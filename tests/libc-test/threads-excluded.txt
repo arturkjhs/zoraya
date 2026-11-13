@@ -1,0 +1,31 @@
+# The tests of musl's libc-test (ports/sources.lock, `libctest`) that
+# tests/libc-test/build.sh leaves out of `make test-posix-suites`, one a line:
+# the file under src/ without .c, then the reason (ADR-0309 item 1). Every
+# other functional/pthread_*, functional/sem_init, functional/tls_* and
+# regression/pthread_*, regression/pthread-* test runs and must exit 0.
+# The names that begin with sqlite/ are the scenarios of SQLite's
+# test/threadtest3.c (ports/sources.lock, `sqlitesrc`) that
+# tests/libc-test/threadtest3.script leaves out (ADR-0309 item 2).
+functional/pthread_cancel          asynchronous cancellation is deferred here: no signal can stop a running thread (ADR-0305, CP-10); the test spins in a loop with PTHREAD_CANCEL_ASYNCHRONOUS
+functional/pthread_cancel-points   does not link: its last scenario calls shm_open and shm_unlink, which are not exported (POSIX shared memory objects are T3, ADR-0005, and not in 9b's scope); the other six scenarios (blocking and non-blocking sem_wait, sem_timedwait and pthread_join, each cancelled) pass (exit 0) on a copy without the shm one: make posix-cancel-points
+functional/pthread_mutex_pi        PTHREAD_PRIO_INHERIT is ENOTSUP (ADR-0302, INV-0302-4)
+functional/pthread_robust        robust mutexes: pthread_mutexattr_setrobust is ENOSYS (no robust list in the kernel; a thread that dies holding a mutex is not visible to the others)
+regression/pthread-robust-detach  robust mutexes, as functional/pthread_robust
+functional/sem_open                named semaphores are not exported (ADR-0308 item 2)
+functional/tls_align            its thread-local object lives in a shared object (tls_align_dso, built by tls_align.mk)
+functional/tls_align_dlopen        no dynamic loading (ADR-0100)
+functional/tls_align_dso           no dynamic loading (ADR-0100)
+functional/tls_init_dlopen         no dynamic loading (ADR-0100)
+functional/tls_init_dso            no dynamic loading (ADR-0100)
+regression/pthread_atfork-errno-clobber   forks and sets RLIMIT_NPROC: posixrun has no broker; fork with threads is covered by tests/posix/t_posix.c (tfork, tforkthread)
+regression/pthread_exit-dtor       forks: posixrun has no broker; the destructor case is covered by t_threads tls
+regression/sem_close-unmap         named semaphores are not exported (ADR-0308 item 2)
+regression/pthread_create-oom      fills all memory (t_memfill) to make pthread_create fail; the job's memory ceiling is a different mechanism (ADR-0307), covered by t_threads limit
+sqlite/walthread1   WAL mode: the shared-memory index (-shm) is a shared mmap of a file, which Zoraya has not (ADR-0100 item 5); rollback-journal scenarios run instead
+sqlite/walthread2   WAL mode, as walthread1
+sqlite/walthread3   WAL mode, as walthread1
+sqlite/walthread4   WAL mode, as walthread1
+sqlite/walthread5   WAL mode, as walthread1
+sqlite/checkpoint_starvation_1   WAL mode, as walthread1
+sqlite/checkpoint_starvation_2   WAL mode, as walthread1
+sqlite/stress2      runs for 60 s of wall time by its table; stress1 runs the same code for 10 s

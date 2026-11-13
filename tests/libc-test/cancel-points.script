@@ -1,0 +1,9 @@
+# musl's pthread_cancel-points without its shm_open scenario (make posix-cancel-points;
+# tests/libc-test/threads-excluded.txt says why the whole test is not in make posix-suites).
+! panicked
+! ZORAYA-PANIC
+< \r\n~> 
+> posixrun /bin/cancel-points\r
+< posixrun: exit 0
+< \r\n~> 
+> poweroff\r

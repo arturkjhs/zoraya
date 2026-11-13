@@ -44,9 +44,18 @@ hidden long __syscall_ret(unsigned long);
 
 #define __syscall(...) __zoraya_sys_call(__VA_ARGS__)
 #define syscall(...) __syscall_ret(__syscall(__VA_ARGS__))
-/* There are no cancellation points: one thread (ADR-0100 item 5). */
-#define __syscall_cp(...) __syscall(__VA_ARGS__)
-#define syscall_cp(...) __syscall_ret(__syscall(__VA_ARGS__))
+/* Cancellation points (ADR-0305): `cancel.c` checks the thread's flag before
+ * a call that can block and after one that was cut short. The route of the
+ * call itself is the constant name's, as for `__syscall`; only the futex
+ * waits of the retained src/thread use it (the library's own calls are
+ * Rust). */
+long __zoraya_cp_before(void);
+long __zoraya_cp_after(long r);
+#define __syscall_cp(nr, ...) ({                                              \
+	long __cpe = __zoraya_cp_before();                                    \
+	__zoraya_cp_after(__cpe ? __cpe : __syscall(nr, __VA_ARGS__));        \
+})
+#define syscall_cp(...) __syscall_ret(__syscall_cp(__VA_ARGS__))
 
 long zoraya_posix_read(long fd, long buf, long count);
 long zoraya_posix_readv(long fd, long iov, long iovcnt);
@@ -69,9 +78,10 @@ _Noreturn void zoraya_posix_exit_group(long status);
 #define __zoraya_sys_SYS_mmap(a, l, p, fl, fd, off) \
 	zoraya_posix_mmap(__scc(a), __scc(l), __scc(p), __scc(fl), __scc(fd), __scc(off))
 #define __zoraya_sys_SYS_set_tid_address(p) zoraya_posix_set_tid_address(__scc(p))
-/* _Exit calls exit_group, then exit in a loop; both end the process. */
+/* _Exit calls exit_group, which ends the process; SYS_exit ends the calling
+ * thread (src/thread: a thread's last act, ADR-0302 item 2). */
 #define __zoraya_sys_SYS_exit_group(c) (zoraya_posix_exit_group(__scc(c)), 0L)
-#define __zoraya_sys_SYS_exit(c) (zoraya_posix_exit_group(__scc(c)), 0L)
+#define __zoraya_sys_SYS_exit(c) (zoraya_posix_thread_exit(__scc(c)), 0L)
 
 /* musl's internal name for wait4 (src/stdio/pclose.c), which musl's own
  * syscall.h defines as the system call: here waitpid in zoraya-posix. */
@@ -81,10 +91,28 @@ _Noreturn void zoraya_posix_exit_group(long status);
 /* fcntl's third argument is absent for F_GETFL and F_GETFD. */
 #define __zoraya_sys_arg0(...) __scc(__VA_ARGS__ + 0)
 
-/* src/internal/pthread_impl.h's __wake and __futexwait are compiled into
- * every file that includes it. A process has one thread (ADR-0100 item 5):
- * no futex ever has a waiter, and nobody waits on a lock another thread holds,
- * so both are answered here with ENOSYS without a call. */
-#define __zoraya_sys_SYS_futex(...) (-ENOSYS)
+/* Threads (ADR-0302 item 2). src/thread reaches the kernel through these. The
+ * futex takes three to six arguments; the missing ones are 0. */
+_Noreturn void zoraya_posix_thread_exit(long code);
+long zoraya_posix_futex(long, long, long, long, long, long);
+long zoraya_posix_rt_sigprocmask(long how, long set, long old, long size);
+long zoraya_posix_tkill(long tid, long sig);
+long zoraya_posix_sched_yield(void);
+
+#define __zoraya_futex6(a, b, c, d, e, f, ...) \
+	zoraya_posix_futex(__scc(a), __scc(b), __scc(c), __scc(d), __scc(e), __scc(f))
+#define __zoraya_sys_SYS_futex(...) __zoraya_futex6(__VA_ARGS__, 0, 0, 0, 0)
+#define __zoraya_sys_SYS_rt_sigprocmask(how, set, old, size) \
+	zoraya_posix_rt_sigprocmask(__scc(how), __scc(set), __scc(old), __scc(size))
+#define __zoraya_sys_SYS_tkill(tid, sig) zoraya_posix_tkill(__scc(tid), __scc(sig))
+#define __zoraya_sys_SYS_sched_yield() zoraya_posix_sched_yield()
+/* No robust lists in the kernel (musl walks its own at thread exit) and no
+ * priorities or policies (ADR-0030): musl tolerates the answer. */
+#define __zoraya_sys_SYS_set_robust_list(...) (-ENOSYS)
+#define __zoraya_sys_SYS_get_robust_list(...) (-ENOSYS)
+#define __zoraya_sys_SYS_sched_setscheduler(...) (-ENOSYS)
+#define __zoraya_sys_SYS_sched_getscheduler(...) (-ENOSYS)
+#define __zoraya_sys_SYS_sched_getparam(...) (-ENOSYS)
+#define __zoraya_sys_SYS_sched_setparam(...) (-ENOSYS)
 
 #endif

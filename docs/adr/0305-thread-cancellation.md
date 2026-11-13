@@ -130,6 +130,9 @@ a cancel interrupt is resumed or ends the thread, and is never an `EINTR` to the
 
 ## Open questions
 
+- Which of INV-0305-1..5 are checked (rule 6 of ADR-0001, recorded by the `work/9b-libc` task): 1 in part by the `cancel` case of `make test-posix-threads`.
+  Not yet: 2 (1000 cancel rounds against threads looping on `open`/`close`), 3 (`tools/check-cancel-points.sh`; the cancellation points are the calls named in
+  ADR-0315 item 5), 4 (`sigaction` of 32 to 34), 5 (`PTHREAD_CANCEL_MASKED`; musl's `pthread_setcancelstate` has no masked mode here).
 - Whether `close` should be a cancellation point for `fsync`-like service waits.
 - A cancel token for native programs (CP-10) is not built: the POSIX layer only.
 

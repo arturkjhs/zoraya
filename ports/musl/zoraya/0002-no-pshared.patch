@@ -1,0 +1,63 @@
+diff -ru a/src/thread/pthread_barrierattr_setpshared.c b/src/thread/pthread_barrierattr_setpshared.c
+--- a/src/thread/pthread_barrierattr_setpshared.c
++++ b/src/thread/pthread_barrierattr_setpshared.c
+@@ -3,6 +3,8 @@
+ int pthread_barrierattr_setpshared(pthread_barrierattr_t *a, int pshared)
+ {
+ 	if (pshared > 1U) return EINVAL;
++	/* ADR-0302 item 6: no wake across processes (ADR-0301 item 3). */
++	if (pshared == 1) return ENOTSUP;
+ 	a->__attr = pshared ? INT_MIN : 0;
+ 	return 0;
+ }
+diff -ru a/src/thread/pthread_condattr_setpshared.c b/src/thread/pthread_condattr_setpshared.c
+--- a/src/thread/pthread_condattr_setpshared.c
++++ b/src/thread/pthread_condattr_setpshared.c
+@@ -3,6 +3,8 @@
+ int pthread_condattr_setpshared(pthread_condattr_t *a, int pshared)
+ {
+ 	if (pshared > 1U) return EINVAL;
++	/* ADR-0302 item 6: no wake across processes (ADR-0301 item 3). */
++	if (pshared == 1) return ENOTSUP;
+ 	a->__attr &= 0x7fffffff;
+ 	a->__attr |= (unsigned)pshared<<31;
+ 	return 0;
+diff -ru a/src/thread/pthread_mutexattr_setpshared.c b/src/thread/pthread_mutexattr_setpshared.c
+--- a/src/thread/pthread_mutexattr_setpshared.c
++++ b/src/thread/pthread_mutexattr_setpshared.c
+@@ -3,6 +3,8 @@
+ int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared)
+ {
+ 	if (pshared > 1U) return EINVAL;
++	/* ADR-0302 item 6: no wake across processes (ADR-0301 item 3). */
++	if (pshared == 1) return ENOTSUP;
+ 	a->__attr &= ~128U;
+ 	a->__attr |= pshared<<7;
+ 	return 0;
+diff -ru a/src/thread/pthread_rwlockattr_setpshared.c b/src/thread/pthread_rwlockattr_setpshared.c
+--- a/src/thread/pthread_rwlockattr_setpshared.c
++++ b/src/thread/pthread_rwlockattr_setpshared.c
+@@ -3,6 +3,8 @@
+ int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int pshared)
+ {
+ 	if (pshared > 1U) return EINVAL;
++	/* ADR-0302 item 6: no wake across processes (ADR-0301 item 3). */
++	if (pshared == 1) return ENOTSUP;
+ 	a->__attr[0] = pshared;
+ 	return 0;
+ }
+diff -ru a/src/thread/sem_init.c b/src/thread/sem_init.c
+--- a/src/thread/sem_init.c
++++ b/src/thread/sem_init.c
+@@ -8,6 +8,11 @@
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
++	if (pshared) {
++		/* ADR-0302 item 6. */
++		errno = ENOTSUP;
++		return -1;
++	}
+ 	sem->__val[0] = value;
+ 	sem->__val[1] = 0;
+ 	sem->__val[2] = pshared ? 0 : 128;

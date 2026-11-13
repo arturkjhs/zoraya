@@ -56,6 +56,32 @@
  *                      action; continued, it catches it again and says so
  *   t_posix notstp     INV-0200-2's other half: ignores SIGTSTP, so a
  *                      Ctrl-Z does not stop it
+ *   t_posix tfork      INV-0306-1, -2, -3: fork with running siblings (threads
+ *                      holding malloc, stdio and the library, and two
+ *                      counters on different pages): the child has one thread,
+ *                      mallocs, prints, opens, makes a thread of its own, and
+ *                      sees the counters as of one instant; every fourth
+ *                      child then execs a new image
+ *   t_posix tforkthread
+ *                      fork in a non-main thread; pthread_atfork handlers in
+ *                      their order; the child's pthread_self and join
+ *   t_posix texec      INV-0306-4: exec from a non-main thread while a
+ *                      sibling opens files and another writes 'O' to a pipe;
+ *                      the new image writes 'N', and no 'O' follows an 'N';
+ *                      it has only the inherited descriptors and is waited
+ *                      for once
+ *   t_posix tspawn     posix_spawn and vfork from several threads at once
+ *   t_posix tsig       sigwait in a thread woken by kill(getpid()); sigtimedwait
+ *                      times out (EAGAIN); kill(getpid(), n) goes to a thread
+ *                      that has n unblocked, or stays pending until one does
+ *   t_posix tsigdfl    sigwait, sigwaitinfo, sigtimedwait take SIGTERM and SIGCHLD
+ *                      sent by another process under SIG_DFL (the process
+ *                      survives); a thread cancelled in sigwait leaves the
+ *                      process able to take its signals
+ *   t_posix treroute   INV-0304-7: 1000 process signals routed to the one thread
+ *                      that has them unblocked while another sits in sem_wait
+ *   t_posix twait      INV-0302-2: waitpid in a thread while another thread
+ *                      makes library calls
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
  *                      exec and wait (run with ZORAYA_POSIX_STATS for the
@@ -66,7 +92,9 @@
 #include <glob.h>
 #include <locale.h>
 #include <math.h>
+#include <pthread.h>
 #include <pwd.h>
+#include <semaphore.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
@@ -1009,6 +1037,807 @@ static void notstp(void)
 		pause_ms(1000);
 }
 
+/* ------------------------------------------------------------ threads
+ * Part 9b: fork and exec in a process with threads (ADR-0306). These need
+ * the broker, so they are here and not in t_threads. */
+
+static volatile int stop_siblings;
+/* Each on a page of its own, so that a copy in steps could tear them. */
+static volatile unsigned long counter_a __attribute__((aligned(16384)));
+static volatile unsigned long counter_b __attribute__((aligned(16384)));
+static volatile unsigned long seq __attribute__((aligned(16384)));
+/* The mapper's published region (INV-0306-6): the child may touch it only
+ * if the copy has it, which it does only if the mapping existed at the
+ * instant of the fork. */
+static volatile unsigned char *volatile region;
+static volatile unsigned char region_byte;
+
+/* Takes in turn: the heap, the library (open, close), stdout's lock, and
+ * counts on two pages. */
+static void *sibling(void *arg)
+{
+	long which = (long)arg;
+	unsigned long n = 0;
+	while (!stop_siblings) {
+		switch (which % 5) {
+		case 0: {
+			void *p = malloc(100 + n % 900);
+			if (p)
+				memset(p, 1, 50);
+			free(p);
+			break;
+		}
+		case 1: {
+			int fd = open("/etc/zoraya/session", O_RDONLY | O_CLOEXEC);
+			if (fd >= 0)
+				close(fd);
+			break;
+		}
+		case 2:
+			flockfile(stdout);
+			for (volatile int i = 0; i < 200; i++)
+				;
+			funlockfile(stdout);
+			break;
+		case 3:
+			seq++;
+			counter_a++;
+			counter_b++;
+			seq++;
+			break;
+		default: {
+			size_t len = (n % 8 == 7) ? (1u << 20) : 65536;
+			unsigned char *m = mmap(NULL, len, PROT_READ | PROT_WRITE,
+						MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			if (m == MAP_FAILED)
+				break;
+			unsigned char v = (unsigned char)(n | 1);
+			memset(m, v, len);
+			region_byte = v;
+			region = m;
+			for (volatile int i = 0; i < 300; i++)
+				;
+			region = NULL;
+			munmap(m, len);
+			break;
+		}
+		}
+		n++;
+		if (n % 64 == 0)
+			pause_ms(1);
+	}
+	return NULL;
+}
+
+#define SIBLINGS 5
+
+static void start_siblings(pthread_t *t)
+{
+	stop_siblings = 0;
+	for (long i = 0; i < SIBLINGS; i++)
+		CHECK(pthread_create(&t[i], NULL, sibling, (void *)i) == 0);
+}
+
+static void stop_and_join(pthread_t *t)
+{
+	stop_siblings = 1;
+	for (int i = 0; i < SIBLINGS; i++)
+		CHECK(pthread_join(t[i], NULL) == 0);
+}
+
+static void *noop_thread(void *a)
+{
+	return a;
+}
+
+/* Set before a fork: the child then ends by exec of a new image (INV-0306-1
+ * names exec: the child's locks are free for it as for malloc). */
+static int fork_then_exec;
+
+/* The child's checks; returns an exit code, 0 for all well. */
+static int fork_child_checks(void)
+{
+	/* The counters were as of one instant: b is a, or one behind it while
+	 * the sibling was between the two increments. */
+	unsigned long a = counter_a, b = counter_b;
+	if (a != b && a != b + 1)
+		return 10;
+	/* A mapping the sibling had published is in the copy whole (a fault
+	 * here ends the child with a signal). The 1 MiB form is read at
+	 * its ends only. */
+	volatile unsigned char *m = region;
+	if (m && m[0] != region_byte && m[0] != 0)
+		return 16;
+	/* The heap, stdio and the library work without waiting. */
+	char *p = malloc(4096);
+	if (!p)
+		return 11;
+	snprintf(p, 4096, "child %d", (int)getpid());
+	free(p);
+	if (printf("") < 0)
+		return 12;
+	int fd = open("/etc/zoraya/session", O_RDONLY);
+	if (fd < 0)
+		return 13;
+	close(fd);
+	/* A thread of its own works in the child. */
+	pthread_t t;
+	void *r;
+	if (pthread_create(&t, NULL, noop_thread, (void *)5) != 0)
+		return 14;
+	if (pthread_join(t, &r) != 0 || r != (void *)5)
+		return 15;
+	if (fork_then_exec) {
+		char *argv[] = { SELF, "exit0", NULL };
+		execve(SELF, argv, environ);
+		return 17;
+	}
+	return 0;
+}
+
+static void tfork(void)
+{
+	pthread_t t[SIBLINGS];
+	start_siblings(t);
+	pause_ms(20);
+	for (int i = 0; i < 500; i++) {
+		fork_then_exec = i % 4 == 0;
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0)
+			_exit(fork_child_checks());
+		int status = reap(pid);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			printf("t_posix: tfork: round %d status 0x%x\n", i, status);
+			CHECK(0);
+		}
+	}
+	stop_and_join(t);
+	/* The siblings are unharmed: they ran on, the parent still has them
+	 * all (join worked). */
+	passed();
+}
+
+static int atfork_log[16];
+static int atfork_n;
+static void prep1(void) { atfork_log[atfork_n++] = 1; }
+static void prep2(void) { atfork_log[atfork_n++] = 2; }
+static void par1(void) { atfork_log[atfork_n++] = 11; }
+static void par2(void) { atfork_log[atfork_n++] = 12; }
+static void chi1(void) { atfork_log[atfork_n++] = 21; }
+static void chi2(void) { atfork_log[atfork_n++] = 22; }
+
+static void *fork_in_thread(void *arg)
+{
+	(void)arg;
+	atfork_n = 0;
+	pid_t pid = fork();
+	if (pid == 0) {
+		/* Prepare in reverse order of registration, child in order. */
+		int want[] = { 2, 1, 21, 22 };
+		if (atfork_n != 4)
+			_exit(20);
+		for (int i = 0; i < 4; i++)
+			if (atfork_log[i] != want[i])
+				_exit(21 + i);
+		pthread_t me = pthread_self();
+		if (!pthread_equal(me, pthread_self()))
+			_exit(30);
+		_exit(fork_child_checks());
+	}
+	if (pid < 0)
+		return (void *)1;
+	int status = reap(pid);
+	int want[] = { 2, 1, 11, 12 };
+	if (atfork_n != 4)
+		return (void *)2;
+	for (int i = 0; i < 4; i++)
+		if (atfork_log[i] != want[i])
+			return (void *)3;
+	return (void *)(long)(WIFEXITED(status) ? WEXITSTATUS(status) << 8 : 0xffff);
+}
+
+static void tforkthread(void)
+{
+	CHECK(pthread_atfork(prep1, par1, chi1) == 0);
+	CHECK(pthread_atfork(prep2, par2, chi2) == 0);
+	pthread_t sib[SIBLINGS], th;
+	start_siblings(sib);
+	void *r;
+	CHECK(pthread_create(&th, NULL, fork_in_thread, NULL) == 0);
+	CHECK(pthread_join(th, &r) == 0);
+	if (r != NULL)
+		printf("t_posix: tforkthread: thread returned %p\n", r);
+	CHECK(r == NULL);
+	stop_and_join(sib);
+	passed();
+}
+
+/* exec from a non-main thread: the sibling opens files all the while, and
+ * another writes 'O' to a pipe that the new image writes 'N' to: no 'O'
+ * follows the first 'N' (INV-0306-4). */
+static int exec_pipe_fd = -1;
+static char exec_pipe_arg[16];
+
+static void *exec_thread(void *arg)
+{
+	(void)arg;
+	pause_ms(5);
+	char *argv[] = { "t_posix", "texec-child", exec_pipe_arg, NULL };
+	execve(SELF, argv, environ);
+	_exit(99);
+}
+
+static void *opener(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		int fd = open("/etc/zoraya/session", O_RDONLY | O_CLOEXEC);
+		if (fd >= 0)
+			close(fd);
+	}
+	return NULL;
+}
+
+/* The old image's writer: it holds the pipe's write end and writes 'O'. */
+static void *old_writer(void *arg)
+{
+	(void)arg;
+	for (;;)
+		if (write(exec_pipe_fd, "O", 1) < 0 && errno != EINTR)
+			_exit(97);
+	return NULL;
+}
+
+/* The new image: no descriptor above 2 but the pipe's (the opener's were
+ * O_CLOEXEC; a leak would be one the exec copied while it was open without
+ * the flag honoured), it says 'N' on the pipe, and it is alone. */
+static int texec_child(const char *pipe_fd)
+{
+	int keep = pipe_fd ? atoi(pipe_fd) : -1;
+	for (int fd = 3; fd < 64; fd++)
+		if (fd != keep && fcntl(fd, F_GETFD) != -1)
+			return 40 + fd % 20;
+	if (keep >= 0) {
+		for (int i = 0; i < 20; i++)
+			if (write(keep, "N", 1) != 1)
+				return 96;
+			else
+				pause_ms(1);
+	}
+	return 7;
+}
+
+static void texec(void)
+{
+	for (int i = 0; i < 100; i++) {
+		int pfd[2];
+		CHECK(pipe(pfd) == 0);
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0) {
+			close(pfd[0]);
+			exec_pipe_fd = pfd[1];
+			snprintf(exec_pipe_arg, sizeof exec_pipe_arg, "%d", pfd[1]);
+			pthread_t a, b, c, d;
+			if (pthread_create(&a, NULL, opener, NULL) ||
+			    pthread_create(&b, NULL, sibling, (void *)3) ||
+			    pthread_create(&d, NULL, old_writer, NULL) ||
+			    pthread_create(&c, NULL, exec_thread, NULL))
+				_exit(98);
+			/* The main thread waits to be ended by the exec. */
+			for (;;)
+				pause_ms(1000);
+		}
+		close(pfd[1]);
+		/* Read to the end of the pipe (every writer is gone then). */
+		int seen_new = 0, late_old = 0;
+		char buf[256];
+		ssize_t n;
+		while ((n = read(pfd[0], buf, sizeof buf)) != 0) {
+			if (n < 0 && errno == EINTR)
+				continue;
+			CHECK(n > 0);
+			for (ssize_t j = 0; j < n; j++) {
+				if (buf[j] == 'N')
+					seen_new = 1;
+				else if (buf[j] == 'O' && seen_new)
+					late_old++;
+			}
+		}
+		close(pfd[0]);
+		int status = reap(pid);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 7 || !seen_new ||
+		    late_old) {
+			printf("t_posix: texec: round %d status 0x%x new %d old after new %d\n",
+			       i, status, seen_new, late_old);
+			CHECK(0);
+		}
+	}
+	passed();
+}
+
+static void *spawner(void *arg)
+{
+	long id = (long)arg;
+	for (int i = 0; i < 6; i++) {
+		pid_t pid;
+		char *argv[] = { "t_posix", "exit7", NULL };
+		if (id % 2) {
+			if (posix_spawn(&pid, SELF, NULL, NULL, argv, environ) != 0)
+				return (void *)1;
+		} else {
+			pid = vfork();
+			if (pid == 0)
+				_exit(7);
+			if (pid < 0)
+				return (void *)2;
+		}
+		int status = 0;
+		pid_t got;
+		do
+			got = waitpid(pid, &status, 0);
+		while (got == -1 && errno == EINTR);
+		if (got != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7)
+			return (void *)3;
+	}
+	return NULL;
+}
+
+static void tspawn(void)
+{
+	pthread_t t[4];
+	for (long i = 0; i < 4; i++)
+		CHECK(pthread_create(&t[i], NULL, spawner, (void *)i) == 0);
+	for (int i = 0; i < 4; i++) {
+		void *r;
+		CHECK(pthread_join(t[i], &r) == 0);
+		if (r != NULL)
+			printf("t_posix: tspawn: thread %d returned %p\n", i, r);
+		CHECK(r == NULL);
+	}
+	passed();
+}
+
+
+/* ------------------------------------------------------------ signals */
+
+static volatile pthread_t handled_on;
+static volatile int handled_count;
+static void on_usr(int sig)
+{
+	(void)sig;
+	handled_on = pthread_self();
+	handled_count++;
+}
+
+static sigset_t wait_set;
+static volatile int wait_got;
+static void *sigwaiter(void *arg)
+{
+	(void)arg;
+	int sig = 0;
+	int r = sigwait(&wait_set, &sig);
+	wait_got = r == 0 ? sig : -r;
+	return NULL;
+}
+
+static volatile int ready_flag;
+static volatile int leave_flag;
+static void *handler_thread(void *arg)
+{
+	(void)arg;
+	sigset_t none;
+	sigemptyset(&none);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	ready_flag = 1;
+	while (!leave_flag)
+		pause_ms(5);
+	return NULL;
+}
+
+static void tsig(void)
+{
+	/* sigwait in a thread, woken by a process-directed signal that every
+	 * thread blocks. */
+	sigset_t set, all, none;
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	sigfillset(&all);
+	sigemptyset(&none);
+	wait_set = set;
+	CHECK(pthread_sigmask(SIG_BLOCK, &set, NULL) == 0);
+	pthread_t w;
+	wait_got = 0;
+	CHECK(pthread_create(&w, NULL, sigwaiter, NULL) == 0);
+	pause_ms(150);
+	CHECK(wait_got == 0);
+	CHECK(kill(getpid(), SIGUSR1) == 0);
+	CHECK(pthread_join(w, NULL) == 0);
+	CHECK(wait_got == SIGUSR1);
+	/* Taken: it is not pending any more. */
+	struct timespec zero = { 0, 0 };
+	errno = 0;
+	CHECK(sigtimedwait(&set, NULL, &zero) == -1 && errno == EAGAIN);
+	/* A timeout, and a pending signal returned at once with its info. */
+	struct timespec t0, t1, half = { 0, 60000000 };
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	errno = 0;
+	CHECK(sigtimedwait(&set, NULL, &half) == -1 && errno == EAGAIN);
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+	CHECK(ms >= 50 && ms < 2000);
+	CHECK(raise(SIGUSR1) == 0);
+	siginfo_t info;
+	CHECK(sigwaitinfo(&set, &info) == SIGUSR1 && info.si_signo == SIGUSR1);
+
+	/* kill(getpid(), n) with n blocked here and unblocked in a thread:
+	 * the handler runs on that thread. */
+	handle(SIGUSR2, on_usr, 0);
+	sigset_t two;
+	sigemptyset(&two);
+	sigaddset(&two, SIGUSR2);
+	CHECK(pthread_sigmask(SIG_BLOCK, &two, NULL) == 0);
+	pthread_t h;
+	ready_flag = 0;
+	leave_flag = 0;
+	handled_count = 0;
+	/* The new thread starts with the mask in force and clears it. */
+	CHECK(pthread_create(&h, NULL, handler_thread, NULL) == 0);
+	while (!ready_flag)
+		pause_ms(5);
+	CHECK(kill(getpid(), SIGUSR2) == 0);
+	for (int i = 0; i < 200 && !handled_count; i++)
+		pause_ms(5);
+	CHECK(handled_count == 1);
+	CHECK(pthread_equal(handled_on, h));
+	leave_flag = 1;
+	CHECK(pthread_join(h, NULL) == 0);
+
+	/* Every thread blocks it: it stays with the process until a thread
+	 * unblocks it, and runs there. */
+	handled_count = 0;
+	CHECK(kill(getpid(), SIGUSR2) == 0);
+	pause_ms(50);
+	CHECK(handled_count == 0);
+	CHECK(pthread_sigmask(SIG_UNBLOCK, &two, NULL) == 0);
+	CHECK(handled_count == 1);
+	CHECK(pthread_equal(handled_on, pthread_self()));
+	handle(SIGUSR2, SIG_DFL, 0);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	passed();
+}
+
+/* sigwait, sigwaitinfo and sigtimedwait take signals of other processes under
+ * SIG_DFL (ADR-0315 item 10, a deviation from ADR-0106 item 2; INV-0106-2),
+ * and a cancelled sigwait puts its state back before the thread ends. */
+static volatile int dfl_variant;
+static volatile int dfl_got;
+static volatile int dfl_in;
+static void *dfl_waiter(void *arg)
+{
+	(void)arg;
+	int sig = 0;
+	dfl_in = 1;
+	struct timespec far = { 20, 0 };
+	siginfo_t info;
+	switch (dfl_variant) {
+	case 0:
+		dfl_got = sigwait(&wait_set, &sig) == 0 ? sig : -1;
+		break;
+	case 1:
+		dfl_got = sigtimedwait(&wait_set, &info, &far);
+		break;
+	default:
+		dfl_got = sigwaitinfo(&wait_set, &info);
+		break;
+	}
+	return NULL;
+}
+
+static volatile int cancel_in;
+static volatile int cancel_blocked_in_cleanup = -1;
+static void cancel_cleanup(void *arg)
+{
+	sigset_t cur;
+	(void)arg;
+	pthread_sigmask(SIG_SETMASK, NULL, &cur);
+	/* sigismember is not exported; musl's sigset_t is bit n-1 of word 0. */
+	cancel_blocked_in_cleanup = (int)((((unsigned long *)&cur)[0] >> (SIGUSR2 - 1)) & 1);
+}
+
+static void *cancel_waiter(void *arg)
+{
+	(void)arg;
+	int sig;
+	pthread_cleanup_push(cancel_cleanup, NULL);
+	cancel_in = 1;
+	sigwait(&wait_set, &sig);
+	pthread_cleanup_pop(0);
+	return NULL;
+}
+
+/* The waiter is inside the call: it said so, and had time to enter it. */
+static void await_in(volatile int *flag)
+{
+	for (int i = 0; i < 5000 && !*flag; i++)
+		pause_ms(1);
+	CHECK(*flag);
+	pause_ms(100);
+}
+
+/* A child that waits for SIGUSR2 in a thread with a timeout (a wait that
+ * ends by itself), then sleeps: the signal must kill it as before the wait.
+ * A bound ends it with status 95 if the kernel disposition stayed Deliver. */
+static void *usr2_timed_waiter(void *arg)
+{
+	sigset_t s;
+	struct timespec t = { 0, 100000000 };
+	(void)arg;
+	sigemptyset(&s);
+	sigaddset(&s, SIGUSR2);
+	sigtimedwait(&s, NULL, &t);
+	return NULL;
+}
+
+static pid_t spawn_usr2_child(void)
+{
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		sigset_t none;
+		pthread_t w;
+		sigemptyset(&none);
+		pthread_sigmask(SIG_SETMASK, &none, NULL);
+		if (pthread_create(&w, NULL, usr2_timed_waiter, NULL) != 0 ||
+		    pthread_join(w, NULL) != 0)
+			_exit(97);
+		/* Bounded: a signal that did not end the child leaves 95. */
+		for (int i = 0; i < 2000; i++)
+			pause_ms(10);
+		_exit(95);
+	}
+	return pid;
+}
+
+static void tsigdfl(void)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGTERM);
+	sigaddset(&set, SIGCHLD);
+	wait_set = set;
+	CHECK(signal(SIGTERM, SIG_DFL) != SIG_ERR);
+	CHECK(signal(SIGCHLD, SIG_DFL) != SIG_ERR);
+	CHECK(pthread_sigmask(SIG_BLOCK, &set, NULL) == 0);
+	int sigs[2] = { SIGTERM, SIGCHLD };
+	for (dfl_variant = 0; dfl_variant < 3; dfl_variant++) {
+		for (int k = 0; k < 2; k++) {
+			pthread_t w;
+			dfl_got = 0;
+			dfl_in = 0;
+			CHECK(pthread_create(&w, NULL, dfl_waiter, NULL) == 0);
+			await_in(&dfl_in);
+			pid_t pid = fork();
+			CHECK(pid >= 0);
+			if (pid == 0) {
+				_exit(kill(getppid(), sigs[k]) == 0 ? 0 : 1);
+			}
+			CHECK(pthread_join(w, NULL) == 0);
+			if (dfl_got != sigs[k])
+				printf("t_posix: tsigdfl: variant %d sig %d got %d\n",
+				       dfl_variant, sigs[k], dfl_got);
+			CHECK(dfl_got == sigs[k]);
+			int status = reap(pid);
+			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+		}
+	}
+	/* A timeout is EAGAIN. (Outside a wait a blocked SIGTERM under SIG_DFL
+	 * ends the process, INV-0106-4, so the restored default is not probed.) */
+	struct timespec shortt = { 0, 100000000 };
+	errno = 0;
+	CHECK(sigtimedwait(&set, NULL, &shortt) == -1 && errno == EAGAIN);
+
+	/* A fork while a sibling waits copies the kernel dispositions that wait
+	 * made; the child has no such thread, and SIGTERM must end it. The
+	 * sibling is then woken by a SIGTERM of the process to itself. */
+	{
+		pthread_t w;
+		sigset_t none;
+		sigemptyset(&none);
+		dfl_variant = 1;
+		dfl_got = 0;
+		dfl_in = 0;
+		CHECK(pthread_create(&w, NULL, dfl_waiter, NULL) == 0);
+		await_in(&dfl_in);
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0) {
+			pthread_sigmask(SIG_SETMASK, &none, NULL);
+				for (int i = 0; i < 2000; i++)
+				pause_ms(10);
+			_exit(95);
+		}
+		pause_ms(100);
+		CHECK(kill(pid, SIGTERM) == 0);
+		int status = reap(pid);
+		/* (A child's end is no SIGCHLD for a wait under SIG_DFL.) */
+		CHECK(kill(getpid(), SIGTERM) == 0);
+		CHECK(pthread_join(w, NULL) == 0);
+		if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM)
+			printf("t_posix: tsigdfl: fork child status 0x%x\n", status);
+		CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+		CHECK(dfl_got == SIGTERM);
+	}
+
+	/* The kernel dispositions are back when a wait ends by itself. */
+	{
+		pid_t pid = spawn_usr2_child();
+		pause_ms(500);
+		CHECK(kill(pid, SIGUSR2) == 0);
+		int status = reap(pid);
+		if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGUSR2)
+			printf("t_posix: tsigdfl: usr2 child status 0x%x\n", status);
+		CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGUSR2);
+	}
+
+	/* A thread cancelled in sigwait: the wait is undone, the mask comes back
+	 * (the thread ends last), and a signal of its set goes to this thread. */
+	sigset_t usr2;
+	sigemptyset(&usr2);
+	sigaddset(&usr2, SIGUSR2);
+	wait_set = usr2;
+	/* The waiter's creator does not block SIGUSR2: the wait blocks it, and
+	 * the cleanup handler (run at the cancel, after the wait) sees it back. */
+	pthread_t c;
+	CHECK(pthread_sigmask(SIG_UNBLOCK, &usr2, NULL) == 0);
+	cancel_in = 0;
+	CHECK(pthread_create(&c, NULL, cancel_waiter, NULL) == 0);
+	await_in(&cancel_in);
+	CHECK(pthread_cancel(c) == 0);
+	void *ret = NULL;
+	CHECK(pthread_join(c, &ret) == 0);
+	CHECK(ret == PTHREAD_CANCELED);
+	CHECK(cancel_blocked_in_cleanup == 0);
+	/* The wait is undone: a signal of its set goes to this thread. */
+	CHECK(pthread_sigmask(SIG_BLOCK, &usr2, NULL) == 0);
+	CHECK(kill(getpid(), SIGUSR2) == 0);
+	struct timespec second = { 1, 0 };
+	CHECK(sigtimedwait(&usr2, NULL, &second) == SIGUSR2);
+	/* And SIGUSR2 from outside kills a child that did the same. */
+	{
+		pid_t pid = spawn_usr2_child();
+		pause_ms(500);
+		CHECK(kill(pid, SIGUSR2) == 0);
+		int status = reap(pid);
+		CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGUSR2);
+	}
+	sigset_t none;
+	sigemptyset(&none);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	passed();
+}
+
+/* waitpid in a thread leaves the library free for the others (INV-0302-2). */
+static volatile pid_t wait_child_pid;
+static volatile int wait_status;
+static volatile pid_t wait_result;
+static void *waiter(void *arg)
+{
+	(void)arg;
+	int st = 0;
+	wait_result = waitpid(wait_child_pid, &st, 0);
+	wait_status = st;
+	return NULL;
+}
+
+static void twait(void)
+{
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		pause_ms(600);
+		_exit(5);
+	}
+	wait_child_pid = pid;
+	wait_result = 0;
+	pthread_t w;
+	CHECK(pthread_create(&w, NULL, waiter, NULL) == 0);
+	pause_ms(100);
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	for (int i = 0; i < 20; i++) {
+		struct stat st;
+		CHECK(getpid() > 0);
+		CHECK(stat("/etc/zoraya/session", &st) == 0);
+		int fd = open("/etc/zoraya/session", O_RDONLY);
+		CHECK(fd >= 0);
+		close(fd);
+	}
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+	/* The calls did not wait for the child's end (it is still running). */
+	CHECK(ms < 400);
+	CHECK(wait_result == 0);
+	CHECK(pthread_join(w, NULL) == 0);
+	CHECK(wait_result == pid);
+	CHECK(WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 5);
+	passed();
+}
+
+
+/* INV-0304-7 (1000 rounds): A waits in sem_wait with the signal blocked; B
+ * takes the process's signals one by one; A does not return from sem_wait
+ * until the post. (kill of oneself needs the broker's pid: not in
+ * t_threads.) */
+static volatile int rr_stop, rr_a_done, rr_ready;
+static sem_t rr_sem;
+static volatile int rr_count;
+static volatile pthread_t rr_on;
+
+static void rr_handler(int sig)
+{
+	(void)sig;
+	rr_on = pthread_self();
+	rr_count++;
+}
+
+static void *rr_a(void *a)
+{
+	rr_ready = 1;
+	while (sem_wait(&rr_sem) != 0)
+		;
+	rr_a_done = 1;
+	return a;
+}
+
+static void *rr_b(void *a)
+{
+	sigset_t none;
+	sigemptyset(&none);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	while (!rr_stop) {
+		getpid();
+		pause_ms(1);
+	}
+	return a;
+}
+
+static void treroute(void)
+{
+	pthread_t a, b;
+	sigset_t set, none;
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	sigemptyset(&none);
+	handle(SIGUSR1, rr_handler, 0);
+	CHECK(sem_init(&rr_sem, 0, 0) == 0);
+	CHECK(pthread_sigmask(SIG_BLOCK, &set, NULL) == 0);
+	CHECK(pthread_create(&a, NULL, rr_a, NULL) == 0);
+	CHECK(pthread_create(&b, NULL, rr_b, NULL) == 0);
+	while (!rr_ready)
+		pause_ms(5);
+	pause_ms(100);
+	for (int i = 0; i < 1000; i++) {
+		CHECK(kill(getpid(), SIGUSR1) == 0);
+		int j;
+		for (j = 0; j < 5000 && rr_count < i + 1; j++)
+			pause_ms(1);
+		CHECK(rr_count == i + 1);
+		CHECK(!rr_a_done);
+	}
+	CHECK(pthread_equal(rr_on, b));
+	rr_stop = 1;
+	CHECK(pthread_join(b, NULL) == 0);
+	CHECK(sem_post(&rr_sem) == 0);
+	CHECK(pthread_join(a, NULL) == 0);
+	CHECK(rr_a_done);
+	CHECK(pthread_sigmask(SIG_SETMASK, &none, NULL) == 0);
+	handle(SIGUSR1, SIG_DFL, 0);
+	passed();
+}
+
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -1056,10 +1885,30 @@ int main(int argc, char **argv)
 		live(atoi(argv[2]));
 	else if (!strcmp(argv[1], "exit7"))
 		return 7;
+	else if (!strcmp(argv[1], "exit0"))
+		return 0;
 	else if (!strcmp(argv[1], "tstp"))
 		tstp();
 	else if (!strcmp(argv[1], "notstp"))
 		notstp();
+	else if (!strcmp(argv[1], "tfork"))
+		tfork();
+	else if (!strcmp(argv[1], "tforkthread"))
+		tforkthread();
+	else if (!strcmp(argv[1], "texec"))
+		texec();
+	else if (!strcmp(argv[1], "texec-child"))
+		return texec_child(argc > 2 ? argv[2] : NULL);
+	else if (!strcmp(argv[1], "tsig"))
+		tsig();
+	else if (!strcmp(argv[1], "tsigdfl"))
+		tsigdfl();
+	else if (!strcmp(argv[1], "treroute"))
+		treroute();
+	else if (!strcmp(argv[1], "twait"))
+		twait();
+	else if (!strcmp(argv[1], "tspawn"))
+		tspawn();
 	else if (!strcmp(argv[1], "bench"))
 		bench();
 	else

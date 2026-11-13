@@ -86,3 +86,18 @@ file = "crates/zoraya-abi/src/spawn.rs"
 find = 'if a.slot == b.slot || (moved && a.handle == b.handle) {'
 replace = 'if a.slot == b.slot || (moved && a.handle == b.handle && false) {'
 note = "ADR-0313 item 7: a handle named twice in a spawn list with a Move is InvalidArgument. KILLED by hand (t_spawn a_handle_named_twice_with_a_move_is_refused)"
+
+[[mutant]]
+id = "T-exec-exit-outside-state"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = '''        zoraya_rt::process_exit(0)
+    });
+    match r {
+        Ok(()) => unreachable!(),'''
+replace = '''        Ok(())
+    });
+    match r {
+        Ok(()) => zoraya_rt::process_exit(0),'''
+tests = ["make -s test-posix POSIX_SCRIPTS=tests/posix/threads.script"]
+timeout = 1500
+note = "INV-0315-6 / ADR-0306 item 7: the old image ends inside state(), the library lock held, so no sibling writes after the new image's first write; ending outside it releases the lock first (texec 'O' after 'N'). Run by hand at 9b review: texec fails in round 1 (killed)"

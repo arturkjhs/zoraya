@@ -171,6 +171,10 @@ item 11 is that rule for the futex shim, where musl's own callers (`sem_wait`, `
 
 ## Open questions
 
+- Which of INV-0304-1..8 are checked (rule 6 of ADR-0001, recorded by the `work/9b-libc` task): 1 and 2 by `cargo test -p zoraya-posix --test threads`,
+  4 and 7 by the `signals` case of `make test-posix-threads` (in part: see the Status column). Not yet: 3 (a handler that calls `open`/`write`/`malloc` while a sibling
+  waits, 1000 rounds), 5 (INV-0106-2's host test with the thread table populated), 6 (a `SIGTERM` with every thread blocking it), 8 (counting `futex_wait` calls and
+  handler runs for the mutex and condition-variable outcomes); each needs a case in `t_threads` or a host test that no step has written yet.
 - Whether a signal thread inside the library (one thread that waits for requests and routes them) is better than the herd;
   decide when the stress test measures the herd.
 - Real-time signals and `sigqueue` stay excluded (ADR-0005).

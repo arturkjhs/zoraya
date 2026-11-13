@@ -243,3 +243,43 @@ units on both; every other subtest's units are equal too (58, 64). So the time w
 not a regression of 9b's teardown or the deadline heap. Off HVF `t_cpu` now takes `t_bound`'s limit of 1 s for the time and keeps
 `MAX_UNITS` (ADR-0270) as the check; under HVF the 2 ms limit is unchanged. The one HVF failure (2696 us on a loaded host, the deep
 job) is left as is (`docs/backlog.md`).
+
+## 9b step 2, second slice of `libposix` threads (branch `work/9b-libc`)
+
+What exists (ADR-0315, proposed; ADR-0314 items 2 to 4 are refined by it):
+
+- **The `Pending` split** (INV-0302-2): `Posix::wait_for` returns `errno::PENDING` once the process has a thread; the boundary's `state()` waits on a
+  port of its own with the library lock free and runs the method again with the outcome (`Resume`); a write keeps its progress. Host tests: `tests/files.rs`
+  (`deferred`). In QEMU: `t_threads waits` (a reader in `read`, a sleeper, a `pselect`, while the main thread calls `getpid`, `open`, `write`, `stat`, `printf` 20 times
+  within 0.3 s) and `blockedexit` (`exit()` flushes stdio while a sibling is blocked in `read`).
+- **The thread table, per-thread signal state, `tkill`, `rt_sigprocmask`, routing of process signals** (`threads.rs`, host tests `tests/threads.rs`); musl's
+  `__block_*_sigs` now save the mask (they were no-ops and left `pthread_create`'s `sig_mask` uninitialised: found by the test).
+  `t_threads signals`: `pthread_kill` wakes a thread in `read` and in `nanosleep` (`EINTR`, handler on that thread) and in `sem_wait` (goes on); masks are per thread.
+- **Deferred cancellation** (`cancel.c`): `pthread_cancel` interrupts the target; futex waits act on the flag before and after; library waits call `__testcancel` once woken.
+  `t_threads cancel`: `read`, `nanosleep`, `sem_wait`, `pthread_cond_wait` and a `pthread_testcancel` loop, cleanup handler once, `PTHREAD_CANCELED`.
+
+Ran in this session (HVF, after merging `origin/work/9b` at its head of 2026-11-13): `make check` (16 of 16), `cargo test -p zoraya-posix` (all),
+`make test-posix-threads` (all 17 cases), `make test-libposix`, `make ports` with `check-ports` (dash, busybox, make, pdpmake, tcc and toybox link the threaded `libc.a`;
+tcc builds a hello world for Zoraya), and `make test-posix` limited to `hello`, `smoke` and `invariants` (signals, EINTR, raise, execmask, blocked: the single-thread paths
+through the thread table). Not run: the rest of `make test-posix`, TCG, `make test-changed`.
+
+Not done (the next session; each is in ADR-0315 item 6 or below):
+
+- Fork freeze and child reduction (ADR-0306: the kernel `Freeze` is in `work/9b`, the library side is not), `exec` holding the lock, `atfork.c`; tests for fork with siblings running and exec from a thread.
+- `sigwait`/`sigtimedwait`, `kill(getpid())` from a thread that blocks the signal (stays in that thread), `pthread_getattr_np`, thread names, `check-cancel-points`, async-signal tests of INV-0304-3/-5/-7/-8 (1000-round forms), INV-0305-2/-4/-5.
+- In-QEMU cases for `waitpid`, `accept` and `sem_wait` (as a library wait) in a thread: `posixrun` has no broker, so `posix_spawn` and `fork` hang there; they belong in `tests/posix/t_posix.c`.
+- The suites of step 4: libc-test functional subset, SQLite `threadtest3` (SQLite is a pinned port, the amalgamation only: `threadtest3.c` needs the source zip), `threads-excluded.txt`, the mapping-count measurement, INV-0302-5 and INV-0308-3 checks, a TCG run of `test-posix-threads`.
+
+## 9b step 2, third slice of `libposix` threads (branch `work/9b-libc`)
+
+What exists (ADR-0315 items 9 and 10, INV-0315-5 to -7):
+
+- **Fork with siblings and `exec` from a thread** (ADR-0306): `ports/musl/zoraya/atfork.c` (prepare, parent, child: musl's `fork.c` and `__post_Fork` around the snapshot, stdio locks of dead
+  threads freed, other threads' stacks unmapped in the child), `MEM` taken around `snapshot_process` only, the thread table reduced in the child (`threads_after_fork`), `exec` holds
+  the library lock to the end of the old image. The `EAGAIN` guard is gone. `tests/posix/t_posix.c`: `tfork` (500 forks, five kinds of sibling), `tforkthread`, `texec` (100 execs), `tspawn`.
+- **`sigwait`, `sigtimedwait`, `sigwaitinfo`**, `pthread_getattr_np`, `pthread_getname_np`, `pthread_setname_np`; `open` is a cancellation point.
+- **1000-round cases** in `t_threads`: `handlerlock`, `condsig`, `cancelrounds`, `maskedcancel`; in `t_posix`: `treroute`, `tsig`, `twait`.
+- **Suites:** `make test-posix-suites` (13 libc-test thread tests; exclusions with reasons in `tests/libc-test/threads-excluded.txt`), wired into `TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`,
+  `tools/plan-lib.sh`. `tests/posix/threads.script` runs in `make test-posix` (both accelerators in CI). `make posix-threadtest3` is not a step (no `fcntl` record locks).
+
+Not done: INV-0306-3 and -5 checks; INV-0308-3 over fresh logs of all workloads; the mapping-count measurement; a TCG run of `test-posix-threads` and the full `make test-posix` (see the final report of the session); `accept` in a thread (no loopback server in the session).

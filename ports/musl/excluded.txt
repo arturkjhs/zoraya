@@ -51,3 +51,7 @@ src/time/timer_getoverrun.c
 src/time/timer_gettime.c
 src/time/timer_settime.c
 src/time/times.c
+
+# src/thread (retained since part 9b, ADR-0302 item 1). synccall.c signals
+# every thread with tkill and reads gettid: it is only for the set-uid family.
+src/thread/synccall.c
