@@ -144,7 +144,7 @@ struct Calls<'f> {
 }
 
 /// The handles a `Move` list holds from its check until the child exists
-/// (ADR-0313 item 8): held handles are seen, duplicated, closed and moved by
+/// (ADR-0313 item 7): held handles are seen, duplicated, closed and moved by
 /// no sibling, so the checked entry is the one that leaves, however long the
 /// call pauses. Dropping the claim gives them all back; `finish` takes them.
 struct MoveClaim {
@@ -302,7 +302,8 @@ impl Calls<'_> {
             None => None,
         };
         // Last, after every check: the moved handles are held until the child
-        // exists, as in `spawn`. A handle listed twice fails here.
+        // exists, as in `spawn`. (A handle listed twice never gets here: the
+        // decode refuses it, ADR-0313 item 7.)
         for m in request.moves() {
             claim.hold(&mut handles, m.handle, Rights::TRANSFER)?;
         }
