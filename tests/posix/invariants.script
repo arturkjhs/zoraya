@@ -40,7 +40,7 @@
 # file paths of a process with no handler.
 > ZORAYA_POSIX_STATS=1 t_posix files\r
 < t_posix: files passed
-< broker=0 takes=0
+< broker=0 takes=0 futex=0
 < PSURF>
 # ADR-0210: the functions the workloads' own programs need.
 > t_posix products\r

@@ -4,6 +4,7 @@
  * binary with named cases; each prints "t_threads: NAME passed" or a line ending in FAIL and exits 1. Cases that need fork, exec or posix_spawn
  * (posixrun has no broker) are in tests/posix/t_posix.c (tfork, texec, ...).
  *
+ *   t_threads attr      pthread_getattr_np (main and other thread), thread names
  *   t_threads create    create, join, results, pthread_self/equal, detach
  *   t_threads mutex     normal, recursive, errorcheck mutexes; trylock; timedlock
  *   t_threads cond      a producer and consumer ring, broadcast, timed waits
@@ -27,6 +28,7 @@
  *   t_threads overflow  a thread writes far below its stack: the process faults (INV-0302-6)
  *   t_threads all       every case but the last three, which end the process
  */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <locale.h>
 #include <pthread.h>
@@ -1240,6 +1242,277 @@ static void overflow(void)
 	printf("t_threads: not reached FAIL\n");
 }
 
+/* ------------------------------------------------------------ rounds
+ * The 1000-round forms of INV-0304-3, -7, -8 and INV-0305-2, -4, -5. */
+
+#define RR 1000
+
+static volatile int hl_count;
+static volatile pthread_t hl_on;
+static int hl_pipe[2], hl_rd[2];
+
+/* A handler that calls the library and the heap (INV-0304-3). */
+static void hl_handler(int sig)
+{
+	(void)sig;
+	int fd = open("/bin/t_threads", O_RDONLY);
+	if (fd >= 0)
+		close(fd);
+	char c = 'h';
+	if (write(hl_pipe[1], &c, 1) != 1)
+		_exit(70);
+	void *p = malloc(32);
+	free(p);
+	hl_on = pthread_self();
+	hl_count++;
+}
+
+/* Waits (bounded, 10 s) for *v to reach n, with 1 ms sleeps. */
+static void wait_fast(volatile int *v, int n)
+{
+	for (int i = 0; i < 10000 && *v < n; i++) {
+		struct timespec ts = {0, 1000 * 1000};
+		nanosleep(&ts, NULL);
+	}
+	CHECK(*v >= n);
+}
+
+static void install_hl(void)
+{
+	struct sigaction sa;
+	sigset_t none;
+	sigemptyset(&none);
+	OK(pthread_sigmask(SIG_SETMASK, &none, NULL));
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = hl_handler;
+	OK(sigaction(SIGUSR1, &sa, NULL));
+	OK(pipe(hl_pipe));
+	OK(pipe(hl_rd));
+	hl_count = 0;
+}
+
+static void *hl_reader(void *a)
+{
+	char c;
+	sig_ready = 1;
+	for (;;) {
+		ssize_t r = read(hl_rd[0], &c, 1);
+		if (r == 1)
+			break;
+	}
+	return a;
+}
+
+static void handlerlock(void)
+{
+	pthread_t t;
+	install_hl();
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, hl_reader, NULL));
+	wait_ready();
+	for (int i = 0; i < RR; i++) {
+		OK(pthread_kill(t, SIGUSR1));
+		wait_fast(&hl_count, i + 1);
+		if (i % 100 == 0) {
+			/* The main thread's own calls complete meanwhile. */
+			int fd = open("/bin/t_threads", O_RDONLY);
+			CHECK(fd >= 0);
+			close(fd);
+		}
+	}
+	CHECK(pthread_equal(hl_on, t));
+	CHECK(write(hl_rd[1], "x", 1) == 1);
+	OK(pthread_join(t, NULL));
+	printf("t_threads: handlerlock passed\n");
+}
+
+static pthread_mutex_t rc_m = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t rc_m2 = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t rc_c = PTHREAD_COND_INITIALIZER;
+static volatile int rc_pred, rc_done, rc_got, rc_wakes;
+
+static void *rc_waiter(void *a)
+{
+	OK(pthread_mutex_lock(&rc_m));
+	sig_ready = 1;
+	while (!rc_pred) {
+		OK(pthread_cond_wait(&rc_c, &rc_m));
+		rc_wakes++;
+	}
+	rc_done = 1;
+	OK(pthread_mutex_unlock(&rc_m));
+	return a;
+}
+
+static void *rc_locker(void *a)
+{
+	sig_ready = 1;
+	OK(pthread_mutex_lock(&rc_m2));
+	rc_got = 1;
+	OK(pthread_mutex_unlock(&rc_m2));
+	return a;
+}
+
+/* INV-0304-8: a handler runs on a thread blocked in pthread_cond_wait or
+ * pthread_mutex_lock; both go on waiting (the predicate and the lock decide). */
+static void condsig(void)
+{
+	pthread_t t;
+	install_hl();
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, rc_waiter, NULL));
+	wait_ready();
+	for (int i = 0; i < RR; i++) {
+		OK(pthread_kill(t, SIGUSR1));
+		wait_fast(&hl_count, i + 1);
+		CHECK(!rc_done);
+		if (i % 250 == 0)
+			printf("t_threads: condsig cond round %d\n", i);
+	}
+	OK(pthread_mutex_lock(&rc_m));
+	rc_pred = 1;
+	OK(pthread_cond_signal(&rc_c));
+	OK(pthread_mutex_unlock(&rc_m));
+	OK(pthread_join(t, NULL));
+	CHECK(rc_done);
+
+	hl_count = 0;
+	OK(pthread_mutex_lock(&rc_m2));
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, rc_locker, NULL));
+	wait_ready();
+	for (int i = 0; i < RR; i++) {
+		OK(pthread_kill(t, SIGUSR1));
+		wait_fast(&hl_count, i + 1);
+		CHECK(!rc_got);
+	}
+	OK(pthread_mutex_unlock(&rc_m2));
+	OK(pthread_join(t, NULL));
+	CHECK(rc_got);
+	printf("t_threads: condsig passed\n");
+}
+
+static void *opener(void *a)
+{
+	(void)a;
+	for (;;) {
+		int fd = open("/bin/t_threads", O_RDONLY);
+		if (fd >= 0)
+			close(fd);
+	}
+	return NULL;
+}
+
+/* INV-0305-2 and INV-0305-4. */
+static void cancelrounds(void)
+{
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = hl_handler;
+	for (int n = 32; n <= 34; n++) {
+		errno = 0;
+		CHECK(sigaction(n, &sa, NULL) == -1 && errno == EINVAL);
+	}
+	for (int i = 0; i < RR; i++) {
+		pthread_t t;
+		void *r = NULL;
+		OK(pthread_create(&t, NULL, opener, NULL));
+		struct timespec ts = {0, (i % 4) * 300 * 1000};
+		if (ts.tv_nsec)
+			nanosleep(&ts, NULL);
+		OK(pthread_cancel(t));
+		OK(pthread_join(t, &r));
+		CHECK(r == PTHREAD_CANCELED);
+		int fd = open("/bin/t_threads", O_RDONLY);
+		CHECK(fd >= 0);
+		close(fd);
+	}
+	printf("t_threads: cancelrounds passed\n");
+}
+
+static pthread_mutex_t mc_m = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t mc_c = PTHREAD_COND_INITIALIZER;
+static volatile int mc_ready;
+
+static void *masked_waiter(void *a)
+{
+	int old;
+	OK(pthread_setcancelstate(PTHREAD_CANCEL_MASKED, &old));
+	OK(pthread_mutex_lock(&mc_m));
+	mc_ready = 1;
+	int r = pthread_cond_wait(&mc_c, &mc_m);
+	pthread_mutex_unlock(&mc_m);
+	return (void *)(intptr_t)r;
+}
+
+/* INV-0305-5: with masked cancellation a cancel is never lost at the wait:
+ * pthread_cond_wait returns ECANCELED, and the thread is not terminated. */
+static void maskedcancel(void)
+{
+	for (int i = 0; i < RR; i++) {
+		pthread_t t;
+		void *r = NULL;
+		mc_ready = 0;
+		OK(pthread_create(&t, NULL, masked_waiter, NULL));
+		if (i % 2) {
+			wait_fast(&mc_ready, 1);
+			struct timespec ts = {0, 300 * 1000};
+			nanosleep(&ts, NULL);
+		}
+		OK(pthread_cancel(t));
+		OK(pthread_join(t, &r));
+		if (r == PTHREAD_CANCELED || (intptr_t)r != ECANCELED) {
+			printf("t_threads: maskedcancel round %d returned %ld FAIL\n", i, (long)(intptr_t)r);
+			exit(1);
+		}
+	}
+	printf("t_threads: maskedcancel passed\n");
+}
+
+/* ------------------------------------------------------------ attr */
+
+static void *attr_thread(void *a)
+{
+	pthread_attr_t at;
+	void *addr;
+	size_t size;
+	char name[16];
+	pthread_t self = pthread_self();
+	OK(pthread_getattr_np(self, &at));
+	OK(pthread_attr_getstack(&at, &addr, &size));
+	/* The thread's own stack holds a local. */
+	CHECK((char *)&at >= (char *)addr && (char *)&at < (char *)addr + size);
+	OK(pthread_attr_destroy(&at));
+	OK(pthread_setname_np(self, "worker-1"));
+	OK(pthread_getname_np(self, name, sizeof name));
+	CHECK(strcmp(name, "worker-1") == 0);
+	return a;
+}
+
+static void attr(void)
+{
+	pthread_attr_t at;
+	void *addr;
+	size_t size;
+	char name[16];
+	/* The main thread: the stack holds this frame. */
+	OK(pthread_getattr_np(pthread_self(), &at));
+	OK(pthread_attr_getstack(&at, &addr, &size));
+	CHECK(size >= 16384);
+	CHECK((char *)&at >= (char *)addr && (char *)&at < (char *)addr + size);
+	OK(pthread_attr_destroy(&at));
+	pthread_t t;
+	OK(pthread_create(&t, NULL, attr_thread, NULL));
+	/* Another thread's name, set from here (after it ran: it is joined). */
+	OK(pthread_join(t, NULL));
+	OK(pthread_setname_np(pthread_self(), "main"));
+	OK(pthread_getname_np(pthread_self(), name, sizeof name));
+	CHECK(strcmp(name, "main") == 0);
+	CHECK(pthread_setname_np(pthread_self(), "0123456789abcdef") == ERANGE);
+	CHECK(pthread_getname_np(pthread_self(), name, 8) == ERANGE);
+	printf("t_threads: attr passed\n");
+}
+
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1271,6 +1544,11 @@ int main(int argc, char **argv)
 	CASE("signals", signals_case)
 	CASE("selfkill", selfkill)
 	CASE("cancel", cancel_case)
+	CASE("attr", attr)
+	CASE("handlerlock", handlerlock)
+	CASE("condsig", condsig)
+	CASE("cancelrounds", cancelrounds)
+	CASE("maskedcancel", maskedcancel)
 	if (strcmp(mode, "blockedexit") == 0) {
 		blockedexit();
 		return 0;

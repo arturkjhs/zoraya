@@ -17,5 +17,14 @@
 > t_posix tspawn\r
 < t_posix: tspawn passed
 < PSURF> 
+> t_posix tsig\r
+< t_posix: tsig passed
+< PSURF> 
+> t_posix treroute\r
+< t_posix: treroute passed
+< PSURF> 
+> t_posix twait\r
+< t_posix: twait passed
+< PSURF> 
 > exit\r
 < BROKER-STATS

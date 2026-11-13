@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use posix_stats::{
     W4_REQUIRED, call_names, called, check_calls, exempt_names, list_hash, measured, missing,
-    parse, table, tier_list,
+    parse, table, thread_calls, tier_list,
 };
 
 fn read(path: &str) -> Result<String, String> {
@@ -64,6 +64,17 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
         return Err("usage: --calls NAMES LIST TSV EXEMPT LOG... [--require WORKLOAD...]".into());
     };
     let exempt = exempt_names(&read(exempt)?).map_err(|e| format!("{exempt}: {e}"))?;
+    // `--no-thread-calls T9` (INV-0308-3) may precede `--require`.
+    let (rest, t9) = match rest.iter().position(|a| a == "--no-thread-calls") {
+        Some(i) if i + 1 < rest.len() => {
+            let t9 = read(&rest[i + 1])?;
+            let mut v = rest[..i].to_vec();
+            v.extend_from_slice(&rest[i + 2..]);
+            (v, Some(tier_list(&t9)))
+        }
+        _ => (rest.to_vec(), None),
+    };
+    let rest = &rest[..];
     let (logs, required) = match rest.iter().position(|a| a == "--require") {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, &[][..]),
@@ -138,6 +149,14 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
             "posix-stats: warning: exempted but called, so the exemption is stale: {}",
             r.stale_exemptions.join(" ")
         );
+    }
+    if let Some(t9) = &t9 {
+        let threads = thread_calls(t9, &union);
+        show("thread functions called (fails)", &threads);
+        if !threads.is_empty() {
+            eprintln!("posix-stats: INV-0308-3: a workload called thread functions");
+            ok = false;
+        }
     }
     if !r.passed() {
         eprintln!("posix-stats: INV-0005-3: measured tier-list functions never called");

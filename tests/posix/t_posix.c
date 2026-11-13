@@ -68,6 +68,13 @@
  *                      sibling opens files; the new image has only the
  *                      inherited descriptors and is waited for once
  *   t_posix tspawn     posix_spawn and vfork from several threads at once
+ *   t_posix tsig       sigwait in a thread woken by kill(getpid()); sigtimedwait
+ *                      times out (EAGAIN); kill(getpid(), n) goes to a thread
+ *                      that has n unblocked, or stays pending until one does
+ *   t_posix treroute   INV-0304-7: 1000 process signals routed to the one thread
+ *                      that has them unblocked while another sits in sem_wait
+ *   t_posix twait      INV-0302-2: waitpid in a thread while another thread
+ *                      makes library calls
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
  *                      exec and wait (run with ZORAYA_POSIX_STATS for the
@@ -80,6 +87,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <pwd.h>
+#include <semaphore.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
@@ -1327,6 +1335,234 @@ static void tspawn(void)
 }
 
 
+/* ------------------------------------------------------------ signals */
+
+static volatile pthread_t handled_on;
+static volatile int handled_count;
+static void on_usr(int sig)
+{
+	(void)sig;
+	handled_on = pthread_self();
+	handled_count++;
+}
+
+static sigset_t wait_set;
+static volatile int wait_got;
+static void *sigwaiter(void *arg)
+{
+	(void)arg;
+	int sig = 0;
+	int r = sigwait(&wait_set, &sig);
+	wait_got = r == 0 ? sig : -r;
+	return NULL;
+}
+
+static volatile int ready_flag;
+static volatile int leave_flag;
+static void *handler_thread(void *arg)
+{
+	(void)arg;
+	sigset_t none;
+	sigemptyset(&none);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	ready_flag = 1;
+	while (!leave_flag)
+		pause_ms(5);
+	return NULL;
+}
+
+static void tsig(void)
+{
+	/* sigwait in a thread, woken by a process-directed signal that every
+	 * thread blocks. */
+	sigset_t set, all, none;
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	sigfillset(&all);
+	sigemptyset(&none);
+	wait_set = set;
+	CHECK(pthread_sigmask(SIG_BLOCK, &set, NULL) == 0);
+	pthread_t w;
+	wait_got = 0;
+	CHECK(pthread_create(&w, NULL, sigwaiter, NULL) == 0);
+	pause_ms(150);
+	CHECK(wait_got == 0);
+	CHECK(kill(getpid(), SIGUSR1) == 0);
+	CHECK(pthread_join(w, NULL) == 0);
+	CHECK(wait_got == SIGUSR1);
+	/* Taken: it is not pending any more. */
+	struct timespec zero = { 0, 0 };
+	errno = 0;
+	CHECK(sigtimedwait(&set, NULL, &zero) == -1 && errno == EAGAIN);
+	/* A timeout, and a pending signal returned at once with its info. */
+	struct timespec t0, t1, half = { 0, 60000000 };
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	errno = 0;
+	CHECK(sigtimedwait(&set, NULL, &half) == -1 && errno == EAGAIN);
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+	CHECK(ms >= 50 && ms < 2000);
+	CHECK(raise(SIGUSR1) == 0);
+	siginfo_t info;
+	CHECK(sigwaitinfo(&set, &info) == SIGUSR1 && info.si_signo == SIGUSR1);
+
+	/* kill(getpid(), n) with n blocked here and unblocked in a thread:
+	 * the handler runs on that thread. */
+	handle(SIGUSR2, on_usr, 0);
+	sigset_t two;
+	sigemptyset(&two);
+	sigaddset(&two, SIGUSR2);
+	CHECK(pthread_sigmask(SIG_BLOCK, &two, NULL) == 0);
+	pthread_t h;
+	ready_flag = 0;
+	leave_flag = 0;
+	handled_count = 0;
+	/* The new thread starts with the mask in force and clears it. */
+	CHECK(pthread_create(&h, NULL, handler_thread, NULL) == 0);
+	while (!ready_flag)
+		pause_ms(5);
+	CHECK(kill(getpid(), SIGUSR2) == 0);
+	for (int i = 0; i < 200 && !handled_count; i++)
+		pause_ms(5);
+	CHECK(handled_count == 1);
+	CHECK(pthread_equal(handled_on, h));
+	leave_flag = 1;
+	CHECK(pthread_join(h, NULL) == 0);
+
+	/* Every thread blocks it: it stays with the process until a thread
+	 * unblocks it, and runs there. */
+	handled_count = 0;
+	CHECK(kill(getpid(), SIGUSR2) == 0);
+	pause_ms(50);
+	CHECK(handled_count == 0);
+	CHECK(pthread_sigmask(SIG_UNBLOCK, &two, NULL) == 0);
+	CHECK(handled_count == 1);
+	CHECK(pthread_equal(handled_on, pthread_self()));
+	handle(SIGUSR2, SIG_DFL, 0);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	passed();
+}
+
+/* waitpid in a thread leaves the library free for the others (INV-0302-2). */
+static volatile pid_t wait_child_pid;
+static volatile int wait_status;
+static volatile pid_t wait_result;
+static void *waiter(void *arg)
+{
+	(void)arg;
+	int st = 0;
+	wait_result = waitpid(wait_child_pid, &st, 0);
+	wait_status = st;
+	return NULL;
+}
+
+static void twait(void)
+{
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		pause_ms(600);
+		_exit(5);
+	}
+	wait_child_pid = pid;
+	wait_result = 0;
+	pthread_t w;
+	CHECK(pthread_create(&w, NULL, waiter, NULL) == 0);
+	pause_ms(100);
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	for (int i = 0; i < 20; i++) {
+		struct stat st;
+		CHECK(getpid() > 0);
+		CHECK(stat("/etc/zoraya/session", &st) == 0);
+		int fd = open("/etc/zoraya/session", O_RDONLY);
+		CHECK(fd >= 0);
+		close(fd);
+	}
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+	/* The calls did not wait for the child's end (it is still running). */
+	CHECK(ms < 400);
+	CHECK(wait_result == 0);
+	CHECK(pthread_join(w, NULL) == 0);
+	CHECK(wait_result == pid);
+	CHECK(WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 5);
+	passed();
+}
+
+
+/* INV-0304-7 (1000 rounds): A waits in sem_wait with the signal blocked; B
+ * takes the process's signals one by one; A does not return from sem_wait
+ * until the post. (kill of oneself needs the broker's pid: not in
+ * t_threads.) */
+static volatile int rr_stop, rr_a_done, rr_ready;
+static sem_t rr_sem;
+static volatile int rr_count;
+static volatile pthread_t rr_on;
+
+static void rr_handler(int sig)
+{
+	(void)sig;
+	rr_on = pthread_self();
+	rr_count++;
+}
+
+static void *rr_a(void *a)
+{
+	rr_ready = 1;
+	while (sem_wait(&rr_sem) != 0)
+		;
+	rr_a_done = 1;
+	return a;
+}
+
+static void *rr_b(void *a)
+{
+	sigset_t none;
+	sigemptyset(&none);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	while (!rr_stop) {
+		getpid();
+		pause_ms(1);
+	}
+	return a;
+}
+
+static void treroute(void)
+{
+	pthread_t a, b;
+	sigset_t set, none;
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	sigemptyset(&none);
+	handle(SIGUSR1, rr_handler, 0);
+	CHECK(sem_init(&rr_sem, 0, 0) == 0);
+	CHECK(pthread_sigmask(SIG_BLOCK, &set, NULL) == 0);
+	CHECK(pthread_create(&a, NULL, rr_a, NULL) == 0);
+	CHECK(pthread_create(&b, NULL, rr_b, NULL) == 0);
+	while (!rr_ready)
+		pause_ms(5);
+	pause_ms(100);
+	for (int i = 0; i < 1000; i++) {
+		CHECK(kill(getpid(), SIGUSR1) == 0);
+		int j;
+		for (j = 0; j < 5000 && rr_count < i + 1; j++)
+			pause_ms(1);
+		CHECK(rr_count == i + 1);
+		CHECK(!rr_a_done);
+	}
+	CHECK(pthread_equal(rr_on, b));
+	rr_stop = 1;
+	CHECK(pthread_join(b, NULL) == 0);
+	CHECK(sem_post(&rr_sem) == 0);
+	CHECK(pthread_join(a, NULL) == 0);
+	CHECK(rr_a_done);
+	CHECK(pthread_sigmask(SIG_SETMASK, &none, NULL) == 0);
+	handle(SIGUSR1, SIG_DFL, 0);
+	passed();
+}
+
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -1386,6 +1622,12 @@ int main(int argc, char **argv)
 		texec();
 	else if (!strcmp(argv[1], "texec-child"))
 		return texec_child();
+	else if (!strcmp(argv[1], "tsig"))
+		tsig();
+	else if (!strcmp(argv[1], "treroute"))
+		treroute();
+	else if (!strcmp(argv[1], "twait"))
+		twait();
 	else if (!strcmp(argv[1], "tspawn"))
 		tspawn();
 	else if (!strcmp(argv[1], "bench"))

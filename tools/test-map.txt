@@ -6,7 +6,7 @@
 #
 # PREFIX                      STEPS
 docs/                         check
-docs/adr/posix-surface-T9.txt  check test-libposix test-posix-threads
+docs/adr/posix-surface-T9.txt  check test-libposix test-posix-threads test-posix-suites
 README                        check
 CLAUDE.md                     check
 .github/                      check
@@ -26,9 +26,9 @@ tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
-kernel/                       test-qemu test-boot test-net test-posix-threads
+kernel/                       test-qemu test-boot test-net test-posix-threads test-posix-suites
 crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
-crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-gui test-net
+crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-posix-suites test-gui test-net
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
@@ -119,16 +119,17 @@ tests/posix-net/              test-net
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix test-posix-gui test-net
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-net
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
-user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix
+user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix
 user/src/posix_child.rs       test-posix test-net
-ports/                        test-libposix test-posix-threads test-posix test-posix-gui test-net
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-net
 tests/posix/                  test-posix test-posix-gui test-tour-gui
-tests/posix-core/             test-libposix test-posix-threads
+tests/posix-core/             test-libposix test-posix-threads test-posix-suites
+tests/libc-test/             test-posix-suites
 
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run

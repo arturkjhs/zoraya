@@ -106,7 +106,7 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    (`pselect` with 1024 descriptors: 16 KiB of sources, 4 x 128 bytes of sets), usually under 300 bytes. A cancel that arrives before the call, or between calls, leaks nothing.
    Restructuring so that the wait returns to the top of the wrapper before the test is possible (a `CANCELLED` marker through `state()`), and is follow-up work if a
    program cancels threads in a loop.
-6. **Not in this slice** (kept as known limits; see the report): `sigwait`/`sigtimedwait`; `pthread_getattr_np` and thread names; the `check-cancel-points` script;
+6. **Not in this slice** (kept as known limits; see the report): the `check-cancel-points` script;
    `waitpid` and `accept` in a thread are covered by the host retry model and not by an in-QEMU case, because `posixrun` has no broker (a
    `posix_spawn` there hangs): they belong in `tests/posix/t_posix.c`'s full session.
    (The temporary refusal of `fork` with siblings, `EAGAIN`, was removed by item 9.)
@@ -136,6 +136,17 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    musl's list, so its stack is not unmapped in the child until the child ends; (c) `abort`'s lock is not taken (`abort` is the library's); (d) `defer_waits` stays on in the child
    (each long wait costs a port, as in a threaded process); (e) INV-0306-3 (usage returns to the single-thread figure) and INV-0306-5 (a refused charge leaves no thread
    parked) have no in-QEMU check yet.
+10. **Third slice** (sigwait, attributes, rounds). `sigwait`, `sigtimedwait` and `sigwaitinfo` (`ffi/procs.rs`, `wait_signals`) block the set for the call, take a signal of it from the
+   thread-pending or process-pending set, wait with `wait_for` and the thread's port, and give `EAGAIN` at the deadline, `EINTR` when a handler of another signal ran;
+   a thread in the wait is a target of routing (`ThreadRec::sigwait`, host test). They are in `posix-surface-T9.txt` with `pthread_getattr_np`, `pthread_getname_np`, `pthread_setname_np`
+   (`ports/musl/zoraya/attr.c`; names live in the thread table; the main thread's stack is the kernel's 64 KiB). `open`/`openat` are cancellation points (item 5's list; the
+   1000-round test found they were not). The statistics line has `futex=N` (INV-0302-5). `posix-stats --no-thread-calls` checks INV-0308-3 against the call log's union; it
+   was written and unit-tested but not run over fresh logs of all the T1 workloads (`make test-posix-long`), so INV-0308-3 stays "not yet applicable".
+   Test layout: cases that need `kill(getpid())` or `fork` cannot run under `posixrun` (no broker: `getpid()` is 0 there and `kill` of oneself goes to the broker and hangs),
+   so `treroute`, `tsig`, `twait`, `tfork*`, `texec`, `tspawn` are in `tests/posix/t_posix.c`. **Suites (ADR-0309):** `make test-posix-suites` builds and runs 13 thread tests of musl's libc-test
+   (pinned in `ports/sources.lock`, `libctest`; `tests/libc-test/threads-excluded.txt` names the 12 left out with reasons: asynchronous cancel, robust mutexes (`ENOSYS`), priority inheritance,
+   named semaphores, dynamic loading, tests that fork or fill memory). SQLite's `threadtest3` is pinned (`sqlitesrc`) and builds, but every scenario fails at its first write with
+   `SQLITE_IOERR_LOCK` because `fcntl` record locks (`F_SETLK`) are `EINVAL`: it is `make posix-threadtest3`, not a step, until record locks have an ADR.
 
 ## Consequences
 
@@ -167,6 +178,9 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
 ## Open questions
 
 - Whether the port per wait should be cached per thread once the thread table carries it (a measurement of a read-heavy threaded program decides).
+- `fcntl` record locks (`F_SETLK`, `F_GETLK`): needed by SQLite's unix VFS; a per-process emulation (success when no other process holds a conflicting lock) would unblock `threadtest3`; a decision for the architect.
+- Robust mutexes (`pthread_mutexattr_setrobust`) are `ENOSYS`; whether a thread that ends holding a mutex should be visible to the others is open.
+- Not checked yet: INV-0306-3 (usage returns to one thread's figure) and INV-0306-5 (a refused charge leaves no thread parked); INV-0308-3 as above; the mapping-count measurement of a 128-thread process (risk 10) was not made.
 - The `check-cancel-points` script (INV-0305-3) is not written; the points are the calls named in item 5.
 - Whether the wait should hand the cancel back to the top of the wrapper (item 5, the bounded leak).
 

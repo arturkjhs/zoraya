@@ -58,7 +58,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: suites ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -467,6 +467,18 @@ $(WORKLOADS)/sqlite: $(LOCK)
 $(WORKLOADS)/hello: $(LOCK)
 	@mkdir -p $(WORKLOADS)
 	$(call unpack,hello,ports/patches/hello)
+	@touch $@
+# The thread suites of part 9b (ADR-0309): musl's libc-test and SQLite's source
+# tree (its test/threadtest3.c), unpacked for `make test-posix-suites`. Test
+# inputs only: nothing of them enters libc.a or the rootfs.
+suites: $(WORKLOADS)/libctest $(WORKLOADS)/sqlitesrc
+$(WORKLOADS)/libctest: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,libctest,ports/patches/libctest)
+	@touch $@
+$(WORKLOADS)/sqlitesrc: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,sqlitesrc,ports/patches/sqlitesrc)
 	@touch $@
 $(WORKLOADS_STAMP): $(addprefix $(WORKLOADS)/,tcc lua sqlite hello)
 	@mkdir -p $(dir $@) && touch $@

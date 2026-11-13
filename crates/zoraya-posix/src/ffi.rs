@@ -245,13 +245,19 @@ const USER_WAKE: u64 = u64::MAX;
 /// The kernel's wait on an address behind the lock's trait (ADR-0301).
 struct Futex;
 
+/// The futex calls this process made (`futex_wait`, `futex_wake`, through the
+/// library lock or musl's): zero in a program with one thread (INV-0302-5).
+static FUTEX_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 impl Wait for Futex {
     fn wait(&self, word: &AtomicU32, expected: u32) {
+        FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
         // Any return is an early return to the lock's loop, which re-checks.
         let _ = zoraya_rt::futex_wait(word as *const AtomicU32 as u64, expected, DEADLINE_INFINITE);
     }
 
     fn wake(&self, word: &AtomicU32) {
+        FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
         let _ = zoraya_rt::futex_wake(word as *const AtomicU32 as u64, 1);
     }
 }
@@ -1028,8 +1034,16 @@ fn print_stats() {
         let mean = s.resolve_ns.checked_div(s.resolutions).unwrap_or(0);
         let _ = writeln!(
             line,
-            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={} broker={} takes={}",
-            s.resolutions, mean, s.requests, s.seeks, s.shares, s.reports, s.broker, s.takes
+            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={} broker={} takes={} futex={}",
+            s.resolutions,
+            mean,
+            s.requests,
+            s.seeks,
+            s.shares,
+            s.reports,
+            s.broker,
+            s.takes,
+            FUTEX_CALLS.load(Ordering::Relaxed)
         );
         let mean = |total: u64, n: u64| total.checked_div(n).unwrap_or(0);
         if s.prepares > 0 || s.forks > 0 {
@@ -1297,6 +1311,7 @@ extern "C" fn zoraya_posix_futex(
     address2: i64,
     value3: i64,
 ) -> i64 {
+    FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
     const WAIT: i64 = 0;
     const WAKE: i64 = 1;
     const REQUEUE: i64 = 3;
@@ -1456,6 +1471,57 @@ extern "C" fn zoraya_posix_interrupt(tid: i64) -> i64 {
     }
 }
 
+/// `pthread_setname_np`/`getname_np` (`attr.c`): thread `tid`'s name, 16 bytes
+/// at `buf`; `set` writes it from `buf` (NUL-terminated, at most 15 bytes).
+/// Returns 0 or `-errno`.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_thread_name(tid: i64, buf: *mut u8, set: i64) -> i64 {
+    let Ok(tid) = u32::try_from(tid) else {
+        return -i64::from(EINVAL);
+    };
+    let r = with(|p| {
+        if set != 0 {
+            let mut name = [0u8; 16];
+            // SAFETY: C's contract: `buf` holds a NUL-terminated string; at
+            // most 16 bytes are read, the 16th only to find it missing.
+            let n = (0..16)
+                .take_while(|&i| unsafe { buf.add(i).read() } != 0)
+                .count();
+            for (i, b) in name.iter_mut().enumerate().take(n.min(15)) {
+                // SAFETY: as above, within the first `n` bytes.
+                *b = unsafe { buf.add(i).read() };
+            }
+            if n > 15 {
+                return Err(crate::errno::ERANGE);
+            }
+            p.set_thread_name(tid, &name[..n])
+        } else {
+            p.thread_name(tid).map(|n| {
+                // SAFETY: C's contract: `buf` has room for 16 bytes.
+                unsafe { ptr::copy_nonoverlapping(n.as_ptr(), buf, 16) }
+            })
+        }
+    });
+    match r {
+        None => -i64::from(ENOSYS),
+        Some(Err(e)) => -i64::from(e),
+        Some(Ok(())) => 0,
+    }
+}
+
+/// The main thread's stack (`pthread_getattr_np`): the top and the size the
+/// kernel gave every process.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_main_stack(out: *mut [usize; 2]) {
+    // SAFETY: C's contract: `out` holds two words.
+    unsafe {
+        out.write([
+            zoraya_abi::spawn::USER_STACK_TOP as usize,
+            zoraya_abi::spawn::USER_STACK_SIZE as usize,
+        ])
+    };
+}
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
     zoraya_rt::process_exit_terminated(6)
@@ -1606,6 +1672,8 @@ extern "C" fn open(path: *const c_char, flags: i32, mode: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn openat(dirfd: i32, path: *const c_char, flags: i32, mode: u32) -> i32 {
+    // A cancellation point (ADR-0305 item 2), at the top, outside the lock.
+    testcancel();
     // SAFETY: C's contract: `path` is a string.
     let path = unsafe { c_str(path) };
     int(path.and_then(|path| state(|p| p.open(dirfd, path, flags as u32, mode))))

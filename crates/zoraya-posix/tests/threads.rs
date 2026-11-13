@@ -250,3 +250,75 @@ fn a_fork_child_keeps_the_calling_thread_only() {
     r.p.thread_add(500, 5, None);
     assert_eq!(r.p.thread_count(), 2);
 }
+
+#[test]
+fn a_process_signal_goes_to_a_thread_in_sigwait_that_blocks_it() {
+    let mut r = three();
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    // Thread 3 blocks USR1 and waits for it in sigwait; thread 2 blocks it
+    // and does not wait.
+    r.p.switch_to(200);
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    r.p.switch_to(300);
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    r.p.set_sigwait(bit(USR1));
+    r.p.switch_to(100);
+    r.p.sys.interrupts.clear();
+    let was = r.p.signals.pending & bit(USR1) != 0;
+    assert_eq!(r.p.signals.take(USR1), Taken::Pending);
+    r.p.route(USR1, was);
+    assert_eq!(r.p.signals.shared, bit(USR1));
+    assert_eq!(
+        r.p.sys.interrupts,
+        vec![(1003, None)],
+        "the waiter is woken"
+    );
+}
+
+#[test]
+fn thread_names_are_kept_per_thread() {
+    let mut r = three();
+    assert_eq!(r.p.thread_name(2), Ok([0; 16]));
+    r.p.set_thread_name(2, b"worker").unwrap();
+    let mut want = [0u8; 16];
+    want[..6].copy_from_slice(b"worker");
+    assert_eq!(r.p.thread_name(2), Ok(want));
+    assert_eq!(r.p.thread_name(3), Ok([0; 16]));
+    assert_eq!(r.p.set_thread_name(2, &[b'x'; 16]), Err(ERANGE));
+    assert_eq!(r.p.set_thread_name(9, b"x"), Err(ESRCH));
+    assert_eq!(r.p.thread_name(9), Err(ESRCH));
+}
+
+/// INV-0304-5: with threads in the table and no handler, no request is taken,
+/// no thread is interrupted, and nothing polls.
+#[test]
+fn no_request_is_taken_and_no_thread_interrupted_without_a_handler() {
+    let mut r = rig();
+    r.p.switch_to(100);
+    r.p.thread_add(200, 2, Some(1002));
+    r.p.thread_add(300, 3, Some(1003));
+    for who in [100, 200, 300, 100] {
+        r.p.switch_to(who);
+        let fd =
+            r.p.open(-100, b"/t.txt", 0o102, 0o644)
+                .unwrap_or_else(|e| panic!("open: {e}"));
+        assert_eq!(r.write(fd, b"data"), Ok(4));
+        r.p.close(fd).unwrap();
+        let (a, b) = r.p.pipe(0).unwrap();
+        r.p.close(a).unwrap();
+        r.p.close(b).unwrap();
+        assert!(!r.p.should_poll());
+    }
+    assert_eq!(r.p.stats.takes, 0);
+    assert!(r.p.sys.interrupts.is_empty());
+}
+
+/// INV-0305-4: the signal numbers above `signal::MAX` (musl's internal 32 to
+/// 34 among them) cannot be given an action.
+#[test]
+fn no_handler_can_be_installed_for_musls_internal_numbers() {
+    let mut r = rig();
+    for n in [32, 33, 34, 35, 64] {
+        assert_eq!(r.p.signals.set(n, Some(HANDLER)), Err(EINVAL), "{n}");
+    }
+}

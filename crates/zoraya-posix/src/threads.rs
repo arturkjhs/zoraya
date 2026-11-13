@@ -36,6 +36,12 @@ pub struct ThreadRec<H> {
     /// An interrupt came (a cancel, or a signal sent to it) since the thread
     /// last looked.
     pub interrupted: bool,
+    /// The signals the thread waits for in `sigwait`/`sigtimedwait` (blocked
+    /// on purpose): a process-directed one is routed to it as to a thread
+    /// that has it unblocked.
+    pub sigwait: u64,
+    /// `pthread_setname_np`: up to 15 bytes and a NUL.
+    pub name: [u8; 16],
 }
 
 pub struct Threads<H> {
@@ -79,6 +85,8 @@ impl<S: Sys> Posix<S> {
                 pending: self.signals.pending,
                 wait_port: None,
                 interrupted: false,
+                sigwait: 0,
+                name: [0; 16],
             });
             self.threads.cur = tp;
             return;
@@ -120,6 +128,8 @@ impl<S: Sys> Posix<S> {
             pending: 0,
             wait_port: None,
             interrupted: false,
+            sigwait: 0,
+            name: [0; 16],
         });
     }
 
@@ -217,6 +227,40 @@ impl<S: Sys> Posix<S> {
         interrupted && port.is_some() || ready
     }
 
+    /// `pthread_setname_np` (musl: `ERANGE` over 15 bytes) for thread `tid`.
+    pub fn set_thread_name(&mut self, tid: u32, name: &[u8]) -> Result<(), i32> {
+        if name.len() > 15 {
+            return Err(crate::errno::ERANGE);
+        }
+        let r = self
+            .threads
+            .list
+            .iter_mut()
+            .find(|r| r.tid == tid)
+            .ok_or(ESRCH)?;
+        r.name = [0; 16];
+        r.name[..name.len()].copy_from_slice(name);
+        Ok(())
+    }
+
+    /// `pthread_getname_np`: the name of thread `tid`, NUL padded.
+    pub fn thread_name(&self, tid: u32) -> Result<[u8; 16], i32> {
+        self.threads
+            .list
+            .iter()
+            .find(|r| r.tid == tid)
+            .map(|r| r.name)
+            .ok_or(ESRCH)
+    }
+
+    /// The calling thread waits for `set` (0: it no longer does).
+    pub fn set_sigwait(&mut self, set: u64) {
+        let cur = self.threads.cur;
+        if let Some(r) = self.threads.list.iter_mut().find(|r| r.tp == cur) {
+            r.sigwait = set;
+        }
+    }
+
     /// Whether the calling thread was interrupted since it last looked; and
     /// forgets it.
     pub fn take_interrupted(&mut self) -> bool {
@@ -248,7 +292,7 @@ impl<S: Sys> Posix<S> {
             .list
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.tp != cur && r.blocked & bit(n) == 0)
+            .filter(|(_, r)| r.tp != cur && (r.blocked & bit(n) == 0 || r.sigwait & bit(n) != 0))
             .min_by_key(|(_, r)| (r.wait_port.is_none(), r.tid))
             .map(|(i, _)| i);
         if let Some(i) = pick {

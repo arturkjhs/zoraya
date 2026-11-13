@@ -449,6 +449,133 @@ extern "C" fn pause() -> i32 {
     suspend_with(None)
 }
 
+/// `sigtimedwait` and its kin (ADR-0304 item 3, ADR-0315 item 10): waits until
+/// a signal of `set` is pending for this thread or for the process, takes it
+/// off (no handler runs for it) and returns its number. `set` is blocked
+/// meanwhile, as POSIX asks the caller to have done; the mask is put back.
+/// Other signals with handlers run their handlers, and the wait is then
+/// `EINTR`. `deadline` is absolute on the monotonic clock; `EAGAIN` once it passes.
+fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
+    testcancel();
+    // `SIGKILL` and `SIGSTOP` cannot be waited for.
+    let set = set & !(crate::signals::bit(9) | crate::signals::bit(19));
+    let old = state(|p| {
+        p.set_sigwait(set);
+        p.signals.mask(crate::signals::SIG_BLOCK, Some(set))
+    })?;
+    let result = loop {
+        let d = deliver();
+        let got = with(|p| {
+            let ready = (p.signals.pending | p.signals.shared) & set;
+            if ready == 0 {
+                return None;
+            }
+            let n = ready.trailing_zeros() + 1;
+            p.signals.pending &= !crate::signals::bit(n);
+            p.signals.shared &= !crate::signals::bit(n);
+            Some(n)
+        })
+        .flatten();
+        if let Some(n) = got {
+            break Ok(n);
+        }
+        if d.ran {
+            break Err(EINTR);
+        }
+        if deadline.is_some_and(|t| zoraya_rt::clock_monotonic() >= t) {
+            break Err(EAGAIN);
+        }
+        match state(|p| p.wait_for(&[], deadline)) {
+            Err(EINTR) | Ok(_) => {}
+            Err(EINVAL) => zoraya_rt::sleep_until(u64::MAX),
+            Err(e) => break Err(e),
+        }
+        testcancel();
+    };
+    let _ = state(|p| {
+        p.set_sigwait(0);
+        p.signals.mask(SIG_SETMASK, Some(old))
+    });
+    poll();
+    result
+}
+
+/// Fills a `siginfo_t` (128 bytes) for a signal taken by a wait: number and
+/// `SI_USER`; the sender is not known.
+///
+/// # Safety
+///
+/// `info` is NULL or a writable `siginfo_t`.
+unsafe fn write_siginfo(info: *mut u8, n: u32) {
+    if !info.is_null() {
+        // SAFETY: the caller's contract; musl's layout puts `si_signo` at 0.
+        unsafe {
+            ptr::write_bytes(info, 0, 128);
+            (info as *mut i32).write(n as i32);
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn sigtimedwait(set: *const u64, info: *mut u8, timeout: *const [i64; 2]) -> i32 {
+    // SAFETY: C's contract: `set` is a `sigset_t`.
+    let Some(set) = (unsafe { read_set(set) }) else {
+        return int(Err(EFAULT));
+    };
+    let deadline = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: C's contract: `timeout` is a `struct timespec`.
+        let [sec, nsec] = unsafe { timeout.read() };
+        if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
+            return int(Err(EINVAL));
+        }
+        Some(
+            zoraya_rt::clock_monotonic()
+                .saturating_add((sec as u64).saturating_mul(1_000_000_000))
+                .saturating_add(nsec as u64)
+                .min(u64::MAX - 1),
+        )
+    };
+    match wait_signals(set, deadline) {
+        Ok(n) => {
+            // SAFETY: as above, `info` is NULL or a `siginfo_t`.
+            unsafe { write_siginfo(info, n) };
+            n as i32
+        }
+        Err(e) => int(Err(e)),
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn sigwaitinfo(set: *const u64, info: *mut u8) -> i32 {
+    sigtimedwait(set, info, ptr::null())
+}
+
+/// `sigwait` returns the error number, and does not stop for a handler.
+#[unsafe(no_mangle)]
+extern "C" fn sigwait(set: *const u64, sig: *mut i32) -> i32 {
+    loop {
+        match sigtimedwait(set, ptr::null_mut(), ptr::null()) {
+            -1 => {
+                // SAFETY: musl's errno.
+                let e = unsafe { *__errno_location() };
+                if e == EINTR {
+                    continue;
+                }
+                return e;
+            }
+            n => {
+                if !sig.is_null() {
+                    // SAFETY: C's contract: `sig` is an int.
+                    unsafe { sig.write(n) };
+                }
+                return 0;
+            }
+        }
+    }
+}
+
 /// `nanosleep`'s core (ADR-0106 item 10): the port's deadline, `EINTR`
 /// with the time left when a handler ran.
 fn sleep_until(deadline: u64) -> Result<(), u64> {

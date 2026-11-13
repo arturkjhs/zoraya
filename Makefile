@@ -635,9 +635,50 @@ test-posix-threads: $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_threads
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_THREADS)/root $(POSIX_THREADS)/disk.img && \
-	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_THREADS)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_THREADS)/disk.img || exit 1; done
+
+# Part 9b's thread suites (ADR-0309 items 1 and 2): musl's libc-test thread
+# tests (tests/libc-test/threads-excluded.txt names what is left out and why),
+# each run by posixrun on the image of test-libposix. They need
+# `make fetch-ports` once, as the ports do; the sources are unpacked by
+# `make -f ports/Makefile suites`.
+POSIX_SUITES := $(BUILD)/posix-suites
+test-posix-suites: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc
+	@$(MAKE) -s -f ports/Makefile check-libc
+	@$(MAKE) -s -f ports/Makefile suites
+	rm -rf $(POSIX_SUITES) && mkdir -p $(POSIX_SUITES)/root/bin/lct $(POSIX_SUITES)/root/work
+	cp -R rootfs/. $(POSIX_SUITES)/root/
+	tests/libc-test/build.sh $(BUILD)/ports/workloads/libctest $(POSIX_SUITES)/lct
+	cp $(POSIX_SUITES)/lct/bin/* $(POSIX_SUITES)/root/bin/lct/
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(POSIX_SUITES)/root/bin/lct/*
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/root $(POSIX_SUITES)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_SUITES)/lct/script --label posix-suites-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_SUITES)/disk.img || exit 1; done
+
+# SQLite's threadtest3 (ADR-0309 item 2), NOT a step of make test: it builds and
+# starts, and every scenario fails at its first write with SQLITE_IOERR_LOCK
+# (3850) because libposix has no `fcntl` record locks (F_SETLK is EINVAL), which
+# needs a decision of its own. Run by hand with `make posix-threadtest3` once
+# they exist.
+posix-threadtest3: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc suites
+	@$(MAKE) -s -f ports/Makefile workloads
+	rm -rf $(POSIX_SUITES)/tt && mkdir -p $(POSIX_SUITES)/tt/root/bin $(POSIX_SUITES)/tt/root/work
+	cp -R rootfs/. $(POSIX_SUITES)/tt/root/
+	tools/zcc -O2 -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL \
+	  -I$(BUILD)/ports/workloads/sqlite -I$(BUILD)/ports/workloads/sqlitesrc/src -I$(BUILD)/ports/workloads/sqlitesrc/test \
+	  -o $(POSIX_SUITES)/tt/root/bin/threadtest3 $(BUILD)/ports/workloads/sqlitesrc/test/threadtest3.c \
+	  $(BUILD)/ports/workloads/sqlite/sqlite3.c $(BUILD)/ports/workloads/sqlitesrc/src/test_multiplex.c \
+	  tests/libc-test/strerror_r.c
+	target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/tt/root $(POSIX_SUITES)/tt/disk.img
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/threadtest3.script --label posix-threadtest3 -- \
+	  $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/tt/disk.img --accel auto $(KERNEL)
 
 # The POSIX session (TASK-21, ADR-0110): dash on ttyd through the broker, on
 # an image of the ports' root (make ports' build/rootfs-posix), rootfs/ and
@@ -759,6 +800,7 @@ posix-calls:
 	target/debug/posix-stats --calls $(BUILD)/sysroot/usr/lib/zoraya-calls.txt \
 	  docs/adr/posix-surface-T1.txt tools/posix-surface/results/dynamic-programs.tsv \
 	  docs/adr/0211-acceptance-choices-of-stage-6e.md \
+	  --no-thread-calls docs/adr/posix-surface-T9.txt \
 	  $(foreach r,$(POSIX_T1_RUNS),$(wildcard $(foreach a,auto hvf tcg,$(POSIX_LOGS)/posix-$(r)-$(a).log))) \
 	  --require $(POSIX_T1_RUNS)
 
@@ -1040,7 +1082,7 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
 TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

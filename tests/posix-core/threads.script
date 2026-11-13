@@ -54,6 +54,26 @@
 < posixrun: exit 0
 < \r\n~> 
 # Long waits are made outside the library lock (INV-0302-2, ADR-0302 item 9).
+> posixrun /bin/t_threads attr\r
+< t_threads: attr passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads handlerlock\r
+< t_threads: handlerlock passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads condsig\r
+< t_threads: condsig passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cancelrounds\r
+< t_threads: cancelrounds passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads maskedcancel\r
+< t_threads: maskedcancel passed
+< posixrun: exit 0
+< \r\n~> 
 > posixrun /bin/t_threads waits\r
 < t_threads: waits passed
 < posixrun: exit 0

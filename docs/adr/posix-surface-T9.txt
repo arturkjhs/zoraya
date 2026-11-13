@@ -2,9 +2,6 @@
 # item 2, part 9b), beside docs/adr/posix-surface-T1.txt. Not exported:
 # sem_open, sem_close, sem_unlink, pthread_getcpuclockid, the priority-ceiling
 # pair, pthread_{get,set}attr_default_np.
-# pthread_getattr_np, pthread_getname_np and pthread_setname_np are in ADR-0308
-# item 2 but are not defined yet (ADR-0314 item 6): they join the list when
-# they are.
 call_once
 cnd_broadcast
 cnd_destroy
@@ -61,7 +58,9 @@ pthread_create
 pthread_detach
 pthread_equal
 pthread_exit
+pthread_getattr_np
 pthread_getconcurrency
+pthread_getname_np
 pthread_getschedparam
 pthread_getspecific
 pthread_join
@@ -103,6 +102,7 @@ pthread_self
 pthread_setcancelstate
 pthread_setcanceltype
 pthread_setconcurrency
+pthread_setname_np
 pthread_setschedparam
 pthread_setschedprio
 pthread_setspecific
@@ -122,6 +122,9 @@ sem_post
 sem_timedwait
 sem_trywait
 sem_wait
+sigtimedwait
+sigwait
+sigwaitinfo
 thrd_create
 thrd_current
 thrd_detach

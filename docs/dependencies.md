@@ -135,6 +135,8 @@ measured T1 workloads).
 | pdpmake | `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` (2.0.4) | public domain (the Unlicense) | `/bin/pdpmake`, TASK-02's comparison make for W2 and W4 (ADR-0110) |
 | Lua | 5.5.1 | MIT | W2's source, in the image only, built inside Zoraya |
 | SQLite | 3540100 | public domain | W3's source, in the image only, built inside Zoraya |
+| libc-test | `63e36e934e8f2bedf645303a90b64098e2af6c8f` | MIT | the thread tests of musl's conformance suite, built by `make test-posix-suites` (ADR-0309); a test input, never in the image or `libc.a` |
+| SQLite source tree | 3540100 | public domain | `test/threadtest3.c` (ADR-0309 item 2); a test input |
 | GNU hello | 2.12.3 | GPL-3.0-or-later | W4's source, in the image only, built inside Zoraya |
 
 ### Mutation testing

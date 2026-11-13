@@ -30,8 +30,8 @@ SHIM_REPLACED := src/thread/clone src/thread/aarch64/clone \
 	src/thread/pthread_cancel src/thread/pthread_sigmask
 # Dropped, not replaced: they reach for files, /proc or prctl, which Zoraya has
 # none of, and no program of this port needs them. Named semaphores are
-# ADR-0308 item 2; pthread_getattr_np waits for the main thread's stack
-# (ADR-0302 open question).
+# ADR-0308 item 2. pthread_getattr_np and the name calls are replaced by
+# ports/musl/zoraya/attr.c (they read /proc and call prctl).
 SHIM_REPLACED += src/thread/sem_open src/thread/sem_unlink \
 	src/thread/pthread_getattr_np src/thread/pthread_getname_np src/thread/pthread_setname_np
 SHIM_SRCS := $(wildcard ports/musl/zoraya/*.c)

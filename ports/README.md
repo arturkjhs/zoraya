@@ -41,6 +41,8 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | pdpmake | 2.0.4, commit `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` | public domain (`LICENSE`, the Unlicense) | none |
 | Lua | 5.5.1 | MIT (`doc/readme.html`) | none; W2's source, built inside Zoraya |
 | SQLite | 3.54.1 (amalgamation 3540100) | public domain (the blessing at the head of `sqlite3.c`) | none; W3's source, built inside Zoraya |
+| libc-test | `63e36e934e8f2bedf645303a90b64098e2af6c8f` (a snapshot of repo.or.cz/libc-test.git; the hash of the archive was taken at first fetch, ADR-0109 trust on first use) | MIT (its `COPYRIGHT`) | none; `make test-posix-suites` builds its thread tests (ADR-0309), which `tests/libc-test/threads-excluded.txt` narrows |
+| SQLite source tree | 3.54.1 (`sqlite-src-3540100.zip`) | public domain | none; `test/threadtest3.c` for ADR-0309 item 2 |
 | GNU hello | 2.12.3 | GPL-3.0-or-later (`COPYING`, `src/hello.c`) | none; W4's source, built inside Zoraya |
 
 Lua, SQLite and hello are not built on the host: `make -f ports/Makefile workloads`
