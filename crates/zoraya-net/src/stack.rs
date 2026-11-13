@@ -186,6 +186,7 @@ impl<L: Link> Stack<L> {
             events: Vec::new(),
             extra: crate::tcp::Extra::default(),
         };
+        stack.seed_ports(seed);
         match stack.config.mode.clone() {
             Mode::Dhcp => {
                 let mut socket = dhcpv4::Socket::new();

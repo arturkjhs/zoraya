@@ -866,3 +866,39 @@ mod service;
 mod accounts;
 #[path = "conn_tests.rs"]
 mod conn;
+
+fn first_port(seed: u64) -> u16 {
+    let (a, _b, _q) = End::pair();
+    let mut stack = Stack::new(a, CLIENT_MAC, static_config(), 0, seed).unwrap();
+    stack.ephemeral_port()
+}
+
+#[test]
+fn stacks_with_different_seeds_start_on_different_ports() {
+    assert_ne!(first_port(1), first_port(2));
+    assert_ne!(first_port(0), first_port(12345));
+}
+
+#[test]
+fn the_same_seed_gives_the_same_first_port() {
+    assert_eq!(first_port(0xdead_beef), first_port(0xdead_beef));
+}
+
+#[test]
+fn every_seed_gives_a_port_in_the_ephemeral_range() {
+    for seed in [0, 1, 16383, 16384, 16385, u64::MAX, u64::MAX - 1, 1 << 40] {
+        assert!((49152..=65535).contains(&first_port(seed)), "seed {seed}");
+    }
+    // The range has 16384 ports: the last seed of a round gives 65535.
+    assert_eq!(first_port(16383), 65535);
+    assert_eq!(first_port(0), 49152);
+}
+
+#[test]
+fn the_ports_wrap_from_the_top_back_into_range() {
+    let (a, _b, _q) = End::pair();
+    let mut stack = Stack::new(a, CLIENT_MAC, static_config(), 0, 16383).unwrap();
+    assert_eq!(stack.ephemeral_port(), 65535);
+    assert_eq!(stack.ephemeral_port(), 49152);
+    assert_eq!(stack.ephemeral_port(), 49153);
+}
