@@ -108,7 +108,7 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
   that was not ending and loses its last thread is ended by that leave. *Check:* `cargo test -p zoraya-thread`.
 - **INV-0313-2.** A futex waiter that returns for any reason leaves no node on the process's wait list: after any mixture of
   wakes, time-outs and interrupts, a `futex_wake` of the address wakes none. *Check:* `t_thread` in `make test-qemu`.
-- **INV-0313-3.** A thread that has stored its `clear` word has already given its `threads` figure and kernel memory back: the job's
+- **INV-0313-3.** A thread that has stored its `clear` word has already given its `threads` figure and kernel memory back (the memory half is checked with one joiner, the figure also with 70 joiners woken across a yield): the job's
   usage read right after `join` and the close of the thread's handle equals its value before the thread was made: the refund precedes the store and the wake of the `clear` word, which may yield with 64 or more waiters. *Check:* `t_thread` in `make test-qemu`.
 
 ## Open questions

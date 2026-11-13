@@ -733,7 +733,10 @@ extern "C" fn clear_waiter(arg: u64) -> ! {
 /// The `clear` store wakes 70 waiters, 64 at a time with a step point
 /// between; a woken one reads the job's `threads` figure while the exiting
 /// thread is paused in the wake. It must already be refunded. The sweep wake
-/// is `FORCE_SWITCH`ed so that the pause hands over the CPU.
+/// is `FORCE_SWITCH`ed so that the pause hands over the CPU. Only the
+/// `threads` figure is read here; the memory half of INV-0313-3 is checked
+/// without a yield, in `join_and_unmap_rounds` (the per-thread memory cannot
+/// be told from the stacks' pages and tables by a figure read).
 fn clear_refund_precedes_the_wake() {
     CLEAR_GO.store(0, SeqCst);
     CLEAR_READY.store(0, SeqCst);
