@@ -60,17 +60,24 @@
  *                      holding malloc, stdio and the library, and two
  *                      counters on different pages): the child has one thread,
  *                      mallocs, prints, opens, makes a thread of its own, and
- *                      sees the counters as of one instant
+ *                      sees the counters as of one instant; every fourth
+ *                      child then execs a new image
  *   t_posix tforkthread
  *                      fork in a non-main thread; pthread_atfork handlers in
  *                      their order; the child's pthread_self and join
  *   t_posix texec      INV-0306-4: exec from a non-main thread while a
- *                      sibling opens files; the new image has only the
- *                      inherited descriptors and is waited for once
+ *                      sibling opens files and another writes 'O' to a pipe;
+ *                      the new image writes 'N', and no 'O' follows an 'N';
+ *                      it has only the inherited descriptors and is waited
+ *                      for once
  *   t_posix tspawn     posix_spawn and vfork from several threads at once
  *   t_posix tsig       sigwait in a thread woken by kill(getpid()); sigtimedwait
  *                      times out (EAGAIN); kill(getpid(), n) goes to a thread
  *                      that has n unblocked, or stays pending until one does
+ *   t_posix tsigdfl    sigwait, sigwaitinfo, sigtimedwait take SIGTERM and SIGCHLD
+ *                      sent by another process under SIG_DFL (the process
+ *                      survives); a thread cancelled in sigwait leaves the
+ *                      process able to take its signals
  *   t_posix treroute   INV-0304-7: 1000 process signals routed to the one thread
  *                      that has them unblocked while another sits in sem_wait
  *   t_posix twait      INV-0302-2: waitpid in a thread while another thread
@@ -1123,6 +1130,10 @@ static void *noop_thread(void *a)
 	return a;
 }
 
+/* Set before a fork: the child then ends by exec of a new image (INV-0306-1
+ * names exec: the child's locks are free for it as for malloc). */
+static int fork_then_exec;
+
 /* The child's checks; returns an exit code, 0 for all well. */
 static int fork_child_checks(void)
 {
@@ -1156,6 +1167,11 @@ static int fork_child_checks(void)
 		return 14;
 	if (pthread_join(t, &r) != 0 || r != (void *)5)
 		return 15;
+	if (fork_then_exec) {
+		char *argv[] = { SELF, "exit0", NULL };
+		execve(SELF, argv, environ);
+		return 17;
+	}
 	return 0;
 }
 
@@ -1165,6 +1181,7 @@ static void tfork(void)
 	start_siblings(t);
 	pause_ms(20);
 	for (int i = 0; i < 500; i++) {
+		fork_then_exec = i % 4 == 0;
 		pid_t pid = fork();
 		CHECK(pid >= 0);
 		if (pid == 0)
@@ -1236,12 +1253,17 @@ static void tforkthread(void)
 	passed();
 }
 
-/* exec from a non-main thread: the sibling opens files all the while. */
+/* exec from a non-main thread: the sibling opens files all the while, and
+ * another writes 'O' to a pipe that the new image writes 'N' to: no 'O'
+ * follows the first 'N' (INV-0306-4). */
+static int exec_pipe_fd = -1;
+static char exec_pipe_arg[16];
+
 static void *exec_thread(void *arg)
 {
 	(void)arg;
 	pause_ms(5);
-	char *argv[] = { "t_posix", "texec-child", NULL };
+	char *argv[] = { "t_posix", "texec-child", exec_pipe_arg, NULL };
 	execve(SELF, argv, environ);
 	_exit(99);
 }
@@ -1257,35 +1279,78 @@ static void *opener(void *arg)
 	return NULL;
 }
 
-/* The new image: no descriptor above 2 (the opener's were O_CLOEXEC; a
- * leak would be one the exec copied while it was open without the flag
- * honoured), and it is alone. */
-static int texec_child(void)
+/* The old image's writer: it holds the pipe's write end and writes 'O'. */
+static void *old_writer(void *arg)
 {
+	(void)arg;
+	for (;;)
+		if (write(exec_pipe_fd, "O", 1) < 0 && errno != EINTR)
+			_exit(97);
+	return NULL;
+}
+
+/* The new image: no descriptor above 2 but the pipe's (the opener's were
+ * O_CLOEXEC; a leak would be one the exec copied while it was open without
+ * the flag honoured), it says 'N' on the pipe, and it is alone. */
+static int texec_child(const char *pipe_fd)
+{
+	int keep = pipe_fd ? atoi(pipe_fd) : -1;
 	for (int fd = 3; fd < 64; fd++)
-		if (fcntl(fd, F_GETFD) != -1)
+		if (fd != keep && fcntl(fd, F_GETFD) != -1)
 			return 40 + fd % 20;
+	if (keep >= 0) {
+		for (int i = 0; i < 20; i++)
+			if (write(keep, "N", 1) != 1)
+				return 96;
+			else
+				pause_ms(1);
+	}
 	return 7;
 }
 
 static void texec(void)
 {
 	for (int i = 0; i < 100; i++) {
+		int pfd[2];
+		CHECK(pipe(pfd) == 0);
 		pid_t pid = fork();
 		CHECK(pid >= 0);
 		if (pid == 0) {
-			pthread_t a, b, c;
+			close(pfd[0]);
+			exec_pipe_fd = pfd[1];
+			snprintf(exec_pipe_arg, sizeof exec_pipe_arg, "%d", pfd[1]);
+			pthread_t a, b, c, d;
 			if (pthread_create(&a, NULL, opener, NULL) ||
 			    pthread_create(&b, NULL, sibling, (void *)3) ||
+			    pthread_create(&d, NULL, old_writer, NULL) ||
 			    pthread_create(&c, NULL, exec_thread, NULL))
 				_exit(98);
 			/* The main thread waits to be ended by the exec. */
 			for (;;)
 				pause_ms(1000);
 		}
+		close(pfd[1]);
+		/* Read to the end of the pipe (every writer is gone then). */
+		int seen_new = 0, late_old = 0;
+		char buf[256];
+		ssize_t n;
+		while ((n = read(pfd[0], buf, sizeof buf)) != 0) {
+			if (n < 0 && errno == EINTR)
+				continue;
+			CHECK(n > 0);
+			for (ssize_t j = 0; j < n; j++) {
+				if (buf[j] == 'N')
+					seen_new = 1;
+				else if (buf[j] == 'O' && seen_new)
+					late_old++;
+			}
+		}
+		close(pfd[0]);
 		int status = reap(pid);
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 7) {
-			printf("t_posix: texec: round %d status 0x%x\n", i, status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 7 || !seen_new ||
+		    late_old) {
+			printf("t_posix: texec: round %d status 0x%x new %d old after new %d\n",
+			       i, status, seen_new, late_old);
 			CHECK(0);
 		}
 	}
@@ -1439,6 +1504,99 @@ static void tsig(void)
 	CHECK(handled_count == 1);
 	CHECK(pthread_equal(handled_on, pthread_self()));
 	handle(SIGUSR2, SIG_DFL, 0);
+	pthread_sigmask(SIG_SETMASK, &none, NULL);
+	passed();
+}
+
+/* sigwait, sigwaitinfo and sigtimedwait take signals of other processes under
+ * SIG_DFL (ADR-0315 item 10, a deviation from ADR-0106 item 2; INV-0106-2),
+ * and a cancelled sigwait puts its state back before the thread ends. */
+static volatile int dfl_variant;
+static volatile int dfl_got;
+static void *dfl_waiter(void *arg)
+{
+	(void)arg;
+	int sig = 0;
+	struct timespec far = { 20, 0 };
+	siginfo_t info;
+	switch (dfl_variant) {
+	case 0:
+		dfl_got = sigwait(&wait_set, &sig) == 0 ? sig : -1;
+		break;
+	case 1:
+		dfl_got = sigtimedwait(&wait_set, &info, &far);
+		break;
+	default:
+		dfl_got = sigwaitinfo(&wait_set, &info);
+		break;
+	}
+	return NULL;
+}
+
+static void *cancel_waiter(void *arg)
+{
+	(void)arg;
+	int sig;
+	sigwait(&wait_set, &sig);
+	return NULL;
+}
+
+static void tsigdfl(void)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGTERM);
+	sigaddset(&set, SIGCHLD);
+	wait_set = set;
+	CHECK(signal(SIGTERM, SIG_DFL) != SIG_ERR);
+	CHECK(signal(SIGCHLD, SIG_DFL) != SIG_ERR);
+	CHECK(pthread_sigmask(SIG_BLOCK, &set, NULL) == 0);
+	int sigs[2] = { SIGTERM, SIGCHLD };
+	for (dfl_variant = 0; dfl_variant < 3; dfl_variant++) {
+		for (int k = 0; k < 2; k++) {
+			pthread_t w;
+			dfl_got = 0;
+			CHECK(pthread_create(&w, NULL, dfl_waiter, NULL) == 0);
+			pid_t pid = fork();
+			CHECK(pid >= 0);
+			if (pid == 0) {
+				pause_ms(150);
+				_exit(kill(getppid(), sigs[k]) == 0 ? 0 : 1);
+			}
+			CHECK(pthread_join(w, NULL) == 0);
+			if (dfl_got != sigs[k])
+				printf("t_posix: tsigdfl: variant %d sig %d got %d\n",
+				       dfl_variant, sigs[k], dfl_got);
+			CHECK(dfl_got == sigs[k]);
+			int status = reap(pid);
+			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+		}
+	}
+	/* A timeout is EAGAIN. (Outside a wait a blocked SIGTERM under SIG_DFL
+	 * ends the process, INV-0106-4, so the restored default is not probed.) */
+	struct timespec shortt = { 0, 100000000 };
+	errno = 0;
+	CHECK(sigtimedwait(&set, NULL, &shortt) == -1 && errno == EAGAIN);
+
+	/* A thread cancelled in sigwait: the wait is undone, the mask comes back
+	 * (the thread ends last), and a signal of its set goes to this thread. */
+	sigset_t usr2;
+	sigemptyset(&usr2);
+	sigaddset(&usr2, SIGUSR2);
+	wait_set = usr2;
+	CHECK(pthread_sigmask(SIG_BLOCK, &usr2, NULL) == 0);
+	pthread_t c;
+	CHECK(pthread_create(&c, NULL, cancel_waiter, NULL) == 0);
+	pause_ms(150);
+	CHECK(pthread_cancel(c) == 0);
+	void *ret = NULL;
+	CHECK(pthread_join(c, &ret) == 0);
+	CHECK(ret == PTHREAD_CANCELED);
+	CHECK(kill(getpid(), SIGUSR2) == 0);
+	struct timespec second = { 1, 0 };
+	CHECK(sigtimedwait(&usr2, NULL, &second) == SIGUSR2);
+	sigset_t none;
+	sigemptyset(&none);
 	pthread_sigmask(SIG_SETMASK, &none, NULL);
 	passed();
 }
@@ -1610,6 +1768,8 @@ int main(int argc, char **argv)
 		live(atoi(argv[2]));
 	else if (!strcmp(argv[1], "exit7"))
 		return 7;
+	else if (!strcmp(argv[1], "exit0"))
+		return 0;
 	else if (!strcmp(argv[1], "tstp"))
 		tstp();
 	else if (!strcmp(argv[1], "notstp"))
@@ -1621,9 +1781,11 @@ int main(int argc, char **argv)
 	else if (!strcmp(argv[1], "texec"))
 		texec();
 	else if (!strcmp(argv[1], "texec-child"))
-		return texec_child();
+		return texec_child(argc > 2 ? argv[2] : NULL);
 	else if (!strcmp(argv[1], "tsig"))
 		tsig();
+	else if (!strcmp(argv[1], "tsigdfl"))
+		tsigdfl();
 	else if (!strcmp(argv[1], "treroute"))
 		treroute();
 	else if (!strcmp(argv[1], "twait"))

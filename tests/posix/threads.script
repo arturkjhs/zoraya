@@ -20,6 +20,9 @@
 > t_posix tsig\r
 < t_posix: tsig passed
 < PSURF> 
+> t_posix tsigdfl\r
+< t_posix: tsigdfl passed
+< PSURF> 
 > t_posix treroute\r
 < t_posix: treroute passed
 < PSURF> 
