@@ -1,6 +1,6 @@
 # ADR-0313: Threads in the kernel as built: the owner is the last to leave, lazy thread lists, parked threads woken by one
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0270, ADR-0285, ADR-0300, ADR-0301, ADR-0306, ADR-0307
 - **Evidence:** CP-10, CP-14, DM-004, GR-011, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -149,4 +149,6 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
 - A measured sweep cost (ADR-0301 INV-0301-4) over ADR-0270's bound.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+The architect accepted it as recommended: the five refinements, including the bounded window between the refund and the reaper's free (item 5).
