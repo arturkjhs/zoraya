@@ -1,7 +1,10 @@
 # TASK-27 9c, ADR-0320: an asyncio HTTPS client. argv: HOST PORT. The system's
 # roots (/system/tls, given with the network) are the only trust; a refused
 # certificate ends before any request byte (INV-0320-3).
-import asyncio, ssl, sys
+import asyncio, faulthandler, ssl, sys
+
+# A hang is a failure with a traceback of every thread, not a wait for the runner's timeout.
+faulthandler.dump_traceback_later(40, exit=True)
 
 host, port = sys.argv[1], int(sys.argv[2])
 
@@ -21,8 +24,15 @@ async def get():
     await w.drain()
     body = await r.read()
     w.close()
+    print("closing", flush=True)
+    try:
+        await asyncio.wait_for(w.wait_closed(), 10)
+    except Exception as e:
+        print("wait_closed", type(e).__name__, flush=True)
     print("status", body.split(b"\r\n", 1)[0].decode())
     print("body", body.split(b"\r\n\r\n", 1)[1].decode().strip().replace("\n", " | "))
     return 0
 
-sys.exit(asyncio.run(get()))
+rc = asyncio.run(get())
+print("loop done", flush=True)
+sys.exit(rc)
