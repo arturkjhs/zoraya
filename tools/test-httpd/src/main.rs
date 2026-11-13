@@ -99,6 +99,102 @@ fn body(out: &mut TcpStream, n: u64, slow: bool) -> std::io::Result<()> {
     }
 }
 
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in data {
+        c ^= u32::from(b);
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                (c >> 1) ^ 0xedb8_8320
+            } else {
+                c >> 1
+            };
+        }
+    }
+    !c
+}
+
+/// A solid-colour RGB PNG of `w x h` (stored deflate blocks: no compressor).
+fn solid_png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let mut raw = Vec::new();
+    for _ in 0..h {
+        raw.extend_from_slice(&[0]);
+        for _ in 0..w {
+            raw.extend_from_slice(&rgb);
+        }
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &raw {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    let mut z = vec![0x78, 0x01];
+    let mut chunks = raw.chunks(65535).peekable();
+    while let Some(c) = chunks.next() {
+        z.push(u8::from(chunks.peek().is_none()));
+        z.extend_from_slice(&(c.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(c.len() as u16)).to_le_bytes());
+        z.extend_from_slice(c);
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+    };
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(b"IDAT", &z);
+    chunk(b"IEND", &[]);
+    out
+}
+
+/// The pages of the NetSurf test (`make test-netsurf`, TASK-27 9d): HTML with
+/// a style sheet and an image of known colours, a form that submits and a
+/// result page. Returns the content type and the body.
+fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    let (route, query) = path.split_once('?').unwrap_or((path, ""));
+    match route {
+        "/ns/page" => Some((
+            "text/html",
+            br#"<html><head><title>NS page</title><link rel="stylesheet" type="text/css" href="/ns/style.css"></head>
+<body style="margin:0;background:#ffffff"><div class="blue"></div>
+<img src="/ns/green.png" width="100" height="60" alt="green">
+<form action="/ns/result" method="get"><input type="text" name="q" size="12"><input type="submit" value="Go"></form>
+</body></html>
+"#
+            .to_vec(),
+        )),
+        "/ns/style.css" => Some((
+            "text/css",
+            b".blue{width:200px;height:60px;background:#0000ff}\n".to_vec(),
+        )),
+        "/ns/green.png" => Some(("image/png", solid_png(100, 60, [0, 255, 0]))),
+        "/ns/result" => {
+            let q: String = query
+                .strip_prefix("q=")
+                .unwrap_or("")
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect();
+            Some((
+                "text/html",
+                format!(
+                    "<html><head><title>NS result</title></head><body style=\"margin:0;background:#ffff00\"><h1>Result: {q}</h1></body></html>\n"
+                )
+                .into_bytes(),
+            ))
+        }
+        _ => None,
+    }
+}
+
 fn serve(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(TIMEOUT));
     let _ = stream.set_write_timeout(Some(TIMEOUT));
@@ -135,7 +231,20 @@ fn serve(mut stream: TcpStream) {
         return;
     }
     let size = |s: &str| s.parse::<u64>().ok().filter(|n| *n <= MAX_BODY);
+    let ns = ns_page(path);
     let result = match path.split('/').collect::<Vec<_>>().as_slice() {
+        _ if ns.is_some() => {
+            let (kind, bytes) = ns.unwrap_or(("text/plain", Vec::new()));
+            let h = head(
+                200,
+                "OK",
+                &[
+                    ("Content-Type", kind.into()),
+                    ("Content-Length", bytes.len().to_string()),
+                ],
+            );
+            stream.write_all(&h).and_then(|()| stream.write_all(&bytes))
+        }
         ["", ""] => {
             let h = head(
                 200,

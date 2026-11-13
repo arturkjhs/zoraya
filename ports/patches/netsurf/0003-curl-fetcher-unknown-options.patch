@@ -1,0 +1,16 @@
+--- a/netsurf/content/fetchers/curl.c
++++ b/netsurf/content/fetchers/curl.c
+@@ -1181,9 +1181,12 @@
+ 	const char *auth;
+ 
+ #undef SETOPT
++/* Zoraya (ADR-0318): libcurl is built without cookies and proxies (ADR-0310),
++ * so CURLOPT_COOKIE and CURLOPT_PROXY* are unknown options there; NetSurf sets
++ * them on every fetch. Ignore that one error: no cookies, no proxy. */
+ #define SETOPT(option, value) { \
+ 	code = curl_easy_setopt(f->curl_handle, option, value);	\
+-	if (code != CURLE_OK)					\
++	if (code != CURLE_OK && code != CURLE_UNKNOWN_OPTION)	\
+ 		return code;					\
+ 	}
+ 

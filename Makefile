@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps netsurf test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads \
+.PHONY: FORCE apps netsurf test-netsurf test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -589,6 +589,40 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 		else echo '[apps] ok: curl and wget sent no request byte to the refused TLS servers'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(APPS_DISK); rc=$$?; fi; \
+	exit $$rc
+
+# TASK-27 9d (proposed ADR-0317, ADR-0318): NetSurf in a window of the desktop. The
+# image is test-apps' (rootfs/, build/rootfs-apps with `netsurf`, the test PKI's root,
+# test names), the GUI headless with the network, the runner's HTTP and TLS servers
+# on the host (tools/test-httpd). The script tests/gui/netsurf.script reads the
+# screen by colour regions and takes screendumps (docs/netsurf/ in the report).
+NS_ROOT := $(BUILD)/netsurf-root
+NS_DISK := $(BUILD)/netsurf-disk.img
+NS_TEMPLATE := tests/gui/netsurf.script
+NS_SCRIPT := $(BUILD)/netsurf.script
+NS_HTTP_READY := $(BUILD)/netsurf-httpd.port
+NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
+NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(NS_SCRIPT) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --net --net-open --mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
+test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
+	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
+	: > $(NS_HTTP_READY) && : > $(NS_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 400 --ready-file $(NS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NS_TLS_READY) > target/test-logs/test-httpd-netsurf.log 2>&1 & echo $$! > $(BUILD)/netsurf-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/netsurf-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(NS_HTTP_READY) ] && [ -s $(NS_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(NS_TLS_READY)); tlsvalid=$$1; \
+	port=$$(cat $(NS_HTTP_READY)); \
+	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[netsurf] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-netsurf.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
+	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
 	exit $$rc
 
 # An interactive machine on QEMU's user network without `restrict`: the guest

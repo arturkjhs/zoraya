@@ -1,0 +1,17 @@
+# TASK-27 9d: NetSurf in a window (exploratory).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+type netsurf http://10.0.2.2:@PORT@/\r
+pause 20000
+drag 400 119 700 640
+pause 1500
+shot netsurf-term
+click 122 119
+pause 3000
+shot netsurf-closed
+click 300 87
+pause 500
+type poweroff\r
+exit
