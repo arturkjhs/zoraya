@@ -15,7 +15,7 @@ re-run for this block. **To be updated when 9c, 9d and `work/tls-options` merge.
 |---|---|---|
 | **9b POSIX threads** | **merged.** Design `e4ff190` (ADR-0300 to ADR-0309); kernel step `02d32e5` (calls 56 to 61, futex, the thread object, the `threads` quota; ADR-0313); `libposix` threads `a0cfc1f` (musl's pthreads over the shim, long waits outside the lock, per-thread signals, deferred cancellation, `fork` and `exec` with siblings, `make test-posix-suites`; ADR-0314, ADR-0315); record locks and SQLite's `threadtest3` `936db09` (ADR-0319). Sections "9b ..." below. | `stage-9b` = `936db09` |
 | **9a TLS for C, zlib, curl, wget** | **merged** `da73e69`: OpenSSL 3.5.9 (with threads), zlib 1.3.1, curl 8.23.0, wget 1.25.0 built by `zcc` (`make apps`), `getrandom` in `libposix`, the `names` key, `/system/tls` for a POSIX program with the network, `EXTRA_ROOT` (`tools/run-disk.sh`); the per-launch leak fixed by `work/9a-leak` (`a9f0cfe`, merged into `work/9a`). Sections "9a ..." below. | `stage-9a` = `da73e69` |
-| 9c CPython | **in progress** on `work/9c` (head `74d33e7`). Its section: `make python` (CPython 3.15.2, static, five patches), `make test-python` `PASS: 55 steps` under HVF, the `regrtest` subset 3,114 tests `Result: SUCCESS`; ADR-0320 `proposed`; not run: TCG, the independent review, CI. `candidate/work-9c-a` (`6ccd7e2`, run 43457392275) failed in the build job (the host Python's `ensurepip` needs `zlib`); `74d33e7` configures the host Python `--without-ensurepip`; no candidate run of it yet. | |
+| 9c CPython | **in progress** on `work/9c` (head `74d33e7` before the review fixes of the section below). Its section: `make python` (CPython 3.15.2, static, six patches), `make test-python` `PASS: 55 steps` under HVF, the `regrtest` subset 3,114 tests `Result: SUCCESS`; ADR-0320 `proposed`; not run: TCG, the independent review, CI. `candidate/work-9c-a` (`6ccd7e2`, run 43457392275) failed in the build job (the host Python's `ensurepip` needs `zlib`); `74d33e7` configures the host Python `--without-ensurepip`; no candidate run of it yet. | |
 | 9d NetSurf | **in progress** on `work/9d` (head `0bf5f7a`). Its section: NetSurf 3.11 in a window of its own (`window` line, a client channel from the panel, `zoraya-surface`), `make test-netsurf` passes locally under HVF (HTTP page with CSS, image and form; HTTPS; expired certificate and Proceed with 0 request bytes); review findings fixed (`eba8400`, `454af63`, `bdfd4d9`, `95decc5`, `57a4b55`, `335a68d`); ADR-0317 and ADR-0318 accepted (recorded on the branch, `a58cbe0`). `candidate/work-9d-a` (`a58cbe0`, run 43455266029) failed in the build job (`netsurf-libs.stamp`); no candidate run of the later heads yet. | |
 | `work/tls-options` | **in progress** (head `8563ca3`): curl and wget patches refuse every option that turns off, replaces or weakens TLS verification or the roots (curl 23 options by `C_...` code, wget five settings), cases in `tests/shell/apps.script`; ADR-0321 `proposed`. No report section and no candidate run yet. | |
 
@@ -72,6 +72,9 @@ fresh logs, the mapping-count measurement of a 128-thread process, `check-cancel
    `work/tls-options` has none. Merge order and a `candidate-full/` run before `stage-9c`/`stage-9d`: to be updated when they merge.
 5. **The `Makefile` comment above `RUN_NET_CMD`** still gives the 8.5 MiB per-launch leak as the reason for 512 MiB; the leak is fixed
    (`a9f0cfe`; `apps-launches` runs 16 launches on 128 MiB). Whether the run machines go back to less memory is open.
+6. **INV-0312-1 for a program that turns verification off** (9c re-review W6): the ADR-0312 note now states only the fact;
+   the proposed reading (the invariant covers connections with this OpenSSL's defaults) is ADR-0320 item 10. Decide it, or ask for a
+   superseding ADR.
 
 ### Manual checks for the architect
 
@@ -473,6 +476,42 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
 6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
    runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.
 
+## 9c: CPython (branch `work/9c`, 2026-11-13)
+
+### What exists
+- `ports/sources.lock` pins Python-3.15.2.tar.xz by the SHA-256 python.org publishes (`8b5536d2...797de`); python.org also publishes a
+  Sigstore bundle, and checking it is optional and not done (an earlier note here and in the session said python.org published no SHA-256: wrong, corrected on the architect's word).
+- `make python` (`ports/Makefile`): host Python 3.15.2 (`build/ports/hostpython`; `build/ports/host` until the merge of `main` with 9d, whose host tools are there), SQLite for the target, `libpyshim.a` (`ports/apps/pyshim.c`), the static
+  cross build with `zcc`, the install, byte code compiled by the host Python (`unchecked-hash`), and `build/rootfs-python`: `bin/python3` 15.5 MB and
+  `usr/lib/python3.15` 37 MB, 1226 files, 52 MB in all (`du` 52,364 KiB). The recipe ran end to end three times in this session (each patch change rebuilds it from the unpacked source).
+- Six patches in `ports/patches/python/` (the sixth, `urllib` without proxies from the environment, is from the review round) (`_ssl` fd BIO; environment, byte code and user site off; `asyncio` self-pipe on `os.pipe`; `main` on a 2 MiB thread stack (8 MiB at first; see the review round); no `pyvenv.cfg` search in `getpath.py` and `site.py`), `ac_cv_header_sys_ioctl_h=no`
+  (so `set_blocking` uses `fcntl`: libposix's `ioctl` serves terminals only).
+- `user/describe/posix/python3.cmd`; `tools/run-disk.sh` with several colon-separated `EXTRA_ROOT`s and `DISK_SIZE`; `tests/python/` (`smoke.py`, `https_client.py`, `regr.py`, `regr-modules.txt`, `regr-ignore.txt`), `tests/shell/python.script`, `make test-python`;
+  CI wiring (`TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`, `tools/plan-lib.sh`, the workflow's cache paths and 30-minute timeout, `ci-build` builds `python`).
+- ADR-0320 (`proposed`, INV-0320-1 to -5), `docs/design.md` section "CPython (stage 9, 9c)".
+
+### What was run (HVF, M4, this session)
+- `make python`: ok (3 times). `make adr-check` and `make check`: ok after the ADR and the index (before the CI wiring; `make check-ci-jobs` ok after it).
+- Found by running, fixed: a process starts on a 64 KiB stack and CPython's overflow guard keeps 32 KiB, so the first `import` gave `RecursionError` (patch 0004); `os.set_blocking` failed with `ENOTTY` (ioctl `FIONBIO`: configure without `<sys/ioctl.h>`);
+  the shell hinted about `/pyvenv.cfg` (patch 0005); `ssl.create_default_context()` refuses the test PKI's certificates (no Authority Key Identifier, `VERIFY_X509_STRICT`): the test client clears that flag alone; `regrtest` needs `--tempdir` below `/tmp` (the program is not given a `stat` of `/`).
+- In the guest, one run of each part (by hand, in a harness with the same disk and script lines; the full run is the last item): `python3 -V`; `-c`; exit statuses; `smoke.py` (flags `1 True 1`, `sqlite3` 3.54.1, `ssl` OpenSSL 3.5.9, `asyncio`, a thread, `fork`); `grants python3 ...` with and without `+net`;
+  the `asyncio` HTTPS client: `HTTP/1.1 200`, the page; an expired certificate refused ("certificate has expired"), a wrong-name one refused ("Hostname mismatch"), the server's log showing `ended after 0 request bytes` for both; `regr.py`: 17 modules, 3,114 tests, 51 skipped, `Result: SUCCESS`, 31 s.
+- `make test-python` end to end: `PASS: 55 steps`, the server's log shows 0 request bytes for both refused certificates, `zoraya-fsck` clean (HVF; ~10 minutes with the build).
+- Not run: TCG; CI (no candidate tag, as told); `make test-changed`; the independent review (opus-review).
+
+### Limits found (recorded in `docs/design.md`)
+- A program that Python starts has no random connection (ADR-0310, the same as under `dash`): another `python3` fails at start. Nine test cases of the listed modules start interpreters and are left out (`tests/python/regr-ignore.txt`, each with its reason).
+- `test_threading` (CPython's) first failed with `Out of memory`; that was `os.fork`, not thread creation (see the review round: it is in the subset now); `test_thread`, `test_threading_local` and `test_queue` pass. A very large thread stack gives `MemoryError`.
+- No `socketpair`, `AF_UNIX`, server sockets, `posix_spawn`, shared modules, `ctypes`.
+- The shell prints hints for `/dev/urandom` and `/system/tls/roots` after a script that touches them without the grants.
+
+### Decisions (taken without asking, as told)
+Patch 0004 (the thread) over a larger initial stack in the kernel (an ABI constant for every process); no weakening of Python's hash randomization for a child with no random connection (the test cases are left out instead);
+no `-E`-style environment variable honoured; the client test clears `VERIFY_X509_STRICT` and not the test PKI's certificates (shared with other steps).
+
+### For the independent review (opus-review)
+Patch 0001 (`_ssl` BIO) and 0004 (the thread and the exit path: `exit()` from a non-main thread); the shims in `pyshim.c` (`dirfd`, `gethostbyname`, `execv`); the surface block of ADR-0320 (170 names added to `libc.a`);
+the environment policy (patch 0002) as a security boundary; `tools/run-disk.sh`'s colon-separated roots and the key; the `test_threading` out-of-memory finding.
 ## 9d: NetSurf, step 1 (branch `work/9d`, 2026-11-13, in progress)
 
 Done: proposed ADR-0317 (a POSIX program's window: a `window` line in the description, a client channel from the panel
@@ -613,6 +652,21 @@ scale 2 (the scale-2 run failed there before). Ran: `make check`; `cargo test -p
 `make test-qemu-one` has no GPU and skips `t_gui`); `make test-gui` for `terminal:auto:1` (82 steps), `windows:auto:1`
 and `windows:auto:2` (62 steps each).
 
+## 9c: the merge of `main` with 9d (branch `work/9c`, 2026-11-13)
+
+`origin/main` (65b1522, 9d merged) merged into `work/9c`; every conflict keeps both sides (the netsurf and python targets,
+`TEST_STEPS`, `ci-build` builds `netsurf` and `python`, `tools/ci-tests.txt`, `plan-lib.sh`, one map line per prefix with the
+union of both steps). The host Python's prefix is now `build/ports/hostpython`: `build/ports/host` holds NetSurf's host tools,
+which CI's artifact must keep for `test-netsurf` (it left `build/ports/host` out for Python before). The workflow's build job
+has 60 minutes (a cold cache builds NetSurf and CPython; not measured), ADR-0317 is in the ports cache's key, and the long-job
+timeout names `test-apps` and `test-netsurf` as well. Invariants Total 628. No ADR number collides (0320 here; 0321
+`work/tls-options`, 0322 and 0323 `work/9e`).
+
+Run on the Mac (HVF): `make check` ok; `make netsurf` ok (`bin/netsurf` 12.5 MB); `make test-python` (rebuilt with the new
+prefix) `PASS: 107 steps`, 0 request bytes to the refused servers; `make apps`; a 192M volume of `rootfs-apps` (curl, wget,
+NetSurf) and `rootfs-python` (77.9 MB of files, 20,195 of 49,152 blocks) made by `tools/run-disk.sh`, `zoraya-fsck` clean;
+`make test-hand-run` ok (three runs PASS). Not run: `make test-netsurf`, CI.
+
 ## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
 
 Result accepted by the architect: the `ubuntu-24.04-arm` runner has no KVM (`/dev/kvm` missing; `-accel kvm` exits 1 with
@@ -623,3 +677,35 @@ caches, run 43447464141). Decision: move nothing; `work/ci-arm` is not merged an
 probe (its workflow `ci-arm.yml` runs on pushes to that branch and by hand). The details are in
 `docs/research/ci-arm.md` on that branch.
 
+
+### 9c review round (opus-review E1 to N14, branch `work/9c`)
+- E1 the host python is configured `--without-ensurepip` (the CI container has no zlib headers); a clean host build with no zlib module and `compileall` of the stage ran here. E2 the interpreter thread ends the process with `exit(status)`; `smoke.py` checks a fork child's `sys.exit(5)` (5) and an uncaught exception (1): passed. N12 no fallback to 64 KiB (message, status 1).
+- W3 the stack is 2 MiB, measured: fork capacity on 512 MiB 11 (8 MiB), 15 (2 MiB), 16 (1 MiB); 1 and 2 MiB passed the deep-nesting cases (`json`, `ast`, `compile`, `pickle`, `copy`). W4 the `Out of memory` was `os.fork`; `test_threading` runs with no OOM at 2 MiB (not run: `--mem 2G`; not repeated at 8 MiB); 4000 threads leave the mapping table flat; recursion past about 33,000 frames ends in `MemoryError` (one mapping per frame chunk, the table is 256).
+- W5 `-c` and `-m` no longer import from the current directory (patch 0002); a script imports from its own directory, said in `python3.cmd`; `cwd none` considered, not taken. W6 the default context finds the roots: text fixed, test added. W7 `http.client` and `urllib` tests. W8 negative `grants` check. W9 INV-0312-1 note, Python not mediated, patch 0006. W10 markers, `build/python-testlib`, the artifact and cache leave out the Python trees (cold `ci-build` time not measured here). W11 `test-run-disk.sh` extended. N13 `pause`, `sched_yield`. N14 text slips.
+
+
+### 9c re-review round (opus-review E1, W2 to W6, N7 to N10, branch `work/9c`)
+- E1 the python stamp's recipe makes the source and host trees again when a marker outlived them; `make check-python-cache` (in
+  `make check` and CI's checks job) dry-runs a cache hit and was seen failing on a mutant (host tree check removed). Simulated here
+  for real: the trees deleted, the markers kept, `libzshim.a` touched: `make python` printed "unpacking it again" and "building the
+  host python again" and ended with the image part (52,332 KiB, 1226 files). CI: the libc ADRs are in the ports cache key and get the
+  old time, `build/ports/workloads` is cached, the build job's timeout is 45 min (N7; cold time on CI still not measured).
+- W2 patch 0004: the main thread blocks every signal; Ctrl-C to `time.sleep(30)` prints `KeyboardInterrupt` (new script step). N10
+  `abort()` after the join. W3 the negative grants check looks between the report's first line and the prompt; the mutant
+  "roots without +net" (`tools/mutants/python-9c.toml`) failed it ("/system/tls appeared where it must not"). W4 exactly 3
+  zero-byte connections per refused server, none with more. W5 patch 0002: only a script file adds a directory; `python3 <
+  fromstdin.py` does not import the planted module. N8 `-D_PYTHREAD_NAME_MAXLEN=15`; `test_set_name` out of the ignore list.
+- `make test-python` (HVF): `PASS: 107 steps`, regrtest 3,329 tests, 66 skipped, `Result: SUCCESS`, 15 min 59 s; `test_threading`
+  took 15 min 29 s and ended "env changed" (uncaught `OSError` in `do_fork_and_wait` threads, the `fork` out-of-memory of ADR-0320's
+  open question); regrtest counts it as passed. Its time is a risk for the 30-min CI test job under TCG: not measured on CI.
+- Candidate run 43488132441 (`candidate/work-9c-e`): every job passed but `make test-python`, cancelled at the 30-minute job
+  limit under TCG (CI has no HVF): the script's steps before regrtest took 4.5 minutes, regrtest's first 11 modules 1.6 minutes,
+  and `test_queue` had not ended after 22 minutes. The recipe also lacked `exit $rc` (a failed run left make with status 0); fixed.
+  Split (ADR-0320 item 9): `make test-python` (`python.script`, without regrtest), `make test-python-regr` (`python-regr.script`,
+  regr.py over `regr-modules.txt`), each a CI job of 45 minutes, the runner's limits 900 s and 1500 s; `make test-python-long`
+  (by hand, not in `make test` nor nightly) over `tests/python/regr-long.txt`. Measured with `--slowest`: the 17 modules under the
+  Mac's TCG 5 min 39 s, `test_queue` 4 min 5 s of it (9 s under HVF), so **the CI subset is the 16 other modules** (core types,
+  `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `_thread`, `threading.local`, `asyncio` tasks, futures, locks) and **the long list is
+  `test_queue` and `test_threading`** (15.5 min under HVF). Runs on the Mac: `make test-python` HVF `PASS: 104 steps` (106 s with
+  the build), TCG `PASS: 104 steps` (112 s), INV-0320-3 server check ok, fsck clean; `make test-python-regr` HVF `PASS: 9 steps`,
+  16 modules, 2,949 tests, 44 skipped, `Result: SUCCESS`, 21.3 s. `make test-python-long` not run in this round.

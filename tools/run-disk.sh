@@ -25,6 +25,10 @@
 # build/rootfs-apps when that exists; EXTRA_ROOT= (empty) takes none. Its
 # files go in the key, so a new curl makes a new disk. /system is read-only to
 # everyone (ADR-0289 item 8), so an EXTRA_ROOT may not hold files under it.
+# EXTRA_ROOT may name several directories, separated by colons (TASK-27 9c:
+# build/rootfs-apps:build/rootfs-python); later ones are copied over earlier
+# ones. DISK_SIZE (default 64M) sets the volume's size, and is in the key:
+# curl, wget and the 52 MB Python part do not fit in 64M.
 #
 # Needs target/debug/zoraya-mkfs (make tools-storage).
 
@@ -33,7 +37,7 @@ set -eu
 [ $# = 1 ] || { echo "usage: tools/run-disk.sh IMAGE" >&2; exit 2; }
 image=$1
 mkfs=target/debug/zoraya-mkfs
-size=64M
+size=${DISK_SIZE:-64M}
 
 [ -x "$mkfs" ] || { echo "run-disk.sh: $mkfs not built (make tools-storage)" >&2; exit 2; }
 format=$(sed -n 's/^pub const FORMAT_VERSION: u16 = \([0-9][0-9]*\);$/\1/p' crates/zoraya-fs/src/format.rs)
@@ -44,18 +48,38 @@ system=$(cd rootfs && find system -type f | LC_ALL=C sort | while read -r f; do
     printf '%s %s\n' "$f" "$(cksum < "$f")"
 done | cksum)
 extra=${EXTRA_ROOT-build/rootfs-apps}
-if [ -n "$extra" ] && [ ! -d "$extra" ]; then
+if [ -n "$extra" ]; then
     # The default is optional; a root named on purpose must exist.
-    [ -z "${EXTRA_ROOT+x}" ] && extra= || { echo "run-disk.sh: EXTRA_ROOT $extra is not a directory" >&2; exit 2; }
+    optional=
+    [ -z "${EXTRA_ROOT+x}" ] && optional=1
+    keep=
+    oldifs=$IFS; IFS=:
+    for d in $extra; do
+        [ -n "$d" ] || continue
+        if [ ! -d "$d" ]; then
+            [ -n "$optional" ] && continue
+            echo "run-disk.sh: EXTRA_ROOT $d is not a directory" >&2
+            exit 2
+        fi
+        if [ -e "$d/system" ]; then
+            echo "run-disk.sh: EXTRA_ROOT $d holds /system, which only rootfs/ may" >&2
+            exit 2
+        fi
+        keep="${keep:+$keep:}$d"
+    done
+    IFS=$oldifs
+    extra=$keep
 fi
 extra_sum=
 if [ -n "$extra" ]; then
-    if [ -e "$extra/system" ]; then
-        echo "run-disk.sh: EXTRA_ROOT $extra holds /system, which only rootfs/ may" >&2
-        exit 2
-    fi
-    extra_sum=$(cd "$extra" && find . -type f | LC_ALL=C sort | while read -r f; do
-        printf '%s %s\n' "$f" "$(cksum < "$f")"
+    # Directory names are in the sum's input: the order of the roots matters.
+    extra_sum=$(oldifs=$IFS; IFS=:; for d in $extra; do
+        IFS=$oldifs
+        echo "root $d"
+        (cd "$d" && find . -type f | LC_ALL=C sort | while read -r f; do
+            printf '%s %s\n' "$f" "$(cksum < "$f")"
+        done)
+        IFS=:
     done | cksum)
 fi
 key="format $format; size $size; system $system"
@@ -81,7 +105,9 @@ if [ -n "$extra" ]; then
     stage=$(mktemp -d "${TMPDIR:-/tmp}/zoraya-disk.XXXXXX")
     trap 'rm -rf "$stage"' EXIT
     cp -R rootfs/. "$stage/"
-    cp -R "$extra"/. "$stage/"
+    oldifs=$IFS; IFS=:
+    for d in $extra; do cp -R "$d"/. "$stage/"; done
+    IFS=$oldifs
     "$mkfs" --size "$size" --from "$stage" "$image"
 else
     "$mkfs" --size "$size" --from rootfs "$image"

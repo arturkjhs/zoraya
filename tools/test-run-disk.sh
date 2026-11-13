@@ -7,7 +7,10 @@
 #  2. nothing is made twice for the same inputs, and a changed extra file
 #     makes a new disk and keeps the old one as .old;
 #  3. EXTRA_ROOT= takes no extra root, and a named root that is missing, or
-#     that holds /system, is refused.
+#     that holds /system, is refused;
+#  4. several roots separated by colons all end up on the disk, a missing
+#     second one is refused, the order of the roots is in the key, and so is
+#     DISK_SIZE.
 # No QEMU and no real mkfs: the scratch mkfs copies the tree it is given.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -62,4 +65,29 @@ echo mine > evil/system/tls/roots
 if runx evil evil.img; then fail "an EXTRA_ROOT with /system was accepted"; fi
 grep -q 'holds /system' err || fail "the refusal does not say why: $(cat err)"
 [ ! -e evil.img ] || fail "a disk was made from an EXTRA_ROOT with /system"
+# Several roots (TASK-27 9c).
+mkdir -p build/rootfs-apps/bin build/rootfs-python/bin
+echo curl-v3 > build/rootfs-apps/bin/curl
+echo py-v1 > build/rootfs-python/bin/python3
+runx build/rootfs-apps:build/rootfs-python two.img
+grep -q './bin/curl' two.img || fail "the first of two roots is not on the disk"
+grep -q './bin/python3' two.img || fail "the second of two roots is not on the disk"
+grep -q './bin/sh' two.img || fail "rootfs/ is not on a disk of two roots"
+# A second root that is not there is refused, and no disk is made.
+if runx build/rootfs-apps:build/nowhere miss.img; then fail "a missing second root was accepted"; fi
+[ ! -e miss.img ] || fail "a disk was made with a missing second root"
+# The same roots again: nothing is made.
+runx build/rootfs-apps:build/rootfs-python two.img
+[ ! -s err ] || fail "a current two-root disk was replaced: $(cat err)"
+[ ! -e two.img.old ] || fail "a current two-root disk was kept as .old"
+# Another order is another key (the roots are listed in that order).
+runx build/rootfs-python:build/rootfs-apps two.img
+[ -f two.img.old ] || fail "a change of the order of the roots did not make a new disk"
+grep -q 'another format or another /system' err || fail "the new order was not said"
+# A new size is another key.
+cp two.img.key size.key
+( DISK_SIZE=128M; export DISK_SIZE; EXTRA_ROOT=build/rootfs-python:build/rootfs-apps; export EXTRA_ROOT; run two.img )
+grep -q 'size 128M' two.img.key || fail "DISK_SIZE is not in the key: $(cat two.img.key)"
+cmp -s two.img.key size.key && fail "a new DISK_SIZE did not change the key"
+[ -f two.img.old.1 ] || fail "a new DISK_SIZE did not make a new disk"
 echo "test-run-disk: ok"

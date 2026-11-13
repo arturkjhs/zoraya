@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps netsurf test-netsurf test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -600,6 +600,105 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 		else echo '[apps] ok: curl and wget sent no request byte to the refused TLS servers'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(APPS_DISK); rc=$$?; fi; \
+	exit $$rc
+
+# TASK-27 9c (proposed ADR-0320): CPython 3.15, cross-built static with zcc.
+# `make python` builds the host python of the same version (build/ports/hostpython),
+# SQLite for the target and the program with its standard library into
+# build/rootfs-python (needs `make fetch-ports` and the OpenSSL of `make apps`'
+# ports once). Three steps boot a volume made of rootfs/, that directory and
+# the test suite's subset (tests/python/), each with its own volume and script,
+# so that each is a CI job of its own (ADR-0320 item 9: under TCG the whole of
+# it did not fit one 30-minute job, run 43488132441):
+#   test-python       tests/shell/python.script: smoke.py, grants, the planted
+#                     module, Ctrl-C, the TLS clients (https_client.py,
+#                     https_blocking.py) against the runner's servers
+#   test-python-regr  tests/shell/python-regr.script: regr.py over
+#                     tests/python/regr-modules.txt, the CI subset
+#   test-python-long  the same over tests/python/regr-long.txt, the modules too
+#                     slow for a CI job under TCG; by hand, not in make test
+PYTHON_ROOT := $(BUILD)/rootfs-python
+python:
+	@$(MAKE) -f ports/Makefile python
+PYTHON_QEMU ?= --mem 512M
+PYTHON_ACCEL ?= auto
+# The runner's limits, below the python CI jobs' 45 minutes
+# (.github/workflows/test.yml), so that a slow run ends with the runner's
+# report and not a cancelled job.
+PYTHON_TIMEOUT ?= 900
+PYTHON_REGR_TIMEOUT ?= 1500
+PYTHON_LONG_TIMEOUT ?= 3600
+# regrtest's options after the list (regr.py): --slowest prints the ten slowest
+# modules, the measurement the CI subset is chosen by.
+PYTHON_REGR_ARGS ?= --slowest
+test-python: PY_TEMPLATE := tests/shell/python.script
+test-python: PY_TIMEOUT = $(PYTHON_TIMEOUT)
+test-python: PY_LIST := regr-modules.txt
+test-python-regr: PY_TEMPLATE := tests/shell/python-regr.script
+test-python-regr: PY_TIMEOUT = $(PYTHON_REGR_TIMEOUT)
+test-python-regr: PY_LIST := regr-modules.txt
+test-python-long: PY_TEMPLATE := tests/shell/python-regr.script
+test-python-long: PY_TIMEOUT = $(PYTHON_LONG_TIMEOUT)
+test-python-long: PY_LIST := regr-long.txt
+# Every path is the step's own ($@), so that test-par may run the steps at once.
+PY_ROOT = $(BUILD)/$@-root
+PY_DISK = $(BUILD)/$@-disk.img
+PY_SCRIPT = $(BUILD)/$@.script
+PY_READY = $(BUILD)/$@-httpd.port
+PY_TLS_READY = $(BUILD)/$@-tlsd.ports
+PY_HTTPD_LOG = target/test-logs/test-httpd-$@.log
+# The standard library's own tests: the modules of tests/python/regr-modules.txt
+# and regr-long.txt, with the support files of Lib/test (every file of its top
+# level that is not a test, support/ and libregrtest/), taken from the source
+# tree (configure's --disable-test-modules leaves Lib/test out of the stage) and
+# compiled by the host python, as the rest of the library is.
+PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
+PYTHON_HOSTPY := $(BUILD)/ports/hostpython/bin/python3.15
+PYTHON_TESTLIB := $(BUILD)/python-testlib
+PYTHON_REGR_FILES := tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt
+# Made once, by ci-build, so that the test jobs need neither the source tree nor
+# the host python (neither is in the build artifact).
+$(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
+	@$(MAKE) --no-print-directory python
+	rm -rf $(PYTHON_TESTLIB).tmp && mkdir -p $(PYTHON_TESTLIB).tmp
+	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
+		case $$n in test_*) ;; *) cp -R $$f $(PYTHON_TESTLIB).tmp/ ;; esac; done
+	for m in $$(cat tests/python/regr-modules.txt tests/python/regr-long.txt | sed 's/\..*//' | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
+	@# deliberately bad test files do not compile, so the exit status is not read
+	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $(PYTHON_TESTLIB).tmp >/dev/null 2>&1; true
+	rm -rf $(PYTHON_TESTLIB) && mv $(PYTHON_TESTLIB).tmp $(PYTHON_TESTLIB)
+python-testlib: $(PYTHON_TESTLIB)
+# The TLS check (INV-0320-3) reads the server's log of test-python only: the
+# regrtest scripts make no connection to it.
+test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[$@] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	rm -rf $(PY_ROOT) && mkdir -p $(PY_ROOT) target/test-logs && cp -R rootfs/. $(PY_ROOT)/ && \
+	cp -R $(PYTHON_ROOT)/. $(PY_ROOT)/ && mkdir -p $(PY_ROOT)/home && cp tests/python/*.py tests/python/regr-*.txt $(PY_ROOT)/home/ && \
+	mkdir -p $(PY_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PY_ROOT)/usr/lib/python3.15/test/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(PY_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(PY_ROOT)/system/tls/roots && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PY_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 256M --from $(PY_ROOT) $(PY_DISK) && \
+	: > $(PY_READY) && : > $(PY_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime $$(( $(PY_TIMEOUT) + 60 )) --ready-file $(PY_READY) --tls-dir tests/net/tls --tls-ready-file $(PY_TLS_READY) > $(PY_HTTPD_LOG) 2>&1 & echo $$! > $(BUILD)/$@-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/$@-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(PY_READY) ] && [ -s $(PY_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(PY_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
+	port=$$(cat $(PY_READY)); \
+	if [ -z "$$port" ] || [ -z "$$tlswrong" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[$@] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat $(PY_HTTPD_LOG); exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+		-e "s/@REGRLIST@/$(PY_LIST)/g" -e "s/@REGRARGS@/$(PYTHON_REGR_ARGS)/g" $(PY_TEMPLATE) > $(PY_SCRIPT); \
+	$(RUNNER) --timeout $(PY_TIMEOUT) --script $(PY_SCRIPT) --label $(@:test-%=%)-$(PYTHON_ACCEL) -- \
+		$(RUN_QEMU) --test --keys --net --net-open --disk $(PY_DISK) $(PYTHON_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL); rc=$$?; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ] && [ $@ = test-python ]; then \
+		if grep -q -e '^tls \(expired\|wrong\): request of' -e '^tls \(expired\|wrong\): ended after [1-9]' $(PY_HTTPD_LOG) || ! grep -q '^tls valid: request of' $(PY_HTTPD_LOG) \
+		   || [ "$$(grep -c '^tls expired: ended after 0 request bytes' $(PY_HTTPD_LOG))" != 3 ] || [ "$$(grep -c '^tls wrong: ended after 0 request bytes' $(PY_HTTPD_LOG))" != 3 ]; then \
+			echo '[python] FAIL: INV-0320-3: a Python program sent request bytes after a refused handshake, or a refused server did not see exactly 3 connections end after 0 request bytes (asyncio, http.client, urllib), or no request on the valid one'; cat $(PY_HTTPD_LOG); rc=1; \
+		else echo '[python] ok: asyncio, http.client and urllib sent no request byte to the refused TLS servers (3 connections each, 0 bytes)'; fi; \
+	fi; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PY_DISK); rc=$$?; fi; \
 	exit $$rc
 
 # TASK-27 9d (proposed ADR-0317, ADR-0318): NetSurf in a window of the desktop. The
@@ -1176,8 +1275,8 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk
-fetch-ports ports check-ports clean-ports:
+.PHONY: check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-python-cache
+fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 
 # INV-0109-3 and INV-0109-4: the fetch step and the cache, offline.
@@ -1310,7 +1409,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python test-python-regr
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1319,7 +1418,8 @@ TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net ch
 # configuration, a script under an accelerator, or a W8 build.
 ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
-	$(MAKE) -f ports/Makefile ports workloads apps netsurf
+	$(MAKE) -f ports/Makefile ports workloads apps netsurf python
+	@$(MAKE) -s python-testlib
 	@$(MAKE) -s posix-image
 	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
 	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint
@@ -1339,7 +1439,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-mutant-lists check-run-disk check-ci-plan
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-mutant-lists check-run-disk check-ci-plan check-python-cache
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

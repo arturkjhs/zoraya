@@ -2079,6 +2079,42 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
+## CPython (stage 9, 9c)
+
+`python3` runs inside Zoraya (proposed ADR-0320): CPython 3.15.2 cross-built static with `zcc`, as a POSIX program from the
+volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
+
+- **The build.** `ports/sources.lock` pins the archive by the SHA-256 python.org publishes (the Sigstore bundle it also
+  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/hostpython`, minimal: `--without-ensurepip`, no zlib needed; for
+  `--with-build-python` and for compiling the library's byte code), SQLite for the target (`THREADSAFE=1`, no extension
+  loading, no WAL, FTS5), `libpyshim.a` (`ports/apps/pyshim.c`: `execv`, `madvise`, `msync`, `sched_yield`, `pause`, `dirfd`,
+  `gethostbyname` over `getaddrinfo`, `getprotobyname`, `getservbyname`, `hstrerror`...) and CPython itself, into
+  `build/rootfs-python` (`bin/python3`, 15.5 MB, and the trimmed library, 37 MB, byte code `unchecked-hash`; 52 MB, 1226 files).
+  Built in: `_socket`, `select`, `_ssl` and `_hashlib` (OpenSSL), `_sqlite3`, `zlib`, `_asyncio`, `_thread`. No shared modules
+  (no `dlopen`), `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`.
+- **Patches** (`ports/patches/python/`): `_ssl` uses a file-descriptor BIO (OpenSSL has no sockets); the environment, byte code
+  files and the per-user site directory are off; `asyncio`'s self-pipe is `os.pipe()` (no `socketpair`); `main` runs the interpreter
+  on a thread with a 2 MiB stack (committed in full, copied by every `fork` child; measured 8, 2 and 1 MiB, ADR-0320 item 5) and ends the process with `exit(status)` from it, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB (the main thread blocks every signal, so Ctrl-C reaches the interpreter's thread); no `pyvenv.cfg`
+  search; `-c`, `-m` and a program read from standard input put no directory on `sys.path`; `urllib` takes no proxy from the environment. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`, and `_PYTHREAD_NAME_MAXLEN` is 15 (configure does not know the platform), so a long thread name is truncated, not refused.
+- **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
+  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. `ssl.create_default_context()` finds the roots with no `cafile` (OpenSSL's `OPENSSLDIR` is `/system/tls`). `PYTHON*` variables decide nothing. A script imports from the standard library and its own directory (the current directory is readable), not from the current directory under `-c`, `-m` or a program read from standard input. Python is not mediated: a script can turn verification off (`ssl.CERT_NONE`), unlike curl's refused `-k`.
+- **The volume.** `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and `DISK_SIZE` (default 64M, in
+  the disk's key): curl, wget and Python do not fit in 64M, so `make run` with Python is
+  `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`, which also holds NetSurf (9d: `bin/netsurf` 12.5 MB and
+  `usr/share/netsurf` in `build/rootfs-apps`, about 12 MiB in all, beside Python's 52 MB). `make test-python` makes its own 256M disk.
+- **Tests** (`make test-python`, `tests/shell/python.script`): `-V`, `-c`, exit statuses, `tests/python/smoke.py` (flags,
+  `sqlite3`, `ssl`, `asyncio`, a thread, `fork`), `grants` with and without `+net`, an `asyncio` HTTPS client
+  (`tests/python/https_client.py`) against `tools/test-httpd`'s TLS server with the test PKI's root, the refusal of an expired and a
+  wrong-name certificate with 0 request bytes at the server. `make test-python-regr` (`tests/shell/python-regr.script`):
+  `tests/python/regr.py`, CPython's regrtest over the CI subset `tests/python/regr-modules.txt`; `make test-python-long` (by hand,
+  not in `make test`): the modules too slow for a CI job under TCG, `tests/python/regr-long.txt` (`test_queue`, `test_threading`;
+  ADR-0320 item 9). Each step makes its own volume.
+- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
+  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
+  without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
+  (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
+
 ## The network on the desktop, and when it fails (stage 8, N6)
 
 `--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of
