@@ -122,6 +122,9 @@ struct SheetGuard {
 }
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
+/// `ClientGone` tags kept while the panel's queue is full; past it the
+/// oldest is lost (a panel that reads nothing for this many client ends).
+pub const MAX_GONE_PENDING: usize = 256;
 
 /// The scale `auto` gives a display `width` physical pixels wide whose
 /// width is `width_mm` millimetres (0: unknown): 2 from `SCALE_TWO_FROM`
@@ -338,6 +341,10 @@ pub struct Compositor<P: Platform> {
     manager: P::End,
     /// The panel's channel (ADR-0168): launch records, rooms, the dock.
     client_manager: Option<P::End>,
+    /// `ClientGone` tags the panel's full queue did not take: sent again
+    /// every round until they fit, so that the panel never counts a gone
+    /// client as live (9d re-review, W1). At most [`MAX_GONE_PENDING`].
+    gone_pending: Vec<u32>,
     /// The room table and the current room, from the panel (ADR-0172).
     rooms: zoraya_settings::rooms::Rooms,
     current_room: String,
@@ -473,6 +480,7 @@ impl<P: Platform> Compositor<P> {
             platform,
             manager,
             client_manager: None,
+            gone_pending: Vec::new(),
             rooms: zoraya_settings::rooms::Rooms::default(),
             current_room: String::new(),
             dock_apps: Vec::new(),
@@ -688,6 +696,14 @@ impl<P: Platform> Compositor<P> {
             (None, Some(_)) => Some(self.platform.now() + RETRY_NS),
             (None, None) => None,
         };
+        // A `ClientGone` waiting for room in the panel's queue is tried
+        // again every 10 ms too.
+        let deadline = if self.gone_pending.is_empty() {
+            deadline
+        } else {
+            let retry = self.platform.now() + RETRY_NS;
+            Some(deadline.map_or(retry, |d| d.min(retry)))
+        };
         self.platform.wait(&mut ready, deadline);
         for key in ready {
             match key {
@@ -703,6 +719,7 @@ impl<P: Platform> Compositor<P> {
                 _ => {}
             }
         }
+        self.flush_client_gone();
         let waiting = self.in_flight.or(self.stuck_since);
         if let Some(since) = waiting
             && self.platform.now() >= since + FLUSH_DEADLINE_NS
@@ -1341,7 +1358,7 @@ impl<P: Platform> Compositor<P> {
         // control or bidirectional character; and a connection.
         let name = core::str::from_utf8(d.name.0)
             .ok()
-            .filter(|t| !t.is_empty() && !t.contains('/') && rooms::plain_text(t))
+            .filter(|t| !t.is_empty() && !t.contains('/') && gui::plain_text(t))
             .map(String::from);
         let channel = self.platform.kind(entry) == Kind::Channel;
         // That press, still held, named within `DRAG_NAMES_WITHIN_NS` of it.
@@ -2376,10 +2393,19 @@ impl<P: Platform> Compositor<P> {
             // From either launcher: init's first terminal is `home`'s
             // (proposed ADR-0242).
             37 if one => match decode::<gui::AddRoomClient<'_>>(bytes, 1) {
-                Ok((_, m)) => match Record::of(&m) {
-                    Some(r) => (self.add_client(handles[0], r), true),
-                    None => (status::INVALID, false),
-                },
+                Ok((_, m)) => {
+                    let (s, used) = match Record::of(&m) {
+                        Some(r) => (self.add_client(handles[0], r), true),
+                        None => (status::INVALID, false),
+                    };
+                    // A tagged client the panel counts but that never came
+                    // to be is gone at once, whatever the refusal (9d
+                    // re-review, W1): the panel reads no reply.
+                    if s != status::OK && clients && m.tag != 0 {
+                        self.tell_client_gone(m.tag);
+                    }
+                    (s, used)
+                }
                 Err(_) => (status::INVALID, false),
             },
             39 if clients && none => match decode::<gui::SetRooms<'_>>(bytes, 0) {
@@ -2695,7 +2721,7 @@ impl<P: Platform> Compositor<P> {
         let Ok(words) = core::str::from_utf8(words) else {
             return status::BAD_RANGE;
         };
-        if tag == 0 || words.is_empty() || !rooms::plain_text(words) {
+        if tag == 0 || words.is_empty() || !gui::plain_text(words) {
             return status::BAD_RANGE;
         }
         let Some(slot) = self
@@ -2894,6 +2920,10 @@ impl<P: Platform> Compositor<P> {
         }
         if let Some(c) = self.clients[slot].take() {
             self.platform.close(c.end);
+            // The panel counts the clients it made (ADR-0317 item 2).
+            if c.record.tag != 0 {
+                self.tell_client_gone(c.record.tag);
+            }
         }
         self.prune_refusals();
         self.rehover();

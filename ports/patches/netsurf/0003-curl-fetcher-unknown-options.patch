@@ -1,0 +1,42 @@
+--- a/netsurf/content/fetchers/curl.c
++++ b/netsurf/content/fetchers/curl.c
+@@ -1136,9 +1136,18 @@
+ 	CURLcode code = CURLE_OK;
+ 
+ #undef SETOPT
++/* Zoraya (ADR-0318): libcurl is built without cookies and proxies (ADR-0310),
++ * so CURLOPT_COOKIE and CURLOPT_PROXY* are unknown options there; NetSurf sets
++ * them on every fetch. Ignore that one error for those options only: no
++ * cookies, no proxy. Any other unknown option stays an error. */
++#define SETOPT_OPTIONAL(option) ((option) == CURLOPT_COOKIE ||	\
++	(option) == CURLOPT_PROXY || (option) == CURLOPT_PROXYPORT ||	\
++	(option) == CURLOPT_NOPROXY || (option) == CURLOPT_PROXYAUTH ||	\
++	(option) == CURLOPT_PROXYUSERPWD)
+ #define SETOPT(option, value) { \
+ 	code = curl_easy_setopt(f->curl_handle, option, value);	\
+-	if (code != CURLE_OK)					\
++	if (code != CURLE_OK &&					\
++	    !(code == CURLE_UNKNOWN_OPTION && SETOPT_OPTIONAL(option))) \
+ 		return code;					\
+ 	}
+ 
+@@ -1181,9 +1190,18 @@
+ 	const char *auth;
+ 
+ #undef SETOPT
++/* Zoraya (ADR-0318): libcurl is built without cookies and proxies (ADR-0310),
++ * so CURLOPT_COOKIE and CURLOPT_PROXY* are unknown options there; NetSurf sets
++ * them on every fetch. Ignore that one error for those options only: no
++ * cookies, no proxy. Any other unknown option stays an error. */
++#define SETOPT_OPTIONAL(option) ((option) == CURLOPT_COOKIE ||	\
++	(option) == CURLOPT_PROXY || (option) == CURLOPT_PROXYPORT ||	\
++	(option) == CURLOPT_NOPROXY || (option) == CURLOPT_PROXYAUTH ||	\
++	(option) == CURLOPT_PROXYUSERPWD)
+ #define SETOPT(option, value) { \
+ 	code = curl_easy_setopt(f->curl_handle, option, value);	\
+-	if (code != CURLE_OK)					\
++	if (code != CURLE_OK &&					\
++	    !(code == CURLE_UNKNOWN_OPTION && SETOPT_OPTIONAL(option))) \
+ 		return code;					\
+ 	}
+ 

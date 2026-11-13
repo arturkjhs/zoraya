@@ -81,9 +81,39 @@ impl Default for Lock {
     }
 }
 
+/// A `fork` child's copy of an `Option` it must not use or drop: the value
+/// names resources (handles, mappings) of its parent's, so it is left
+/// without running `Drop` and the option is emptied (W1 of the 9d review: a
+/// window's channel slot is empty in the child, and a pipe may take it).
+pub fn forget_taken<T>(option: &mut Option<T>) {
+    core::mem::forget(option.take());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A value whose drop would be seen.
+    struct Loud<'a>(&'a AtomicUsize);
+    impl Drop for Loud<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_fork_child_forgets_a_cell_without_dropping_it() {
+        let drops = AtomicUsize::new(0);
+        let mut cell = Some(Loud(&drops));
+        forget_taken(&mut cell);
+        assert!(cell.is_none());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        // Where a plain `take` would have dropped it.
+        let mut cell = Some(Loud(&drops));
+        drop(cell.take());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Condvar, Mutex};
     use std::thread;

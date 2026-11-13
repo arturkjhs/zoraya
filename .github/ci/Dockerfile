@@ -14,12 +14,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 COPY tools/ci-apt-install.sh /usr/local/bin/ci-apt-install.sh
 # clang, lld, llvm: tools/zcc, libc.a and the ports; zstd: the build archive;
 # qemu-system-arm: the tests (qemu-system-aarch64); the rest: the ports' and
-# the host tools' builds and the checks (ruby for make check-ci-jobs' YAML
+# the host tools' builds and the checks (gperf, flex and bison: NetSurf's libraries and nsgenbind, 9d; ruby for make check-ci-jobs' YAML
 # parse, git for actions/checkout, curl for make fetch-ports).
 RUN ci-apt-install.sh \
         build-essential ca-certificates clang lld llvm zstd qemu-system-arm \
         git curl patch perl python3 ruby xz-utils bzip2 gzip unzip zip file \
-        gawk pkg-config sudo \
+        gawk pkg-config gperf flex bison sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # The workspace is owned by the runner's user, the job runs as root: without

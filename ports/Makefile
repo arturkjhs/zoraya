@@ -43,7 +43,7 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # that add names (posix-surface-check's LIST+ADR form).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
-	docs/adr/0310-surface-for-tls-curl-and-wget.md
+	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -593,7 +593,7 @@ $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.si
 # user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
 apps: $(APPS_STAMP)
 $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
-	rm -rf $(APPS_ROOT) && mkdir -p $(APPS_ROOT)/bin
+	mkdir -p $(APPS_ROOT)/bin
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
 	$(ELF_CHECK) $(APPS_ROOT)/bin
@@ -613,6 +613,153 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	@for p in ports/patches/openssl/*.patch; do \
 	  grep -q '^+.*__zoraya__' $$p || { echo "$$p changes OpenSSL for every system"; exit 1; }; done
 	@touch $@
+
+# ---------------------------------------------------------------- NetSurf (TASK-27 9d, ADR-0317, ADR-0318)
+
+# `make netsurf`: libpng, libjpeg and curl's header and library for NetSurf into
+# $(DEPS); NetSurf 3.11's own libraries into $(DEPS); then `netsurf` (the framebuffer
+# front end, its bitmap font, curl with OpenSSL from 9a) into $(APPS_ROOT)/bin, and
+# its resources (default.css, Messages, ...) into $(APPS_ROOT)/usr/share/netsurf.
+# Host tools, built into $(HOSTPFX) from the pinned archives so that the build needs no
+# more of the host than a C compiler, perl, gperf, flex and bison: pkg-config (only
+# when the host has none; ADR-0318 item 1) and zlib and libpng, which NetSurf's
+# image converter (tools/convert_image.c) links. Not built, by decision (ADR-0318 and
+# the report's 9d step 2): JavaScript (so no nsgenbind), SVG (libsvgtiny needs an XML
+# binding of libdom, which needs expat), RISC OS sprites, libjxl, WebP, video.
+HOSTPFX := $(PORTS)/host
+NS_PKGCONFIG := $(shell command -v pkg-config 2>/dev/null)
+ifeq ($(NS_PKGCONFIG),)
+NS_PKGCONFIG := $(HOSTPFX)/bin/pkg-config
+endif
+# bison 3 or later (libnslog's grammar; macOS ships 2.3): the host's, or the pinned one built into $(HOSTPFX).
+NS_BISON_OK := $(shell bison --version 2>/dev/null | awk 'NR == 1 { split($$NF, v, "."); print (v[1] >= 3) ? "yes" : "no" }')
+NS_BISON := $(if $(filter yes,$(NS_BISON_OK)),,$(HOSTPFX)/bin/bison)
+NS_TRIPLE := aarch64-unknown-zoraya
+NETSURF := $(WORK)/netsurf-all-$(call lock_ver,netsurf)
+NS_STAMP := $(OBJ)/netsurf-libs.stamp
+NETSURF_BIN := $(NETSURF)/netsurf/nsfb
+# The NetSurf libraries, in dependency order (libsvgtiny, librosprite and the RISC OS
+# ones are left out).
+NS_LIBS := buildsystem libnslog libwapcaplet libparserutils libcss libhubbub libdom libnsbmp libnsgif libnsutils libutf8proc libnspsl libnsfb
+# What every NetSurf make runs with: no host pkg-config path (only $(DEPS)'s), and the
+# tools of the cross environment first. HOST and BUILD both name the target, so that
+# the buildsystem takes its native path (its cross path wants a GCC toolchain and
+# /bin/which) and uses the CC and AR given.
+NS_ENV := $(CROSS_ENV) PKG_CONFIG_LIBDIR=$(DEPS)/lib/pkgconfig PKG_CONFIG_PATH= \
+	PATH=$(HOSTPFX)/bin:$(dir $(NS_PKGCONFIG)):$(TOOLBIN):$$PATH
+NS_MK := HOST=$(NS_TRIPLE) BUILD=$(NS_TRIPLE) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	PREFIX=$(DEPS) WARNFLAGS='-Wall -W -Wno-error' Q=@ V=1
+
+host-pkgconfig: $(HOSTPFX)/bin/pkg-config
+BISON_SRC := $(WORK)/bison-$(call lock_ver,bison)
+$(BISON_SRC): $(LOCK)
+	$(call unpack,bison,ports/patches/none)
+	@touch $@
+$(HOSTPFX)/bin/bison: $(BISON_SRC)
+	@cd $(BISON_SRC) && $(call logged,env CC=$(HOSTCC) ./configure --prefix=$(HOSTPFX) --disable-nls --disable-yacc,host-bison-configure)
+	@$(call logged,$(MAKE) -C $(BISON_SRC) -j3 install,host-bison)
+PKGCONFIG_SRC := $(WORK)/pkg-config-$(call lock_ver,pkgconfig)
+$(PKGCONFIG_SRC): $(LOCK)
+	$(call unpack,pkgconfig,ports/patches/none)
+	@touch $@
+# glib is the one inside the archive; 0.29.2's sources use constructs modern clang
+# rejects by default, hence the flags.
+$(HOSTPFX)/bin/pkg-config: $(PKGCONFIG_SRC)
+	@cd $(PKGCONFIG_SRC) && $(call logged,env CC=$(HOSTCC) CFLAGS="-O1 -Wno-int-conversion -Wno-error=int-conversion -Wno-incompatible-function-pointer-types" \
+	  ./configure --prefix=$(HOSTPFX) --with-internal-glib --disable-host-tool,host-pkgconfig-configure)
+	@$(call logged,$(MAKE) -C $(PKGCONFIG_SRC) -j3 install,host-pkgconfig)
+
+# zlib and libpng for the host (NetSurf's build tools).
+HOSTZLIB := $(WORK)/hostzlib-$(call lock_ver,zlib)
+$(HOSTZLIB): $(LOCK)
+	$(call unpack,zlib,ports/patches/none)
+	@touch $@
+HOSTPNG := $(WORK)/hostlibpng-$(call lock_ver,libpng)
+$(HOSTPNG): $(LOCK)
+	$(call unpack,libpng,ports/patches/none)
+	@touch $@
+$(HOSTPFX)/lib/libpng16.a: $(HOSTZLIB) $(HOSTPNG)
+	@cd $(HOSTZLIB) && $(call logged,env CC=$(HOSTCC) ./configure --static --prefix=$(HOSTPFX),host-zlib-configure)
+	@$(call logged,$(MAKE) -C $(HOSTZLIB) install,host-zlib)
+	@cd $(HOSTPNG) && $(call logged,env CC=$(HOSTCC) CPPFLAGS=-I$(HOSTPFX)/include LDFLAGS=-L$(HOSTPFX)/lib \
+	  ./configure --prefix=$(HOSTPFX) --disable-shared,host-libpng-configure)
+	@$(call logged,$(MAKE) -C $(HOSTPNG) -j3 install,host-libpng)
+
+# libpng and libjpeg for NetSurf.
+LIBPNG := $(WORK)/libpng-$(call lock_ver,libpng)
+$(LIBPNG): $(LOCK) $(wildcard ports/patches/libpng/*.patch)
+	$(call unpack,libpng,ports/patches/libpng)
+	@touch $@
+$(DEPS)/lib/libpng16.a: $(LIBPNG) $(DEPS)/lib/libz.a $(SYSROOT_STAMP) ports/config.site
+	@cd $(LIBPNG) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl --prefix=$(DEPS) --disable-shared --enable-static \
+	  --enable-arm-neon=off $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" LDFLAGS="-L$(DEPS)/lib",libpng-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(LIBPNG) -j3 libpng16.la install-libLTLIBRARIES install-pkgconfigDATA \
+	  install-pkgincludeHEADERS install-nodist_pkgincludeHEADERS install-header-links install-library-links install-libpng-pc,libpng)
+	@touch $@
+LIBJPEG := $(WORK)/jpeg-$(call lock_ver,libjpeg)
+$(LIBJPEG): $(LOCK) $(wildcard ports/patches/libjpeg/*.patch)
+	$(call unpack,libjpeg,ports/patches/libjpeg)
+	@touch $@
+$(DEPS)/lib/libjpeg.a: $(LIBJPEG) $(SYSROOT_STAMP) ports/config.site
+	@cd $(LIBJPEG) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl --prefix=$(DEPS) --disable-shared --enable-static \
+	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)",libjpeg-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(LIBJPEG) -j3 install-libLTLIBRARIES install-includeHEADERS,libjpeg)
+	@cp $(LIBJPEG)/jconfig.h $(DEPS)/include/
+	@touch $@
+
+# libcurl for NetSurf: the library, its headers and its .pc, from the tree `make curl`
+# built. libcurl.pc's `Libs:` also names what a static link needs (-lssl ...), which
+# pkg-config would leave in `Libs.private`.
+$(DEPS)/lib/libcurl.a: $(CURL_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL)/lib install prefix=$(DEPS),libcurl-install)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL)/include install prefix=$(DEPS),libcurl-include-install)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL) install-pkgconfigDATA prefix=$(DEPS),libcurl-pc-install)
+	sed -i.bak 's|^Libs: .*|Libs: -L$${libdir} -lcurl -lssl -lcrypto -lz -lzshim|' $(DEPS)/lib/pkgconfig/libcurl.pc && rm -f $(DEPS)/lib/pkgconfig/libcurl.pc.bak
+	@touch $@
+
+netsurf-src: $(NETSURF)
+$(NETSURF): $(LOCK) $(wildcard ports/patches/netsurf/*.patch) ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h
+	$(call unpack,netsurf,ports/patches/netsurf)
+	cp ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h $@/libnsfb/src/surface/
+	@touch $@
+
+# The libraries, one make each, installed into $(DEPS). Tests are not built.
+netsurf-libs: $(NS_STAMP)
+$(NS_STAMP): $(NETSURF) $(NS_PKGCONFIG) $(NS_BISON) $(DEPS)/lib/libpng16.a $(DEPS)/lib/libjpeg.a $(DEPS)/lib/libcurl.a $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/include $(DEPS)/lib/pkgconfig $(OBJ)
+	@$(call logged,for l in $(NS_LIBS); do echo "== $$l"; $(NS_ENV) $(MAKE) -C $(NETSURF)/$$l install $(NS_MK) \
+	  WITH_EXPAT_BINDING=no WITH_LIBXML_BINDING=no || exit 1; done,netsurf-libs)
+	@touch $@
+
+# NetSurf itself. Makefile.config is ours (ports/netsurf/Makefile.config); the build
+# tools (convert_image and others) are host programs linked against $(HOSTPFX).
+NETSURF_MK := TARGET=framebuffer HOST=zoraya CC=$(ZCC) PREFIX=/ ZORAYA_DEPS=$(DEPS) \
+	BUILD_CC=$(HOSTCC) BUILD_CFLAGS="-g -W -Wall -Wno-unused-parameter -I$(HOSTPFX)/include" \
+	BUILD_LDFLAGS="-L$(HOSTPFX)/lib" BUILD_LIBPNG_LDFLAGS="-L$(HOSTPFX)/lib -lpng16 -lz -lm" Q=@ V=1 SHELL=/bin/bash
+# The program and its resources into the volume's tree (`make image EXTRA_ROOT=build/rootfs-apps`):
+# /bin/netsurf and /usr/share/netsurf/ (NETSURF_FB_RESPATH of Makefile.config).
+NETSURF_STAMP := $(OBJ)/netsurf.stamp
+NETSURF_RES := adblock.css default.css internal.css quirks.css netsurf.png favicon.png welcome.html credits.html licence.html
+netsurf: $(NETSURF_STAMP)
+$(NETSURF_STAMP): $(NETSURF_BIN)
+	mkdir -p $(APPS_ROOT)/bin $(APPS_ROOT)/usr/share/netsurf
+	cp $(NETSURF_BIN) $(APPS_ROOT)/bin/netsurf
+	for f in $(NETSURF_RES); do cp $(NETSURF)/netsurf/frontends/framebuffer/res/$$f $(APPS_ROOT)/usr/share/netsurf/; done
+	cp $(NETSURF)/netsurf/frontends/framebuffer/res/en/Messages $(APPS_ROOT)/usr/share/netsurf/Messages
+	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no NetSurf code was compiled with __linux__ (INV-0318-2)"
+	@# A missing (or renamed) build log fails: the check never passes on nothing (9d re-review, N3).
+	@for l in netsurf-libs netsurf; do \
+	  if [ ! -s $(LOGS)/$$l.log ]; then echo "INV-0318-2: $(LOGS)/$$l.log is missing; the check cannot run"; exit 1; fi; \
+	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
+	@touch $@
+$(DEPS)/lib/libnsshim.a: ports/apps/nsshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/lib $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/nsshim.o ports/apps/nsshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/nsshim.o
+$(NETSURF_BIN): $(NS_STAMP) $(HOSTPFX)/lib/libpng16.a $(DEPS)/lib/libzshim.a $(DEPS)/lib/libnsshim.a ports/netsurf/Makefile.config
+	cp ports/netsurf/Makefile.config $(NETSURF)/netsurf/Makefile.config
+	@$(call logged,$(NS_ENV) $(MAKE) -C $(NETSURF)/netsurf -j3 $(NETSURF_MK),netsurf)
 
 # ---------------------------------------------------------------- the workloads' sources
 

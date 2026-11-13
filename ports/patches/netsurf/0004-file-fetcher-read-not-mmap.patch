@@ -1,0 +1,37 @@
+--- a/netsurf/content/fetchers/file/file.c
++++ b/netsurf/content/fetchers/file/file.c
+@@ -300,8 +300,24 @@
+ 
+ 	/* allocate the buffer storage */
+ 	if (buf_size > 0) {
+-		buf = mmap(NULL, buf_size, PROT_READ, MAP_SHARED, fd, 0);
++		/* Zoraya (ADR-0318): libposix maps no file; read it whole. */
++		size_t got = 0;
++		buf = malloc(buf_size);
++		while (buf != NULL && got < (size_t)buf_size) {
++			ssize_t n = read(fd, (char *)buf + got, buf_size - got);
++			if (n <= 0)
++				break;
++			got += (size_t)n;
++		}
++		if (buf != NULL && got != (size_t)buf_size) {
++			free(buf);
++			buf = NULL;
++		}
++		if (buf == NULL) {
++			buf = MAP_FAILED;
++		}
+ 		if (buf == MAP_FAILED) {
++			buf = NULL;
+ 			msg.type = FETCH_ERROR;
+ 			msg.data.error = "Unable to map memory for file data buffer";
+ 			fetch_file_send_callback(&msg, ctx);
+@@ -349,7 +365,7 @@
+ fetch_file_process_aborted:
+ 
+ 	if (buf != NULL)
+-		munmap(buf, buf_size);
++		free(buf);
+ 	close(fd);
+ #else
+ 	fetch_msg msg;
