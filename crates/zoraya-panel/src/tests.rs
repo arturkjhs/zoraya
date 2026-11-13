@@ -739,9 +739,9 @@ fn every_launched_application_is_counted() {
     use zoraya_proto_chooser::window_refusal as why;
     let max = 8;
     let mut w = OpenWindows::default();
-    // A home terminal, two editors, an untrusted room's terminal.
+    // A home terminal, three editors.
     for tag in [1, 2, 3, 4] {
-        w.launched(tag);
+        w.launched(tag, false);
     }
     assert_eq!(w.clients(), 6);
     // 6 + this + 3 reserved = 10 > 8: no window.
@@ -786,4 +786,31 @@ fn a_window_the_compositor_refuses_does_not_stay_open() {
     }
     assert_eq!((w.count(), w.clients()), (0, UNTAGGED_CLIENTS));
     assert_eq!(w.admit(0, "netsurf", max), Ok(()));
+}
+
+/// INV-0323-2: the reserve is taken from the session's share of the
+/// compositor's clients, and an untrusted room's launches are counted in
+/// its own account, not in that share.
+#[test]
+fn the_reserve_is_out_of_the_sessions_share() {
+    use zoraya_proto_chooser::window_refusal as why;
+    use zoraya_proto_gui::SESSION_CLIENTS;
+    let mut w = OpenWindows::default();
+    for tag in 1..=6 {
+        w.launched(100 + tag, true);
+    }
+    assert_eq!(w.clients(), UNTAGGED_CLIENTS);
+    // Windows of POSIX programs up to the reserve, each shell one.
+    let room = SESSION_CLIENTS - UNTAGGED_CLIENTS - RESERVED_CLIENTS;
+    for i in 0..room {
+        assert_eq!(w.admit(i, "netsurf", SESSION_CLIENTS), Ok(()), "{i}");
+        w.opened(i, "netsurf", 200 + i as u32);
+    }
+    assert_eq!(w.clients() + RESERVED_CLIENTS, SESSION_CLIENTS);
+    assert_eq!(w.admit(room, "netsurf", SESSION_CLIENTS), Err(why::BUSY));
+    // An untrusted room's client going frees nothing of the session's.
+    w.gone(101);
+    assert_eq!(w.admit(room, "netsurf", SESSION_CLIENTS), Err(why::BUSY));
+    w.gone(200);
+    assert_eq!(w.admit(room, "netsurf", SESSION_CLIENTS), Ok(()));
 }

@@ -47,8 +47,9 @@ pub use rooms::{Cell, DockApp, DockGeometry, Record};
 use window::Buffer;
 pub use window::{Frame, Window, WindowKind, Zone};
 
-/// Client connections at once `[assumption, ADR-0093]`.
-pub const MAX_CLIENTS: usize = 8;
+/// Client connections at once (proposed ADR-0323; 8 before, an assumption of
+/// ADR-0093).
+pub const MAX_CLIENTS: usize = gui::MAX_CLIENTS;
 /// Input drivers at once.
 pub const MAX_INPUTS: usize = 4;
 /// Windows of all clients at once, popups included.
@@ -2837,6 +2838,10 @@ impl<P: Platform> Compositor<P> {
         if self.platform.kind(end) != Kind::Channel {
             self.platform.close(end);
             return status::UNSUPPORTED;
+        }
+        if !self.within_client_account(&record) {
+            self.platform.close(end);
+            return status::OVER_QUOTA;
         }
         let Some(slot) = self.clients.iter().position(Option::is_none) else {
             self.platform.close(end);

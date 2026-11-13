@@ -471,7 +471,8 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   (ordinal 46) to the toplevel or popup body under it, never during a move, a drag or the switcher, and with the
   modifiers only to the focused client (proposed ADR-0322). A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
-  At most 8 clients. With no display driver it goes on; a new one gets the same framebuffer and one full flush.
+  At most 32 clients (`zoraya_proto_gui::MAX_CLIENTS`); an untrusted room's are counted in its account, 3 a room and
+  12 for all, refused `OVER_QUOTA`, so the session keeps 20 (proposed ADR-0323). With no display driver it goes on; a new one gets the same framebuffer and one full flush.
 - **`term`** (`zoraya-term`, `zoraya-text`, ADR-0096, ADR-0162). A compositor client with an 80 × 24 grid of 8 × 18
   cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14), 668 × 460 pixels, and
   500 lines of scrollback (Shift with Page Up or Page Down, or the wheel, three lines a notch). It parses the VT subset of ADR-0096 with ADR-0154's faint

@@ -102,6 +102,21 @@ pub fn plain_text(s: &str) -> bool {
 /// Popups a client may have open at once (ADR-0160).
 pub const MAX_POPUPS: usize = 4;
 
+/// The compositor's client connections at once (proposed ADR-0323): as many
+/// as its windows (`MAX_WINDOWS`, 32), since a client is there for a
+/// window and its record costs about 1.5 KiB.
+pub const MAX_CLIENTS: usize = 32;
+/// Clients one untrusted room may have (proposed ADR-0323): as many as its
+/// account's surfaces (ADR-0262 point 2).
+pub const ROOM_CLIENTS: usize = 3;
+/// Clients all untrusted rooms together may have: four accounts of
+/// [`ROOM_CLIENTS`].
+pub const UNTRUSTED_CLIENTS: usize = 4 * ROOM_CLIENTS;
+/// The session's share (home, the trusted rooms, the system clients): what
+/// the untrusted rooms cannot take. The panel keeps its reserve for the
+/// desktop's own applications out of it.
+pub const SESSION_CLIENTS: usize = MAX_CLIENTS - UNTRUSTED_CLIENTS;
+
 /// One past the last Unicode scalar value: `text` is below it, and 0 is no
 /// text. A receiver still converts it with `char::from_u32`.
 pub const TEXT_LIMIT: u32 = 0x11_0000;

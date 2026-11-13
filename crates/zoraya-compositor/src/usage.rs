@@ -33,6 +33,17 @@ pub const UNTRUSTED_AREAS: u64 = 8;
 /// Untrusted rooms with surfaces at once (the keeper's four, ADR-0269).
 pub const UNTRUSTED_ACCOUNTS: usize = 4;
 
+// The client columns (proposed ADR-0323) are the surfaces' shape: a client
+// of a room per surface, four accounts, the session the rest, and no more
+// clients than windows.
+const _: () = {
+    use zoraya_proto_gui as gui;
+    assert!(gui::ROOM_CLIENTS == ROOM_SURFACES);
+    assert!(gui::UNTRUSTED_CLIENTS == UNTRUSTED_ACCOUNTS * gui::ROOM_CLIENTS);
+    assert!(gui::SESSION_CLIENTS + gui::UNTRUSTED_CLIENTS == crate::MAX_CLIENTS);
+    assert!(crate::MAX_CLIENTS <= crate::MAX_WINDOWS);
+};
+
 /// An untrusted room's account in the compositor, as `top` would list it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Account {
@@ -104,6 +115,35 @@ impl<P: Platform> Compositor<P> {
             match self.refusals.iter_mut().find(|(r, _)| *r == room) {
                 Some((_, n)) => *n = n.saturating_add(1),
                 None => self.refusals.push((room, 1)),
+            }
+        }
+        ok
+    }
+
+    /// Whether a new client with `record` fits its untrusted room's account
+    /// (proposed ADR-0323): at most `gui::ROOM_CLIENTS` of the room and
+    /// `gui::UNTRUSTED_CLIENTS` of all untrusted rooms. A client that is not
+    /// in an untrusted room is not asked. A refusal is counted for the room
+    /// and changes nothing else (INV-0262-1).
+    pub(crate) fn within_client_account(&mut self, record: &crate::Record) -> bool {
+        if !record.untrusted || record.room.is_empty() {
+            return true;
+        }
+        let mut room = 0;
+        let mut all = 0;
+        for c in self.clients.iter().flatten() {
+            if c.record.untrusted && !c.record.room.is_empty() {
+                all += 1;
+                if c.record.room == record.room {
+                    room += 1;
+                }
+            }
+        }
+        let ok = room < zoraya_proto_gui::ROOM_CLIENTS && all < zoraya_proto_gui::UNTRUSTED_CLIENTS;
+        if !ok {
+            match self.refusals.iter_mut().find(|(r, _)| *r == record.room) {
+                Some((_, n)) => *n = n.saturating_add(1),
+                None => self.refusals.push((record.room.clone(), 1)),
             }
         }
         ok

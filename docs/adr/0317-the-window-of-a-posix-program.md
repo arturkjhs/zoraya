@@ -157,6 +157,8 @@ zoraya_window_poll
   (`ZW_WHEEL`), and the C surface turns each whole notch toward the person into a press and release of
   `NSFB_KEY_MOUSE_5` (away: `NSFB_KEY_MOUSE_4`), which NetSurf's framebuffer front end scrolls by 100 pixels; a
   horizontal turn is not offered. The change is ADR-0322's; this ADR's decision is unchanged.
+- *Note (9e, proposed ADR-0323):* the compositor takes 32 clients, and the panel's `RESERVED_CLIENTS` (3) are kept out
+  of the session's share, `zoraya_proto_gui::SESSION_CLIENTS` (20), counting the session's clients only.
 
 ## Revisit triggers
 - A second POSIX graphical program with different needs (video, GL), or a measured frame cost above 16 ms for a full

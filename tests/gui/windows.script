@@ -41,6 +41,44 @@ screen ~> _
 # otherwise reached no window, 2026-11-09).
 click 400 80
 region 130 76 100 4 f7f7f8
+# More clients than the compositor's 8 slots of before (proposed ADR-0323):
+# nine terminals from the panel (System+Enter), eleven clients with this one
+# and the chooser.
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 4000
+shot windows-many
+# The tenth window, on top where the cascade meets the work area's corner,
+# has its shell: it takes keys after a click on its title bar. With 8 slots
+# the compositor refused the seventh of them.
+origin 361 231
+screen Type help to begin, or help tour.
+screen ~> _
+click 560 212
+region 600 200 60 4 f7f7f8
+pause 500
+type echo eleven clients\r
+screen eleven clients
+screen ~> _
+# A terminal of the panel's has no power to end the machine: back to the
+# first, init's, whose title bar shows above the others.
+click 300 80
+region 130 76 100 4 f7f7f8
 # Keys typed at once after the focusing click can be lost under TCG (the
 # first five of poweroff, locally and on CI); a hand is not that quick.
 pause 500

@@ -478,7 +478,8 @@ pub struct WindowRecord {
 
 /// Compositor client slots kept for the desktop's own applications (the
 /// terminal, the file manager, the settings window), which a POSIX program's
-/// windows never take (ADR-0317 item 2, review W2).
+/// windows never take (ADR-0317 item 2, review W2), out of the session's
+/// share (`zoraya_proto_gui::SESSION_CLIENTS`, proposed ADR-0323).
 pub const RESERVED_CLIENTS: usize = 3;
 
 /// The compositor's clients the panel did not make and has no tag for: the
@@ -498,21 +499,26 @@ pub struct OpenWindows {
     /// slot.
     open: Vec<(usize, String, u32)>,
     /// The tags of the applications the panel launched (`term`, `files`,
-    /// `edit`, an `OpenWith`, in any room).
+    /// `edit`, an `OpenWith`) outside untrusted rooms: the session's share.
     launched: Vec<u32>,
+    /// The tags of the applications launched in untrusted rooms, counted in
+    /// their rooms' accounts by the compositor, not in the session's share
+    /// (proposed ADR-0323).
+    untrusted: Vec<u32>,
 }
 
 impl OpenWindows {
     /// Whether the shell of `launcher` may have a window for `app`: not while
     /// it has one open, and not if the clients that exist ([`Self::clients`])
     /// with this one would leave fewer than [`RESERVED_CLIENTS`] of the
-    /// compositor's `max_clients`.
-    pub fn admit(&self, launcher: usize, app: &str, max_clients: usize) -> Result<(), u32> {
+    /// session's share of the compositor's clients, `session_clients`
+    /// (`zoraya_proto_gui::SESSION_CLIENTS`, proposed ADR-0323).
+    pub fn admit(&self, launcher: usize, app: &str, session_clients: usize) -> Result<(), u32> {
         use zoraya_proto_chooser::window_refusal as why;
         if self.open.iter().any(|(l, a, _)| *l == launcher && a == app) {
             return Err(why::BUSY);
         }
-        if self.clients() + 1 + RESERVED_CLIENTS > max_clients {
+        if self.clients() + 1 + RESERVED_CLIENTS > session_clients {
             return Err(why::BUSY);
         }
         Ok(())
@@ -523,9 +529,14 @@ impl OpenWindows {
         self.open.push((launcher, String::from(app), tag));
     }
 
-    /// An application's `AddRoomClient` was sent with `tag`.
-    pub fn launched(&mut self, tag: u32) {
-        self.launched.push(tag);
+    /// An application's `AddRoomClient` was sent with `tag`, in an
+    /// untrusted room or not.
+    pub fn launched(&mut self, tag: u32, untrusted: bool) {
+        if untrusted {
+            self.untrusted.push(tag);
+        } else {
+            self.launched.push(tag);
+        }
     }
 
     /// The compositor's client of `tag` is gone, or was refused: its window
@@ -533,6 +544,7 @@ impl OpenWindows {
     pub fn gone(&mut self, tag: u32) {
         self.open.retain(|(_, _, t)| *t != tag);
         self.launched.retain(|t| *t != tag);
+        self.untrusted.retain(|t| *t != tag);
     }
 
     /// The shell of `launcher` ended: it asks for nothing more, and the next
@@ -548,8 +560,9 @@ impl OpenWindows {
         self.open.len()
     }
 
-    /// How many of the compositor's clients are live as the panel counts
-    /// them: the untagged ones, the launched applications, the windows.
+    /// How many of the session's clients are live as the panel counts them:
+    /// the untagged ones, the applications launched outside untrusted rooms,
+    /// the windows (only a trusted room's shell has one, INV-0317-1).
     pub fn clients(&self) -> usize {
         UNTAGGED_CLIENTS + self.launched.len() + self.open.len()
     }
