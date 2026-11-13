@@ -972,6 +972,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-thread"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-time"
 version = "0.1.0"
 dependencies = [
