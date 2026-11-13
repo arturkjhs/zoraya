@@ -1522,9 +1522,7 @@ impl Z {
             "zosh",
             Some(exec.name),
             "the arguments are not ones its description gives",
-            &[
-                "a program that may reach the network runs only a line its description parses (see `help`)",
-            ],
+            &["a program with a window runs only a line its description parses (see `help`)"],
         ))
     }
 

@@ -735,7 +735,7 @@ $(NS_STAMP): $(NETSURF) $(NS_PKGCONFIG) $(NS_BISON) $(DEPS)/lib/libpng16.a $(DEP
 # tools (convert_image and others) are host programs linked against $(HOSTPFX).
 NETSURF_MK := TARGET=framebuffer HOST=zoraya CC=$(ZCC) PREFIX=/ ZORAYA_DEPS=$(DEPS) \
 	BUILD_CC=$(HOSTCC) BUILD_CFLAGS="-g -W -Wall -Wno-unused-parameter -I$(HOSTPFX)/include" \
-	BUILD_LDFLAGS="-L$(HOSTPFX)/lib" BUILD_LIBPNG_LDFLAGS="-L$(HOSTPFX)/lib -lpng16 -lz -lm" Q=@ V=1
+	BUILD_LDFLAGS="-L$(HOSTPFX)/lib" BUILD_LIBPNG_LDFLAGS="-L$(HOSTPFX)/lib -lpng16 -lz -lm" Q=@ V=1 SHELL=/bin/bash
 # The program and its resources into the volume's tree (`make image EXTRA_ROOT=build/rootfs-apps`):
 # /bin/netsurf and /usr/share/netsurf/ (NETSURF_FB_RESPATH of Makefile.config).
 NETSURF_STAMP := $(OBJ)/netsurf.stamp
