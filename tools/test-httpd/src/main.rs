@@ -220,6 +220,9 @@ fn serve(mut stream: TcpStream) {
             return;
         }
     }
+    if first.contains("/ns/") {
+        eprintln!("http: {first}");
+    }
     let mut parts = first.split(' ');
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
     if method != "GET" {

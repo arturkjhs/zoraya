@@ -1,9 +1,10 @@
 name     netsurf
 summary  browse the Web in a window (NetSurf, a POSIX program)
-usage    netsurf [URL]
+usage    netsurf [-v] [URL]
 program  /bin/netsurf
 cwd      none
 window   NetSurf
+option   -v --verbose  print NetSurf's log (warnings and information) on the error stream
 operand  [URL]  url  the first page, http(s)://HOST[:PORT]/PATH; this command may reach that host and port only
 exit     0  closed by the person
 exit     1  it could not start
