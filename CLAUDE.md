@@ -88,6 +88,10 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
 - Before a merge, the candidate run on the branch must be green; merge only when it is. A stage is not done until a
   full run of its head (`candidate-full/`), and then `main`'s, pass. Run them; do not infer them. A red nightly run
   is the first item of the next session.
+- A push to main runs only the document checks when every changed file is under docs/ and no posix-surface block of
+  an ADR changed; every other push to main, the nightly and candidate-full/ run the full set. A stage tag still needs
+  a full green run on the tagged commit or on its nearest code ancestor (the latest ancestor commit whose run was the
+  full set).
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this
   session.
 - Logic that does not need hardware lives in a separate `no_std` crate under `crates/`, with host tests

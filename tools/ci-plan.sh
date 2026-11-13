@@ -8,6 +8,11 @@
 # needs only `check` (docs, the map) runs no machine at all, and no build.
 #
 #   tools/ci-plan.sh [BASE]     (BASE: origin/main; FULL=1: the full set)
+#   DOCS_BEFORE=SHA DOCS_AFTER=SHA tools/ci-plan.sh
+#       a push to main: if only docs/ changed between the two commits
+#       (plan-lib.sh's docs_only) the plan is `docs_only=1`, no tests, no
+#       build, and `doc_checks` names the checks to run; any other change, or
+#       an unusable BEFORE, gives the full set.
 #
 # Prints key=value lines for $GITHUB_OUTPUT: `tests` (a JSON array of the
 # make commands of tools/ci-tests.txt, the full list or a part of it),
@@ -37,6 +42,23 @@ emit() { # the jobs on stdin, why
 
 if [ "${FULL:-0}" = 1 ]; then
     jobs | emit "full set"
+    echo "docs_only=0"
+    exit 0
+fi
+if [ -n "${DOCS_AFTER:-}" ]; then
+    # shellcheck source=tools/plan-lib.sh
+    . tools/plan-lib.sh
+    if docs_only "${DOCS_BEFORE:-}" "$DOCS_AFTER"; then
+        echo "tests=[]"
+        echo "build=false"
+        echo "docs_only=1"
+        echo "doc_checks=$doc_checks"
+        echo "summary=docs only: the document checks ($doc_checks), 0 jobs"
+        echo "ci-plan: docs only: $doc_checks" >&2
+    else
+        jobs | emit "full set (push to main)"
+        echo "docs_only=0"
+    fi
     exit 0
 fi
 if [ -n "${CI_PLAN_PATHS:-}" ]; then
