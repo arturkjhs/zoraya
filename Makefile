@@ -680,6 +680,23 @@ posix-threadtest3: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/threadtest3.script --label posix-threadtest3 -- \
 	  $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/tt/disk.img --accel auto $(KERNEL)
 
+# musl's pthread_cancel-points without its shm_open scenario (shm_open is T3,
+# ADR-0005, not exported, not in 9b's scope; tests/libc-test/threads-excluded.txt):
+# the six cancel scenarios (sem_wait, sem_timedwait, pthread_join, each blocking
+# and not) run on a copy of the source with that one scenario deleted. NOT a
+# step of make test; run by hand with `make posix-cancel-points`.
+posix-cancel-points: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc suites
+	rm -rf $(POSIX_SUITES)/cp && mkdir -p $(POSIX_SUITES)/cp/root/bin $(POSIX_SUITES)/cp/root/work
+	cp -R rootfs/. $(POSIX_SUITES)/cp/root/
+	sed '/execute_shm_open, cleanup_shm/d' $(BUILD)/ports/workloads/libctest/src/functional/pthread_cancel-points.c \
+	  > $(POSIX_SUITES)/cp/cancel-points-noshm.c
+	tools/zcc -O2 -w -I$(BUILD)/ports/workloads/libctest/src/common -o $(POSIX_SUITES)/cp/root/bin/cancel-points \
+	  $(POSIX_SUITES)/cp/cancel-points-noshm.c $(BUILD)/ports/workloads/libctest/src/common/print.c
+	target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/cp/root $(POSIX_SUITES)/cp/disk.img
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/cancel-points.script --label posix-cancel-points -- \
+	  $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/cp/disk.img --accel auto $(KERNEL)
+
 # The POSIX session (TASK-21, ADR-0110): dash on ttyd through the broker, on
 # an image of the ports' root (make ports' build/rootfs-posix), rootfs/ and
 # tests/posix/rootfs (with /etc/zoraya/session and /tests/wN.sh), in

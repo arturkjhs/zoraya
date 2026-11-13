@@ -151,8 +151,16 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    ending does not disarm another), and the wait listens to the process's own request signal as a handler would (`interrupt_sources`). Both are undone on every exit of the
    wait (signal, timeout, `EINTR`, cancel). So a process that is in `sigwait` takes `process_take_request` calls and set-disposition calls that INV-0106-2's list does not name:
    **`sigwait`, `sigwaitinfo` and `sigtimedwait` are on that list** here (INV-0315-8). Cancel: the wait runs with the cancel state disabled (`__zoraya_cancel_begin`), looks at
-   the flag itself at the top of each round, ends its state (`sigwait` cleared, mask restored, dispositions restored), and only then calls `testcancel`, so a cancelled
-   thread leaves no blocked mask and no routing target behind. Known limit: a signal taken from the pending sets clears the thread-pending and the process-pending bit of the
+   the flag itself at the top of each round, ends its state (`sigwait` cleared, mask restored, dispositions restored), and only then calls `testcancel` (only when the loop itself saw the cancel: a
+   signal already taken is returned, not lost to a late cancel), so a cancelled thread leaves no blocked mask and no routing target behind. The same section that ends the wait
+   first takes every request still queued in the kernel into the pending sets (`Posix::drain_requests`), because restoring `Terminate` with one queued ends the process (a daemon
+   that waits for {HUP, TERM} when both arrive would otherwise end instead of shutting down). A `fork` child puts the kernel dispositions right from its own state after
+   `after_fork_in_child` (`sync_disposition` for every signal): the copied ones carry a sibling's wait, and that thread is gone in the child.
+   Known limits of the wait: (a) between two waits of a loop, a `SIGCHLD` under `SIG_DFL` is dropped by the kernel (`Ignore`), and a `SIGTERM` (terminating default) ends
+   the process, as INV-0106-4 has it for a blocked signal; only a signal that arrives while some thread is in the wait is taken. (b) Each wait makes two `set_disposition`
+   calls per signal of the set even when nothing changes. (c) A handler of another signal that leaves the wait by `siglongjmp` or does not return leaves the wait's state
+   (cancel state disabled, set blocked, dispositions `Deliver`, `sigwait` set) behind; the library does not run handlers under a guard (a handler that does not return
+   is the program's, as `run_handler` says for the mask). (d) The between-waits window and (c) are not checked. Known limit: a signal taken from the pending sets clears the thread-pending and the process-pending bit of the
    number together, so two instances (one `pthread_kill`, one `kill`) become one where Linux returns two. The `siginfo_t` of a wait has `SI_USER` and no sender. They are in `posix-surface-T9.txt` with `pthread_getattr_np`, `pthread_getname_np`, `pthread_setname_np`
    (`ports/musl/zoraya/attr.c`; names live in the thread table; the main thread's stack is the kernel's 64 KiB). `open`/`openat` are cancellation points (item 5's list; the
    1000-round test found they were not). The statistics line has `futex=N` (INV-0302-5). `posix-stats --no-thread-calls` checks INV-0308-3 against the call log's union; it
@@ -160,8 +168,8 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    Test layout: cases that need `kill(getpid())` or `fork` cannot run under `posixrun` (no broker: `getpid()` is 0 there and `kill` of oneself goes to the broker and hangs),
    so `treroute`, `tsig`, `tsigdfl`, `twait`, `tfork*`, `texec`, `tspawn` are in `tests/posix/t_posix.c`. **Suites (ADR-0309):** `make test-posix-suites` builds and runs 13 thread tests of musl's libc-test
    (pinned in `ports/sources.lock`, `libctest`; `tests/libc-test/threads-excluded.txt` names the 12 left out with reasons: asynchronous cancel, `pthread_cancel-points` (does not link:
-   `shm_open` is not exported; its six cancel scenarios pass on a copy without it), robust mutexes (`ENOSYS`), priority inheritance, named semaphores, dynamic loading, tests that
-   fork or fill memory). SQLite's `threadtest3` is pinned (`sqlitesrc`) and builds, but every scenario fails at its first write with
+   `shm_open` is T3 (ADR-0005), not exported, not in 9b's scope; its six cancel scenarios pass on a copy without it), robust mutexes (`ENOSYS`), priority inheritance, named semaphores, dynamic loading, tests that
+   fork or fill memory; `make posix-cancel-points` runs the six cancel scenarios of `pthread_cancel-points` on a copy without its `shm_open` one). SQLite's `threadtest3` is pinned (`sqlitesrc`) and builds, but every scenario fails at its first write with
    `SQLITE_IOERR_LOCK` because `fcntl` record locks (`F_SETLK`) are `EINVAL`: it is `make posix-threadtest3`, not a step, until record locks have an ADR. The 3850 is not a threads defect and is out of 9b's scope: record locks need an ADR of their own (see the open questions).
 
 ## Consequences
@@ -190,9 +198,12 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
 - **INV-0315-6.** `exec` from a non-main thread while siblings open files and write to a pipe ends the old image, runs the new one once, leaves it no descriptor above 2 but the
   pipe's, and no write of the old image follows the new image's first. *Check:* the same script (`texec`, 100 execs).
 - **INV-0315-7.** `posix_spawn` and `vfork` from four threads at once all complete with the child's status. *Check:* the same script (`tspawn`).
-- **INV-0315-8.** `sigwait`, `sigwaitinfo` and `sigtimedwait` take a signal of the set sent by another process while its action is `SIG_DFL` (the process survives, also for a
-  default-ignored signal); a cancelled `sigwait` leaves the mask and the wait undone; the kernel dispositions are back when the wait ends. *Check:* `cargo test -p zoraya-posix
-  --test threads` (the `sigwait` cases) and `make test-posix` with `tests/posix/threads.script` (`tsigdfl`).
+- **INV-0315-8.** While a thread is in `sigwait`, `sigwaitinfo` or `sigtimedwait`, a signal of the set sent by another process while its action is `SIG_DFL` is taken by the
+  wait (the process survives, also for a default-ignored signal); a cancelled wait leaves the mask unblocked again when the thread's cleanup handlers run and no routing
+  target behind; when a wait ends, the kernel dispositions are back (a later `SIGUSR2` from outside ends the process), no request stays queued, and a `fork` child has no
+  disposition of a sibling's wait. *Check:* `cargo test -p zoraya-posix --test threads` (the `sigwait` cases and the drain) and `make test-posix` with
+  `tests/posix/threads.script` (`tsigdfl`: three variants, cancel with a cleanup handler reading the mask, the dispositions after a timed wait and after a cancel, the fork
+  child ended by `SIGTERM`).
 
 ## Open questions
 
