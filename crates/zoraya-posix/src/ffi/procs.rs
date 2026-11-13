@@ -1930,10 +1930,10 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
         // The new image runs: this one ends without atexit or stdio. The
         // library lock stays held to the end (ADR-0306 item 7): no sibling
         // opens, closes or dups a descriptor after the table was copied.
-        zoraya_rt::process_exit(0)
+        Ok(())
     });
     match r {
-        Ok(()) => unreachable!(),
+        Ok(()) => zoraya_rt::process_exit(0),
         Err(e) => e,
     }
 }

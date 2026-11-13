@@ -100,4 +100,4 @@ replace = '''        Ok(())
         Ok(()) => zoraya_rt::process_exit(0),'''
 tests = ["make -s test-posix POSIX_SCRIPTS=tests/posix/threads.script"]
 timeout = 1500
-note = "INV-0315-6 / ADR-0306 item 7: the old image ends inside state(), the library lock held, so no sibling writes after the new image's first write; ending outside it releases the lock first (texec 'O' after 'N')"
+note = "INV-0315-6 / ADR-0306 item 7: the old image ends inside state(), the library lock held, so no sibling writes after the new image's first write; ending outside it releases the lock first (texec 'O' after 'N'). Run by hand at 9b review: texec fails in round 1 (killed)"
