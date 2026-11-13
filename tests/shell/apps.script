@@ -154,16 +154,20 @@
 < \r\nexit status 60
 < \r\n~>
 # `-k` and `--no-check-certificate` are not options of the descriptions: the
-# line is a usage mistake, the program gets no connection and cannot resolve
-# or connect (no request is sent: the Makefile checks the server's log).
+# line does not match one, so it runs with default settings and the programs
+# themselves refuse the option (ADR-0321; the +net cases at the end are the
+# same lines with a network that would let a transfer happen).
 > curl -k https://test.zoraya:@TLSVALID@/\r
-< Could not resolve
-< \r\n~>
-> wget --no-check-certificate -O - https://expired.zoraya:@TLSEXPIRED@/\r
-< Permission denied
+< --insecure is refused
 < \r\n~>
 > status\r
-< \r\nexit status 4
+< \r\nexit status 2
+< \r\n~>
+> wget --no-check-certificate -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< --check-certificate is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
 < \r\n~>
 # What the line gives, exactly (ADR-0311): the network, /system/tls to read
 # with it, and for -O the one file the URL names. A line without a URL
@@ -339,6 +343,188 @@
 < \r\n~>
 > status\r
 < \r\nexit status 5
+< \r\n~>
+# Nothing in the programs turns the checks off or changes the roots (ADR-0321,
+# INV-0321-1; ADR-0228 item 3, INV-0312-1). The lines below do not match a
+# description, so they run with default settings, and the +net word gives the
+# network that a transfer would need: the programs themselves refuse each
+# option, exit with status 2, and the Makefile checks that the expired and
+# wrong-name servers saw 0 request bytes. The roots a --cacert or --capath
+# names are readable (+r), the other root of the test PKI.
+> +net expired.zoraya:@TLSEXPIRED@ curl -k https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl -ks https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+# After -s the message is silent, the refusal is not.
+> +net expired.zoraya:@TLSEXPIRED@ curl -sk https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --insecure https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --proxy-insecure https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --doh-insecure https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --ssl-no-revoke https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --ssl-revoke-best-effort https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --tlsv1.0 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --ciphers aNULL https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --tls13-ciphers TLS_AES_128_GCM_SHA256 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ curl -k https://wrong.zoraya:@TLSWRONG@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ curl --insecure https://wrong.zoraya:@TLSWRONG@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/other-root.pem +net expired.zoraya:@TLSEXPIRED@ curl --cacert /etc/test-pki/other-root.pem https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/other-root.pem +net expired.zoraya:@TLSEXPIRED@ curl --proxy-cacert /etc/test-pki/other-root.pem https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/hashed +net expired.zoraya:@TLSEXPIRED@ curl --capath /etc/test-pki/hashed https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/hashed +net expired.zoraya:@TLSEXPIRED@ curl --proxy-capath /etc/test-pki/hashed https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/other-root.pem +net test.zoraya:@TLSVALID@ curl --cacert /etc/test-pki/other-root.pem https://test.zoraya:@TLSVALID@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --no-check-certificate -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --check-certificate=off -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --ciphers=aNULL -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --secure-protocol=SSLv3 -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --secure-protocol=TLSv1 -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --secure-protocol=PFS -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ wget --no-check-certificate -O - https://wrong.zoraya:@TLSWRONG@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/other-root.pem +net expired.zoraya:@TLSEXPIRED@ wget --ca-certificate=/etc/test-pki/other-root.pem -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/other-root.pem +net test.zoraya:@TLSVALID@ wget --ca-certificate=/etc/test-pki/other-root.pem -O - https://test.zoraya:@TLSVALID@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/hashed +net expired.zoraya:@TLSEXPIRED@ wget --ca-directory=/etc/test-pki/hashed -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+# The stricter settings that stay: a TLS version the programs already have.
+> +net test.zoraya:@TLSVALID@ curl -s --tlsv1.2 https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> +net test.zoraya:@TLSVALID@ wget -q --secure-protocol=TLSv1_2 -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
 < \r\n~>
 x power off
 > poweroff\r
