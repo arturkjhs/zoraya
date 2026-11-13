@@ -106,13 +106,11 @@ pub fn pause() {
 #[inline(always)]
 pub fn assert_unlocked(#[allow(unused)] what: &str) {
     #[cfg(feature = "qemu-test")]
-    if sched::current().process().is_some() {
-        assert_eq!(
-            crate::sync::held(),
-            0,
-            "a spinlock is held across {what} (ADR-0270 point 2)"
-        );
-    }
+    assert_eq!(
+        crate::sync::held(),
+        0,
+        "a spinlock is held across {what} (ADR-0270 point 2)"
+    );
 }
 
 /// Whether every [`pause`] asks the scheduler to switch (the test kernel's
