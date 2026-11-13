@@ -2029,3 +2029,78 @@ Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: C
 
 `make check`; `make test-qemu-one` (the whole test kernel on auto-default, which includes `t_bound` and `t_devices`) after steps 1 to 2 and after steps 5 and 6; `cargo test -p zoraya-events`;
 the mutation above. Not run: `make test-changed`/`test-keeper` (the shell's refusal is dead code until the gate opens), `make test-qemu` on TCG, CI.
+
+## Hand-run: `make run-net` on the architect's machine (branch `work/hand-run`, on `main` at 120ee31)
+
+**What the architect saw.** `make run-net` on a MacBook Air: `net status` right (lease, gateway, DNS), but `fetch http://google.com`
+and `fetch https://google.com` both "zosh: /system/tls/roots: the file service is gone", and the prompt `/>` instead of `~>`.
+
+**Cause.** Not the read-only `/system` (ADR-0289 item 8): the disk. `make run`, `run-net` and `run-gui` attached `build/disk.img`, which
+the Makefile made once (`$(DISK): | $(KERNEL)`, order-only) and never again. A disk made before Q5 (format 2, ADR-0265; f7c95e1,
+2026-11-11) is format 1, which `fsd` does not mount. Reproduced with this host's own kept `build/disk.img` (from 2026-11-02), copied, under
+the exact `make run-net` command line (`tools/run-qemu.sh --net --disk DISK build/zoraya-kernel.elf`, interactive mode, through the
+runner): `fsd: mount: Corrupt`, `init: storage failed`, `zosh: there is no volume: the file commands will fail`, the prompt `/>`
+(the shell has no home), and after three restarts `init: no more restarts: the volume stays down`; `zoraya-fsck` on that image: "root
+records: no valid root record". Every command with a network grant then fails before it runs, because the shell adds
+`/system/tls/roots` to its table (ADR-0228 item 3) and opening it on a volume that is gone is `FILE_GONE` ("the file service is gone"),
+for `http://` too. With a fresh disk from the same build the same command line gives `~>` and `fetch https://example.com/` prints the
+page. A disk made between Q5 and N5 (2026-11-11 to -12) would mount but have no `/system/tls/roots` at all, and since `/system` is
+read-only at run time for everyone, no disk ever gets a new root store: the same staleness, quieter.
+
+**Fix.** `tools/run-disk.sh IMAGE`, the recipe of `$(DISK)` (run on every `make run`, `run-net`, `run-gui`): it keeps the disk while
+`IMAGE.key` matches what the disk was made for (the format version from `crates/zoraya-fs/src/format.rs`, the size, and a checksum of
+`rootfs/system`); otherwise it moves the disk to `IMAGE.old` (one generation), says so, and makes a new one from `rootfs/`. `/system` stays
+read-only for everyone; nothing writes into an existing image. Cost: a change of format or of `rootfs/system` takes a person's files on
+that disk with it into `build/disk.img.old` (readable by an older build, or `zoraya-fsck`); carrying them over needs the system-update
+path that ADR-0289 leaves to a later ADR. The command lines of the three targets are one definition each (`RUN_CMD`, `RUN_NET_CMD`,
+`RUN_GUI_CMD` in the Makefile), which the test calls.
+
+**The step that closes the gap: `make test-hand-run`** (in `TEST_STEPS`, `tools/ci-tests.txt`, `tools/plan-lib.sh`, a lane of
+`tools/test-par.sh`, the smoke set of `tools/ci-plan.sh`, the 30-minute jobs of the workflow, and `tools/test-map.txt` for the paths that
+make the image). It boots `build/zoraya-kernel.elf` (not a test image) with a disk made by `tools/run-disk.sh` at
+`build/hand-run-disk.img` (so a person's disk stays), first replacing a planted stale disk without a key and then checking that a second
+call keeps the new one byte for byte; then:
+- `RUN_NET_CMD` (interactive mode, no `restrict`), `tests/shell/hand-run-net.script`: the prompt `~>`; `net status` with lease, gateway
+  10.0.2.2 and DNS 10.0.2.3; `fetch http://10.0.2.2:PORT/` the test page from `tools/test-httpd`; `fetch https://10.0.2.2:TLSPORT/`
+  "certificate is not signed by a trusted root"; forbidden throughout: "fsd: mount", "storage failed", "there is no volume", "the file
+  service is gone".
+- `RUN_CMD`, `tests/shell/hand-run.script`: the prompt `~>` and a command.
+- `RUN_GUI_CMD` with `--display-opts none --qmp SOCKET`, `tests/shell/hand-run-gui.script` (the runner's GUI script): the desktop
+  starts and its terminal shows `~>`.
+
+**Decisions (for the architect).**
+- *HTTPS against the production roots.* The image must be exact, so no test roots overlay: the production store
+  (`rootfs/system/tls/roots`) accepts no certificate a test server on the host can present. The step checks that `fetch https://`
+  gets its roots, runs the handshake and refuses the test PKI's certificate as unknown issuer, which also shows the roots were read
+  (without them the message is the file error). The full HTTPS path with a trusted root is `make test-net-fetch`'s (test image, the test
+  PKI's root as `/system/tls/roots`), unchanged. No name is fetched: the image has no `net.hosts`, and SLIRP's DNS forwarder needs the
+  host's resolver (as `net-dns` is skipped on CI).
+- *What differs from a person's run.* Only the disk's path, stdin (the runner's pipe instead of a terminal; `-serial mon:stdio` is
+  kept), and for `run-gui` no window and a QMP socket (the runner reads the screen and types through it; it does not change the
+  machine). `GUI_SCALE` is the Makefile's: 2 on macOS, 1 on CI's Linux. In interactive mode the guest can reach the Internet through
+  SLIRP; the scripts contact only 10.0.2.2.
+- *Seen, not fixed.* `fsd` reports a format-1 volume as `mount: Corrupt`, and `zoraya-fsck` as "no valid root record", not the format
+  message `format.rs` has ("format version is not 2: rebuild the volume with zoraya-mkfs"); a hint there would have named the cause.
+  While storage restarts, the console shell greets three times and drops the lines typed in between.
+
+**By-hand commands in the reports, `docs/design.md` and the README** (there is no README file) and what covers them:
+
+| Command (where) | Covered by |
+|---|---|
+| `make run` (design.md "Using the shell", 3a's criterion) | `test-hand-run` (`RUN_CMD`) |
+| `make run-net`, with `net status`, `fetch` (this report N1, N2, N3; design.md "Network") | `test-hand-run` (`RUN_NET_CMD`); `settings net.gateway ...` by hand (N2): `test-net`'s `net-settings` on a test command line, backlog for the exact one |
+| `zoraya-test-httpd --port 8080` then `make run-net` and `fetch` (N3) | `test-hand-run` (the same server, a port of its choosing) |
+| `make run-gui` (TASK-24, design.md "Desktop") | `test-hand-run` (`RUN_GUI_CMD`): boot, desktop, prompt. Backlog: the cocoa window's checks (Retina scale 2 on a real screen, the window resized and the display following it, a click landing where the pointer points, Command reaching the guest; TASK-24 "To check by hand") need a window and a person |
+| `make debug` (Makefile, design.md) | backlog: no step starts it and attaches a debugger |
+| `make posix-image` and `tools/run-qemu.sh --mem 512M --disk build/posix-disk.img ...` (design.md "Running a workload by hand", TASK-22) | the image is built by `ci-build` and booted by `test-posix` in test mode; backlog: the interactive command line itself |
+| `make bench-net` (N6, design.md) | backlog: runs only by hand, asserts only that each fetch ends |
+| `make measure-w4`, `make test-posix-long` (design.md, TASK-22) | backlog: not in `make test` by decision (design.md "run only where someone runs them") |
+| `zoraya-mkfs --size 64M --limit room=64K ...`, `make test-posix POSIX_SCRIPTS=tests/posix/scenarios.script` (Q5) | `test-posix` (scenarios.script is a CI job) and `test-unit` (mkfs) |
+| `cargo test -p zoraya-fs-service --test service ...` (Q3) | `test-unit` |
+
+**Run (this session, on the development host, HVF).** The reproduction above (the old disk and a fresh one, each under the exact
+`make run-net` line through the runner, with a timeout); `make test-hand-run` twice (the second after adding the `run` and GUI boots):
+the stale disk replaced and the new one kept, `hand-run-net` PASS (25 steps), `hand-run` PASS (12), `hand-run-gui` PASS (9), each disk
+clean under `zoraya-fsck`; `tests/shell/hand-run.script` against the old disk fails ("forbidden output: fsd: mount"); `make check`.
+Not run: TCG, CI, `make test-changed`. Left for a follow-up session on this branch: a `ping` command, the shipping check of the
+Mozilla roots, `run-gui`'s network default.

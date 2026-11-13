@@ -1,0 +1,14 @@
+# `make run-gui` as a person runs it (`make test-hand-run`): the image
+# $(KERNEL), the disk tools/run-disk.sh keeps, and the same QEMU command line
+# (RUN_GUI_CMD), with no window (`--display-opts none`) and a QMP socket to
+# read the screen and type (the runner's GUI script, tools/test-runner/src/gui.rs).
+# The desktop's terminal has a shell with its volume: the prompt is the home.
+serial init: gui: gpu on its own page
+serial compd:
+screen Type help to begin, or help tour.
+screen ~> _
+type echo ready\r
+screen ready
+screen ~> _
+type poweroff\r
+exit

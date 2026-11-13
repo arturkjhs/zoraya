@@ -1356,8 +1356,11 @@ that `zoraya-tour` generates from that file (INV-0154-4). This section follows t
 part is built.
 
 - **Getting your bearings** (tour 1 to 3). The shell starts in `/home` (`shell.home`), shown as `~`; `/config` holds
-  `settings`, `start.zosh` and `history` (ADR-0157). `make run` attaches `build/disk.img`, made from `rootfs/` on
-  first use; without a disk the shell starts in `/` and file commands fail. `help` lists the topics, the commands
+  `settings`, `start.zosh` and `history` (ADR-0157). `make run` (and `run-net`, `run-gui`) attaches `build/disk.img`, made from
+  `rootfs/` by `tools/run-disk.sh` on first use and kept; when the on-disk format or `rootfs/system` changes, the old
+  disk becomes `build/disk.img.old` and a new one is made (a disk `fsd` cannot mount gave the prompt `/>` and
+  `fetch` "the file service is gone", TASK-26 hand-run). Without a volume the shell starts in `/` and file commands
+  fail. `make test-hand-run` boots these three machines as a person runs them. `help` lists the topics, the commands
   and the demonstrations a screen at a time; a command that succeeds prints only its result.
 - **Files and the language** (tour 4 to 8, 22 to 24; ADR-0150, ADR-0151; `zoraya_shell::syntax`, `glob`, `eval`).
   Words split only at spaces; `'...'` is literal, `"..."` expands `$name` and `$(...)`. Variables are lists

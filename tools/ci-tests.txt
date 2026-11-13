@@ -39,5 +39,6 @@ make test-posix POSIX_SCRIPTS="tests/posix/zosh.script" POSIX_ACCELS="auto tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="auto"
 make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="tcg"
 make test-keeper
+make test-hand-run
 make test-fuzz FUZZ_SECONDS=600 FUZZ_JOBS=5
 make test-fuzz-net FUZZ_SECONDS=600 FUZZ_JOBS=3

@@ -74,7 +74,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: FORCE test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -127,20 +127,32 @@ $(NET_TEST_KERNEL): $(NET_TEST_RAMDISK)
 $(RUNNER):
 	$(CARGO) build -p zoraya-test-runner
 
-# The default disk: made once from rootfs/, and kept, so that files stay.
-$(DISK): | $(KERNEL)
-	$(CARGO) build -q -p zoraya-mkfs
-	target/debug/zoraya-mkfs --size 64M --from rootfs $@
+# The default disk: made from rootfs/ and kept, so that files stay, while it
+# is a volume of this system: tools/run-disk.sh makes a new one (and keeps the
+# old as build/disk.img.old) when the format or rootfs/system changed.
+$(DISK): tools-storage FORCE
+	@tools/run-disk.sh $@
+
+FORCE:
+
+# The machines a person runs by hand, one definition each, which
+# `make test-hand-run` boots as they are (the image $(KERNEL), a disk made by
+# tools/run-disk.sh, this command line): $(1) is the disk; RUN_GUI_CMD's $(2)
+# is empty for a person and `--display-opts none` for the test, which has no
+# window.
+RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
+RUN_NET_CMD = $(RUN_QEMU) --net --disk $(1) $(KERNEL)
+RUN_GUI_CMD = $(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
 
 run: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
+	$(call RUN_CMD,$(DISK))
 
 # The GUI (ADR-0097): a window on the host; the serial line stays here.
 # On macOS the window is on a Retina screen as a rule: twice the pixels,
 # scale 2 (the architect's check of 2026-11-10); GUI_SCALE=1 gives 1024x768.
 GUI_SCALE ?= $(if $(filter Darwin,$(shell uname -s)),2,1)
 run-gui: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 512M --disk $(DISK) $(KERNEL)
+	$(call RUN_GUI_CMD,$(DISK),)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
@@ -440,7 +452,57 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.
 run-net: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --net --disk $(DISK) $(KERNEL)
+	$(call RUN_NET_CMD,$(DISK))
+
+# What a person runs by hand, booted as it is (TASK-26, hand-run): the image
+# $(KERNEL), not a test image; a disk made by tools/run-disk.sh, the recipe of
+# $(DISK), here at $(HAND_DISK) so that a person's disk stays; and the command
+# lines RUN_CMD, RUN_NET_CMD and RUN_GUI_CMD (interactive mode; RUN_GUI_CMD
+# with no window and a QMP socket to read its screen). The first disk is a
+# stale one without a key, which run-disk.sh must replace (what made the
+# architect's `make run-net` fail); a second call must keep the new one. Each
+# boot forbids the lines of a volume that did not mount ("fsd: mount", "there
+# is no volume") and waits for the home's prompt, `~>`, not `/>`. The network
+# run fetches http:// and https:// from
+# tools/test-httpd on the host's 127.0.0.1: https:// reaches the certificate,
+# which the production roots refuse (the full path is test-net-fetch's).
+HAND_DISK := $(BUILD)/hand-run-disk.img
+HAND_NET_TEMPLATE := tests/shell/hand-run-net.script
+HAND_NET_SCRIPT := $(BUILD)/hand-run-net.script
+HAND_SCRIPT := tests/shell/hand-run.script
+HAND_GUI_SCRIPT := tests/shell/hand-run-gui.script
+HAND_HTTP_READY := $(BUILD)/hand-run-httpd.port
+HAND_TLS_READY := $(BUILD)/hand-run-tlsd.ports
+test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@rm -f $(HAND_DISK).key $(HAND_DISK).old $(BUILD)/hand-run-disk.copy
+	@head -c 1048576 /dev/zero > $(HAND_DISK)
+	@tools/run-disk.sh $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; cat $(BUILD)/hand-run-disk.log; \
+	if [ ! -f $(HAND_DISK).old ] || ! grep -q 'made for another format' $(BUILD)/hand-run-disk.log; then \
+		echo "[hand-run] FAIL: tools/run-disk.sh kept a disk without a key"; exit 1; fi; \
+	cp $(HAND_DISK) $(BUILD)/hand-run-disk.copy && tools/run-disk.sh $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; \
+	if [ -s $(BUILD)/hand-run-disk.log ] || ! cmp -s $(HAND_DISK) $(BUILD)/hand-run-disk.copy; then \
+		echo "[hand-run] FAIL: tools/run-disk.sh replaced a disk of this system"; cat $(BUILD)/hand-run-disk.log; exit 1; fi; \
+	echo "[hand-run] ok: a stale disk is replaced, a current one kept"
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[hand-run] skipped run-net: QEMU has no user-mode networking"; exit 0; }; \
+	mkdir -p target/test-logs && : > $(HAND_HTTP_READY) && : > $(HAND_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(HAND_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(HAND_TLS_READY) > target/test-logs/test-httpd-hand-run.log 2>&1 & echo $$! > $(BUILD)/hand-run-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/hand-run-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(HAND_HTTP_READY) ] && [ -s $(HAND_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(HAND_TLS_READY)); tlsvalid=$${1:-}; port=$$(cat $(HAND_HTTP_READY)); \
+	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[hand-run] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-hand-run.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" $(HAND_NET_TEMPLATE) > $(HAND_NET_SCRIPT); \
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(HAND_NET_SCRIPT) --label hand-run-net -- $(call RUN_NET_CMD,$(HAND_DISK)); rc=$$?; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(HAND_DISK); rc=$$?; fi; \
+	exit $$rc
+	@tools/run-disk.sh $(HAND_DISK)
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(HAND_SCRIPT) --label hand-run -- $(call RUN_CMD,$(HAND_DISK))
+	target/debug/zoraya-fsck $(HAND_DISK)
+	@tools/run-disk.sh $(HAND_DISK)
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --gui-script $(HAND_GUI_SCRIPT) --qmp $(BUILD)/hand-run-gui.qmp --label hand-run-gui -- \
+		$(call RUN_GUI_CMD,$(HAND_DISK),--display-opts none --qmp $(BUILD)/hand-run-gui.qmp)
+	target/debug/zoraya-fsck $(HAND_DISK)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell
@@ -946,7 +1008,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
