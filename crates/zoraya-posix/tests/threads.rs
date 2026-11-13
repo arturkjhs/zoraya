@@ -104,18 +104,66 @@ fn a_process_signal_the_taker_blocks_goes_to_one_thread_that_does_not() {
     assert!(!r.p.set_wait_port(Some(77)));
     r.p.switch_to(100);
     assert_eq!(r.p.signals.take(USR1), Taken::Pending);
-    r.p.route(USR1);
+    r.p.route(USR1, false);
     assert_eq!(
         r.p.sys.interrupts,
         vec![(1003, Some(77))],
         "woken through its port"
     );
     assert_eq!(r.p.signals.pending, 0, "no longer the taker's");
+    assert_eq!(
+        r.p.signals.shared,
+        bit(USR1),
+        "process-pending (ADR-0304 3b)"
+    );
     r.p.switch_to(300);
     assert_eq!(r.p.signals.next_unblocked(), Some(USR1));
     assert!(r.p.take_interrupted());
     // Exactly one thread has it: not thread 2.
     r.p.switch_to(200);
+    assert_eq!(r.p.signals.pending, 0);
+    r.p.signals.mask(SIG_SETMASK, Some(0)).unwrap();
+    assert_eq!(r.p.signals.next_unblocked(), None, "taken once");
+}
+
+#[test]
+fn a_routed_signal_is_not_lost_when_its_thread_blocks_it_or_ends() {
+    let mut r = three();
+    // Thread 1 blocks USR1; thread 2 and 3 have it unblocked; 2 is picked.
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    assert_eq!(r.p.signals.take(USR1), Taken::Pending);
+    r.p.route(USR1, false);
+    assert_eq!(r.p.sys.interrupts, vec![(1002, None)]);
+    // Thread 2 blocks it before it looks, then ends: thread 3 still has it.
+    r.p.switch_to(200);
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    assert_eq!(r.p.signals.next_unblocked(), None);
+    r.p.switch_to(300);
+    r.p.thread_remove(200);
+    assert_eq!(r.p.signals.next_unblocked(), Some(USR1));
+}
+
+#[test]
+fn routing_leaves_a_thread_directed_signal_of_the_taker_alone() {
+    let mut r = three();
+    // pthread_kill(1, USR1) while thread 1 blocks it: pending in thread 1.
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    r.p.tkill(1, USR1).unwrap();
+    assert_eq!(r.p.signals.pending, bit(USR1));
+    // A process-directed one arrives: it coalesces; thread 1 keeps its own.
+    let was = r.p.signals.pending & bit(USR1) != 0;
+    assert_eq!(r.p.signals.take(USR1), Taken::Pending);
+    r.p.route(USR1, was);
+    assert_eq!(r.p.signals.pending, bit(USR1), "still thread 1's");
+    assert!(r.p.sys.interrupts.is_empty());
+    // And a thread-directed signal of thread 1 is never moved to thread 3
+    // by a later process-directed one of another number.
+    assert_eq!(r.p.signals.take(USR2), Taken::Run(HANDLER));
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR2))).unwrap();
+    assert_eq!(r.p.signals.take(USR2), Taken::Pending);
+    r.p.route(USR2, false);
+    assert_eq!(r.p.signals.pending, bit(USR1), "USR1 stays");
+    r.p.switch_to(300);
     assert_eq!(r.p.signals.pending, 0);
 }
 
@@ -128,7 +176,7 @@ fn a_signal_every_thread_blocks_stays_with_the_process_for_the_first_to_unblock(
     }
     r.p.switch_to(100);
     assert_eq!(r.p.signals.take(USR2), Taken::Pending);
-    r.p.route(USR2);
+    r.p.route(USR2, false);
     assert!(r.p.sys.interrupts.is_empty());
     assert_eq!(r.p.signals.shared, bit(USR2));
     assert_eq!(r.p.signals.next_unblocked(), None);

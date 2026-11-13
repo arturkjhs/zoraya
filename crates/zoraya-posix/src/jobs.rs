@@ -252,11 +252,12 @@ impl<S: Sys> Posix<S> {
             } else {
                 return Next::None;
             };
+            let was_pending = self.signals.pending & crate::signals::bit(n) != 0;
             match self.signals.take(n) {
                 Taken::Run(a) => return Next::Run(n, a),
                 Taken::Default(DefaultAction::Terminate) => return Next::Terminate(n),
                 Taken::Default(DefaultAction::Stop) => return Next::Stop(n),
-                Taken::Pending => self.route(n),
+                Taken::Pending => self.route(n, was_pending),
                 Taken::Default(_) | Taken::Drop => {}
             }
         }

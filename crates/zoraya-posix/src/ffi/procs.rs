@@ -143,9 +143,10 @@ fn raise_signal_for(n: u32, process: bool) -> Result<(), i32> {
         return Ok(());
     }
     let taken = with(|p| {
+        let was_pending = p.signals.pending & crate::signals::bit(n) != 0;
         let t = p.signals.take(n);
         if process && t == Taken::Pending {
-            p.route(n);
+            p.route(n, was_pending);
         }
         t
     })

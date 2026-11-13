@@ -208,12 +208,20 @@ impl<S: Sys> Posix<S> {
     }
 
     /// A process-directed signal the calling thread blocks (ADR-0304 item 3
-    /// (b)): goes to the thread of lowest tid that has it unblocked and is at
-    /// a wait point if there is one, else the lowest tid with it unblocked;
-    /// else stays in the process's pending set (c).
-    pub fn route(&mut self, n: u32) {
+    /// (b), (c)): it stays in the process's pending set (`shared`), which
+    /// every thread that has it unblocked can take from; and the thread of
+    /// lowest tid that has it unblocked and is at a wait point, else the
+    /// lowest tid with it unblocked, is interrupted to look. `was_pending`:
+    /// the calling thread had the signal pending before `Signals::take`
+    /// added it (a `pthread_kill` of this thread): the two coalesce and the
+    /// thread-directed one is not touched.
+    pub fn route(&mut self, n: u32, was_pending: bool) {
+        if was_pending {
+            return;
+        }
         let cur = self.threads.cur;
         self.signals.pending &= !bit(n);
+        self.signals.shared |= bit(n);
         let pick = self
             .threads
             .list
@@ -222,12 +230,8 @@ impl<S: Sys> Posix<S> {
             .filter(|(_, r)| r.tp != cur && r.blocked & bit(n) == 0)
             .min_by_key(|(_, r)| (r.wait_port.is_none(), r.tid))
             .map(|(i, _)| i);
-        match pick {
-            Some(i) => {
-                self.threads.list[i].pending |= bit(n);
-                self.interrupt_at(i);
-            }
-            None => self.signals.shared |= bit(n),
+        if let Some(i) = pick {
+            self.interrupt_at(i);
         }
     }
 }
