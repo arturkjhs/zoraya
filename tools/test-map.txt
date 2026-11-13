@@ -162,6 +162,10 @@ user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
 tools/test-httpd/            test-net
 tests/shell/net-dns.script   test-net
+# The first lookup of a boot (proposed ADR-0316): the test DNS server with
+# its capture check, and the script.
+tools/test-dns/              test-net
+tests/shell/net-lookup.script test-net
 crates/zoraya-shell/src/netgrant.rs test-net
 
 # HTTPS and the random service (N5): the TLS crate, ring, the generator, rngd

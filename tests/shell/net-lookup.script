@@ -1,0 +1,41 @@
+# The first lookup of a boot (`make test-net-lookup`, which turns @PORT@ into
+# the test web server's port). The disk says `net.dns = 10.0.2.2`: the guest
+# asks tools/test-dns on the host's 127.0.0.1, which answers `slow.zoraya`
+# and `slowweb.zoraya` with 10.0.2.2 after 3 s, never answers
+# `silent.zoraya` and `silentweb.zoraya`, and says NXDOMAIN for any other.
+# The capture of the run is checked afterwards (zoraya-test-dns
+# --check-pcap): one ARP request for the server before the first query, and
+# the echo request and the SYN leave as soon as their names are answered.
+! panicked
+! first process ended
+! did not answer
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+# The first network command of the boot: `ping` by name, answered late (the
+# resolver asks again at 1 s and 2 s, the first answer comes at 3 s). The
+# answer is the gateway, a local address, so `+net 10.0.2.2` covers it.
+> +net 10.0.2.2 ping -c 2 slow.zoraya\r
+< PING slow.zoraya (10.0.2.2): 2 requests
+< 2 sent, 2 received, 0% loss
+< \r\n~>
+# `fetch` by name, its own late lookup.
+> +net 10.0.2.2 fetch --sum http://slowweb.zoraya:@PORT@/pattern/1000\r
+< 1000 bytes fnv1a @SUM1K@ in
+< \r\n~>
+# A name no server answers: `netd` answers at its lookup bound (8 s), and
+# says so; the clients waited for it.
+> ping silent.zoraya\r
+< the name lookup timed out
+< \r\n~>
+> fetch http://silentweb.zoraya/\r
+< the name lookup timed out
+< \r\n~>
+# A name that does not exist is not a timeout.
+> ping nothing.zoraya\r
+< the name has no address
+< \r\n~>
+x power off
+> poweroff\r
