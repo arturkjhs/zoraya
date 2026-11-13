@@ -126,3 +126,12 @@ fix is for the GUI stack to end with the process that started it (a job of its o
   objects, the refusal only in the clients, contiguous memory, smaller items.
 - `Job::drop`'s `retain` and the `children` growth are linear in a parent's children (one interval each); a long job chain's drop runs in whichever call drops the last handle.
 - Gate rows that are not truly `checked:` (the strict check lists them), the pending `disk-filler-tmp`, INV-0262-4 for `+net`, the architect's decision on ADR-0299, then the full CI.
+
+## Mutation lists that no longer apply (part 9b, branch `work/texec-fix`)
+
+Part 9b's review committed a mutant's `replace` by mistake (b447edd: `exec` ended the old image after `state()`
+returned, so the library lock was released before the end, and a sibling's `write` could follow the new image's
+first; `texec` caught it on CI's TCG leg). `make check-mutant-lists` (`zoraya-mutants --check`) now finds a list
+whose `find` is gone. It is not in `make check` yet: on that branch 15 of 241 mutants do not apply (in
+`compositor-settings`, `fs-limits`, `fs-service` and `kernel-objects`), code that moved since the lists were written.
+Update those lists, then add the step to `CHECK_STEPS`.

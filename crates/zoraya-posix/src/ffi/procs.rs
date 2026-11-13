@@ -1929,11 +1929,14 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
         }
         // The new image runs: this one ends without atexit or stdio. The
         // library lock stays held to the end (ADR-0306 item 7): no sibling
-        // opens, closes or dups a descriptor after the table was copied.
-        Ok(())
+        // opens, closes or dups a descriptor after the table was copied,
+        // and none writes after the new image's first write (INV-0315-6).
+        // Ending after `state` returns would release the lock first (the
+        // mutant T-exec-exit-outside-state in tools/mutants/threads-9b.toml).
+        zoraya_rt::process_exit(0)
     });
     match r {
-        Ok(()) => zoraya_rt::process_exit(0),
+        Ok(()) => unreachable!(),
         Err(e) => e,
     }
 }

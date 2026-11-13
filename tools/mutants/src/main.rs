@@ -355,6 +355,9 @@ struct Args {
     jobs: usize,
     only: BTreeSet<String>,
     lists: Vec<PathBuf>,
+    /// `--check`: only that every mutant still applies to the working tree
+    /// (its `find` is where the list says), for `make check-mutant-lists`.
+    check: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -363,6 +366,7 @@ fn parse_args() -> Result<Args, String> {
         jobs: (cores / 2).clamp(1, MAX_WORKERS),
         only: BTreeSet::new(),
         lists: Vec::new(),
+        check: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -378,6 +382,7 @@ fn parse_args() -> Result<Args, String> {
                 let ids = args.next().ok_or("--only needs ids")?;
                 a.only.extend(ids.split(',').map(str::to_string));
             }
+            "--check" => a.check = true,
             s if s.starts_with('-') => return Err(format!("unknown option {s}")),
             _ => a.lists.push(PathBuf::from(arg)),
         }
@@ -386,7 +391,9 @@ fn parse_args() -> Result<Args, String> {
         let mut found: Vec<PathBuf> = fs::read_dir("tools/mutants")
             .map_err(|e| format!("tools/mutants: {e}"))?
             .filter_map(|e| e.ok().map(|e| e.path()))
+            // The tool's own manifest lives here too and is not a list.
             .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+            .filter(|p| p.file_name().is_some_and(|n| n != "Cargo.toml"))
             .collect();
         found.sort();
         a.lists = found;
@@ -418,6 +425,9 @@ fn main_() -> Result<bool, String> {
     }
     if mutants.is_empty() {
         return Err("no mutants".into());
+    }
+    if args.check {
+        return check_lists(&mutants);
     }
     let commit = git(Path::new("."), &["rev-parse", "--short", "HEAD"])?;
     let dirty = git(
@@ -489,6 +499,27 @@ fn main_() -> Result<bool, String> {
         "zoraya-mutants: {} mutants, {survived} survived, {} not applied: {path}",
         results.len(),
         bad - survived
+    );
+    Ok(bad == 0)
+}
+
+/// Every mutant applies to the working tree. A `find` that is gone means the
+/// code moved (update the list) or the mutated text itself was committed
+/// (b447edd committed T-exec-exit-outside-state's `replace`).
+fn check_lists(mutants: &[(String, Mutant)]) -> Result<bool, String> {
+    let mut bad = 0;
+    for (name, m) in mutants {
+        let applies = fs::read_to_string(&m.file)
+            .map_err(|e| format!("{}: {e}", m.file))
+            .and_then(|text| list::apply(m, &text));
+        if let Err(e) = applies {
+            println!("{name}: {} ({}): {e}", m.id, m.file);
+            bad += 1;
+        }
+    }
+    println!(
+        "zoraya-mutants: {} mutants, {bad} do not apply",
+        mutants.len()
     );
     Ok(bad == 0)
 }

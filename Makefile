@@ -1126,6 +1126,15 @@ check-ethd-maps:
 check-tls-roots:
 	tools/check-tls-roots.sh
 
+# Every mutant of tools/mutants/*.toml still applies: its `find` occurs in
+# its file as the list says. A missing one is code that moved, or a mutant's
+# `replace` that was committed by mistake (the texec failure of 9b).
+# MUTANT_LISTS narrows it to some lists. Not yet in make check: 15 mutants of
+# older lists no longer apply (docs/backlog.md).
+check-mutant-lists:
+	@$(CARGO) build -q -p zoraya-mutants
+	@target/debug/zoraya-mutants --check $(MUTANT_LISTS)
+
 check-test-caps:
 	@bad=""; \
 	for f in crates/*/tests/*.rs; do \
