@@ -72,9 +72,11 @@ code asynchronously on an existing thread. Instead:
 - **T2:** adds autoconf `configure` (W4), for 291 symbols and 59 syscalls. T2 is accepted only after the cost of
   `snapshot_process` is measured on W4.
 
-The surface is a list of measured CSV rows, and only an ADR can grow it. Out of scope, with written reasons: threads,
-`ptrace`, System V IPC, sockets, general `poll`/`epoll`, fault handlers, record locks across processes (`fcntl` record locks exist inside one process, ADR-0319), `dlopen`, set-uid, and T3
-(clang/lld).
+The surface is a list of measured CSV rows, and only an ADR can grow it. Out of scope, with written reasons: `ptrace`,
+System V IPC, general `poll`/`epoll`, fault handlers, record locks across processes (`fcntl` record locks exist inside one
+process, ADR-0319, which supersedes ADR-0005 item 6), `flock`, `dlopen`, set-uid, and T3 (clang/lld). ADR-0005 also excluded
+threads and sockets; later ADRs added them: POSIX threads as tier T9 (ADR-0308, stage 9b, "Threads in a process" below) and
+the stream client of the network tier (ADR-0225, ADR-0287, stage 8, "POSIX sockets" below).
 
 **Event and readiness mechanism** ([ADR-0006](adr/0006-event-mechanism.md)). Every kernel object type defines a signal
 set or is explicitly not waitable.
@@ -281,7 +283,7 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
 - **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb` and `sttrb`, which check permissions as EL0
   does.
 
-### Threads in a process (stage 9b, step 1: the kernel; ADR-0300, 0301, 0307, 0313)
+### Threads in a process (stage 9b: the kernel, ADR-0300, 0301, 0307, 0313; `libposix`, ADR-0302 to 0306, 0314, 0315)
 
 The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zoraya-thread`, and `t_thread` at the raw ABI.
 
@@ -310,18 +312,27 @@ The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zor
   (`zoraya_posix_futex`), `SYS_exit` is `thread_exit` and `__unmapself` gives a detached thread's stack and object back. Two
   futex locks (`crates/zoraya-posix/src/lock.rs`): the library lock around `Posix`, the memory lock around the heap and the
   mapping table (256 entries). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
-  condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio). Known limits: a
-  library call that waits holds the library lock (the `Pending` split of ADR-0302 item 9 is the next slice); no signal reaches a
-  thread and `pthread_cancel` only sets a flag (ADR-0304, ADR-0305 are next); `fork` with siblings, `exec` and `exit` from a
-  non-main thread are untested.
-- **Record locks (ADR-0319, proposed).** `libposix` keeps `fcntl` record locks in the process: `F_SETLK`, `F_SETLKW`, `F_GETLK`
+  condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio).
+- **`libposix`, waits, signals, cancellation, `fork` (ADR-0315).** A call that waits long returns `PENDING` inside the library
+  and waits on a port of its own with the library lock free, then runs again with the outcome. A thread table
+  (`crates/zoraya-posix/src/threads.rs`) holds each thread's signal mask and pending set; `pthread_kill` and `raise` are
+  thread-directed (`tkill`, `thread_interrupt`) and a process's signal goes to the lowest-numbered thread that has it unblocked;
+  `sigwait`, `sigtimedwait` and `sigwaitinfo` exist. Cancellation is deferred (`ports/musl/zoraya/cancel.c`: a flag plus
+  `thread_interrupt`, tested at the library's wait points). `fork` with running siblings takes the locks
+  (`ports/musl/zoraya/atfork.c`) and freezes the others for the copy; the child has one thread. `exec` holds the library lock
+  until the old image ends. Tests: `make test-posix-threads` (`t_threads`, with 1000-round cases), `tests/posix/threads.script`
+  in `make test-posix`, and `make test-posix-suites` (musl's libc-test thread tests, exclusions with reasons in
+  `tests/libc-test/threads-excluded.txt`). Known limits: `PTHREAD_PROCESS_SHARED` and priority inheritance are refused
+  (`ENOTSUP`), robust mutexes are `ENOSYS`, asynchronous cancellation acts as deferred.
+- **Record locks (ADR-0319, which supersedes ADR-0005 item 6).** `libposix` keeps `fcntl` record locks in the process: `F_SETLK`, `F_SETLKW`, `F_GETLK`
   and the `F_OFD_*` forms (`crates/zoraya-posix/src/records.rs`, `fcntl_locks.rs`), released on `close` and `dup3`. Limit, by
   design: a second process does not see the lock (the file service has no owner per process, ADR-0103). `flock` is absent.
   `make test-posix-threadtest3` runs SQLite's `threadtest3` (rollback-journal scenarios; WAL needs a shared mapping, ADR-0100) on SQLite's
   default unix VFS, under HVF and TCG (INV-0319-3); `make test-posix-suites` runs musl's libc-test thread tests (ADR-0309).
-- **Not done yet.** Signals, cancellation of a blocked thread and `fork`'s locks in `libposix`, `grants` printing the
-  figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the CPU-ceiling and stepped-map variants of the
-  ending test (see the notes in ADR-0300, 0301 and 0307, and the report).
+- **Not done yet.** `grants` printing the figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the
+  CPU-ceiling and stepped-map variants of the ending test (see the notes in ADR-0300, 0301 and 0307, and the report); the
+  checks of INV-0306-3, INV-0306-5 and INV-0308-3, `check-cancel-points` (INV-0305-3) and the mapping count of a 128-thread
+  process (ADR-0315's open questions); record locks that a second process sees (`docs/backlog.md`).
 
 ## Filesystem engine (as built)
 
@@ -911,7 +922,9 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   workloads' own programs and pdpmake link against). Each exported function is reached through a call-log wrapper
   (`zw-NAME.o`, ADR-0211), and `usr/lib/zoraya-calls.txt` gives the bitmap's order; `POSIX_STATS=0` builds without
   it. `<zoraya/posix.h>` (`ports/include/`) declares Zoraya's
-  additions (ADR-0142). The sysroot also has
+  additions (ADR-0142). The figures above are stage 6's: the export list has since taken the socket names of ADR-0287, the
+  thread surface of tier T9 (ADR-0308, `docs/adr/posix-surface-T9.txt`; musl's `src/thread` is now compiled over the shim,
+  "Threads in a process") and ADR-0310's 22 names (9a). The sysroot also has
   `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
 - **The ports.** All build with `zcc`, and none with `__linux__`: dash (TASK-02's M4 patch and ADR-0142's two
@@ -1725,7 +1738,7 @@ the driver is described under "Network service" below.
   more things the survey did not know: ring's feature `less-safe-getrandom-custom-or-rdrand` (else `SystemRandom` has
   no implementation), and `getrandom 0.2` with its `custom` feature and `register_custom_getrandom!`. `cargo build
   --release` produces ring's C objects and the libraries. Nothing was run on the target: whether ring's aarch64 code
-  works without an operating system, and the source of its randomness, are N5's. BearSSL stays the POSIX answer.
+  works without an operating system, and the source of its randomness, are N5's. The POSIX side's library is OpenSSL 3.5 (ADR-0312, 9a), not BearSSL.
 - **Measured** (`t_net`, 20 ARP rounds, QEMU 11.1.2, test kernel, 128 MiB, 1 CPU, 2026-11-11): HVF: ARP round trip
   (guest transmit to the reply in `t_net`, through the driver and SLIRP) median 42 us, min 40 us, max 258 us;
   interrupt to the frame message read in `t_net` (the driver's wake, the channel write, `t_net`'s wake and read) median
@@ -1972,8 +1985,8 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   and an absorbing `mix` (a construction of ours; ADR-0288 item 5 asks the reviewer to decide on it). A connection speaks
   `Bytes(n)` (exactly `n` bytes, `n` up to 4,096, at once) and `Share(server end)`. The shell holds one and shares a fresh one
   with every native program it starts (the `random` slot of `ZNS1`); `random [COUNT]` prints bytes; `zoraya_user::random::random`
-  is the program's call. **Not built:** the virtio-rng reseed, `libposix`'s `getrandom` and `/dev/urandom`, the connection of the
-  panel's and the broker's programs and of a `fork` child, a restart of `rngd`.
+  is the program's call; `libposix`'s `getrandom` (9a, below) reads a connection the shell gives a POSIX program. **Not built:** the virtio-rng reseed, `/dev/urandom`, the connection of the
+  panel's and the broker's programs, of a program `dash` or `make` starts and of a `fork` child, a restart of `rngd`.
 - **TLS** (ADR-0228). `zoraya-tls` is a blocking client over rustls 0.23.46's unbuffered API with ring 0.17.14 as the provider,
   `no_std`: `Config::new(roots, now)`, `Connection::connect(config, name, transport, seed)` (32 fresh bytes from the random service are mixed into the generator first; `seed_random` refuses fewer than 32; the handshake and nothing else, so no
   application byte goes out before it succeeds), `read`, `write_all`, `close`. The date is the function the program gives (the
@@ -1999,12 +2012,12 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
 - **Measured** (QEMU 11.1.2, HVF, 1 CPU, one run, 2026-11-12): `fetch --sum https://test.zoraya:PORT/pattern/1000000`: handshake
   51.1 ms (ECDSA P-256 certificate, 108 roots parsed, `user` profile at opt-level 1), then 1,000,000 bytes in 25.1 ms against
   38.8 ms for the same page over HTTP in the same boot.
-- **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption,
+- **Not built:** `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption (curl and wget came in 9a, below, over OpenSSL; no BearSSL port),
   the HTTPS lines under TCG, the GUI shells' roots entry (they have no network connection yet).
 
 ## TLS for C programs, curl and wget (stage 9, 9a)
 
-`curl` and `wget` run inside Zoraya and fetch over HTTP and HTTPS (proposed ADR-0310 on `libc.a`'s names, `getrandom` and the
+`curl` and `wget` run inside Zoraya and fetch over HTTP and HTTPS (ADR-0310 on `libc.a`'s names, `getrandom` and the
 volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place of ADR-0228 item 2's BearSSL; TASK-27 9a).
 
 - **The ports.** `ports/sources.lock` pins OpenSSL 3.5.9 (the LTS line), zlib 1.3.1, curl 8.23.0 and wget 1.25.0. `make apps`
@@ -2052,11 +2065,10 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   server on an HTTPS address, by number, `-k` and `--no-check-certificate` as usage mistakes, `grants` for both, a refused
   `-O` name, a value as URL with and without `+net`, and wget without `-O` creating nothing), `make test-hand-run` (the
   production image: plain HTTP with both programs, HTTPS to the certificate and refused there, `grants curl -O`).
-- **Known limits.** *Memory:* each launch of `curl` or `wget` leaves about 8.5 MiB that the machine does not get back (measured by
-  launching `curl --version`: 8 launches on 128 MiB, 23 on 256 MiB, 40 or more on 512 MiB; it does not depend on the network or
-  on `getrandom`, and `grants curl`, which loads the same image, does not leak); the launch is refused with "over quota" when
-  it runs out. `make run-net` and the apps' tests therefore run on 512 MiB. Not found in 9a; the report records what was
-  ruled out. *Other launchers:* a program started by `dash` or `make` has no random connection, so OpenSSL cannot seed.
+- **Known limits.** *Memory:* the leak found in 9a (each launch of `curl` or `wget` kept about 8.5 MiB: `posix_child::load`
+  kept a duplicate of the image's memory object) is fixed (`work/9a-leak`); `tests/shell/apps-launches.script` (in `make test-apps`)
+  runs `curl --version` 16 times on 128 MiB. `make run-net`, `run-gui` and the apps' tests still run on 512 MiB (the Makefile's
+  comment gives the leak as the reason). *Other launchers:* a program started by `dash` or `make` has no random connection, so OpenSSL cannot seed.
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
@@ -2182,8 +2194,9 @@ ADR-0221 items 5, 6 and 8).
 - **Memory.** Page tables left empty by an unmap are not freed; later maps go below them, so a block cannot be used
   where an empty table remains. The heap never shrinks, and memory in a size class
   stays there. Frames are not zeroed by the allocator, except for table frames. No double-free detection in the heap.
-- **Threads.** No priorities, and kernel paths are not preempted. One thread per process. `sleep_until(Infinite)`
-  never returns, and nothing can kill a process yet. Sleepers share a deadline queue of 32, with one slot kept for the slice, so a full
+- **Threads.** No priorities, and kernel paths are not preempted. A process has up to 128 threads and the system 1,000 user
+  threads (stage 9b, "Threads in a process"). `sleep_until(Infinite)`
+  never returns. Sleepers share a deadline queue of 1,024 entries (stage 9b), so a full
   queue fails `sleep_until` with `NoMemory`. Thread and process objects use `Arc::new`, which panics when memory runs
   out, so stage 3's `spawn` needs a fallible form first (ADR-0022).
 - **User memory.** Copies are a byte at a time. At most 255 live processes. A process's memory is all mapped up front.
@@ -2240,6 +2253,12 @@ ADR-0221 items 5, 6 and 8).
   step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there;
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
+  What a run contains is `tools/ci-plan.sh`'s plan: a merge candidate (tag `candidate/NAME`, a pull request) runs the steps its
+  change touches (`tools/test-map.txt`) plus a smoke set; a push to `main` whose changes are all under `docs/` (except the docs a
+  test or build reads, listed in `tools/plan-lib.sh`'s `docs_only`, and the `libc.a` surface lists and blocks) runs only the
+  document checks (`doc_checks`: `adr-check`, `check-host-paths`, `check-untrusted-gate`, `check-quota-tests`,
+  `check-tls-roots`), no build and no machine; every other push to `main`, the nightly run and `candidate-full/` run the full
+  set (`tools/ci-tests.txt`). `make check-ci-plan` tests the plan. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
   The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
   that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
   (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".
