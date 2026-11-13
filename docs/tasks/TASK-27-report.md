@@ -596,8 +596,22 @@ windows run failed at `poweroff` typed into a panel terminal, which has no power
 terminal); `make netsurf` and `make test-netsurf` (72 steps, also after steps 3 and 4); `make test-hand-run` (all three
 runs). Not run: TCG and scale-2 GUI runs, the fuzzers themselves, `make test`, any candidate run (none tagged).
 Limits: the wheel reaches no `zoraya-app` program (file manager, editor, settings); NetSurf takes no horizontal turn; the
-session's 20 clients are not carved (a session of 32 clients leaves untrusted rooms none, as for windows, ADR-0262); the
-coordinates of the tenth window in `windows.script` were read from a screen at scale 1.
+session's 20 clients are not carved (a session of 32 clients leaves untrusted rooms none, as for windows, ADR-0262).
+
+Review fixes (opus-review of 9e): E1 `t_gui`'s flood opened 4 clients in one untrusted room, past the new `ROOM_CLIENTS`
+(3), and the fourth create panicked; it now opens 3, checks that a fourth is refused (its end closed), and asks one client
+for 4 toplevels (3 admitted, 1 `OVER_QUOTA`); another client of the room is refused too. E2 `tools/test-map.txt`: the
+compositor's, the GUI, input and display protocols' and the virtio GPU and input crates also run `test-qemu`. W3
+`tests_wheel.rs`: a test for each early return of `send_wheel` (a sheet over the window, a sheet in its guard, a legacy
+surface, a carried entry; each fails with its return deleted, checked by hand once) and for overlapping bodies. W4 a
+refusal for a room not yet listed forgets the refusals of rooms without a client (the list is at most the untrusted
+clients plus one); the test checks the other clients and accounts are unchanged. N5 ADR-0323's open question names the
+deviation from ADR-0262's four accounts. N6 `terminal.script` checks the view back at the prompt after the wheel turns
+down; `windows.script` drags the tenth window against the bar before reading it, since its cascade place differs at
+scale 2 (the scale-2 run failed there before). Ran: `make check`; `cargo test -p zoraya-compositor -p zoraya-proto-gui
+-p zoraya-panel` (235 passed); the fuzz crate's `check --bins`; `make test-qemu-auto-default` (`t_gui: all passed`;
+`make test-qemu-one` has no GPU and skips `t_gui`); `make test-gui` for `terminal:auto:1` (82 steps), `windows:auto:1`
+and `windows:auto:2` (62 steps each).
 
 ## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
 
