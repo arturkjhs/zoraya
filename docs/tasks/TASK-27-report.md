@@ -232,3 +232,14 @@ Locally (HVF host, `make test-qemu-tcg-default`, one run) the suite passed in ab
 rounds 11.3 s, interrupts 5.4 s, joined/detached rounds 1.4 s each). `t_thread` has no TCG branch and its round counts are
 invariant figures (INV-0300), so none was reduced. `QEMU_SLOW_TIMEOUT` went from 300 s to 420 s (57% over the slowest green
 run, 267 s); the CI job limit of 10 minutes still holds (about 1 minute of setup plus 7).
+
+### CI flake (2026-11-13): `t_cpu`'s masked-time limit off HVF
+
+`cpu_ceiling_from_a_process` failed three times at `t_cpu.rs:181`, twice on TCG (factor 12, limit 2 ms x 64 = 128 ms): `the exit
+of 40 sleepers: 156708320 ns masked` (`main` `c1e1b34`, `test-qemu-auto-default`) and `rooms next to a woken process: 144941856 ns`.
+The failing interval held 55 units of work, the same 55 as the same subtest in a green TCG run of the same day (1579 us, job
+`tcg-smp4-gicv3` of `main`'s run 43387452404) and under HVF locally: 87 us on `c1e1b34`, 106 us on `120ee31` (before 9b), 55
+units on both; every other subtest's units are equal too (58, 64). So the time was the host's (the vCPU stalled with IRQ masked),
+not a regression of 9b's teardown or the deadline heap. Off HVF `t_cpu` now takes `t_bound`'s limit of 1 s for the time and keeps
+`MAX_UNITS` (ADR-0270) as the check; under HVF the 2 ms limit is unchanged. The one HVF failure (2696 us on a loaded host, the deep
+job) is left as is (`docs/backlog.md`).

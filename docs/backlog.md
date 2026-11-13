@@ -126,3 +126,12 @@ fix is for the GUI stack to end with the process that started it (a job of its o
   objects, the refusal only in the clients, contiguous memory, smaller items.
 - `Job::drop`'s `retain` and the `children` growth are linear in a parent's children (one interval each); a long job chain's drop runs in whichever call drops the last handle.
 - Gate rows that are not truly `checked:` (the strict check lists them), the pending `disk-filler-tmp`, INV-0262-4 for `+net`, the architect's decision on ADR-0299, then the full CI.
+
+## `t_cpu`'s masked-time limit off HVF (TASK-27, branch `work/cpu-flake`)
+
+Three CI failures of `cpu_ceiling_from_a_process` at `t_cpu.rs:181` (`the exit of 40 sleepers: 156708320 ns masked`, `rooms next to
+a woken process: 144941856 ns`, both on TCG at factor 12 against 128 ms) were host stalls, not kernel work: the 156.7 ms interval held
+55 units, the same as the same job's green runs (1.6 ms on TCG, 87 us on HVF; 120ee31 before 9b the same). Off HVF the time limit is now
+`t_bound`'s 1 s and the units (`MAX_UNITS`, ADR-0270) are the check; under HVF it stays 2 ms. Open: one HVF failure (2696 us against
+2 ms on the `work/9b` review run, `a job about 30 levels deep`, a loaded host) is under the HVF limit's own rule; if it recurs, look at
+the deep job's 64 units (849 us locally, the longest interval of the program).
