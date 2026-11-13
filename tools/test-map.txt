@@ -155,6 +155,8 @@ crates/zoraya-http/          test-net
 user/src/bin/fetch.rs        test-net test-files test-hand-run
 user/src/netconn.rs          test-net
 user/describe/commands/fetch.cmd test-net test-files
+user/src/bin/ping.rs         test-net test-files test-hand-run
+user/describe/commands/ping.cmd test-net test-files
 tests/shell/net-fetch.script test-net
 tools/test-httpd/            test-net
 tests/shell/net-dns.script   test-net

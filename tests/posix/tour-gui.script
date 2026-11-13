@@ -40,6 +40,7 @@ key spc
 window
 screen   mv        move or rename
 screen   net       show the state of the network
+screen   ping      send echo requests to a host and show the replies
 screen   poweroff  turn the machine off
 screen   pwd       print the current directory
 screen   random    show random bytes

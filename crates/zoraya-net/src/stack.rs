@@ -95,7 +95,7 @@ pub enum PingError {
     NoAddress,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PingResult {
     pub target: [u8; 4],
     pub sent: u32,
@@ -103,6 +103,8 @@ pub struct PingResult {
     pub rtt_min_us: u32,
     pub rtt_avg_us: u32,
     pub rtt_max_us: u32,
+    /// The round trip of each request, in order, `u32::MAX` for none.
+    pub rtts: Vec<u32>,
 }
 
 struct PingRun {
@@ -472,6 +474,9 @@ impl<L: Link> Stack<L> {
                 rtt_min_us: rtts.iter().copied().min().unwrap_or(0),
                 rtt_avg_us: (sum / rtts.len().max(1) as u64) as u32,
                 rtt_max_us: rtts.iter().copied().max().unwrap_or(0),
+                rtts: (0..run.count as usize)
+                    .map(|i| run.rtt.get(i).copied().flatten().unwrap_or(u32::MAX))
+                    .collect(),
             };
             self.ping = None;
             // Whatever is still queued in the socket goes with it.

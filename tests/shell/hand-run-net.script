@@ -35,5 +35,32 @@
 > fetch https://10.0.2.2:@TLSVALID@/\r
 < certificate is not signed by a trusted root
 < \r\n~>
+# `ping` (TASK-26, hand-run): echo requests to the gateway, which SLIRP answers.
+> ping 10.0.2.2\r
+< PING 10.0.2.2: 4 requests
+< 40 bytes from 10.0.2.2: seq=0 time=
+< --- 10.0.2.2 ping statistics ---
+< 4 sent, 4 received, 0% loss
+< rtt min/avg/max =
+< \r\n~>
+> ping -c 2 -W 3 10.0.2.2\r
+< 2 sent, 2 received, 0% loss
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> grants ping 10.0.2.2\r
+< reach, any port (operand HOST)
+< \r\n~>
+# Wrong use is said: no count, a name, no network grant for a value.
+> ping -c 0 10.0.2.2\r
+< not a count from 1 to 16
+< \r\n~>
+> ping example.org\r
+< ping takes a dotted IPv4 address
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
 x power off
 > poweroff\r

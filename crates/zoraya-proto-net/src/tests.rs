@@ -42,13 +42,29 @@ fn every_message_round_trips_and_decodes_totally() {
         count: Below(4),
         timeout_ms: Below(2000),
     });
-    total(PingReply {
+    let rtts = [Rtt { us: 10 }, Rtt { us: NO_REPLY }];
+    let ping = PingReply {
         status: Below(status::OK),
         sent: 4,
         received: 4,
         rtt_min_us: 10,
         rtt_avg_us: 20,
         rtt_max_us: 30,
+        rtts: Seq::Of(&rtts),
+    };
+    let mut out = [0; 2048];
+    let length = encode(&ping, 1, &mut out).unwrap();
+    let (_, back) = decode::<PingReply<'_>>(&out[..length], 0).unwrap();
+    assert_eq!(
+        back.rtts
+            .iter()
+            .map(|r| r.us)
+            .collect::<alloc::vec::Vec<_>>(),
+        [10, NO_REPLY]
+    );
+    assert_eq!((back.sent, back.rtt_max_us), (4, 30));
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<PingReply<'_>>(bytes, 0);
     });
     total(Narrowed {
         status: Below(status::NOT_GRANTED),
@@ -280,4 +296,41 @@ fn status_is_printed_in_words() {
     stat.address_source = Below(source::STATIC);
     stat.lease_left = NO_LEASE;
     assert!(render(&stat).contains("10.0.2.15/24 (static)"));
+}
+
+fn view(rtts: &[u32], sent: u32, received: u32) -> PingView<'_> {
+    PingView {
+        address: [10, 0, 2, 2],
+        sent,
+        received,
+        rtt_min_us: 412,
+        rtt_avg_us: 1500,
+        rtt_max_us: 12_345,
+        rtts,
+    }
+}
+
+#[test]
+fn ping_prints_a_line_per_reply_and_the_summary() {
+    let text = render_ping(&view(&[412, NO_REPLY, 1000, 12_345], 4, 3));
+    assert_eq!(
+        text,
+        "40 bytes from 10.0.2.2: seq=0 time=0.412 ms\n\
+         40 bytes from 10.0.2.2: seq=2 time=1.000 ms\n\
+         40 bytes from 10.0.2.2: seq=3 time=12.345 ms\n\
+         --- 10.0.2.2 ping statistics ---\n\
+         4 sent, 3 received, 25% loss\n\
+         rtt min/avg/max = 0.412/1.500/12.345 ms\n"
+    );
+}
+
+#[test]
+fn ping_with_no_reply_has_no_lines_and_no_rtt() {
+    let text = render_ping(&view(&[NO_REPLY, NO_REPLY], 2, 0));
+    assert_eq!(
+        text,
+        "--- 10.0.2.2 ping statistics ---\n2 sent, 0 received, 100% loss\n"
+    );
+    // Nothing sent is all lost, not a division by zero.
+    assert!(render_ping(&view(&[], 0, 0)).contains("100% loss"));
 }

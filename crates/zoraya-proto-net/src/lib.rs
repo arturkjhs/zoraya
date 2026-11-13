@@ -98,6 +98,13 @@ pub const MAX_ADDRESSES: usize = 8;
 pub const MAX_DNS: usize = 4;
 /// The most echo requests of one `ping`.
 pub const MAX_PINGS: u32 = 16;
+/// `MAX_PINGS` as a length.
+pub const MAX_PINGS_USIZE: usize = 16;
+/// `Rtt::us` of an echo request that was not answered.
+pub const NO_REPLY: u32 = u32::MAX;
+/// The bytes of one echo request or reply: the 8-byte ICMP header and 32 of
+/// data. What `ping` prints, as the other pings do, is this size.
+pub const ECHO_BYTES: u32 = 40;
 /// `StatusReply::lease_left` when there is no lease.
 pub const NO_LEASE: u32 = u32::MAX;
 
@@ -105,6 +112,11 @@ protocol! {
     /// An IPv4 address.
     record Address {
         address: u32,
+    }
+
+    /// The round trip of one echo request, in microseconds, or `NO_REPLY`.
+    record Rtt {
+        us: u32,
     }
 
     /// The state of the interface (right `status`).
@@ -138,7 +150,7 @@ protocol! {
         /// How long to wait for the last reply, in milliseconds.
         timeout_ms: Below<30001>,
     }
-    message PingReply = 2, handles 0 {
+    message PingReply<'a> = 2, handles 0 {
         status: Code,
         sent: u32,
         received: u32,
@@ -146,6 +158,9 @@ protocol! {
         rtt_min_us: u32,
         rtt_avg_us: u32,
         rtt_max_us: u32,
+        /// One entry per request sent, in order (proposed ADR-0300): the
+        /// round trip of that request, or `NO_REPLY`.
+        rtts: Seq<'a, Rtt, MAX_PINGS_USIZE>,
     }
 
     /// Opens a TCP connection to `name` (a host name; empty to use
@@ -337,3 +352,53 @@ mod tests;
 
 #[cfg(test)]
 zoraya_test_alloc::cap_memory!();
+
+/// One run of `ping`, as the command shows it (proposed ADR-0300).
+#[derive(Debug, Clone, Copy)]
+pub struct PingView<'a> {
+    pub address: [u8; 4],
+    pub sent: u32,
+    pub received: u32,
+    pub rtt_min_us: u32,
+    pub rtt_avg_us: u32,
+    pub rtt_max_us: u32,
+    /// Per request, in order; `NO_REPLY` for none.
+    pub rtts: &'a [u32],
+}
+
+/// Microseconds as `1.234` milliseconds.
+fn millis(us: u32) -> String {
+    format!("{}.{:03}", us / 1000, us % 1000)
+}
+
+/// `ping`'s text: one line per reply (`40 bytes from A: seq=N time=T ms`),
+/// then the summary with the loss in whole percent (rounded down) and the
+/// shortest, mean and longest round trip. A request with no reply has no line.
+pub fn render_ping(v: &PingView<'_>) -> String {
+    let [a, b, c, d] = v.address;
+    let mut out = String::new();
+    for (seq, us) in v.rtts.iter().enumerate() {
+        if *us != NO_REPLY {
+            out += &format!(
+                "{ECHO_BYTES} bytes from {a}.{b}.{c}.{d}: seq={seq} time={} ms\n",
+                millis(*us)
+            );
+        }
+    }
+    let loss = if v.sent == 0 {
+        100
+    } else {
+        100 - (u64::from(v.received.min(v.sent)) * 100 / u64::from(v.sent)) as u32
+    };
+    out += &format!("--- {a}.{b}.{c}.{d} ping statistics ---\n");
+    out += &format!("{} sent, {} received, {loss}% loss\n", v.sent, v.received);
+    if v.received > 0 {
+        out += &format!(
+            "rtt min/avg/max = {}/{}/{} ms\n",
+            millis(v.rtt_min_us),
+            millis(v.rtt_avg_us),
+            millis(v.rtt_max_us)
+        );
+    }
+    out
+}

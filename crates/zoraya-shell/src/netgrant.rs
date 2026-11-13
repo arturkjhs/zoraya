@@ -136,11 +136,17 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
         line.parsed
             .operands
             .iter()
-            .find(|(i, _)| d.operands[*i].kind == Kind::Url)
-            .map(|(_, text)| *text)
+            .find(|(i, _)| matches!(d.operands[*i].kind, Kind::Url | Kind::Host))
+            .map(|(i, text)| (d.operands[*i].kind, *text))
     } else {
         None
     };
+    if let Some((Kind::Host, text)) = operand {
+        host_operand(line, text, &mut words)?;
+    }
+    let operand = operand
+        .filter(|(kind, _)| *kind == Kind::Url)
+        .map(|(_, t)| t);
     if let Some(text) = operand {
         let literal = value_of(line.args, text).is_some_and(|v| v.literal);
         if let Ok(url) = zoraya_http::parse_url(text) {
@@ -201,6 +207,40 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     }))
 }
 
+/// The rule a `host` operand adds (proposed ADR-0300): the host, any port,
+/// TCP only (a mark of the operand's rule; the echo request has no port or
+/// protocol, `Scope::reaches_address`). Designation as for a `url`: a literal
+/// operand adds its own rule, one that came from a value only designates
+/// inside a `+net` word of the line.
+fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result<(), Refused> {
+    let literal = value_of(line.args, text).is_some_and(|v| v.literal);
+    let host = text.to_ascii_lowercase();
+    let target = match zoraya_http::parse_ipv4(&host) {
+        Some(a) => Named::Address(a),
+        None if valid_name(&host) => Named::Name(host.clone()),
+        // The command says what is wrong with it.
+        None => return Ok(()),
+    };
+    let word = NetWord {
+        target,
+        ports: Ports::ANY,
+        protocols: Protocols::TCP,
+    };
+    let covered = words.iter().any(|outer| word.rule().within(&outer.rule()));
+    if covered {
+        return Ok(());
+    }
+    if !literal {
+        return Err(Refused {
+            subject: text.into(),
+            problem: "from a value, outside the line's network grants".into(),
+            hint: Some(alloc::format!("if that is meant: +net {host} COMMAND")),
+        });
+    }
+    words.push(word);
+    Ok(())
+}
+
 /// The lines `grants` prints for the scope `net_for` made (ADR-0224 item 3),
 /// one per reach rule: `net: example.org:443    reach (operand URL)`, or
 /// `net: example.org         reach, any port (grant +net)`. A rule over TCP
@@ -237,7 +277,9 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
                     .collect();
                 (alloc::format!("{host}:{}", ports.join(",")), "reach")
             };
-            let source = if rule.protocols == Protocols::TCP {
+            let source = if rule.protocols == Protocols::TCP && rule.ports.is_any() {
+                "operand HOST"
+            } else if rule.protocols == Protocols::TCP {
                 "operand URL"
             } else {
                 "grant +net"

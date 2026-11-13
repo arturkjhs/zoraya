@@ -10,8 +10,8 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, Narrow, NarrowAccount, Narrowed, Ping,
-    PingReply, Resolve, Resolved, StatusReply, source, status as code,
+    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE, Narrow, NarrowAccount,
+    Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source, status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
@@ -447,6 +447,12 @@ impl Service {
     /// `None` if its connection is gone.
     pub fn ping_done(&mut self, result: PingResult) -> Option<(usize, Vec<u8>)> {
         let (id, t) = self.ping.take()?;
+        let rtts: Vec<Rtt> = result
+            .rtts
+            .iter()
+            .take(MAX_PINGS_USIZE)
+            .map(|us| Rtt { us: *us })
+            .collect();
         let body = PingReply {
             status: Below(code::OK),
             sent: result.sent,
@@ -454,6 +460,7 @@ impl Service {
             rtt_min_us: result.rtt_min_us,
             rtt_avg_us: result.rtt_avg_us,
             rtt_max_us: result.rtt_max_us,
+            rtts: Seq::Of(&rtts),
         };
         Some((id, reply(&body, t)))
     }
@@ -513,6 +520,7 @@ fn ping_reply(status: u32, result: Option<PingResult>, t: u32) -> Vec<u8> {
         rtt_min_us: 0,
         rtt_avg_us: 0,
         rtt_max_us: 0,
+        rtts: Vec::new(),
     });
     reply(
         &PingReply {
@@ -522,6 +530,7 @@ fn ping_reply(status: u32, result: Option<PingResult>, t: u32) -> Vec<u8> {
             rtt_min_us: r.rtt_min_us,
             rtt_avg_us: r.rtt_avg_us,
             rtt_max_us: r.rtt_max_us,
+            rtts: Seq::Of(&[]),
         },
         t,
     )

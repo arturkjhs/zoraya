@@ -13,6 +13,7 @@ use crate::grants::{Line, Refused};
 use crate::netgrant::net_for;
 
 const FETCH: &str = include_str!("../../../user/describe/commands/fetch.cmd");
+const PING: &str = include_str!("../../../user/describe/commands/ping.cmd");
 const NET: &str = include_str!("../../../user/describe/commands/net.cmd");
 const CAT: &str = include_str!("../../../user/describe/commands/cat.cmd");
 
@@ -338,4 +339,39 @@ fn a_launcher_with_no_root_refuses_a_line_that_needs_the_network() {
         available(false, Root::Closed, false),
         Err("the network is not available (restarting)")
     );
+}
+
+#[test]
+fn a_literal_host_operand_reaches_that_host_and_nothing_else() {
+    let (r, bytes) =
+        scope_of(go(PING, &[("-c", true), ("2", true), ("10.0.2.2", true)], true).unwrap());
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.reaches_address([10, 0, 2, 2]));
+    assert!(!s.reaches_address([10, 0, 2, 3]));
+    assert_eq!(
+        crate::netgrant::describe(&bytes),
+        [format!(
+            "net: {:<24}reach, any port (operand HOST)",
+            "10.0.2.2"
+        )]
+    );
+}
+
+#[test]
+fn a_host_operand_from_a_value_needs_a_net_word_that_covers_it() {
+    let r = go(PING, &[("10.0.2.2", false)], true).unwrap_err();
+    assert!(r.problem.contains("from a value"), "{}", r.problem);
+    assert_eq!(
+        r.hint.as_deref(),
+        Some("if that is meant: +net 10.0.2.2 COMMAND")
+    );
+    let covered = go_nets(PING, &[("10.0.2.2", false)], &["10.0.2.0/24"], true).unwrap();
+    assert!(
+        Scope::decode(&scope_of(covered).1)
+            .unwrap()
+            .reaches_address([10, 0, 2, 2])
+    );
+    // Only the base system's commands are given a network by an operand.
+    assert!(go(PING, &[("10.0.2.2", true)], false).unwrap().is_none());
 }

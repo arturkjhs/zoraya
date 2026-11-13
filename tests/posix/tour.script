@@ -34,6 +34,7 @@
 > \x20
 <   mv        move or rename
 ^ \r\n  net       show the state of the network
+^ \r\n  ping      send echo requests to a host and show the replies
 ^ \r\n  poweroff  turn the machine off
 ^ \r\n  pwd       print the current directory
 ^ \r\n  random    show random bytes

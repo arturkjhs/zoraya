@@ -382,6 +382,8 @@ fn ping_gets_replies_from_the_peer() {
         .expect("the run ended");
     assert_eq!((done.sent, done.received), (4, 4));
     assert_eq!(done.target, SERVER_IP);
+    assert_eq!(done.rtts.len(), 4);
+    assert_eq!(done.rtts.iter().filter(|u| **u != u32::MAX).count(), 4);
     assert!(done.rtt_min_us <= done.rtt_avg_us && done.rtt_avg_us <= done.rtt_max_us);
     // A second run is possible once the first is over.
     assert!(net.client.ping(SERVER_IP, 1, 1_000_000, net.now).is_ok());

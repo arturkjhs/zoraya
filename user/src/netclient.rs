@@ -123,8 +123,22 @@ fn narrow_with<'a, M: zoraya_protocol::Message<'a>>(conn: Handle, m: &M) -> Resu
     }
 }
 
+/// The answer to a `ping`, owned: the message borrows its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PingOutcome {
+    /// A `status` code of `zoraya_proto_net::status`.
+    pub status: u32,
+    pub sent: u32,
+    pub received: u32,
+    pub rtt_min_us: u32,
+    pub rtt_avg_us: u32,
+    pub rtt_max_us: u32,
+    /// The round trip of each request in order, `NO_REPLY` for none.
+    pub rtts: Vec<u32>,
+}
+
 /// `ping`: `count` echo requests to `address`.
-pub fn ping(conn: Handle, address: [u8; 4], count: u32, timeout_ms: u32) -> Option<PingReply> {
+pub fn ping(conn: Handle, address: [u8; 4], count: u32, timeout_ms: u32) -> Option<PingOutcome> {
     let message = request(&Ping {
         address: u32::from_be_bytes(address),
         count: Below(count),
@@ -132,7 +146,16 @@ pub fn ping(conn: Handle, address: [u8; 4], count: u32, timeout_ms: u32) -> Opti
     });
     let wait = WAIT_NS + u64::from(count) * 200_000_000 + u64::from(timeout_ms) * 1_000_000;
     let reply = exchange(conn, &message, &[], wait)?;
-    decode::<PingReply>(&reply, 0).ok().map(|(_, p)| p)
+    let (_, p) = decode::<PingReply>(&reply, 0).ok()?;
+    Some(PingOutcome {
+        status: p.status.0,
+        sent: p.sent,
+        received: p.received,
+        rtt_min_us: p.rtt_min_us,
+        rtt_avg_us: p.rtt_avg_us,
+        rtt_max_us: p.rtt_max_us,
+        rtts: p.rtts.iter().map(|r| r.us).collect(),
+    })
 }
 
 /// The scope of a launcher's root connection: every name and address, every
