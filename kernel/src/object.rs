@@ -170,24 +170,43 @@ pub fn next_id() -> u64 {
 /// belong to it there. A moved handle ends them too (ADR-0040).
 pub fn end_subscriptions(entry: &Entry) {
     if let Some((source, _)) = entry.object.signals() {
+        // The source's subscribers count as the units `weight` announced.
+        crate::steps::count(port::source_subscriptions(source) / SUBSCRIPTIONS_PER_UNIT);
         port::EVENTS.lock().remove_owner(source, entry.id);
     }
 }
 
+/// Subscriptions that cost one unit of a step to end: a subscription leaves
+/// its port's list (a search and a move of up to 1024 entries) and its
+/// source's, about 0.3 ms for a port of 1024 (the review's host figure, about 20 ms
+/// for 64; `t_bound`'s `exit_with_full_ports` checks it). 16 makes a full port
+/// 65 units, a whole step by itself (`steps::before` caps it at `STEP`).
+pub(crate) const SUBSCRIPTIONS_PER_UNIT: usize = 16;
+
 /// The work of closing a handle in units of a step (`steps::before`), the
 /// handle's own unit included (the caller counts it with `steps::count(1)`).
+/// A port counts its subscriptions and an object with a source those of the
+/// source, since the handle's ending walks them (ADR-0299: the bound per port
+/// and per source does not bound a whole exit that closes 64 handles).
 pub fn weight(entry: &Entry) -> usize {
-    match &entry.object {
-        Object::Memory(object) => crate::memory::object::weight(object),
-        _ => 1,
-    }
+    let subscriptions = match &entry.object {
+        Object::Memory(object) => return crate::memory::object::weight(object),
+        Object::Port(p) => p.subscriptions(),
+        object => object
+            .signals()
+            .map_or(0, |(source, _)| port::source_subscriptions(source)),
+    };
+    1 + subscriptions / SUBSCRIPTIONS_PER_UNIT
 }
 
 /// Ends a handle. A port or a channel end has one handle, so that closes it.
 pub fn close(entry: Entry) {
     end_subscriptions(&entry);
     match &entry.object {
-        Object::Port(port) => port.close(),
+        Object::Port(p) => {
+            crate::steps::count(p.subscriptions() / SUBSCRIPTIONS_PER_UNIT);
+            p.close();
+        }
         Object::Channel(pair, end) => channel::close(pair, *end),
         _ => {}
     }

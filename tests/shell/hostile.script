@@ -1,0 +1,58 @@
+# The gate's hostile-programs row (TASK-26 Q7; ADR-0268 point 3; TASK-21's
+# hostile cases) from inside a room with limits: a program that ignores
+# Interrupt is ended by the second Ctrl-C (job_kill always works); every bad
+# argument to a kernel call comes back as a typed error; random values in
+# every call that can return (INV-0032-2) leave the shell, the room and home
+# alive; and removing the room with --kill brings its use to zero. (The POSIX
+# half, `t_posix hostile`, is tests/posix/scenarios.script, which runs under
+# the shell's broker and `ttyd`; no code from outside the system image runs.)
+! panicked
+! storage failed
+< Type help to begin
+< \r\n~> 
+> room new hostile --mem 64M --procs 16 +w /t/w\r
+< hostile --colour 1 --mem 64M --procs 16 +w /t/w
+< \r\n~> 
+> room hostile\r
+< hostile /t/w> 
+> stubborn\r
+< stubborn: ignoring Interrupt
+> \x03
+< ^C
+< (Ctrl-C again to kill it)
+> \x03
+< ^C
+< stubborn: killed
+< hostile /t/w> 
+> badptr\r
+< \r\nhostile /t/w> 
+> echo $status\r
+< \r\n0
+< hostile /t/w> 
+> fuzz\r
+< \r\nhostile /t/w> 
+> echo $status\r
+< \r\n0
+< hostile /t/w> 
+> memhog --hold 1\r
+< memhog: refused after
+< hostile /t/w> 
+# Everything outside is as it was: the shell answers, the table is whole, and
+# the room's use is the shell's alone.
+> top\r
+< hostile
+< of 64M
+< of 16
+< hostile /t/w> 
+> room --leave\r
+> cd /\r
+< \r\n/> 
+> echo home still works\r
+< home still works
+< \r\n/> 
+> room remove hostile --kill\r
+< \r\n/> 
+> room\r
+< home
+< \r\n/> 
+> poweroff\r

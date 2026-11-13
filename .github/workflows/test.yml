@@ -233,6 +233,7 @@ jobs:
           - make check-ci-jobs
           - make check-charged-alloc
           - make check-untrusted-gate
+          - make check-quota-tests
           - make check-ethd-maps
     name: ${{ matrix.cmd }}
     steps:
@@ -262,7 +263,7 @@ jobs:
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it); every other job stays
     # within 10.
-    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui')) && 30 || 10 }}
+    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net')) && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -276,6 +277,11 @@ jobs:
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
+      - name: Install the nightly toolchain and fetch the fuzz crates (ADR-0298)
+        if: ${{ contains(matrix.cmd, 'test-fuzz') }}
+        run: |
+          rustup toolchain install nightly-2026-11-12 --profile minimal
+          (cd fuzz && cargo +nightly-2026-11-12 fetch --locked)
       - uses: actions/download-artifact@v4
         with:
           name: build

@@ -15,12 +15,13 @@ use zoraya_abi::{
 };
 use zoraya_proto_display::{Attach, Done, FORMAT_XRGB, Flush, Info, InfoReply, Resized, status};
 use zoraya_protocol::{Below, ErrorReply, Header, Message, NO_REPLY, decode, encode};
+use zoraya_user::mmio::Window;
 use zoraya_user::{
-    channel_read, channel_write, clock_monotonic, device_interrupt, device_map, dma_pin,
+    channel_read, channel_write, clock_monotonic, device_interrupt, dma_pin,
     dma_release_quarantine, dma_unpin, handle_close, handle_type, interrupt_ack, memory_create,
     memory_map, port_create, port_subscribe, port_wait, println, startup,
 };
-use zoraya_virtio::{Registers, Shared};
+use zoraya_virtio::Shared;
 use zoraya_virtio_gpu::{Announce, Error, Gpu, MAX_RUNS, Rect, SHARED_MEMORY};
 
 extern crate alloc;
@@ -34,20 +35,6 @@ const POLL_NS: u64 = 10_000_000;
 const DISPLAY_POLL_NS: u64 = 100_000_000;
 /// Reported once: a wait passed 10 ms with no interrupt.
 static MISSED: AtomicBool = AtomicBool::new(false);
-
-struct Window(u64);
-
-impl Registers for Window {
-    fn read(&self, offset: usize) -> u32 {
-        // SAFETY: a device mapping of this process, and `offset` a register.
-        unsafe { ((self.0 + offset as u64) as *const u32).read_volatile() }
-    }
-
-    fn write(&mut self, offset: usize, value: u32) {
-        // SAFETY: as in `read`.
-        unsafe { ((self.0 + offset as u64) as *mut u32).write_volatile(value) }
-    }
-}
 
 struct Queues(u64);
 
@@ -341,7 +328,7 @@ fn main() -> i32 {
         .unwrap_or(0);
     // What a dead driver left: the kernel resets the device first (ADR-0070).
     let _ = dma_release_quarantine(device);
-    let (window, offset) = device_map(device, index).expect("map the device");
+    let window = Window::open(device, index).expect("map the device");
     let size = SHARED_MEMORY as u64;
     let queues = memory_create(size, MemoryFlags::CONTIGUOUS).expect("queue memory");
     let at = memory_map(queues, 0, size, MapFlags::WRITE).expect("map the queues");
@@ -360,7 +347,7 @@ fn main() -> i32 {
     let requests = port_create().expect("port");
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     port_subscribe(requests, client, wanted, 1, Mode::Level).expect("subscribe");
-    let gpu = match Gpu::new(Window(window + offset), Queues(at), runs[0][0]) {
+    let gpu = match Gpu::new(window, Queues(at), runs[0][0]) {
         Ok(gpu) => gpu,
         Err(e) => {
             println!("gpud: {e:?}");

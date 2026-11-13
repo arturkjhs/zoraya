@@ -293,7 +293,8 @@ fn removed_items_go_stale_and_are_bounded() {
 
 /// R-02 of the TASK-09 review: closing a handle with many ready subscriptions,
 /// keys in the worst order for the sorted list. A quadratic path takes 16
-/// times as long for 4 times the size, and this allows 8.
+/// times as long for 4 times the size, and this allows 8. A port holds at most
+/// `MAX_SUBSCRIPTIONS`, so the sizes are 256 and that.
 #[test]
 fn ending_a_handle_is_not_quadratic() {
     use std::time::{Duration, Instant};
@@ -310,9 +311,104 @@ fn ending_a_handle_is_not_quadratic() {
         time
     }
     let best = |n| (0..5).map(|_| run(n)).min().unwrap();
-    let (small, large) = (best(20_000), best(80_000));
+    let (small, large) = (best(256), best(MAX_SUBSCRIPTIONS as u64));
     assert!(
         large < small * 8 + Duration::from_millis(5),
         "{small:?} {large:?}"
     );
+}
+
+/// ADR-0299: a port takes `MAX_SUBSCRIPTIONS` subscriptions, to any sources,
+/// and refuses the next; an unsubscribe makes room, and the refusal changed
+/// nothing.
+#[test]
+fn a_port_holds_a_bounded_number_of_subscriptions() {
+    let mut e = E::new();
+    let port = e.new_port().unwrap();
+    for key in 0..MAX_SUBSCRIPTIONS as u64 {
+        let source = e.new_source(0).unwrap();
+        e.subscribe(port, source, A, key, Mode::Level, 0).unwrap();
+    }
+    let source = e.new_source(0).unwrap();
+    let key = MAX_SUBSCRIPTIONS as u64;
+    assert_eq!(
+        e.subscribe(port, source, A, key, Mode::Level, 0),
+        Err(Error::TooMany)
+    );
+    assert_eq!(e.subscription_count(), MAX_SUBSCRIPTIONS);
+    e.unsubscribe(port, 7).unwrap();
+    e.subscribe(port, source, A, key, Mode::Level, 0).unwrap();
+    assert_eq!(
+        e.subscribe(port, source, A, key + 1, Mode::Level, 0),
+        Err(Error::TooMany)
+    );
+    // Another port is not affected, and a closed port gives its room back.
+    let other = e.new_port().unwrap();
+    e.subscribe(other, source, A, 0, Mode::Level, 0).unwrap();
+    e.close_port(port, &mut drop_wake());
+    assert_eq!(e.subscription_count(), 1);
+}
+
+/// ADR-0299: a source takes `MAX_SUBSCRIPTIONS` subscriptions, from any
+/// ports, so the walk of `set` is a fixed amount.
+#[test]
+fn a_source_has_a_bounded_number_of_subscriptions() {
+    let mut e = E::new();
+    let source = e.new_source(0).unwrap();
+    let mut ports = Vec::new();
+    for _ in 0..MAX_SUBSCRIPTIONS {
+        let port = e.new_port().unwrap();
+        e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
+        ports.push(port);
+    }
+    let port = e.new_port().unwrap();
+    assert_eq!(
+        e.subscribe(port, source, A, 0, Mode::Level, 0),
+        Err(Error::TooMany)
+    );
+    e.set(source, A, &mut drop_wake());
+    for port in ports {
+        assert_eq!(keys(&mut e, port), [0]);
+    }
+    e.remove_owner(source, 0);
+    assert_eq!(e.subscription_count(), 0);
+    e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
+}
+
+/// Review error 3 (TASK-26 fix): the two bounds do not bound their product.
+/// A source with `MAX_SUBSCRIPTIONS` subscribers, each on a port that holds
+/// `MAX_SUBSCRIPTIONS` entries with the source's at the front (the worst
+/// place for the move), is freed. The work is a search and a move per
+/// subscriber, not a pass over the 1M entries of the ports; the bound is
+/// loose because the host and the build vary, and the kernel measures its own
+/// (`t_bound`).
+#[test]
+fn freeing_a_full_source_on_full_ports_is_bounded() {
+    use std::time::{Duration, Instant};
+    let n = MAX_SUBSCRIPTIONS as u64;
+    let mut e = E::new();
+    let source = e.new_source(0).unwrap();
+    let others: Vec<SourceId> = (0..n - 1).map(|_| e.new_source(0).unwrap()).collect();
+    let mut ports = Vec::new();
+    for _ in 0..n {
+        let port = e.new_port().unwrap();
+        e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
+        // Keys 1.., spread over the other sources (each takes at most one
+        // subscription per port here, so at most `n` in all).
+        for (i, other) in others.iter().enumerate() {
+            e.subscribe(port, *other, A, 1 + i as u64, Mode::Level, 0)
+                .unwrap();
+        }
+        ports.push(port);
+    }
+    assert_eq!(e.subscription_count(), (n * n) as usize);
+    let start = Instant::now();
+    e.free_source(source);
+    let time = start.elapsed();
+    assert_eq!(e.subscription_count(), (n * (n - 1)) as usize);
+    // The key 0 is free again on every port, the others are untouched.
+    let other = e.new_source(0).unwrap();
+    e.subscribe(ports[0], other, A, 0, Mode::Level, 0).unwrap();
+    std::eprintln!("free_source, 1024 ports of 1024 entries: {time:?}");
+    assert!(time < Duration::from_millis(250), "{time:?}");
 }

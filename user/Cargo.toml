@@ -66,6 +66,12 @@ zoraya-tty = { path = "../crates/zoraya-tty" }
 [build-dependencies]
 zoraya-describe = { path = "../crates/zoraya-describe" }
 
+[features]
+# The image of `make test-net-fetch` only (ADR-0296 item 5): `init`, `netd`
+# and `zosh` build the test of the network's restart. The ramdisk every other
+# kernel embeds is built without it, so no volume can turn it on.
+net-test = []
+
 [lints]
 workspace = true
 
@@ -478,6 +484,11 @@ bench = false
 
 [[bin]]
 name = "memhog"
+test = false
+bench = false
+
+[[bin]]
+name = "diskfill"
 test = false
 bench = false
 

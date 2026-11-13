@@ -15,34 +15,20 @@ use zoraya_abi::{
 };
 use zoraya_proto_block::{Attach, Done, Flush, Info, InfoReply, Range, Read, Write, status};
 use zoraya_protocol::{Below, ErrorReply, Header, Message, decode, encode};
+use zoraya_user::mmio::Window;
 use zoraya_user::{
-    channel_read, channel_write, device_interrupt, device_map, dma_pin, dma_release_quarantine,
-    dma_unpin, handle_close, interrupt_ack, memory_create, memory_map, port_create, port_subscribe,
-    port_wait, println, startup,
+    channel_read, channel_write, device_interrupt, dma_pin, dma_release_quarantine, dma_unpin,
+    handle_close, interrupt_ack, memory_create, memory_map, port_create, port_subscribe, port_wait,
+    println, startup,
 };
 use zoraya_virtio::{
-    Driver, Error, Kind, MAX_IN_FLIGHT, MAX_PIECES, Piece, QUEUE_MEMORY, Registers, Request,
-    Shared, place,
+    Driver, Error, Kind, MAX_IN_FLIGHT, MAX_PIECES, Piece, QUEUE_MEMORY, Request, Shared, place,
 };
 
 extern crate alloc;
 
 const CLIENT_KEY: u64 = 1;
 const MAX_RUNS: usize = 512;
-
-struct Window(u64);
-
-impl Registers for Window {
-    fn read(&self, offset: usize) -> u32 {
-        // SAFETY: a device mapping of this process, and `offset` is a register.
-        unsafe { ((self.0 + offset as u64) as *const u32).read_volatile() }
-    }
-
-    fn write(&mut self, offset: usize, value: u32) {
-        // SAFETY: as in `read`.
-        unsafe { ((self.0 + offset as u64) as *mut u32).write_volatile(value) }
-    }
-}
 
 struct Queues(u64);
 
@@ -312,7 +298,7 @@ fn main() -> i32 {
         .unwrap_or(0);
     // What a dead driver left: the kernel resets the device first (ADR-0070).
     let _ = dma_release_quarantine(device);
-    let (window, offset) = device_map(device, index).expect("map the device");
+    let window = Window::open(device, index).expect("map the device");
     let size = (QUEUE_MEMORY as u64).next_multiple_of(4096);
     let queues = memory_create(size, MemoryFlags::CONTIGUOUS).expect("queue memory");
     let at = memory_map(queues, 0, size, MapFlags::WRITE).expect("map the queues");
@@ -331,7 +317,7 @@ fn main() -> i32 {
     let requests = port_create().expect("port");
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     port_subscribe(requests, client, wanted, CLIENT_KEY, Mode::Level).expect("subscribe");
-    let driver = match Driver::new(Window(window + offset), Queues(at), runs[0][0]) {
+    let driver = match Driver::new(window, Queues(at), runs[0][0]) {
         Ok(driver) => driver,
         Err(e) => {
             println!("blkd: {e:?}");

@@ -6,14 +6,32 @@ use zoraya_abi::{
     CONSOLE, ChannelObject, DIRECTORY, Handle, JOB, JobFlags, ObjectType, RTC_SLOT, Rights,
 };
 use zoraya_rt::{
-    channel_create, device_map, directory_lookup, handle_close, handle_type, job_create, job_kill,
-    memory_unmap, spawn,
+    channel_create, device_map, directory_lookup, handle_close, handle_duplicate, handle_type,
+    job_create, job_kill, memory_unmap, spawn,
 };
 
 use crate::files::File;
 use crate::{dup, wait_exit};
 
-pub(crate) const DRIVER_RIGHTS: Rights = Rights::MAP.union(Rights::INTERRUPT).union(Rights::DMA);
+/// A driver's device: the mapping (or, for a transport device, the register
+/// calls), its interrupt and its DMA pins.
+pub(crate) const DRIVER_RIGHTS: Rights = Rights::MAP
+    .union(Rights::INTERRUPT)
+    .union(Rights::DMA)
+    .union(Rights::READ)
+    .union(Rights::WRITE);
+
+/// The rights a driver gets for `device`: [`DRIVER_RIGHTS`], without `MAP`
+/// for a transport device, whose handle never has it (INV-0295-3).
+pub(crate) fn driver_rights(device: Handle) -> Rights {
+    match handle_duplicate(device, DRIVER_RIGHTS) {
+        Ok(copy) => {
+            let _ = handle_close(copy);
+            DRIVER_RIGHTS
+        }
+        Err(_) => DRIVER_RIGHTS.without(Rights::MAP),
+    }
+}
 
 /// The block device: the one page holding exactly one, a block device
 /// (ADR-0091).
@@ -112,7 +130,7 @@ fn start_stack_with(device: Handle, range: u32, floor: u64, sealed: bool) -> Opt
         "blkd",
         &[
             console(),
-            dup(5, device, DRIVER_RIGHTS),
+            dup(5, device, driver_rights(device)),
             moved(6, driver_end),
         ],
         &[&digits],

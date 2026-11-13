@@ -8,12 +8,12 @@ Running report, updated after each part. Part 9b's design was written by a Sonne
 | Part | State | Tag |
 |---|---|---|
 | 9a TLS for C, zlib, curl, wget | not started | |
-| **9b POSIX threads** | **design done** on `work/9b-design` (ADR-0300 to ADR-0309, `proposed`, and the plan below); implementation not started | |
+| **9b POSIX threads** | **design accepted 2026-11-13** (ADR-0300 to ADR-0309 accepted by the architect as recommended; ADR-0308 supersedes ADR-0100's "no threads" and the other places it lists); implementation not started. Next: 9a, then 9b implementation and 9d in parallel, then 9c. Thread calls stay 56 to 61 (the highest call on main is 55, `device_write`) | |
 | 9c CPython | not started | |
 | 9d NetSurf | not started | |
 | image addition (`EXTRA_ROOT`) | not started | |
 
-### The proposed ADRs of part 9b (all `proposed`; one line each is a recommendation, not a decision)
+### The ADRs of part 9b (all accepted 2026-11-13; they were `proposed`; one line each is a recommendation, not a decision)
 
 | ADR | Title | Recommendation in one line |
 |---|---|---|

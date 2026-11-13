@@ -2,7 +2,11 @@
 
 Running report, updated after each part. Written by the Sonnet main session; reviews by `opus-review`.
 
-## Status (orchestrator, 2026-11-12, main at `e9c5368`)
+## Status (orchestrator, 2026-11-13, main at `7de36fc`)
+
+Stage 8 is built and merged: every part below is on `main` with its tag. **The untrusted gate stays closed** (`room new --untrusted` is
+refused; `make check-untrusted-gate` passes with the gate closed and lists what is open when a marker is removed). There is no `stage-8`
+tag yet: it waits for the architect and for the full runs.
 
 | Part | Merge on main | Tag |
 |---|---|---|
@@ -18,6 +22,9 @@ Running report, updated after each part. Written by the Sonnet main session; rev
 | N5 | `1be11a1` | `stage-8-n5` |
 | Q6a | `1e9b1aa` | `stage-8-q6a` |
 | Q6b | `e9c5368` | `stage-8-q6b` |
+| N6 (partly done, see its section) | `cd58996` | `stage-8-n6` |
+| Q7 | `4250211` | `stage-8-q7` |
+| Review of the system calls and `work/q7-fixes` | `7de36fc` (no part tag) | - |
 
 Follow-ups merged without a stage tag:
 
@@ -25,37 +32,81 @@ Follow-ups merged without a stage tag:
 - `system-ro` (`0cbef2b`): `/system` read-only at run time, the architect's decision.
 - `tbound-fix` (`d78bdea`): `t_bound`'s time bound off HVF.
 - `units-fix` (`745669c`): bounded masked work in the frame allocator, the reaper and heap growth.
+- `work/q7-fixes` (merged as `7de36fc`): the fixes of the system-call review and of its four review rounds, then the red candidate run's fixes
+  (`0cc3863`, `29351b3`).
 
-Q6a's QEMU paths (the keeper's restart by `init`, the reconnect channel, `zosh`'s prompt rebind) are Q7 gate rows, `pending`
-(architect, 2026-11-12); the gate cannot report ready without them.
+### The review of the system call surface
 
-In progress, in this order:
+`docs/tasks/TASK-26-syscall-review.md` (opus-review, head `a3866f3`, ADR-0268 point 6): verdict, the gate stays closed. Two errors (INV-0270-1
+did not hold for the job tree walks, nor for subscriptions), five warnings, seven notes. Both errors are fixed on `work/q7-fixes`
+(walks in steps; subscriptions bounded to 1024 per port and per source, proposed ADR-0299), as are warnings 3 to 6; four review rounds of the
+fixes were answered (section "Review of the system call surface after stage 8"). Open: warning 7 and notes 8 to 14, below.
 
-1. N6 (`work/n6`): implementation, then `opus-review`.
-2. Q7, both gate stages.
-3. The `opus-review` report of the system-call surface.
-4. The `stage-8` tag, with the gate closed (`make check-untrusted-gate`) and a `candidate-full/` run, then `main`'s, green.
+### The gate
+
+- Closed: `room new --untrusted` is refused in the shell and the panel; the `+net` refusal for untrusted rooms is marked (`net-refusal`,
+  `net-refusal-call`), dead code until the gate opens. `make check-untrusted-gate` reads `tools/untrusted-gate.txt` and
+  `docs/adr/invariants.md`, counts the markers and passes a row only if its status begins `checked:` and names nothing open.
+- Rows of `tools/untrusted-gate.txt` with a step: charged-allocation, memory-hog, fork-bomb, masked-time, cpu-ceiling, cpu-spinners, disk-filler,
+  service-floods, keeper, keeper-restart, keeper-reconnect, prompt-rebind, many-rooms, hostile-programs, fuzzing (stage 1); net-account-flood,
+  net-fuzz (stage 2). **Pending:** `disk-filler-tmp` (an untrusted room's `/tmp`, owner Q8).
+- Blockers still open (Q7 and review sections, `docs/backlog.md` "Gate blockers from the review of the system calls"):
+  - Warning 7: the heap never returns frames while the charge is refunded; to measure, then a heap ceiling for the untrusted job, or return of
+    free chunks, or the bound in ADR-0261's open questions.
+  - Notes 8 to 14, not fixed: uncharged growth and the reaper's queue (8); `Paid` dropped under `EVENTS` holding the last `Arc<Job>` (9);
+    `console_write` keeps IRQ masked about 60 ms at 4 KiB (10); code can run from a memory object (11); the refusal lives only in the clients
+    (12); contiguous memory is open to every process (13); smaller items (14).
+  - Left over from the fixes: `Job::drop`'s `retain` and the growth of `children` are linear in a parent's children, in one interval each.
+  - Invariants not `checked:` that the strict check lists: INV-0172-3, INV-0260-1, INV-0261-2, -6, -7, INV-0262-1, -2, -3, INV-0263-3,
+    INV-0264-3 (the architect's bound), INV-0265-1, INV-0265-3 (the `/tmp` half), INV-0265-4, INV-0268-3, INV-0270-1 (names known breaches);
+    stage 2 also needs INV-0262-4 (a `netd` connection's rings charged to the client's job).
+  - Not built: an untrusted room's `/tmp` and `tmpd`, `+net`/`+listen` words in rooms (N6 "Not done"), the untrusted line reader.
+  - The architect's go-ahead, then a full run (`candidate-full/`) of the commit that removes the refusal, then `main`'s.
 
 ### Items for the architect
 
-- **Decided (2026-11-12):** ADRs 0287 to 0294 are accepted as recommended (0287 N4 sockets, 0288 clock and random, 0289 HTTPS, 0290
-  engine charges, 0291 fsd accounts, 0292 who may set a limit, 0293 Q6a keeper, 0294 Q6b display), recorded by an agent at the
-  architect's request. ADR-0289's "Architect's decision" carries the `/system` decision: read-only at run time for everyone, the
-  console shell included; `+w /system` is refused with a hint; it changes only when the image is built, and a system-update path is a
-  later ADR.
-- **Decided (2026-11-12): N4's curl and wget are deferred** to the next stage ("living in the system": BearSSL or rustls-ffi as the C
-  TLS library, then curl and wget). `zfetch` stands in until then. It is not a blocker for stage 8 (`docs/backlog.md`).
-- **CI infrastructure:** `QEMU_SLOW_TIMEOUT` is 300 s (`ci-timeout`); the CI image is on ghcr (section 'CI image'); timing tests flake on
-  loaded hosts, and `units-fix` bounds the masked work that a slow host stretched; a runner stall hit `w9-term` tcg once.
-- **ADR-0270 open items:** the address-space frame list doubling still runs inline; the `memory_map` list copy under the lock costs N/512
-  units (a flat list); the 2 ms bound is an `[assumption]` under HVF, checked on CI by a calibration factor.
-- **Decided (2026-11-12): Q6a paths never run in QEMU** (`init`'s keeper restart, the reconnect channel, `zosh`'s prompt rebind)
-  are Q7's gate tests: rows `keeper-restart`, `keeper-reconnect` and `prompt-rebind` of `tools/untrusted-gate.txt`, `pending` until Q7
-  builds them, so the gate cannot report ready without them.
-- **Untrusted gate rows still pending:** `cpu-spinners` and `disk-filler` (the GUI forms of INV-0264-3 and INV-0269-1); `room new
-  --untrusted` stays refused; an untrusted room's `/tmp`, `+w` and `+net` lines are not built (ADR-0268 point 7).
+- **Proposed ADRs awaiting a decision:** ADR-0295 (register access by call for shared pages), ADR-0296 (the services channel and the restart
+  test), ADR-0297 (the `+net` word in the shell), ADR-0298 (how the gate's tests run), ADR-0299 (subscriptions bounded to 1024; a change of
+  ADR-0006's behaviour). ADRs 0287 to 0294 were accepted as recommended on 2026-11-12; the status of the earlier stage-8 proposals (0281, 0285, 0286) is in `docs/adr/index.md`.
+- **INV-0264-3's GUI bound** (ADR-0298 item 4): +450 ms over the same run's no-spinner baseline, not 50 ms. The invariant is `not yet applicable`
+  until the architect accepts it or asks for a lower bound; the kernel half is checked by `t_cpu`.
+- **ADR-0006 INV-0006-3 against ADR-0299:** the check measures 10,000 idle subscriptions, which the bound of 1024 refuses. `portbench` now
+  measures with 1 and 1024 and fails on a refused call; whether the check's number becomes 1024 is the architect's change (recorded in ADR-0006's
+  open questions).
+- **Toolchain pin and rustup:** fuzzing uses `nightly-2026-11-12` (script, workflow, ADR-0298 item 3). Installing it ran
+  `rustup toolchain install`, which also updated rustup itself (1.29.2 to 1.29.3) on the host.
+- **ADR-0270 open items:** the address-space frame list doubling still runs inline; the `memory_map` list copy under the lock costs N/512 units
+  (a flat list); the 2 ms bound is an `[assumption]` under HVF, checked on CI by a calibration factor; ADR-0299's product bound (16 MiB moved)
+  and its 1.5 ms extrapolation are not measured at the full size.
+- **Decided (2026-11-12): N4's curl and wget are deferred** to the next stage ("living in the system": BearSSL or rustls-ffi as the C TLS
+  library, then curl and wget). `zfetch` stands in. Not a blocker for stage 8 (`docs/backlog.md`).
+- **Decided (2026-11-12):** `/system` is read-only at run time for everyone (ADR-0289's "Architect's decision"); `+w /system` is refused with a
+  hint; a system-update path is a later ADR. The Q6a paths in QEMU (keeper restart, reconnect, prompt rebind) became gate rows, now built and
+  passing in `test-keeper` (Q7).
 - **Open from earlier parts:** the kernel reserve (1/16 kept, GUI guests 512 MiB); the 'Not done' lists of Q6b (rooms overview, `Raise`
-  button, `top --session`, disk and connection use, refusal notices) and N5 (BearSSL and curl, `getrandom`, `rngd` restart, `tls.roots`).
+  button, `top --session`, disk and connection use, refusal notices), N5 (BearSSL and curl, `getrandom`, `rngd` restart, `tls.roots`) and N6
+  (rooms' `+net`, pills and hover card, `REPORT`, `+listen`).
+- **CI infrastructure:** `QEMU_SLOW_TIMEOUT` is 300 s; the CI image is on ghcr (section 'CI image'); timing tests flake on loaded hosts. The red
+  candidate run 43311917098 (`FORCE_SWITCH` under TCG; `portbench`) was fixed in `0cc3863` and `29351b3`.
+
+### Known limitations and backlog
+
+Recorded in `docs/design.md` (the network on the desktop and when it fails; two known limitations) and `docs/backlog.md`: `sleep 60 &` ending at once
+in a dock-launched terminal (not reproduced); a failed `t_gui` leaves its GUI stack running, so one failure reads as five; the fuzz targets
+reach few states of the keeper and the compositor (no structure-aware generator), and 600 s a target has not run in CI; the heap does not give
+frames back (warning 7); INV-0262-4 and the `status` counters are not built; two checks of the review fixes are by reasoning only (the
+front-to-back walk mutant, and the order of `write` and `prepare`); the `Vec::remove` mutant survives as equivalent. ADR-0270's own text
+still says '16,384 frames' and 'power of two' for the mutant survivors; the true figures are in the units-fix section (Q6b), from `kernel/src/testing.rs`.
+
+### What was and was not run
+
+Each part's section lists its own runs. For the fixes: `make check`, `make test-qemu-one` (HVF and, for the red run's fix, TCG),
+`cargo test -p zoraya-events`, the mutations named in the rounds. **Not run by the agents:** `make test-changed` on the fixes, the TCG runs
+of most steps, `make test` and `make test-par`, `test-posix*`, `test-tour-gui`, `test-crash`, fuzzing at 600 s a target.
+Candidate tags exist for every part (`candidate/work-*`); the newest on the fixes is `candidate/work-q7-fixes-f` at `29351b3`, whose result this report does not record.
+
+- **Full run `candidate-full/stage-8` on `7de36fc`: success** (run 43327428941, 56 of 56 jobs; the plan job ran with `full=1`). `main`'s own push run on `7de36fc` (43323966568) also passed, 56 of 56. The candidate run of `work/q7-fixes` at `29351b3` (43320805132) passed too.
+- `main`'s run on the commit that carries this line: see the `stage-8` tag, which is placed only after it is green.
 
 ## Q1: frame and kernel budgets on jobs (branch `work/q1`)
 
@@ -1497,7 +1548,7 @@ not listed (equivalent).
 - **3 partly fixed.** 17 mutants in `tools/mutants/kernel-objects.toml`: 9 killed (the image's `prepare_step`, the
   list's copy counted in `reserve_step` and in `adopt`, `prepare_step`'s reserve and its step point, `available`, the
   reaper's counter, the first zeroing step, the rescan) and 8 survivors with the reason in each note: a snapshot's two
-  `prepare_step`s and `memory_map`'s two need a process with 16,384 frames or more (a crafted image run by `t_bound`),
+  `prepare_step`s and `memory_map`'s two need a user process whose frame list passes a capacity (the list's capacities are 73 times a power of two, not powers of two: 9,344 at about 8,192 frames, 18,688 at about 16,384; the `t_bound` spawn test passes the first, and a snapshot or `memory_map` case would need a crafted image),
   the stack's and the startup block's are unreachable with `hello`, the segments' count needs a longer segment, and the
   kernel's tables come from the boot pool until 128 MiB of window.
 - **4 fixed.** `reaper::held` is a counter; `free_some` and `take` start at a cursor past the emptied items.
@@ -1510,3 +1561,458 @@ not listed (equivalent).
   116 with all), `make test-qemu-auto-smp4-2g` and `make test-qemu-tcg-el2` (116 passed, 9 expected failures each,
   `t_bound: all passed` on tcg-el2). Two kernel tests that spawn or run the scheduler have to come after the timer
   tests: before them they left a slice deadline queued (`timer_is_off_with_no_deadlines`).
+
+## N6: failure, rooms and the desktop (branch `work/n6`, on `main` at e9c5368), partly done
+
+Done: the register-access kernel call and `--gui --net` (ADR-0221 item 8), the restart reaching the console shell (items 5 and 6),
+the `+net` word in the shell, `make bench-net`. Not done: the rooms' `+net` words, untrusted rooms with a network, the pills, the
+hover card, the panel's hint and network, the `REPORT` message. They are listed under "Not done".
+
+### Built
+
+- **Register access by kernel call** (ADR-0221 item 8 as the task decided; proposed ADR-0295). Three calls in
+  `crates/zoraya-abi/src/lib.rs` (53 to 55): `device_transport(page, index)` (needs `MAP`) returns the `Device` of one transport,
+  made at boot in `kernel/src/device.rs` (`Device::make_transports`; one per range, sharing the page's kernel mapping, with its own
+  pins, quarantine, reset and interrupt, no mapping); `device_read(device, offset)` (`READ`) and `device_write(device, offset,
+  value)` (`WRITE`) on a transport device only. `Device::register_offset` is the one place an offset is checked: a multiple of 4,
+  the word inside the transport's block (the device tree's size, at most 0x200); a value above `u32::MAX` is refused. `DeviceObject`
+  gained `READ` and `WRITE` in its rights (the page devices have them and the calls refuse them). `device_map` on a transport
+  device is `AccessDenied` (`begin_mapping`). No allocation in the calls (the Arcs exist from boot), so no charge (ADR-0261).
+- **The drivers** open their device through `user/src/mmio.rs` (`Window::open`: a mapping, or calls when the kernel answers
+  `AccessDenied`); `ethd`, `gpud`, `inputd` and `blkd` lost their own `Window` types and no logic changed. `init`'s scan (`user/src/gui.rs`)
+  keeps `Page::One` as before and, for `Page::Several`, splits each transport (`device_transport`), reads it with `device_read`, and gives
+  it to its driver with range 0. `tools/run-qemu.sh` accepts `--net --gui`. `tools/check-ethd-maps.sh` follows (`Window::open(device,` once).
+- **The restart** (ADR-0221 items 5, 6; proposed ADR-0296). `init` already restarted `ethd`/`netd` (N2); now the console shell has a services
+  channel at slot 13: `NetworkRestarted` (ordinal 32, one handle, the new root) and `NetworkDown` (33) in `zoraya-proto-net`;
+  `init` makes the new root with `narrow` from its control connection (`root_connection`) and sends it; `zosh`'s `network_available`
+  reads the channel before a line that needs the network and refuses the line while the root is closed. The test-only `Crash` (40):
+  `netd` honours it only if it has an event at slot 8, which `init` gives only if the volume holds `/etc/zoraya/net-crash`; `net crash`
+  sends it.
+- **`+net` in the shell** (ADR-0224 item 1; proposed ADR-0297): `zoraya_shell::netgrant::{parse_word, net_for, describe}`; the parser, `eval`
+  (`Exec::nets`) and `zosh` (`grants` prints the `net:` lines; a value `url` operand designates inside a word).
+- **`make bench-net`** (ADR-0230 item 8; `tests/shell/net-bench.script`).
+
+### Decisions where the ADRs are silent (proposed ADR-0295, ADR-0296, ADR-0297; recommendations)
+
+1. **A transport device per transport, calls only on it, `device_transport` needs `MAP` on the page** (ADR-0295). Accept. Open: a process that maps
+   the page can still reach every transport; only `init` maps a shared page (once, to read the identifiers). The kernel does not make
+   the mapping and the calls exclude each other.
+2. **`Size` for the register offset and `Opaque` for the value** in the ABI (no new parameter kind); the allow-list test names the calls.
+3. **The console shell only gets the services channel.** The panel and the broker hold no root connection today (a shell started by the panel has
+   none), so there is nothing to tell them. Accept for now; they come with the rooms' words.
+4. **`Crash` honoured by a flag that is an event at slot 8**, given by `init` when `/etc/zoraya/net-crash` exists (a described program may
+   not read argv, INV-0155-2). Accept.
+5. **`+net` grammar** as ADR-0297 (any, name, `*.suffix`, address, `ADDRESS/BITS`, `:PORT`; both protocols; any described program).
+6. **A line that needs the network is refused while the root is closed** rather than run without a connection (the ADR-0221 example).
+
+### Where a number or text from outside enters, and where it is checked (for the reviewer)
+
+| Input | Entry | Check |
+|---|---|---|
+| register offset and value | `device_read`, `device_write` in `kernel/src/syscall.rs` | `Device::register_offset`: transport devices only, multiple of 4, `offset + 4 <= range.size <= 0x200` with `checked_add`; the value `u32::try_from`; the rights `READ`/`WRITE` first |
+| transport index | `device_transport` | `MAP` on the page, `get(index)` on the 8-slot array, a transport device refuses |
+| `+net` argument | `netgrant::parse_word` | total over any text: port 1 to 65535, `valid_name`, dotted address, prefix bits 0 to 32 with no bits past it, at most `MAX_RULES` rules |
+| `NetworkRestarted` / `NetworkDown` | `netclient::poll_services` | decoded with the exact handle count; the handle must be a channel; others are closed |
+| `Crash` | `netd` before `Service::handle` | only with the event at slot 8 and no handle with the message |
+
+### Invariants delta
+
+`checked`: INV-0221-4 (`make test-net-fetch`: three `net crash` with a fetch after each, the fourth leaves the network down and the next line
+is refused), INV-0295-1 (`t_devices`), INV-0295-2 (`tests/gui/net.script`), INV-0296-1 (`tests/shell/net.script`), INV-0297-1 (`cargo test -p
+zoraya-shell netgrant`). Not changed (still `not yet applicable (stage 8)`): INV-0221-3 (partial: `t_netd` shows `PEER_CLOSED` for a native client, no
+`ECONNRESET` test), INV-0224-1 to -5 (notes in ADR-0224), INV-0230-1 to -4 (as before; `make test-net` runs). adr-check total 526.
+
+### Tests run (this session)
+
+- `cargo test -p zoraya-abi -p zoraya-proto-net -p zoraya-net -p zoraya-shell`: 67, 5, 83, 121 passed (8 new `netgrant` tests).
+- `make check` before each commit: all 14 checks pass; adr-check 0 errors, total 526.
+- `make test-qemu-one`: 116 kernel tests and `t_devices` (the new `transport_devices`) pass (twice, standalone).
+- `make test-gui GUI_RUNS="net:auto:1"`: PASS, 12 steps (`--gui --net`; `net status` read from the screen).
+- `make test-net-fetch`: PASS, 156 steps (the +net lines, three `net crash` with a fetch after each, the fourth leaves the network down, the next line is
+  refused), `net-dns` 14 steps, the refused TLS servers read no request byte. `make bench-net` runs (HVF).
+- `PAR_QEMU=1 make test-changed` (every step, as `init.rs` and the `Makefile` are not in the map; HVF, one guest at a time; the worktree had no
+  ports archives, copied from another worktree's cache and verified with `make fetch-ports`): 45 host test binaries, test-boot, test-libposix,
+  test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui (315 s) passed; **test-qemu and test-net failed** on
+  `a_spawn_with_a_big_space_is_bounded` (`NoMemory`), an intermittent failure that is not N6's: the same message came from `make test-net` on the
+  tree of `main` (ac8d7de, worktree `zoraya-q6b`) in 1 of 3 runs, and on `work/n6` in 2 of 4 standalone runs (the others passed; `test-qemu-one`
+  passed 2 of 2). Entered in `docs/backlog.md`. I did not re-run all of `test-changed`.
+- Not run: `FULL=1`, TCG, fuzz targets, mutation tests.
+
+### Measurements (HVF, one run)
+
+Register read by call (`t_devices`, 2,000 reads, three boots): 1,393 to 1,419 ns. `make bench-net` (5 runs): 16 MiB 216, 217, 231, 235, 243 ms
+(median 231 ms, 72 MB/s); one byte 14.4, 19.8, 27.2, 27.3, 27.3 ms (median 27.2 ms). The restart's duration is not measured (see `docs/design.md`).
+
+### Not done
+
+- The rooms' `+net` and `+listen` words (`room new NAME ... +net HOST`, resolved against the creator's scope, INV-0224-3), the panel giving a
+  window's shell a network connection narrowed to its room, untrusted rooms with network words (the gate's stage 2 rows `net-account-flood` and
+  `net-fuzz` stay `pending`), the pills and hover card for a network rule (INV-0224-5), the `REPORT` message and the hint (INV-0224-4), `+listen`,
+  the roots entry that goes with a network rule, editor highlighting of `+net`.
+- A `libposix` client's `ECONNRESET` after a kill (INV-0221-3), the panel's and the broker's services channels.
+- Counters in `status` beyond frames: the per-account bounds and refusals exist (N4), `status` does not print them yet.
+- TCG for the new steps (GUI net, bench) and the fuzz targets under libFuzzer. No mutation run (the kernel part is small and bounded; the
+  checks are in `t_devices`).
+- `docs/design.md` has the section "The network on the desktop, and when it fails" and two Known limitations; the roadmap row is unchanged.
+
+### Handoff
+
+- State: branch `work/n6` from `main` at e9c5368, pushed, no candidate tag (`opus-review` first: a kernel call and a driver boundary).
+- For the reviewer (kernel, `unsafe`-adjacent, the driver boundary): `kernel/src/device.rs` (`make_transports`, `transport`,
+  `read_register`, `write_register`, `register_offset`, `begin_mapping`), `kernel/src/syscall.rs` (`device_transport`, `device_read`,
+  `device_write`), `crates/zoraya-abi/src/lib.rs` (calls 53 to 55, `DeviceObject` rights), `user/src/mmio.rs`, `user/src/gui.rs` (`scan`,
+  `read_transport`, `classify`), `user/src/bin/t_devices.rs` (`transport_devices`), `user/src/bin/init.rs` (`root_connection`, `net_crash`,
+  the arms for `KEY_NETD | KEY_ETHD`, `start_shell`), `user/src/netclient.rs` (`poll_services`, `send_restarted`, `send_down`,
+  `crash`, `start_network_with`), `user/src/bin/netd.rs` (the `crash_on_request` check), `user/src/bin/zosh.rs` (`network_available`,
+  `grants`), `crates/zoraya-shell/src/netgrant.rs`, ADR-0295 to ADR-0297.
+- Review questions: (1) is it right that a page device handle has `READ`/`WRITE` rights that the calls refuse, or should the
+  rights be per type; (2) `device_transport` returns a handle with `MAP`: acceptable since `device_map` refuses a transport device
+  (`begin_mapping`), or should the rights exclude `MAP`; (3) the mapping of a shared page and the register calls do not exclude
+  each other (only `init` maps it): is that enough; (4) the `Crash` hook in a production `netd`: acceptable behind the event handle,
+  or should it be a build feature; (5) the shell refuses a line while the root is closed instead of running it without a
+  network: the right default?
+
+### Review of N6 (Opus, head 9c2ff92) and its dispositions
+
+Fixed (tests written first where a test can show it):
+
+1. **Warning, a transport and its page did not see each other** (kernel). The quarantine check of a transport device read only its own
+   `mapped`, always false, so a driver given a whole single-device page could map it, pin through a transport, end the pin and release the
+   transport's quarantine (device reset, frames freed) with the mapping still live; and two processes could drive one transport. Now
+   (`kernel/src/device.rs`, `kernel/src/memory/user.rs`, `kernel/src/syscall.rs`): a transport device knows its page (`Weak`, made with
+   `Arc::new_cyclic` at boot); the first `device_write` makes the process the transport's *holder* (a `DeviceClaim` in its address space,
+   ended by `handle_close` of its last handle to the transport with `WRITE`, or by its exit); a second holder, a holder while the page is
+   mapped, the page's mapping or release while a transport has a holder or a live pin, and a transport's release while its page is mapped
+   are all `BadState`. Lock order: the page's state, then a transport's. A transport handle has no `MAP` (`init` gives drivers their
+   rights less `MAP` for one, `stack::driver_rights`). Test: `t_devices` `a_transport_and_its_page_keep_holders_apart` (the review's
+   scenario failed before the fix: `dma_release_quarantine(t) succeeded`; then a second writer in a child, the hold's end with the last
+   handle and with the child's exit, live pins refusing the page). New INV-0295-3, `checked: make test-qemu`. Reads take no hold (they
+   restart nothing), so `init` identifies a transport without holding it; a hold whose handle was moved away lasted until the process
+   ended (corrected by the re-review's finding 1 below).
+2. **Warning, `Crash` was a persistent denial of the network.** The Crash path is built only with the `zoraya-user` feature `net-test`,
+   which only `make test-net-fetch`'s image has (`build/zoraya-kernel-net-test.elf`, ramdisk `build/ramdisk-net-test.bin`, target
+   directories `target/user-net-test` and `target/net-test`; `make ci-build` builds it and `make clippy` lints the feature). In that image
+   `netd` honours `Crash` only on `init`'s control connection; `net crash` makes the shell ask `init` on its services channel (after the
+   program's own connection is made), `init` sends it, and the `net` program's own `Crash` is answered as an unknown ordinal. `make
+   test-net` now fails if the image's `netd` holds `netd: ended on request` (checked: the production `netd` has 0 occurrences, the test
+   image's 1). INV-0296-1 reworded. `make test-net-fetch` still does three restarts and the fourth stays down (156 steps, `init: the shell
+   asked the network service to end` four times).
+3. **Warning, `shell_services` was never closed:** closed next to `shell_reconnect` when the shell ends (`init.rs`). No test (`init`'s
+   table is not observable from a test today).
+4. **Warning, the gate's network rows:** `net-account-flood` and `net-fuzz` are re-owned to **Q7** in `tools/untrusted-gate.txt`
+   (still `pending`); N6 did not build them.
+5. **Note, overlapping transport blocks:** `device::init` leaves out a transport whose block would overlap the one before it in its
+   page (`follows`), with a message; kernel test `overlapping_transports_are_left_out`. INV-0295-1 says so.
+6. **Note, byte access by call:** `device_read` and `device_write` take a width (1, 2 or 4, aligned; narrower than 4 only in the
+   configuration from 0x100, since QEMU answers a narrow read of a control register with 0, as `t_devices` showed on the first try).
+   ABI change (calls 54 and 55 gain `width: Size`), `zoraya-rt` `device_read_width` and `device_write_width`, `Window::read8`/`write8`
+   by call make one byte access. Tests in `transport_devices`. ADR-0295 item 2.
+7. **Note, no root:** `zoraya_shell::netgrant::available` (host test
+   `a_launcher_with_no_root_refuses_a_line_that_needs_the_network`); `zosh` refuses a line that needs the network when it holds the
+   services channel and no root. ADR-0296 item 3.
+8. **Note, `+net $X`:** recorded in ADR-0297 item 1 (as ADR-0153 rule 3 for `+r $X`; `X=any` gives full reach, which `grants` shows).
+9. **Note, a failed `send_restarted`:** it closes the root it could not move (`netclient.rs`). No test (as 3).
+
+The answers to the handoff's review questions: (2) and (3) are finding 1's fix, (4) is finding 2's, (5) stands with finding 7.
+
+### Tests run (review fixes, this session)
+
+- `cargo test -p zoraya-abi` 67, `-p zoraya-shell` 122, `-p zoraya-proto-net` 5, `-p zoraya-virtio` 38: passed.
+- `make check` before each commit: passed; adr-check 0 errors, total 527.
+- `make test-qemu-one`: before the fix, `devices_from_a_process` failed on the review's scenario; after it, 118 kernel tests passed
+  (`devices_from_a_process`, `overlapping_transports_are_left_out`) with the 9 expected panics. Two of the four runs failed on
+  `a_spawn_with_a_big_space_is_bounded` (`NoMemory`, then `first process did not start: OverQuota`), the intermittent failure in
+  `docs/backlog.md`, which another agent is looking at; one of those also had the first form of the width test, which read a control
+  register a byte at a time and got QEMU's 0.
+- `make test-net-fetch` (the new test image): PASS, 156 steps, and `net-dns` 14 steps.
+- `make test-gui GUI_RUNS="net:auto:1"`: PASS, 12 steps.
+- `PAR_QEMU=1 make test-changed` (every step, HVF, one guest at a time): the checks, 45 host test binaries, test-boot, test-libposix,
+  test-files, test-crash, test-posix, test-posix-gui, test-tour-gui and test-gui passed; **test-qemu and test-net failed only on
+  `a_spawn_with_a_big_space_is_bounded`** (`NoMemory`; 117 passed, the 9 expected panics), the intermittent failure above. test-net's
+  new INV-0296-1 check of the image's `netd` passed before the boot.
+- State: branch `work/n6` pushed, tag `candidate/work-n6` on its head for CI's candidate run.
+
+### Re-review of N6 (Opus, head 4cc31c3) and its dispositions
+
+1. **Warning, a `Move` did not end a transport's hold** (fixed). Only `handle_close` ended it, so a driver that moved its only
+   transport handle (at `spawn`, over a channel, at `snapshot_process`) kept the hold until it exited: the receiver's first write,
+   and `init`'s `device_map` and `dma_release_quarantine` on the page, got `BadState`. One helper, `Calls::end_hold_if_unwritable`
+   (`kernel/src/syscall.rs`), now runs after every removal: `handle_close`, the moves of `spawn` and `snapshot_process`, and
+   `channel_write` before the message is queued. Test first: `t_devices` `the_hold_ends_with_a_move` (failed before the fix,
+   "the child the handle moved to writes", 1 for 0): a held transport moved to a child at `spawn` and its write succeeds; moved
+   over a channel, the page maps and is released while the message is queued, and the reader's child writes. Mutants
+   `K-transport-hold-kept-on-spawn-move` and `K-transport-hold-kept-on-channel-move` in `tools/mutants/kernel-objects.toml`.
+   ADR-0295 item 3a, INV-0295-3 and `docs/design.md` say so; the limitation is gone from Known limitations.
+2. **Note, pins are one-way** (recorded). `dma_pin` through a transport is allowed while the page is mapped or another process
+   holds the transport (a pin starts nothing; `t_devices` builds the first review's scenario so); a live pin refuses the mapping
+   and both releases. ADR-0295 item 3a, INV-0295-3 and `docs/design.md`.
+3. **Note, `init`'s overlap `continue` was untested** (fixed). The placing of a transport in its page is `device::place`, which
+   `init` calls; the kernel test `overlapping_transports_are_left_out` runs it on a built list through `blocks_kept` (the
+   overlapping block left out and the next kept, nine blocks of which eight kept). Mutant `K-transport-overlap-kept`.
+4. **Note, the page's lock across a reset's spin** (recorded): ADR-0295 Consequences and `docs/design.md` (bounded by
+   `RESET_NANOS`, 100 ms; other transports of the page wait behind it). ADR-0270 is accepted and not edited.
+5. **Note, two doc comments** (fixed): `AddressSpace::pop_mapping` has its own again and `hold` only its own;
+   `device_transport` says its handle has the device rights but `MAP`.
+6. **Note, INV-0296-1's check was a canary** (fixed). `NET_CRASH_MARKS` in the `Makefile` lists a string of each `Crash` path
+   (`netd`'s end, `init`'s request and its look for `/etc/zoraya/net-crash`); `make test-net` fails if the image's `netd` or `init`
+   holds one, and `make test-net-fetch` fails if its own image's lacks one (a check that cannot go blind). The shell's `net crash`
+   path has no string and only asks `init`. ADR-0296 and the invariants table say so.
+
+## Q7: the gate's tests, both stages (branch `work/q7`, on `main` at cd58996)
+
+Sonnet main session. No `opus-review` yet (the branch has no candidate tag; the review comes first). **The gate stays closed:**
+`room new --untrusted` is still refused in `zosh` and the panel, `make check-untrusted-gate` passes with the refusal in place, no
+code from outside the system image ran as untrusted, and nothing here opens anything.
+
+### Built
+
+- **Fuzz targets** (`fuzz/fuzz_targets/`, `wire.rs` makes messages with valid headers around fuzzed bodies): `spawn_request`
+  (`SpawnRequest::decode`, `StartupBlock::decode`, a valid request with bytes changed), `keeper_messages` (the room keeper's
+  `handle` on the three channel kinds, a model of the kernel's jobs), `broker_tty` (the POSIX broker on a model kernel, the terminal
+  server with keys, output and resizes), `compositor_protocol` (a client's messages and input frames on a fake platform),
+  `file_protocol` (`fsd`'s `Service` over a fake transport on a small volume). The network's are the existing `net_rx`, `net_stack`,
+  `net_dns_http`. `tools/run-fuzz.sh` builds them with the `nightly` toolchain and LLVM's coverage flags (no cargo-fuzz), runs
+  libFuzzer for `FUZZ_SECONDS` each, in parallel, output in `target/test-logs/fuzz-TARGET.log`; `make test-fuzz`, `make test-fuzz-net`.
+- **`make test-keeper`** (`tests/shell/keeper.script`, the net-test image): `room crash-keeper` (test image only, ADR-0298 item 2) makes
+  `init` kill the keeper under a running room; the script checks `init`'s restart (the room keeps its job, its process and its
+  limit: `top`, `grants`, a hog refused at the kept limit), the reconnect (`room set` over the channel `init` gives, applied to the same
+  job) and the prompt's rebind, twice in a row. HVF and TCG.
+- **`tests/shell/disk-filler.script`** and **`tests/shell/hostile.script`** in `make test-files`; new test program `diskfill` (fills a
+  directory until the limit refuses; `--syncs N` and `--loop S` time syncs).
+- **Service floods:** `t_storage` (`fsd`: an account of 20 open handles; `clone_account` as the launcher does), `t_gui` (the compositor:
+  untrusted-room clients played by the test, `Gui::new_room_client`), `t_netd` (`netd`: `narrow_account` of 3 connections).
+- **`tests/gui/spinners.script`** in `make test-gui`; the runner's `latency N MS` step fails if the median key is more than MS over one
+  screendump read.
+- **`make check-quota-tests`** (INV-0260-1): reads ADR-0260's hard rows, requires each to name a gate row with a step
+  (`tools/quota-tests.txt`); it reports the one gap (an untrusted room's `/tmp`) and fails only when the refusal is gone.
+- `check-untrusted-gate.sh` now joins the Makefile's `TEST_STEPS` lines (a step at a line's end was not found); ADR-0298 (proposed);
+  `docs/adr/invariants.md`: INV-0298-1, -2, and the statuses below.
+
+### Gate rows
+
+| Row | Step | Result (this session) |
+|---|---|---|
+| keeper-restart, keeper-reconnect, prompt-rebind | `test-keeper` | pass, 55 steps, HVF and TCG (`FULL=1` TCG run once) |
+| keeper | `test-qemu` | `t_rooms` (unchanged); the QEMU paths are the three rows above; the GUI form of INV-0269-1 is in `spinners.script` |
+| cpu-spinners | `test-gui` | `spinners:auto:1` pass, 67 steps. Two rooms at `--cpu 25%` with two spinners each (jobs `running`): median key 168 ms to a screendump (floor 3.9 ms); the same script's terminal without spinners (`terminal:auto:1`): 188 ms. The bound is relative: at most 450 ms over the median of the same run's no-spinner baseline (`latency N +MS`) |
+| disk-filler | `test-files` | pass, 60 steps: the filler stops at 224 KiB of `--disk 256K` (`OverQuota`), home and another room write, 100 write-and-syncs in home next to a sync loop (138193 syncs in 40 s): slowest 0 ms (loop 2 ms) |
+| service-floods | `test-qemu` | `fsd`: the room stopped at 19 of 20, another account opened 18, home 100 (pass); compositor: 3 surfaces admitted, 1 refused (status 8), another room and home admitted (`t_gui` pass); `netd` in `net-account-flood` |
+| hostile-programs | `test-files` | pass, 48 steps: `stubborn` ended by the second Ctrl-C, `badptr`, `fuzz` (random registers into every call) exit 0 in a room with limits, a hog refused, the shell and home answer, the room removed with `--kill` |
+| fuzzing | `test-fuzz` | 180 s each, no finding: `spawn_request` 199M runs, `keeper_messages` 3.0M, `broker_tty` 12.9M, `compositor_protocol` 56k, `file_protocol` 490k (cov 122 / 529 / 1487 / 1605 / 2100) |
+| net-fuzz (stage 2) | `test-fuzz-net` | 180 s each, no finding: `net_rx` 8.9M, `net_stack` 16.4M, `net_dns_http` 337M |
+| net-account-flood (stage 2) | `test-net` | `t_netd`: an account of 3 connections opened 12 to an address that answers no ARP: 3 admitted, 9 refused `OVER_QUOTA` at once, the root connection still connects. (`make test-net` as a whole fails here at `test-net-posix`: the ports' sources are not in this worktree) |
+
+### Decisions where the ADRs are silent (proposed ADR-0298; recommendations)
+
+1. The tests play the room's client against the production service (account carved as the launcher does) and use trusted rooms with limits for the job's limits; no switch lifts the refusal. Recommend accepting.
+2. A test hook on the net-test image: `room crash-keeper` -> `init` kills the keeper; two marks in `NET_CRASH_MARKS` keep it out of the production image.
+3. Fuzzing through `tools/run-fuzz.sh` on nightly, 600 s a target in two 30-minute CI jobs, a fetch step outside `make test` (`cargo +nightly fetch --locked` in `fuzz/`).
+4. INV-0264-3's GUI half is bounded at 450 ms over the same run's no-spinner baseline, not 50 ms (the runner polls the screen every 150 ms); the 50 ms stays in `t_cpu`. **Architect: accept or ask for a lower bound.** INV-0264-3 was marked `checked` on that basis and is reverted to `not yet applicable` until accepted (Review fixes below); `spinners.script` is a starvation smoke test.
+
+### Invariants delta
+
+INV-0264-3 `not yet applicable` (kernel half checked, GUI half waits for the architect, see 4 and Review fixes), INV-0265-5 `checked: make test-qemu` (`t_storage`) and `make test-files`, INV-0265-3's directory half checked (the `/tmp` half is not
+built, status stays `not yet applicable`), INV-0260-1 has its check (`make check-quota-tests`), INV-0298-1 and -2 added. Stage 1
+invariants of the gate's list still not `checked`: **INV-0172-3** (stage 7: the compositor's confirm card for a drop or paste into an
+untrusted window; no QEMU form), **INV-0260-1** (one resource with no test), **INV-0265-3** (`/tmp` half), **INV-0265-4** (an untrusted
+room's `/tmp` and its `tmpd`), and, outside the checked pattern, **INV-0268-3** (broker and `tmpd` in an untrusted room's job); stage 2: **INV-0262-4**
+(a `netd` connection's stream rings charged to the client's job: not tested).
+
+### Where a number or text from outside enters (for the reviewer)
+
+`wire::messages` (fuzz) feeds ordinals and bodies; `room crash-keeper` is the only new message on a reconnect channel and is compiled out
+outside `net-test`; `diskfill`'s operand and options come from its description; the runner's `latency N MS` reads a number from a script.
+
+### Tests run (this session)
+
+`make check` (all pass); `cargo test -p zoraya-test-runner`; `make test-fuzz` and `test-fuzz-net` at 15 and 180 s; `make test-keeper` (`FULL=1`, HVF and TCG);
+`make test-files` (every script, with `disk-filler` and `hostile`: pass);
+`make test-qemu-auto-default` (`t_gui`, `t_storage`, `t_quota` etc. pass), `make test-qemu-one`; `make test-net` up to `t_netd: all passed`;
+`make test-gui GUI_RUNS="spinners:auto:1"` and `terminal:auto:1`. **Not run:** `make test-changed` (an unmapped path, `Makefile` and `init.rs`,
+makes it run every step, and its build step needs the ports' sources, which are not in this worktree: `make fetch-ports` downloads);
+the TCG runs of everything but `test-keeper`; the whole of `test-posix*`, `test-tour-gui`, `test-crash`; the candidate and the `candidate-full/` run.
+
+### Not done
+
+- **The gate's open items, for the architect:** the six invariants above; an untrusted room's `/tmp` (`--tmp`, a `tmpd` in the room's job), the broker and `tmpd` in
+  an untrusted room's job, the untrusted line reader, `+net` in rooms (ADR-0268 point 7; the stage 2 rows run the services' own accounts, not an
+  untrusted `+net` line); the architect's go-ahead; the `opus-review` report of the system-call surface (point 6).
+- The fuzz targets reach few states of the keeper (valid names are rare in random bytes) and of the compositor; no structure-aware generator. 600 s a target has not run in CI.
+- `sleep 60 &` in a terminal launched from the dock ended at once in `spinners.script` (`[1] done: sleep 60`), while the same line in the console shell's room, and
+  `spin &` in the GUI, stay running. Not reproduced by the reviewer; `sleep` now loops until the clock passes its deadline (see "Review fixes"); backlog entry.
+- INV-0262-4 (rings charged to the job) and the `status` counters; the TCG runs of `t_netd` flood under `FULL=1`.
+
+### Handoff
+
+- State: branch `work/q7` from `main` at cd58996, pushed, no candidate tag. Commits: fuzz targets and steps; keeper test; `t_netd` flood, `diskfill`, scripts;
+  compositor flood, GUI script, ADR-0298; gate file and invariants; quota check.
+- For `opus-review`: `user/src/bin/init.rs` (`answer_reconnect`, the `net-test` branch), `user/src/roomsclient.rs` (`crash`), `user/src/bin/zosh.rs`
+  (`room_builtin`'s `crash-keeper`), `user/src/netconn.rs` (`start` and `wait`, split from `connect`), `user/src/bin/t_netd.rs` (`account_flood`),
+  `user/src/bin/t_storage.rs` (`account_flood`), `user/src/bin/t_gui.rs` (`surface_flood`), `user/src/gui.rs` (`new_room_client`), `fuzz/fuzz_targets/*.rs` (the new ones),
+  `tools/run-fuzz.sh`, `tools/check-quota-tests.sh`, `tools/check-untrusted-gate.sh`, `tests/shell/{keeper,disk-filler,hostile}.script`, `tests/gui/spinners.script`, ADR-0298.
+- Review questions: (1) is the test hook's reach (a reconnect channel message) acceptable on a net-test image only; (2) are tests that play an untrusted client
+  enough for INV-0262-1 in the compositor and `netd`, or must a room's real line exist first; (3) is +450 ms over a baseline an acceptable GUI bound for INV-0264-3; (4) should the full CI
+  run the fuzzers 600 s each; (5) the candidate bug above.
+
+### Review fixes (opus-review of Q7, a later session)
+
+- **INV-0265-5** was `checked` on a script whose rooms are trusted (the fold of ADR-0265 item 9 needs an untrusted account, made only by
+  `carve`/`clone_account`). New `t_storage::untrusted_sync_folds`: a carved account writes and sends a `sync` it does not wait for; no
+  reply within 300 ms while nothing commits; 100 write-and-sync rounds of the session's account each under 1 s (88 ms in all, slowest 3 ms);
+  the first commit answers the room's `sync`. **Mutation:** `may_fold` made to return false: `t_storage` panics "the room's sync was
+  answered before any commit: it is not folded" (reverted). The status is `checked` on `make test-qemu` (t_storage) plus the script as a smoke test.
+  `disk-filler.script` now also fails on `diskfill: sync N: status` and expects the looper's result.
+- **INV-0264-3** is back to `not yet applicable (until the architect accepts ADR-0298 item 4's bound ...)`, kernel half by `t_cpu`.
+  `spinners.script` stays as a starvation smoke test; ADR-0298 item 4, the gate file and this report say so.
+- **prompt-rebind** is tested: the net-test `init` prints "the shell reconnected to the room keeper (a test)" when it answers a reconnect, and
+  `keeper.script` expects it right after the restart, before any keeper call. **Mutation:** the rebind in `Keeper::pump` removed:
+  `make test-keeper` fails (timed out waiting for that line); reverted. The line is a fourth mark of `NET_CRASH_MARKS`; the mark loops of
+  `test-net` and `test-keeper` now fail when the production program is missing, and `test-keeper` builds `$(KERNEL)` first.
+- **keeper.script:** `top` is matched with `1 of 16` (`sleep 300` survived); after `room remove agent-1 --kill` the notice `sleep 300: killed` is expected (INV-0269-3).
+- **Fuzz:** `FUZZ_JOBS` limits runs (the oldest is waited for; the earlier code waited for a `PID:target` and did nothing); default 2 targets,
+  `-rss_limit_mb=1024` (was 3 x 2048); `make test-fuzz` and `test-fuzz-net` skip unless `CI` or `FUZZ_FORCE=1`; the toolchain is pinned to
+  `nightly-2026-11-12` (script, workflow, ADR-0298 item 3). Installing it ran `rustup toolchain install`, which also updated rustup itself (1.29.2 to 1.29.3).
+  `keeper_messages`: the model's `set_limits` and `create_job` panic when the keeper targets a launch job (the old end-of-input assertion could not fail).
+  `compositor_protocol` also sends `AddRoomClient`; its header now says that state carries over between inputs, so a saved artifact is not a per-input
+  reproduction. `file_protocol` now runs the volume's check (`zoraya_fs::check`) after a final `sync`.
+- **Gate file:** `disk-filler-tmp` (the `/tmp` half, `pending`, owner Q8) split from `disk-filler`; `check-untrusted-gate` requires it; the gate stays closed.
+- **Other:** `t_gui` asserts `OVER_QUOTA` (8); `t_netd` asserts the control channel's message has ordinal 17; `tools/test-map.txt` maps `init.rs`,
+  `zosh.rs` and `roomsclient.rs` to `test-keeper`; `sleep` loops until the clock passes the deadline.
+
+## Review of the system call surface after stage 8 (opus-review, head `a3866f3`) and its fixes (branch `work/q7-fixes`)
+
+The review is `docs/tasks/TASK-26-syscall-review.md` (ADR-0268 point 6). **Verdict: the gate stays closed.** Two errors (INV-0270-1 did not hold for
+the job tree walks and for subscriptions), five warnings and seven notes; 40-odd calls checked and found sound otherwise.
+
+### Fixed on `work/q7-fixes` (one commit each)
+
+1. **Error 1, job tree walks.** `Job::walk` goes in steps of `steps::STEP` visits with `TREE` held inside a step only and `steps::pause` between steps
+   (a path of at most 32 frames; dead child slots stay while a walk runs so no index moves; processes are visited from the end of their list).
+   `t_bound::job_tree_sites` builds 700 jobs in chains of 12 under one job and measures `job_signal`, `job_suspend`, `job_resume` and `job_kill`
+   against 8 jobs (units on every host: at most 80). ADR-0270 has a note that lists the sites (open-question note, no Decision change).
+2. **Error 2, subscriptions.** Not stepped (`set` runs in handlers): bounded. 1024 per port and per source, `Error::TooMany`, `LimitReached` for a
+   program. **Proposed ADR-0299** (a behaviour change of ADR-0006), INV-0299-1; host tests `a_port_holds_a_bounded_number_of_subscriptions` and
+   `a_source_has_a_bounded_number_of_subscriptions`; `t_bound::subscription_sites` at the limit (one run, auto-default: last subscribe 11 us,
+   signal of a source 64 us, close of the port 313 us masked). The frees of 1024 `Paid` are timed, not counted in units.
+3. **Warning 3, `+net`.** `zosh` refuses a line that would get a network connection while its room is untrusted (`untrusted-gate: net-refusal`; dead code
+   while no untrusted room can be entered). `check-untrusted-gate.sh` fails when no such marker exists unless stage 2 is ready and INV-0262-4 is `checked`,
+   gate open or closed.
+4. **Warning 6, the check.** Markers are counted (the shell's two, the panel's one); a row passes only if its status begins `checked:` and says nothing
+   is open or not yet checked; INV-0268-3 is in the list; INV-0262-4 is left to stage 2. **Mutation (reverted):** removing only the marker of
+   `room new --untrusted` in `zosh.rs` made `make check-untrusted-gate` fail (15 rows listed); with the gate closed it passes as before.
+5. **Warning 4, `stream_create`.** The table's lock is released while the stream is built (`reserve_many(2)`, build, lock, insert).
+6. **Warning 5, `device_transport`.** The transport gets the page handle's rights that a device handle has, without `MAP`; `t_devices` case
+   `a_transport_has_no_right_its_page_lacks`.
+
+### Review of the fixes (opus-review of `work/q7-fixes` at `7af044c`) and its dispositions
+
+Eight findings, fixed in order, one commit each (on top of `7af044c`):
+
+1. **Error, dead child slots leaked.** `WALKS` is gone. A dropped job leaves its parent's list by `swap_remove`, as a process does. A walk counts down from the end,
+   so none is skipped; one may be visited twice (`Job::walk`'s comment, ADR-0270 note).
+2. **Error, suspend and resume interleaved (INV-0105-5).** `job_suspend`, `job_resume` and `job_kill` take turns (`Job::Exclusive`, waiting at `steps::pause`, no
+   lock held). A caller that was stopped while it waited parks before taking its turn (`process::park_if_stopped`), else its `job_resume` would run right after the
+   `suspend` returned. Chosen over an ancestor check under `TREE` because that does not settle two calls on one top job. Test: `t_suspend`
+   `a_resume_from_inside_cannot_undo_a_suspend_walk` (a resumer inside 700 jobs; a stress case, since the walks interleave only when a slice ends during one; the
+   mutation without the turns was **not** run: it is probabilistic on one CPU).
+3. **Error, `remove_matching`.** Each entry is found by binary search on its key and removed, not by a pass over every port's list. Worst case (1024 ports of
+   1024 entries, the source's entry first): 1.05 ms on the host, release build (the pass over every list was 1.94 ms there, about 10 ms in the kernel by the
+   review's estimate). ADR-0299 states the product bound (16 MiB moved). Host test `freeing_a_full_source_on_full_ports_is_bounded`; `t_bound` `wide-source`:
+   32 ports of 1024, `handle_close` of the job 47 us masked (auto-default, factor 4), so about 1.5 ms scaled to 1024 ports, linear in the ports.
+4. **Error, `weight`.** A port weighs `1 + subscriptions/16`, and any object with a source `1 + subscribers/16`; `end_subscriptions` and `close` count those units, so
+   the 80-unit check sees them on every host. `t_bound` `full-ports`: 16 ports of 1024, each with a job of 1024 subscribers, half closed port first: 779 us masked for the whole
+   run. **Smaller than the review's 64:** the test machine has 128 MiB and the heap does not give frames back (warning 7), so 64 ports (65k subscriptions) and 128 ports of
+   `wide-source` made later tests fail for want of memory (run and seen). By reasoning, weight 1 would put over 1000 units in one interval and fail the 80-unit check.
+5. **Warning, shared per-source bound.** The broker polls (100 ms) a job it could not subscribe to instead of ignoring the error. Not prevented: a per-holder bound
+   is bypassed by duplicating the handle, and a reserve needs the kernel to tell the broker from other holders. ADR-0299 records it. Not tested (no test of the
+   broker fills a source; the code is small).
+6. **Warning, `+net` marker.** `untrusted-gate: net-refusal-call` at each of the two calls in `zosh.rs`, at least 2 required by `check-untrusted-gate.sh`. **Mutation
+   (reverted):** deleting the POSIX call and its marker failed the script ("1 of 2 markers").
+7. **Warning, tree test.** `t_suspend` `a_large_tree_is_suspended_whole_while_jobs_come_and_go` (put in `t_suspend`, which has the counting children, not `t_bound`):
+   700 jobs, 16 counting processes spread through them, a second process making and closing jobs under the top job and a middle job; every job `SUSPENDED` and the 16
+   stopped after each of 15 suspends, all running after each resume.
+8. **Notes.** `Job::create` takes the parent's `suspended` under `TREE` and makes the new job match (both ways); `Job::walk`'s comment says a second visit can happen.
+
+Run: `make check` before each commit; `cargo test -p zoraya-events`; `make test-qemu-one` three times (the first run failed for the memory above; the second and the last, after the `t_suspend` tree test, passed with
+`t_bound` and `t_suspend`). Not run: `make test-changed`, TCG, CI, the broker's polling.
+
+### Review round 2 (opus-review of `work/q7-fixes` at `b94798f`) and its dispositions
+
+1. **Error, moved handles not paced.** `channel_write` collects the moved entries and ends their subscriptions after the table's lock is dropped, each after
+   `steps::before(weight)` (error paths too); spawn and snapshot moves call `before(weight)` per handle. `t_bound` `moved-jobs` (16 full jobs in one write).
+2. **Error, unfair `Exclusive`.** A ticket queue (FIFO) for `suspend` and `resume`; `job_kill` takes no turn. Not per room (a root-level walk must exclude room
+   walks). ADR-0270 note corrected ("bounded by the holder's walk" was only true with one walk; now by the walks queued before).
+3. **Warning, vacuous test.** Test-kernel call `FORCE_SWITCH` (0x701a, `qemu-test` only) makes every `steps::pause` ask for a switch; `t_suspend` sets it for
+   `a_resume_from_inside_cannot_undo_a_suspend_walk` and the tree test. **Mutation (reverted, run):** `Exclusive::take` returning at once (no turns) made `t_suspend` fail at
+   round 0 ("SUSPENDED on a job below", `t_suspend.rs:168`); the unmutated run passes. So the test is no longer vacuous.
+4. **Warning, `swap_remove`.** A `dropper` child drops the last handle of one of the first four children of the top job (visited last) while the walk is between
+   steps (forced switch); it yields while it waits (spinning cost a slice per forced switch and the first version gave up after 20 s). **Mutation (reverted, run):** `Vec::remove` instead of
+   `swap_remove` in `Job::drop` **survived**: it is an equivalent mutant for the walk (the shift makes at most a second visit, never a skip). A skip needs a front-to-back walk, which was not built as
+   a mutant; the test would fail it (every one of 700 jobs must be `SUSPENDED`), but that is by reasoning, not run.
+5. **Warning, broker poll.** `next_poll` is fixed; the poll runs at the top of the loop whenever `clock_monotonic() >= next_poll`, whatever woke the loop. A subscribe error
+   (`BadHandle`) lands in `polled` and is reported as terminated (`object_get_signals` fails). Not run: no test of the broker covers it.
+
+Run: `make check` (all 15 pass); `make test-qemu-one` (last one passes: `t_bound` with `moved-jobs`, `t_suspend` all passed; 9 expected failures as before). Not run: `cargo test -p zoraya-events` (not touched), `make test-changed`, CI.
+The first commit of the round holds `FORCE_SWITCH` in `syscall.rs`, whose `steps` side is in the third commit, so only the head builds.
+6. **Notes.** ADR-0299 states: the time bound unchecked at factor above 1, the 1.5 ms extrapolated, the gate marker a proxy. `channel::close_one` counts a dropped port's units.
+
+### Review round 3 (opus-review of `work/q7-fixes` at `131e5b5`) and its dispositions
+
+1. **Error, `write` no longer adjacent to `prepare`.** `channel_write` now queues the message right after `prepare` and ends the moved entries' subscriptions (paced, no
+   lock held) after `pair.write`; the old ids are dead (`next_id`), so the order does not matter. Spawn and snapshot moves have no `prepare`/`write` pair (they write no
+   channel), so they were not affected. Test: `t_bound` `peer_closing_in_a_write` (`FORCE_SWITCH` on, a child closes the peer end at the writer's first pause; the write is
+   accepted or refused `PeerClosed`; if accepted the carried end's peer must see `PEER_CLOSED`; the heap returns). In the run all 6 rounds were accepted. **Not run:** the test against the
+   old order (no mutant of it), so its power is by reasoning. **Seen:** a spawn and exit leave about 150 bytes of live heap per round (a control run with nothing moved shows it too), so the heap
+   bound allows 1 KiB per round; not investigated (record for the architect).
+2. **Warning, spinning turn waiters.** A waiter calls `steps::pause` then `sched::yield_now`, so N waiters cost switches, not a slice each. The bound (quota(threads) x quota(jobs) x
+   slowdown) is in ADR-0270's notes. **Mutation (run, reverted):** `Exclusive::take` returning at once made `t_suspend` fail (`t_suspend.rs:188`, "SUSPENDED on a job below"). A first
+   try of the guard below reset `FORCE_SWITCH` at the start of `main`, which the children run too, so the mutant survived twice; the reset is now in the test process only.
+3. **Notes.** The handle's own `steps::count(1)` is counted in the moved paths (channel write, spawn, snapshot). The `failed` path of `channel_write` is commented as defensive and
+   unreachable. `t_suspend` sets `FORCE_SWITCH` through a guard (`Forced`, off on drop) and resets it before the first case and at the start of each forced case (a panic aborts, so the
+   reset at the start is what protects the next case).
+
+Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: `make test-changed`, CI, `cargo test`.
+
+### Review round 4 (final findings) and its dispositions
+
+1. **Error, last references dropped together.** `channel_write` now consumes `moved_out`, dropping each object after its own `before`/`count`/`end_subscriptions`. The spawn and
+   snapshot move paths already drop each entry at the end of its iteration. Test: `t_bound` `moved_memory_is_freed_a_step_at_a_time` (64 memory objects of 63 pages moved to a
+   reader that closes them, forced switch). **Mutation (run, reverted):** the old loop (`for taken in &moved_out`) freed 4033 units in one interval and the test failed (limit 80); the fix gives 64.
+2. **Warning, heap residue.** Not a kernel leak. A loop of spawn and exit in a room kept open leaves the live heap exactly constant (8 rounds measured; closing the room frees its 544-byte record).
+   The 144 bytes a round were the write test's own page mapping, never unmapped. The test unmaps it and now asserts exact equality after round 0. Nothing for `docs/backlog.md`.
+3. **Notes.** `moved_out.try_reserve_exact` is above `prepare`; ADR-0270 now says "finds no other thread ready".
+
+Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: CI, `make test-changed`.
+
+### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
+
+- **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for
+  good). To measure (`HEAP_BACKING`, free frames, on 512 MiB), then a heap ceiling for the untrusted job, or return of free chunks, or the bound in ADR-0261's open questions.
+- **Notes 8 to 14**, not fixed: uncharged growth on call paths and the reaper's queue (8); `Paid` dropped under `EVENTS` must never hold the last `Arc<Job>` (9);
+  `console_write` keeps IRQ masked about 60 ms at 4 KiB (10); any process can run code from a memory object (11); the refusal lives only in the clients (12);
+  contiguous memory is open to every process (13); smaller items: the RTC's rights, calls 53 to 55 under a proposed ADR, `held` counts the job's own record (14).
+- **Left over from the fixes:** `Job::drop`'s `retain` and the growth of `children` are still linear in a parent's children, in one interval each; the drop of a long job chain
+  runs in whichever call drops the last handle (the walks no longer interleave: ADR-0270 note).
+- **Rows the strict check now lists as not `checked:`** (run the check with a marker removed to see them): INV-0172-3, INV-0260-1, INV-0261-2, INV-0261-6, INV-0261-7,
+  INV-0262-1, -2 and -3, INV-0263-3, INV-0264-3 (the architect's bound), INV-0265-1, INV-0265-3 (the `/tmp` half), INV-0265-4, INV-0268-3, INV-0270-1 (its status names known breaches).
+  INV-0262-4 is needed for `+net` (stage 2).
+- The pending row `disk-filler-tmp` (an untrusted room's `/tmp` and its `tmpd`); the architect's go-ahead; a full CI run (`candidate-full/`) of the commit that removes the refusal, then `main`'s.
+- ADR-0299 (proposed) needs the architect's decision.
+
+### Red candidate run 43311917098 (`candidate/work-q7-fixes-e`, head 96da472) and its fixes
+
+- **Every test-qemu job and test-net timed out at 300 s** (stopping between test 110 and 117 of 127, wherever the budget ran out; the 9 failures
+  are the expected panics). No hang: under TCG on the development host `job_suspend_from_a_process` took 240 s (it used to take a few), of
+  which the two forced cases of round 2 took about 235 s (`a_resume_from_inside_cannot_undo_a_suspend_walk` 2 s a round for 40 rounds,
+  `a_large_tree_is_suspended_whole_while_jobs_come_and_go` 9 s a round for 15). `FORCE_SWITCH` makes each step point of a 700-job walk
+  switch, and every process spinning at EL0 then kept the CPU for a whole 10 ms slice before the walk went on. Fix: while `FORCE_SWITCH` is
+  on, the test kernel gives user threads 1 ms slices (`test_calls::FORCED_SLICE_NS`). `t_suspend` then took 39 s under TCG and the whole
+  tcg-default run 141 s (PASS); the mutation of `Exclusive::take` returning at once still fails `t_suspend` (HVF, auto-default).
+- **`portbench` panicked (`subscribe: LimitReached`) and the test passed**: it subscribed 10,000 times to one port and one job, which
+  ADR-0299's bound of 1024 refuses; its panic exit 101 is under `PORT_RATIO_LIMIT` (150). It now measures with 1024 subscriptions and
+  exits with `i32::MAX` on any refused call. INV-0006-3's 10,000 is recorded in ADR-0006's open questions for the architect.
+
+### Tests run (this session)
+
+`make check`; `make test-qemu-one` (the whole test kernel on auto-default, which includes `t_bound` and `t_devices`) after steps 1 to 2 and after steps 5 and 6; `cargo test -p zoraya-events`;
+the mutation above. Not run: `make test-changed`/`test-keeper` (the shell's refusal is dead code until the gate opens), `make test-qemu` on TCG, CI.

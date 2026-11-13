@@ -80,6 +80,14 @@ impl Keeper {
         })
     }
 
+    /// The test image's `room crash-keeper` (proposed ADR-0298): asks `init`,
+    /// on the reconnect channel, to end the keeper.
+    #[cfg(feature = "net-test")]
+    pub fn crash(&self) -> bool {
+        self.reconnect
+            .is_some_and(|init| channel_write(init, b"crash", &[]).is_ok())
+    }
+
     fn rebind(&mut self) -> bool {
         let Some(init) = self.reconnect else {
             return false;

@@ -81,6 +81,8 @@ pub struct Exec<'a> {
     /// `NAME=value` for the child's environment (ADR-0150 rule 6).
     pub env: &'a [String],
     pub grants: &'a [(bool, Value)],
+    /// `+net` words' arguments (ADR-0224 item 1).
+    pub nets: &'a [Value],
     /// Its own redirections, which take the place of what the pipeline
     /// gives that stream (ADR-0152 rule 3).
     pub redirects: &'a [(Stream, bool, String)],
@@ -1398,9 +1400,15 @@ impl<H: Host> Shell<H> {
     fn grants(&mut self, state: &mut State, args: &[Value], io: &mut Io) -> i32 {
         let mut rest = args;
         let mut given: Vec<(bool, Value)> = Vec::new();
+        let mut nets: Vec<Value> = Vec::new();
         while let [g, path, after @ ..] = rest {
-            if !(g.literal && (g.text == "+r" || g.text == "+w")) {
+            if !(g.literal && (g.text == "+r" || g.text == "+w" || g.text == "+net")) {
                 break;
+            }
+            if g.text == "+net" {
+                nets.push(path.clone());
+                rest = after;
+                continue;
             }
             if g.text == "+w"
                 && let Err(e) = self.system_is_read_only(&path.text)
@@ -1428,6 +1436,7 @@ impl<H: Host> Shell<H> {
             args,
             env: &[],
             grants: &given,
+            nets: &nets,
             redirects: &[],
             err_too: false,
         };
@@ -1591,11 +1600,19 @@ impl<H: Host> Shell<H> {
             own.push((a.name.clone(), v[0].text.clone()));
         }
         let mut grants = Vec::new();
+        let mut nets = Vec::new();
         for g in &s.grants {
             let v = match self.expand(src, &g.path, Context::Grant) {
                 Ok(v) => v,
                 Err(e) => return Err(self.report(&e)),
             };
+            if g.net {
+                if v.len() != 1 {
+                    return Err(self.report(&shell_error("+net", "needs exactly one host")));
+                }
+                nets.push(v[0].clone());
+                continue;
+            }
             if v.len() != 1 {
                 let marker = if g.write { "+w" } else { "+r" };
                 return Err(self.report(&shell_error(marker, "needs exactly one path")));
@@ -1632,6 +1649,7 @@ impl<H: Host> Shell<H> {
             args: args[1..].to_vec(),
             env,
             grants,
+            nets,
             redirects,
             err_too: false,
         })
@@ -1831,6 +1849,7 @@ struct Prepared {
     args: Vec<Value>,
     env: Vec<String>,
     grants: Vec<(bool, Value)>,
+    nets: Vec<Value>,
     redirects: Vec<(Stream, bool, String)>,
     err_too: bool,
 }
@@ -1842,6 +1861,7 @@ impl Prepared {
             args: &self.args,
             env: &self.env,
             grants: &self.grants,
+            nets: &self.nets,
             redirects: &self.redirects,
             err_too: self.err_too,
         }

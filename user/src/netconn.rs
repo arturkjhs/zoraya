@@ -94,6 +94,20 @@ pub fn connect(
     port: u16,
     wait_ns: u64,
 ) -> Result<Connection, ConnectError> {
+    let (control, in_read, out_write) = start(conn, name, address, port)?;
+    wait(control, in_read, out_write, wait_ns)
+}
+
+/// Sends the `Connect` and gives our three ends once `netd` has said
+/// `Connecting` (and not yet `Connected` or `Failed`): the connection channel,
+/// the stream to read and the stream to write. For a program that opens
+/// many at once (the gate's `net-account-flood`, `t_netd`).
+pub fn start(
+    conn: Handle,
+    name: &str,
+    address: [u8; 4],
+    port: u16,
+) -> Result<(Handle, Handle, Handle), ConnectError> {
     let (control, server) = channel_create().map_err(|_| ConnectError::Unavailable)?;
     let streams = stream_create().and_then(|a| stream_create().map(|b| (a, b)));
     let Ok(((in_read, in_write), (out_read, out_write))) = streams else {
@@ -157,6 +171,22 @@ pub fn connect(
             return Err(ConnectError::Unavailable);
         }
     }
+    Ok((control, in_read, out_write))
+}
+
+/// Waits up to `wait_ns` for `Connected` or `Failed` on `control`, as
+/// [`connect`] does; on an error the three ends are closed.
+pub fn wait(
+    control: Handle,
+    in_read: Handle,
+    out_write: Handle,
+    wait_ns: u64,
+) -> Result<Connection, ConnectError> {
+    let close_ours = || {
+        for h in [control, in_read, out_write] {
+            let _ = handle_close(h);
+        }
+    };
     // `Connected` or `Failed` on the connection channel.
     let Ok(waiter) = port_create() else {
         close_ours();

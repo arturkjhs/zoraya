@@ -219,14 +219,32 @@ protocol! {
         budget: Below<17>,
         scope: Data<'a, MAX_SCOPE_BYTES>,
     }
+
+    /// On a launcher's *services channel*, from `init` (ADR-0221 item 6,
+    /// proposed ADR-0296): the network was restarted, and the handle is the
+    /// launcher's new root connection. Not a request: `netd` never sees it.
+    message NetworkRestarted = 32, handles 1 {}
+    /// On the services channel, from `init`: the restarts of this boot are
+    /// used up (at most three, ADR-0221 item 5); no root connection will come.
+    message NetworkDown = 33, handles 0 {}
+
+    /// Ends `netd` at once, so that a test can see `init`'s restart (INV-0221-3,
+    /// INV-0221-4). Honoured only by a `netd` that `init` started with
+    /// an event handle at slot 8, which it does only when the volume holds
+    /// `/etc/zoraya/net-crash`; any other `netd` answers it as it answers
+    /// an unknown ordinal. Proposed ADR-0296.
+    message Crash = 40, handles 0 {}
 }
+
+/// `Crash`'s ordinal, for a `netd` that checks it before the service does.
+pub const CRASH_ORDINAL: u32 = 40;
 
 /// The most connections one carved account may be given (ADR-0262's
 /// `--conns`, scaled to `netd`'s 16: a quarter).
 pub const MAX_BUDGET: u32 = 4;
 
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 9] = [
+pub const ORDINALS: [(&str, u32); 12] = [
     ("status", 1),
     ("ping", 2),
     ("connect", 3),
@@ -236,6 +254,9 @@ pub const ORDINALS: [(&str, u32); 9] = [
     ("connected", 16),
     ("failed", 17),
     ("reset", 18),
+    ("network_restarted", 32),
+    ("network_down", 33),
+    ("crash", 40),
 ];
 
 fn dotted(a: u32) -> String {

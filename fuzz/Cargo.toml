@@ -31,6 +31,18 @@ zoraya-abi = { path = "../crates/zoraya-abi" }
 zoraya-net = { path = "../crates/zoraya-net" }
 zoraya-dns = { path = "../crates/zoraya-dns" }
 zoraya-http = { path = "../crates/zoraya-http" }
+zoraya-rooms = { path = "../crates/zoraya-rooms" }
+zoraya-proto-rooms = { path = "../crates/zoraya-proto-rooms" }
+zoraya-settings = { path = "../crates/zoraya-settings" }
+zoraya-broker = { path = "../crates/zoraya-broker" }
+zoraya-tty = { path = "../crates/zoraya-tty" }
+zoraya-compositor = { path = "../crates/zoraya-compositor" }
+zoraya-proto-gui = { path = "../crates/zoraya-proto-gui" }
+zoraya-proto-input = { path = "../crates/zoraya-proto-input" }
+zoraya-proto-display = { path = "../crates/zoraya-proto-display" }
+zoraya-fs-service = { path = "../crates/zoraya-fs-service" }
+zoraya-proto-file = { path = "../crates/zoraya-proto-file" }
+zoraya-proto-block = { path = "../crates/zoraya-proto-block" }
 
 [[bin]]
 name = "mount_walk"
@@ -86,6 +98,41 @@ bench = false
 [[bin]]
 name = "net_dns_http"
 path = "fuzz_targets/net_dns_http.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spawn_request"
+path = "fuzz_targets/spawn_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keeper_messages"
+path = "fuzz_targets/keeper_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "broker_tty"
+path = "fuzz_targets/broker_tty.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compositor_protocol"
+path = "fuzz_targets/compositor_protocol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_protocol"
+path = "fuzz_targets/file_protocol.rs"
 test = false
 doc = false
 bench = false

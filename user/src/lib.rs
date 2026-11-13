@@ -11,6 +11,7 @@ pub mod filecmd;
 pub mod files;
 pub mod gui;
 mod heap;
+pub mod mmio;
 pub mod namespace;
 pub mod netclient;
 pub mod netconn;

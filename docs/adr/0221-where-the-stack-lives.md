@@ -234,6 +234,14 @@ replaces `netd`'s core with a router.
   `ECONNRESET` (the sockets come with N3), the three-restart bound as a test (the code is in `init`; the test needs a
   fetch between kills), and ADR-0221 item 6's services channel. Both rows stay `not yet applicable (stage 8)`.
 
+- *Note, 2026-11-12 (N6, recorded by an agent; ADR-0001 rule 6):* item 8 is built as TASK-26 decided it, register access by
+  kernel call (proposed ADR-0295): `--gui --net` boot, the network device shares page 2 with the GPU, and each driver
+  holds its transport. Item 6 is built for the console shell (proposed ADR-0296): `NetworkRestarted` and `NetworkDown` on a
+  services channel; the panel's and the broker's launchers hold no root connection yet, so they have no such channel.
+  INV-0221-4 is checked by `tests/shell/net-fetch.script` (three `net crash`, a fetch after each, the fourth leaves the
+  network down). INV-0221-3 stays partial: `t_netd` shows `PEER_CLOSED` for a native client; the `libposix` client's
+  `ECONNRESET` after a kill is not tested.
+
 ## Revisit triggers
 - Before the network on the desktop: item 8's decision, so that `--net` and `--gui` can combine.
 - A measured transfer rate dominated by the two process boundaries: a shared ring between `netd` and programs for

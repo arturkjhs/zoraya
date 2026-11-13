@@ -20,6 +20,11 @@ fn main() -> i32 {
         );
         return 2;
     };
-    sleep_until(clock_monotonic() + seconds as u64 * 1_000_000_000);
+    // `sleep_until` may return early (a wake-up that is not the deadline); the
+    // command ends when the clock has passed it.
+    let deadline = clock_monotonic() + seconds as u64 * 1_000_000_000;
+    while clock_monotonic() < deadline {
+        sleep_until(deadline);
+    }
     0
 }

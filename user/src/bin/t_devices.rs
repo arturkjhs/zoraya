@@ -12,6 +12,7 @@ use zoraya_abi::{
 };
 use zoraya_user::{
     assert_err, channel_create, channel_read, channel_write, device_interrupt, device_map,
+    device_read, device_read_width, device_transport, device_write, device_write_width,
     directory_lookup, dma_pin, dma_release_quarantine, dma_unpin, handle_close, handle_duplicate,
     interrupt_ack, memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_wait,
     raw_syscall, spawn, wait_exit,
@@ -252,6 +253,134 @@ fn a_closed_pin_stays_quarantined() {
     memory_unmap(window, PAGE).expect("unmap");
 }
 
+/// Runs `child write-register` on `transport`, passed by `transfer`, and
+/// gives its exit code.
+fn second_writer(transport: Handle, transfer: Transfer) -> i32 {
+    let image = directory_lookup(DIRECTORY, "child").expect("child");
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, JOB, image);
+    e.handle(HandleEntry {
+        slot: 4,
+        handle: transport,
+        rights: Rights::WRITE,
+        transfer,
+    });
+    e.arg(b"write-register");
+    let length = e.finish().expect("fits");
+    let child = spawn(&buffer[..length]).expect("spawn");
+    handle_close(image).expect("close");
+    let code = wait_exit(child).code;
+    handle_close(child).expect("close");
+    code
+}
+
+/// INV-0295-3 (review N6 finding 1): a transport and its page are one
+/// device to ADR-0070. A mapping of the page, or a process that wrote a
+/// transport's registers (its holder), could restart it: either refuses
+/// the other, a second holder, and the release of the quarantine.
+fn a_transport_and_its_page_keep_holders_apart() {
+    let (page, range) = find_block_device();
+    let t = device_transport(page, range).expect("transport");
+    // The review's scenario: the page mapped, a pin through the transport
+    // ended without `dma_unpin`, then the transport's release.
+    let (window, _) = device_map(page, range).expect("map");
+    let free = test_call(FREE_FRAMES);
+    let memory = memory_create(PAGE, MemoryFlags::NONE).expect("memory");
+    let mut runs = [[0u64; 2]; 1];
+    let pin = dma_pin(memory, t, &mut runs).expect("pin through the transport");
+    handle_close(memory).expect("close");
+    handle_close(pin).expect("close with no unpin");
+    assert_eq!(test_call(FREE_FRAMES), free - 1, "quarantined");
+    assert_err!(dma_release_quarantine(t), Status::BadState);
+    assert_eq!(
+        test_call(FREE_FRAMES),
+        free - 1,
+        "the mapping could restart it"
+    );
+    // No holder by call while the page is mapped.
+    assert_err!(device_write(t, REG_STATUS, 0), Status::BadState);
+    memory_unmap(window, PAGE).expect("unmap");
+    // A writer is the transport's holder: the page can be neither mapped
+    // nor released, and the transport not released, while it holds it.
+    device_write(t, REG_STATUS, 0).expect("the first write takes the transport");
+    assert_err!(device_map(page, range), Status::BadState);
+    assert_err!(dma_release_quarantine(t), Status::BadState);
+    assert_err!(dma_release_quarantine(page), Status::BadState);
+    assert_eq!(test_call(FREE_FRAMES), free - 1);
+    // The hold ends with the holder's last handle to the transport.
+    let copy = handle_duplicate(t, Rights::DMA.union(Rights::WRITE)).expect("copy");
+    handle_close(t).expect("close");
+    assert_err!(dma_release_quarantine(copy), Status::BadState);
+    handle_close(copy).expect("close");
+    let t = device_transport(page, range).expect("transport");
+    dma_release_quarantine(t).expect("release");
+    assert_eq!(test_call(FREE_FRAMES), free, "the frame came back");
+    // A live pin through the transport refuses the page's mapping and
+    // release.
+    let memory = memory_create(PAGE, MemoryFlags::NONE).expect("memory");
+    let pin = dma_pin(memory, t, &mut runs).expect("pin");
+    assert_err!(device_map(page, range), Status::BadState);
+    assert_err!(dma_release_quarantine(page), Status::BadState);
+    dma_unpin(pin).expect("unpin");
+    handle_close(memory).expect("close");
+    // Two holders are kept apart: a second process's write is refused
+    // while this one holds the transport, and allowed once it does not.
+    device_write(t, REG_STATUS, 0).expect("hold");
+    assert_eq!(
+        second_writer(t, Transfer::Duplicate),
+        1,
+        "a second holder is refused"
+    );
+    handle_close(t).expect("close");
+    let t = device_transport(page, range).expect("transport");
+    assert_eq!(
+        second_writer(t, Transfer::Duplicate),
+        0,
+        "with no other holder it writes"
+    );
+    // The child's hold ended with it.
+    dma_release_quarantine(t).expect("release");
+    let (window, _) = device_map(page, range).expect("map");
+    memory_unmap(window, PAGE).expect("unmap");
+    // A transport device's handle has no `MAP` at all.
+    assert_err!(handle_duplicate(t, Rights::MAP), Status::AccessDenied);
+    handle_close(t).expect("close");
+    the_hold_ends_with_a_move(page, range);
+}
+
+/// INV-0295-3 (re-review N6 finding 1): a `Move` of the holder's last
+/// handle that can write the transport ends its hold, as a close does: at
+/// a spawn, and over a channel.
+fn the_hold_ends_with_a_move(page: Handle, range: u32) {
+    let t = device_transport(page, range).expect("transport");
+    device_write(t, REG_STATUS, 0).expect("hold");
+    assert_eq!(
+        second_writer(t, Transfer::Move),
+        0,
+        "the child the handle moved to writes"
+    );
+    let t = device_transport(page, range).expect("transport");
+    device_write(t, REG_STATUS, 0).expect("hold");
+    let (a, b) = channel_create().expect("create");
+    let entry = ChannelEntry {
+        handle: t,
+        rights: Rights::READ.union(Rights::WRITE).union(Rights::TRANSFER),
+        transfer: Transfer::Move,
+    };
+    channel_write(a, b"", &[entry]).expect("write");
+    // Queued, the handle is no one's: the page maps and is released.
+    let (window, _) = device_map(page, range).expect("map with no holder");
+    memory_unmap(window, PAGE).expect("unmap");
+    dma_release_quarantine(page).expect("release with no holder");
+    let mut body = [0; 1];
+    let mut got = [a; 1];
+    channel_read(b, &mut body, &mut got).expect("read");
+    assert_eq!(second_writer(got[0], Transfer::Move), 0, "it writes");
+    for h in [a, b] {
+        handle_close(h).expect("close");
+    }
+}
+
 /// INV-0054-3: a driver that dies with a pin leaves its frames unreallocated.
 fn a_dead_holder_leaves_its_frames_quarantined() {
     let (device, _) = find_block_device();
@@ -287,9 +416,147 @@ fn a_dead_holder_leaves_its_frames_quarantined() {
     assert_eq!(test_call(FREE_FRAMES), held + 1, "the one frame came back");
 }
 
+const DEVICE_WRITE: u64 = 55;
+
+/// ADR-0295: a transport device is one transport of a page, reached by
+/// register calls that the kernel bounds, and nothing else of the page.
+fn transport_devices() {
+    let (page, range) = find_block_device();
+    let t = device_transport(page, range).expect("transport");
+    assert_eq!(device_read(t, 0), Ok(VIRTIO_MAGIC));
+    assert_eq!(device_read(t, REG_DEVICE), Ok(DEVICE_BLOCK));
+    // Bounds: the block is 0x200 bytes of aligned words, whatever the caller says.
+    assert!(device_read(t, 0x1fc).is_ok());
+    for bad in [
+        0x200,
+        0x1fe,
+        1,
+        2,
+        3,
+        0x1000,
+        0x2000,
+        u64::MAX,
+        u64::MAX - 3,
+        1 << 32,
+    ] {
+        assert_err!(device_read(t, bad), Status::InvalidArgument);
+        assert_err!(device_write(t, bad, 0), Status::InvalidArgument);
+    }
+    // Review N6 finding 6 (virtio 1.2 4.2.2.2): 8- and 16-bit accesses to
+    // the configuration (from 0x100), as its fields want, aligned to their
+    // width and inside the block; the control registers below it take
+    // 32-bit accesses only (QEMU answers a narrower one with 0).
+    let config = device_read(t, 0x100).expect("config");
+    assert_eq!(device_read_width(t, 0x100, 1), Ok(config & 0xff));
+    assert_eq!(device_read_width(t, 0x101, 1), Ok((config >> 8) & 0xff));
+    assert_eq!(device_read_width(t, 0x103, 1), Ok(config >> 24));
+    assert_eq!(device_read_width(t, 0x102, 2), Ok(config >> 16));
+    assert!(device_read_width(t, 0x1ff, 1).is_ok());
+    assert!(device_read_width(t, 0x1fe, 2).is_ok());
+    for (offset, width) in [
+        (0, 1),
+        (2, 2),
+        (0xfe, 2),
+        (0x101, 2),
+        (0x103, 2),
+        (0x102, 4),
+        (0x200, 1),
+        (0x200, 2),
+        (0x100, 3),
+        (0x100, 8),
+        (0x100, 0),
+    ] {
+        assert_err!(device_read_width(t, offset, width), Status::InvalidArgument);
+        assert_err!(
+            device_write_width(t, offset, 0, width),
+            Status::InvalidArgument
+        );
+    }
+    // A value wider than its access is refused, not cut.
+    assert_err!(
+        device_write_width(t, 0x100, 0x100, 1),
+        Status::InvalidArgument
+    );
+    assert_err!(
+        device_write_width(t, 0x100, 0x1_0000, 2),
+        Status::InvalidArgument
+    );
+    // The cost of one register call (reported, never asserted): 2,000 reads
+    // of the magic value, timed.
+    let from = zoraya_user::clock_monotonic();
+    for _ in 0..2000 {
+        assert_eq!(device_read(t, 0), Ok(VIRTIO_MAGIC));
+    }
+    let nanos = (zoraya_user::clock_monotonic() - from) / 2000;
+    zoraya_user::println!("t_devices: a register read by call takes {nanos} ns");
+    // A value wider than a register is refused, not cut.
+    let (status, _) = raw_syscall(DEVICE_WRITE, [t.raw(), REG_STATUS, 1 << 32, 4, 0, 0]);
+    assert_eq!(status, Status::InvalidArgument as u64);
+    // A write reaches the register: reset, and read back.
+    device_write(t, REG_STATUS, 0).expect("write");
+    assert_eq!(device_read(t, REG_STATUS), Ok(0));
+    // No other transport of the page is reachable through it: another
+    // range's device is another handle, with its own registers.
+    let other = (range + 1) % 8;
+    let o = device_transport(page, other).expect("another transport");
+    assert_ne!(device_read(o, REG_DEVICE), Ok(DEVICE_BLOCK));
+    assert_err!(device_transport(page, 99), Status::InvalidArgument);
+    // A transport device is not a page: no mapping, no further transports,
+    // and a page device has no register calls.
+    assert_err!(device_map(t, 0), Status::AccessDenied);
+    assert_err!(device_transport(t, 0), Status::AccessDenied);
+    assert_err!(device_read(page, 0), Status::AccessDenied);
+    assert_err!(device_write(page, REG_STATUS, 0), Status::AccessDenied);
+    assert_eq!(test_call(DEVICE_MAPPINGS), 0);
+    // Rights: reading needs READ, writing WRITE, `device_transport` MAP.
+    let write_only = handle_duplicate(t, Rights::WRITE).expect("narrow");
+    assert_err!(device_read(write_only, 0), Status::AccessDenied);
+    handle_close(write_only).expect("close");
+    let read_only = handle_duplicate(t, Rights::READ).expect("narrow");
+    assert_err!(device_write(read_only, REG_STATUS, 0), Status::AccessDenied);
+    handle_close(read_only).expect("close");
+    let no_map = handle_duplicate(page, Rights::READ).expect("narrow");
+    assert_err!(device_transport(no_map, range), Status::AccessDenied);
+    handle_close(no_map).expect("close");
+    // Not a device: the right is checked first, then the type.
+    let memory = memory_create(PAGE, MemoryFlags::CONTIGUOUS).expect("memory");
+    assert_err!(device_read(memory, 0), Status::BadHandle);
+    assert_err!(device_write(memory, 0, 0), Status::BadHandle);
+    assert_err!(device_transport(JOB, 0), Status::AccessDenied);
+    // The interrupt and the pin are the transport's own, as the page's were.
+    assert_err!(device_interrupt(t, 1), Status::InvalidArgument);
+    let interrupt = device_interrupt(t, 0).expect("interrupt");
+    assert_err!(device_interrupt(page, range), Status::BadState);
+    handle_close(interrupt).expect("close");
+    let mut runs = [[0u64; 2]; 1];
+    let pin = dma_pin(memory, t, &mut runs).expect("pin through the transport");
+    dma_unpin(pin).expect("unpin");
+    handle_close(memory).expect("close");
+    handle_close(o).expect("close");
+    handle_close(t).expect("close");
+}
+
+/// ADR-0040 (review warning 5): a transport has the page handle's rights that
+/// a device handle has, and no more. From a page handle with `MAP` and `READ`
+/// alone it cannot write or pin, and no right can be added to it.
+fn a_transport_has_no_right_its_page_lacks() {
+    let (page, range) = find_block_device();
+    let narrow = handle_duplicate(page, Rights::MAP.union(Rights::READ)).expect("narrow");
+    let t = device_transport(narrow, range).expect("transport");
+    assert_err!(device_write(t, REG_STATUS, 0), Status::AccessDenied);
+    assert_err!(handle_duplicate(t, Rights::WRITE), Status::AccessDenied);
+    assert_err!(handle_duplicate(t, Rights::DMA), Status::AccessDenied);
+    device_read(t, 0).expect("it reads");
+    handle_close(t).expect("close");
+    handle_close(narrow).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     maps_a_device();
+    transport_devices();
+    a_transport_and_its_page_keep_holders_apart();
+    a_transport_has_no_right_its_page_lacks();
     takes_an_interrupt();
     pins_and_unpins();
     refusals();

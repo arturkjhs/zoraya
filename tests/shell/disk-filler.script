@@ -1,0 +1,76 @@
+# The gate's disk-filler row (TASK-26 Q7; ADR-0265, ADR-0268 point 3;
+# INV-0265-3 and INV-0265-5) from the console, in rooms with `--disk`: a
+# program writes in a room's directory until the limit refuses; the other
+# room and home still write; a sync loop in one room does not hold up the sync
+# of a program in home beyond the bound. The rooms here are trusted (the gate
+# is closed), so the loop's syncs are not folded into the commits; the fold of
+# an untrusted account's `sync` (ADR-0265 item 9, INV-0265-5) is checked by
+# `t_storage`. This is a smoke test of the loop. (An untrusted room's /tmp,
+# `--tmp`, is not built: the gate row disk-filler-tmp is pending.)
+! panicked
+! storage failed
+! (over 5 s)
+! diskfill: sync 
+< Type help to begin
+< \r\n~> 
+> mkdir /t/fill\r
+< \r\n~> 
+> mkdir /t/other\r
+< \r\n~> 
+> mkdir /t/home\r
+< \r\n~> 
+> mkdir /t/loop\r
+< \r\n~> 
+> room new looper --procs 16 --disk 256K +w /t/loop\r
+< looper --colour
+< \r\n~> 
+> room new filler --disk 256K --procs 16 +w /t/fill\r
+< filler --colour
+< \r\n~> 
+> room new other --disk 256K --procs 16 +w /t/other\r
+< other --colour
+< \r\n~> 
+# The filler writes until the directory's limit refuses.
+> room filler\r
+< filler /t/fill> 
+> diskfill /t/fill\r
+< diskfill: stopped after
+< refused (16)
+< filler /t/fill> 
+> room --leave\r
+> cd /\r
+< \r\n/> 
+# Home writes (the room's limit is on its directory only), and so does the
+# other room, up to its own limit (INV-0265-3).
+> echo home > /t/home/note.txt\r
+< \r\n/> 
+> cat /t/home/note.txt\r
+< home
+< \r\n/> 
+> room other\r
+< other /t/other> 
+> diskfill /t/other\r
+< diskfill: stopped after
+< refused (16)
+< other /t/other> 
+> room --leave\r
+> cd /\r
+< \r\n/> 
+# A sync loop in a room, and a program in home that writes and syncs 100
+# times: none of its syncs takes over five seconds (INV-0265-5; the program
+# says so when one does).
+> room looper\r
+< looper /t/loop> 
+> diskfill --loop 40 /t/loop &\r
+< [1] diskfill --loop 40 /t/loop
+< looper /t/loop> 
+> room --leave\r
+> cd /\r
+< \r\n/> 
+> diskfill --syncs 100 /t/home\r
+< diskfill: 100 syncs, slowest
+< \r\n/> 
+> wait\r
+< syncs, slowest
+< \r\n/> 
+> poweroff\r

@@ -12,14 +12,15 @@ use zoraya_abi::{
 use zoraya_proto_gui as gui;
 use zoraya_protocol::{Message, decode, encode};
 use zoraya_rt::{
-    channel_create, channel_read, channel_write, clock_monotonic, device_map, handle_close,
-    handle_type, memory_unmap, port_create, port_subscribe, port_wait, println,
+    channel_create, channel_read, channel_write, clock_monotonic, device_map, device_read,
+    device_transport, handle_close, handle_type, memory_unmap, port_create, port_subscribe,
+    port_wait, println,
 };
 use zoraya_virtio::queue::{Page, Transport, identify};
 use zoraya_virtio::{DEVICE_BLOCK, DEVICE_GPU, DEVICE_INPUT, DEVICE_NET, reg};
 
 use crate::dup;
-use crate::stack::{DRIVER_RIGHTS, console, end_job, moved, start};
+use crate::stack::{console, driver_rights, end_job, moved, start};
 
 /// Restarts allowed for each driver, and for the session (ADR-0097).
 pub const MAX_RESTARTS: u32 = 3;
@@ -64,7 +65,38 @@ fn read_page(device: Handle) -> Page {
     identify(&transports[..count])
 }
 
-/// Every device page this process holds, sorted by what it is.
+/// Reads transport `range` of a shared page through its transport device
+/// (ADR-0295).
+fn read_transport(device: Handle, range: u32) -> Option<(Handle, Transport)> {
+    let transport = device_transport(device, range).ok()?;
+    let register = |at: usize| device_read(transport, at as u64).unwrap_or(0);
+    let read = Transport {
+        range: 0,
+        magic: register(reg::MAGIC),
+        version: register(reg::VERSION),
+        device_id: register(reg::DEVICE_ID),
+    };
+    Some((transport, read))
+}
+
+/// Puts a device `init` found, as `(handle, range)`, with the drivers that
+/// want its kind.
+fn classify(found: &mut Devices, device: (Handle, u32), device_id: u32) -> bool {
+    match device_id {
+        DEVICE_BLOCK if found.disk.is_none() => found.disk = Some(device),
+        DEVICE_GPU if found.gpu.is_none() => found.gpu = Some(device),
+        DEVICE_INPUT => found.inputs.push(device),
+        DEVICE_NET if found.net.is_none() => found.net = Some(device),
+        _ => return false,
+    }
+    true
+}
+
+/// Every device page this process holds, sorted by what it is. A page with
+/// one device goes to its driver whole, mapped; a page with several is
+/// never given whole: each of its devices goes to its driver as a transport
+/// device that the driver reaches by register calls (ADR-0295, ADR-0221
+/// item 8), so the drivers on the page cannot reach one another's registers.
 pub fn scan() -> Devices {
     let mut found = Devices::default();
     for slot in FIRST_DEVICE_SLOT..FIRST_DEVICE_SLOT + 16 {
@@ -75,15 +107,30 @@ pub fn scan() -> Devices {
             continue;
         }
         match read_page(device) {
-            Page::One { range, device_id } => match device_id {
-                DEVICE_BLOCK if found.disk.is_none() => found.disk = Some((device, range)),
-                DEVICE_GPU if found.gpu.is_none() => found.gpu = Some((device, range)),
-                DEVICE_INPUT => found.inputs.push((device, range)),
-                DEVICE_NET if found.net.is_none() => found.net = Some((device, range)),
-                _ => {}
-            },
+            Page::One { range, device_id } => {
+                classify(&mut found, (device, range), device_id);
+            }
             Page::Several => {
-                println!("init: device slot {slot}: more than one device on a page, not used");
+                let mut used = 0;
+                for range in 0..8u32 {
+                    let Some((transport, read)) = read_transport(device, range) else {
+                        break;
+                    };
+                    let kept = match identify(&[read]) {
+                        Page::One { range, device_id } => {
+                            classify(&mut found, (transport, range), device_id)
+                        }
+                        _ => false,
+                    };
+                    if kept {
+                        used += 1;
+                    } else {
+                        let _ = handle_close(transport);
+                    }
+                }
+                println!(
+                    "init: device slot {slot}: shared page, {used} device(s) by register calls"
+                );
             }
             Page::Empty => {}
         }
@@ -109,7 +156,11 @@ impl Running {
 pub fn start_driver(name: &str, device: (Handle, u32)) -> Option<(Running, Handle)> {
     let (ours, theirs) = channel_create().ok()?;
     let digits = [b'0' + device.1 as u8];
-    let entries = [console(), dup(5, device.0, DRIVER_RIGHTS), moved(6, theirs)];
+    let entries = [
+        console(),
+        dup(5, device.0, driver_rights(device.0)),
+        moved(6, theirs),
+    ];
     match start(name, &entries, &[&digits]) {
         Some((job, process)) => Some((Running { job, process }, ours)),
         None => {
@@ -302,6 +353,25 @@ impl Gui {
     pub fn new_client(&self) -> Option<Handle> {
         let (ours, theirs) = channel_create().ok()?;
         manager_send(self.manager, &gui::AddClient {}, Some(theirs), 0, &mut [])?;
+        Some(ours)
+    }
+
+    /// A client of room `room`, untrusted or not, with a record that lists
+    /// nothing: what `t_gui` needs to play a program of that room (the
+    /// compositor's per-room account, ADR-0262, INV-0262-1) without running
+    /// untrusted code. The panel's `launch` makes the real ones.
+    pub fn new_room_client(&self, room: &str, untrusted: bool) -> Option<Handle> {
+        let (ours, theirs) = channel_create().ok()?;
+        let m = gui::AddRoomClient {
+            untrusted: u32::from(untrusted),
+            colour: 0,
+            tag: 0,
+            room: zoraya_protocol::Data(room.as_bytes()),
+            app: zoraya_protocol::Data(b"term"),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(b"term"),
+        };
+        manager_send(self.manager, &m, Some(theirs), 0, &mut [])?;
         Some(ours)
     }
 

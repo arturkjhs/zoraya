@@ -26,5 +26,12 @@
 > net --help\r
 < net: show the state of the network
 < \r\n/>
+# INV-0296-1: this image is not the test image (feature net-test), so `Crash` ends nothing.
+> net crash\r
+< net: asked the network service to end
+< \r\n/>
+> net status\r
+< net0  up  52:54:00:12:34:56
+< \r\n/>
 x power off
 > poweroff\r

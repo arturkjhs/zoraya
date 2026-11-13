@@ -87,10 +87,27 @@ pub fn pause() {
         0,
         "a spinlock is held across a step (ADR-0270 point 2)"
     );
+    #[cfg(feature = "qemu-test")]
+    if ALWAYS_SWITCH.load(core::sync::atomic::Ordering::Relaxed) {
+        crate::sched::request_resched();
+    }
     // SAFETY: only a user process's system call gets here, which runs after
     // the vectors and the interrupt controller are set up, and the caller
     // holds no spinlock (its contract, checked above in the test kernel).
     unsafe { step_point(sched::preempt_point) };
+}
+
+/// Whether every [`pause`] asks the scheduler to switch (the test kernel's
+/// `FORCE_SWITCH` call), so that walks and teardowns of different processes
+/// interleave at each step point, whatever the slice. For tests of
+/// interleaving only; one global flag, which the test that sets it clears.
+#[cfg(feature = "qemu-test")]
+static ALWAYS_SWITCH: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Sets [`ALWAYS_SWITCH`].
+#[cfg(feature = "qemu-test")]
+pub fn set_always_switch(on: bool) {
+    ALWAYS_SWITCH.store(on, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Whether [`pause`] makes a step point in a kernel thread too: a test

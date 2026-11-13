@@ -10,12 +10,12 @@ use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
     Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
-    Detail, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason, ExitRecord, Handle,
-    Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
-    MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
-    PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
-    Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject, StreamWriteObject, UsageFlags,
-    request_value,
+    Detail, DeviceObject, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason,
+    ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags,
+    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer,
+    PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind,
+    Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject,
+    StreamWriteObject, UsageFlags, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_elf::{EHDR_SIZE, Header, Program};
@@ -237,6 +237,33 @@ impl Calls<'_> {
         Ok((table, self_handle))
     }
 
+    /// INV-0295-3: the hold of a transport device ends with the last handle
+    /// of this process that can write it. Called with the table unlocked
+    /// after a handle to `object` left it, by a close or by a `Move` (spawn,
+    /// channel_write, snapshot). A process has one thread, so nothing adds a
+    /// handle meanwhile; and the kernel is not preempted on its one CPU
+    /// (design.md, Scheduler), so the process a moved handle went to runs
+    /// only after the hold has ended.
+    fn end_hold_if_unwritable(&self, object: &Object) {
+        let Object::Device(device) = object else {
+            return;
+        };
+        let writable = self.process.handles.lock().entries().any(|(_, e)| {
+            e.rights.contains(Rights::WRITE)
+                && matches!(&e.object, Object::Device(d) if Arc::ptr_eq(d, device))
+        });
+        if writable {
+            return;
+        }
+        let claim = self
+            .process
+            .space
+            .lock()
+            .as_mut()
+            .and_then(|s| s.let_go(device));
+        drop(claim);
+    }
+
     fn insert(&self, object: Object, rights: Rights) -> Result<u64, Status> {
         let handle = self
             .process
@@ -286,8 +313,14 @@ impl Handlers for Calls<'_> {
     }
 
     fn handle_close(&mut self, handle: Handle) -> Result<u64, Status> {
-        let entry = self.process.handles.lock().remove(handle);
-        object::close(entry.ok_or(Status::BadHandle)?);
+        let entry = self
+            .process
+            .handles
+            .lock()
+            .remove(handle)
+            .ok_or(Status::BadHandle)?;
+        self.end_hold_if_unwritable(&entry.object);
+        object::close(entry);
         Ok(0)
     }
 
@@ -366,7 +399,10 @@ impl Handlers for Calls<'_> {
             if listed.transfer == Transfer::Move {
                 let entry = self.process.handles.lock().remove(listed.handle);
                 if let Some(entry) = entry {
+                    steps::before(object::weight(&entry));
+                    steps::count(1);
                     object::end_subscriptions(&entry);
+                    self.end_hold_if_unwritable(&entry.object);
                 }
             }
         }
@@ -775,19 +811,39 @@ impl Handlers for Calls<'_> {
         carried
             .try_reserve_exact(entries)
             .map_err(|_| Status::NoMemory)?;
+        // The moved entries' old forms, whose subscriptions end after the
+        // handle-table lock is dropped, a pause at a time (review round 2,
+        // error 1): the old owner id is dead, so nothing can need them.
+        let mut moved_out = Vec::new();
+        moved_out
+            .try_reserve_exact(entries)
+            .map_err(|_| Status::NoMemory)?;
         // The writer pays for the message while it is queued (ADR-0261 point 7).
         let mut paid = Paid::new(Some(self.process.job()));
         paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
         let mut message = channel::message(body, Vec::new(), paid)?;
         pair.prepare(side, message.bytes.len())?;
-        for entry in listed {
+        let mut failed = None;
+        for entry in listed.clone() {
             let object = match entry.transfer {
-                Transfer::Duplicate => handles.check(entry.handle, Rights::NONE)?.object.clone(),
-                Transfer::Move => {
-                    let taken = handles.remove(entry.handle).ok_or(Status::BadHandle)?;
-                    object::end_subscriptions(&taken);
-                    taken.object
-                }
+                Transfer::Duplicate => match handles.check(entry.handle, Rights::NONE) {
+                    Ok(held) => held.object.clone(),
+                    Err(status) => {
+                        failed = Some(status);
+                        break;
+                    }
+                },
+                Transfer::Move => match handles.remove(entry.handle) {
+                    Some(taken) => {
+                        let object = taken.object.clone();
+                        moved_out.push(taken);
+                        object
+                    }
+                    None => {
+                        failed = Some(Status::BadHandle);
+                        break;
+                    }
+                },
             };
             carried.push(zoraya_handle::Entry {
                 object,
@@ -796,8 +852,40 @@ impl Handlers for Calls<'_> {
             });
         }
         drop(handles);
+        if let Some(status) = failed {
+            // Defensive, unreachable: the entries were validated above under
+            // the same lock, which is still the only way to change them (one
+            // `handles` guard). Kept so that a later change cannot leak a
+            // subscription.
+            for taken in &moved_out {
+                object::end_subscriptions(taken);
+            }
+            return Err(status);
+        }
+        // Before the write: the reader holds the handles only after it.
+        for (entry, moved) in carried.iter().zip(listed) {
+            if moved.transfer == Transfer::Move {
+                self.end_hold_if_unwritable(&entry.object);
+            }
+        }
         message.handles = carried;
+        // `write` follows `prepare` with nothing that can pause between them
+        // (channel.rs): a pause there lets the peer close, and the message
+        // would be queued into a closed end (review round 3, error 1).
         pair.write(side, message);
+        // Only now the moved entries' subscriptions end, a pause at a time
+        // with no lock held. The old ids are dead (`next_id`), so the order
+        // against the write does not matter.
+        // Each is dropped after its own announcement: the reader may have
+        // closed them meanwhile, and these are then the last references, so
+        // holding them all to the end would free them in one interval (review
+        // round 4, error 1).
+        for taken in moved_out {
+            steps::before(object::weight(&taken));
+            steps::count(1);
+            object::end_subscriptions(&taken);
+            drop(taken);
+        }
         Ok(0)
     }
 
@@ -894,6 +982,64 @@ impl Handlers for Calls<'_> {
         self.insert(Object::Interrupt(interrupt), InterruptObject::RIGHTS)
     }
 
+    /// ADR-0295: the device of one transport of a page, for a holder of the
+    /// page with `MAP`. The new handle has the page handle's rights that a
+    /// device handle has, but `MAP` (a transport device is never mapped), so
+    /// it passes where the page's would, to the one driver whose transport it
+    /// is.
+    fn device_transport(&mut self, device: Handle, index: RangeIndex) -> Result<u64, Status> {
+        let (object, held) = {
+            let handles = self.process.handles.lock();
+            let entry = handles.check(device, Rights::MAP)?;
+            (entry.object.clone(), entry.rights)
+        };
+        let Object::Device(device) = object else {
+            return Err(Status::BadHandle);
+        };
+        let transport = device.transport(index.0)?;
+        // Rights only decrease (ADR-0040): the page handle's rights that a
+        // device handle has, and no `MAP`: a transport device is never
+        // mapped (INV-0295-3).
+        let rights = Rights::from_raw(held.raw() & DeviceObject::RIGHTS.raw())
+            .ok_or(Status::InvalidArgument)?
+            .without(Rights::MAP);
+        self.insert(Object::Device(transport), rights)
+    }
+
+    /// ADR-0295: a register of a transport device. The offset is the
+    /// caller's and `Device::read_register` bounds it.
+    fn device_read(&mut self, device: Handle, offset: Size, width: Size) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        device.read_register(offset.0, width.0).map(u64::from)
+    }
+
+    fn device_write(
+        &mut self,
+        device: Handle,
+        offset: Size,
+        value: Opaque,
+        width: Size,
+    ) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        // A value wider than its access is refused, not cut.
+        if width.0 > 4 || value.0 >> (8 * width.0) != 0 {
+            return Err(Status::InvalidArgument);
+        }
+        let value = value.0 as u32;
+        device.check_register(offset.0, width.0)?;
+        // The first write makes this process the transport's holder, and a
+        // second holder is refused (INV-0295-3). A process has one thread.
+        let mut space = self.process.space.lock();
+        let space = space.as_mut().ok_or(Status::BadState)?;
+        let held = space.hold(&device)?;
+        device.write_register(held, offset.0, width.0, value)?;
+        Ok(0)
+    }
+
     fn interrupt_ack(&mut self, interrupt: Handle) -> Result<u64, Status> {
         let Object::Interrupt(interrupt) = self.object(interrupt, Rights::WRITE)? else {
             return Err(Status::BadHandle);
@@ -976,9 +1122,13 @@ impl Handlers for Calls<'_> {
         }
         let target = UserSlice::of(ends.0)?;
         target.write(&[0; 16])?;
-        let mut handles = self.process.handles.lock();
-        handles.reserve_many(2)?;
+        // The table's lock is not held while the stream is built: its
+        // memory object prepares the heap, which may pause (ADR-0270
+        // point 2). The room for both ends is kept by the reservation (a
+        // process has one thread).
+        self.process.handles.lock().reserve_many(2)?;
         let (reader, writer) = Stream::create(Some(self.process.job()))?;
+        let mut handles = self.process.handles.lock();
         let read = Object::StreamRead(reader);
         let read = handles.insert(read, StreamReadObject::RIGHTS, object::next_id())?;
         let write = Object::StreamWrite(writer);
@@ -1076,19 +1226,21 @@ impl Handlers for Calls<'_> {
             suspended: request.suspended,
         })?;
         // The child exists: only now do the moved handles leave (INV-0102-2).
-        let mut handles = self.process.handles.lock();
         for moved in request.moves() {
-            if let Some(entry) = handles.remove(moved.handle) {
+            let entry = self.process.handles.lock().remove(moved.handle);
+            if let Some(entry) = entry {
+                steps::before(object::weight(&entry));
+                steps::count(1);
                 object::end_subscriptions(&entry);
+                self.end_hold_if_unwritable(&entry.object);
             }
         }
         // `snapshot_table` reserved this room, and removing made more.
-        let handle = handles.insert(
+        let handle = self.process.handles.lock().insert(
             Object::Process(child),
             ProcessObject::RIGHTS,
             object::next_id(),
         )?;
-        drop(handles);
         *LAST_SNAPSHOT.lock() = (timer::now().nanos_since(started), copied.pages);
         Ok(handle.raw())
     }
@@ -1268,6 +1420,18 @@ pub mod test_calls {
     pub const SET_CPU_PERIOD: u64 = 0x7018;
     /// Prints where the units of the busiest masked interval came from.
     pub const DIAGNOSE_UNITS: u64 = 0x7019;
+    /// Makes every step point switch away (x0 = 1) or not (0): the walks of
+    /// different processes then interleave at each one (`t_suspend`). While
+    /// it is on, user threads also get [`FORCED_SLICE_NS`] slices.
+    pub const FORCE_SWITCH: u64 = 0x701a;
+    /// The slice while `FORCE_SWITCH` is on. Each step point of a walk then
+    /// runs every other ready thread before the walk goes on, and a process
+    /// that spins at EL0 keeps the CPU for its whole slice: with the default
+    /// 10 ms, `t_suspend`'s two forced cases (700 jobs, up to 18 spinning
+    /// processes) took about 235 s of a 240 s `t_suspend` under TCG on the
+    /// development host and pushed every CI test-qemu run past its 300 s;
+    /// with 1 ms the whole of `t_suspend` took 39 s there.
+    pub const FORCED_SLICE_NS: u64 = 1_000_000;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1300,6 +1464,17 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         // would storm; 0 restores the default.
         test_calls::SET_CPU_PERIOD if a0 != 0 && a0 < 1_000_000 => {
             Some(Err(Status::InvalidArgument))
+        }
+        test_calls::FORCE_SWITCH => {
+            crate::steps::set_always_switch(a0 != 0);
+            // 0 restores the default slice; the harness also restores it
+            // before every test.
+            sched::set_test_slice(if a0 != 0 {
+                test_calls::FORCED_SLICE_NS
+            } else {
+                0
+            });
+            Some(Ok(0))
         }
         test_calls::DIAGNOSE_UNITS => {
             crate::steps::diagnose_units();

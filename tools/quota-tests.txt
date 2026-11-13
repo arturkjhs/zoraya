@@ -1,0 +1,11 @@
+# INV-0260-1 (ADR-0260): the gate rows (tools/untrusted-gate.txt) that reach the
+# refusal of each resource marked hard in ADR-0260's table, from a program in a
+# limited job. `RESOURCE | ROW,ROW` with the first cell of the table's row; a `-`
+# is a resource no test reaches yet. tools/check-quota-tests.sh reads this file.
+Memory | memory-hog,charged-allocation
+Processes | fork-bomb,many-rooms
+CPU | cpu-ceiling,cpu-spinners
+Disk | disk-filler
+`/tmp` of an untrusted room | -
+Service state | service-floods
+Network objects | net-account-flood

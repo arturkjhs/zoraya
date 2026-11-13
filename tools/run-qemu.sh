@@ -27,12 +27,14 @@
 #                         compositor's scale 2, ADR-0164)
 #   --gui-size WxH        with --gui: a display of W by H pixels instead
 #                         (ADR-0246; the compositor picks the scale)
-#   --net                 attach a virtio-net device on transport 16 (page 2, alone
-#                         on its page, ADR-0091) over QEMU's user-mode network
+#   --net                 attach a virtio-net device on transport 16 (page 2; alone
+#                         on its page without --gui, ADR-0091; with --gui it
+#                         shares the page with the GPU on transport 23, and
+#                         `init` gives each driver its transport by register
+#                         calls, ADR-0295) over QEMU's user-mode network
 #                         (SLIRP: guest 10.0.2.15/24, gateway 10.0.2.2). With
 #                         --test the network is `restrict=on`: the guest reaches
 #                         nothing outside it (ADR-0230 item 2, INV-0230-1).
-#                         Refused with --gui until ADR-0221 item 8 is decided.
 #   --net-open            with --net --test: no `restrict=on`, so that the guest
 #                         reaches the host at 10.0.2.2 (SLIRP's alias of the
 #                         host's 127.0.0.1) and gets a router and a DNS server
@@ -213,9 +215,6 @@ case $mode in
 esac
 
 # Version 2 of virtio-mmio: QEMU defaults to the legacy transport (ADR-0080).
-if [ "$net" = 1 ] && [ "$gui" = 1 ]; then
-    die "--net and --gui cannot be combined: the GUI takes all four device pages (ADR-0221 item 8)"
-fi
 case $net_forward in
     "") ;;
     *[!0-9]*) die "--net-forward needs a port number" ;;
