@@ -12,7 +12,11 @@
  *   t_threads cycles    create and join 500 threads, 300 detached ones, stack reuse
  *   t_threads locks     rwlock, barrier, spin lock, semaphore
  *   t_threads stdio     printf and a pipe from several threads
- *   t_threads all       every case above
+ *   t_threads limit     create threads until EAGAIN, release them, create again
+ *   t_threads exit      exit() from a non-main thread while a sibling spins (exit 7)
+ *   t_threads mainexit  pthread_exit in the main thread; the process ends with the last thread
+ *   t_threads overflow  a thread overruns its stack: the process faults (INV-0302-6)
+ *   t_threads all       every case but the last three, which end the process
  */
 #include <errno.h>
 #include <pthread.h>
@@ -591,6 +595,107 @@ static void stdio_case(void)
 	printf("t_threads: stdio passed\n");
 }
 
+/* ------------------------------------------------------------ limit */
+
+static pthread_mutex_t gate2 = PTHREAD_MUTEX_INITIALIZER;
+
+static void *blocked_on_gate(void *a)
+{
+	(void)a;
+	pthread_mutex_lock(&gate2);
+	pthread_mutex_unlock(&gate2);
+	return NULL;
+}
+
+static void limit(void)
+{
+	enum { MAX = 400 };
+	static pthread_t t[MAX];
+	int n = 0, r = 0;
+	OK(pthread_mutex_lock(&gate2));
+	while (n < MAX && (r = pthread_create(&t[n], NULL, blocked_on_gate, NULL)) == 0)
+		n++;
+	/* ADR-0300: at most 128 threads, the first included; or the room's
+	 * figure or memory, whichever is first: always EAGAIN, never a hang. */
+	CHECK(n >= 8 && n <= 127);
+	CHECK(r == EAGAIN);
+	OK(pthread_mutex_unlock(&gate2));
+	for (int i = 0; i < n; i++)
+		OK(pthread_join(t[i], NULL));
+	/* Recovered: the same number again. */
+	OK(pthread_mutex_lock(&gate2));
+	int m = 0;
+	while (m < n && pthread_create(&t[m], NULL, blocked_on_gate, NULL) == 0)
+		m++;
+	CHECK(m == n);
+	OK(pthread_mutex_unlock(&gate2));
+	for (int i = 0; i < m; i++)
+		OK(pthread_join(t[i], NULL));
+	printf("t_threads: limit passed (%d threads)\n", n);
+}
+
+/* ------------------------------------------------------------ ends */
+
+static volatile long spun_up;
+
+static void *spin_forever(void *a)
+{
+	(void)a;
+	for (;;)
+		spun_up++;
+}
+
+static void *exit_seven(void *a)
+{
+	while (spun_up < 1000)
+		thrd_yield();
+	printf("t_threads: exiting from a thread\n");
+	exit(7);
+	return a;
+}
+
+static void exit_case(void)
+{
+	pthread_t s, e;
+	OK(pthread_create(&s, NULL, spin_forever, NULL));
+	OK(pthread_create(&e, NULL, exit_seven, NULL));
+	pthread_join(e, NULL);
+	printf("t_threads: not reached FAIL\n");
+}
+
+static void *finish_later(void *a)
+{
+	for (int i = 0; i < 20; i++)
+		thrd_yield();
+	printf("t_threads: last thread leaving\n");
+	return a;
+}
+
+static void mainexit(void)
+{
+	pthread_t t;
+	OK(pthread_create(&t, NULL, finish_later, NULL));
+	printf("t_threads: main thread leaving\n");
+	pthread_exit(NULL);
+}
+
+static void *overrun(void *a)
+{
+	volatile char big[1 << 20];
+	for (size_t i = 0; i < sizeof big; i += 1024)
+		big[i] = (char)i;
+	(void)a;
+	return NULL;
+}
+
+static void overflow(void)
+{
+	pthread_t t;
+	OK(pthread_create(&t, NULL, overrun, NULL));
+	pthread_join(t, NULL);
+	printf("t_threads: not reached FAIL\n");
+}
+
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -609,6 +714,19 @@ int main(int argc, char **argv)
 	CASE("cycles", cycles)
 	CASE("locks", locks)
 	CASE("stdio", stdio_case)
+	CASE("limit", limit)
+	if (strcmp(mode, "exit") == 0) {
+		exit_case();
+		return 0;
+	}
+	if (strcmp(mode, "mainexit") == 0) {
+		mainexit();
+		return 0;
+	}
+	if (strcmp(mode, "overflow") == 0) {
+		overflow();
+		return 0;
+	}
 	if (!known) {
 		printf("t_threads: unknown case %s\n", mode);
 		return 2;

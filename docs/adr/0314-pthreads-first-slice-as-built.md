@@ -14,7 +14,7 @@ rwlocks, barriers, spin locks and semaphores, tested by `tests/posix-core/t_thre
 Signals per thread, deferred cancellation of a blocked thread, `fork` with siblings, `exec` and `exit` from a non-main
 thread, and the split of the long waits are the next slices. This ADR records where the code differs from the accepted text
 or fixes a choice the text left open, so that no choice is silent (CLAUDE.md "Decisions"). Each item names the sentence it
-refines. Measured under HVF on the development host: the eight cases of `t_threads` pass (`make test-posix-threads`).
+refines. Measured under HVF on the development host: the twelve cases of `t_threads` (create, mutex, cond, once, tls, cycles, locks, stdio, limit, exit, mainexit, overflow) pass (`make test-posix-threads`).
 
 ## Decision drivers
 
@@ -94,11 +94,11 @@ code of the first slice.
    on the shim, so they are not in `excluded.txt`, whose rule is that its files fail to compile. `synccall.c` (signals every
    thread with `tkill`, reads `gettid`) is excluded there, as the shim refuses it.
 8. **Mappings.** `mprotect` stays `ENOSYS` (musl tolerates it); a thread's stack is writable below its guard area, and the page
-   the kernel leaves unmapped under every mapping is the guard (ADR-0302 item 7). INV-0302-6 is not tested in this slice.
+   the kernel leaves unmapped under every mapping is the guard (ADR-0302 item 7). INV-0302-6 is tested: the case `overflow` of `t_threads` ends `Fault`.
 
 ## Consequences
 
-- **Positive.** The thread library runs and passes eight cases under HVF; the kernel's calls 56 to 61 are used by real code;
+- **Positive.** The thread library runs and passes twelve cases under HVF; the kernel's calls 56 to 61 are used by real code;
   a single-threaded program's cost is the two atomics.
 - **Negative.** A thread blocked in a library wait stops the others' library calls (item 2): a known limit until the next slice.
   No signal can reach a thread, and `pthread_cancel` does not wake a blocked thread (item 4).
