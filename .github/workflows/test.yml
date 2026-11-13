@@ -133,8 +133,9 @@ jobs:
     needs: [plan, image]
     if: ${{ needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
-    # 30: a cold ports cache builds OpenSSL, curl and wget as well (TASK-27 9a).
-    timeout-minutes: 30
+    # 30: a cold ports cache builds OpenSSL, curl and wget as well (TASK-27 9a);
+    # 45: and the host and the cross CPython (9c, N7: not yet measured cold on CI).
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
@@ -185,13 +186,18 @@ jobs:
       # The ports' build (make reads times): the key is every file under
       # ports/ (sources.lock among them) and tools/zcc/, and those files get
       # an old time first, so that the restored outputs are newer than them.
+      # The ADRs whose name lists libc.a's check reads (ports/Makefile's
+      # TIER_LIST and ADDED_ADRS) are in the key and get the old time too:
+      # with their checkout time every hit rebuilt libc.a and all after it.
+      # The python port's trees are not in the cache (W10): when its stamp
+      # must be rebuilt, its recipe makes them again (make check-python-cache).
       # Other files make's rules read keep their checkout time, which only
       # rebuilds more. Not the other sources: cargo would take an old time
       # for an unchanged file. A key that misses
       # builds everything, as before. If a restored build is ever wrong, change
       # the prefix `ports-build-v3`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
-        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-ignore.txt | xargs -0 touch -h -t 200001010000
+        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0320-*.md' | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
         uses: actions/cache@v4
         with:
@@ -207,10 +213,11 @@ jobs:
             build/rootfs-python
             build/python-testlib
             build/workloads
+            build/ports/workloads
             !build/ports/work/Python-*
             !build/ports/work/hostpython-build
             !build/ports/work/python-build
-          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt') }}
+          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0320-*.md') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -258,6 +265,7 @@ jobs:
           - make check-tokens
           - make check-fetch-ports
           - make check-ci-jobs
+          - make check-python-cache
           - make check-charged-alloc
           - make check-untrusted-gate
           - make check-quota-tests

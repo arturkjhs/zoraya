@@ -40,7 +40,8 @@ SURFACE_CHECK := $(ROOT)/target/debug/posix-surface-check
 ELF_CHECK := $(ROOT)/target/debug/zoraya-elf-check
 TIER_LIST := docs/adr/posix-surface-T1.txt
 # The names libc.a may export: the generated list, and the blocks of the ADRs
-# that add names (posix-surface-check's LIST+ADR form).
+# that add names (posix-surface-check's LIST+ADR form). CI's ports cache
+# names the same files (.github/workflows/test.yml, its build job).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0320-cpython-port.md
@@ -59,7 +60,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: python hostpython suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: python python-trees check-python-cache hostpython suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -637,8 +638,11 @@ $(PYTHON_SRC): $(LOCK) $(wildcard ports/patches/python/*.patch)
 # What the python stamp depends on are markers, not the trees: CI's test jobs
 # take build/ without the source and host trees (they are 500 MB the tests do
 # not read, W10), and a missing tree would make make rebuild the whole port.
-# A marker is older than the output built from it; the tree is made, if it
-# is missing, by the marker's own rule.
+# A marker is older than the output built from it. A marker does not say its
+# tree is there: when the stamp must be rebuilt and a tree is missing (CI's
+# build job after a cache hit, whose cache leaves the trees out), the stamp's
+# recipe makes the tree again first (PYTHON_SRC_TREE, HOSTPY_TREE; make
+# check-python-cache).
 PYTHON_SRC_STAMP := $(OBJ)/python-src.stamp
 $(PYTHON_SRC_STAMP): $(LOCK) $(wildcard ports/patches/python/*.patch)
 	rm -rf $(PYTHON_SRC)
@@ -704,7 +708,45 @@ PYTHON_STAGE := $(PORTS)/python-stage
 # own subset from the stage), IDLE, tkinter and turtle, ensurepip, the
 # embedding's configuration and the documentation topics. Sizes: docs/design.md.
 PYTHON_TRIM := test idlelib idle_test tkinter turtledemo turtle.py ensurepip config-$(PYMM)-* pydoc_data __phello__
+# The trees the recipe reads, made again if a marker outlived them (above).
+PYTHON_SRC_TREE = [ -x $(PYTHON_SRC)/configure ] || { echo "python: no $(PYTHON_SRC), unpacking it again"; \
+	  rm -f $(PYTHON_SRC_STAMP) && $(MAKE) -f ports/Makefile $(PYTHON_SRC_STAMP); }
+HOSTPY_TREE = [ -x $(HOSTPY) ] || { echo "python: no $(HOSTPY), building the host python again"; \
+	  rm -f $(HOSTPY_STAMP) && $(MAKE) -f ports/Makefile $(HOSTPY_STAMP); }
+# The '+' makes them run under make -n too, which is how check-python-cache
+# sees what a cache hit would make, without making it.
+python-trees:
+	@+$(PYTHON_SRC_TREE)
+	@+$(HOSTPY_TREE)
+# CI's build job after a cache hit (E1): both markers there, neither tree, the
+# stamp out of date. Dry run in a scratch directory: the trees must be made
+# again (the unpack and the host build's configure are what make would run);
+# with both trees there, nothing.
+PYCACHE_CHECK := $(ROOT)/build/check-python-cache
+PYCACHE_VARS = WORK=$(PYCACHE_CHECK)/work OBJ=$(PYCACHE_CHECK)/obj LOGS=$(PYCACHE_CHECK)/logs HOSTPY_PREFIX=$(PYCACHE_CHECK)/host
+check-python-cache:
+	@rm -rf $(PYCACHE_CHECK) && mkdir -p $(PYCACHE_CHECK)/obj $(PYCACHE_CHECK)/logs
+	@touch $(PYCACHE_CHECK)/obj/python-src.stamp $(PYCACHE_CHECK)/obj/hostpython.stamp
+	@# make -n still runs the host build's $(MAKE) -C lines (as dry runs): give them a directory.
+	@mkdir -p $(PYCACHE_CHECK)/work/hostpython-build && printf 'all install:\n\t@:\n' > $(PYCACHE_CHECK)/work/hostpython-build/Makefile
+	@$(MAKE) -s -n -f ports/Makefile python-trees $(PYCACHE_VARS) > $(PYCACHE_CHECK)/hit.txt 2>&1 || \
+	  { echo "check-python-cache: make -n failed"; tail -20 $(PYCACHE_CHECK)/hit.txt; exit 1; }
+	@for w in "unpacking it again" "building the host python again" "Python-$(PYVER)-host/configure --prefix=$(PYCACHE_CHECK)/host" \
+	  "hostpython-install"; do grep -q -F -e "$$w" $(PYCACHE_CHECK)/hit.txt || \
+	  { echo "check-python-cache: a cache hit would not make the trees again (no '$$w'):"; cat $(PYCACHE_CHECK)/hit.txt; exit 1; }; done
+	@grep -q -e 'tar xf .*Python-$(PYVER)' $(PYCACHE_CHECK)/hit.txt || \
+	  { echo "check-python-cache: a cache hit would not unpack the source again:"; cat $(PYCACHE_CHECK)/hit.txt; exit 1; }
+	@mkdir -p $(PYCACHE_CHECK)/work/Python-$(PYVER) $(PYCACHE_CHECK)/host/bin
+	@printf '#!/bin/sh\n' > $(PYCACHE_CHECK)/work/Python-$(PYVER)/configure && cp $(PYCACHE_CHECK)/work/Python-$(PYVER)/configure $(PYCACHE_CHECK)/host/bin/python$(PYMM)
+	@chmod +x $(PYCACHE_CHECK)/work/Python-$(PYVER)/configure $(PYCACHE_CHECK)/host/bin/python$(PYMM)
+	@$(MAKE) -s -n -f ports/Makefile python-trees $(PYCACHE_VARS) > $(PYCACHE_CHECK)/present.txt 2>&1
+	@if grep -q -e 'again$$' -e 'tar xf' -e 'configure --prefix' $(PYCACHE_CHECK)/present.txt; then \
+	  echo "check-python-cache: trees there, yet make would make them again:"; cat $(PYCACHE_CHECK)/present.txt; exit 1; fi
+	@rm -rf $(PYCACHE_CHECK)
+	@echo "check-python-cache: a cache hit unpacks the source and builds the host python again; with both there, nothing"
 $(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a $(DEPS)/lib/libsqlite3.a $(DEPS)/lib/libpyshim.a $(DEPS)/lib/libzshim.a ports/config.site
+	@$(PYTHON_SRC_TREE)
+	@$(HOSTPY_TREE)
 	rm -rf $(PYTHON_BUILD) $(PYTHON_STAGE) $(PYTHON_ROOT) && mkdir -p $(PYTHON_BUILD)
 	@cd $(PYTHON_BUILD) && $(call logged,$(CROSS_ENV) $(PYTHON_CACHE) MACHDEP=zoraya MODULE_BUILDTYPE=static PKG_CONFIG=false OPT="-DNDEBUG -O2" \
 	  $(PYTHON_SRC)/configure $(PYTHON_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \
