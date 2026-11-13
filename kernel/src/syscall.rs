@@ -964,6 +964,9 @@ impl Handlers for Calls<'_> {
         let target = UserSlice::of(out.0)?;
         target.write(&[0; 16])?;
         let offset = device.offset(index.0).ok_or(Status::InvalidArgument)?;
+        // Every mapping call takes the mapping lock (ADR-0301 item 6): a
+        // sibling's stepped map holds a reserved address between its parts.
+        let _map = MapGuard::acquire(&self.process)?;
         let mapping = device.begin_mapping()?;
         // Device-nGnRnE, never executable (INV-0054-1).
         let attributes = Attributes {
