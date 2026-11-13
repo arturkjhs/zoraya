@@ -235,6 +235,7 @@ jobs:
           - make check-untrusted-gate
           - make check-quota-tests
           - make check-ethd-maps
+          - make check-tls-roots
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4

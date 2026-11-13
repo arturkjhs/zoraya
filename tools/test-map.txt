@@ -19,6 +19,8 @@ tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
+tools/check-tls-roots.sh      check
+rootfs/system/tls/        check test-files test-hand-run
 tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
@@ -153,10 +155,10 @@ tools/footprint/              check
 crates/zoraya-dns/           test-net
 crates/zoraya-http/          test-net
 user/src/bin/fetch.rs        test-net test-files test-hand-run
-user/src/netconn.rs          test-net
-user/describe/commands/fetch.cmd test-net test-files
 user/src/bin/ping.rs         test-net test-files test-hand-run
 user/describe/commands/ping.cmd test-net test-files
+user/src/netconn.rs          test-net
+user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
 tools/test-httpd/            test-net
 tests/shell/net-dns.script   test-net

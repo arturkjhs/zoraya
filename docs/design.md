@@ -899,6 +899,10 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 - `make check-user-access` and `make check-host-paths`: the unprivileged load and store forms only in `usercopy.rs`
   (INV-0031-4), and no home-directory paths or email addresses in tracked files outside `docs/research/` and
   `tools/posix-surface/results/`;
+- `make check-tls-roots`: the roots the image ships (`rootfs/system/tls/roots`, Mozilla's store, 108 certificates from the CCADB report of
+  2026-11-12, ADR-0228) on the source: at least 100 blocks, each a DER certificate, none repeated, none of the test PKI's, the
+  header's count, source and date, and `docs/dependencies.md` agreeing; `cargo test -p zoraya-tls --test production_roots` loads every
+  one into the verifier;
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-libposix`, the stage 6c criterion (below, under "How the in-QEMU tests run");
