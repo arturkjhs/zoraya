@@ -38,6 +38,7 @@ weak_alias(dummy_lockptr, __stdio_ofl_lockptr);
 weak_alias(dummy_lockptr, __syslog_lockptr);
 weak_alias(dummy_lockptr, __timezone_lockptr);
 weak_alias(dummy_lockptr, __bump_lockptr);
+weak_alias(dummy_lockptr, __vmlock_lockptr);
 
 static volatile int *const *const atfork_locks[] = {
 	&__at_quick_exit_lockptr,
@@ -108,15 +109,19 @@ void __zoraya_fork_parent(struct zoraya_fork *c)
 }
 
 /* A FILE locked by a thread that is not here is free in the child (a
- * sibling in the middle of printf when the fork came). */
+ * sibling in the middle of printf when the fork came). A negative lock is
+ * "never locked" (musl's single-threaded form) and stays. The buffer of a
+ * FILE whose lock is freed this way can hold a half-written record of the dead
+ * thread (INV-0306-1, ADR-0315 item 9): the lock is free, the data is as the
+ * sibling left it. */
 static void free_stdio_locks(pthread_t self)
 {
 	FILE *fixed[3] = { stdin, stdout, stderr };
 	for (int i = 0; i < 3; i++)
-		if ((fixed[i]->lock & ~MAYBE_WAITERS) != self->tid)
+		if (fixed[i]->lock >= 0 && (fixed[i]->lock & ~MAYBE_WAITERS) != self->tid)
 			fixed[i]->lock = 0;
 	for (FILE *f = *__ofl_lock(); f; f = f->next)
-		if ((f->lock & ~MAYBE_WAITERS) != self->tid)
+		if (f->lock >= 0 && (f->lock & ~MAYBE_WAITERS) != self->tid)
 			f->lock = 0;
 	__ofl_unlock();
 }
@@ -133,6 +138,11 @@ void __zoraya_fork_child(struct zoraya_fork *c)
 	if (libc.need_locks) libc.need_locks = -1;
 	if (c->need_locks) {
 		__release_ptc();
+		/* musl's fork.c: the memory-mapping lock of vmlock.c. */
+		if (__vmlock_lockptr) {
+			__vmlock_lockptr[0] = 0;
+			__vmlock_lockptr[1] = 0;
+		}
 		for (int i = 0; i < sizeof atfork_locks / sizeof *atfork_locks; i++)
 			if (*atfork_locks[i]) **atfork_locks[i] = 0;
 		__aio_atfork(1);
