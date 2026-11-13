@@ -15,6 +15,7 @@ tools/test-map.txt            check
 tools/ci-plan.sh              check
 tools/ci-tests.txt            check
 tools/plan-lib.sh             check
+tools/check-ci-plan.sh        check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
