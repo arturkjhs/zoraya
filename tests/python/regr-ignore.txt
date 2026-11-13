@@ -41,7 +41,3 @@ test_print_exception_stderr_is_none_1
 test_print_exception_stderr_is_none_2
 test_recursion_limit
 test_keyboard_interrupt_during_threading_shutdown
-# ... and the names of a thread longer than 15 bytes, which musl's
-# pthread_setname_np refuses with ERANGE (CPython truncates only where it
-# knows __linux__).
-test_set_name

@@ -35,8 +35,8 @@ The environment decides nothing: PYTHONPATH, PYTHONHOME, PYTHONSTARTUP, PYTHONSA
 not read (the program runs as with -E), and urllib takes no proxy from http_proxy or https_proxy. What it imports from is
 the standard library, and, for a script, the script's own directory: that directory is on sys.path, and the current
 directory is readable (as for every POSIX program), so a module next to the script is imported by it. Run a script from a
-directory you trust, or with -P (or -I). -c and -m put no directory on sys.path: a module in the current directory is not
-imported by them.
+directory you trust, or with -P (or -I). -c, -m and a program read from standard input put no directory on sys.path: a
+module in the current directory is not imported by them.
 Neither is a per-user site directory used, and no .pyc file is written (the standard library comes with its own). Of
 Python's options, -E, -X, -i, -d, -v, -x and the interactive session are not offered: there is no terminal from zosh
 (ADR-0153), so a program is a script, -c or -m, or standard input read to its end.

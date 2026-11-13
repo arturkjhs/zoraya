@@ -50,19 +50,19 @@
      config->buffered_stdio = 1;
      config->pathconfig_warnings = 1;
  #ifdef MS_WINDOWS
---- a/Modules/main.c	2026-11-13 17:05:52
-+++ b/Modules/main.c	2026-11-13 17:05:52
+--- a/Modules/main.c	2026-10-25 17:57:51
++++ b/Modules/main.c	2026-11-13 17:49:22
 @@ -698,7 +698,16 @@
      if (main_importer_path != NULL) {
          path0 = Py_NewRef(main_importer_path);
      }
 +#ifdef __zoraya__
-+    /* TASK-27 9c, ADR-0320 item 6: with -c and -m sys.path[0] would be the
-+       current directory, and code planted there (a downloaded ssl.py) would
-+       run with the program's grants; neither adds it. A script still adds its
-+       own directory, as the module search of a script needs. */
-+    else if (!config->safe_path && config->run_command == NULL
-+             && config->run_module == NULL) {
++    /* TASK-27 9c, ADR-0320 item 6: with -c, -m or a program read from
++       standard input sys.path[0] would be the current directory, and code
++       planted there (a downloaded ssl.py) would run with the program's
++       grants; none of them adds it. A script file still adds its own
++       directory, as the module search of a script needs. */
++    else if (!config->safe_path && config->run_filename != NULL) {
 +#else
      else if (!config->safe_path) {
 +#endif

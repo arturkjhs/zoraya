@@ -1,6 +1,6 @@
---- a/Programs/python.c	2026-11-13 15:32:05
-+++ b/Programs/python.c	2026-11-13 15:32:05
-@@ -8,6 +8,51 @@
+--- a/Programs/python.c	2026-10-25 17:57:51
++++ b/Programs/python.c	2026-11-13 17:49:39
+@@ -8,6 +8,70 @@
  {
      return Py_Main(argc, argv);
  }
@@ -13,19 +13,31 @@
 +   The thread ends the process itself with exit(status): in a fork child
 +   (ADR-0306) the wrapper thread is the only one left in musl's list, and its
 +   return would end the process with status 0 whatever the interpreter
-+   returned. */
++   returned.
++   The main thread blocks every signal: it would otherwise be the lowest-tid
++   thread that waits with the signal unblocked (ADR-0304 rules 3 and 4) and
++   take SIGINT itself, so the interpreter's own thread, the one CPython's
++   handler and its EINTR checks run on, would see no Ctrl-C while blocked in
++   time.sleep, input or a socket read. It blocks them before the thread is
++   created, and the thread restores the mask it was started with, so no
++   signal falls between the two. */
 +#include <pthread.h>
++#include <signal.h>
 +#include <stdio.h>
 +#include <stdlib.h>
 +
 +#define ZORAYA_PY_STACK (2u << 20)
 +
-+struct zoraya_main { int argc; char **argv; };
++struct zoraya_main { int argc; char **argv; sigset_t mask; };
 +
 +static void *
 +zoraya_main_thread(void *p)
 +{
 +    struct zoraya_main *m = p;
++    if (pthread_sigmask(SIG_SETMASK, &m->mask, NULL) != 0) {
++        fputs("python3: cannot restore the signal mask\n", stderr);
++        exit(1);
++    }
 +    exit(Py_BytesMain(m->argc, m->argv));
 +    return NULL;
 +}
@@ -34,8 +46,14 @@
 +main(int argc, char **argv)
 +{
 +    struct zoraya_main m = { argc, argv };
++    sigset_t all;
 +    pthread_attr_t attr;
 +    pthread_t t;
++    sigfillset(&all);
++    if (pthread_sigmask(SIG_BLOCK, &all, &m.mask) != 0) {
++        fputs("python3: cannot block signals in the main thread\n", stderr);
++        return 1;
++    }
 +    if (pthread_attr_init(&attr) != 0
 +        || pthread_attr_setstacksize(&attr, ZORAYA_PY_STACK) != 0
 +        || pthread_create(&t, &attr, zoraya_main_thread, &m) != 0) {
@@ -45,9 +63,10 @@
 +              "(not enough memory for its stack?)\n", stderr);
 +        return 1;
 +    }
-+    for (;;) {
-+        pthread_join(t, NULL);
-+    }
++    /* The thread ends the process with exit(); a join that returns is a bug
++       of the thread library, not an exit status. */
++    pthread_join(t, NULL);
++    abort();
 +}
  #else
  int

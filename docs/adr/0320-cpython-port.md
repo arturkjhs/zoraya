@@ -51,7 +51,7 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    publishes for that file, and `make fetch-ports` refuses another (INV-0109-4). python.org also publishes a Sigstore bundle
    for it; checking it is optional and is not done by the tools.
 2. **Build.** Static, `MACHDEP=zoraya`, `--host=aarch64-unknown-linux-musl`, `--disable-shared`, `--disable-ipv6` (ADR-0225),
-   `--without-ensurepip`, `--without-mimalloc`, `--disable-test-modules`, with the functions the headers declare and `libc.a` lacks
+   `--without-ensurepip`, `--without-mimalloc`, `--disable-test-modules`, `-D_PYTHREAD_NAME_MAXLEN=15` (configure knows the limit of `pthread_setname_np` only for the systems it names; libposix's is 15 bytes, as musl's), with the functions the headers declare and `libc.a` lacks
    said absent (`PYTHON_ABSENT`: `posix_spawn`, `epoll`, `eventfd`, `socketpair`, `fchdir`, `link`, ...). The built-in modules: `_socket`, `select`,
    `_ssl`, `_hashlib` (OpenSSL 3.5, threads), `_sqlite3` (SQLite 3.54, `THREADSAFE=1`, `OMIT_LOAD_EXTENSION`, `OMIT_WAL`, FTS5),
    `zlib`, `_asyncio`, `_thread`. Not built: `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`, `syslog`, `_posixsubprocess`'s `posix_spawn` path.
@@ -62,12 +62,15 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    configure finds in the headers; they follow ADR-0310's rule that `libc.a` exports what musl's own source gives and `libposix` already serves.
 5. **Patches** (`ports/patches/python/`, every change under `__zoraya__` or `sys.platform == 'zoraya'`, or in a file only this port reads):
    `0001` `_ssl` reads and writes the socket's descriptor through a file-descriptor BIO (OpenSSL is `no-sock`);
-   `0002` the interpreter starts with `use_environment=0`, `write_bytecode=0` and `user_site_directory=0`, and `-c` and `-m` put no directory
-   on `sys.path` (item 6);
+   `0002` the interpreter starts with `use_environment=0`, `write_bytecode=0` and `user_site_directory=0`, and `-c`, `-m` and a program read from
+   standard input put no directory on `sys.path`: only a script file adds its own (`config->run_filename`, item 6);
    `0003` `asyncio`'s self-pipe is the two ends of `os.pipe()` where `_socket` has no `socketpair`;
    `0004` `main` runs the interpreter on a thread with a 2 MiB stack and ends the process from that thread with `exit(status)` (a process starts
    on 64 KiB, and CPython's overflow guard keeps 32 KiB; in a `fork` child the thread is the only one left, and its return would end the
-   process with status 0). A thread that cannot be started is an error message and status 1, not a run on 64 KiB. The stack is not "taken
+   process with status 0). A thread that cannot be started is an error message and status 1, not a run on 64 KiB. The main thread blocks every signal before it creates the
+   thread, and the thread restores the mask it inherited: otherwise the main thread, waiting in `pthread_join` with signals unblocked, is the
+   lowest-tid waiting thread (ADR-0304 rules 3 and 4) and takes SIGINT, and Ctrl-C does not interrupt `time.sleep`, `input` or a blocking read of the
+   interpreter's thread. A `pthread_join` that returns is `abort()` (the thread ends the process itself). The stack is not "taken
    when used": libposix commits a mapping in full (ADR-0031, ADR-0303) and a `fork` child copies it, so each `python3` costs 2 MiB more
    and each `fork` child 2 MiB (8 MiB was measured: 11 children at once on a 512 MiB machine, against 15 with 2 MiB and 16 with 1 MiB; 2 MiB
    was kept with a margin over 1 MiB, which also passed the deep-nesting cases of `json`, `ast`, `compile`, `pickle` and `copy`);
@@ -75,7 +78,7 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    `0006` `urllib.request.getproxies()` is empty when the interpreter ignores the environment (it did not look at the flag, so `https_proxy` would
    have sent a request where the line did not say it goes).
 6. **Environment policy.** `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONWARNINGS`, `SSL_CERT_FILE`, `http_proxy` and the others decide nothing (the
-   program runs as with `-E`); no byte code is written; no per-user site directory. `-c` and `-m` do not put the current directory on `sys.path`
+   program runs as with `-E`); no byte code is written; no per-user site directory. `-c`, `-m` and a program read from standard input do not put the current directory on `sys.path`
    (a downloaded `ssl.py` would otherwise be imported by `+net bank:443 python3 -c 'import ssl...'` with the line's grants); a script puts its
    own directory on it, and the current directory is readable as for every POSIX program, so **a module next to a script is imported by it**:
    `python3.cmd` says so, and `-P` or `-I` turns it off. (`cwd none` was considered: the script operand grants the file only, so a script could not read
@@ -88,14 +91,20 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    own, the current directory to read, what its operands and `+r`, `+w`, `+net` give (the files and directories a script imports from are the standard library and its own directory, item 6); the network only with `+net HOST:PORT`, and the roots
    with it. Options offered: `-c -m -b -B -I -O -P -q -s -u -V -W`; not `-E -X -i -d -v -x` and no interactive session (no terminal from zosh, ADR-0153).
 8. **Sizes and files.** The image part is `build/rootfs-python` (`/bin/python3`, 15.5 MB, and `/usr/lib/python3.15`, 37 MB, 1226 files, 52 MB in all);
-   `make python` builds it (the host Python is minimal, `--without-ensurepip`: the CI container has no zlib headers, and `compileall` needs none), `make test-python` boots it. CI's build artifact and ports cache leave out the Python source, host and build trees and the stage (about 600 MB the tests do not read): `ports/Makefile` depends on two marker files, and `make ci-build` precompiles the test subset into `build/python-testlib`. `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and a
+   `make python` builds it (the host Python is minimal, `--without-ensurepip`: the CI container has no zlib headers, and `compileall` needs none), `make test-python` boots it. CI's build artifact and ports cache leave out the Python source, host and build trees and the stage (about 600 MB the tests do not read): `ports/Makefile` depends on two marker files, the python stamp's recipe makes a tree again when its marker outlived it (CI's build job after a cache hit; `make check-python-cache` dry-runs that case), and `make ci-build` precompiles the test subset into `build/python-testlib`. `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and a
    `DISK_SIZE` (default 64M; curl, wget and the Python part need 192M): the volume of `make run` is made with
    `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`.
 9. **Tests.** `tests/python/smoke.py` (the flags, `sqlite3`, `ssl`, `asyncio`, threads, `fork` and the status of a child that exits or raises, no proxy from the environment), `tests/python/https_client.py` (an `asyncio` HTTPS client
-   against `tools/test-httpd`'s TLS server, with a `cafile` and with the default context, and the refusal of an expired and a wrong-name certificate with 0 request bytes), `tests/python/https_blocking.py` (the same with `http.client` and `urllib`, which go through the file-descriptor BIO of patch 0001), `planted.py` and `usesplanted.py` (`-c` and `-m` do not import a module of the current directory; a script imports from its own), and
+   against `tools/test-httpd`'s TLS server, with a `cafile` and with the default context, and the refusal of an expired and a wrong-name certificate with 0 request bytes), `tests/python/https_blocking.py` (the same with `http.client` and `urllib`, which go through the file-descriptor BIO of patch 0001), `planted.py`, `usesplanted.py` and `fromstdin.py` (`-c`, `-m` and a program on standard input do not import a module of the current directory; a script imports from its own), Ctrl-C to `time.sleep` (a `KeyboardInterrupt`, patch 0004), and
    `tests/python/regr.py`, which runs CPython's `regrtest` over the modules of `tests/python/regr-modules.txt` (the interpreter's core types,
    `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `threading`, `asyncio`'s tasks, futures and locks). Not run: modules that need `AF_UNIX`, a server socket, `ctypes`,
    shared modules or a terminal; each is recorded in `docs/design.md` where known.
+10. **The scope of INV-0312-1 for a program that turns verification off** (for the architect; ADR-0312 is accepted and its note records only the fact).
+   INV-0312-1 says "a C program built on this OpenSSL verifies ...", and a program can call `SSL_set_verify(..., SSL_VERIFY_NONE, ...)`, as a Python
+   program can use `ssl.CERT_NONE`. Proposed reading: the invariant holds for a connection made with this OpenSSL's defaults (the roots at
+   `/system/tls/roots`, `SSL_VERIFY_PEER` as the ports' curl and wget set it, no environment), and a program that turns verification off on its own
+   is outside it; the mediated cases are the ports' (curl refuses `-k`, wget has no switch), and Python is not mediated (item 6). The alternative is a
+   superseding ADR that narrows INV-0312-1's text. Until the architect decides, INV-0312-1 is read as written and its check is unchanged.
 
 
 ### Names `libc.a` adds
@@ -282,13 +291,13 @@ wmemcmp
 ## Invariants
 - **INV-0320-1.** The interpreter runs with the environment ignored, no byte code written and no user site: `sys.flags.ignore_environment` is 1, `sys.dont_write_bytecode` is true, `sys.flags.no_user_site` is 1. *Check:* `make test-python` (`smoke.py` prints them).
 - **INV-0320-2.** `python3` starts from the volume and imports the standard library, `sqlite3`, `ssl` and `asyncio`, runs a thread and a `fork` child. *Check:* `make test-python` (`smoke.py`).
-- **INV-0320-3.** An `asyncio` HTTPS client verifies the chain, the time and the name against `/system/tls/roots` and sends no request byte after a failed verification. *Check:* `make test-python` (expired and wrong-name servers, with `asyncio`, `http.client` and `urllib`: the server's log shows `ended after 0 request bytes`). Of the default context; a script can turn verification off (item 6).
+- **INV-0320-3.** A Python HTTPS client (`asyncio`, `http.client`, `urllib`) with the default context, or a `cafile`, verifies the chain, the time and the name against `/system/tls/roots` and sends no request byte after a failed verification. *Check:* `make test-python` (expired and wrong-name servers, one connection from each of the three clients: the server's log shows exactly 3 connections per refused server, each `ended after 0 request bytes`, and none with more bytes or a request). Of the default context; a script can turn verification off (item 6).
 - **INV-0320-4.** The line gives the program the network only with a `+net` word, and the roots only with the network. *Check:* `make test-python` (`grants python3 ...` with `+net` shows the roots and the net line; without it shows neither, `x` steps of the script).
 - **INV-0320-5.** CPython's own tests of the listed modules pass in the guest. *Check:* `make test-python` (`regr.py`).
 
 ## Open questions
-- *(Measured, 9c; recorded as findings, not decisions.)* The `OSError: Out of memory` of the first `test_threading` run was **`os.fork`** (`fork_locked` maps `NoMemory` and `OverQuota` to `ENOMEM`, procs.rs), not `pthread_create` (whose failure is `RuntimeError("can't start new thread")`). There is no copy-on-write: a child copies the whole writable space, the interpreter's stack and every thread's stack included. Measured on 512 MiB: with the 8 MiB stack, 11 children at once, then `ENOMEM`; with 2 MiB 15, with 1 MiB 16. With the 2 MiB stack the whole of `test_threading` runs with no `Out of memory` (43 failures and 9 errors, all of them cases that start another interpreter, a `subprocess` child, or `pthread_setname_np` of a name over 15 bytes, which musl refuses with `ERANGE`; they are in `tests/python/regr-ignore.txt`), and the module is in the subset. Not run: the same with `--mem 2G`, and `test_threading` again at 8 MiB (the 8 MiB statements rest on the fork counts).
-- *(Measured, 9c.)* `MAPPING_SLOTS` (libposix, 256, the kernel's own limit per process, ADR-0300): 4000 threads (2000 joined, 2000 daemon) and 30 `fork` + `waitpid` leave the free count flat (248 free at the start, 247 after; probed with private `mmap`s). Not flat but a limit: deep Python recursion (`sys.setrecursionlimit(10**7)`) ends with `MemoryError` at about 33,000 frames, because each frame-chunk and each obmalloc arena (1 MiB) is one mapping; the default limit of 1000 is far from it. Raising the table alone is not safe (the kernel limit is the same number); left as it is.
+- *(Measured, 9c; recorded as findings, not decisions.)* The `OSError: Out of memory` of the first `test_threading` run was **`os.fork`** (`fork_locked` maps `NoMemory` and `OverQuota` to `ENOMEM`, procs.rs), not `pthread_create` (whose failure is `RuntimeError("can't start new thread")`). There is no copy-on-write: a child copies the whole writable space, the interpreter's stack and every thread's stack included. Measured on 512 MiB: with the 8 MiB stack, 11 children at once, then `ENOMEM`; with 2 MiB 15, with 1 MiB 16. With the 2 MiB stack the whole of `test_threading` runs with no `Out of memory` (43 failures and 9 errors, all of them cases that start another interpreter, a `subprocess` child, or `test_set_name`; they are in `tests/python/regr-ignore.txt`). `test_set_name` failed because configure leaves `_PYTHREAD_NAME_MAXLEN` undefined for a platform it does not know (`pyconfig.h`), so CPython passed a name over 15 bytes whole and libposix refused it with `ERANGE`; musl was not the cause. `-D_PYTHREAD_NAME_MAXLEN=15` (item 2) makes CPython truncate, and `test_set_name` is out of the ignore list (`threading` itself already ignored the `OSError`), and the module is in the subset. Not run: the same with `--mem 2G`, and `test_threading` again at 8 MiB (the 8 MiB statements rest on the fork counts).
+- *(Measured, 9c.)* `MAPPING_SLOTS` (libposix, 256, the kernel's own limit per process, ADR-0300): 4000 threads (2000 joined, 2000 daemon) and 30 `fork` + `waitpid` leave the free count flat (248 free at the start, 247 after; probed with private `mmap`s). Not flat but a limit: deep Python recursion (`sys.setrecursionlimit(10**7)`) ends with `MemoryError` at about 33,000 frames, because each frame-chunk and each obmalloc arena (1 MiB) is one mapping. The limit is of mappings, not of recursion: a program that holds about 250 MiB of small objects (250 arenas) ends in `MemoryError` too, at any depth (from the count of slots; not measured), and a machine of 512 MiB reaches it before its memory. The default recursion limit of 1000 is far from the 33,000 frames. Raising the table alone is not safe (the kernel limit is the same number); left as it is.
 - Whether the modules of `regr-modules.txt` can grow once `AF_UNIX` and server sockets exist.
 - The Sigstore bundle of the archive: verification by `make fetch-ports` (needs a tool that is not on the host).
 

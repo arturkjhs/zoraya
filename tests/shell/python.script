@@ -25,6 +25,13 @@
 > python3 -c 'import nosuchmodule'\r
 < ModuleNotFoundError
 < \r\n~>
+# Ctrl-C reaches the interpreter's thread while it is blocked (patch 0004: the
+# wrapper's main thread blocks every signal), as KeyboardInterrupt.
+> python3 -c 'import time; print("asl" "eep", flush=True); time.sleep(30)'\r
+< asleep
+> \x03
+< KeyboardInterrupt
+< \r\n~>
 # The environment decides nothing, no bytecode is written, no user site.
 > python3 smoke.py\r
 < ok flags 1 True 1
@@ -46,13 +53,19 @@
 < the terminal
 < /bin /usr /etc       read (system)
 < \r\n~>
+# The same report again, for the negative half: an `x` step looks between the
+# last two matches, so they are the report's first line and the prompt.
+> grants python3 smoke.py\r
+< python3 gets (a POSIX program):
+< \r\n~>
 x /system/tls
 x net:
 > grants +net test.zoraya:@TLSVALID@ python3 https_client.py test.zoraya @TLSVALID@\r
 < /system/tls          read (with the network)
 < net: test.zoraya:@TLSVALID@
 < \r\n~>
-# Code in the current directory is not imported by -c and -m (a planted module
+# Code in the current directory is not imported by -c, -m and a program read from
+# standard input (a planted module
 # is the way a download would run with the line's grants); a script imports
 # from its own directory, as python3.cmd says.
 > python3 -c 'import planted'\r
@@ -61,6 +74,10 @@ x net:
 x PLANTED
 > python3 -m planted\r
 < No module named planted
+< \r\n~>
+x PLANTED
+> python3 < fromstdin.py\r
+< stdin program imports no planted module
 < \r\n~>
 x PLANTED
 > python3 usesplanted.py\r

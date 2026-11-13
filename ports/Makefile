@@ -581,7 +581,7 @@ WGET_OPTS := --sysconfdir=/etc --with-ssl=openssl --with-libssl-prefix=$(DEPS) -
 	--without-cares --without-libidn --without-gpgme --without-included-regex
 $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
 	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ./configure --host=aarch64-unknown-linux-musl \
-	  $(WGET_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \
+	  $(WGET_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include -D_PYTHREAD_NAME_MAXLEN=15" \
 	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim" ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz",wget-configure)
 	rm -f $(WGET_BIN)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/lib -j3,wget-lib)
@@ -691,6 +691,10 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # cross targets and is a musl one, as wget's; the compiler is zcc, which
 # defines nothing of Linux). IPv4 only (ADR-0225); no readline, curses, bz2,
 # lzma, uuid, ffi, gdbm, ensurepip; mimalloc and the JIT off.
+# _PYTHREAD_NAME_MAXLEN: configure knows the limit of pthread_setname_np only for
+# the systems it names, and without it CPython passes a long name whole; libposix
+# keeps 15 bytes and a NUL and refuses a longer one with ERANGE (threads.rs, as
+# musl), so CPython truncates to 15 (N8).
 # No <sys/ioctl.h>: libposix's ioctl serves terminals only, so os.set_blocking and
 # socket.setblocking must take their fcntl(F_SETFL, O_NONBLOCK) path, not FIONBIO.
 # The functions configure finds only by their declaration in musl's headers
@@ -749,7 +753,7 @@ $(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a 
 	@$(HOSTPY_TREE)
 	rm -rf $(PYTHON_BUILD) $(PYTHON_STAGE) $(PYTHON_ROOT) && mkdir -p $(PYTHON_BUILD)
 	@cd $(PYTHON_BUILD) && $(call logged,$(CROSS_ENV) $(PYTHON_CACHE) MACHDEP=zoraya MODULE_BUILDTYPE=static PKG_CONFIG=false OPT="-DNDEBUG -O2" \
-	  $(PYTHON_SRC)/configure $(PYTHON_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \
+	  $(PYTHON_SRC)/configure $(PYTHON_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include -D_PYTHREAD_NAME_MAXLEN=15" \
 	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lpyshim -lzshim" \
 	  ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz" \
 	  LIBSQLITE3_CFLAGS="-I$(DEPS)/include" LIBSQLITE3_LIBS="-L$(DEPS)/lib -lsqlite3",python-configure)
