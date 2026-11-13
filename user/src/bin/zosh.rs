@@ -1420,6 +1420,10 @@ impl Z {
                 &["the broker runs beside zosh on a volume with /bin (ADR-0153 rule 10)"],
             ));
         }
+        if let Err(e) = Self::posix_line_parses(exec, path) {
+            let _ = handle_close(image);
+            return Err(e);
+        }
         // A literal `url` operand of a POSIX program the image describes
         // designates, as for a native one (ADR-0224 item 2): the program
         // gets a connection to `netd` that reaches that host and port.
@@ -1499,6 +1503,36 @@ impl Z {
         ))
     }
 
+    /// Whether a line for a POSIX program the image describes may run: a
+    /// program that can get the network (a `window` key, a `url` operand, or
+    /// `+net` words on the line) runs only a line its description parses
+    /// (ADR-0317 item 6, INV-0312-1). Anything else, an option the
+    /// description does not have among them, is the program's own (`curl -k`,
+    /// `netsurf --ca_bundle=FILE`), and a line that falls back to no
+    /// description at all would still give it the network of the `+net`
+    /// words. `--help` alone is the program's to answer.
+    fn posix_line_parses(exec: &Exec<'_>, path: &str) -> Result<(), String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let Some(d) = grants::trusted_description(&trusted, path) else {
+            return Ok(());
+        };
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        if zoraya_shell::netgrant::line_may_run(d, &texts, !exec.nets.is_empty()) {
+            return Ok(());
+        }
+        Err(zoraya_command::error(
+            "zosh",
+            Some(exec.name),
+            "the arguments are not ones its description gives",
+            &[
+                "a program that may reach the network runs only a line its description parses (see `help`)",
+            ],
+        ))
+    }
+
     /// The window channel for a POSIX program whose trusted description has
     /// `window TITLE` (ADR-0317): the panel makes the compositor's client with
     /// this room's record and the pills of the line's grants, and the client
@@ -1513,8 +1547,10 @@ impl Z {
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
             .collect();
-        let Some(title) =
-            grants::trusted_description(&trusted, path).and_then(|d| d.window.clone())
+        // The name is the description's, not the word the line used: `netsurf`
+        // for `/bin/netsurf` and `./netsurf` as well.
+        let Some((app, title)) = grants::trusted_description(&trusted, path)
+            .and_then(|d| d.window.clone().map(|t| (d.name.clone(), t)))
         else {
             return Ok(None);
         };
@@ -1535,28 +1571,24 @@ impl Z {
                 &["start a terminal from the desktop"],
             ));
         };
-        let mut pills: Vec<String> = Vec::new();
-        for m in grants::merge(plan) {
-            let word = if m.rights & file_rights::WRITE != 0 {
-                "+w"
-            } else {
-                "+r"
-            };
-            let pill = format!("{word} {}", m.path);
-            if !pills.contains(&pill) {
-                pills.push(pill);
-            }
-        }
-        if let Ok(Some((_, scope))) = self.posix_net_scope(exec, path) {
-            for line in zoraya_shell::netgrant::describe(&scope) {
-                let target = line.trim_start_matches("net: ").split_whitespace().next();
-                if let Some(t) = target {
-                    pills.push(format!("+net {t}"));
-                }
-            }
-        }
-        pills.truncate(16);
-        zoraya_user::windowclient::ask(panel, exec.name, &title, &pills.join("\n"))
+        let targets = match self.posix_net_scope(exec, path) {
+            Ok(Some((_, scope))) => zoraya_shell::netgrant::targets(&scope),
+            _ => Vec::new(),
+        };
+        // The window must show every grant: more pills than it takes is a
+        // refusal, never a cut (INV-0317-1).
+        let pills = grants::window_pills(plan, &targets).map_err(|n| {
+            zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                &format!(
+                    "the line gives {n} grants and a window shows {} at most",
+                    grants::MAX_WINDOW_PILLS
+                ),
+                &["ADR-0317: narrow the line's grants; a window never shows fewer than it has"],
+            )
+        })?;
+        zoraya_user::windowclient::ask(panel, &app, &title, &pills.join("\n"))
             .map(Some)
             .map_err(|why| zoraya_command::error("zosh", Some(exec.name), &why, &[]))
     }
