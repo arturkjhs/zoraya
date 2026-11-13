@@ -1,8 +1,8 @@
 /*
  * Part 9b's threads through libposix (ADR-0302, ADR-0303, ADR-0309 item 3):
  * a static C program, built with zcc against libc.a, run by posixrun. One
- * binary with named cases; each prints "t_threads: NAME passed" or a line ending in FAIL and exits 1. Cases that need signals, cancellation of a blocked
- * thread, fork or exec with siblings come with step 3.
+ * binary with named cases; each prints "t_threads: NAME passed" or a line ending in FAIL and exits 1. Cases that need exec with siblings or the
+ * fork freeze are not here (fork with siblings is refused: "forkrefused").
  *
  *   t_threads create    create, join, results, pthread_self/equal, detach
  *   t_threads mutex     normal, recursive, errorcheck mutexes; trylock; timedlock
@@ -17,13 +17,19 @@
  *   t_threads mainexit  pthread_exit in the main thread; the process ends with the last thread
  *   t_threads waits     read, nanosleep, pselect in threads; the others use the library (INV-0302-2)
  *   t_threads signals   pthread_kill wakes a thread blocked in read, nanosleep, sem_wait; masks are per thread
- *   t_threads cancel    pthread_cancel of a thread blocked in each wait; cleanup handlers; PTHREAD_CANCELED
+ *   t_threads selfkill  pthread_kill/raise of oneself run the handler after musl's lock is released (handlers that
+ *                       pthread_kill oneself again or pthread_exit do not deadlock)
+ *   t_threads cancel    pthread_cancel of a thread blocked in each wait; cleanup handlers; PTHREAD_CANCELED;
+ *                       a cancel taken by a mutex wait is still acted on at the next read; a cancel of a thread
+ *                       that has ended; a disabled cancel waits for the enable
+ *   t_threads forkrefused fork with a sibling thread fails with EAGAIN (until the fork freeze)
  *   t_threads blockedexit exit() flushes stdio while a sibling is blocked in read (exit 4)
  *   t_threads blocked   _Exit from the main thread while a sibling is blocked in read (exit 3)
- *   t_threads overflow  a thread overruns its stack: the process faults (INV-0302-6)
+ *   t_threads overflow  a thread writes far below its stack: the process faults (INV-0302-6)
  *   t_threads all       every case but the last three, which end the process
  */
 #include <errno.h>
+#include <locale.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdint.h>
@@ -55,6 +61,40 @@ static double now(void)
 	struct timespec t;
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+/* Real time for a thread that announced it is about to block to be blocked:
+ * the kernel-visible state of a thread is not exposed to a program, so the
+ * tests announce and then sleep. The sleep is long against the few
+ * microseconds the call needs to block, short against the case timeout. A
+ * thread that is not yet blocked when the next step comes still gives the
+ * right result (the interrupt and the cancel flag are sticky); the sleep only
+ * makes the interesting order the likely one, and a slow host (TCG) makes the
+ * wait longer, not shorter. */
+static void settle(void)
+{
+	struct timespec ts = {0, 150 * 1000 * 1000};
+	nanosleep(&ts, NULL);
+}
+
+/* Waits (bounded, 20 s) until *flag is nonzero. */
+static void wait_flag(volatile int *flag)
+{
+	for (int i = 0; i < 2000 && !*flag; i++) {
+		struct timespec ts = {0, 10 * 1000 * 1000};
+		nanosleep(&ts, NULL);
+	}
+	CHECK(*flag);
+}
+
+/* Waits (bounded, 20 s) until *v reaches n. */
+static void wait_count(volatile int *v, int n)
+{
+	for (int i = 0; i < 2000 && *v < n; i++) {
+		struct timespec ts = {0, 10 * 1000 * 1000};
+		nanosleep(&ts, NULL);
+	}
+	CHECK(*v >= n);
 }
 
 /* ------------------------------------------------------------ create */
@@ -367,6 +407,7 @@ static _Thread_local int tl_array[64];
 static _Thread_local int tl_counter = 5;
 static pthread_key_t key;
 static volatile int destructed;
+#define TLS_ROUNDS 10000
 
 static void destructor(void *v)
 {
@@ -376,17 +417,25 @@ static void destructor(void *v)
 static void *tls_thread(void *a)
 {
 	int me = (int)(intptr_t)a;
+	/* A locale pointer of this thread's own (INV-0303-2: errno and the
+	 * locale pointer): a distinct, zeroed object for each thread, which
+	 * uselocale only stores; it is put back before the thread ends. */
+	static char fake_locale[5][1024];
+	locale_t mine = (locale_t)fake_locale[me];
+	CHECK(uselocale(mine) == LC_GLOBAL_LOCALE);
 	CHECK(tl_counter == 5);
-	for (int r = 0; r < 2000; r++) {
-		errno = me * 1000 + r;
+	for (int r = 0; r < TLS_ROUNDS; r++) {
+		errno = me * 1000 + (r & 511);
 		tl_array[r & 63] = me + r;
 		tl_counter++;
 		if ((r & 31) == 0)
 			thrd_yield();
-		CHECK(errno == me * 1000 + r);
+		CHECK(errno == me * 1000 + (r & 511));
+		CHECK(uselocale((locale_t)0) == mine);
 		CHECK(tl_array[r & 63] == me + r);
 	}
-	CHECK(tl_counter == 5 + 2000);
+	CHECK(tl_counter == 5 + TLS_ROUNDS);
+	CHECK(uselocale(LC_GLOBAL_LOCALE) == mine);
 	OK(pthread_setspecific(key, (void *)(intptr_t)me));
 	CHECK(pthread_getspecific(key) == (void *)(intptr_t)me);
 	return NULL;
@@ -404,6 +453,7 @@ static void tls(void)
 	CHECK(destructed == 1 + 2 + 3 + 4);
 	/* The main thread's own copies were not touched. */
 	CHECK(tl_counter == 5 && tl_array[0] == 0);
+	CHECK(uselocale((locale_t)0) == LC_GLOBAL_LOCALE);
 	CHECK(pthread_getspecific(key) == NULL);
 	OK(pthread_key_delete(key));
 	printf("t_threads: tls passed\n");
@@ -694,7 +744,8 @@ static void *read_forever(void *a)
 {
 	char c;
 	(void)a;
-	/* Holds the library lock until the pipe has data (ADR-0314 item 2). */
+	/* Blocked in a library wait made outside the library lock (ADR-0302
+	 * item 9); the pipe never gets data. */
 	read(blocked_pipe[0], &c, 1);
 	return NULL;
 }
@@ -704,10 +755,10 @@ static void blocked(void)
 	pthread_t t;
 	OK(pipe(blocked_pipe));
 	OK(pthread_create(&t, NULL, read_forever, NULL));
-	for (int i = 0; i < 200; i++)
-		thrd_yield();
-	/* No library call that takes the lock can be made now; the exit must
-	 * still end the process. */
+	settle();
+	/* _Exit must end the process with a sibling blocked in read: it does
+	 * not wait for, or for the lock of, any thread. (Before ADR-0315 the
+	 * reader held the library lock here; that is no longer the premise.) */
 	_Exit(3);
 }
 
@@ -766,8 +817,7 @@ static void waits(void)
 	OK(pthread_create(&r, NULL, w_reader, NULL));
 	OK(pthread_create(&s, NULL, w_sleeper, NULL));
 	OK(pthread_create(&e, NULL, w_selector, NULL));
-	for (int i = 0; i < 100; i++)
-		thrd_yield();
+	settle();
 	/* All three are blocked now; the main thread uses the library. */
 	t0 = now();
 	for (int i = 0; i < 20; i++) {
@@ -837,10 +887,8 @@ static void *sig_worker(void *a)
 
 static void wait_ready(void)
 {
-	while (!sig_ready)
-		thrd_yield();
-	for (int i = 0; i < 300; i++)
-		thrd_yield();
+	wait_flag(&sig_ready);
+	settle();
 }
 
 static void signals_case(void)
@@ -892,9 +940,7 @@ static void signals_case(void)
 	OK(pthread_create(&t, NULL, sig_worker, (void *)(intptr_t)W_SEM));
 	wait_ready();
 	OK(pthread_kill(t, SIGUSR1));
-	for (int i = 0; i < 300; i++)
-		thrd_yield();
-	CHECK(usr1_count == 3);
+	wait_count(&usr1_count, 3);
 	OK(sem_post(&sig_sem));
 	OK(pthread_join(t, &self));
 	printf("t_threads: signals step 3\n");
@@ -958,6 +1004,98 @@ static void *cancel_worker(void *a)
 	return NULL;
 }
 
+/* A cancel that a non-cancellation-point wait swallowed (ADR-0305 items 1
+ * and 3, INV-0315-4): the worker waits for a mutex that main holds, is
+ * cancelled meanwhile (the interrupt ends the futex wait, musl's wait loop
+ * waits again, the one-shot interrupt flag is spent), gets the mutex, and
+ * then calls read on an empty pipe: the pending cancel must act there and
+ * not hang. */
+static pthread_mutex_t held_m = PTHREAD_MUTEX_INITIALIZER;
+
+static void *mutex_then_read(void *a)
+{
+	char c;
+	(void)a;
+	pthread_cleanup_push(cleanup, NULL);
+	sig_ready = 1;
+	pthread_mutex_lock(&held_m);
+	pthread_mutex_unlock(&held_m);
+	read(sig_pipe[0], &c, 1);
+	pthread_cleanup_pop(0);
+	return NULL;
+}
+
+/* Cancel disabled: the cancel waits for the enable. */
+static volatile int survived_disabled, past_enable;
+
+static void *disabled_then_enabled(void *a)
+{
+	int old;
+	(void)a;
+	pthread_cleanup_push(cleanup, NULL);
+	OK(pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old));
+	sig_ready = 1;
+	sem_wait(&sig_sem);
+	survived_disabled = 1;
+	OK(pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &old));
+	pthread_testcancel();
+	past_enable = 1;
+	pthread_cleanup_pop(0);
+	return NULL;
+}
+
+static volatile int quick_done;
+
+static void *quick(void *a)
+{
+	quick_done = 1;
+	return a;
+}
+
+static void cancel_extras(void)
+{
+	pthread_t t;
+	void *res = NULL;
+	double t0;
+
+	/* A cancel taken by a mutex wait. */
+	cleaned = 0;
+	sig_ready = 0;
+	OK(pthread_mutex_lock(&held_m));
+	OK(pthread_create(&t, NULL, mutex_then_read, NULL));
+	wait_ready();
+	OK(pthread_cancel(t));
+	settle();
+	t0 = now();
+	OK(pthread_mutex_unlock(&held_m));
+	OK(pthread_join(t, &res));
+	printf("t_threads: cancel step mutex-then-read\n");
+	CHECK(res == PTHREAD_CANCELED && cleaned == 1 && now() - t0 < 5);
+
+	/* Disabled, then enabled. */
+	cleaned = 0;
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, disabled_then_enabled, NULL));
+	wait_ready();
+	OK(pthread_cancel(t));
+	settle();
+	OK(sem_post(&sig_sem));
+	OK(pthread_join(t, &res));
+	printf("t_threads: cancel step disabled\n");
+	CHECK(res == PTHREAD_CANCELED && survived_disabled && !past_enable && cleaned == 1);
+
+	/* A thread that has ended (not joined yet): the cancel is harmless and
+	 * the join returns its own value. */
+	quick_done = 0;
+	OK(pthread_create(&t, NULL, quick, (void *)7));
+	wait_flag(&quick_done);
+	settle();
+	OK(pthread_cancel(t));
+	OK(pthread_join(t, &res));
+	printf("t_threads: cancel step gone\n");
+	CHECK(res == (void *)7);
+}
+
 static void cancel_case(void)
 {
 	static const char *names[] = {"read", "nanosleep", "sem_wait", "cond_wait", "testcancel"};
@@ -981,9 +1119,109 @@ static void cancel_case(void)
 			exit(1);
 		}
 	}
-	/* A cancel of a thread that has gone is harmless; one that is disabled
-	 * waits for the enable. */
+	cancel_extras();
 	printf("t_threads: cancel passed\n");
+}
+
+/* ------------------------------------------------------------ selfkill */
+
+/* pthread_kill and raise hold musl's killlock and block every signal around
+ * the tkill of oneself; the handler must run only after both are released.
+ * A handler that kills its own thread again, or exits it, deadlocks (the
+ * lock is not recursive) if it runs inside. */
+static volatile int sk1, sk2, sk_exit;
+
+static void on_sk1(int sig)
+{
+	(void)sig;
+	sk1++;
+	pthread_kill(pthread_self(), SIGUSR2);
+}
+
+static void on_sk2(int sig)
+{
+	(void)sig;
+	sk2++;
+}
+
+static void on_sk_exit(int sig)
+{
+	(void)sig;
+	sk_exit++;
+	pthread_exit((void *)9);
+}
+
+static void *selfkill_exit_thread(void *a)
+{
+	(void)a;
+	pthread_kill(pthread_self(), SIGURG);
+	return (void *)1; /* not reached: the handler ends the thread */
+}
+
+static void selfkill(void)
+{
+	struct sigaction sa;
+	pthread_t t;
+	void *res = NULL;
+	sigset_t none;
+	sigemptyset(&none);
+	OK(pthread_sigmask(SIG_SETMASK, &none, NULL));
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = on_sk1;
+	OK(sigaction(SIGUSR1, &sa, NULL));
+	sa.sa_handler = on_sk2;
+	OK(sigaction(SIGUSR2, &sa, NULL));
+	sa.sa_handler = on_sk_exit;
+	OK(sigaction(SIGURG, &sa, NULL));
+
+	/* The handler of USR1 kills its own thread with USR2. */
+	OK(pthread_kill(pthread_self(), SIGUSR1));
+	CHECK(sk1 == 1 && sk2 == 1);
+	/* The same through raise, from a second thread's point of view too. */
+	OK(raise(SIGUSR1));
+	CHECK(sk1 == 2 && sk2 == 2);
+	/* Blocked: pending until unblocked, then delivered at once. */
+	{
+		sigset_t set, old;
+		sigemptyset(&set);
+		sigaddset(&set, SIGUSR1);
+		OK(pthread_sigmask(SIG_BLOCK, &set, &old));
+		OK(pthread_kill(pthread_self(), SIGUSR1));
+		CHECK(sk1 == 2);
+		OK(pthread_sigmask(SIG_SETMASK, &old, NULL));
+		CHECK(sk1 == 3 && sk2 == 3);
+	}
+	/* A handler that ends the thread. */
+	OK(pthread_create(&t, NULL, selfkill_exit_thread, NULL));
+	OK(pthread_join(t, &res));
+	CHECK(res == (void *)9 && sk_exit == 1);
+	printf("t_threads: selfkill passed\n");
+}
+
+/* ------------------------------------------------------------ forkrefused */
+
+static void *wait_for_post(void *a)
+{
+	sig_ready = 1;
+	sem_wait(&sig_sem);
+	return a;
+}
+
+static void forkrefused(void)
+{
+	pthread_t t;
+	pid_t pid;
+	OK(sem_init(&sig_sem, 0, 0));
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, wait_for_post, NULL));
+	wait_flag(&sig_ready);
+	/* A child would inherit the thread table and a lock a sibling may
+	 * hold: refused until the fork freeze. */
+	pid = fork();
+	CHECK(pid == -1 && errno == EAGAIN);
+	OK(sem_post(&sig_sem));
+	OK(pthread_join(t, NULL));
+	printf("t_threads: forkrefused passed\n");
 }
 
 static void *read_for_exit(void *a)
@@ -1000,14 +1238,18 @@ static void blockedexit(void)
 	static char buf[4096];
 	OK(pipe(blocked_pipe));
 	OK(pthread_create(&t, NULL, read_for_exit, NULL));
-	for (int i = 0; i < 200; i++)
-		thrd_yield();
+	settle();
 	/* Fully buffered: exit() must write it with the sibling blocked. */
 	setvbuf(stdout, buf, _IOFBF, sizeof buf);
 	printf("t_threads: flushed at exit\n");
 	exit(4);
 }
 
+/* The frame is 1 MiB, so its lowest byte is far below the thread's stack
+ * mapping in one jump: this tests the layout (the mapping gap below the
+ * stack is unmapped, INV-0302-6), not a guard page. musl's guard pages are
+ * made with mprotect, which is ENOSYS here, so they stay writable; a thread
+ * that overruns by less than the gap would run on. */
 static void *overrun(void *a)
 {
 	volatile char big[1 << 20];
@@ -1054,7 +1296,9 @@ int main(int argc, char **argv)
 	}
 	CASE("waits", waits)
 	CASE("signals", signals_case)
+	CASE("selfkill", selfkill)
 	CASE("cancel", cancel_case)
+	CASE("forkrefused", forkrefused)
 	if (strcmp(mode, "blockedexit") == 0) {
 		blockedexit();
 		return 0;

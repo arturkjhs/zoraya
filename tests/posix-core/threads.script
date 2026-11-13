@@ -63,8 +63,17 @@
 < t_threads: signals passed
 < posixrun: exit 0
 < \r\n~> 
+> posixrun /bin/t_threads selfkill\r
+< t_threads: selfkill passed
+< posixrun: exit 0
+< \r\n~> 
 > posixrun /bin/t_threads cancel\r
 < t_threads: cancel passed
+< posixrun: exit 0
+< \r\n~> 
+# fork with a sibling thread is refused until the fork freeze.
+> posixrun /bin/t_threads forkrefused\r
+< t_threads: forkrefused passed
 < posixrun: exit 0
 < \r\n~> 
 # exit() flushes stdio (a write) while a sibling is blocked in read.
