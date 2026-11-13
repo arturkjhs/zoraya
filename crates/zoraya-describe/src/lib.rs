@@ -237,7 +237,11 @@ pub struct Names {
 /// guess what the program will create (INV-0311-1).
 pub fn url_file_name(url: &str) -> Option<&str> {
     let rest = url.split_once("://")?.1;
-    let path = &rest[rest.find('/')?..];
+    // The authority ends at the first `/`, `?` or `#`; a query or fragment
+    // that comes first leaves the path `/` (`http://h?q/x.txt` saves under
+    // no name), and what follows a `?` or `#` is never the path.
+    let at = rest.find(['/', '?', '#'])?;
+    let path = &rest[at..];
     let path = path.split(['?', '#']).next().unwrap_or("");
     let name = path.rsplit('/').next().unwrap_or("");
     let plain = |c: char| c.is_ascii_alphanumeric() || ".-_+~@,=".contains(c);
