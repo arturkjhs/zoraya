@@ -82,6 +82,12 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
    its kernel stack go back to the job in `thread_exit` or at its leave (`Paid::release_exited`); the memory itself is freed by the
    reaper at the next switch. The refund is made before the `clear` store and its wake (which may yield, in steps of 64, with
    that many joiners), so a joiner woken by the store always sees the figures refunded.
+   *Bound (review of step 1).* The refund comes before the stack is freed, so for a short time the job is charged less than the
+   kernel holds. Only a thread that yields after the refund is in that state: the 64 or more `clear` waiters being woken, and the
+   single sweeper; each leaves one record and one kernel stack uncharged until its own switch (the reaper frees them at the next
+   switch). Transient and bounded by 128 threads. A visible effect: a joiner's next `thread_create` passes the job's `threads`
+   quota while the exiting thread is still listed in the process, so at 128 threads `has_room` then answers `LimitReached`
+   (the process list, not the quota, is the limit).
 6. **A failed first lists-making gives back the member list if it can** (review of step 1). `Members::shrink` builds the smaller
    list with `try_reserve_exact` and swaps it in (the kernel allocator has no `realloc`, and `Vec::shrink_to` cannot fail
    softly). If that fails, the large list stays and so does its charge: `multi_cost` records it (while no lists exist), the next
