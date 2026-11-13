@@ -568,8 +568,12 @@ pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
         // the object itself, mapped for reading, and let it go.
         let base = zoraya_rt::memory_map(object, 0, size, zoraya_abi::MapFlags::READ)?;
         // SAFETY: the object is `size` bytes, mapped readable at `base` for
-        // as long as it is mapped; `length <= size`; nothing writes it (the
-        // file service's copy is done: `read_buffer` returned).
+        // as long as it is mapped; `length <= size`. The file service keeps
+        // its own attached copy of the object, writable, so this does not
+        // rely on nothing else mapping it but on the service (a trusted
+        // system service, ADR-0033) writing only while it serves
+        // `read_buffer`, which has returned; a stray write would change the
+        // bytes `is_native` reads, not their validity.
         let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, length as usize) };
         native = zoraya_elf::is_native(bytes);
         let _ = zoraya_rt::memory_unmap(base, size);
