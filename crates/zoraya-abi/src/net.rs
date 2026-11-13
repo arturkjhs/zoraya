@@ -21,7 +21,8 @@
 //!          length u8 (0..=32, the host bits zero); Any 4: nothing
 //! ports    0xFF for any port, or a count 1..=8 and that many (low, high)
 //!          pairs of u16, little endian, 1 <= low <= high
-//! protocols u8, 1 (TCP), 2 (UDP) or 3 (both)
+//! protocols u8, a set of bits: 1 (TCP), 2 (UDP), 4 (echo, ADR-0330); 1 to 7
+//!          in a reach rule, 1 to 3 in a listen rule
 //! ```
 //!
 //! Decisions where the ADR is silent (docs/adr/0281): addresses are IPv4 (the
@@ -54,17 +55,23 @@ pub mod rights {
     pub const ALL: u32 = REACH | LISTEN | STATUS | NARROW;
 }
 
-/// A set of TCP and UDP.
+/// A set of TCP, UDP and ICMP echo (ADR-0330: a rule that grants echo
+/// requests alone has [`Protocols::ECHO`]; a listen rule has TCP and UDP only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Protocols(u8);
 
 impl Protocols {
     pub const TCP: Protocols = Protocols(1);
     pub const UDP: Protocols = Protocols(2);
+    /// TCP and UDP: not echo.
     pub const BOTH: Protocols = Protocols(3);
+    /// ICMP echo requests (`ping`), no connection and no datagram.
+    pub const ECHO: Protocols = Protocols(4);
+    /// TCP, UDP and echo.
+    pub const ALL: Protocols = Protocols(7);
 
     pub const fn from_raw(raw: u8) -> Option<Protocols> {
-        if raw >= 1 && raw <= 3 {
+        if raw >= 1 && raw <= 7 {
             Some(Protocols(raw))
         } else {
             None
@@ -383,7 +390,11 @@ impl<'a> Reader<'a> {
 
     fn listen(&mut self) -> Option<ListenRule> {
         let ports = self.ports()?;
+        // Nothing listens for an echo.
         let protocols = Protocols::from_raw(self.u8()?)?;
+        if !protocols.within(Protocols::BOTH) {
+            return None;
+        }
         Some(ListenRule { ports, protocols })
     }
 }
@@ -495,8 +506,21 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Whether some reach rule covers `address` on some port (what an echo
-    /// request has: no port).
+    /// Whether a rule that grants echo requests covers `name`: what a `ping`
+    /// by name needs (ADR-0330). A rule of TCP or UDP only does not.
+    pub fn allows_echo_name(&self, name: &str) -> bool {
+        self.reach_rules()
+            .any(|r| r.target.covers_name(name) && r.protocols.contains(Protocols::ECHO))
+    }
+
+    /// As [`Scope::allows_echo_name`] for an address.
+    pub fn allows_echo_address(&self, address: [u8; 4]) -> bool {
+        self.reach_rules()
+            .any(|r| r.target.covers_address(address) && r.protocols.contains(Protocols::ECHO))
+    }
+
+    /// Whether some reach rule of any protocol covers `address` on some port
+    /// (what `resolve` asks of a local answer).
     pub fn reaches_address(&self, address: [u8; 4]) -> bool {
         self.reach_rules().any(|r| r.target.covers_address(address))
     }

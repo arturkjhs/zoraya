@@ -710,6 +710,25 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> ping --help\r
+< \r\nping: send echo requests to a host and show the replies
+^ \r\nusage: ping [--count N] [--timeout SECONDS] HOST
+^ \r\n  -c, --count N           how many echo requests, 1 to 16; 4 if not given
+^ \r\n  -W, --timeout SECONDS   how long to wait for the last reply, 1 to 30; 2 if not given
+^ \r\n  --help                  show this help
+^ \r\nmore: help ping
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> ping --no-such-option\r
+< \r\nping: --no-such-option: no such option
+^ \r\nusage: ping [--count N] [--timeout SECONDS] HOST
+^ \r\nmore: help ping
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > random --help\r
 < \r\nrandom: show random bytes
 ^ \r\nusage: random [COUNT]

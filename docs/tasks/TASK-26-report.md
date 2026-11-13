@@ -65,6 +65,12 @@ fixes were answered (section "Review of the system call surface after stage 8").
 
 ### Items for the architect
 
+**Decided 2026-11-13** (recorded by an agent at the architect's request, branch `work/arch-decisions-2`): ADR-0295 to ADR-0299 accepted;
+INV-0006-3's check measures 1024 idle subscriptions (ADR-0006 open-question note, `portbench` already does); the toolchain pin
+`nightly-2026-11-12` and rustup 1.29.3 accepted (ADR-0298's decision section, `docs/dependencies.md`); INV-0264-3: +450 ms under TCG in CI
+only, 50 ms over the no-spinner baseline under HVF, measured locally (`latency 30 +50 tcg +450`; 8 passing runs, the difference -1.7 to +0.9 ms;
+`docs/design.md`); INV-0264-3 is `checked: make test-gui`. The items below are the ones as they stood before the decision.
+
 - **Proposed ADRs awaiting a decision:** ADR-0295 (register access by call for shared pages), ADR-0296 (the services channel and the restart
   test), ADR-0297 (the `+net` word in the shell), ADR-0298 (how the gate's tests run), ADR-0299 (subscriptions bounded to 1024; a change of
   ADR-0006's behaviour). ADRs 0287 to 0294 were accepted as recommended on 2026-11-12; the status of the earlier stage-8 proposals (0281, 0285, 0286) is in `docs/adr/index.md`.
@@ -1223,6 +1229,19 @@ INV-0269-1 and -3: checked at the keeper's channels in `t_rooms` (the test stand
 restart path are not run). INV-0266-3 stays open for the compositor's hover card (Q6b); INV-0265-3 and -4 and INV-0268-3 stay open (the
 room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts unchanged (the table has 518 rows).
 
+### net-port-seed (`work/net-port-seed`): the first ephemeral port of a restarted `netd`
+
+- **Incident** (main CI run 43330650492, `net-fetch-tcg`): `Extra.next_port` started at 0 and nothing seeded it, so `ephemeral_port()` gave
+  `PORT_FIRST` (49152) to the first socket of every `netd`. After the test's deliberate `net crash`, the first fetch of the restarted `netd`
+  reused the four-tuple 10.0.2.15:49152 -> 10.0.2.2:PORT of the killed `netd`'s connection, which SLIRP still held; its SYNs were swallowed, the
+  fetch waited for retransmits (1 to 3 s even in green runs) and sometimes hit `CONNECT_US` (10 s): "the host did not answer", step timeout.
+- **Fix**: `Stack::new` seeds the first port with `PORT_FIRST + seed % 16384` (RFC 6056 randomized selection, `Extra::seed_ports`);
+  `ephemeral_port` still skips ports in use and wraps 65535 -> 49152. Host tests: different seeds give different first ports, the same seed the
+  same port, seeds 0, 16383 (port 65535) and `u64::MAX` stay in 49152..=65535, and the wrap from 65535 goes to 49152.
+- **Seed source**: `netd` passes `clock_monotonic() ^ MAC` (user/src/bin/netd.rs), not a constant; it differs between starts. The entropy
+  service of ADR-0227 is not wired into `netd` yet, so the seed is still not random (not a secret; unchanged). No doc states a fixed first port.
+- Tests: `cargo test -p zoraya-net`, `make check`.
+
 ### Tests run (this session)
 
 - `cargo test -p zoraya-settings` (27), `-p zoraya-proto-rooms` (6), `-p zoraya-rooms` (20), `-p zoraya-panel` (14): pass.
@@ -2016,3 +2035,139 @@ Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: C
 
 `make check`; `make test-qemu-one` (the whole test kernel on auto-default, which includes `t_bound` and `t_devices`) after steps 1 to 2 and after steps 5 and 6; `cargo test -p zoraya-events`;
 the mutation above. Not run: `make test-changed`/`test-keeper` (the shell's refusal is dead code until the gate opens), `make test-qemu` on TCG, CI.
+
+## Hand-run: `make run-net` on the architect's machine (branch `work/hand-run`, on `main` at 120ee31)
+
+**What the architect saw.** `make run-net` on a MacBook Air: `net status` right (lease, gateway, DNS), but `fetch http://google.com`
+and `fetch https://google.com` both "zosh: /system/tls/roots: the file service is gone", and the prompt `/>` instead of `~>`.
+
+**Cause.** Not the read-only `/system` (ADR-0289 item 8): the disk. `make run`, `run-net` and `run-gui` attached `build/disk.img`, which
+the Makefile made once (`$(DISK): | $(KERNEL)`, order-only) and never again. A disk made before Q5 (format 2, ADR-0265; f7c95e1,
+2026-11-11) is format 1, which `fsd` does not mount. Reproduced with this host's own kept `build/disk.img` (from 2026-11-02), copied, under
+the exact `make run-net` command line (`tools/run-qemu.sh --net --disk DISK build/zoraya-kernel.elf`, interactive mode, through the
+runner): `fsd: mount: Corrupt`, `init: storage failed`, `zosh: there is no volume: the file commands will fail`, the prompt `/>`
+(the shell has no home), and after three restarts `init: no more restarts: the volume stays down`; `zoraya-fsck` on that image: "root
+records: no valid root record". Every command with a network grant then fails before it runs, because the shell adds
+`/system/tls/roots` to its table (ADR-0228 item 3) and opening it on a volume that is gone is `FILE_GONE` ("the file service is gone"),
+for `http://` too. With a fresh disk from the same build the same command line gives `~>` and `fetch https://example.com/` prints the
+page. A disk made between Q5 and N5 (2026-11-11 to -12) would mount but have no `/system/tls/roots` at all, and since `/system` is
+read-only at run time for everyone, no disk ever gets a new root store: the same staleness, quieter.
+
+**Fix.** `tools/run-disk.sh IMAGE`, the recipe of `$(DISK)` (run on every `make run`, `run-net`, `run-gui`): it keeps the disk while
+`IMAGE.key` matches what the disk was made for (the format version from `crates/zoraya-fs/src/format.rs`, the size, and a checksum of
+`rootfs/system`); otherwise it moves the disk to `IMAGE.old` (one generation), says so, and makes a new one from `rootfs/`. `/system` stays
+read-only for everyone; nothing writes into an existing image. Cost: a change of format or of `rootfs/system` takes a person's files on
+that disk with it into `build/disk.img.old` (readable by an older build, or `zoraya-fsck`); carrying them over needs the system-update
+path that ADR-0289 leaves to a later ADR. The command lines of the three targets are one definition each (`RUN_CMD`, `RUN_NET_CMD`,
+`RUN_GUI_CMD` in the Makefile), which the test calls.
+
+**The step that closes the gap: `make test-hand-run`** (in `TEST_STEPS`, `tools/ci-tests.txt`, `tools/plan-lib.sh`, a lane of
+`tools/test-par.sh`, the smoke set of `tools/ci-plan.sh`, the 30-minute jobs of the workflow, and `tools/test-map.txt` for the paths that
+make the image). It boots `build/zoraya-kernel.elf` (not a test image) with a disk made by `tools/run-disk.sh` at
+`build/hand-run-disk.img` (so a person's disk stays), first replacing a planted stale disk without a key and then checking that a second
+call keeps the new one byte for byte; then:
+- `RUN_NET_CMD` (interactive mode, no `restrict`), `tests/shell/hand-run-net.script`: the prompt `~>`; `net status` with lease, gateway
+  10.0.2.2 and DNS 10.0.2.3; `fetch http://10.0.2.2:PORT/` the test page from `tools/test-httpd`; `fetch https://10.0.2.2:TLSPORT/`
+  "certificate is not signed by a trusted root"; forbidden throughout: "fsd: mount", "storage failed", "there is no volume", "the file
+  service is gone".
+- `RUN_CMD`, `tests/shell/hand-run.script`: the prompt `~>` and a command.
+- `RUN_GUI_CMD` with `--display-opts none --qmp SOCKET`, `tests/shell/hand-run-gui.script` (the runner's GUI script): the desktop
+  starts and its terminal shows `~>`.
+
+**Decisions (for the architect).**
+- *HTTPS against the production roots.* The image must be exact, so no test roots overlay: the production store
+  (`rootfs/system/tls/roots`) accepts no certificate a test server on the host can present. The step checks that `fetch https://`
+  gets its roots, runs the handshake and refuses the test PKI's certificate as unknown issuer, which also shows the roots were read
+  (without them the message is the file error). The full HTTPS path with a trusted root is `make test-net-fetch`'s (test image, the test
+  PKI's root as `/system/tls/roots`), unchanged. No name is fetched: the image has no `net.hosts`, and SLIRP's DNS forwarder needs the
+  host's resolver (as `net-dns` is skipped on CI).
+- *What differs from a person's run.* Only the disk's path, stdin (the runner's pipe instead of a terminal; `-serial mon:stdio` is
+  kept), and for `run-gui` no window and a QMP socket (the runner reads the screen and types through it; it does not change the
+  machine). `GUI_SCALE` is the Makefile's: 2 on macOS, 1 on CI's Linux. In interactive mode the guest can reach the Internet through
+  SLIRP; the scripts contact only 10.0.2.2.
+- *Seen, not fixed.* `fsd` reports a format-1 volume as `mount: Corrupt`, and `zoraya-fsck` as "no valid root record", not the format
+  message `format.rs` has ("format version is not 2: rebuild the volume with zoraya-mkfs"); a hint there would have named the cause.
+  While storage restarts, the console shell greets three times and drops the lines typed in between.
+
+**By-hand commands in the reports, `docs/design.md` and the README** (there is no README file) and what covers them:
+
+| Command (where) | Covered by |
+|---|---|
+| `make run` (design.md "Using the shell", 3a's criterion) | `test-hand-run` (`RUN_CMD`) |
+| `make run-net`, with `net status`, `fetch` (this report N1, N2, N3; design.md "Network") | `test-hand-run` (`RUN_NET_CMD`); `settings net.gateway ...` by hand (N2): `test-net`'s `net-settings` on a test command line, backlog for the exact one |
+| `zoraya-test-httpd --port 8080` then `make run-net` and `fetch` (N3) | `test-hand-run` (the same server, a port of its choosing) |
+| `make run-gui` (TASK-24, design.md "Desktop") | `test-hand-run` (`RUN_GUI_CMD`): boot, desktop, prompt. Backlog: the cocoa window's checks (Retina scale 2 on a real screen, the window resized and the display following it, a click landing where the pointer points, Command reaching the guest; TASK-24 "To check by hand") need a window and a person |
+| `make debug` (Makefile, design.md) | backlog: no step starts it and attaches a debugger |
+| `make posix-image` and `tools/run-qemu.sh --mem 512M --disk build/posix-disk.img ...` (design.md "Running a workload by hand", TASK-22) | the image is built by `ci-build` and booted by `test-posix` in test mode; backlog: the interactive command line itself |
+| `make bench-net` (N6, design.md) | backlog: runs only by hand, asserts only that each fetch ends |
+| `make measure-w4`, `make test-posix-long` (design.md, TASK-22) | backlog: not in `make test` by decision (design.md "run only where someone runs them") |
+| `zoraya-mkfs --size 64M --limit room=64K ...`, `make test-posix POSIX_SCRIPTS=tests/posix/scenarios.script` (Q5) | `test-posix` (scenarios.script is a CI job) and `test-unit` (mkfs) |
+| `cargo test -p zoraya-fs-service --test service ...` (Q3) | `test-unit` |
+
+**Run (this session, on the development host, HVF).** The reproduction above (the old disk and a fresh one, each under the exact
+`make run-net` line through the runner, with a timeout); `make test-hand-run` twice (the second after adding the `run` and GUI boots):
+the stale disk replaced and the new one kept, `hand-run-net` PASS (25 steps), `hand-run` PASS (12), `hand-run-gui` PASS (9), each disk
+clean under `zoraya-fsck`; `tests/shell/hand-run.script` against the old disk fails ("forbidden output: fsd: mount"); `make check`.
+Not run: TCG, CI, `make test-changed`. Items 3 to 6 below were done in a follow-up session on this branch.
+
+### Hand-run, items 3 to 6 (same branch; the gate stays closed)
+
+**3. `ping HOST`** (proposed ADR-0330; ADR-0281 item 3 already had `netd`'s diagnostic echo, so no new request).
+`ping [-c COUNT] [-W SECONDS] HOST`: count 1 to 16 (default 4), timeout 1 to 30 s (default 2), after `head --lines` and `fetch
+--output` (short and long forms, a value after each). One line per reply (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`), then
+`--- ADDR ping statistics ---`, `4 sent, 4 received, 0% loss`, `rtt min/avg/max = a/b/c ms`; exit 1 when none came, 2 for wrong
+use. Decisions: (a) the host is designated by a new description operand kind `host` (the `url` precedent: a literal operand adds
+its rule, any port, TCP-marked, shown as `(operand HOST)` by `grants`; a value only designates inside a `+net` word, else the
+line is refused with `if that is meant: +net HOST COMMAND`); (b) `PingReply` carries each request's round trip (`rtts`, `NO_REPLY`
+= `u32::MAX`), because min/avg/max alone cannot give a line per reply; `zoraya-proto-net::render_ping` formats the text and has
+host tests; (c) dotted IPv4 addresses only, because a name rule does not cover the address it resolves to (INV-0220-4): a ping
+by name needs a request that takes a name, or `+net any`; recorded as an open question of the ADR; (d) `netd` answers when the
+run ends, so the lines appear together at the end. The image (`USER_PROGRAMS`, `user/Cargo.toml`), the help list and tour
+(`docs/tour.md`, `tests/posix/tour*.script`), `tools/test-map.txt` and `docs/design.md` have it. Tests: `tests/shell/net-fetch.script`
+(`make test-net-fetch`, test image: lines, summary, `-c`/`-W`, `grants`, bad count, a name, a value with and without `+net`, a
+silent address with status 1), `tests/shell/hand-run-net.script` (the production image, gateway 10.0.2.2), `t_netd` (`rtts`),
+`cargo test -p zoraya-proto-net`, `-p zoraya-net`, `-p zoraya-shell netgrant`, `-p zoraya-describe`. ADR-0330 is `proposed`;
+index and invariant rows added (INV-0330-1).
+
+**4. The image's roots.** Already Mozilla's: `rootfs/system/tls/roots` holds 108 certificates from the CCADB report
+`IncludedCACertificateReportPEMCSV` (Mozilla's included CAs with the Websites trust bit, no distrust date, no applied constraints),
+fetched 2026-11-12, CDLA-Permissive-2.0 as data, recorded in `docs/dependencies.md`; the test PKI (`tests/net/tls/`) is only in the
+test images. Nothing to vendor. Added: `make check-tls-roots` (`tools/check-tls-roots.sh`, in `make check`, CI, test-map): at
+least 100 blocks, each a DER certificate, none repeated, none of the test PKI's, the header's count, source and date, and
+`docs/dependencies.md` agreeing; and `crates/zoraya-tls/tests/production_roots.rs`, which loads every root into the verifier
+(`make test-unit`). `fetch https://example.com` needs the Internet, so it is not a CI test; the hand-run keeps the unknown-issuer path.
+
+**5. `make run-gui` has the network.** `RUN_GUI_CMD` has `--net` unless `NET=0` (`NET=0 make run-gui`); `make test-hand-run` boots
+that exact line, and `tests/shell/hand-run-gui.script` now checks `net status` and `ping -c 1 10.0.2.2` in the desktop's terminal.
+`make run` stays without the network, `make run-net` is the serial console with it. The Makefile header and `docs/design.md`
+("Using the desktop", the `--net` paragraph, which still said `--net` with `--gui` was refused) say so.
+
+**6. A disk of another format.** `zoraya_fs::foreign_format_version` finds a root slot with the magic and another version;
+`fsd` prints `fsd: the disk is format 1, this system needs format 2: make a new disk (make run does)` before `mount: Corrupt`, and
+`select_root` (so `zoraya-fsck`) says `no valid root record: the volume is of another format version, or damaged: run zoraya-fsck`. Host test: `crates/zoraya-fs/tests/integrity.rs`.
+
+**Run.** `make check` (16 steps) before each commit; `make test-net-fetch` (196 steps, ping lines included) and `make test-net`
+(`t_netd`, boot, settings, fetch, dns pass; `net-posix` stops at "musl-1.2.5.tar.gz is missing: run make fetch-ports first", this
+worktree has no ports cache, as before); `make test-hand-run` (`hand-run-net` 50 steps, `hand-run` 12, `hand-run-gui` 15 with the network and ping), clean under `zoraya-fsck`.
+Item 6 also under QEMU: a disk with its root slots patched to format 1, under the `make run` line and `tests/shell/hand-run.script`, printed the new `fsd:` line before `mount: Corrupt`. Not run: TCG, CI, `make test-changed`.
+
+**Review of f7d514c (opus-review), fixed.** `tools/run-disk.sh` never overwrites an earlier `IMAGE.old` (it rotates to `IMAGE.old.N`;
+the preamble of `test-hand-run` plants a second mismatch and builds `HAND_DISK` through `make DISK=... $(DISK)`); INV-0330-1 is
+checked for lost requests (`t_netd`'s lost run, a host test with replies 1 and 3 dropped, the mutant in `tools/mutants/net-ping.toml`);
+a run is clamped to `MAX_PINGS`; the `host` operand makes a grant only for a dotted address, and ADR-0330 now says plainly that its
+rule (TCP, any port of the address) is wider than an echo, with the echo-only alternative for the architect. Only `NET=0` turns the
+network off in `make run-gui`; the variable keeps its name.
+
+**Architect's changes to the ping fix (2026-11-13), done.** (1) `ping NAME` works like `fetch`: `Ping` carries a name
+(`Data<253>`), `netd` checks it against an echo rule, resolves it (a `net.hosts` entry or the DNS), refuses an answer on this
+machine's side of the network as `resolve` does, and the reply and the output line show the address
+(`PING example.org (A.B.C.D): 4 requests`). (2) The ping grant is echo only: `Protocols::ECHO` (4) and `ALL` (7) in
+`zoraya_abi::net`, `BOTH` stays TCP and UDP; a listen rule with the echo bit does not decode; the `host` operand makes an
+echo-only rule (a name or an address); the root scope and `+net` words are `ALL`; `netd` refuses a connection under an echo-only
+grant and an echo under a TCP/UDP-only grant. The N4 restriction to dotted addresses is undone. ADR-0330 records both decisions
+in its "Architect's decision" section, status still `proposed`, and gains INV-0330-2. Tests: `zoraya-abi` (echo rule grants no
+TCP/UDP, listen refuses the echo bit), `zoraya-net` service (ping by name from `net.hosts`, refusals), `zoraya-shell`
+(`echo only (operand HOST)`, names), `zoraya-proto-net` (name bound 253, round trips, text), `t_netd` (an echo-only connection
+pings the gateway, not the DNS server, resolves no name it was not given, opens no TCP connection to any of three ports; a
+TCP/UDP-only connection cannot ping), `tools/mutants/net-ping.toml` (three more mutants, killed by hand). There is no UDP
+request in the protocol yet: the UDP side of the rule is tested in `zoraya-abi` only.

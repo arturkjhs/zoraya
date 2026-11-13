@@ -1,6 +1,6 @@
 # ADR-0295: N6, a shared virtio-mmio page: register access by call, one device per transport
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0054, ADR-0070, ADR-0091, ADR-0221, ADR-0230
 - **Evidence:** DM-009, CP-01, CP-17, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, stage-4/sources.md#virtio-and-qemu
@@ -132,4 +132,4 @@ access is the price of a desktop with a network.
 - PCI transports, which make the question moot (ADR-0091's trigger).
 
 ## Architect's decision
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

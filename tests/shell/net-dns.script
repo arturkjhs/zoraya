@@ -20,5 +20,13 @@
 > fetch http://nothing.invalid/\r
 < the name has no address
 < \r\n~>
+# `ping` resolves a name inside the network service, under an echo-only grant for
+# that name, with the same refusals as `fetch`.
+> ping localhost\r
+< the name points at this machine's own network
+< \r\n~>
+> ping nothing.invalid\r
+< the name has no address
+< \r\n~>
 x power off
 > poweroff\r

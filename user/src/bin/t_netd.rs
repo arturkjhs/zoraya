@@ -68,11 +68,15 @@ fn status_of(conn: Handle) -> Option<Seen> {
 }
 
 fn one_rule(target: Target<'_>) -> Vec<u8> {
+    rule_of(target, Protocols::ALL)
+}
+
+fn rule_of(target: Target<'_>, protocols: Protocols) -> Vec<u8> {
     let mut out = alloc::vec![0u8; 128];
     let rule = ReachRule {
         target,
         ports: Ports::ANY,
-        protocols: Protocols::BOTH,
+        protocols,
     };
     let n = encode_scope(&[rule], &[], &mut out).expect("a scope");
     out.truncate(n);
@@ -139,7 +143,7 @@ fn check_lease(seen: &Seen, ms: u64) {
     );
 }
 
-fn ping(conn: Handle, address: [u8; 4], count: u32) -> zoraya_proto_net::PingReply {
+fn ping(conn: Handle, address: [u8; 4], count: u32) -> netclient::PingOutcome {
     netclient::ping(conn, address, count, 3000).expect("a ping reply")
 }
 
@@ -233,7 +237,15 @@ fn main() -> i32 {
         r.rtt_avg_us,
         r.rtt_max_us
     );
-    assert_eq!((r.status.0, r.sent), (status::OK, 4));
+    assert_eq!((r.status, r.sent), (status::OK, 4));
+    assert_eq!(r.rtts.len(), 4);
+    assert_eq!(
+        r.rtts
+            .iter()
+            .filter(|u| **u != zoraya_proto_net::NO_REPLY)
+            .count() as u32,
+        r.received
+    );
     assert!(r.received >= 1, "the gateway answers");
     assert!(r.rtt_min_us > 0 && r.rtt_min_us <= r.rtt_max_us);
     // Requests that cannot leave (an on-link address that answers no ARP):
@@ -245,18 +257,17 @@ fn main() -> i32 {
         "t_netd: ping 10.0.2.99: sent {} received {}",
         lost.sent, lost.received
     );
-    assert_eq!(
-        (lost.status.0, lost.sent, lost.received),
-        (status::OK, 8, 0)
-    );
+    assert_eq!((lost.status, lost.sent, lost.received), (status::OK, 8, 0));
+    // INV-0330-1: every request is marked as without a reply.
+    assert_eq!(lost.rtts, [zoraya_proto_net::NO_REPLY; 8]);
     let again = ping(root, GATEWAY, 4);
     assert_eq!(
-        (again.status.0, again.sent, again.received),
+        (again.status, again.sent, again.received),
         (status::OK, 4, 4)
     );
     // Not an address anyone can be pinged at.
     assert_eq!(
-        ping(root, [0, 0, 0, 0], 1).status.0,
+        ping(root, [0, 0, 0, 0], 1).status,
         status::INVALID,
         "the unspecified address"
     );
@@ -270,15 +281,60 @@ fn main() -> i32 {
         status_of(status_only).expect("status").get().status.0,
         status::OK
     );
-    assert_eq!(ping(status_only, GATEWAY, 1).status.0, status::NOT_GRANTED);
+    assert_eq!(ping(status_only, GATEWAY, 1).status, status::NOT_GRANTED);
     assert_eq!(
         netclient::narrow(status_only, rights::ALL, &root_scope()).err(),
         Some(status::NOT_GRANTED)
     );
     let one = netclient::narrow(root, rights::REACH, &one_rule(Target::Address(GATEWAY)))
         .expect("a connection for one address");
-    assert_eq!(ping(one, GATEWAY, 1).status.0, status::OK);
-    assert_eq!(ping(one, DNS, 1).status.0, status::NOT_GRANTED);
+    assert_eq!(ping(one, GATEWAY, 1).status, status::OK);
+    assert_eq!(ping(one, DNS, 1).status, status::NOT_GRANTED);
+    // ADR-0330: the grant `ping` gets is echo and nothing else. An echo-only
+    // rule for the gateway answers an echo to it, and refuses an echo to any
+    // other host, a name it does not name, and every connection (TCP) to the
+    // gateway itself; a rule of TCP and UDP alone refuses the echo. (There is
+    // no UDP request yet: the rule's UDP side is `zoraya-abi`'s test.)
+    let echo_only = netclient::narrow(
+        root,
+        rights::REACH,
+        &rule_of(Target::Address(GATEWAY), Protocols::ECHO),
+    )
+    .expect("an echo-only connection");
+    let echoed = ping(echo_only, GATEWAY, 2);
+    assert_eq!((echoed.status, echoed.received), (status::OK, 2));
+    assert_eq!(echoed.address, GATEWAY);
+    assert_eq!(ping(echo_only, DNS, 1).status, status::NOT_GRANTED);
+    let named = netclient::ping_host(echo_only, "localhost", [0; 4], 1, 1000).expect("a reply");
+    assert_eq!(named.status, status::NOT_GRANTED, "a name no rule names");
+    for port in [80, 53, 8080] {
+        assert!(
+            matches!(
+                zoraya_user::netconn::connect(echo_only, "", GATEWAY, port, 2_000_000_000),
+                Err(zoraya_user::netconn::ConnectError::Refused(
+                    status::NOT_GRANTED
+                ))
+            ),
+            "an echo grant opened a TCP connection to port {port}"
+        );
+    }
+    let tcp_only = netclient::narrow(
+        root,
+        rights::REACH,
+        &rule_of(Target::Address(GATEWAY), Protocols::BOTH),
+    )
+    .expect("a TCP and UDP connection");
+    assert_eq!(ping(tcp_only, GATEWAY, 1).status, status::NOT_GRANTED);
+    // And the parent's echo-only scope cannot be widened by a child.
+    assert_eq!(
+        netclient::narrow(
+            echo_only,
+            rights::REACH,
+            &one_rule(Target::Address(GATEWAY))
+        )
+        .err(),
+        Some(status::NOT_GRANTED)
+    );
     assert_eq!(
         status_of(one).expect("a reply").get().status.0,
         status::NOT_GRANTED,
@@ -303,7 +359,7 @@ fn main() -> i32 {
     let n = encode_scope(&[], &[listen], &mut bytes).expect("a listen scope");
     let listener =
         netclient::narrow(root, rights::LISTEN, &bytes[..n]).expect("a listening connection");
-    assert_eq!(ping(listener, GATEWAY, 1).status.0, status::NOT_GRANTED);
+    assert_eq!(ping(listener, GATEWAY, 1).status, status::NOT_GRANTED);
     println!("t_netd: scopes held");
 
     // Hostile requests: an unknown ordinal gets an error and the connection
@@ -341,6 +397,7 @@ fn main() -> i32 {
                 address: u32::from_be_bytes(GATEWAY),
                 count: zoraya_protocol::Below(16),
                 timeout_ms: zoraya_protocol::Below(3000),
+                name: zoraya_protocol::Data(b""),
             },
             1,
             &mut out,

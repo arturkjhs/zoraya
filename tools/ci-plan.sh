@@ -3,8 +3,8 @@
 # what the change since origin/main touches (tools/test-map.txt, the longest
 # prefix; a path not in the map runs every step, as in make test-changed)
 # plus a smoke set: boot (test-boot), the shell's files script (test-files),
-# one GUI run (terminal, host accelerator, scale 1) and the POSIX hello
-# script. Host tests: the changed crates and their dependents. A change that
+# one GUI run (terminal, host accelerator, scale 1), the POSIX hello
+# script and the machines a person runs by hand (test-hand-run). Host tests: the changed crates and their dependents. A change that
 # needs only `check` (docs, the map) runs no machine at all, and no build.
 #
 #   tools/ci-plan.sh [BASE]     (BASE: origin/main; FULL=1: the full set)
@@ -79,6 +79,7 @@ if [ -n "$(echo "$sel" | grep .)" ]; then
     has "make test-boot" || sel=$(printf '%s\n%s\n' "$sel" "make test-boot")
     has "make test-files" || sel=$(printf '%s\n%s\n' "$sel" "make test-files")
     has "make test-gui" || sel=$(printf '%s\n%s\n' "$sel" 'make test-gui GUI_RUNS="terminal:auto:1"')
+    has "make test-hand-run" || sel=$(printf '%s\n%s\n' "$sel" "make test-hand-run")
     has "hello.script" || sel=$(printf '%s\n%s\n' "$sel" 'make test-posix POSIX_SCRIPTS="tests/posix/hello.script" POSIX_ACCELS="auto"')
 fi
 echo "$sel" | grep . | sort -u | emit "candidate"

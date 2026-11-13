@@ -10,8 +10,8 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, Narrow, NarrowAccount, Narrowed, Ping,
-    PingReply, Resolve, Resolved, StatusReply, source, status as code,
+    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE, Narrow, NarrowAccount,
+    Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source, status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
@@ -66,6 +66,15 @@ struct Lookup {
     transaction: u32,
     account: usize,
     scope: Vec<u8>,
+    /// Set for a `ping` by name: the run to start with the answer (ADR-0330).
+    ping: Option<PingStart>,
+}
+
+/// What a `ping` by name waits for the resolver to give.
+#[derive(Clone, Copy)]
+struct PingStart {
+    count: u32,
+    timeout_us: i64,
 }
 
 pub struct Service {
@@ -74,7 +83,10 @@ pub struct Service {
     lookups: Vec<Lookup>,
     next_token: u32,
     /// The connection and transaction a running `ping` answers.
-    ping: Option<(usize, u32)>,
+    /// `None` as owner: the connection is gone but its run (or lookup) is
+    /// not over, so the slot stays taken until it is (nobody else gets its
+    /// result).
+    ping: Option<(Option<usize>, u32)>,
 }
 
 impl Default for Service {
@@ -158,9 +170,13 @@ impl Service {
         for l in self.lookups.iter_mut().filter(|l| l.conn == Some(id)) {
             l.conn = None;
         }
-        if self.ping.is_some_and(|(owner, _)| owner == id) {
-            // Its reply has nowhere to go; the run itself finishes on its own.
-            self.ping = None;
+        if let Some((owner, _)) = self.ping.as_mut()
+            && *owner == Some(id)
+        {
+            // Its reply has nowhere to go; the run finishes on its own and the
+            // slot stays taken until `ping_done` (or the lookup's end) frees it,
+            // so that no other connection is given this run's result.
+            *owner = None;
         }
     }
 
@@ -205,28 +221,80 @@ impl Service {
                 let Ok((_, m)) = decode::<Ping>(message, handles) else {
                     return Action::Close;
                 };
-                let address = m.address.to_be_bytes();
-                let verdict = connection.decide(Request::Ping { address });
-                let code = match verdict {
-                    Verdict::Allowed => None,
-                    _ => Some(code::NOT_GRANTED),
-                };
-                if let Some(c) = code {
-                    return Action::Reply(ping_reply(c, None, t));
+                let timeout = i64::from(m.timeout_ms.0) * 1000;
+                if m.name.0.is_empty() {
+                    let address = m.address.to_be_bytes();
+                    if connection.decide(Request::Ping { address }) != Verdict::Allowed {
+                        return Action::Reply(ping_reply(code::NOT_GRANTED, None, t));
+                    }
+                    if self.ping.is_some() {
+                        return Action::Reply(ping_reply(code::BUSY, None, t));
+                    }
+                    return match stack.ping(address, m.count.0, timeout, now_us) {
+                        Ok(()) => {
+                            self.ping = Some((Some(id), t));
+                            Action::Deferred
+                        }
+                        Err(e) => Action::Reply(ping_reply(ping_code(e), None, t)),
+                    };
                 }
-                if self.ping.is_some() {
+                // A name: valid, covered by a rule that grants echo, resolved
+                // here with the person's resolver (ADR-0220: the grant names
+                // the host, the resolution happens inside the service).
+                let Some(name) = core::str::from_utf8(m.name.0)
+                    .ok()
+                    .filter(|n| zoraya_abi::net::valid_name(n))
+                else {
+                    return Action::Reply(ping_reply(code::INVALID, None, t));
+                };
+                if connection.decide(Request::PingName { name }) != Verdict::Allowed {
+                    return Action::Reply(ping_reply(code::NOT_GRANTED, None, t));
+                }
+                if self.ping.is_some()
+                    || stack.ping_running()
+                    || self.lookups.iter().any(|l| l.conn == Some(id))
+                {
                     return Action::Reply(ping_reply(code::BUSY, None, t));
                 }
-                let timeout = i64::from(m.timeout_ms.0) * 1000;
-                match stack.ping(address, m.count.0, timeout, now_us) {
-                    Ok(()) => {
-                        self.ping = Some((id, t));
+                let account = connection.account();
+                let scope = connection.scope_bytes().to_vec();
+                if self.accounts.charge(account, Kind::Resolutions).is_err() {
+                    return Action::Reply(ping_reply(code::OVER_QUOTA, None, t));
+                }
+                let token = self.fresh_token();
+                let owner = Owner {
+                    account,
+                    cache: self.accounts.limit(account, Kind::CacheEntries) as usize,
+                };
+                let start = PingStart {
+                    count: m.count.0,
+                    timeout_us: timeout,
+                };
+                match stack.resolve_as(token, owner, name, now_us) {
+                    Start::Pending => {
+                        self.ping = Some((Some(id), t));
+                        self.lookups.push(Lookup {
+                            token,
+                            conn: Some(id),
+                            transaction: t,
+                            account,
+                            scope,
+                            ping: Some(start),
+                        });
                         Action::Deferred
                     }
-                    Err(PingError::Busy) => Action::Reply(ping_reply(code::BUSY, None, t)),
-                    Err(PingError::BadTarget) => Action::Reply(ping_reply(code::INVALID, None, t)),
-                    Err(PingError::NoAddress) => {
-                        Action::Reply(ping_reply(code::UNAVAILABLE, None, t))
+                    Start::Done(found) => {
+                        self.accounts.release(account, Kind::Resolutions);
+                        let reply =
+                            self.start_named_ping(id, t, &found, &scope, start, stack, now_us);
+                        match reply {
+                            Some(bytes) => Action::Reply(bytes),
+                            None => Action::Deferred,
+                        }
+                    }
+                    Start::Failed(f) => {
+                        self.accounts.release(account, Kind::Resolutions);
+                        Action::Reply(ping_reply(resolve_code(f), None, t))
                     }
                 }
             }
@@ -315,6 +383,7 @@ impl Service {
                             transaction: t,
                             account,
                             scope,
+                            ping: None,
                         });
                         Action::Deferred
                     }
@@ -428,14 +497,40 @@ impl Service {
     /// given back either way).
     pub fn resolve_done<L: Link>(
         &mut self,
-        stack: &Stack<L>,
+        stack: &mut Stack<L>,
         answer: Answer,
         now_us: i64,
     ) -> Option<(usize, Vec<u8>)> {
         let at = self.lookups.iter().position(|l| l.token == answer.token)?;
         let l = self.lookups.swap_remove(at);
         self.accounts.release(l.account, Kind::Resolutions);
+        if l.ping.is_some() && l.conn.is_none() {
+            // The connection went while the name was looked up: no run started,
+            // the slot goes back.
+            self.ping = None;
+            return None;
+        }
         let id = l.conn?;
+        if let Some(start) = l.ping {
+            // A `ping` by name: the run starts now, or the reply says why not;
+            // `None` while the run goes on (its reply comes from `ping_done`).
+            let bytes = match answer.result {
+                Ok(found) => self.start_named_ping(
+                    id,
+                    l.transaction,
+                    &found,
+                    &l.scope,
+                    start,
+                    stack,
+                    now_us,
+                )?,
+                Err(f) => {
+                    self.ping = None;
+                    ping_reply(resolve_code(f), None, l.transaction)
+                }
+            };
+            return Some((id, bytes));
+        }
         let bytes = match answer.result {
             Ok(found) => found_reply(&found, &l.scope, stack, now_us, l.transaction),
             Err(f) => resolved_reply(fail_code(f), &[], l.transaction),
@@ -443,20 +538,83 @@ impl Service {
         Some((id, bytes))
     }
 
+    /// Starts the run of a `ping` by name on the first usable address of the
+    /// answer. `None` when the run started (the reply comes with its end);
+    /// else the reply that says why not, with the slot given back.
+    #[allow(clippy::too_many_arguments)] // one call site per path, all the state of a ping
+    fn start_named_ping<L: Link>(
+        &mut self,
+        id: usize,
+        t: u32,
+        found: &Found,
+        scope: &[u8],
+        start: PingStart,
+        stack: &mut Stack<L>,
+        now_us: i64,
+    ) -> Option<Vec<u8>> {
+        let scope = zoraya_abi::net::Scope::decode(scope).unwrap_or(zoraya_abi::net::Scope::EMPTY);
+        // As `resolve` does: an answer that is this machine, its gateway or
+        // its DNS servers (`is_local`; other hosts of the subnet and its
+        // broadcast address are not counted) is used only if an echo rule
+        // covers that address too. A non-unicast answer or our own address is
+        // never pinged.
+        let own = stack.address();
+        let usable = found.addresses.iter().copied().find(|a| {
+            crate::config::is_unicast(*a)
+                && Some(*a) != own
+                && (found.from_hosts
+                    || !is_local(stack, *a, now_us)
+                    || scope.allows_echo_address(*a))
+        });
+        let failure = match usable {
+            None => code::LOCAL,
+            Some(address) => match stack.ping(address, start.count, start.timeout_us, now_us) {
+                Ok(()) => {
+                    self.ping = Some((Some(id), t));
+                    return None;
+                }
+                Err(e) => ping_code(e),
+            },
+        };
+        self.ping = None;
+        Some(ping_reply(failure, None, t))
+    }
+
     /// The reply to the run that ended: the connection and the bytes, or
     /// `None` if its connection is gone.
     pub fn ping_done(&mut self, result: PingResult) -> Option<(usize, Vec<u8>)> {
-        let (id, t) = self.ping.take()?;
+        let (owner, t) = self.ping.take()?;
+        let id = owner?;
+        let rtts: Vec<Rtt> = result
+            .rtts
+            .iter()
+            .take(MAX_PINGS_USIZE)
+            .map(|us| Rtt { us: *us })
+            .collect();
         let body = PingReply {
             status: Below(code::OK),
+            address: be(result.target),
             sent: result.sent,
             received: result.received,
             rtt_min_us: result.rtt_min_us,
             rtt_avg_us: result.rtt_avg_us,
             rtt_max_us: result.rtt_max_us,
+            rtts: Seq::Of(&rtts),
         };
         Some((id, reply(&body, t)))
     }
+}
+
+fn ping_code(e: PingError) -> u32 {
+    match e {
+        PingError::Busy => code::BUSY,
+        PingError::BadTarget => code::INVALID,
+        PingError::NoAddress => code::UNAVAILABLE,
+    }
+}
+
+fn resolve_code(f: ResolveFail) -> u32 {
+    fail_code(f)
 }
 
 fn fail_code(f: ResolveFail) -> u32 {
@@ -513,15 +671,18 @@ fn ping_reply(status: u32, result: Option<PingResult>, t: u32) -> Vec<u8> {
         rtt_min_us: 0,
         rtt_avg_us: 0,
         rtt_max_us: 0,
+        rtts: Vec::new(),
     });
     reply(
         &PingReply {
             status: Below(status),
+            address: be(r.target),
             sent: r.sent,
             received: r.received,
             rtt_min_us: r.rtt_min_us,
             rtt_avg_us: r.rtt_avg_us,
             rtt_max_us: r.rtt_max_us,
+            rtts: Seq::Of(&[]),
         },
         t,
     )

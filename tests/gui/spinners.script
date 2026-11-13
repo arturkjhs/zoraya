@@ -10,14 +10,18 @@
 # 2. Two rooms with `--cpu 25%` run two spinners each (the rooms' own programs,
 #    from the system image); the key latency of a terminal in `home` is
 #    measured by the runner's `latency` step, first with nothing spinning (the
-#    baseline) and then with the spinners, and the second may be at most
-#    450 ms over the first (both over one screendump read). A smoke test of
-#    starvation, not a timing: the runner reads the screen every 150 ms, so a
-#    time is a screendump plus whole polls (CI, auto: 169 ms with nothing
-#    spinning, 331 ms with the spinners, a fixed 300 ms failed); 450 ms is
-#    three more polls, and a starved terminal takes seconds. The kernel's own
-#    50 ms bound for an uncapped process next to capped rooms that spin and
-#    burst is checked by t_cpu (make test-qemu).
+#    baseline) and then with the spinners, over 30 keys each. The median with
+#    the spinners may be at most 50 ms over the baseline's (INV-0264-3) when
+#    the machine runs under HVF, where the runner reads the screen every
+#    10 ms, so that a time is a screendump and not whole polls; and 450 ms
+#    over it under TCG (`tcg +450`), where the runner must read every 150 ms
+#    (back to back dumps starve a TCG guest) and a time is a screendump plus
+#    whole polls (CI, auto then: 169 ms with nothing spinning, 331 ms with
+#    the spinners); 450 ms is three more polls, and a starved terminal takes
+#    seconds. Both are differences of two medians of the same run, over one
+#    screendump read each. The kernel's own 50 ms bound for an uncapped
+#    process next to capped rooms that spin and burst is checked by t_cpu
+#    (make test-qemu).
 serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
@@ -57,7 +61,7 @@ prefix /> _
 chord ctrl l
 top /> _
 pause 1500
-latency 10
+latency 30
 type room new spin1 --cpu 25% --procs 6 +w ~/other\r
 prefix spin1 --colour
 prefix /> _
@@ -88,7 +92,7 @@ prefix /> _
 chord ctrl l
 top /> _
 pause 1500
-latency 10 +450
+latency 30 +50 tcg +450
 shot spinners
 type poweroff\r
 exit

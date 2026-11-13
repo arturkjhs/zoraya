@@ -77,6 +77,7 @@ pub struct Extra {
     /// Released sockets waiting for their reset to go out, and whether a
     /// `tcp_reap` has passed since.
     doomed: Vec<(usize, bool)>,
+    /// The next port to try; 0 until the first socket (or `seed_ports`).
     next_port: u16,
     pub(crate) resolver: Resolver,
 }
@@ -97,7 +98,15 @@ impl<L: Link> Stack<L> {
         self.extra.sockets.iter().flatten().count()
     }
 
-    fn ephemeral_port(&mut self) -> u16 {
+    /// Picks the first ephemeral port from `seed` (RFC 6056, randomized
+    /// selection), so that a restarted stack does not reuse the four-tuple of
+    /// its predecessor's connections, which a NAT may still hold.
+    pub(crate) fn seed_ports(&mut self, seed: u64) {
+        let range = u64::from(u16::MAX - PORT_FIRST) + 1;
+        self.extra.next_port = PORT_FIRST + (seed % range) as u16;
+    }
+
+    pub(crate) fn ephemeral_port(&mut self) -> u16 {
         loop {
             let p = self.extra.next_port.max(PORT_FIRST);
             self.extra.next_port = if p == u16::MAX { PORT_FIRST } else { p + 1 };

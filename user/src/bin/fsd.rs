@@ -389,13 +389,22 @@ fn main() -> i32 {
         port: block_port,
         data,
     };
-    let Ok(device) = ChannelDevice::new(link) else {
+    let Ok(mut device) = ChannelDevice::new(link) else {
         println!("fsd: no answer from the driver");
         return 1;
     };
+    // A disk of another format version is not corrupt, and the person should
+    // read that (TASK-26, hand-run): read the root slots before the mount.
+    let foreign = zoraya_fs::foreign_format_version(&mut device);
     let volume = match Volume::mount(device, Time, MountOptions::default()) {
         Ok(volume) => volume,
         Err(e) => {
+            if let Some(found) = foreign {
+                println!(
+                    "fsd: the disk is format {found}, this system needs format {}: make a new disk (make run does)",
+                    zoraya_fs::format::FORMAT_VERSION
+                );
+            }
             println!("fsd: mount: {e:?}");
             return 1;
         }

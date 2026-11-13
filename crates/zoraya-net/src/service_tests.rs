@@ -2,6 +2,7 @@
 //! messages out, over the scripted peers of the parent module.
 
 use super::*;
+use crate::connection::{ConnectTarget, Request, Verdict};
 use crate::service::{Action, MAX_CONNECTIONS, Service};
 use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode as encode_scope, rights};
 use zoraya_proto_net::{
@@ -30,6 +31,7 @@ fn ping_message(address: [u8; 4], count: u32) -> Vec<u8> {
             address: u32::from_be_bytes(address),
             count: Below(count),
             timeout_ms: Below(2000),
+            name: Data(b""),
         },
         9,
     )
@@ -125,22 +127,34 @@ fn ping_through_the_service_answers_when_the_run_ends() {
 fn ping_needs_the_right_and_a_rule_for_the_address() {
     let mut net = Net::new(static_config());
     let mut service = Service::new();
-    let rule = |target| {
+    let rule_of = |target, protocols| {
         let mut out = vec![0u8; 128];
         let r = ReachRule {
             target,
             ports: Ports::ANY,
-            protocols: Protocols::BOTH,
+            protocols,
         };
         let n = encode_scope(&[r], &[], &mut out).unwrap();
         out.truncate(n);
         out
     };
+    let rule = |target| rule_of(target, Protocols::ALL);
     let by_name = Connection::new(rights::REACH, &rule(Target::Name("gateway"))).unwrap();
     let elsewhere = Connection::new(rights::REACH, &rule(Target::Address([8, 8, 8, 8]))).unwrap();
     let no_right = Connection::new(rights::STATUS, &rule(Target::Any)).unwrap();
-    let exact = Connection::new(rights::REACH, &rule(Target::Address(SERVER_IP))).unwrap();
-    for refused in [by_name, elsewhere, no_right] {
+    // ADR-0330: a grant of TCP and UDP to exactly this address is no grant of
+    // echo requests to it.
+    let no_echo = Connection::new(
+        rights::REACH,
+        &rule_of(Target::Address(SERVER_IP), Protocols::BOTH),
+    )
+    .unwrap();
+    let exact = Connection::new(
+        rights::REACH,
+        &rule_of(Target::Address(SERVER_IP), Protocols::ECHO),
+    )
+    .unwrap();
+    for refused in [by_name, elsewhere, no_right, no_echo] {
         let id = service.add(refused).unwrap();
         let Action::Reply(r) =
             service.handle(id, &ping_message(SERVER_IP, 1), 0, &mut net.client, net.now)
@@ -477,4 +491,174 @@ fn connect_is_checked_against_the_right_and_the_scope_before_anything_else() {
             Action::Close
         );
     }
+}
+
+fn ping_name_message(name: &str, count: u32) -> Vec<u8> {
+    bytes(
+        &Ping {
+            address: 0,
+            count: Below(count),
+            timeout_ms: Below(2000),
+            name: Data(name.as_bytes()),
+        },
+        11,
+    )
+}
+
+fn scope_for(target: Target<'_>, protocols: Protocols) -> Vec<u8> {
+    let mut out = vec![0u8; 128];
+    let r = ReachRule {
+        target,
+        ports: Ports::ANY,
+        protocols,
+    };
+    let n = encode_scope(&[r], &[], &mut out).unwrap();
+    out.truncate(n);
+    out
+}
+
+fn hosts_config() -> Config {
+    Config {
+        hosts: vec![
+            ("gateway".into(), SERVER_IP),
+            ("other".into(), [10, 0, 2, 9]),
+        ],
+        ..static_config()
+    }
+}
+
+#[test]
+fn ping_by_name_resolves_inside_the_service_and_needs_an_echo_rule_for_the_name() {
+    // ADR-0330. The names come from net.hosts here; the resolver's own paths
+    // are `conn_tests`.
+    let mut net = Net::new(hosts_config());
+    let mut service = Service::new();
+    let refused = |service: &mut Service, net: &mut Net, scope: Vec<u8>, name: &str| {
+        let id = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        let Action::Reply(r) =
+            service.handle(id, &ping_name_message(name, 1), 0, &mut net.client, net.now)
+        else {
+            panic!("refused");
+        };
+        let code = decode::<PingReply>(&r, 0).unwrap().1.status.0;
+        assert!(!net.client.ping_running(), "no frame left for it");
+        service.remove(id);
+        code
+    };
+    // A TCP and UDP rule for the name is no echo grant; nor is a rule for
+    // another name or for the address the name resolves to (the grant names
+    // the host the person wrote).
+    for scope in [
+        scope_for(Target::Name("gateway"), Protocols::BOTH),
+        scope_for(Target::Name("other"), Protocols::ECHO),
+        scope_for(Target::Address([8, 8, 8, 8]), Protocols::ECHO),
+    ] {
+        assert_eq!(
+            refused(&mut service, &mut net, scope, "gateway"),
+            status::NOT_GRANTED
+        );
+    }
+    // A name that is not a name.
+    assert_eq!(
+        refused(
+            &mut service,
+            &mut net,
+            scope_for(Target::Any, Protocols::ALL),
+            "a..b"
+        ),
+        status::INVALID
+    );
+    // The echo rule for the name: the run starts, the reply names the address.
+    let id = service
+        .add(
+            Connection::new(
+                rights::REACH,
+                &scope_for(Target::Name("gateway"), Protocols::ECHO),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        service.handle(
+            id,
+            &ping_name_message("gateway", 2),
+            0,
+            &mut net.client,
+            net.now
+        ),
+        Action::Deferred
+    );
+    let (to, reply) = finish_ping(&mut service, &mut net).expect("the run ended");
+    assert_eq!(to, id);
+    let (_, r) = decode::<PingReply>(&reply, 0).unwrap();
+    assert_eq!((r.status.0, r.sent, r.received), (status::OK, 2, 2));
+    assert_eq!(r.address, u32::from_be_bytes(SERVER_IP));
+    assert_eq!(r.rtts.len(), 2);
+    // The same connection cannot open a TCP connection to the host.
+    assert_eq!(
+        service.connection(id).unwrap().decide(Request::Connect {
+            target: ConnectTarget::Name("gateway"),
+            port: 80
+        }),
+        Verdict::NotGranted
+    );
+    assert_eq!(
+        service.connection(id).unwrap().decide(Request::Connect {
+            target: ConnectTarget::Address(SERVER_IP),
+            port: 80
+        }),
+        Verdict::NotGranted
+    );
+}
+
+#[test]
+fn a_run_whose_connection_went_is_not_given_to_the_next_asker() {
+    // A pings (16 requests) and goes; B, with an echo rule for a name, asks
+    // for a ping by name while A's run still goes. B is told Busy, and when
+    // A's run ends nobody is handed its address and round trips.
+    let mut net = Net::new(hosts_config());
+    let mut service = Service::new();
+    let a = service.add(Connection::root()).unwrap();
+    assert_eq!(
+        service.handle(a, &ping_message(SERVER_IP, 16), 0, &mut net.client, net.now),
+        Action::Deferred
+    );
+    service.remove(a);
+    let b = service
+        .add(
+            Connection::new(
+                rights::REACH,
+                &scope_for(Target::Name("other"), Protocols::ECHO),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let Action::Reply(r) = service.handle(
+        b,
+        &ping_name_message("other", 1),
+        0,
+        &mut net.client,
+        net.now,
+    ) else {
+        panic!("busy");
+    };
+    assert_eq!(decode::<PingReply>(&r, 0).unwrap().1.status.0, status::BUSY);
+    // The same by address: busy too.
+    assert!(
+        finish_ping(&mut service, &mut net).is_none(),
+        "A's end goes to nobody"
+    );
+    // The slot is free again.
+    assert_eq!(
+        service.handle(
+            b,
+            &ping_name_message("other", 1),
+            0,
+            &mut net.client,
+            net.now
+        ),
+        Action::Deferred
+    );
 }

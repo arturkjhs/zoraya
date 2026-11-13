@@ -78,10 +78,14 @@ pub enum Kind {
     /// connection that reaches that host and port, nothing else (ADR-0224
     /// item 2, N3).
     Url,
+    /// A host: a dotted IPv4 address or a name. The base-system command is
+    /// given a network connection whose scope is that host, any port
+    /// (`ping`, proposed ADR-0330).
+    Host,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Read,
         Kind::Write,
         Kind::Create,
@@ -91,6 +95,7 @@ impl Kind {
         Kind::Tree,
         Kind::Text,
         Kind::Url,
+        Kind::Host,
     ];
 
     pub fn parse(word: &str) -> Option<Kind> {
@@ -109,6 +114,7 @@ impl Kind {
             Kind::Tree => "tree",
             Kind::Text => "text",
             Kind::Url => "url",
+            Kind::Host => "host",
         }
     }
 
@@ -124,11 +130,12 @@ impl Kind {
             Kind::Tree => "anything in it changed",
             Kind::Text => "text",
             Kind::Url => "host and port reached",
+            Kind::Host => "host reached",
         }
     }
 
     pub fn is_path(self) -> bool {
-        !matches!(self, Kind::Text | Kind::Url)
+        !matches!(self, Kind::Text | Kind::Url | Kind::Host)
     }
 }
 

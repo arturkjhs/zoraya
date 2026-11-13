@@ -34,6 +34,7 @@
 > \x20
 <   mv        move or rename
 ^ \r\n  net       show the state of the network
+^ \r\n  ping      send echo requests to a host and show the replies
 ^ \r\n  poweroff  turn the machine off
 ^ \r\n  pwd       print the current directory
 ^ \r\n  random    show random bytes
@@ -54,7 +55,9 @@
 ^ \r\n  unset     remove a variable
 ^ \r\n  uptime    time since boot
 ^ \r\n  wait      wait for background jobs
-^ \r\nDemonstrations: echo-args exit-with fault hello spin stubborn
+< -- space: next page, q: quit --
+> \x20
+< Demonstrations: echo-args exit-with fault hello spin stubborn
 ^ \r\n~>
 > pwd\r
 < \r\n/home
