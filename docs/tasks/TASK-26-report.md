@@ -1223,6 +1223,19 @@ INV-0269-1 and -3: checked at the keeper's channels in `t_rooms` (the test stand
 restart path are not run). INV-0266-3 stays open for the compositor's hover card (Q6b); INV-0265-3 and -4 and INV-0268-3 stay open (the
 room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts unchanged (the table has 518 rows).
 
+### net-port-seed (`work/net-port-seed`): the first ephemeral port of a restarted `netd`
+
+- **Incident** (main CI run 43330650492, `net-fetch-tcg`): `Extra.next_port` started at 0 and nothing seeded it, so `ephemeral_port()` gave
+  `PORT_FIRST` (49152) to the first socket of every `netd`. After the test's deliberate `net crash`, the first fetch of the restarted `netd`
+  reused the four-tuple 10.0.2.15:49152 -> 10.0.2.2:PORT of the killed `netd`'s connection, which SLIRP still held; its SYNs were swallowed, the
+  fetch waited for retransmits (1 to 3 s even in green runs) and sometimes hit `CONNECT_US` (10 s): "the host did not answer", step timeout.
+- **Fix**: `Stack::new` seeds the first port with `PORT_FIRST + seed % 16384` (RFC 6056 randomized selection, `Extra::seed_ports`);
+  `ephemeral_port` still skips ports in use and wraps 65535 -> 49152. Host tests: different seeds give different first ports, the same seed the
+  same port, seeds 0, 16383 (port 65535) and `u64::MAX` stay in 49152..=65535, and the wrap from 65535 goes to 49152.
+- **Seed source**: `netd` passes `clock_monotonic() ^ MAC` (user/src/bin/netd.rs), not a constant; it differs between starts. The entropy
+  service of ADR-0227 is not wired into `netd` yet, so the seed is still not random (not a secret; unchanged). No doc states a fixed first port.
+- Tests: `cargo test -p zoraya-net`, `make check`.
+
 ### Tests run (this session)
 
 - `cargo test -p zoraya-settings` (27), `-p zoraya-proto-rooms` (6), `-p zoraya-rooms` (20), `-p zoraya-panel` (14): pass.
