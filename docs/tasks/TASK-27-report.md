@@ -602,6 +602,21 @@ For the architect's manual check of real sites (a terminal from the desktop, hom
 or `make run-net` shows the dock): `netsurf https://example.org/`, `netsurf http://example.com/`, `netsurf https://www.wikipedia.org/` (a page that
 links to other hosts will show their images missing: add `+net upload.wikimedia.org` words to the line), and `netsurf` alone for the welcome page.
 
+## 9c: the merge of `main` with 9d (branch `work/9c`, 2026-11-13)
+
+`origin/main` (65b1522, 9d merged) merged into `work/9c`; every conflict keeps both sides (the netsurf and python targets,
+`TEST_STEPS`, `ci-build` builds `netsurf` and `python`, `tools/ci-tests.txt`, `plan-lib.sh`, one map line per prefix with the
+union of both steps). The host Python's prefix is now `build/ports/hostpython`: `build/ports/host` holds NetSurf's host tools,
+which CI's artifact must keep for `test-netsurf` (it left `build/ports/host` out for Python before). The workflow's build job
+has 60 minutes (a cold cache builds NetSurf and CPython; not measured), ADR-0317 is in the ports cache's key, and the long-job
+timeout names `test-apps` and `test-netsurf` as well. Invariants Total 628. No ADR number collides (0320 here; 0321
+`work/tls-options`, 0322 and 0323 `work/9e`).
+
+Run on the Mac (HVF): `make check` ok; `make netsurf` ok (`bin/netsurf` 12.5 MB); `make test-python` (rebuilt with the new
+prefix) `PASS: 107 steps`, 0 request bytes to the refused servers; `make apps`; a 192M volume of `rootfs-apps` (curl, wget,
+NetSurf) and `rootfs-python` (77.9 MB of files, 20,195 of 49,152 blocks) made by `tools/run-disk.sh`, `zoraya-fsck` clean;
+`make test-hand-run` ok (three runs PASS). Not run: `make test-netsurf`, CI.
+
 ## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
 
 Result accepted by the architect: the `ubuntu-24.04-arm` runner has no KVM (`/dev/kvm` missing; `-accel kvm` exits 1 with

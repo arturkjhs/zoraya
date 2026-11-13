@@ -2093,7 +2093,8 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. `ssl.create_default_context()` finds the roots with no `cafile` (OpenSSL's `OPENSSLDIR` is `/system/tls`). `PYTHON*` variables decide nothing. A script imports from the standard library and its own directory (the current directory is readable), not from the current directory under `-c`, `-m` or a program read from standard input. Python is not mediated: a script can turn verification off (`ssl.CERT_NONE`), unlike curl's refused `-k`.
 - **The volume.** `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and `DISK_SIZE` (default 64M, in
   the disk's key): curl, wget and Python do not fit in 64M, so `make run` with Python is
-  `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`. `make test-python` makes its own 256M disk.
+  `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`, which also holds NetSurf (9d: `bin/netsurf` 12.5 MB and
+  `usr/share/netsurf` in `build/rootfs-apps`, about 12 MiB in all, beside Python's 52 MB). `make test-python` makes its own 256M disk.
 - **Tests** (`make test-python`, `tests/shell/python.script`): `-V`, `-c`, exit statuses, `tests/python/smoke.py` (flags,
   `sqlite3`, `ssl`, `asyncio`, a thread, `fork`), `grants` with and without `+net`, an `asyncio` HTTPS client
   (`tests/python/https_client.py`) against `tools/test-httpd`'s TLS server with the test PKI's root, the refusal of an expired and a
