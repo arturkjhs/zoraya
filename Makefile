@@ -427,9 +427,10 @@ test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
 	dnsport=$$(cat $(NET_LOOKUP_DNS_READY)); port=$$(cat $(NET_LOOKUP_HTTP_READY)); \
 	if [ -z "$$dnsport" ] || [ -z "$$port" ] || ! kill -0 $$dns 2>/dev/null || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[net-lookup] FAIL: the test servers did not start"; cat $(NET_LOOKUP_DNS_LOG); kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
-	printf 'net.dns = 10.0.2.2\n' > $(NET_LOOKUP_ROOT)/config/settings && \
-	echo "$$dnsport" > $(NET_LOOKUP_ROOT)/config/net-test-dns-port && \
-	target/debug/zoraya-mkfs --size 16M --from $(NET_LOOKUP_ROOT) $(NET_LOOKUP_DISK) && \
+	if ! { printf 'net.dns = 10.0.2.2\n' > $(NET_LOOKUP_ROOT)/config/settings && \
+		echo "$$dnsport" > $(NET_LOOKUP_ROOT)/config/net-test-dns-port && \
+		target/debug/zoraya-mkfs --size 16M --from $(NET_LOOKUP_ROOT) $(NET_LOOKUP_DISK); }; then \
+		echo "[net-lookup] FAIL: the disk was not made"; kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
 	sed -e "s/@PORT@/$$port/g" -e "s/@SUM1K@/$$($(HTTPD) --checksum 1000)/" tests/shell/net-lookup.script > $(NET_LOOKUP_SCRIPT); \
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_LOOKUP_SCRIPT) --label net-lookup-auto -- \
 		$(RUN_QEMU) --test --keys --net --net-open --net-pcap $(NET_LOOKUP_PCAP) --disk $(NET_LOOKUP_DISK) --accel auto $(NET_TEST_KERNEL); rc=$$?; \
