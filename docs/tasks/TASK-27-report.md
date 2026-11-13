@@ -427,3 +427,14 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
    by a release; there is no upstream release to pin. A new commit means a new line and a new hash.
 6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
    runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.
+
+## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
+
+Result accepted by the architect: the `ubuntu-24.04-arm` runner has no KVM (`/dev/kvm` missing; `-accel kvm` exits 1 with
+"failed to initialize kvm"), and arm TCG is 1.4 to 1.7 times slower than x86 TCG for the four QEMU steps measured
+(`make test-qemu-auto-default` 3:13 against 4:48, `make test-qemu-tcg-smp4-gicv3` 3:44 against 5:54, `make test-net` 8:32
+against 12:15, the `threads.script` posix job 8:34 against 14:55; whole job 30:54 against 45:44; one run each, cold
+caches, run 43447464141). Decision: move nothing; `work/ci-arm` is not merged and stays as the branch for a later KVM
+probe (its workflow `ci-arm.yml` runs on pushes to that branch and by hand). The details are in
+`docs/research/ci-arm.md` on that branch.
+
