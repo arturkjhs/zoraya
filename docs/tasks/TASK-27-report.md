@@ -7,11 +7,11 @@ Running report, updated after each part. Part 9b's design was written by a Sonne
 
 | Part | State | Tag |
 |---|---|---|
-| 9a TLS for C, zlib, curl, wget | not started | |
+| **9a TLS for C, zlib, curl, wget** | implemented on `work/9a` (merged with `origin/main` at `a0cfc1f`, so it has 9b's kernel and libposix threads); ADR-0312 accepted 2026-11-13; ADR-0310 and ADR-0311 `proposed` (they only add decisions); OpenSSL rebuilt with threads; not merged; tests in the section "9a: OpenSSL with threads" below | |
 | **9b POSIX threads** | **design accepted 2026-11-13** (ADR-0300 to ADR-0309 accepted by the architect as recommended; ADR-0308 supersedes ADR-0100's "no threads" and the other places it lists); kernel step implemented on `work/9b`; ADR-0313 (the kernel as built) accepted 2026-11-13; libposix step on `work/9b-libc` (ADR-0314, ADR-0315 proposed). Next: 9a, then 9b implementation and 9d in parallel, then 9c. Thread calls stay 56 to 61 (the highest call on main is 55, `device_write`) | |
 | 9c CPython | not started | |
 | 9d NetSurf | not started | |
-| image addition (`EXTRA_ROOT`) | not started | |
+| image addition (`EXTRA_ROOT`) | done inside 9a (`tools/run-disk.sh`, `make check-run-disk`), without descriptions for unknown programs; already on `work/9a` | |
 
 ### The ADRs of part 9b (all accepted 2026-11-13; they were `proposed`; one line each is a recommendation, not a decision)
 
@@ -371,3 +371,43 @@ Decisions made without the architect, all in ADR-0310 to ADR-0312 (still `propos
 
 Ran in this session: `make check`; `cargo test -p zoraya-describe -p zoraya-posix -p zoraya-shell`; `make apps`; `make test-apps`
 (one run, HVF, 235 steps); `make test-hand-run`; `make test-files`. Not run: `FULL=1` (TCG), `make test-changed`, `test-net-posix`.
+
+## 9a: OpenSSL with threads, and the merge with `main` (2026-11-13)
+
+Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-0314, ADR-0315) reached `main`.
+
+- **Merge.** `origin/main` (`a0cfc1f`) merged into `work/9a`; conflicts in the Makefile step lists, `ports/Makefile`, `ports/sources.lock`,
+  `tools/plan-lib.sh`, `tools/test-map.txt`, the fake kernel of `crates/zoraya-posix/tests/kernel/mod.rs`, `docs/adr/invariants.md`
+  (Total recomputed: 615) and this file; both sides kept. ADR numbers do not collide (0310 to 0312 are 9a's; 0313 to 0316 are 9b's and
+  first-lookup's). `work/9a-leak`'s fix (`posix_child::load` attaches the image's object itself) was merged into `work/9a` earlier
+  (`git merge-base --is-ancestor origin/work/9a-leak HEAD` holds); nothing to fold in.
+- **OpenSSL with threads.** `ports/Makefile` `OPENSSL_OPTS` has `threads` in place of `no-threads`; the rest (`no-tls1 no-tls1_1 no-dtls no-ssl3
+  no-engine no-dso no-shared`, `--with-rand-seed=getrandom`, the four patches) is unchanged, and `getrandom` is still the only seed source (the end
+  of `make apps` checks it as before). Its locks are OpenSSL's own `threads_pthread.c` (`CRYPTO_THREAD_*` over `pthread_rwlock_*`,
+  `pthread_once`, `pthread_key_*`) on musl's pthreads in `libc.a`; the build and the test link and run without a shim. curl and wget stay
+  single-threaded: curl's options already say `--disable-threaded-resolver` (synchronous resolver; chosen, recorded in ADR-0310 item 2)
+  and wget's `--disable-threads`. `curl --version` now lists `threadsafe` (a feature of the build with OpenSSL's threads), which
+  `tests/shell/apps-launches.script` expects.
+- **The test of ADR-0309 item 4 (TLS half).** `tests/apps/tlsthreads.c` (built by `ports/Makefile`, copied to the test volume by `make test-apps` only;
+  described by `user/describe/posix/tlsthreads.cmd`, so the shell gives it a connection and `/system/tls`): four threads, one shared `SSL_CTX`, three
+  handshakes each per URL. Against the valid server all 12 succeed and return the page; against the expired and the wrong-name server all 12
+  are refused (and the Makefile's check of the server logs shows 0 request bytes). The shell's connection account for a POSIX program holds two
+  connections (`POSIX_NET_BUDGET`), so a thread whose `connect` fails waits 50 ms and tries again: at most two handshakes are in flight at once.
+- **Not done:** the SHA-256 / AES-GCM / `RAND_bytes` check of ADR-0309 item 4 (`tests/posix/ossl_threads.c`).
+- **A stale build trap found:** `build/ramdisk.bin` is rebuilt only when missing, so a new `user/describe/posix/*.cmd` (or any user-program change)
+  does not reach `make test-apps`' kernel until `build/ramdisk.bin` and `build/zoraya-kernel.elf` are removed (CI starts clean).
+
+## Status for the architect (9a)
+
+1. **ADR-0310 and ADR-0311 are `proposed`.** They only add decisions (names for `libc.a`, the `names` description key, the roots directory). Accept,
+   change or reject them; 9a does not merge on their account alone, but the descriptions and the shell code depend on them.
+2. **wget is GPL-3.0-or-later.** It is a separate program in the image, built from the pinned tarball, not linked into anything; the precedent is
+   ADR-0109 (GNU make, GPL-3.0, in the image). `docs/dependencies.md` lists it. Confirm that this is acceptable.
+3. **SQLite's source is public domain** and is used as a test input only (`threadtest3` in 9b, W3's source); it is not linked into the kernel or a
+   `no_std` crate.
+4. **Linux CI build of the ports** (`make apps` in the build job): verified by the candidate run 43371864611 (green on `11d77f2`, as the orchestrator reported; not rerun here). The
+   candidate for this head is the orchestrator's to tag.
+5. **The `libc-test` fetch is pinned by git commit** (`ports/sources.lock`: `libctest 63e36e9...`, with the SHA-256 of the tarball made from it), not
+   by a release; there is no upstream release to pin. A new commit means a new line and a new hash.
+6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
+   runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.

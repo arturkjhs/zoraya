@@ -9,7 +9,7 @@
 ! the other end is gone
 < Type help to begin, or help tour.
 < \r\n~>
-* 16 curl --version\r | libz SSL\r\n~>
+* 16 curl --version\r | libz SSL threadsafe\r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)
 < \r\n~>

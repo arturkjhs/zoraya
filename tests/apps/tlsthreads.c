@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <openssl/err.h>
@@ -79,6 +80,12 @@ static void one(const struct target *t)
 {
 	int fd = dial(t);
 	SSL *ssl;
+	/* The shell gives a POSIX program a connection account of POSIX_NET_BUDGET (2)
+	   sockets at a time: a thread that finds none free waits and tries again. */
+	for (int tries = 0; fd < 0 && tries < 600; tries++) {
+		nanosleep(&(struct timespec){0, 50 * 1000 * 1000}, NULL);
+		fd = dial(t);
+	}
 	char buf[2048];
 	size_t have = 0;
 	int n;
