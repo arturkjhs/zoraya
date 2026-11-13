@@ -1642,3 +1642,193 @@ fn a_deferred_read_and_sleep_get_their_outcomes() {
     let slept = deferred(&mut r, |r| r.p.wait_for(&[], Some(1)), |_| {});
     assert_eq!(slept, Ok((None, None)));
 }
+
+// ------------------------------------------------------- record locks (ADR-0317)
+
+mod record_locks {
+    use super::*;
+    use zoraya_posix::records::{
+        F_GETLK, F_OFD_GETLK, F_OFD_SETLK, F_OFD_SETLKW, F_RDLCK, F_SETLK, F_SETLKW, F_UNLCK,
+        F_WRLCK, FLOCK_SIZE,
+    };
+
+    fn flock(kind: i16, whence: i16, start: i64, len: i64) -> [u8; FLOCK_SIZE] {
+        let mut b = [0u8; FLOCK_SIZE];
+        b[0..2].copy_from_slice(&kind.to_le_bytes());
+        b[2..4].copy_from_slice(&whence.to_le_bytes());
+        b[8..16].copy_from_slice(&start.to_le_bytes());
+        b[16..24].copy_from_slice(&len.to_le_bytes());
+        b
+    }
+
+    fn ty(b: &[u8; FLOCK_SIZE]) -> i16 {
+        i16::from_le_bytes([b[0], b[1]])
+    }
+
+    fn lk(
+        r: &mut Rig,
+        fd: i32,
+        cmd: i32,
+        mut b: [u8; FLOCK_SIZE],
+    ) -> Result<[u8; FLOCK_SIZE], i32> {
+        r.p.fcntl_lock(fd, cmd, &mut b).map(|()| b)
+    }
+
+    /// Two opens of one file: the locks of one process do not conflict with
+    /// each other, those of two descriptions (OFD) do.
+    #[test]
+    fn ofd_locks_conflict_by_description_and_posix_locks_by_process() {
+        let mut r = rig();
+        let a = open(&mut r, "db", RW_CREATE, 0o644).unwrap();
+        let b = open(&mut r, "db", o::RDWR, 0).unwrap();
+        // POSIX locks: one process, never in its own way.
+        lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 0, 10)).unwrap();
+        lk(&mut r, b, F_SETLK, flock(F_WRLCK, 0, 5, 10)).unwrap();
+        let g = lk(&mut r, b, F_GETLK, flock(F_WRLCK, 0, 0, 100)).unwrap();
+        assert_eq!(ty(&g), F_UNLCK, "its own locks are not reported");
+        lk(&mut r, a, F_SETLK, flock(F_UNLCK, 0, 0, 0)).unwrap();
+        // OFD locks: a description conflicts with another's, and with the
+        // process's POSIX lock.
+        lk(&mut r, a, F_OFD_SETLK, flock(F_WRLCK, 0, 0, 10)).unwrap();
+        assert_eq!(
+            lk(&mut r, b, F_OFD_SETLK, flock(F_RDLCK, 0, 9, 1)),
+            Err(EAGAIN)
+        );
+        lk(&mut r, b, F_OFD_SETLK, flock(F_RDLCK, 0, 10, 1)).unwrap();
+        let g = lk(&mut r, b, F_OFD_GETLK, flock(F_WRLCK, 0, 0, 100)).unwrap();
+        assert_eq!(ty(&g), F_WRLCK, "the OFD write lock of `a`");
+        assert_eq!(i64::from_le_bytes(g[8..16].try_into().unwrap()), 0);
+        assert_eq!(i64::from_le_bytes(g[16..24].try_into().unwrap()), 10);
+        assert_eq!(i32::from_le_bytes(g[24..28].try_into().unwrap()), -1);
+        // A pid with an OFD command is refused.
+        let mut bad = flock(F_RDLCK, 0, 0, 1);
+        bad[24] = 1;
+        assert_eq!(lk(&mut r, a, F_OFD_SETLK, bad), Err(EINVAL));
+        // A POSIX lock over what `b` holds: refused with EAGAIN; the wait
+        // command is the same call (the caller sleeps).
+        assert_eq!(
+            lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 10, 1)),
+            Err(EAGAIN)
+        );
+        assert_eq!(
+            lk(&mut r, a, F_SETLKW, flock(F_WRLCK, 0, 10, 1)),
+            Err(EAGAIN)
+        );
+        // F_GETLK shows a POSIX lock's holder: this process.
+        r.p.close(a).unwrap();
+        lk(&mut r, b, F_SETLK, flock(F_WRLCK, 0, 50, 0)).unwrap();
+        let c = open(&mut r, "db", o::RDWR, 0).unwrap();
+        let g = lk(&mut r, c, F_OFD_GETLK, flock(F_RDLCK, 0, 60, 1)).unwrap();
+        assert_eq!(ty(&g), F_WRLCK);
+        assert_eq!(
+            i64::from_le_bytes(g[16..24].try_into().unwrap()),
+            0,
+            "to EOF"
+        );
+        assert_eq!(
+            i32::from_le_bytes(g[24..28].try_into().unwrap()),
+            r.p.facts.pid as i32
+        );
+    }
+
+    /// POSIX: closing any fd of a file drops all the process's locks on it;
+    /// closing the last fd of a description drops its OFD locks, and a `dup`
+    /// keeps them.
+    #[test]
+    fn close_releases() {
+        let mut r = rig();
+        let a = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+        let b = open(&mut r, "f", o::RDWR, 0).unwrap();
+        let other = open(&mut r, "other", RW_CREATE, 0o644).unwrap();
+        lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        lk(&mut r, other, F_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        let probe = open(&mut r, "f", o::RDWR, 0).unwrap();
+        let held = |r: &mut Rig| lk(r, probe, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 1));
+        assert_eq!(held(&mut r), Err(EAGAIN));
+        r.p.close(b).unwrap(); // not the fd that locked
+        assert!(held(&mut r).is_ok(), "the lock is on the file, not the fd");
+        r.p.close(probe).unwrap();
+        // The lock of `other` is untouched by that.
+        let p2 = open(&mut r, "other", o::RDWR, 0).unwrap();
+        assert_eq!(
+            lk(&mut r, p2, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 1)),
+            Err(EAGAIN)
+        );
+        // OFD: a dup keeps the lock while one fd is open.
+        let d = open(&mut r, "g", RW_CREATE, 0o644).unwrap();
+        let d2 = r.p.dup(d).unwrap();
+        lk(&mut r, d, F_OFD_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        let q = open(&mut r, "g", o::RDWR, 0).unwrap();
+        r.p.close(d).unwrap();
+        assert_eq!(
+            lk(&mut r, q, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 1)),
+            Err(EAGAIN)
+        );
+        r.p.close(d2).unwrap();
+        lk(&mut r, q, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 1)).unwrap();
+        // dup2 over an fd that locked ends the process's locks on its file.
+        let e = open(&mut r, "h", RW_CREATE, 0o644).unwrap();
+        lk(&mut r, e, F_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        let hp = open(&mut r, "h", o::RDWR, 0).unwrap();
+        assert_eq!(
+            lk(&mut r, hp, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 1)),
+            Err(EAGAIN)
+        );
+        r.p.dup3(q, e, 0, false).unwrap();
+        lk(&mut r, hp, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 1)).unwrap();
+    }
+
+    #[test]
+    fn arguments_and_whence() {
+        let mut r = rig();
+        let ro = open(&mut r, "w", RW_CREATE, 0o644).unwrap();
+        r.write(ro, b"0123456789").unwrap();
+        let rd = open(&mut r, "w", o::RDONLY, 0).unwrap();
+        let wr = open(&mut r, "w", o::WRONLY, 0).unwrap();
+        assert_eq!(lk(&mut r, rd, F_SETLK, flock(F_WRLCK, 0, 0, 1)), Err(EBADF));
+        assert_eq!(lk(&mut r, wr, F_SETLK, flock(F_RDLCK, 0, 0, 1)), Err(EBADF));
+        lk(&mut r, rd, F_SETLK, flock(F_RDLCK, 0, 0, 1)).unwrap();
+        assert_eq!(lk(&mut r, rd, F_SETLK, flock(5, 0, 0, 1)), Err(EINVAL));
+        assert_eq!(
+            lk(&mut r, rd, F_SETLK, flock(F_RDLCK, 3, 0, 1)),
+            Err(EINVAL)
+        );
+        assert_eq!(
+            lk(&mut r, rd, F_SETLK, flock(F_RDLCK, 0, -1, 1)),
+            Err(EINVAL)
+        );
+        assert_eq!(lk(&mut r, 99, F_SETLK, flock(F_RDLCK, 0, 0, 1)), Err(EBADF));
+        // SEEK_END counts from the size, SEEK_CUR from the position.
+        let probe = open(&mut r, "w", o::RDWR, 0).unwrap();
+        lk(&mut r, ro, F_OFD_SETLK, flock(F_WRLCK, 2, -2, 2)).unwrap(); // bytes 8..10
+        assert_eq!(
+            lk(&mut r, probe, F_OFD_SETLK, flock(F_RDLCK, 0, 9, 1)),
+            Err(EAGAIN)
+        );
+        lk(&mut r, probe, F_OFD_SETLK, flock(F_RDLCK, 0, 7, 1)).unwrap();
+        r.p.lseek(ro, 4, 0).unwrap();
+        lk(&mut r, ro, F_OFD_SETLK, flock(F_UNLCK, 1, 4, 0)).unwrap(); // from 8 on
+        lk(&mut r, probe, F_OFD_SETLK, flock(F_RDLCK, 0, 9, 1)).unwrap();
+        // Not a file: a pipe is EINVAL.
+        let (p0, _p1) = r.p.pipe(0).unwrap();
+        assert_eq!(
+            lk(&mut r, p0, F_SETLK, flock(F_RDLCK, 0, 0, 1)),
+            Err(EINVAL)
+        );
+        // The ordinary fcntl does not take the lock commands.
+        assert_eq!(r.p.fcntl(rd, F_SETLK, 0), Err(EINVAL));
+        let _ = F_OFD_SETLKW;
+    }
+
+    /// A file's locks are those of the process that holds them: a table of a
+    /// new `Posix` (a `fork` child's) is empty.
+    #[test]
+    fn a_new_process_starts_with_no_locks() {
+        let mut r = rig();
+        let a = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+        lk(&mut r, a, F_OFD_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        assert!(!r.p.locks_is_empty());
+        let r2 = rig();
+        assert!(r2.p.locks_is_empty());
+    }
+}
