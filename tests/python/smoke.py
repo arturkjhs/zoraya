@@ -48,4 +48,30 @@ if pid == 0:
 _, status = os.waitpid(pid, 0)
 assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 7, status
 print("ok fork")
+
+# The status of a child that ends through the interpreter (not os._exit): the
+# thread the interpreter runs on ends the process with it (patch 0004), also in
+# a fork child, where that thread is the only one left.
+def child_status(body):
+    pid = os.fork()
+    if pid == 0:
+        body()
+        os._exit(99)
+    _, st = os.waitpid(pid, 0)
+    assert os.WIFEXITED(st), st
+    return os.WEXITSTATUS(st)
+
+assert child_status(lambda: sys.exit(5)) == 5
+def boom():
+    sys.stderr = open(os.devnull, "w")
+    raise RuntimeError("expected: an uncaught exception in a child")
+assert child_status(boom) == 1
+print("ok fork status")
+
+# urllib takes no proxy from the environment (the interpreter runs as with -E,
+# patch 0006); the variable is set here, after start, as a program could.
+import urllib.request
+os.environ["https_proxy"] = os.environ["http_proxy"] = "http://127.0.0.1:9"
+assert urllib.request.getproxies() == {}, urllib.request.getproxies()
+print("ok no proxy")
 print("smoke done")

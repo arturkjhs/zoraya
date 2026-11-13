@@ -34,18 +34,38 @@
 < ok ssl
 < ok asyncio
 < ok fork
+< ok fork status
+< ok no proxy
 < smoke done
 < \r\n~>
 # What the line gives (ADR-0320 item 7): the script and the standard library
-# to read; no network without a +net word, and the roots only with it.
+# to read; no network without a +net word, and the roots only with it (INV-0320-4:
+# without the word, neither the roots nor a net line in the report).
 > grants python3 smoke.py\r
 < python3 gets (a POSIX program):
 < the terminal
 < /bin /usr /etc       read (system)
 < \r\n~>
+x /system/tls
+x net:
 > grants +net test.zoraya:@TLSVALID@ python3 https_client.py test.zoraya @TLSVALID@\r
 < /system/tls          read (with the network)
 < net: test.zoraya:@TLSVALID@
+< \r\n~>
+# Code in the current directory is not imported by -c and -m (a planted module
+# is the way a download would run with the line's grants); a script imports
+# from its own directory, as python3.cmd says.
+> python3 -c 'import planted'\r
+< ModuleNotFoundError
+< \r\n~>
+x PLANTED
+> python3 -m planted\r
+< No module named planted
+< \r\n~>
+x PLANTED
+> python3 usesplanted.py\r
+< PLANTED module imported
+< script directory imported
 < \r\n~>
 # An asyncio HTTPS client against the test PKI's valid server, and the refusal
 # of an expired and of a wrong-name certificate before any request byte.
@@ -57,6 +77,35 @@
 < refused certificate has expired
 < \r\n~>
 > +net wrong.zoraya:@TLSWRONG@ python3 https_client.py wrong.zoraya @TLSWRONG@\r
+< refused
+< \r\n~>
+# The same server with no cafile: the default context finds the system roots
+# (OPENSSLDIR/roots, /system/tls/roots), and with them only.
+> +net test.zoraya:@TLSVALID@ python3 https_client.py test.zoraya @TLSVALID@ default\r
+< status HTTP/1.1 200
+< body Zoraya test page
+< \r\n~>
+# A blocking client (http.client, urllib: the file-descriptor BIO of patch 0001),
+# no cafile: the valid server answers, the expired and wrong-name ones are
+# refused before any request byte (the server's log is checked by the Makefile).
+> +net test.zoraya:@TLSVALID@ python3 https_blocking.py test.zoraya @TLSVALID@ http.client\r
+< status 200
+< body Zoraya test page
+< \r\n~>
+> +net test.zoraya:@TLSVALID@ python3 https_blocking.py test.zoraya @TLSVALID@ urllib\r
+< status 200
+< body Zoraya test page
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ python3 https_blocking.py expired.zoraya @TLSEXPIRED@ http.client\r
+< refused certificate has expired
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ python3 https_blocking.py expired.zoraya @TLSEXPIRED@ urllib\r
+< refused certificate has expired
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ python3 https_blocking.py wrong.zoraya @TLSWRONG@ http.client\r
+< refused
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ python3 https_blocking.py wrong.zoraya @TLSWRONG@ urllib\r
 < refused
 < \r\n~>
 # CPython's own tests of the modules in tests/python/regr-modules.txt, through
