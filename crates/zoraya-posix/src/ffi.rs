@@ -201,31 +201,7 @@ impl Sys for RtSys {
                 port
             }
         };
-        let mut subscribed = 0;
-        let mut r = Ok(());
-        for (i, &(h, wanted)) in sources.iter().enumerate() {
-            r = zoraya_rt::port_subscribe(port, h, wanted, i as u64 + 1, Mode::Level);
-            if r.is_err() {
-                break;
-            }
-            subscribed = i + 1;
-        }
-        let mut packets = [Packet::default()];
-        let waited = match r {
-            Ok(()) => {
-                zoraya_rt::port_wait(port, deadline.unwrap_or(DEADLINE_INFINITE), &mut packets)
-            }
-            Err(s) => Err(s),
-        };
-        for i in 0..subscribed {
-            let _ = zoraya_rt::port_unsubscribe(port, i as u64 + 1);
-        }
-        waited?;
-        let key = packets[0].key as usize;
-        if key == 0 || key > sources.len() {
-            return Err(Status::BadState);
-        }
-        Ok((key - 1, packets[0].signals))
+        port_wait_any(port, sources, deadline)
     }
 
     fn signals_of(&mut self, h: Handle) -> Result<u32, Status> {
@@ -382,8 +358,71 @@ fn raw(r: Result<i64, i32>) -> i64 {
     r.unwrap_or_else(|e| -i64::from(e))
 }
 
-fn state<R>(f: impl FnOnce(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
-    with(f).unwrap_or(Err(ENOSYS))
+/// Runs `f` on the state; a long wait it asks for (`Err(PENDING)`, ADR-0302
+/// item 9) is made here with the library lock released, and `f` runs again
+/// with the outcome. So `f` is run again from its start: it must have changed
+/// nothing it cannot repeat before a wait (the methods keep that rule, and a
+/// write keeps its progress in the pending wait).
+fn state<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
+    let mut resume: Option<crate::jobs::Resume<Handle>> = None;
+    loop {
+        let r = with(|p| p.run_deferred(resume.take(), &mut f));
+        match r {
+            None => return Err(ENOSYS),
+            Some((r, None)) => return r,
+            Some((_, Some(w))) => {
+                let result = wait_unlocked(&w.sources, w.deadline);
+                resume = Some(crate::jobs::Resume {
+                    sources: w.sources,
+                    own_len: w.own_len,
+                    result,
+                    progress: w.progress,
+                });
+            }
+        }
+    }
+}
+
+/// A wait of a thread, made with no library lock held (INV-0302-2): on a
+/// port of its own, since two threads waiting on one port would take each
+/// other's packets (ADR-0302 item 5). The port lives for the one wait.
+fn wait_unlocked(sources: &[(Handle, u32)], deadline: Option<u64>) -> Result<(usize, u32), Status> {
+    let port = zoraya_rt::port_create()?;
+    let r = port_wait_any(port, sources, deadline);
+    let _ = zoraya_rt::handle_close(port);
+    r
+}
+
+/// Subscribes `sources` on `port` (key = index + 1), waits for one packet or
+/// the deadline, unsubscribes.
+fn port_wait_any(
+    port: Handle,
+    sources: &[(Handle, u32)],
+    deadline: Option<u64>,
+) -> Result<(usize, u32), Status> {
+    let mut subscribed = 0;
+    let mut r = Ok(());
+    for (i, &(h, wanted)) in sources.iter().enumerate() {
+        r = zoraya_rt::port_subscribe(port, h, wanted, i as u64 + 1, Mode::Level);
+        if r.is_err() {
+            break;
+        }
+        subscribed = i + 1;
+    }
+    let mut packets = [Packet::default()];
+    let waited = match r {
+        Ok(()) => zoraya_rt::port_wait(port, deadline.unwrap_or(DEADLINE_INFINITE), &mut packets),
+        Err(s) => Err(s),
+    };
+    for i in 0..subscribed {
+        let _ = zoraya_rt::port_unsubscribe(port, i as u64 + 1);
+    }
+    waited?;
+    let key = packets[0].key as usize;
+    if key == 0 || key > sources.len() {
+        return Err(Status::BadState);
+    }
+    Ok((key - 1, packets[0].signals))
 }
 
 /// The bytes of a C string, without its NUL.
@@ -1072,6 +1111,8 @@ extern "C" fn __clone(
         return -EAGAIN;
     }
     CLEAR_ON_EXIT.store(ctid as u64, Ordering::Relaxed);
+    // From the first thread on, long waits are made outside the library lock.
+    let _ = with(|p| p.defer_waits = true);
     let sp = (stack - core::mem::size_of::<Start>()) & !15;
     // SAFETY: `stack` is the top of the new thread's own, unused stack, in a
     // mapping the caller made; the thread does not exist yet.

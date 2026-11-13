@@ -290,6 +290,13 @@ pub struct Posix<S: Sys> {
     pub fork_group: i32,
     /// A child's end seen at a wait point: `SIGCHLD` to take.
     pub sigchld: bool,
+    /// Long waits are handed to the C boundary instead of made here, because
+    /// the process has more than one thread (ADR-0302 item 9).
+    pub defer_waits: bool,
+    /// The wait a method asked the boundary to make, with the lock released.
+    pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
+    /// The outcome of that wait, for the method's second run.
+    pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
     /// What `Read` a terminal connection has outstanding, by connection.
     pub(crate) tty_reads: Vec<(S::H, u32)>,
     /// Answers to held terminal reads that another request's wait took.
@@ -350,6 +357,9 @@ impl<S: Sys> Posix<S> {
             children: Vec::new(),
             fork_group: -1,
             sigchld: false,
+            defer_waits: false,
+            pending: None,
+            resume: None,
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),
@@ -1290,7 +1300,11 @@ impl<S: Sys> Posix<S> {
         from: User,
         nonblock: bool,
     ) -> Result<usize, i32> {
-        let mut done = 0;
+        // A second run after a deferred wait resumes where the first stopped.
+        let mut done = self
+            .resume
+            .as_mut()
+            .map_or(0, |r| core::mem::take(&mut r.progress));
         while done < from.length {
             match self
                 .sys
@@ -1303,6 +1317,12 @@ impl<S: Sys> Posix<S> {
                 Err(Status::WouldBlock) => {
                     let s = match self.wait_point(end, signals::WRITABLE | signals::PEER_CLOSED) {
                         Ok(s) => s,
+                        Err(PENDING) => {
+                            if let Some(w) = self.pending.as_mut() {
+                                w.progress = done;
+                            }
+                            return Err(PENDING);
+                        }
                         // What was written counts, as for any later error.
                         Err(_) if done > 0 => return Ok(done),
                         Err(e) => return Err(e),

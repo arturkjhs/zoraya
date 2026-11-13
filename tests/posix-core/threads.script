@@ -53,7 +53,17 @@
 < t_threads: last thread leaving
 < posixrun: exit 0
 < \r\n~> 
-# A sibling blocked in read holds the library lock (ADR-0314 item 2); _Exit
+# Long waits are made outside the library lock (INV-0302-2, ADR-0302 item 9).
+> posixrun /bin/t_threads waits\r
+< t_threads: waits passed
+< posixrun: exit 0
+< \r\n~> 
+# exit() flushes stdio (a write) while a sibling is blocked in read.
+> posixrun /bin/t_threads blockedexit\r
+< t_threads: flushed at exit
+< posixrun: exit 4
+< \r\n~> 
+# A sibling blocked in read held the library lock (ADR-0314 item 2); _Exit
 # still ends the process.
 > posixrun /bin/t_threads blocked\r
 < posixrun: exit 3

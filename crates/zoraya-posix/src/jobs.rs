@@ -24,6 +24,24 @@ use crate::signals::{DefaultAction, Taken, bit};
 use crate::sys::{Sys, User, signals};
 use crate::wait;
 
+/// A long wait that a method asked the boundary to make (ADR-0302 item 9).
+pub struct PendingWait<H> {
+    pub sources: Vec<(H, u32)>,
+    /// How many of `sources` are the method's own.
+    pub own_len: usize,
+    pub deadline: Option<u64>,
+    /// How much of a write was done, for the second run.
+    pub progress: usize,
+}
+
+/// The outcome of a [`PendingWait`], for the method's second run.
+pub struct Resume<H> {
+    pub sources: Vec<(H, u32)>,
+    pub own_len: usize,
+    pub result: Result<(usize, u32), Status>,
+    pub progress: usize,
+}
+
 /// `waitpid`'s options.
 pub const WNOHANG: i32 = 1;
 pub const WUNTRACED: i32 = 2;
@@ -115,12 +133,6 @@ impl<S: Sys> Posix<S> {
         Ok(())
     }
 
-    /// Counts a kernel wait (ADR-0110 item 7's wake-ups).
-    fn count_wait(&mut self) -> &mut Self {
-        self.stats.waits += 1;
-        self
-    }
-
     /// Waits for `h` to assert one of `wanted` at a wait point: `EINTR` when a
     /// signal is to be delivered first (ADR-0106 item 3).
     pub fn wait_point(&mut self, h: S::H, wanted: u32) -> Result<u32, i32> {
@@ -130,27 +142,78 @@ impl<S: Sys> Posix<S> {
 
     /// Waits for one of `own` at a wait point, or the deadline (`None` for
     /// the index then). `EINTR` when a signal came first.
+    ///
+    /// In a process with threads (`defer_waits`) the wait is not made here:
+    /// the method returns `Err(PENDING)` with the wait in `self.pending`,
+    /// changing nothing it cannot repeat; the boundary releases the library
+    /// lock, waits, and runs the method again with the outcome in
+    /// `self.resume`, which this function then returns (ADR-0302 item 9).
     pub fn wait_for(
         &mut self,
         own: &[(S::H, u32)],
         deadline: Option<u64>,
     ) -> Result<(Option<usize>, Option<u32>), i32> {
+        if let Some(r) = self.resume.take() {
+            self.stats.waits += 1;
+            return self.finish_wait(&r.sources, r.own_len, r.result);
+        }
         let mut sources = Vec::with_capacity(own.len() + 4);
         sources.extend_from_slice(own);
         self.interrupt_sources(&mut sources);
-        if sources.is_empty() {
-            return match deadline {
-                // Nothing to wait for and no end: a wait that never ends.
-                None => Err(EINVAL),
-                Some(_) => match self.count_wait().sys.wait_any(&[], deadline) {
-                    Ok(_) | Err(Status::DeadlineExceeded) => Ok((None, None)),
-                    Err(s) => Err(crate::errno::from_status(s, crate::errno::Call::Other)),
-                },
-            };
+        if sources.is_empty() && deadline.is_none() {
+            // Nothing to wait for and no end: a wait that never ends.
+            return Err(EINVAL);
+        }
+        if self.defer_waits {
+            self.pending = Some(PendingWait {
+                sources,
+                own_len: own.len(),
+                deadline,
+                progress: 0,
+            });
+            return Err(PENDING);
         }
         self.stats.waits += 1;
-        match self.sys.wait_any(&sources, deadline) {
-            Ok((i, s)) if i < own.len() => Ok((Some(i), Some(s))),
+        let r = self.sys.wait_any(&sources, deadline);
+        self.finish_wait(&sources, own.len(), r)
+    }
+
+    /// One run of `f` for the boundary's retry loop (ADR-0302 item 9): with
+    /// the outcome of the wait the last run asked for, and the wait this run
+    /// asks for, if `f` gave `Err(PENDING)`.
+    pub fn run_deferred<R>(
+        &mut self,
+        resume: Option<Resume<S::H>>,
+        f: impl FnOnce(&mut Self) -> Result<R, i32>,
+    ) -> (Result<R, i32>, Option<PendingWait<S::H>>) {
+        self.resume = resume;
+        let r = f(self);
+        let pending = self.end_run(&r);
+        (r, pending)
+    }
+
+    /// The two halves of [`Posix::run_deferred`], for a caller whose closure
+    /// cannot borrow the process: the outcome in, and the wait out.
+    pub fn set_resume(&mut self, resume: Option<Resume<S::H>>) {
+        self.resume = resume;
+    }
+
+    pub fn end_run<R>(&mut self, r: &Result<R, i32>) -> Option<PendingWait<S::H>> {
+        self.resume = None;
+        let pending = self.pending.take();
+        if matches!(r, Err(PENDING)) { pending } else { None }
+    }
+
+    /// What a finished wait means to the method that asked for it.
+    fn finish_wait(
+        &mut self,
+        sources: &[(S::H, u32)],
+        own_len: usize,
+        r: Result<(usize, u32), Status>,
+    ) -> Result<(Option<usize>, Option<u32>), i32> {
+        match r {
+            Ok((i, s)) if i < own_len => Ok((Some(i), Some(s))),
+            Ok(_) if sources.is_empty() => Ok((None, None)),
             Ok((i, _)) => {
                 self.interrupted(sources[i])?;
                 // A source that is no longer a reason: go round again.

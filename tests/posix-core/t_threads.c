@@ -15,6 +15,8 @@
  *   t_threads limit     create threads until EAGAIN, release them, create again
  *   t_threads exit      exit() from a non-main thread while a sibling spins (exit 7)
  *   t_threads mainexit  pthread_exit in the main thread; the process ends with the last thread
+ *   t_threads waits     read, nanosleep, pselect in threads; the others use the library (INV-0302-2)
+ *   t_threads blockedexit exit() flushes stdio while a sibling is blocked in read (exit 4)
  *   t_threads blocked   _Exit from the main thread while a sibling is blocked in read (exit 3)
  *   t_threads overflow  a thread overruns its stack: the process faults (INV-0302-6)
  *   t_threads all       every case but the last three, which end the process
@@ -29,6 +31,9 @@
 #include <threads.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/select.h>
+#include <sys/stat.h>
 
 #define CHECK(cond)                                                             \
 	do {                                                                    \
@@ -703,6 +708,112 @@ static void blocked(void)
 	_Exit(3);
 }
 
+
+/* ------------------------------------------------------------ waits */
+
+/* INV-0302-2: a thread blocked in a long library wait does not stop another
+ * thread's library calls. Each blocked wait below lasts a visible time; the
+ * main thread's calls must take far less. */
+
+static int wpipe[2];
+static volatile int w_read_got = -1;
+static volatile int w_sleep_done, w_select_done;
+
+static void *w_reader(void *a)
+{
+	char c = 0;
+	(void)a;
+	w_read_got = read(wpipe[0], &c, 1) == 1 ? c : -2;
+	return NULL;
+}
+
+static void *w_sleeper(void *a)
+{
+	struct timespec ts = {0, 400 * 1000 * 1000};
+	(void)a;
+	nanosleep(&ts, NULL);
+	w_sleep_done = 1;
+	return NULL;
+}
+
+static void *w_selector(void *a)
+{
+	int p[2];
+	fd_set rs;
+	struct timespec tv = {0, 400 * 1000 * 1000};
+	(void)a;
+	pipe(p);
+	FD_ZERO(&rs);
+	FD_SET(p[0], &rs);
+	CHECK(pselect(p[0] + 1, &rs, NULL, NULL, &tv, NULL) == 0);
+	w_select_done = 1;
+	close(p[0]);
+	close(p[1]);
+	return NULL;
+}
+
+static void waits(void)
+{
+	pthread_t r, s, e;
+	char path[64];
+	struct stat st;
+	double t0;
+
+	OK(pipe(wpipe));
+	OK(pthread_create(&r, NULL, w_reader, NULL));
+	OK(pthread_create(&s, NULL, w_sleeper, NULL));
+	OK(pthread_create(&e, NULL, w_selector, NULL));
+	for (int i = 0; i < 100; i++)
+		thrd_yield();
+	/* All three are blocked now; the main thread uses the library. */
+	t0 = now();
+	for (int i = 0; i < 20; i++) {
+		int fd;
+		CHECK(getpid() >= 0);
+		snprintf(path, sizeof path, "/work/w%d", i);
+		fd = open(path, O_CREAT | O_WRONLY, 0644);
+		CHECK(fd >= 0);
+		CHECK(write(fd, "x", 1) == 1);
+		CHECK(stat(path, &st) == 0 && st.st_size == 1);
+		close(fd);
+		unlink(path);
+		printf("t_threads: waits main %d\n", i);
+	}
+	CHECK(now() - t0 < 0.3);
+	CHECK(!w_sleep_done && !w_select_done);
+	CHECK(w_read_got == -1);
+	/* The write that the reader waits for. */
+	CHECK(write(wpipe[1], "z", 1) == 1);
+	OK(pthread_join(r, NULL));
+	CHECK(w_read_got == 'z');
+	OK(pthread_join(s, NULL));
+	OK(pthread_join(e, NULL));
+	CHECK(w_sleep_done && w_select_done);
+	printf("t_threads: waits passed\n");
+}
+
+static void *read_for_exit(void *a)
+{
+	char c;
+	(void)a;
+	read(blocked_pipe[0], &c, 1);
+	return NULL;
+}
+
+static void blockedexit(void)
+{
+	pthread_t t;
+	static char buf[4096];
+	OK(pipe(blocked_pipe));
+	OK(pthread_create(&t, NULL, read_for_exit, NULL));
+	for (int i = 0; i < 200; i++)
+		thrd_yield();
+	/* Fully buffered: exit() must write it with the sibling blocked. */
+	setvbuf(stdout, buf, _IOFBF, sizeof buf);
+	printf("t_threads: flushed at exit\n");
+	exit(4);
+}
+
 static void *overrun(void *a)
 {
 	volatile char big[1 << 20];
@@ -745,6 +856,11 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(mode, "mainexit") == 0) {
 		mainexit();
+		return 0;
+	}
+	CASE("waits", waits)
+	if (strcmp(mode, "blockedexit") == 0) {
+		blockedexit();
 		return 0;
 	}
 	if (strcmp(mode, "blocked") == 0) {
