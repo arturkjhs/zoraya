@@ -3,20 +3,12 @@ serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
 pause 3000
-type netsurf -v 2> nslog\r
-pause 20000
+type netsurf http://10.0.2.2:@PORT@/ns/page\r
+pause 15000
+shot netsurf-page
 click 122 119
 pause 3000
 click 300 87
 pause 500
-type head -n 24 nslog\r
-pause 2500
-shot netsurf-log1
-type head -n 32 nslog\r
-pause 2500
-shot netsurf-log2
-type head -n 40 nslog\r
-pause 2500
-shot netsurf-log3
 type poweroff\r
 exit
