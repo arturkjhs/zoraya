@@ -1397,10 +1397,9 @@ extern "C" fn zoraya_posix_tkill(tid: i64, sig: i64) -> i64 {
         None => -i64::from(ENOSYS),
         Some(Err(e)) => -i64::from(e),
         Some(Ok(crate::threads::Tkill::Sent)) => 0,
-        Some(Ok(crate::threads::Tkill::Myself)) => {
-            procs::raise_own(n);
-            0
-        }
+        // Left pending in this thread: `__restore_sigs` delivers it once
+        // musl's `killlock` is released (it blocks everything meanwhile).
+        Some(Ok(crate::threads::Tkill::Myself)) => 0,
     }
 }
 
@@ -2415,35 +2414,51 @@ extern "C" fn getrusage(who: i32, usage: *mut u8) -> i32 {
 
 /// musl's thread code blocks signals around its locks and thread creation:
 /// `set` gets the mask in force, which `pthread_create` gives the new thread
-/// (`args->sig_mask`) and `__restore_sigs` puts back. Nothing is blocked: a
-/// handler runs only at a library entry or wait (ADR-0106 item 5), never
-/// inside musl's critical sections, so there is nothing to keep out; the
-/// mask itself is the thread's (ADR-0304 item 1).
-fn save_mask(set: *mut u64) {
-    let mask = with(|p| p.signals.blocked).unwrap_or(0);
-    // SAFETY: C's contract: `set` is a `sigset_t` (128 bytes) the caller owns.
-    unsafe {
-        set.write_unaligned(mask);
-        set.add(1).write_unaligned(0);
+/// (`args->sig_mask`) and `__restore_sigs` puts back. The calling thread's
+/// mask really becomes "everything" (except `SIGKILL` and `SIGSTOP`) until
+/// then, so a handler never runs inside musl's critical sections (`killlock`,
+/// the thread-list lock): neither a `tkill` of oneself nor a delivery at a
+/// futex wait finds it unblocked (ADR-0304 item 1; reviewed: the first
+/// version blocked nothing). A null `set` (`abort`) forgets the old mask.
+fn block_sigs(set: *mut u64) {
+    let old = with(|p| {
+        p.signals
+            .mask(crate::signals::SIG_SETMASK, Some(u64::MAX))
+            .unwrap_or(0)
+    })
+    .unwrap_or(0);
+    if !set.is_null() {
+        // SAFETY: C's contract: `set` is a `sigset_t` (128 bytes) the caller owns.
+        unsafe {
+            set.write_unaligned(old);
+            set.add(1).write_unaligned(0);
+        }
     }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __block_all_sigs(set: *mut u64) {
-    if !set.is_null() {
-        save_mask(set);
-    }
+    block_sigs(set);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn __block_app_sigs(set: *mut u64) {
-    if !set.is_null() {
-        save_mask(set);
-    }
+    block_sigs(set);
 }
 
+/// Puts the saved mask back and delivers what it lets through now: a signal
+/// that a `tkill` of oneself left pending runs its handler here, after
+/// musl's lock is released (`pthread_kill`, `raise`).
 #[unsafe(no_mangle)]
-extern "C" fn __restore_sigs(_set: *mut u64) {}
+extern "C" fn __restore_sigs(set: *mut u64) {
+    if set.is_null() {
+        return;
+    }
+    // SAFETY: C's contract: `set` was filled by `__block_*_sigs`.
+    let old = unsafe { set.read_unaligned() };
+    let _ = with(|p| p.signals.mask(crate::signals::SIG_SETMASK, Some(old)));
+    procs::poll();
+}
 
 /// `siglongjmp` without the signal mask, which is 6d's: a `sigjmp_buf` begins
 /// with a `jmp_buf`.

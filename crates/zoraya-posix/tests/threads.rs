@@ -65,6 +65,12 @@ fn tkill_reaches_the_target_thread_only() {
     assert_eq!(r.p.tkill(2, 0), Ok(Tkill::Sent), "0 only looks");
     assert!(r.p.sys.interrupts.is_empty());
     assert_eq!(r.p.tkill(1, USR1), Ok(Tkill::Myself));
+    assert_eq!(
+        r.p.signals.pending,
+        bit(USR1),
+        "oneself: only marked, delivered when musl's locks are released"
+    );
+    r.p.signals.pending = 0;
     assert_eq!(r.p.tkill(3, USR1), Ok(Tkill::Sent));
     assert_eq!(r.p.sys.interrupts, vec![(1003, None)]);
     r.p.switch_to(300);

@@ -161,11 +161,6 @@ fn raise_signal_for(n: u32, process: bool) -> Result<(), i32> {
     Ok(())
 }
 
-/// `tkill` of the calling thread: as `raise` (ADR-0304 item 2).
-pub(super) fn raise_own(n: u32) {
-    let _ = raise_signal(n);
-}
-
 /// Delivers what is deliverable to this thread; true if a handler ran
 /// (ADR-0304 item 11).
 pub(super) fn deliver_ran() -> bool {

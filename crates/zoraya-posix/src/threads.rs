@@ -156,6 +156,12 @@ impl<S: Sys> Posix<S> {
             return Ok(Tkill::Sent);
         }
         if self.threads.list[i].tp == self.threads.cur {
+            // Only marked: musl's `pthread_kill` and `raise` hold locks (and
+            // block every signal) around the call, and `__restore_sigs`
+            // delivers it after (a handler must not run inside them).
+            if self.signals.action(n).handler != SIG_IGN {
+                self.signals.pending |= bit(n);
+            }
             return Ok(Tkill::Myself);
         }
         if self.signals.action(n).handler != SIG_IGN {
