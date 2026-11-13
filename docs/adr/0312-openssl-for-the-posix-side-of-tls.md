@@ -18,7 +18,7 @@ links into curl and wget against 22 added names, and offers TLS 1.2 and 1.3.
 
 ## Decision drivers
 1. The programs of stage 9 need TLS 1.3 (servers prefer it), HTTP clients that exist (curl, wget, CPython's `ssl`).
-2. The fewer TLS libraries, the fewer trust stores and bugs (ADR-0228's own driver for one native crate).
+2. The fewer TLS libraries, the fewer trust stores and bugs (ADR-0228's own driver for one native crate; CP-27 asks the surface to stay small).
 3. Only permissive licences (CLAUDE.md): OpenSSL 3 is Apache-2.0.
 
 ## Considered options

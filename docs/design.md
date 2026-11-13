@@ -1887,9 +1887,9 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
   and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
 - **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `poll`, `sendmsg`/`recvmsg`,
-  `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex`, `getrandom`; a socket does not cross `spawn` (`EBADF`) or
+  `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
-  curl and wget (W11, W13), which need `poll` and TLS.
+  curl and wget (W11, W13) were built in stage 9 (see "TLS for C programs, curl and wget"), which needed `select` and TLS.
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 
@@ -1937,6 +1937,61 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   38.8 ms for the same page over HTTP in the same boot.
 - **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption,
   the HTTPS lines under TCG, the GUI shells' roots entry (they have no network connection yet).
+
+## TLS for C programs, curl and wget (stage 9, 9a)
+
+`curl` and `wget` run inside Zoraya and fetch over HTTP and HTTPS (proposed ADR-0310 on `libc.a`'s names, `getrandom` and the
+volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place of ADR-0228 item 2's BearSSL; TASK-27 9a).
+
+- **The ports.** `ports/sources.lock` pins OpenSSL 3.5.9 (the LTS line), zlib 1.3.1, curl 8.23.0 and wget 1.25.0. `make apps`
+  (`ports/Makefile`, after `make fetch-ports`) builds them with `zcc` into `build/ports/deps` (the libraries) and
+  `build/rootfs-apps/bin/{curl,wget}` (6.7 MiB each, static, no debug information). OpenSSL is `no-shared no-dso no-threads
+  no-engine no-asm no-async no-sock no-dgram no-quic no-secure-memory`, with three patches: `getrandom` is its seed source
+  and nothing falls back to anything else, no `posix_memalign`, and the default certificate file is `/system/tls/roots`.
+  curl is HTTP and HTTPS only with blocking name resolution (no threads), no proxy, cookies, netrc, `.curlrc` or OpenSSL
+  configuration file; wget is built with OpenSSL's plain-fd BIO (patch) and reads a byte at a time where it peeked (patch:
+  libposix has no `MSG_PEEK`). wget's configure takes the host triple `aarch64-unknown-linux-musl` for gnulib's guesses only;
+  the compiler is still `zcc`, which defines nothing of Linux (the end of `make apps` reads the logs for it).
+- **`libc.a`** exports 337 names (22 more: `getrandom`, `gmtime`, `strerror_r`, `setbuf`, `tzset`, `strncat`, `rand`, `srand`,
+  `fnmatch`, the `regcomp` family, `sigismember` and six `*_unlocked`). `ports/apps/zshim.c`, linked into `curl` and `wget`
+  only, holds the names their sources reference and `libc.a` does not export: `select` (= `pselect`), refusals for `bind`,
+  `listen`, `accept`, `link`, `setsid`, `setresuid`, `setresgid` and `tcsetattr`, a `clock_getres` that answers, a no-op
+  `rewinddir` and two program-name variables.
+- **`getrandom`** (`zoraya-posix/src/random.rs`): one `Bytes` request per 2 KiB on the program's connection to `rngd`, the whole
+  of the buffer or an error; without the connection `ENOSYS`, never a weaker source; a `fork` child has none. The second
+  bootstrap message has a form `ZPBX` plus a flag byte (net, random) with the handles in the order SELF, net, random
+  (`zoraya_abi::posix`); `zosh` makes one `Share` of its own random connection per POSIX program (`posix_child::Launch::random`).
+  A program a POSIX parent starts has none yet.
+- **The grants.** `user/describe/posix/curl.cmd` and `wget.cmd` are the image's own descriptions: a literal `url` operand
+  gives a connection that reaches that host and port (as for `zfetch`), and with it `/system/tls` read-only (a POSIX program is
+  given directories only, and the directory holds the roots file alone: `make check-tls-roots`). `grants curl -O
+  https://x.example/y` shows the current directory read, `create and change anything in` it for `y` (`option -O`),
+  `/system/tls  read (with the network)` and `net: x.example:443  reach (operand URL)`. The new description key `names
+  OPTION OPERAND` (`zoraya-describe`, `url_file_name`) is how `-O` is designated: the shell takes the last segment of the URL's
+  path, if it is plain letters, digits and `. - _ + ~ @ , =`, and refuses the line otherwise. `-k`, `--cacert`,
+  `--no-check-certificate` and the rest that would weaken a check are not options of the descriptions: such a line is a
+  usage mistake and the program gets no connection at all. `grants` shows the network line and the roots for POSIX programs now;
+  `/etc/wgetrc` (in `rootfs/`) sets wget's roots, `check_certificate = on` and `inet4_only`.
+- **The volume.** `tools/run-disk.sh` adds `EXTRA_ROOT` (default `build/rootfs-apps` when it exists; `EXTRA_ROOT=` for none) to
+  the volume of `make run`, `run-net` and `run-gui`, and puts its checksum in the disk's key: a new `curl` makes a new disk, and
+  the old one is kept as `.old`. `RUN_NET_CMD` boots with 512 MiB (see the limits).
+- **Tests.** `cargo test -p zoraya-posix --test random` (7: the buffer is the service's bytes in 2 KiB requests, no request for
+  zero bytes, `ENOSYS` without the connection and the buffer untouched, `EINVAL` for an unknown flag, a short answer and a gone
+  service are `EIO` with the buffer untouched, a fork child has none), `-p zoraya-describe` (the `names` key and
+  `url_file_name`), `-p zoraya-shell` (`curl_o_*`), `make check-run-disk` (`tools/test-run-disk.sh`), `make test-apps`
+  (`tests/shell/apps.script`: both programs against `tools/test-httpd` over HTTP and over TLS with the test PKI's root: a page,
+  files by `-o` and `-O`, bodies of 70,000 to 1,000,000 bytes by size, 404 and a refused port with their exit
+  statuses, an expired and a wrong-name certificate refused by both with the server's log showing no request byte, a plain
+  server on an HTTPS address, by number, `-k` and `--no-check-certificate` as usage mistakes, `grants` for both, a refused
+  `-O` name, a value as URL with and without `+net`, and wget without `-O` creating nothing), `make test-hand-run` (the
+  production image: plain HTTP with both programs, HTTPS to the certificate and refused there, `grants curl -O`).
+- **Known limits.** *Memory:* each launch of `curl` or `wget` leaves about 8.5 MiB that the machine does not get back (measured by
+  launching `curl --version`: 8 launches on 128 MiB, 23 on 256 MiB, 40 or more on 512 MiB; it does not depend on the network or
+  on `getrandom`, and `grants curl`, which loads the same image, does not leak); the launch is refused with "over quota" when
+  it runs out. `make run-net` and the apps' tests therefore run on 512 MiB. Not found in 9a; the report records what was
+  ruled out. *Other launchers:* a program started by `dash` or `make` has no random connection, so OpenSSL cannot seed.
+  *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
+  *Threads:* OpenSSL is built without them until 9b.
 
 ## The network on the desktop, and when it fails (stage 8, N6)
 

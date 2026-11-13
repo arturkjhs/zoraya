@@ -123,15 +123,17 @@
 > status\r
 < \r\nexit status 60
 < \r\n~>
-# `-k` is not an option of the description: the line is a usage mistake, the
-# program gets no connection and the shell says nothing is reached.
+# `-k` and `--no-check-certificate` are not options of the descriptions: the
+# line is a usage mistake, the program gets no connection and cannot resolve
+# or connect (no request is sent: the Makefile checks the server's log).
 > curl -k https://test.zoraya:@TLSVALID@/\r
 < Could not resolve
 < \r\n~>
 > wget --no-check-certificate -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< Permission denied
 < \r\n~>
 > status\r
-< \r\nexit status 1
+< \r\nexit status 4
 < \r\n~>
 # What the line gives, exactly (ADR-0311): the network, /system/tls to read
 # with it, and for -O the one file the URL names. A line without a URL
