@@ -782,28 +782,36 @@ static void *w_reader(void *a)
 	return NULL;
 }
 
+/* The sleeper and the selector wait "forever" (30 s) and are released by the
+ * test: the sleeper by a signal (EINTR), the selector by a byte on its pipe.
+ * Nothing here depends on how fast the host runs: a short timed wait would
+ * already have expired on a slow TCG host before the main thread checked it. */
+static int w_selpipe[2];
+static volatile int w_sleep_rc = 99, w_select_rc = 99;
+
+static void w_noop(int sig)
+{
+	(void)sig;
+}
+
 static void *w_sleeper(void *a)
 {
-	struct timespec ts = {0, 400 * 1000 * 1000};
+	struct timespec ts = {30, 0};
 	(void)a;
-	nanosleep(&ts, NULL);
+	w_sleep_rc = nanosleep(&ts, NULL) == -1 && errno == EINTR ? -1 : 0;
 	w_sleep_done = 1;
 	return NULL;
 }
 
 static void *w_selector(void *a)
 {
-	int p[2];
 	fd_set rs;
-	struct timespec tv = {0, 400 * 1000 * 1000};
+	struct timespec tv = {30, 0};
 	(void)a;
-	pipe(p);
 	FD_ZERO(&rs);
-	FD_SET(p[0], &rs);
-	CHECK(pselect(p[0] + 1, &rs, NULL, NULL, &tv, NULL) == 0);
+	FD_SET(w_selpipe[0], &rs);
+	w_select_rc = pselect(w_selpipe[0] + 1, &rs, NULL, NULL, &tv, NULL);
 	w_select_done = 1;
-	close(p[0]);
-	close(p[1]);
 	return NULL;
 }
 
@@ -814,7 +822,16 @@ static void waits(void)
 	struct stat st;
 	double t0;
 
+	struct sigaction sa;
+	sigset_t none;
+
+	sigemptyset(&none);
+	OK(pthread_sigmask(SIG_SETMASK, &none, NULL));
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = w_noop;
+	OK(sigaction(SIGUSR1, &sa, NULL));
 	OK(pipe(wpipe));
+	OK(pipe(w_selpipe));
 	OK(pthread_create(&r, NULL, w_reader, NULL));
 	OK(pthread_create(&s, NULL, w_sleeper, NULL));
 	OK(pthread_create(&e, NULL, w_selector, NULL));
@@ -833,9 +850,13 @@ static void waits(void)
 		unlink(path);
 		printf("t_threads: waits main %d\n", i);
 	}
-	CHECK(now() - t0 < 0.3);
+	/* Far less than the 30 s waits; the bound is loose on purpose. */
+	CHECK(now() - t0 < 10);
 	CHECK(!w_sleep_done && !w_select_done);
 	CHECK(w_read_got == -1);
+	/* Release the sleeper (EINTR) and the selector (data). */
+	OK(pthread_kill(s, SIGUSR1));
+	CHECK(write(w_selpipe[1], "y", 1) == 1);
 	/* The write that the reader waits for. */
 	CHECK(write(wpipe[1], "z", 1) == 1);
 	OK(pthread_join(r, NULL));
@@ -843,6 +864,11 @@ static void waits(void)
 	OK(pthread_join(s, NULL));
 	OK(pthread_join(e, NULL));
 	CHECK(w_sleep_done && w_select_done);
+	CHECK(w_sleep_rc == -1 && w_select_rc == 1);
+	close(wpipe[0]);
+	close(wpipe[1]);
+	close(w_selpipe[0]);
+	close(w_selpipe[1]);
 	printf("t_threads: waits passed\n");
 }
 
