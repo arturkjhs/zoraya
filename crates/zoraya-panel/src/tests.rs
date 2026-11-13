@@ -86,7 +86,8 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             (STARTUP_SLOT, Give::Startup),
             (6, Give::Terminal),
             (7, Give::Broker),
-            (8, Give::Tmp)
+            (8, Give::Tmp),
+            (WINDOW_SLOT, Give::Launcher)
         ]
     );
     assert!(s[1].2.is_empty());
@@ -623,4 +624,79 @@ fn without_a_keeper_the_line_is_written_and_kept() {
     );
     assert_eq!(r, Ok(()));
     assert_ne!(*file.borrow(), ROOMS);
+}
+
+/// INV-0317-1, the host half: a window is made for a trusted room's shell
+/// only, with the pills the shell wrote; the shell of an untrusted room has
+/// no channel to ask on and is refused if it asks.
+#[test]
+fn a_window_is_for_a_trusted_rooms_shell_only() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let trusted = p.rooms.get("project").cloned();
+    let untrusted = p.rooms.get("agent-1").cloned();
+    assert!(trusted.as_ref().is_some_and(|r| !r.untrusted));
+    assert!(untrusted.as_ref().is_some_and(|r| r.untrusted));
+    let entries = "+net example.org:443\n+r /share/netsurf";
+    let r = window_record(trusted.as_ref(), "netsurf", "NetSurf", entries).unwrap();
+    assert_eq!(
+        (r.untrusted, r.room.as_str(), r.app.as_str()),
+        (false, "project", "netsurf")
+    );
+    assert_eq!(
+        (r.entries.as_str(), r.line.as_str()),
+        (entries, "room project netsurf")
+    );
+    assert_eq!(
+        window_record(None, "netsurf", "NetSurf", entries)
+            .unwrap()
+            .line,
+        "netsurf"
+    );
+    assert_eq!(
+        window_record(untrusted.as_ref(), "netsurf", "NetSurf", entries),
+        Err(why::UNTRUSTED)
+    );
+    // An untrusted room's terminal is built without the channel as well.
+    let l = terminal(untrusted.as_ref());
+    assert!(
+        l.programs
+            .iter()
+            .all(|p| p.handles.iter().all(|s| s.give != Give::Launcher))
+    );
+    let l = terminal(trusted.as_ref());
+    assert!(
+        l.programs[1]
+            .handles
+            .iter()
+            .any(|s| s.give == Give::Launcher && s.slot == WINDOW_SLOT)
+    );
+    assert!(
+        l.programs[0]
+            .handles
+            .iter()
+            .all(|s| s.give != Give::Launcher)
+    );
+}
+
+#[test]
+fn a_window_request_is_checked() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let ok = |a: &str, t: &str, e: &str| window_record(None, a, t, e);
+    assert!(ok("netsurf", "NetSurf", "").is_ok());
+    for (a, t, e) in [
+        ("", "T", ""),
+        ("Net Surf", "T", ""),
+        ("netsurf", "", ""),
+        ("netsurf", "a\nb", ""),
+        ("netsurf", &"x".repeat(49), ""),
+        ("netsurf", "T", "net example.org"),
+        ("netsurf", "T", "+r /a\u{1b}[2J"),
+        ("netsurf", "T", &"+r /a\n".repeat(17)),
+        ("netsurf", "T", &format!("+r /{}", "a".repeat(200))),
+    ] {
+        assert_eq!(ok(a, t, e), Err(why::INVALID), "{a:?} {t:?} {e:?}");
+    }
+    assert!(ok("netsurf", "T", &"+r /a\n".repeat(16)).is_ok());
 }

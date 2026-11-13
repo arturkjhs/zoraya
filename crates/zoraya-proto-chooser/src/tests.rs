@@ -97,6 +97,23 @@ fn every_message_round_trips_and_decodes_totally() {
         0
     );
     round!(
+        OpenWindow<'_>,
+        OpenWindow {
+            app: Data(b"netsurf"),
+            title: Data(b"NetSurf"),
+            entries: Data(b"+net example.org:443\n+r /share/netsurf"),
+        },
+        0
+    );
+    round!(WindowOpened, WindowOpened {}, 1);
+    round!(
+        WindowRefused,
+        WindowRefused {
+            status: Below(window_refusal::BUSY)
+        },
+        0
+    );
+    round!(
         OpeningApp,
         OpeningApp {
             status: Below(status::BUSY)

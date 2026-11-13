@@ -443,10 +443,81 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             },
         ],
     };
+    // A channel back to the panel, to ask for the window of a POSIX program
+    // (ADR-0317). Never in an untrusted room (INV-0317-1).
+    if !room.is_some_and(|r| r.untrusted)
+        && let Some(shell) = launch.programs.get_mut(1)
+    {
+        shell.handles.push(Slot {
+            slot: WINDOW_SLOT,
+            give: Give::Launcher,
+        });
+    }
     if let (Some(slot), Some(shell)) = (keeper, launch.programs.get_mut(1)) {
         shell.handles.push(slot);
     }
     launch
+}
+
+/// The slot of a trusted room shell's channel to the panel (ADR-0317).
+pub const WINDOW_SLOT: u32 = 9;
+
+/// What the compositor is told of a POSIX program's window
+/// (`AddRoomClient`'s fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRecord {
+    pub untrusted: bool,
+    pub colour: u32,
+    pub room: String,
+    pub app: String,
+    pub entries: String,
+    pub line: String,
+}
+
+/// The shell of `room` asks for a window for `app` (ADR-0317, proposed): the
+/// record to give the compositor, or the reason in
+/// `zoraya_proto_chooser::window_refusal`. The pills are the line's grants
+/// as the shell wrote them, checked here to be only ADR-0153 words.
+pub fn window_record(
+    room: Option<&Room>,
+    app: &str,
+    title: &str,
+    entries: &str,
+) -> Result<WindowRecord, u32> {
+    use zoraya_proto_chooser::window_refusal as why;
+    // untrusted-gate: refusal (ADR-0317 INV-0317-1, `make check-untrusted-gate`)
+    // A window of a POSIX program only in a trusted room.
+    if room.is_some_and(|r| r.untrusted) {
+        return Err(why::UNTRUSTED);
+    }
+    let plain = |t: &str| !t.chars().any(char::is_control);
+    let name_ok = !app.is_empty()
+        && app.len() <= 32
+        && app
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+    if !name_ok || title.is_empty() || title.chars().count() > 48 || !plain(title) {
+        return Err(why::INVALID);
+    }
+    let mut count = 0;
+    for l in entries.split('\n').filter(|l| !l.is_empty()) {
+        count += 1;
+        let word = ["+r ", "+w ", "+net "].iter().any(|p| l.starts_with(p));
+        if count > 16 || !word || l.len() > 200 || !plain(l) {
+            return Err(why::INVALID);
+        }
+    }
+    Ok(WindowRecord {
+        untrusted: false,
+        colour: room.map_or(0, |r| u32::from(r.colour)),
+        room: room.map_or(String::new(), |r| r.name.clone()),
+        app: String::from(app),
+        entries: String::from(entries),
+        line: match room {
+            Some(r) => format!("room {} {app}", r.name),
+            None => String::from(app),
+        },
+    })
 }
 
 /// A terminal launched in `room` (`None` is `home`) to start at `path`, an

@@ -190,6 +190,43 @@ protocol! {
         status: Below<2>,
         text: Data<'a, 160>,
     }
+
+    /// A shell to the panel (ADR-0317): a client channel to the compositor
+    /// for the window of the POSIX program on its line. `app` is the
+    /// program's name, `title` the description's `window` key, `entries`
+    /// the pills of the line's grants, one in ADR-0153's words a line. The
+    /// panel answers `WindowOpened` with the client end, or `WindowRefused`.
+    /// Only the channel of a trusted room's shell is read (untrusted-gate).
+    message OpenWindow<'a> = 38, handles 0 {
+        app: Data<'a, 32>,
+        title: Data<'a, MAX_WINDOW_TITLE>,
+        entries: Data<'a, MAX_WINDOW_ENTRIES>,
+    }
+
+    /// The client end of the window's channel to the compositor.
+    message WindowOpened = 38, handles 1 {}
+
+    /// Why there is no window; see [`window_refusal`].
+    message WindowRefused = 39, handles 0 {
+        status: Below<4>,
+    }
+}
+
+/// The longest window title (`zoraya_describe` allows 48 characters).
+pub const MAX_WINDOW_TITLE: usize = 192;
+/// The longest pill text of a window request.
+pub const MAX_WINDOW_ENTRIES: usize = 1024;
+
+/// Why the panel gave no window channel.
+pub mod window_refusal {
+    /// The shell's room is untrusted (ADR-0172 while the gate is closed).
+    pub const UNTRUSTED: u32 = 0;
+    /// This shell has a window open already (one a run).
+    pub const BUSY: u32 = 1;
+    /// The request was malformed.
+    pub const INVALID: u32 = 2;
+    /// The compositor or the panel could not make the channel.
+    pub const FAILED: u32 = 3;
 }
 
 /// The application requests' ordinals.
@@ -199,7 +236,7 @@ pub const ANSWERS: [u32; 2] = [8, 9];
 /// The panel's requests.
 pub const PANEL_REQUESTS: [u32; 1] = [16];
 /// The file manager's request to the panel.
-pub const LAUNCHER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 36, 37];
+pub const LAUNCHER_REQUESTS: [u32; 7] = [32, 33, 34, 35, 36, 37, 38];
 
 #[cfg(test)]
 extern crate std;
