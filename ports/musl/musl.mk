@@ -10,13 +10,32 @@
 # ports/musl/excluded.txt names. ADR-0141 gives the rule.
 
 RETAINED_DIRS := string ctype multibyte locale stdlib math regex search prng \
-	setjmp errno misc passwd fenv complex stdio time env exit conf temp internal
+	setjmp errno misc passwd fenv complex stdio time env exit conf temp internal \
+	thread
 # musl's start-up needs these from directories that are otherwise replaced
 # (ADR-0100 item 2).
 EXCEPTIONS := src/thread/aarch64/__set_thread_area.s
 # Single files of directories that are otherwise replaced: system.c calls
 # only functions libc.a has (ADR-0210).
 EXCEPTIONS_BASE := src/process/system.c
+
+# src/thread is retained (ADR-0302 item 1, which supersedes ADR-0100 item 5)
+# except the files that this port replaces by Rust (zoraya-posix: __clone,
+# __unmapself, pthread_sigmask) or by ports/musl/zoraya/*.c (cancellation,
+# ADR-0305). They compile on the shim, so they are not in excluded.txt, whose
+# files must fail to compile; the replacements define the same names.
+SHIM_REPLACED := src/thread/clone src/thread/aarch64/clone \
+	src/thread/__unmapself src/thread/aarch64/__unmapself \
+	src/thread/__syscall_cp src/thread/syscall_cp src/thread/aarch64/syscall_cp \
+	src/thread/pthread_cancel src/thread/pthread_sigmask
+# Dropped, not replaced: they reach for files, /proc or prctl, which Zoraya has
+# none of, and no program of this port needs them. Named semaphores are
+# ADR-0308 item 2. pthread_getattr_np and the name calls are replaced by
+# ports/musl/zoraya/attr.c (they read /proc and call prctl).
+SHIM_REPLACED += src/thread/sem_open src/thread/sem_unlink \
+	src/thread/pthread_getattr_np src/thread/pthread_getname_np src/thread/pthread_setname_np
+SHIM_SRCS := $(wildcard ports/musl/zoraya/*.c)
+SHIM_OBJS := $(patsubst ports/musl/zoraya/%.c,zoraya/%.o,$(SHIM_SRCS))
 
 EXCLUDED := $(shell sed -e 's/\#.*//' -e '/^[[:space:]]*$$/d' ports/musl/excluded.txt)
 
@@ -27,8 +46,8 @@ ARCH_SRCS := $(sort $(foreach d,$(RETAINED_DIRS),$(wildcard $(MUSL)/src/$(d)/aar
 BASE_OBJS := $(patsubst $(MUSL)/%,%.o,$(basename $(BASE_SRCS)))
 ARCH_OBJS := $(patsubst $(MUSL)/%,%.o,$(basename $(ARCH_SRCS)))
 REPLACED := $(sort $(subst /aarch64/,/,$(ARCH_OBJS)))
-EXCLUDED_OBJS := $(addsuffix .o,$(basename $(EXCLUDED)))
-OBJS := $(addprefix $(OBJ)/,$(filter-out $(REPLACED) $(EXCLUDED_OBJS),$(sort $(BASE_OBJS) $(ARCH_OBJS))))
+EXCLUDED_OBJS := $(addsuffix .o,$(basename $(EXCLUDED))) $(addsuffix .o,$(SHIM_REPLACED))
+OBJS := $(addprefix $(OBJ)/,$(filter-out $(REPLACED) $(EXCLUDED_OBJS),$(sort $(BASE_OBJS) $(ARCH_OBJS))) $(SHIM_OBJS))
 
 # musl's configure's flags for clang, with -O2 -g as measured (ADR-0109 item 1).
 CFLAGS := -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math \
@@ -52,6 +71,11 @@ $(OBJ)/src/internal/version.h:
 	printf '#define VERSION "1.2.5"\n' > $@
 
 $(OBJ)/%.o: $(MUSL)/%.c $(OBJ)/src/internal/version.h
+	@mkdir -p $(dir $@)
+	$(ZCC) $(CFLAGS) -c -o $@ $<
+
+# The port's own C, compiled as musl's (it includes musl's internal headers).
+$(OBJ)/zoraya/%.o: ports/musl/zoraya/%.c $(OBJ)/src/internal/version.h
 	@mkdir -p $(dir $@)
 	$(ZCC) $(CFLAGS) -c -o $@ $<
 

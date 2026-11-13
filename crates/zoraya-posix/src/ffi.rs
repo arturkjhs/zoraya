@@ -5,8 +5,11 @@
 //! `unsafe` (INV-0100-3): C hands it pointers.
 //!
 //! Process functions (`fork`, `posix_spawn`, `wait*`, signals, `kill`, the
-//! terminal) are stage 6d's, in `procs`. A process has one thread (ADR-0100
-//! item 5), so the state is a cell with no lock.
+//! terminal) are stage 6d's, in `procs`. A process has threads (ADR-0300,
+//! ADR-0302, which supersede ADR-0100 item 5): the state is a cell behind the
+//! library lock, the heap and the mapping table behind a second lock, and
+//! musl's own `src/thread` reaches the kernel through the shim targets
+//! below (`zoraya_posix_futex`, `__clone`, `__unmapself`, thread exit).
 
 mod procs;
 mod sockets;
@@ -16,9 +19,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
-use core::cell::{Cell, UnsafeCell};
+use core::cell::UnsafeCell;
 use core::ffi::c_char;
 use core::ptr;
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use zoraya_abi::posix::{self as abi, Bootstrap, SELF_MESSAGE, SELF_NET_MESSAGE, slot};
 use zoraya_abi::{
@@ -28,6 +32,7 @@ use zoraya_abi::{
 use zoraya_heap::{Backing, Heap, PAGE_SIZE};
 
 use crate::errno::{self, *};
+use crate::lock::{Lock, Wait};
 use crate::path::PATH_MAX;
 use crate::process::{self, AT_EMPTY_PATH, AT_FDCWD, Desc, Posix, Target, o};
 use crate::stat;
@@ -196,31 +201,7 @@ impl Sys for RtSys {
                 port
             }
         };
-        let mut subscribed = 0;
-        let mut r = Ok(());
-        for (i, &(h, wanted)) in sources.iter().enumerate() {
-            r = zoraya_rt::port_subscribe(port, h, wanted, i as u64 + 1, Mode::Level);
-            if r.is_err() {
-                break;
-            }
-            subscribed = i + 1;
-        }
-        let mut packets = [Packet::default()];
-        let waited = match r {
-            Ok(()) => {
-                zoraya_rt::port_wait(port, deadline.unwrap_or(DEADLINE_INFINITE), &mut packets)
-            }
-            Err(s) => Err(s),
-        };
-        for i in 0..subscribed {
-            let _ = zoraya_rt::port_unsubscribe(port, i as u64 + 1);
-        }
-        waited?;
-        let key = packets[0].key as usize;
-        if key == 0 || key > sources.len() {
-            return Err(Status::BadState);
-        }
-        Ok((key - 1, packets[0].signals))
+        port_wait_any(port, sources, deadline)
     }
 
     fn signals_of(&mut self, h: Handle) -> Result<u32, Status> {
@@ -242,41 +223,177 @@ impl Sys for RtSys {
     fn slot_of(&self, h: Handle) -> u32 {
         h.slot()
     }
+
+    fn thread_self(&mut self) -> Option<Handle> {
+        zoraya_rt::thread_self().ok()
+    }
+
+    fn interrupt(&mut self, h: Handle, port: Option<Handle>) {
+        let _ = zoraya_rt::thread_interrupt(h);
+        if let Some(port) = port {
+            let _ = zoraya_rt::port_queue(port, USER_WAKE, 0);
+        }
+    }
 }
+
+/// The key of the packet that wakes a thread out of a port wait for another
+/// thread's sake (ADR-0304 item 11); the subscriptions' keys are small.
+const USER_WAKE: u64 = u64::MAX;
 
 // ------------------------------------------------------------ the state
 
-/// One thread (ADR-0100 item 5): a cell, with a flag that turns a reentry,
-/// which would alias the state, into a panic.
-struct Global {
-    state: UnsafeCell<Option<Posix<RtSys>>>,
-    busy: Cell<bool>,
+/// The kernel's wait on an address behind the lock's trait (ADR-0301).
+struct Futex;
+
+/// The futex calls this process made (`futex_wait`, `futex_wake`, through the
+/// library lock or musl's): zero in a program with one thread (INV-0302-5).
+static FUTEX_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+impl Wait for Futex {
+    fn wait(&self, word: &AtomicU32, expected: u32) {
+        FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
+        // Any return is an early return to the lock's loop, which re-checks.
+        let _ = zoraya_rt::futex_wait(word as *const AtomicU32 as u64, expected, DEADLINE_INFINITE);
+    }
+
+    fn wake(&self, word: &AtomicU32) {
+        FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
+        let _ = zoraya_rt::futex_wake(word as *const AtomicU32 as u64, 1);
+    }
 }
 
-// SAFETY: a POSIX process on Zoraya has one thread (ADR-0100 item 5); nothing
-// runs asynchronously on it (ADR-0004).
+/// This thread's thread pointer: zero before `__init_tls`, then unique to the
+/// thread (its `struct pthread`).
+fn thread_pointer() -> usize {
+    let tp: usize;
+    // SAFETY: reads a register, touches no memory.
+    unsafe {
+        core::arch::asm!("mrs {}, tpidr_el0", out(reg) tp, options(nomem, nostack, preserves_flags));
+    }
+    tp
+}
+
+/// No owner: the value of [`LIB_OWNER`] while the lock is free.
+const NO_OWNER: usize = usize::MAX;
+
+/// The library lock (ADR-0302 item 8): guards [`STATE`]. Order: this lock,
+/// then [`MEM`]; never the other way.
+static LIB: Lock = Lock::new();
+static LIB_OWNER: AtomicUsize = AtomicUsize::new(NO_OWNER);
+
+/// The memory lock (ADR-0302 item 8): the heap and the mapping table. The
+/// heap never calls the library.
+static MEM: Lock = Lock::new();
+
+/// The memory lock across a `fork`'s snapshot (ADR-0306 item 1): taken by the
+/// forking thread, which then allocates nothing until [`unlock_memory`].
+fn lock_memory() {
+    MEM.lock(&Futex);
+}
+
+/// Releases it; in the child (`child`) the copy of the lock is made free
+/// instead: its holder, the forking thread, is the one running.
+fn unlock_memory(child: bool) {
+    if child {
+        MEM.reset();
+    } else {
+        MEM.unlock(&Futex);
+    }
+}
+
+/// Runs `f` with `lock` held.
+fn locked<R>(lock: &Lock, f: impl FnOnce() -> R) -> R {
+    lock.lock(&Futex);
+    let r = f();
+    lock.unlock(&Futex);
+    r
+}
+
+struct Global {
+    state: UnsafeCell<Option<Posix<RtSys>>>,
+}
+
+// SAFETY: the state is reached only through `with`, which holds `LIB`; two
+// threads are never inside at once.
 unsafe impl Sync for Global {}
 
 static STATE: Global = Global {
     state: UnsafeCell::new(None),
-    busy: Cell::new(false),
 };
 
-/// Runs `f` on the process's state; `None` before start-up.
+/// Runs `f` on the process's state; `None` before start-up. A second entry by
+/// the same thread (which would alias the state and deadlock on the lock) is
+/// a panic, as it was with one thread.
 fn with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
-    assert!(!STATE.busy.replace(true), "zoraya-posix entered twice");
-    // SAFETY: one thread, and `busy` makes this the only reference.
+    let me = thread_pointer();
+    assert!(
+        LIB_OWNER.load(Ordering::Relaxed) != me,
+        "zoraya-posix entered twice"
+    );
+    LIB.lock(&Futex);
+    LIB_OWNER.store(me, Ordering::Relaxed);
+    // SAFETY: `LIB` is held, so this is the only reference.
+    let state = unsafe { &mut *STATE.state.get() };
+    let r = state.as_mut().map(|p| {
+        // The signal state is this thread's from here (ADR-0304 item 1).
+        p.switch_to(me);
+        f(p)
+    });
+    LIB_OWNER.store(NO_OWNER, Ordering::Relaxed);
+    LIB.unlock(&Futex);
+    r
+}
+
+/// How long the exit path waits for the library lock before it gives the
+/// statistics up: a sibling's short broker round trip, not a wait.
+const EXIT_LOCK_BUDGET_NS: u64 = 500_000_000;
+
+/// As [`with`], but waits for the library lock for at most `budget_ns` (a
+/// sleep of 1 ms between tries) and gives up after that: `None` then, and
+/// before start-up. For the exit path, which must end the process even if a
+/// sibling holds the lock for good (it is in a service call, ADR-0314 item
+/// 2), but should not drop the ADR-0110 report because a sibling held it
+/// for a moment.
+fn try_with_for<R>(budget_ns: u64, f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
+    let me = thread_pointer();
+    if LIB_OWNER.load(Ordering::Relaxed) == me {
+        return None;
+    }
+    let end = zoraya_rt::clock_monotonic().saturating_add(budget_ns);
+    while !LIB.try_lock() {
+        let now = zoraya_rt::clock_monotonic();
+        if now >= end {
+            return None;
+        }
+        zoraya_rt::sleep_until(now.saturating_add(1_000_000).min(end));
+    }
+    LIB_OWNER.store(me, Ordering::Relaxed);
+    // SAFETY: `LIB` is held, so this is the only reference.
     let state = unsafe { &mut *STATE.state.get() };
     let r = state.as_mut().map(f);
-    STATE.busy.set(false);
+    LIB_OWNER.store(NO_OWNER, Ordering::Relaxed);
+    LIB.unlock(&Futex);
     r
 }
 
 unsafe extern "C" {
+    /// musl's (`cancel.c`): ends the calling thread if a cancel is pending
+    /// and enabled.
+    fn __testcancel();
+    fn __zoraya_cancel_begin() -> i32;
+    fn __zoraya_cancel_seen(old: i32) -> i32;
+    fn __zoraya_cancel_end(old: i32);
     fn __errno_location() -> *mut i32;
     fn fdopen(fd: i32, mode: *const c_char) -> *mut u8;
     fn __fmodeflags(mode: *const c_char) -> i32;
     fn longjmp(env: *mut u8, value: i32) -> !;
+}
+
+/// A cancellation point of the calling thread; never holds a lock.
+fn testcancel() {
+    // SAFETY: `cancel.c`'s function; it only reads the thread's own flags
+    // and ends the thread, which holds no library lock here.
+    unsafe { __testcancel() };
 }
 
 fn set_errno(e: i32) {
@@ -311,8 +428,92 @@ fn raw(r: Result<i64, i32>) -> i64 {
     r.unwrap_or_else(|e| -i64::from(e))
 }
 
-fn state<R>(f: impl FnOnce(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
-    with(f).unwrap_or(Err(ENOSYS))
+/// Runs `f` on the state; a long wait it asks for (`Err(PENDING)`, ADR-0302
+/// item 9) is made here with the library lock released, and `f` runs again
+/// with the outcome. So `f` is run again from its start: it must have changed
+/// nothing it cannot repeat before a wait (the methods keep that rule, and a
+/// write keeps its progress in the pending wait).
+fn state<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
+    let mut resume: Option<crate::jobs::Resume<Handle>> = None;
+    loop {
+        let r = with(|p| p.run_deferred(resume.take(), &mut f));
+        match r {
+            None => return Err(ENOSYS),
+            Some((r, None)) => return r,
+            Some((_, Some(w))) => {
+                let result = wait_unlocked(&w.sources, w.deadline);
+                resume = Some(crate::jobs::Resume {
+                    sources: w.sources,
+                    own_len: w.own_len,
+                    result,
+                    progress: w.progress,
+                });
+            }
+        }
+    }
+}
+
+/// A wait of a thread, made with no library lock held (INV-0302-2): on a
+/// port of its own, since two threads waiting on one port would take each
+/// other's packets (ADR-0302 item 5). The port lives for the one wait.
+///
+/// Both ends are cancellation points (ADR-0305, INV-0315-4) and hold no lock.
+/// The test is made whatever ended the wait, not only the user packet: the
+/// `interrupted` flag a cancel sets is one-shot and a futex wait or a data
+/// packet may have taken it, while musl's own `cancel` flag stays set.
+fn wait_unlocked(sources: &[(Handle, u32)], deadline: Option<u64>) -> Result<(usize, u32), Status> {
+    testcancel();
+    let port = zoraya_rt::port_create()?;
+    // Tell the table where this thread waits, so that another thread can wake
+    // it; and do not wait if something was already sent (ADR-0304 items 2, 3).
+    let skip = with(|p| p.set_wait_port(Some(port))).unwrap_or(false);
+    let r = if skip {
+        Ok((usize::MAX, 0))
+    } else {
+        port_wait_any(port, sources, deadline)
+    };
+    let _ = with(|p| {
+        p.set_wait_port(None);
+        p.take_interrupted()
+    });
+    let _ = zoraya_rt::handle_close(port);
+    testcancel();
+    r
+}
+
+/// Subscribes `sources` on `port` (key = index + 1), waits for one packet or
+/// the deadline, unsubscribes.
+fn port_wait_any(
+    port: Handle,
+    sources: &[(Handle, u32)],
+    deadline: Option<u64>,
+) -> Result<(usize, u32), Status> {
+    let mut subscribed = 0;
+    let mut r = Ok(());
+    for (i, &(h, wanted)) in sources.iter().enumerate() {
+        r = zoraya_rt::port_subscribe(port, h, wanted, i as u64 + 1, Mode::Level);
+        if r.is_err() {
+            break;
+        }
+        subscribed = i + 1;
+    }
+    let mut packets = [Packet::default()];
+    let waited = match r {
+        Ok(()) => zoraya_rt::port_wait(port, deadline.unwrap_or(DEADLINE_INFINITE), &mut packets),
+        Err(s) => Err(s),
+    };
+    for i in 0..subscribed {
+        let _ = zoraya_rt::port_unsubscribe(port, i as u64 + 1);
+    }
+    waited?;
+    if packets[0].key == USER_WAKE {
+        return Ok((usize::MAX, 0));
+    }
+    let key = packets[0].key as usize;
+    if key == 0 || key > sources.len() {
+        return Err(Status::BadState);
+    }
+    Ok((key - 1, packets[0].signals))
 }
 
 /// The bytes of a C string, without its NUL.
@@ -382,19 +583,23 @@ unsafe impl Backing for Objects {
 
 struct ProcessHeap(UnsafeCell<Heap<Objects>>);
 
-// SAFETY: one thread (ADR-0100 item 5).
+// SAFETY: every access is under `MEM`.
 unsafe impl Sync for ProcessHeap {}
 
 // SAFETY: `Heap` returns blocks of the layout asked, or null.
 unsafe impl GlobalAlloc for ProcessHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: one thread, and `Heap` calls nothing that allocates.
-        unsafe { (*self.0.get()).alloc(layout) }
+        locked(&MEM, || {
+            // SAFETY: `MEM` is held, and `Heap` calls nothing that allocates.
+            unsafe { (*self.0.get()).alloc(layout) }
+        })
     }
 
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
-        // SAFETY: as in `alloc`; the caller's contract is `Heap::dealloc`'s.
-        unsafe { (*self.0.get()).dealloc(block, layout) }
+        locked(&MEM, || {
+            // SAFETY: as in `alloc`; the caller's contract is `Heap::dealloc`'s.
+            unsafe { (*self.0.get()).dealloc(block, layout) }
+        })
     }
 }
 
@@ -502,15 +707,21 @@ extern "C" fn __libc_free(p: *mut u8) {
 
 /// Private anonymous mappings (ADR-0103 item 12), for `__init_tls` and
 /// whatever else maps: a memory object each, recorded for `munmap`.
-struct Mappings(UnsafeCell<[(u64, u64, u64); 64]>);
+/// One for each of the kernel's 256 mappings of a process, so that 128 thread
+/// stacks fit with the image and the heap (ADR-0300).
+const MAPPING_SLOTS: usize = 256;
 
-// SAFETY: one thread.
+struct Mappings(UnsafeCell<[(u64, u64, u64); MAPPING_SLOTS]>);
+
+// SAFETY: every access is under `MEM`.
 unsafe impl Sync for Mappings {}
 
-static MAPPINGS: Mappings = Mappings(UnsafeCell::new([(0, 0, 0); 64]));
+static MAPPINGS: Mappings = Mappings(UnsafeCell::new([(0, 0, 0); MAPPING_SLOTS]));
 
-fn mappings() -> &'static mut [(u64, u64, u64); 64] {
-    // SAFETY: one thread, and no caller holds the reference across another.
+/// The table. The caller holds `MEM` and does not keep the reference across
+/// releasing it.
+fn mappings() -> &'static mut [(u64, u64, u64); MAPPING_SLOTS] {
+    // SAFETY: the caller holds `MEM` (see above).
     unsafe { &mut *MAPPINGS.0.get() }
 }
 
@@ -544,34 +755,39 @@ fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
         return Err(EINVAL);
     }
     let size = (length as u64).next_multiple_of(PAGE_SIZE as u64);
-    let free = mappings().iter().position(|m| m.1 == 0).ok_or(ENOMEM)?;
-    let object =
-        zoraya_rt::memory_create(size, MemoryFlags::NONE).map_err(|s| rt_errno(s, Call::Memory))?;
-    match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
-        Ok(address) => {
-            mappings()[free] = (address, size, object.raw());
-            Ok(address as i64)
+    // The table is `MEM`'s; the calls inside allocate nothing.
+    locked(&MEM, || {
+        let free = mappings().iter().position(|m| m.1 == 0).ok_or(ENOMEM)?;
+        let object = zoraya_rt::memory_create(size, MemoryFlags::NONE)
+            .map_err(|s| rt_errno(s, Call::Memory))?;
+        match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
+            Ok(address) => {
+                mappings()[free] = (address, size, object.raw());
+                Ok(address as i64)
+            }
+            Err(s) => {
+                let _ = zoraya_rt::handle_close(object);
+                Err(rt_errno(s, Call::Memory))
+            }
         }
-        Err(s) => {
-            let _ = zoraya_rt::handle_close(object);
-            Err(rt_errno(s, Call::Memory))
-        }
-    }
+    })
 }
 
 fn unmap(address: u64, length: u64) -> Result<(), i32> {
     let size = length.next_multiple_of(PAGE_SIZE as u64);
-    // The kernel ends whole mappings only: a part of one is refused.
-    let m = mappings()
-        .iter_mut()
-        .find(|m| m.1 != 0 && m.0 == address && m.1 == size)
-        .ok_or(EINVAL)?;
-    zoraya_rt::memory_unmap(m.0, m.1).map_err(|s| rt_errno(s, Call::Memory))?;
-    if let Some(h) = Handle::new(m.2) {
-        let _ = zoraya_rt::handle_close(h);
-    }
-    *m = (0, 0, 0);
-    Ok(())
+    locked(&MEM, || {
+        // The kernel ends whole mappings only: a part of one is refused.
+        let m = mappings()
+            .iter_mut()
+            .find(|m| m.1 != 0 && m.0 == address && m.1 == size)
+            .ok_or(EINVAL)?;
+        zoraya_rt::memory_unmap(m.0, m.1).map_err(|s| rt_errno(s, Call::Memory))?;
+        if let Some(h) = Handle::new(m.2) {
+            let _ = zoraya_rt::handle_close(h);
+        }
+        *m = (0, 0, 0);
+        Ok(())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -612,15 +828,34 @@ extern "C" fn mmap(a: *mut u8, length: usize, prot: i32, flags: i32, fd: i32, of
     }
 }
 
+/// musl's `pthread_create` maps a thread's stack with `__mmap`.
+#[unsafe(no_mangle)]
+extern "C" fn __mmap(
+    a: *mut u8,
+    length: usize,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    off: i64,
+) -> *mut u8 {
+    mmap(a, length, prot, flags, fd, off)
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn __munmap(address: *mut u8, length: usize) -> i32 {
     munmap(address, length)
 }
 
-/// ADR-0100 item 6: no permission changes on mappings.
+/// ADR-0100 item 6: no permission changes on mappings. `pthread_create`
+/// tolerates the `ENOSYS` (ADR-0302 item 7).
 #[unsafe(no_mangle)]
 extern "C" fn mprotect(_a: *mut u8, _n: usize, _prot: i32) -> i32 {
     int(Err(ENOSYS))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __mprotect(a: *mut u8, n: usize, prot: i32) -> i32 {
+    mprotect(a, n, prot)
 }
 
 // ------------------------------------------------------------ start-up
@@ -795,15 +1030,23 @@ fn print_stats() {
     if !wanted {
         return;
     }
-    let _ = with(|p| {
+    let line = try_with_for(EXIT_LOCK_BUDGET_NS, |p| {
         use core::fmt::Write;
         let s = p.stats;
         let mut line = String::new();
         let mean = s.resolve_ns.checked_div(s.resolutions).unwrap_or(0);
         let _ = writeln!(
             line,
-            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={} broker={} takes={}",
-            s.resolutions, mean, s.requests, s.seeks, s.shares, s.reports, s.broker, s.takes
+            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={} broker={} takes={} futex={}",
+            s.resolutions,
+            mean,
+            s.requests,
+            s.seeks,
+            s.shares,
+            s.reports,
+            s.broker,
+            s.takes,
+            FUTEX_CALLS.load(Ordering::Relaxed)
         );
         let mean = |total: u64, n: u64| total.checked_div(n).unwrap_or(0);
         if s.prepares > 0 || s.forks > 0 {
@@ -821,8 +1064,13 @@ fn print_stats() {
                 mean(s.snapshot_ns, s.forks)
             );
         }
-        let _ = p.write(2, User::new(line.as_ptr() as u64, line.len()));
+        line
     });
+    if let Some(line) = line {
+        // Written with the lock free: a full pipe makes the write ask for a
+        // wait (`PENDING`), which `restartable` makes outside the lock.
+        let _ = procs::restartable(|p| p.write(2, User::new(line.as_ptr() as u64, line.len())));
+    }
 }
 
 // ------------------------------------------------------------ the report
@@ -891,7 +1139,12 @@ fn restart_stats(_p: &mut Posix<RtSys>) {}
 /// `exit_group`).
 fn exit(code: i64) -> ! {
     print_stats();
-    let _ = with(report_stats);
+    // A sibling may hold the library lock for ever (a service call that does
+    // not end, ADR-0315 item 1): the report is skipped after a bounded wait
+    // rather than the exit lost.
+    if cfg!(feature = "stats") {
+        let _ = try_with_for(EXIT_LOCK_BUDGET_NS, report_stats);
+    }
     zoraya_rt::process_exit((code & 0xff) as i32)
 }
 
@@ -905,10 +1158,371 @@ extern "C" fn zoraya_posix_exit_group(code: i64) -> ! {
     exit(code)
 }
 
+/// The address the kernel clears and wakes when a thread ends (`thread_exit`'s
+/// `clear`). musl gives the same one to every thread, `&__thread_list_lock`,
+/// at `set_tid_address` for the main thread and as `__clone`'s `ctid`; the
+/// library keeps the last one given (all equal) instead of a record per
+/// thread (ADR-0314 item 3).
+static CLEAR_ON_EXIT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The id of the main thread (ADR-0302 item 2); new threads take 2, 3, ...
+const MAIN_TID: i64 = 1;
+static NEXT_TID: AtomicU32 = AtomicU32::new(2);
+/// musl's tids stay below 2^30 (`__lock` uses the top bits).
+const TID_LIMIT: u32 = 1 << 30;
+
 #[unsafe(no_mangle)]
-extern "C" fn zoraya_posix_set_tid_address(_p: i64) -> i64 {
-    // musl keeps it as the thread's id: the process's, or 1 without one.
-    i64::from(with(|p| p.facts.pid).unwrap_or(0).max(1))
+extern "C" fn zoraya_posix_set_tid_address(p: i64) -> i64 {
+    CLEAR_ON_EXIT.store(p as u64, Ordering::Relaxed);
+    MAIN_TID
+}
+
+/// The words musl's `__clone` caller leaves at the top of a new thread's
+/// stack: what to run.
+#[repr(C)]
+struct Start {
+    function: usize,
+    argument: usize,
+}
+
+/// A new thread begins here (`thread_create`'s entry), on its own stack with
+/// its thread pointer set: musl's `start`, which never returns.
+extern "C" fn thread_start(start: *const Start) -> ! {
+    // SAFETY: `__clone` wrote a `Start` at the new stack's top before the
+    // thread was made, and only this thread reads it.
+    let Start { function, argument } = unsafe { start.read() };
+    // SAFETY: `function` is the `int (*)(void *)` `__clone` was given.
+    let function: extern "C" fn(usize) -> i32 =
+        unsafe { core::mem::transmute::<usize, extern "C" fn(usize) -> i32>(function) };
+    function(argument);
+    zoraya_posix_thread_exit(0)
+}
+
+/// musl's `__clone` (`src/thread/aarch64/clone.s`, excluded): makes a thread
+/// that runs `function(argument)` on `stack` with thread pointer `tls`.
+/// `flags` are musl's constant set and are ignored; the new id is stored at
+/// `ptid` before the thread starts. Returns the id or `-EAGAIN`.
+#[unsafe(no_mangle)]
+extern "C" fn __clone(
+    function: usize,
+    stack: usize,
+    _flags: i32,
+    argument: usize,
+    ptid: *mut i32,
+    tls: usize,
+    ctid: usize,
+) -> i32 {
+    let tid = NEXT_TID.fetch_add(1, Ordering::Relaxed);
+    if tid >= TID_LIMIT {
+        return -EAGAIN;
+    }
+    CLEAR_ON_EXIT.store(ctid as u64, Ordering::Relaxed);
+    // From the first thread on, long waits are made outside the library lock.
+    let _ = with(|p| p.defer_waits = true);
+    let sp = (stack - core::mem::size_of::<Start>()) & !15;
+    // SAFETY: `stack` is the top of the new thread's own, unused stack, in a
+    // mapping the caller made; the thread does not exist yet.
+    unsafe {
+        (sp as *mut Start).write(Start { function, argument });
+        ptid.write(tid as i32);
+    }
+    // The record first: the new thread may run, and take the library lock,
+    // before this returns.
+    let _ = with(|p| p.thread_add(tls, tid, None));
+    let entry: extern "C" fn(*const Start) -> ! = thread_start;
+    match zoraya_rt::thread_create(entry as usize as u64, sp as u64, sp as u64, tls as u64) {
+        Ok(handle) => {
+            // Kept for `thread_interrupt`; closed by the thread's own exit.
+            let _ = with(|p| {
+                if let Some(r) = p.threads.list.iter_mut().find(|r| r.tp == tls) {
+                    r.handle = Some(handle);
+                }
+            });
+            tid as i32
+        }
+        Err(_) => {
+            let _ = with(|p| p.thread_remove(tls));
+            -EAGAIN
+        }
+    }
+}
+
+/// The thread's table record goes, and its handle with it (ADR-0302 item 4),
+/// before the thread ends: no slot outlives the thread (INV-0300-7).
+fn forget_thread() {
+    let me = thread_pointer();
+    if let Some(Some(r)) = with(|p| p.thread_remove(me))
+        && let Some(h) = r.handle
+    {
+        let _ = zoraya_rt::handle_close(h);
+    }
+}
+
+/// `SYS_exit`: ends the calling thread (the last one ends the process with
+/// code 0, ADR-0300 item 3). `_Exit` calls `exit_group` first, so this is
+/// reached only by a thread leaving.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_thread_exit(_code: i64) -> ! {
+    forget_thread();
+    zoraya_rt::thread_exit(CLEAR_ON_EXIT.load(Ordering::Relaxed), 0, 0)
+}
+
+/// musl's `__unmapself`: a detached thread's last act. Gives the mapping's
+/// object handle back (the library's table forgets the mapping), then the
+/// kernel unmaps `[base, base + size)` and ends the thread, without touching
+/// the stack that goes (ADR-0300 item 3).
+#[unsafe(no_mangle)]
+extern "C" fn __unmapself(base: u64, size: u64) -> ! {
+    forget_thread();
+    let handle = locked(&MEM, || {
+        mappings()
+            .iter_mut()
+            .find(|m| m.1 != 0 && m.0 == base && m.1 == size)
+            .map(|m| core::mem::take(&mut m.2))
+    });
+    if let Some(h) = handle.and_then(Handle::new) {
+        let _ = zoraya_rt::handle_close(h);
+    }
+    // The table entry is cleared by `take` only for the handle: free it too.
+    locked(&MEM, || {
+        if let Some(m) = mappings().iter_mut().find(|m| m.0 == base && m.1 == size) {
+            *m = (0, 0, 0);
+        }
+    });
+    zoraya_rt::thread_exit(CLEAR_ON_EXIT.load(Ordering::Relaxed), base, size)
+}
+
+/// `SYS_sched_yield`.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_sched_yield() -> i64 {
+    zoraya_rt::thread_yield();
+    0
+}
+
+/// `FUTEX_WAIT` and `FUTEX_WAKE` of musl, over ADR-0301's two calls
+/// (ADR-0302 item 2). The private flag is ignored (every futex is private);
+/// `REQUEUE` is a wake of the wake count plus the requeue count; anything
+/// else is `ENOTSUP`. A `futex_wait` that returns early on `thread_interrupt`
+/// is a spurious wake here (0): ADR-0304 item 11's handler and cancel cases
+/// come with signals (ADR-0314 item 4).
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_futex(
+    address: i64,
+    op: i64,
+    value: i64,
+    timeout: i64,
+    address2: i64,
+    value3: i64,
+) -> i64 {
+    FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
+    const WAIT: i64 = 0;
+    const WAKE: i64 = 1;
+    const REQUEUE: i64 = 3;
+    const CMP_REQUEUE: i64 = 4;
+    const PRIVATE: i64 = 128;
+    match op & !PRIVATE {
+        WAIT => {
+            let deadline = if timeout == 0 {
+                DEADLINE_INFINITE
+            } else {
+                // SAFETY: C's contract: a non-null `timeout` is a `struct
+                // timespec` (two 64-bit words, relative: musl converts).
+                let [sec, nsec] = unsafe { ptr::read(timeout as *const [i64; 2]) };
+                if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
+                    return -i64::from(if sec < 0 { ETIMEDOUT } else { EINVAL });
+                }
+                zoraya_rt::clock_monotonic()
+                    .saturating_add((sec as u64).saturating_mul(1_000_000_000))
+                    .saturating_add(nsec as u64)
+                    .min(DEADLINE_INFINITE - 1)
+            };
+            match zoraya_rt::futex_wait(address as u64, value as u32, deadline) {
+                Ok(false) => 0,
+                // Interrupted (ADR-0304 item 11): `-EINTR` only if a handler
+                // ran on this thread; otherwise a spurious wake, which
+                // `cancel.c` turns into the cancel if one is pending.
+                Ok(true) => {
+                    let _ = with(|p| p.take_interrupted());
+                    if procs::deliver_ran() {
+                        -i64::from(EINTR)
+                    } else {
+                        0
+                    }
+                }
+                Err(Status::WouldBlock) => -i64::from(EAGAIN),
+                Err(Status::DeadlineExceeded) => -i64::from(ETIMEDOUT),
+                Err(Status::BadAddress) => -i64::from(EFAULT),
+                // The process is ending: the thread leaves at its next
+                // return to EL0; a spurious wake until then.
+                Err(Status::Cancelled) => 0,
+                Err(_) => -i64::from(ENOMEM),
+            }
+        }
+        WAKE => wake_up_to(address as u64, value),
+        REQUEUE | CMP_REQUEUE => {
+            if op & !PRIVATE == CMP_REQUEUE {
+                // SAFETY: C's contract: `address` is a futex word.
+                let now = unsafe { ptr::read_volatile(address as *const i32) };
+                if i64::from(now) != value3 {
+                    return -i64::from(EAGAIN);
+                }
+            }
+            // No requeue (ADR-0301 item 4): wake the waiters that would have
+            // moved too, each of which re-checks and sleeps on `address2`.
+            let _ = address2;
+            wake_up_to(
+                address as u64,
+                value.saturating_add(timeout.min(i64::from(i32::MAX))),
+            )
+        }
+        // Priority inheritance (`FUTEX_LOCK_PI`) and the rest: refused as
+        // "not supported", which `pthread_mutexattr_setprotocol` returns to
+        // the program (ADR-0302 item 6, INV-0302-4).
+        _ => -i64::from(ENOTSUP),
+    }
+}
+
+/// Wakes up to `count` waiters (`FUTEX_WAKE`'s `INT_MAX` means all): the
+/// kernel takes 128 at a call.
+fn wake_up_to(address: u64, count: i64) -> i64 {
+    let mut left = count.max(0);
+    let mut woken = 0i64;
+    while left > 0 {
+        let ask = left.min(128) as u32;
+        match zoraya_rt::futex_wake(address, ask) {
+            Ok(n) => {
+                woken += i64::from(n);
+                left -= i64::from(ask);
+                if n < ask {
+                    break;
+                }
+            }
+            Err(Status::BadAddress) => return -i64::from(EFAULT),
+            Err(_) => return -i64::from(EINVAL),
+        }
+    }
+    woken
+}
+
+/// `SYS_rt_sigprocmask`: the calling thread's mask (ADR-0304 item 1), the
+/// call musl's thread start and `abort` make. `pthread_sigmask` is the Rust
+/// one, not musl's.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_rt_sigprocmask(how: i64, set: i64, old: i64, size: i64) -> i64 {
+    // musl passes `_NSIG / 8` (16): the set is two words, the library keeps
+    // the first (signals 1 to 64; the second is always empty).
+    if size != 8 && size != 16 {
+        return -i64::from(EINVAL);
+    }
+    let new = if set == 0 {
+        None
+    } else {
+        // SAFETY: C's contract: `set` is a `sigset_t` of 8 bytes.
+        Some(unsafe { ptr::read_unaligned(set as *const u64) })
+    };
+    let Some(r) = with(|p| p.signals.mask(how as i32, new)) else {
+        return 0;
+    };
+    match r {
+        Ok(o) => {
+            if old != 0 {
+                // SAFETY: C's contract: `old` is a `sigset_t` of 8 bytes.
+                unsafe {
+                    ptr::write_unaligned(old as *mut u64, o);
+                    if size == 16 {
+                        ptr::write_unaligned((old as *mut u64).add(1), 0);
+                    }
+                };
+            }
+            // Unblocking: what was pending is delivered now (ADR-0304 item 3).
+            if new.is_some() && how != 0 {
+                procs::poll();
+            }
+            0
+        }
+        Err(e) => -i64::from(e),
+    }
+}
+
+/// `SYS_tkill`: a signal for one thread (ADR-0304 item 2).
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_tkill(tid: i64, sig: i64) -> i64 {
+    let (Ok(tid), Ok(n)) = (u32::try_from(tid), u32::try_from(sig)) else {
+        return -i64::from(EINVAL);
+    };
+    match with(|p| p.tkill(tid, n)) {
+        None => -i64::from(ENOSYS),
+        Some(Err(e)) => -i64::from(e),
+        Some(Ok(crate::threads::Tkill::Sent)) => 0,
+        // Left pending in this thread: `__restore_sigs` delivers it once
+        // musl's `killlock` is released (it blocks everything meanwhile).
+        Some(Ok(crate::threads::Tkill::Myself)) => 0,
+    }
+}
+
+/// `pthread_cancel`'s wake (`cancel.c`, ADR-0305): interrupts thread `tid`
+/// out of a futex wait, a sleep or a library wait, so that it sees its flag.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_interrupt(tid: i64) -> i64 {
+    let Ok(tid) = u32::try_from(tid) else {
+        return -i64::from(EINVAL);
+    };
+    match with(|p| p.interrupt_tid(tid)) {
+        None => -i64::from(ENOSYS),
+        Some(Err(e)) => -i64::from(e),
+        Some(Ok(())) => 0,
+    }
+}
+
+/// `pthread_setname_np`/`getname_np` (`attr.c`): thread `tid`'s name, 16 bytes
+/// at `buf`; `set` writes it from `buf` (NUL-terminated, at most 15 bytes).
+/// Returns 0 or `-errno`.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_thread_name(tid: i64, buf: *mut u8, set: i64) -> i64 {
+    let Ok(tid) = u32::try_from(tid) else {
+        return -i64::from(EINVAL);
+    };
+    let r = with(|p| {
+        if set != 0 {
+            let mut name = [0u8; 16];
+            // SAFETY: C's contract: `buf` holds a NUL-terminated string; at
+            // most 16 bytes are read, the 16th only to find it missing.
+            let n = (0..16)
+                .take_while(|&i| unsafe { buf.add(i).read() } != 0)
+                .count();
+            for (i, b) in name.iter_mut().enumerate().take(n.min(15)) {
+                // SAFETY: as above, within the first `n` bytes.
+                *b = unsafe { buf.add(i).read() };
+            }
+            if n > 15 {
+                return Err(crate::errno::ERANGE);
+            }
+            p.set_thread_name(tid, &name[..n])
+        } else {
+            p.thread_name(tid).map(|n| {
+                // SAFETY: C's contract: `buf` has room for 16 bytes.
+                unsafe { ptr::copy_nonoverlapping(n.as_ptr(), buf, 16) }
+            })
+        }
+    });
+    match r {
+        None => -i64::from(ENOSYS),
+        Some(Err(e)) => -i64::from(e),
+        Some(Ok(())) => 0,
+    }
+}
+
+/// The main thread's stack (`pthread_getattr_np`): the top and the size the
+/// kernel gave every process.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_main_stack(out: *mut [usize; 2]) {
+    // SAFETY: C's contract: `out` holds two words.
+    unsafe {
+        out.write([
+            zoraya_abi::spawn::USER_STACK_TOP as usize,
+            zoraya_abi::spawn::USER_STACK_SIZE as usize,
+        ])
+    };
 }
 
 #[panic_handler]
@@ -1061,6 +1675,8 @@ extern "C" fn open(path: *const c_char, flags: i32, mode: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn openat(dirfd: i32, path: *const c_char, flags: i32, mode: u32) -> i32 {
+    // A cancellation point (ADR-0305 item 2), at the top, outside the lock.
+    testcancel();
     // SAFETY: C's contract: `path` is a string.
     let path = unsafe { c_str(path) };
     int(path.and_then(|path| state(|p| p.open(dirfd, path, flags as u32, mode))))
@@ -1906,87 +2522,53 @@ extern "C" fn getrusage(who: i32, usage: *mut u8) -> i32 {
 
 // ------------------------------------------------------------ threads
 
-/// ADR-0100 item 5: one thread, so a semaphore is a count (musl's `sem_t`
-/// begins with it).
-#[unsafe(no_mangle)]
-extern "C" fn sem_init(sem: *mut i32, _shared: i32, value: u32) -> i32 {
-    if sem.is_null() {
-        return int(Err(EFAULT));
-    }
-    if value > i32::MAX as u32 {
-        return int(Err(EINVAL));
-    }
-    // SAFETY: C's contract: `sem` is a `sem_t`.
-    unsafe { sem.write(value as i32) };
-    0
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn sem_post(sem: *mut i32) -> i32 {
-    if sem.is_null() {
-        return int(Err(EFAULT));
-    }
-    // SAFETY: C's contract: `sem` was initialised.
-    unsafe { sem.write(sem.read().saturating_add(1)) };
-    0
-}
-
-/// A wait on a zero count would wait for ever with no other thread to post.
-#[unsafe(no_mangle)]
-extern "C" fn sem_wait(sem: *mut i32) -> i32 {
-    if sem.is_null() {
-        return int(Err(EFAULT));
-    }
-    // SAFETY: C's contract: `sem` was initialised.
-    unsafe {
-        let n = sem.read();
-        if n <= 0 {
-            return int(Err(35)); // EDEADLK
+/// musl's thread code blocks signals around its locks and thread creation:
+/// `set` gets the mask in force, which `pthread_create` gives the new thread
+/// (`args->sig_mask`) and `__restore_sigs` puts back. The calling thread's
+/// mask really becomes "everything" (except `SIGKILL` and `SIGSTOP`) until
+/// then, so a handler never runs inside musl's critical sections (`killlock`,
+/// the thread-list lock): neither a `tkill` of oneself nor a delivery at a
+/// futex wait finds it unblocked (ADR-0304 item 1; reviewed: the first
+/// version blocked nothing). A null `set` (`abort`) forgets the old mask.
+fn block_sigs(set: *mut u64) {
+    let old = with(|p| {
+        p.signals
+            .mask(crate::signals::SIG_SETMASK, Some(u64::MAX))
+            .unwrap_or(0)
+    })
+    .unwrap_or(0);
+    if !set.is_null() {
+        // SAFETY: C's contract: `set` is a `sigset_t` (128 bytes) the caller owns.
+        unsafe {
+            set.write_unaligned(old);
+            set.add(1).write_unaligned(0);
         }
-        sem.write(n - 1);
     }
-    0
 }
 
-/// No cancellation, one thread: the state is always "enabled" and nothing
-/// changes (ADR-0141's open question, settled in ADR-0180).
 #[unsafe(no_mangle)]
-extern "C" fn pthread_setcancelstate(_new: i32, old: *mut i32) -> i32 {
-    if !old.is_null() {
-        // SAFETY: C's contract: `old` is an int.
-        unsafe { old.write(0) };
-    }
-    0
+extern "C" fn __block_all_sigs(set: *mut u64) {
+    block_sigs(set);
 }
 
-/// One thread and no cancellation (ADR-0100 item 5): musl's `system.c`
-/// calls it first; nothing is ever pending.
 #[unsafe(no_mangle)]
-extern "C" fn pthread_testcancel() {}
+extern "C" fn __block_app_sigs(set: *mut u64) {
+    block_sigs(set);
+}
 
+/// Puts the saved mask back and delivers what it lets through now: a signal
+/// that a `tkill` of oneself left pending runs its handler here, after
+/// musl's lock is released (`pthread_kill`, `raise`).
 #[unsafe(no_mangle)]
-extern "C" fn __lock(_l: *mut i32) {}
-
-#[unsafe(no_mangle)]
-extern "C" fn __unlock(_l: *mut i32) {}
-
-#[unsafe(no_mangle)]
-extern "C" fn _pthread_cleanup_push(_c: *mut u8, _f: usize, _x: *mut u8) {}
-
-#[unsafe(no_mangle)]
-extern "C" fn _pthread_cleanup_pop(_c: *mut u8, _run: i32) {}
-
-#[unsafe(no_mangle)]
-extern "C" fn __block_all_sigs(_set: *mut u8) {}
-
-#[unsafe(no_mangle)]
-extern "C" fn __restore_sigs(_set: *mut u8) {}
-
-/// musl's default thread stack size, which `__init_tls` reads and may raise:
-/// an atomic has `u32`'s layout and lives in writable memory.
-#[unsafe(no_mangle)]
-static __default_stacksize: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(131_072);
+extern "C" fn __restore_sigs(set: *mut u64) {
+    if set.is_null() {
+        return;
+    }
+    // SAFETY: C's contract: `set` was filled by `__block_*_sigs`.
+    let old = unsafe { set.read_unaligned() };
+    let _ = with(|p| p.signals.mask(crate::signals::SIG_SETMASK, Some(old)));
+    procs::poll();
+}
 
 /// `siglongjmp` without the signal mask, which is 6d's: a `sigjmp_buf` begins
 /// with a `jmp_buf`.

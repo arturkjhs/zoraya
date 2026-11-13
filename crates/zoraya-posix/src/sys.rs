@@ -114,6 +114,18 @@ pub trait Sys {
         None
     }
 
+    /// This thread's own handle, for `thread_interrupt` by the others.
+    fn thread_self(&mut self) -> Option<Self::H> {
+        None
+    }
+
+    /// Wakes thread `h` out of its wait (`thread_interrupt`), and, if it is
+    /// waiting on `port`, queues a packet there too (the kernel's
+    /// `port_wait` is not woken by an interrupt, ADR-0301).
+    fn interrupt(&mut self, h: Self::H, port: Option<Self::H>) {
+        let _ = (h, port);
+    }
+
     /// The slot a handle sits in (`fork`'s move list keeps slots).
     fn slot_of(&self, h: Self::H) -> u32 {
         let _ = h;

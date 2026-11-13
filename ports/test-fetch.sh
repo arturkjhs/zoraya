@@ -53,6 +53,50 @@ grep -q "refused" "$tmp/out" || { cat "$tmp/out"; fail "no refusal message"; }
 [ ! -e "$tmp/cache/bad.tar.gz" ] && [ ! -e "$tmp/cache/bad.tar.gz.part" ] || fail "the refused archive is in the cache"
 echo "test-fetch: an archive with the wrong SHA-256 is refused and not cached (INV-0109-4)"
 
+# A hash `tar:HEX` is of the gunzipped file: the same tar, gzipped twice with
+# different headers, is accepted both times; a different tar is refused.
+mkdir -p "$tmp/tarsrc" "$tmp/tarcache"
+printf 'one\n' > "$tmp/tarsrc/a"
+tar cf "$tmp/remote/t.tar" -C "$tmp/tarsrc" a
+gzip -n -c "$tmp/remote/t.tar" > "$tmp/remote/t1.tar.gz"
+sleep 1
+cp "$tmp/remote/t.tar" "$tmp/remote/named.tar" && gzip -c "$tmp/remote/named.tar" > "$tmp/remote/t2.tar.gz"
+tarhash=$(gzip -dc "$tmp/remote/t1.tar.gz" | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1)
+printf 'two\n' > "$tmp/tarsrc/a"
+tar cf "$tmp/remote/u.tar" -C "$tmp/tarsrc" a
+gzip -n -c "$tmp/remote/u.tar" > "$tmp/remote/u.tar.gz"
+cmp -s "$tmp/remote/t1.tar.gz" "$tmp/remote/t2.tar.gz" && fail "test setup: the gzip bytes should differ"
+printf 'tarred 1 tar:%s t.tar.gz file://%s file://%s\n' "$tarhash" "$tmp/remote/t1.tar.gz" "$tmp/remote/t2.tar.gz" > "$tmp/tarlock"
+tools/fetch-ports.sh "$tmp/tarlock" "$tmp/tarcache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "a tar: archive was refused"; }
+rm -f "$tmp/tarcache/t.tar.gz"
+printf 'tarred 1 tar:%s t.tar.gz file://%s file://%s\n' "$tarhash" "$tmp/remote/u.tar.gz" "$tmp/remote/t2.tar.gz" > "$tmp/tarlock"
+tools/fetch-ports.sh "$tmp/tarlock" "$tmp/tarcache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "the same tar in other gzip bytes was refused"; }
+grep -q "refused" "$tmp/out" || { cat "$tmp/out"; fail "a different tar was not refused"; }
+echo "test-fetch: a tar: hash ignores the gzip bytes and refuses another tar"
+
+# A git+REPO#COMMIT URL: the commit is fetched with git, archived with the
+# prefix NAME-<7 digits>/, and accepted by the tar's hash; another commit's
+# tar is refused.
+if command -v git >/dev/null 2>&1; then
+    mkdir -p "$tmp/repo/proj.git" && git -C "$tmp/repo/proj.git" init -q
+    printf 'v1\n' > "$tmp/repo/proj.git/f"
+    git -C "$tmp/repo/proj.git" add f
+    git -C "$tmp/repo/proj.git" -c user.name=t -c user.email=t@t commit -q -m one
+    c1=$(git -C "$tmp/repo/proj.git" rev-parse HEAD)
+    printf 'v2\n' > "$tmp/repo/proj.git/f"
+    git -C "$tmp/repo/proj.git" -c user.name=t -c user.email=t@t commit -q -am two
+    c2=$(git -C "$tmp/repo/proj.git" rev-parse HEAD)
+    git -C "$tmp/repo/proj.git" archive --format=tar --prefix="proj-$(echo "$c1" | cut -c1-7)/" "$c1" > "$tmp/remote/g.tar"
+    gh=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$tmp/remote/g.tar"; else shasum -a 256 < "$tmp/remote/g.tar"; fi | cut -d' ' -f1)
+    printf 'g 1 tar:%s g.tar.gz git+file://%s@%s\n' "$gh" "$tmp/repo/proj.git" "$c1" > "$tmp/glock"
+    mkdir -p "$tmp/gcache"
+    tools/fetch-ports.sh "$tmp/glock" "$tmp/gcache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "a git+ source was refused"; }
+    printf 'g 1 tar:%s g2.tar.gz git+file://%s@%s\n' "$gh" "$tmp/repo/proj.git" "$c2" > "$tmp/glock"
+    if tools/fetch-ports.sh "$tmp/glock" "$tmp/gcache" > "$tmp/out" 2>&1; then fail "another commit's tree was accepted"; fi
+    [ ! -e "$tmp/gcache/g2.tar.gz" ] || fail "the refused git archive is in the cache"
+    echo "test-fetch: a git+ source gives the locked tree, another commit is refused"
+fi
+
 printf 'x' >> "$tmp/cache/good.tar.gz"
 if tools/fetch-ports.sh --verify "$tmp/lock" "$tmp/cache" good > "$tmp/out" 2>&1; then fail "--verify accepted a corrupted cached archive"; fi
 echo "test-fetch: a cached archive corrupted later fails --verify (INV-0109-4)"

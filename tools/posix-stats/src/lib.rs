@@ -286,6 +286,13 @@ pub fn tier_list(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// INV-0308-3: the thread functions (the names of `docs/adr/posix-surface-T9.txt`)
+/// that the union of the runs called. The workloads are built without
+/// `-pthread`, so there must be none.
+pub fn thread_calls(t9: &BTreeSet<String>, union: &BTreeSet<String>) -> Vec<String> {
+    t9.iter().filter(|n| union.contains(*n)).cloned().collect()
+}
+
 /// The functions TASK-02 and TASK-02b saw called by the T0 and T1 tools:
 /// TASK-02's lower bound, the `core` runs of tiers T0 and T1 in
 /// `dynamic-programs.tsv` by measured programs (`built:` products are not

@@ -238,3 +238,11 @@ fn the_list_hash_is_fnv_1a_over_the_lines() {
     assert_ne!(ab, list_hash(&["b".into(), "a".into()]));
     assert_ne!(ab, list_hash(&["ab".into()]));
 }
+
+#[test]
+fn thread_functions_in_the_union_are_reported() {
+    let set = |v: &[&str]| -> BTreeSet<String> { v.iter().map(|s| s.to_string()).collect() };
+    let t9 = set(&["pthread_create", "sigwait"]);
+    assert!(thread_calls(&t9, &set(&["open", "read"])).is_empty());
+    assert_eq!(thread_calls(&t9, &set(&["open", "sigwait"])), ["sigwait"]);
+}

@@ -116,6 +116,10 @@ pub struct Signals {
     actions: [Action; 32],
     pub blocked: u64,
     pub pending: u64,
+    /// The process's own pending set: signals that every thread blocked
+    /// when they were taken (ADR-0304 item 3 (c)); `pending` is the
+    /// calling thread's.
+    pub shared: u64,
 }
 
 impl Signals {
@@ -139,6 +143,7 @@ impl Signals {
             actions,
             blocked: from_record(blocked) & !UNBLOCKABLE,
             pending: 0,
+            shared: 0,
         }
     }
 
@@ -162,6 +167,7 @@ impl Signals {
             if a.handler == SIG_IGN {
                 // POSIX: setting SIG_IGN discards a pending one.
                 self.pending &= !bit(n);
+                self.shared &= !bit(n);
             }
         }
         Ok(old)
@@ -233,12 +239,13 @@ impl Signals {
     /// The lowest pending signal that is no longer blocked, taken off the
     /// pending set (standard signals do not queue).
     pub fn next_unblocked(&mut self) -> Option<u32> {
-        let ready = self.pending & !self.blocked;
+        let ready = (self.pending | self.shared) & !self.blocked;
         if ready == 0 {
             return None;
         }
         let n = ready.trailing_zeros() + 1;
         self.pending &= !bit(n);
+        self.shared &= !bit(n);
         Some(n)
     }
 

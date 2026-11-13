@@ -4,6 +4,7 @@
 mod kernel;
 
 use kernel::*;
+use std::rc::Rc;
 use zoraya_abi::posix::{Access, EntryKind};
 use zoraya_posix::errno::*;
 use zoraya_posix::process::{
@@ -1555,4 +1556,89 @@ fn every_reported_counter_has_its_own_source() {
     assert_eq!(pack_calls(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 7]), [0x01, 0x02]);
     assert_eq!(pack_calls(&[]), Vec::<u8>::new());
     assert_eq!(pack_calls(&[0, 1, 1]), [0x06]);
+}
+
+/// What the C boundary's `state` does (ADR-0302 item 9): runs `f`; a wait it
+/// asks for is made here, between two runs, with nothing borrowed from the
+/// process; `f` runs again with the outcome.
+fn run<R>(
+    r: &mut Rig,
+    resume: Option<zoraya_posix::jobs::Resume<H>>,
+    f: &mut impl FnMut(&mut Rig) -> Result<R, i32>,
+) -> (Result<R, i32>, Option<zoraya_posix::jobs::PendingWait<H>>) {
+    r.p.set_resume(resume);
+    let out = f(r);
+    let w = r.p.end_run(&out);
+    (out, w)
+}
+
+fn deferred<R>(
+    r: &mut Rig,
+    mut f: impl FnMut(&mut Rig) -> Result<R, i32>,
+    mut waited: impl FnMut(&mut Rig),
+) -> Result<R, i32> {
+    use zoraya_posix::jobs::Resume;
+    let mut resume = None;
+    loop {
+        let (out, w) = run(r, resume.take(), &mut f);
+        let Some(w) = w else { return out };
+        waited(r);
+        let result = match w.sources.first() {
+            Some(&(h, wanted)) => r.p.sys.wait(h, wanted).map(|s| (0, s)),
+            None => Err(zoraya_abi::Status::DeadlineExceeded),
+        };
+        resume = Some(Resume {
+            sources: w.sources,
+            own_len: w.own_len,
+            result,
+            progress: w.progress,
+        });
+    }
+}
+
+#[test]
+fn a_deferred_write_resumes_where_it_stopped() {
+    let mut r = rig();
+    r.p.defer_waits = true;
+    let big = vec![5u8; 2 * STREAM_CAPACITY];
+    let (brd, bwr) = r.p.pipe(0).unwrap();
+    let brd = read_end(&r, brd);
+    let drained = Rc::new(std::cell::Cell::new(0usize));
+    let d = drained.clone();
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| {
+        d.set(d.get() + n.drain(brd, usize::MAX));
+    }));
+    let u = r.poke(0, &big);
+    let n = deferred(&mut r, |r| r.p.write(bwr, u), |_| {});
+    assert_eq!(n, Ok(2 * STREAM_CAPACITY));
+    // Nothing written twice: what the reader took is what the writer did,
+    // less what still sits in the ring.
+    r.p.sys.meanwhile = None;
+    let rest = r.p.read(
+        {
+            // The read end's descriptor is 3 less than the write end's.
+            bwr - 1
+        },
+        r.arena.user(ARENA / 2, 2 * STREAM_CAPACITY),
+    );
+    let left = rest.unwrap_or(0);
+    assert_eq!(drained.get() + left, 2 * STREAM_CAPACITY);
+}
+
+#[test]
+fn a_deferred_read_and_sleep_get_their_outcomes() {
+    let mut r = rig();
+    r.p.defer_waits = true;
+    let (rd, _wr) = r.p.pipe(0).unwrap();
+    let h = read_end(&r, rd);
+    // A reader waits; the data comes while it is out of the library.
+    let got = deferred(
+        &mut r,
+        |r| r.read(rd, 4),
+        |r| r.net.borrow_mut().feed(h, b"abcd"),
+    );
+    assert_eq!(got, Ok(b"abcd".to_vec()));
+    // A sleep: no sources, a deadline: the second run sees the deadline pass.
+    let slept = deferred(&mut r, |r| r.p.wait_for(&[], Some(1)), |_| {});
+    assert_eq!(slept, Ok((None, None)));
 }

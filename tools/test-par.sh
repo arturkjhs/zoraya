@@ -35,7 +35,7 @@ checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host
 # overflow the guest's ring while a job runs, which other guests' load can
 # keep from happening (2026-11-09).
 solo="test-boot"
-lanes="test-qemu;test-libposix;test-files test-crash test-keeper test-hand-run;test-posix;test-posix-gui test-tour-gui;test-gui;test-net;test-fuzz test-fuzz-net"
+lanes="test-qemu;test-libposix test-posix-threads;test-files test-crash test-keeper test-hand-run;test-posix;test-posix-gui test-tour-gui;test-gui;test-net;test-fuzz test-fuzz-net"
 all_lanes="$solo $(echo "$lanes" | tr ';' ' ')"
 
 

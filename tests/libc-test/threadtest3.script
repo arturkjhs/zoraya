@@ -1,0 +1,9 @@
+# SQLite's threadtest3 scenarios that need no WAL (tests/libc-test/threads-excluded.txt
+# names the others), each in a directory of its own, by posixrun (ADR-0309 item 2).
+! panicked
+! ZORAYA-PANIC
+< \r\n~> 
+> posixrun /bin/threadtest3 cgt_pager_1 dynamic_triggers create_drop_index_1 lookaside1 vacuum1 stress1 shared1\r
+< posixrun: exit 0
+< \r\n~> 
+> poweroff\r

@@ -135,3 +135,24 @@ a woken process: 144941856 ns`, both on TCG at factor 12 against 128 ms) were ho
 `t_bound`'s 1 s and the units (`MAX_UNITS`, ADR-0270) are the check; under HVF it stays 2 ms. Open: one HVF failure (2696 us against
 2 ms on the `work/9b` review run, `a job about 30 levels deep`, a loaded host) is under the HVF limit's own rule; if it recurs, look at
 the deep job's 64 units (849 us locally, the longest interval of the program).
+
+## Follow-ups from the 9b libposix review (architect, 2026-11-13)
+
+Known limits of the accepted ADR-0314 and ADR-0315, each to be taken up later:
+
+- Service-reply waits inside the library lock: `stop_self` and the tty `TCSADRAIN` reply still hold the library lock while they wait. Move them to Pending waits (ADR-0315 item 1, the `call()` audit; ADR-0302 item 9).
+- The cancel-in-wait leak: a thread cancelled inside a long wait leaks the frames' heap blocks, bounded at about 32 KiB per cancelled thread, usually under 300 bytes. Restructure with the CANCELLED marker so the cancel acts at the top of the call (ADR-0315, the deviation from ADR-0305 item 4).
+- The `check-cancel-points` script is not written (ADR-0305 item 4; ADR-0315).
+- In-QEMU cases for `waitpid` and `accept` in a thread: `waitpid` has a case in `t_posix.c` now; `accept` has none, the session has no loopback server (INV-0302-2, ADR-0302).
+- The HVF `t_cpu` flake: 2696 us against 2 ms on a loaded host, the 30-deep job, 64 units (the `cpu_ceiling_from_a_process` test; the off-HVF limit was fixed on `work/cpu-flake`, the HVF rule is unchanged).
+
+
+## Mutation lists that no longer apply (part 9b, branch `work/texec-fix`)
+
+Part 9b's review committed a mutant's `replace` by mistake (b447edd: `exec` ended the old image after `state()`
+returned, so the library lock was released before the end, and a sibling's `write` could follow the new image's
+first; `texec` caught it on CI's TCG leg). `make check-mutant-lists` (`zoraya-mutants --check`, in `make check`)
+now fails when a mutant's `find` is gone, which a committed `replace` causes. It skips four lists
+(`MUTANT_STALE` in the `Makefile`): 15 of their mutants (in `compositor-settings`, `fs-limits`, `fs-service` and
+`kernel-objects`) do not apply, code that moved since the lists were written. Update those lists, then empty
+`MUTANT_STALE`.
