@@ -71,11 +71,14 @@ Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-1
 | `cargo test -p zoraya-abi` | 69 passed (one new: the `ZPBX` flags) |
 | `make check` | 17 of 17 passed (adr-check 0 errors; `check-run-disk` is new) |
 | `make test-apps` (new) | passed: both programs over HTTP and TLS, expired and wrong-name certificates refused by both with no request byte at the server, `grants`, refused `-O` names, `-k` as a usage mistake |
+| `make test-apps FULL=1` | passed under HVF and TCG |
+| `make test-net-posix`, `test-libposix`, `test-boot` | passed (they cover what the bootstrap and `grants` changes touch) |
+| `make test-files` | passed after one fix: `rootfs/etc/wgetrc` makes `/etc` appear in the root listing of `tests/shell/files-write.script` |
 | `make test-hand-run` | passed: the production `run-net` image with `curl` and `wget`: HTTP works, HTTPS reaches the certificate and is refused (curl exit 60, wget "cannot verify") |
 
-Not run here: `make test-changed`, `test-net`, `test-net-posix`, `test-libposix`, `test-files`, `test-boot` (the files `zosh.rs`,
-`posix_child.rs`, `zoraya-posix` and `grants` changed, so CI's candidate run covers them), anything under TCG, `FULL=1`, mutation
-testing. The CI workflow changed: the build job also builds `make apps` (cache paths and `ports-build-v3`; timeout 30 minutes).
+Not run here: `make test-changed` as a whole, `test-net`, `test-posix*`, `test-tour-gui`, `test-gui`, `test-crash`, `test-qemu` (CI's candidate run
+covers them), TCG for anything but `test-apps`, mutation testing. Disk: 42 GB free at the start, about 38 GB at the end; the worktree
+is `zoraya-9a` with its own `target/` and `build/`. The CI workflow changed: the build job also builds `make apps` (cache paths and `ports-build-v3`; timeout 30 minutes).
 
 ### Decisions
 

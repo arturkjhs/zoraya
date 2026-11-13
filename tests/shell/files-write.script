@@ -14,7 +14,7 @@
 > cd /\r
 < \r\n/> 
 > ls\r
-< README\r\nconfig/\r\ndocs/\r\nhello.txt\r\nhome/
+< README\r\nconfig/\r\ndocs/\r\netc/\r\nhello.txt\r\nhome/
 < \r\n/> 
 > cat hello.txt\r
 < hello from the filesystem
