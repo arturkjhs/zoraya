@@ -42,7 +42,7 @@ and this file's "9a" section, and the newer Status block.
 4. Choices made without you, cheap to reverse: wget's configure runs with the host triple `aarch64-unknown-linux-musl` (gnulib's
    guesses only; the compiler is `zcc`); `rand`/`srand` are exported (wget wants them; OpenSSL never calls them); `-k`,
    `--cacert`, `--no-check-certificate` are not options of the descriptions (a line with them is a usage mistake and the program
-   gets no network at all); `/etc/wgetrc` is in `rootfs/` (roots, `check_certificate = on`, `inet4_only = on`).
+   gets no network at all); there is no `/etc/wgetrc` (removed after review: wget reads no configuration file).
 
 ## 9a: TLS for C programs, zlib, curl, wget
 
@@ -59,7 +59,7 @@ Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-1
   (`user/src/bin/zosh.rs`, `user/src/posix_child.rs`).
 - Descriptions `user/describe/posix/curl.cmd` and `wget.cmd`; the key `names` (`zoraya-describe`); `grants` and the run give a
   POSIX program the roots directory and show the `net:` line; `posix_child::load` reads the program into its image directly.
-- `tools/run-disk.sh` `EXTRA_ROOT`; `rootfs/etc/wgetrc`; `ports/apps/zshim.c`.
+- `tools/run-disk.sh` `EXTRA_ROOT`; `ports/apps/zshim.c`.
 - 22 names in `libc.a` (now 337 exports); ADR-0310 to ADR-0312 with 6 INV rows (the Total is 538).
 
 ### Tests (what ran in this session, on the M4, HVF)
@@ -73,7 +73,7 @@ Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-1
 | `make test-apps` (new) | passed: both programs over HTTP and TLS, expired and wrong-name certificates refused by both with no request byte at the server, `grants`, refused `-O` names, `-k` as a usage mistake |
 | `make test-apps FULL=1` | passed under HVF and TCG |
 | `make test-net-posix`, `test-libposix`, `test-boot` | passed (they cover what the bootstrap and `grants` changes touch) |
-| `make test-files` | passed after one fix: `rootfs/etc/wgetrc` makes `/etc` appear in the root listing of `tests/shell/files-write.script` |
+| `make test-files` | passed (an earlier `rootfs/etc/wgetrc` had made `/etc` appear in the root listing; it is gone) |
 | `make test-hand-run` | passed: the production `run-net` image with `curl` and `wget`: HTTP works, HTTPS reaches the certificate and is refused (curl exit 60, wget "cannot verify") |
 
 Not run here: `make test-changed` as a whole, `test-net`, `test-posix*`, `test-tour-gui`, `test-gui`, `test-crash`, `test-qemu` (CI's candidate run
@@ -93,6 +93,39 @@ for C programs, threads (9b), a hand-written mutation list for the new code (`to
    (`crates/zoraya-describe`, `crates/zoraya-shell/src/grants.rs`): can the name the shell approves differ from the file curl
    makes? (`url_file_name` is deliberately stricter than curl.)
 3. TLS root handling in C programs: `zosh.rs` `ready_from_volume` (the roots directory added with the network),
-   `ports/patches/openssl/0003`, `rootfs/etc/wgetrc`, `ports/patches/wget/0001` (a plain-fd BIO).
+   `ports/patches/openssl/0003`, `ports/patches/wget/0001` (a plain-fd BIO).
 4. `tools/run-disk.sh` `EXTRA_ROOT`, and `grants` for POSIX programs (`grants_report`, `Host::grants`).
 5. The wget patches and the shim (`ports/apps/zshim.c`) are C that runs with the program's authority only; skim.
+
+## 9a: fixes after the independent review (opus-review), same branch
+
+Decisions made without the architect, all in ADR-0310 to ADR-0312 (still `proposed`):
+
+- **Finding 2 (the one to look at).** `-o`/`-O` gave the program the whole current directory (the shell folded the one
+  `create NAME` with the directory's read). Chosen: the preferred fix. `curl.cmd` and `wget.cmd` say `cwd none`; the one
+  name reaches the program as a directory handle narrowed to it at the current directory's prefix, and `grants` says
+  `create or replace NAME (option -O)` and nothing else for the directory (ADR-0311 item 5, INV-0311-1). A line with no
+  output file starts the program in `/bin`, read only; a path below the directory gets the directory read only as a
+  starting point. Alternative for the architect: `cwd read` as before, and say that `-o`/`-O` write the whole directory.
+  Test: `make test-apps` (`grants` lines; `-d @secret.txt` fails with exit 26 for a file the line does not give, and works
+  with `+r .`). wget's `.wget-hsts` is gone with HSTS off.
+- **Finding 1.** The patches (`ports/patches/{openssl/0004,curl/0002,wget/0003}`, ADR-0310 item 6, INV-0310-4): no
+  environment variable and no configuration file decides trust. Tested with `+r .` on the line so that a file could be
+  read: `.curlrc` `insecure`, `.wgetrc` `check_certificate = off`, `WGETRC`/`SYSTEM_WGETRC`, and `CURL_CA_BUNDLE`,
+  `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF` naming nothing (a valid server still works, an expired and a wrong-name one
+  still fail; the server's log shows 0 request bytes).
+- **Findings 3 and 4.** `--with-rand-seed=getrandom no-tls1 no-tls1_1 no-dtls` (and the `-method` forms); the end of `make apps`
+  checks that neither program names `/dev/urandom` or `/dev/random` or links `TLSv1_method` and the like (INV-0310-5). Not tested:
+  a run without the random connection (the shell always gives one); `cargo test -p zoraya-posix --test random` covers the
+  library side (`ENOSYS`). A TLS 1.0 server is not in the test PKI.
+- **Finding 5.** `rootfs/etc/wgetrc` removed (patch 0003 of OpenSSL gives the roots; wget reads no rc file); `files-write.script` back.
+- **Finding 6.** The descriptions now say that `-d @FILE` and `-H @FILE` read only what a `+r`/`+w` of the line gives, and that no
+  configuration file is read; the tests above.
+- **Findings 7 to 11.** `url_file_name` cuts `?` and `#` before the path (host tests); `/system/tls` by the same `REACH` test
+  in the run and in `grants`; a `ZPBX` message with an unknown flag keeps `SELF` (code now agrees with the abi doc);
+  `getrandom` keeps `EINTR` and `EINVAL` (its wait is a signal wait point; no host test of the `EINTR` path: the fake kernel
+  has no signal source), the limit of 64 connections per shell is documented in `random.rs` and ADR-0310; the SAFETY
+  comment of the image mapping states what it relies on.
+
+Ran in this session: `make check`; `cargo test -p zoraya-describe -p zoraya-posix -p zoraya-shell`; `make apps`; `make test-apps`
+(one run, HVF, 235 steps); `make test-hand-run`; `make test-files`. Not run: `FULL=1` (TCG), `make test-changed`, `test-net-posix`.

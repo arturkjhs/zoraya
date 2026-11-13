@@ -2,6 +2,7 @@ name     wget
 summary  download a page over HTTP or HTTPS (GNU wget, a POSIX program)
 usage    wget [-qvc] [-O FILE] [-T SECONDS] [-t N] [-U AGENT] [-4] URL...
 program  /bin/wget
+cwd      none
 operand  URL...  url  the address, http(s)://HOST[:PORT]/PATH; this command may reach those hosts and ports only
 option   -O --output-document FILE create  write the page to FILE ("-" for the terminal)
 option   -q --quiet  print nothing
@@ -25,9 +26,14 @@ another name or is signed by no root in /system/tls/roots fails the transfer, an
 off (--no-check-certificate and the rest are not offered). An address from a variable or a command is refused by
 the shell, as for `fetch`.
 
-Without -O, wget saves under the last part of the address in the current directory, which is read-only to it: give
-+w . before the command to allow that, or name the file with -O FILE, which is the only file the shell lets it
-create. A redirect to a host and port the line does not name fails for want of a connection.
+-O FILE creates or replaces FILE, the only file in the current directory the program is given: it cannot read, list,
+create or replace another there. Without -O, wget would save under the last part of the address in the current
+directory, which it does not get: give +w . before the command to allow that, or name the file with -O FILE. A
+redirect to a host and port the line does not name fails for want of a connection.
+
+No configuration file is read (.wgetrc, WGETRC, SYSTEM_WGETRC, --config and -e are not there), HSTS and proxies are
+off, and neither the environment's SSL_CERT_FILE or SSL_CERT_DIR nor OpenSSL's OPENSSL_CONF is read: what wget trusts
+is the system's roots and nothing a file or a variable says.
 
 EXAMPLES
   wget -O page.html https://example.org/

@@ -60,7 +60,7 @@
 < ERROR: cannot verify 10.0.2.2's certificate
 < \r\n~>
 > grants curl -O https://x.example/y\r
-< create and change anything in (option -O)
+< create or replace y (option -O)
 < /system/tls          read (with the network)
 < net: x.example:443           reach (operand URL)
 < \r\n~>

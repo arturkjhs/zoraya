@@ -616,3 +616,54 @@ fn curl_o_in_a_description_that_is_not_the_images_designates_nothing() {
     let p = go(CURL, &["-O", "https://h/b.txt"], &[], &[], false, "/u").unwrap();
     assert!(p.iter().all(|e| e.access == Access::Read));
 }
+
+// With `cwd none` (curl's and wget's descriptions) the one name is all the
+// program is given of the current directory: the merge keeps the entry
+// narrowed to it, and `-o`/`-O` together with the current directory's read
+// is what would have folded into "create and change anything in" (ADR-0311
+// item 5, INV-0311-1).
+const CURL_NO_CWD: &str = "name curl\nsummary fetch\nusage curl [-O] URL...\noperand URL... url the address\noption -o --output FILE create where\noption -O --remote-name save under the name of the address\nnames --remote-name URL\ncwd none\n";
+
+#[test]
+fn curl_o_with_no_cwd_is_one_narrowed_entry_and_nothing_else_of_the_directory() {
+    let p = go(
+        CURL_NO_CWD,
+        &["-O", "https://x.example/a/b.txt"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&p),
+        vec![(
+            "/u/p".into(),
+            Access::Create("b.txt".into()),
+            "option -O".into()
+        )]
+    );
+    let m = merge(&p);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].path, "/u/p");
+    assert_eq!(m[0].name.as_deref(), Some("b.txt"));
+    assert_eq!(
+        m[0].lines,
+        vec![(
+            "create or replace b.txt".to_string(),
+            "option -O".to_string()
+        )]
+    );
+    // `-o FILE` is the same.
+    let p = go(
+        CURL_NO_CWD,
+        &["-o", "f.txt", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    let m = merge(&p);
+    assert_eq!((m.len(), m[0].name.as_deref()), (1, Some("f.txt")));
+}

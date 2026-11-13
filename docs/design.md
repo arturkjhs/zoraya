@@ -1946,10 +1946,13 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
 - **The ports.** `ports/sources.lock` pins OpenSSL 3.5.9 (the LTS line), zlib 1.3.1, curl 8.23.0 and wget 1.25.0. `make apps`
   (`ports/Makefile`, after `make fetch-ports`) builds them with `zcc` into `build/ports/deps` (the libraries) and
   `build/rootfs-apps/bin/{curl,wget}` (6.7 MiB each, static, no debug information). OpenSSL is `no-shared no-dso no-threads
-  no-engine no-asm no-async no-sock no-dgram no-quic no-secure-memory`, with three patches: `getrandom` is its seed source
-  and nothing falls back to anything else, no `posix_memalign`, and the default certificate file is `/system/tls/roots`.
-  curl is HTTP and HTTPS only with blocking name resolution (no threads), no proxy, cookies, netrc, `.curlrc` or OpenSSL
-  configuration file; wget is built with OpenSSL's plain-fd BIO (patch) and reads a byte at a time where it peeked (patch:
+  no-engine no-asm no-async no-sock no-dgram no-quic no-secure-memory no-ssl3 no-tls1 no-tls1_1 no-dtls`
+  `--with-rand-seed=getrandom` (TLS 1.2 and 1.3 only; no `/dev/urandom` code at all), with four patches: `getrandom` is its
+  seed source, no `posix_memalign`, the default certificate file is `/system/tls/roots`, and the library reads no environment
+  variable and loads no `openssl.cnf`. curl is HTTP and HTTPS only with blocking name resolution (no threads), no proxy,
+  cookies or netrc, and reads no `.curlrc` or trust variable (`CURL_CA_BUNDLE`, `SSL_CERT_FILE`, `SSL_CERT_DIR`); wget reads
+  no `.wgetrc`, `WGETRC`, `SYSTEM_WGETRC` or `/etc/wgetrc`, has HSTS and proxies off, and refuses `--config` and `-e`
+  (patches; INV-0310-4); wget is built with OpenSSL's plain-fd BIO (patch) and reads a byte at a time where it peeked (patch:
   libposix has no `MSG_PEEK`). wget's configure takes the host triple `aarch64-unknown-linux-musl` for gnulib's guesses only;
   the compiler is still `zcc`, which defines nothing of Linux (the end of `make apps` reads the logs for it).
 - **`libc.a`** exports 337 names (22 more: `getrandom`, `gmtime`, `strerror_r`, `setbuf`, `tzset`, `strncat`, `rand`, `srand`,
@@ -1965,13 +1968,13 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
 - **The grants.** `user/describe/posix/curl.cmd` and `wget.cmd` are the image's own descriptions: a literal `url` operand
   gives a connection that reaches that host and port (as for `zfetch`), and with it `/system/tls` read-only (a POSIX program is
   given directories only, and the directory holds the roots file alone: `make check-tls-roots`). `grants curl -O
-  https://x.example/y` shows the current directory read, `create and change anything in` it for `y` (`option -O`),
-  `/system/tls  read (with the network)` and `net: x.example:443  reach (operand URL)`. The new description key `names
+  https://x.example/y` shows `create or replace y (option -O)` for the current directory (the descriptions say `cwd none`:
+  the program is given that one name, as a directory handle narrowed to it, and nothing else of the directory; a line that
+  designates nothing in it starts the program in `/bin`), `/system/tls  read (with the network)` and `net: x.example:443  reach (operand URL)`. The new description key `names
   OPTION OPERAND` (`zoraya-describe`, `url_file_name`) is how `-O` is designated: the shell takes the last segment of the URL's
   path, if it is plain letters, digits and `. - _ + ~ @ , =`, and refuses the line otherwise. `-k`, `--cacert`,
   `--no-check-certificate` and the rest that would weaken a check are not options of the descriptions: such a line is a
-  usage mistake and the program gets no connection at all. `grants` shows the network line and the roots for POSIX programs now;
-  `/etc/wgetrc` (in `rootfs/`) sets wget's roots, `check_certificate = on` and `inet4_only`.
+  usage mistake and the program gets no connection at all. `grants` shows the network line and the roots for POSIX programs now.
 - **The volume.** `tools/run-disk.sh` adds `EXTRA_ROOT` (default `build/rootfs-apps` when it exists; `EXTRA_ROOT=` for none) to
   the volume of `make run`, `run-net` and `run-gui`, and puts its checksum in the disk's key: a new `curl` makes a new disk, and
   the old one is kept as `.old`. `RUN_NET_CMD` boots with 512 MiB (see the limits).

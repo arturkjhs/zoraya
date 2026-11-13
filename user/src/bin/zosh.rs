@@ -1488,7 +1488,39 @@ impl Z {
         match grants::trusted_description(&trusted, path) {
             Some(d) => {
                 let d = d.clone();
-                self.plan_with(exec, &d, true)
+                let mut plan = self.plan_with(exec, &d, true)?;
+                // `cwd none` (proposed ADR-0311 item 5): the program is given
+                // no more of the current directory than the line designates.
+                // A path *below* it needs the directory itself to start from,
+                // read only (libposix resolves a relative path from the
+                // current directory's entry); a name *in* it needs nothing
+                // else, and nothing at all gives the program `/bin` to start
+                // in (`posix_entries`).
+                if d.cwd == zoraya_describe::Cwd::None {
+                    let cwd = self.cwd.clone();
+                    let below = plan
+                        .iter()
+                        .any(|e| e.path != cwd && zoraya_resolve::covers(&cwd, &e.path));
+                    // An entry at the current directory itself (whole, or
+                    // narrowed to a name) is the program's starting point.
+                    let at = plan
+                        .iter()
+                        .any(|e| zoraya_resolve::covers(&e.path, &cwd) && e.path == cwd)
+                        || plan.iter().any(|e| {
+                            e.access.name().is_none() && zoraya_resolve::covers(&e.path, &cwd)
+                        });
+                    if below && !at {
+                        plan.insert(
+                            0,
+                            grants::Planned {
+                                path: cwd,
+                                access: grants::Access::Read,
+                                reason: String::from("current directory"),
+                            },
+                        );
+                    }
+                }
+                Ok(plan)
             }
             None => {
                 let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes())
@@ -1603,6 +1635,15 @@ impl Z {
         let found = zoraya_resolve::longest(prefixes.iter().copied(), &self.cwd)
             .filter(|(i, _)| entries[*i].kind == P::Directory)
             .map(|(i, rest)| (i, String::from(rest)));
+        // A program whose description gives it none of the current directory
+        // and whose line designates nothing in it starts in `/bin`, read
+        // only: it has no relative path to resolve.
+        let found = found.or_else(|| {
+            entries
+                .iter()
+                .position(|e| e.prefix == "/bin" && e.kind == P::Directory)
+                .map(|i| (i, String::new()))
+        });
         let Some((cwd_entry, cwd_rest)) = found else {
             close(&entries);
             return Err(zoraya_command::error(

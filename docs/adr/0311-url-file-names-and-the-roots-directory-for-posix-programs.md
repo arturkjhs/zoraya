@@ -56,23 +56,36 @@ plain.
    neither, so a name curl would change is never one the shell approved.
 3. **The grant.** For each URL operand, a `create NAME` entry of the current directory with the reason `option -O`,
    through the same designation as an operand of kind `create`: a name derived from a value lies inside the current
-   directory by construction, and a literal one needs no `+w`. `grants curl -O https://x/y` shows `y  create or replace y
-   (option -O)` beside the network line. Only for the image's own descriptions (ADR-0153's Decision).
+   directory by construction, and a literal one needs no `+w`. `grants curl -O https://x/y` shows `~  create or replace y
+   (option -O)` beside the network line, and no other line for the current directory (item 5). Only for the image's own
+   descriptions (ADR-0153's Decision).
 4. **The roots for a POSIX program.** When the shell gives a trusted POSIX program a connection that reaches a host, it adds
    the directory `/system/tls` to its entries, read-only, with the reason `with the network`. It is the directory
    because a POSIX program is given directories only; it holds the roots file and nothing else
    (`make check-tls-roots` checks that). `/system` is read-only to everyone (ADR-0289 item 8), so the program cannot
    change it. It is added for the program's own connection only, never to the shell's table.
+5. **The rest of the current directory is not given** (review of 9a, finding 2). The `create NAME` entry reaches the
+   program as a directory handle narrowed to that one name (`narrow(name, rights)`, as for a native program), at the
+   current directory's prefix in the bootstrap table, and the table's current-directory entry is that one. The
+   descriptions of `curl` and `wget` say `cwd none`, so the plan has no `read (current directory)` row to fold the
+   narrowed entry into "create and change anything in" (`merge` folds a narrowed part with a whole one of the same path).
+   Therefore the program can create or replace the one file, and cannot list, read or create another there (no `.curlrc`,
+   no `-d @file` of the directory): a `+r` or `+w` of the line is what gives more. Two rules follow. A line that
+   designates nothing in the current directory (`curl URL`, `wget -O -`) starts the program in `/bin`, read only: it has
+   no relative path to resolve. A line that designates a path *below* the current directory (`-o sub/f`) and nothing at it
+   gets the directory itself read only, as a starting point for the path (`zosh`, `posix_plan`). The alternative, if the
+   architect prefers it, is `cwd read` as before: the program then reads the whole directory and `-o`/`-O` give it write
+   access to the whole directory; this is what 9a first shipped and what review found to be more than the line says.
 
 ## Consequences
 - **Positive.** `curl -O` works with the smallest grant that would let it; the description language has one more key,
   for any later program that saves under a URL's name (NetSurf's downloads, CPython's `urllib.request.urlretrieve`).
 - **Negative.** `-O` on an unusual URL is refused rather than approximated. A program reading the whole of `/system/tls`
   would see anything added there later; the check says it holds the roots alone.
-- **Follow-up.** `grants` words the roots as the file for native programs and as the directory for POSIX ones.
+- **Follow-up.** `url_file_name` cuts the query and fragment before it looks for the path's `/` (`http://h?q/x.txt` has the path `/`). `grants` words the roots as the file for native programs and as the directory for POSIX ones.
 
 ## Invariants
-- **INV-0311-1.** With `-O` on the line the shell designates exactly the files `url_file_name` gives for the URL operands, in the current directory, and refuses the line when it gives none. *Check:* `cargo test -p zoraya-describe` (`url_file_name`), `cargo test -p zoraya-shell` (`grants_tests`, `curl_o_*`), `make test-apps` (`grants curl -O` and a refused name).
+- **INV-0311-1.** With `-O` on the line the shell designates exactly the files `url_file_name` gives for the URL operands, in the current directory, and refuses the line when it gives none; the program is given those files and no other of the directory (a narrowed entry, not the directory). *Check:* `cargo test -p zoraya-describe` (`url_file_name`), `cargo test -p zoraya-shell` (`grants_tests`, `curl_o_*`, the narrowed entry), `make test-apps` (`grants curl -O`, a refused name, and `-d @file` failing for a file the line does not give).
 - **INV-0311-2.** A trusted POSIX program is given `/system/tls` only together with a connection that reaches a host, and read-only. *Check:* `make test-apps` (`grants curl URL` and `grants curl --help`) and `make test-hand-run`.
 
 ## Open questions

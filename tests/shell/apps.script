@@ -140,15 +140,18 @@
 # gives no network and no roots.
 > grants curl -O https://x.example/y\r
 < curl gets (a POSIX program):
-< read (current directory)\r\n  ~                    create and change anything in (option -O)\r\n  /system/tls          read (with the network)\r\n  /bin /usr /etc       read (system)
+< the terminal\r\n  ~                    create or replace y (option -O)\r\n  /system/tls          read (with the network)\r\n  /bin /usr /etc       read (system)
 < net: x.example:443           reach (operand URL)
 < \r\n~>
 > grants curl --help\r
-< read (current directory)\r\n  /bin /usr /etc       read (system)
+< the terminal\r\n  /bin /usr /etc       read (system)
+< \r\n~>
+> grants curl -o f.txt http://x.example/y\r
+< the terminal\r\n  ~                    create or replace f.txt (option -o)\r\n  /system/tls          read (with the network)
 < \r\n~>
 > grants wget -O out.txt https://x.example/y\r
 < wget gets (a POSIX program):
-< read (current directory)\r\n  ~                    create and change anything in (option -O)\r\n  /system/tls          read (with the network)
+< the terminal\r\n  ~                    create or replace out.txt (option -O)\r\n  /system/tls          read (with the network)
 < net: x.example:443           reach (operand URL)
 < \r\n~>
 # A name the shell cannot be sure of is refused before the program runs.
@@ -177,6 +180,95 @@
 < \r\n~>
 > stat 10\r
 < not found
+< \r\n~>
+# The program is given the one file the line names of the current directory
+# and nothing else of it (ADR-0311 item 5, INV-0311-1): -d @FILE is a read of
+# a file the line does not give, and fails (exit 26); the page goes to the one
+# file; what was there is not touched.
+> echo keep this > secret.txt\r
+< \r\n~>
+> curl -s -o got.txt -d @secret.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 26
+< \r\n~>
+> cat secret.txt\r
+< keep this
+< \r\n~>
+# A +r of the directory gives the read, for exactly what the line says.
+> +r . curl -s -d @secret.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+# Nothing in a file of the home directory or in the environment changes what
+# the programs trust (ADR-0310 item 4, INV-0228-1; the Makefile checks the
+# server's log for 0 request bytes where the check must refuse). Each line
+# has the home directory read (+r .), so a configuration file *could* be read.
+> echo insecure > .curlrc\r
+< \r\n~>
+> echo check_certificate = off > .wgetrc\r
+< \r\n~>
+> +r . curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> +r . curl https://wrong.zoraya:@TLSWRONG@/\r
+< no alternative certificate subject name matches target hostname 'wrong.zoraya'
+< \r\n~>
+> +r . wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< Issued certificate has expired.
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+> export WGETRC .wgetrc\r
+< \r\n~>
+> export SYSTEM_WGETRC .wgetrc\r
+< \r\n~>
+> +r . wget -O - https://wrong.zoraya:@TLSWRONG@/\r
+< no certificate subject alternative name matches
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+# A configuration file that is not read cannot break the valid transfers.
+> echo no-such-option-at-all > .curlrc\r
+< \r\n~>
+> echo no_such_command = on > .wgetrc\r
+< \r\n~>
+> +r . curl -s https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+# Variables that name roots or a configuration file that is not there would
+# fail the handshake or the start of a program that honoured them.
+> export CURL_CA_BUNDLE /nonexistent/ca.pem\r
+< \r\n~>
+> export SSL_CERT_FILE /nonexistent/ca.pem\r
+< \r\n~>
+> export SSL_CERT_DIR /nonexistent/certs\r
+< \r\n~>
+> export OPENSSL_CONF /nonexistent/openssl.cnf\r
+< \r\n~>
+> curl -s https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> wget -q -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> wget -q -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 5
 < \r\n~>
 x power off
 > poweroff\r
