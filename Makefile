@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads \
+.PHONY: FORCE apps test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -792,24 +792,29 @@ test-posix-suites: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_SUITES)/disk.img || exit 1; done
 
-# SQLite's threadtest3 (ADR-0309 item 2), NOT a step of make test: it builds and
-# starts, and every scenario fails at its first write with SQLITE_IOERR_LOCK
-# (3850) because libposix has no `fcntl` record locks (F_SETLK is EINVAL), which
-# needs a decision of its own. Run by hand with `make posix-threadtest3` once
-# they exist.
-posix-threadtest3: $(KERNEL) $(RUNNER) tools-storage
+# SQLite's threadtest3 (ADR-0309 item 2): the scenarios of
+# tests/libc-test/threadtest3.script (the rollback-journal ones; the WAL ones
+# are in tests/libc-test/threads-excluded.txt) on SQLite's default unix VFS,
+# which takes `fcntl` record locks. libposix has them, in the process
+# (ADR-0319, INV-0319-3). A step of make test, on both accelerators in CI.
+# `make posix-threadtest3` is the same, under its old name.
+POSIX_TT := $(BUILD)/posix-tt
+posix-threadtest3: test-posix-threadtest3
+test-posix-threadtest3: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc suites
 	@$(MAKE) -s -f ports/Makefile workloads
-	rm -rf $(POSIX_SUITES)/tt && mkdir -p $(POSIX_SUITES)/tt/root/bin $(POSIX_SUITES)/tt/root/work
-	cp -R rootfs/. $(POSIX_SUITES)/tt/root/
+	rm -rf $(POSIX_TT) && mkdir -p $(POSIX_TT)/root/bin $(POSIX_TT)/root/work
+	cp -R rootfs/. $(POSIX_TT)/root/
 	tools/zcc -O2 -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL \
 	  -I$(BUILD)/ports/workloads/sqlite -I$(BUILD)/ports/workloads/sqlitesrc/src -I$(BUILD)/ports/workloads/sqlitesrc/test \
-	  -o $(POSIX_SUITES)/tt/root/bin/threadtest3 $(BUILD)/ports/workloads/sqlitesrc/test/threadtest3.c \
+	  -o $(POSIX_TT)/root/bin/threadtest3 $(BUILD)/ports/workloads/sqlitesrc/test/threadtest3.c \
 	  $(BUILD)/ports/workloads/sqlite/sqlite3.c $(BUILD)/ports/workloads/sqlitesrc/src/test_multiplex.c \
 	  tests/libc-test/strerror_r.c
-	target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/tt/root $(POSIX_SUITES)/tt/disk.img
-	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/threadtest3.script --label posix-threadtest3 -- \
-	  $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/tt/disk.img --accel auto $(KERNEL)
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_TT)/root $(POSIX_TT)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/threadtest3.script --label posix-threadtest3-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_TT)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_TT)/disk.img || exit 1; done
 
 # musl's pthread_cancel-points without its shm_open scenario (shm_open is T3,
 # ADR-0005, not exported, not in 9b's scope; tests/libc-test/threads-excluded.txt):
@@ -1244,7 +1249,7 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
 TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk test-apps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
