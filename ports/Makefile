@@ -635,7 +635,9 @@ $(PYTHON_SRC): $(LOCK) $(wildcard ports/patches/python/*.patch)
 	$(call unpack,python,ports/patches/python)
 	@touch $@
 # The host build is made from an unpatched tree of its own: the patches are
-# for Zoraya, and the host python only has to be the same version.
+# for Zoraya, and the host python only has to be the same version. It is minimal
+# on purpose: no ensurepip (it needs the zlib module, and the CI container has no
+# zlib headers; compileall and the freeze steps do not need zlib).
 HOSTPY_SRC := $(WORK)/Python-$(PYVER)-host
 $(HOSTPY_SRC): $(LOCK)
 	$(call unpack,python,ports/patches/none)
@@ -643,7 +645,7 @@ $(HOSTPY_SRC): $(LOCK)
 hostpython: $(HOSTPY)
 $(HOSTPY): $(HOSTPY_SRC)
 	rm -rf $(WORK)/hostpython-build && mkdir -p $(WORK)/hostpython-build
-	@cd $(WORK)/hostpython-build && $(call logged,$(HOSTPY_SRC)/configure --prefix=$(HOSTPY_PREFIX),hostpython-configure)
+	@cd $(WORK)/hostpython-build && $(call logged,$(HOSTPY_SRC)/configure --prefix=$(HOSTPY_PREFIX) --without-ensurepip,hostpython-configure)
 	@$(call logged,$(MAKE) -C $(WORK)/hostpython-build -j3,hostpython)
 	@$(call logged,$(MAKE) -C $(WORK)/hostpython-build install,hostpython-install)
 	@touch $@
