@@ -52,12 +52,17 @@
 //! window            a new window: the next `screen` looks from its top row
 //! top TEXT          wait until the top row reads TEXT (a cleared screen),
 //!                   then a new window as `window`
-//! latency N [MS]    type `x` N times at the prompt, timing each until it
+//! latency N [MS [tcg MS]]
+//!                   type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them; with MS, fail if the median
 //!                   is more than MS over one screendump read; with +MS,
 //!                   more than MS over the last `latency` step's median
 //!                   (both over the screendump read), the baseline of the
-//!                   same run
+//!                   same run. `tcg MS` is the bound of a run under TCG
+//!                   (the first bound is the other runs'). Under TCG the
+//!                   screen is read every 150 ms; under any other
+//!                   accelerator every 10 ms, so that a difference of
+//!                   tens of ms can be read (see `Bound`)
 //! shot NAME         keep the screen as `build/shots/NAME-LABEL.ppm` (the screens
 //!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
@@ -138,6 +143,11 @@ const AFTER_CLICK: Duration = Duration::from_millis(150);
 /// 2026-11-09) they kept a TCG guest from draining the keys just typed, and
 /// keys were lost.
 const SCREEN_POLL: Duration = Duration::from_millis(150);
+/// The least time between two screendumps in a `latency` step outside TCG
+/// (HVF, KVM): a guest at native speed drains its keys between dumps, and
+/// a time then holds a screendump and at most this, not whole polls of
+/// 150 ms, so that INV-0264-3's 50 ms can be read.
+const LATENCY_POLL: Duration = Duration::from_millis(10);
 /// Keys typed before `type` waits for the guest to catch up (`settle`): eight
 /// keys with Shift are 64 events, virtio-input's whole queue. A fixed interval
 /// suits a guest of one speed only: on CI's runner, and locally with QEMU on
@@ -172,7 +182,7 @@ pub enum Step {
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
     /// The count, and the bound on the median over one idle screendump read.
-    Latency(usize, Option<Bound>),
+    Latency(usize, Option<Bound>, Option<Bound>),
     Click(i64, i64),
     DoubleClick(i64, i64),
     RightClick(i64, i64),
@@ -305,17 +315,22 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                     .and_then(|w| w.parse().ok())
                     .ok_or_else(|| bad("latency N [MS | +MS]"))?;
                 let ms = |w: &str| w.parse().map_err(|_| bad("not a number of ms"));
-                let bound = match words.next() {
-                    None => None,
-                    Some(w) => Some(match w.strip_prefix('+') {
+                let bound = |w: &str| -> Result<Bound, String> {
+                    Ok(match w.strip_prefix('+') {
                         Some(w) => Bound::OverBase(ms(w)?),
                         None => Bound::Fixed(ms(w)?),
-                    }),
+                    })
+                };
+                let first = words.next().map(bound).transpose()?;
+                let tcg = match (words.next(), words.next()) {
+                    (None, _) => None,
+                    (Some("tcg"), Some(w)) if first.is_some() => Some(bound(w)?),
+                    _ => return Err(bad("latency N [MS | +MS [tcg MS | +MS]]")),
                 };
                 if words.next().is_some() {
-                    return Err(bad("latency N [MS | +MS]"));
+                    return Err(bad("latency N [MS | +MS [tcg MS | +MS]]"));
                 }
-                Step::Latency(n, bound)
+                Step::Latency(n, first, tcg)
             }
             "origin" => {
                 let v: Vec<i64> = rest
@@ -755,6 +770,9 @@ struct Run {
     /// The median over one screendump read of the last `latency` step,
     /// in ms: the baseline of a `+MS` bound.
     latency_base: Option<f64>,
+    /// The machine runs under TCG (`--accel tcg` in its command line): a
+    /// `latency` step takes its `tcg` bound and reads the screen slowly.
+    tcg: bool,
 }
 
 impl Run {
@@ -797,6 +815,16 @@ impl Run {
     /// A row below the last matched one that reads `text`, or with
     /// `prefix` begins with it.
     fn wait_row(&mut self, text: &str, prefix: bool) -> Result<Duration, String> {
+        self.wait_row_at(text, prefix, SCREEN_POLL)
+    }
+
+    /// `wait_row`, reading the screen every `poll`.
+    fn wait_row_at(
+        &mut self,
+        text: &str,
+        prefix: bool,
+        poll: Duration,
+    ) -> Result<Duration, String> {
         let start = Instant::now();
         let want = self.reader.canonical(text);
         let text = want.as_str();
@@ -833,7 +861,7 @@ impl Run {
                     rows.join("\n")
                 ));
             }
-            std::thread::sleep(SCREEN_POLL);
+            std::thread::sleep(poll);
         }
     }
 
@@ -998,7 +1026,17 @@ impl Run {
                 }
                 std::thread::sleep(SCREEN_POLL);
             },
-            Step::Latency(n, bound) => {
+            Step::Latency(n, bound, tcg) => {
+                // The bound of this accelerator, and how often the screen
+                // is read: under TCG every SCREEN_POLL (back to back dumps
+                // kept a TCG guest from draining its keys), elsewhere
+                // every LATENCY_POLL, so that a time is a screendump and
+                // not a screendump plus whole polls of 150 ms.
+                let (bound, poll) = if self.tcg {
+                    (tcg.as_ref().or(bound.as_ref()), SCREEN_POLL)
+                } else {
+                    (bound.as_ref(), LATENCY_POLL)
+                };
                 let mut times = Vec::new();
                 let row = self.row;
                 let prompt = self.qmp.screen()?.rows(&mut self.reader)[row.unwrap_or(0)].clone();
@@ -1007,10 +1045,13 @@ impl Run {
                     self.row = row.map(|r| r.wrapping_sub(1));
                     self.qmp.press("x", false)?;
                     let want = format!("{base}{}_", "x".repeat(i));
-                    times.push(self.wait_screen(&want)?);
+                    times.push(self.wait_row_at(&want, false, poll)?);
                 }
+                // One at a time, as the keys were typed: 30 at once overran
+                // the guest's key queue (run of 2026-11-13: 8 of 30 stayed).
                 for _ in 0..*n {
                     self.qmp.press("backspace", false)?;
+                    std::thread::sleep(self.key_interval());
                 }
                 self.row = row.map(|r| r.wrapping_sub(1));
                 self.wait_screen(&prompt)?;
@@ -1241,6 +1282,24 @@ impl Run {
     }
 }
 
+/// Whether the machine `command` starts runs under TCG: what the launcher
+/// says it resolved `--accel` to (`--print-accel`, so that `auto` on a host
+/// without HVF counts), else what the command line says.
+fn runs_under_tcg(command: &[String]) -> bool {
+    let asked = Command::new(&command[0])
+        .args(&command[1..])
+        .arg("--print-accel")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match asked {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "tcg",
+        _ => command
+            .windows(2)
+            .any(|w| w[0] == "--accel" && w[1] == "tcg"),
+    }
+}
+
 pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String]) -> ExitCode {
     let steps = match std::fs::read_to_string(file)
         .map_err(|e| e.to_string())
@@ -1296,6 +1355,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             row: None,
             origin: None,
             latency_base: None,
+            tcg: runs_under_tcg(command),
             reader: reader(),
             scale: Scale::ONE,
             layout: 0,
@@ -1343,15 +1403,29 @@ mod tests {
         assert_eq!(steps[4], Step::Region(0, 0, 2, 2, 0x20_3040));
         assert!(parse("region 1 2 3\n").is_err());
         assert!(parse("dance\n").is_err());
-        assert_eq!(parse("latency 10\n").unwrap(), [Step::Latency(10, None)]);
+        assert_eq!(
+            parse("latency 10\n").unwrap(),
+            [Step::Latency(10, None, None)]
+        );
         assert_eq!(
             parse("latency 10 300\n").unwrap(),
-            [Step::Latency(10, Some(Bound::Fixed(300)))]
+            [Step::Latency(10, Some(Bound::Fixed(300)), None)]
         );
         assert_eq!(
             parse("latency 10 +450\n").unwrap(),
-            [Step::Latency(10, Some(Bound::OverBase(450)))]
+            [Step::Latency(10, Some(Bound::OverBase(450)), None)]
         );
+        assert_eq!(
+            parse("latency 30 +50 tcg +450\n").unwrap(),
+            [Step::Latency(
+                30,
+                Some(Bound::OverBase(50)),
+                Some(Bound::OverBase(450))
+            )]
+        );
+        assert!(parse("latency 30 tcg +450\n").is_err());
+        assert!(parse("latency 30 +50 tcg\n").is_err());
+        assert!(parse("latency 30 +50 hvf +450\n").is_err());
         assert!(parse("latency 10 +x\n").is_err());
         assert!(parse("latency 10 300 4\n").is_err());
         assert_eq!(

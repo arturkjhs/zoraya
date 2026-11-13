@@ -1,6 +1,6 @@
 # ADR-0296: N6, the services channel and the test of the network's restart
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0053, ADR-0080, ADR-0221, ADR-0222, ADR-0224, ADR-0230
 - **Evidence:** CP-12, CP-17, alternatives-postmortem.md#minix-3
@@ -92,4 +92,4 @@ shell was handed at start. *ADR-0080* restarts the shell with the storage stack 
 - A launcher that holds the network and is not told of a restart.
 
 ## Architect's decision
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

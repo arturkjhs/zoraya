@@ -1,6 +1,6 @@
 # ADR-0298: Q7, how the gate's tests run where ADR-0268 is silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0001, ADR-0262, ADR-0264, ADR-0265, ADR-0268, ADR-0269, ADR-0293, ADR-0296
 - **Evidence:** CP-14
@@ -92,4 +92,6 @@ choices.
 - The architect lets a test-only switch into the shell; cargo-fuzz becomes available in the CI image.
 
 ## Architect's decision
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+The architect also accepted, 2026-11-13, the toolchain pin of item 3, `nightly-2026-11-12`, and the update of rustup from 1.29.2 to 1.29.3 that installing it made. INV-0264-3's bound of item 4 is accepted for CI under TCG only (+450 ms over the baseline). Under HVF the bound stays 50 ms over the no-spinner baseline, measured locally; if HVF misses it, that is a defect to fix, not a bound to raise.

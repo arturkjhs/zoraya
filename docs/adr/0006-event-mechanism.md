@@ -144,7 +144,7 @@ Interrupted-system-call semantics as measured (`task-02b/parallel-surface.md#int
 - Interactive line editors (`ppoll` in busybox sh, 222 calls): a terminal handle with `READABLE` covers it, but no T0 core program needed it; confirm when a line-editing shell enters scope.
 - When and how file completions are added (rule 7): a separate ADR after a measured need (for example a build that is disk-bound on uncached reads).
 - Edge vs level for the personality: `poll`/`select` are level; whether `libposix` ever needs `Edge` is open.
-- As of TASK-26: ADR-0299 (proposed) bounds a port and a source at 1024 subscriptions, so INV-0006-3's 10,000 idle subscriptions cannot be made; `portbench` measures with 1 subscription, then 1024 and exits with a failing code if a call is refused. Whether the check's number becomes 1024 is the architect's change.
+- Decided by the architect 2026-11-13 (recorded by an agent at the architect's request): ADR-0299 (accepted) bounds a port and a source at 1024 subscriptions, so INV-0006-3's check measures 1024 idle subscriptions instead of 10,000 (the 10,000 calls and the 1.5x bound stay). `portbench` measures with 1 subscription, then 1024, and exits with a failing code if a call is refused. The invariant's wording above is the original; this note is its current reading.
 
 ## Revisit triggers
 
