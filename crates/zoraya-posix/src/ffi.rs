@@ -415,7 +415,13 @@ fn state<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R,
 /// A wait of a thread, made with no library lock held (INV-0302-2): on a
 /// port of its own, since two threads waiting on one port would take each
 /// other's packets (ADR-0302 item 5). The port lives for the one wait.
+///
+/// Both ends are cancellation points (ADR-0305, INV-0315-4) and hold no lock.
+/// The test is made whatever ended the wait, not only the user packet: the
+/// `interrupted` flag a cancel sets is one-shot and a futex wait or a data
+/// packet may have taken it, while musl's own `cancel` flag stays set.
 fn wait_unlocked(sources: &[(Handle, u32)], deadline: Option<u64>) -> Result<(usize, u32), Status> {
+    testcancel();
     let port = zoraya_rt::port_create()?;
     // Tell the table where this thread waits, so that another thread can wake
     // it; and do not wait if something was already sent (ADR-0304 items 2, 3).
@@ -430,10 +436,7 @@ fn wait_unlocked(sources: &[(Handle, u32)], deadline: Option<u64>) -> Result<(us
         p.take_interrupted()
     });
     let _ = zoraya_rt::handle_close(port);
-    if matches!(r, Ok((usize::MAX, _))) {
-        // A cancel point (ADR-0305): the lock is free here.
-        testcancel();
-    }
+    testcancel();
     r
 }
 

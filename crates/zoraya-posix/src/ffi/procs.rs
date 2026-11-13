@@ -181,11 +181,13 @@ pub(super) fn after_write(r: Result<usize, i32>) -> Result<usize, i32> {
 }
 
 pub(super) fn read_fd(fd: i32, u: User) -> Result<usize, i32> {
+    testcancel();
     poll();
     restartable(|p| p.read(fd, u))
 }
 
 pub(super) fn write_fd(fd: i32, u: User) -> Result<usize, i32> {
+    testcancel();
     poll();
     after_write(restartable(|p| p.write(fd, u)))
 }
@@ -406,6 +408,7 @@ extern "C" fn sigismember(set: *const u64, n: i32) -> i32 {
 /// `sigsuspend` (ADR-0106 items 2 and 3): the mask for the wait, a wait on
 /// the process's requests and the children, until a handler runs.
 fn suspend_with(mask: Option<u64>) -> i32 {
+    testcancel();
     let old = match mask {
         Some(m) => match state(|p| p.signals.mask(SIG_SETMASK, Some(m))) {
             Ok(o) => Some(o),
@@ -477,6 +480,7 @@ fn sleep_until(deadline: u64) -> Result<(), u64> {
 }
 
 pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
+    testcancel();
     poll();
     match sleep_until(deadline) {
         Ok(()) => 0,
@@ -494,6 +498,7 @@ pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
 
 /// `waitpid` and its kin (ADR-0104 item 11).
 fn wait_child(pid: i32, status: *mut i32, options: i32) -> i32 {
+    testcancel();
     poll();
     match restartable(|p| p.waitpid(pid, options)) {
         Ok(Some((child, s))) => {
@@ -564,6 +569,9 @@ extern "C" fn pselect(
     timeout: *const [i64; 2],
     sigmask: *const u64,
 ) -> i32 {
+    // A cancellation point, acted on before any buffer is built.
+    // A cancellation point, acted on before any buffer is built.
+    testcancel();
     if !(0..=1024).contains(&nfds) {
         return int(Err(EINVAL));
     }
