@@ -128,6 +128,11 @@ pub fn ensure_multi(process: &Process) -> Result<Arc<Multi>, Status> {
             futex: SpinLock::new(futex),
             map_waiters: SpinLock::new(map_waiters),
         })
+        .inspect_err(|_| {
+            // The list grew but its charge goes back: shrink it too, or it
+            // would stay uncharged.
+            process.members().lock().shrink();
+        })
     })();
     match built {
         Ok(multi) => {

@@ -207,3 +207,21 @@ fn a_wake_takes_what_it_names_and_no_waiter_twice() {
         assert_eq!(w.waiting_on(key), before - n);
     }
 }
+
+/// A failed first `thread_create` gives the grown list back, and a zombie
+/// keeps no list memory.
+#[test]
+fn shrink_and_release_give_the_room_back() {
+    let mut m = Members::<u64>::new_small().unwrap();
+    m.join(0, 0).unwrap();
+    m.reserve_all().unwrap();
+    assert!(m.capacity() >= MAX_THREADS);
+    m.shrink();
+    assert!(m.capacity() < MAX_THREADS);
+    assert_eq!(m.len(), 1, "the live entry stays");
+    m.reserve_all().unwrap();
+    assert!(m.leave(0).owner);
+    m.release();
+    assert_eq!(m.capacity(), 0);
+    assert!(m.is_empty());
+}
