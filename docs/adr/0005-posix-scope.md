@@ -128,6 +128,8 @@ CP-27 says the POSIX layer exists to host a C compiler and its toolchain, that i
 
 ## Open questions
 
+- Superseded in part by ADR-0319 (accepted 2026-11-13): item 6 and the table row for `fcntl` record locks no longer hold; `libposix` has advisory record locks within one process. `flock` stays excluded. The rest of this ADR stands.
+
 - A larger autoconf project (several thousand configure checks, libtool-built libraries) was not measured; it may add rows. Measure one before T2 is accepted.
 - Whether `tcc -ar` and the `ld` wrapper suffice for autoconf projects that call `ld` directly: hello's probes (`W4-configure-noLD`, `W4-make-noAR`) are the only data.
 - toybox `mktemp` prints a `/tmp` path (`emulate`, `task-02/callsite-analysis.md#feature-3-…`): confirm the per-session `/tmp` (ADR-0002) satisfies configure's uses.

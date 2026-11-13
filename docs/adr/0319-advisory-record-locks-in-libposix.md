@@ -1,6 +1,6 @@
 # ADR-0319: Advisory record locks (`fcntl` `F_SETLK`, `F_SETLKW`, `F_GETLK`, `F_OFD_*`) in `libposix`, in the process
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0001, ADR-0005, ADR-0100, ADR-0103, ADR-0109, ADR-0302, ADR-0309, ADR-0315
 - **Evidence:** DM-036, X-15
@@ -143,3 +143,6 @@ so. Threads: the table is under the library's one lock, so all threads of a proc
 - The file service gaining an owner identity per process (ADR-0103's connections).
 
 ## Architect's decision
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A. It supersedes ADR-0005's item 6 and its table row for `fcntl` record locks only; `flock` stays excluded. Option B (locks shared across processes through `fsd`) goes to the backlog: two processes on one SQLite file can corrupt it.

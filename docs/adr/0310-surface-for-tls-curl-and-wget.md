@@ -1,6 +1,6 @@
 # ADR-0310: TLS, curl and wget as ports: the names libc.a adds, `getrandom` for C programs, and where the programs live
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0005, ADR-0100, ADR-0109, ADR-0141, ADR-0153, ADR-0225, ADR-0227, ADR-0228, ADR-0287, ADR-0288, ADR-0289
 - **Evidence:** CP-27
@@ -166,4 +166,6 @@ tzset
 - OpenSSL 3.5 reaching end of support, or a vulnerability with no 3.5 fix.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A. "`curl` started by `dash` has no `getrandom` connection" stays in the backlog.
