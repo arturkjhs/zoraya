@@ -171,6 +171,17 @@ fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
 "#
             .to_vec(),
         )),
+        // A page taller than the window: blue for 1200 pixels, then magenta,
+        // for the wheel (proposed ADR-0322).
+        "/ns/tall" => Some((
+            "text/html",
+            br#"<html><head><title>NS tall</title></head>
+<body style="margin:0;background:#ffffff"><div style="height:1200px;background:#0000ff"></div>
+<div style="height:1500px;background:#ff00ff"></div>
+</body></html>
+"#
+            .to_vec(),
+        )),
         "/ns/style.css" => Some((
             "text/css",
             b".blue{width:200px;height:60px;background:#0000ff}\n".to_vec(),

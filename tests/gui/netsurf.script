@@ -35,6 +35,25 @@ click 300 87
 pause 500
 type echo closed\r
 screen closed
+# The wheel scrolls the page under the pointer, 100 pixels a notch (proposed
+# ADR-0322): /ns/tall is blue for 1200 pixels, then magenta. Fifteen notches
+# toward the person put magenta at the top of the page; fifteen away, blue.
+type netsurf http://10.0.2.2:@PORT@/ns/tall\r
+pause 15000
+region 110 175 150 40 0000ff
+wheel 400 400 down 15
+pause 3000
+shot netsurf-wheel
+region 110 175 150 40 ff00ff
+wheel 400 400 up 15
+pause 3000
+region 110 175 150 40 0000ff
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-wheel\r
+screen closed-wheel
 # No option replaces the roots or turns a check off (INV-0312-1): the line is
 # refused by the shell, with no window (ADR-0317 item 6).
 type netsurf --ca_bundle=/tmp/x.pem https://test.zoraya:@TLSVALID@/ns/page\r
