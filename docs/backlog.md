@@ -165,3 +165,39 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs.
 
 
+## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`)
+
+`make fetch-ports` (`tools/fetch-ports.sh`) downloads every source of `ports/sources.lock` from the Internet when CI's ports cache
+misses. On `main`'s run 43511821485 (attempt 1) the `build` job failed there: `https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz` timed
+out five times (curl exit 28, connect timeout after 30 s) and so did its `ftpmirror.gnu.org` fallback; the re-run of the job passed.
+The change was not at fault, but `main`'s run was red until the job was re-run by hand. Fix: keep the pinned archives where an upstream outage cannot reach
+them, for example a GitHub release or an Actions cache of `build/ports/src` keyed by each archive's SHA-256 (`ports/sources.lock`),
+filled once and read before any upstream URL; `fetch-ports.sh` then tries the mirror first and the upstream URLs only for an archive
+the mirror lacks. The SHA-256 check stays as it is, so the mirror is not trusted more than the upstream.
+
+## Stage 9 parts: what the reports left (TASK-27, 2026-11-13)
+
+From the "Not done" and limits lists of `docs/tasks/TASK-27-report.md` that no row above holds yet:
+
+- **Threads (9b).** INV-0306-3 (a fork child has one thread and no parent thread handle), INV-0306-5 (a failed `snapshot_process`
+  parks no thread) and INV-0308-3 (a program without threads makes no thread call, over fresh logs of every workload) still say
+  `not yet applicable (stage 9)` in `docs/adr/invariants.md` though stage 9 is done: write the checks or record why not (ADR-0001
+  rule 6). The mapping count of a CPython-sized process with 128 thread stacks is not measured (ADR-0300's open question; 9c measured
+  4000 threads one at a time, not 128 at once). The SHA-256 / AES-GCM / `RAND_bytes` half of ADR-0309 item 4
+  (`tests/posix/ossl_threads.c`) is not written.
+- **TLS programs (9a).** No `tls.roots` setting reaches C programs (they read `/system/tls/roots` only). 9a's own code (`random.rs`,
+  the `ZPBX` parse, `posix_child`'s close paths) has no hand-written mutation list in `tools/mutants/`.
+- **`work/tls-options`.** ADR-0321's refused lists are read by hand from curl's `tool_getparam.h` and wget's `init.c`: a check that
+  diffs them against a new release's tables is not built. Neither program's `https` to `http` redirect rule is tested (the test
+  servers send no redirect).
+- **NetSurf (9d).** Downloads through the chooser (a second `ZPBX` slot for a chooser channel); a shell that `init` restarts gets no
+  window channel until the panel restarts; a page's links to other hosts need `+net HOST` words on the line; timed waits are a 2 ms
+  poll loop; no JavaScript, SVG, cookies, proxy, clipboard or cursor shape; titles Latin only. INV-0317-1's shell side is checked
+  only by the marker script (the refusal is unreachable while an untrusted room cannot be entered). `docs/design.md` has no section
+  for the window of a POSIX program and NetSurf (ADR-0317, ADR-0318); write one when the area is next touched.
+- **CPython (9c).** `make test-python-long` (`test_queue`, `test_threading`) runs only by hand: too long for CI's 45-minute jobs under
+  TCG; `test_threading` ends "env changed" because `os.fork` runs out of memory (no copy-on-write). No `socketpair`, `AF_UNIX`,
+  server sockets, `posix_spawn`, shared modules or `ctypes`. The archive's Sigstore bundle is not checked. The cold-cache time of CI's
+  `build` job with NetSurf and CPython is not measured (the job has 60 minutes).
+- **Compositor (9e).** The session's 20 clients are not carved per room; a client with no window keeps its slot (ADR-0323's open
+  questions). The scale-2 and TCG GUI runs of 9e's scripts ran only in CI.
