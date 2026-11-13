@@ -700,3 +700,32 @@ fn a_window_request_is_checked() {
     }
     assert!(ok("netsurf", "T", &"+r /a\n".repeat(16)).is_ok());
 }
+
+/// ADR-0317 item 2, review W2: one window a run for a shell and a program,
+/// freed when the compositor says its client is gone, and client slots kept
+/// for the desktop's own applications.
+#[test]
+fn a_shell_has_one_window_a_program_and_the_desktop_keeps_slots() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let max = 8;
+    let mut w = OpenWindows::default();
+    assert_eq!(w.admit(0, "netsurf", 2, max), Ok(()));
+    w.opened(0, "netsurf", 11);
+    // The same shell, the same program: refused while it is open.
+    assert_eq!(w.admit(0, "netsurf", 2, max), Err(why::BUSY));
+    // Another shell may have one, up to the reserve.
+    assert_eq!(w.admit(1, "netsurf", 2, max), Ok(()));
+    w.opened(1, "netsurf", 12);
+    // 2 others + 2 open + this + 3 reserved = 8: still fits; one more not.
+    assert_eq!(w.admit(2, "netsurf", 2, max), Ok(()));
+    w.opened(2, "netsurf", 13);
+    assert_eq!(w.admit(3, "netsurf", 2, max), Err(why::BUSY));
+    // Closed: the shell may ask again, and a slot is back.
+    w.gone(11);
+    assert_eq!((w.count(), w.admit(0, "netsurf", 2, max)), (2, Ok(())));
+    w.gone(99);
+    assert_eq!(w.count(), 2);
+    // A shell that ended is not held to its window by the next one of its slot.
+    w.orphan(1);
+    assert_eq!(w.admit(1, "netsurf", 2, max), Ok(()));
+}

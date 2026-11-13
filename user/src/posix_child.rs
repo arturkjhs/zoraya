@@ -397,7 +397,6 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
                 .chain(l.net)
                 .chain(l.random)
                 .chain(l.window)
-                .chain(l.window)
             {
                 let _ = handle_close(h);
             }
@@ -463,7 +462,6 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
                 .chain(l.net)
                 .chain(l.random)
                 .chain(l.window)
-                .chain(l.window)
             {
                 let _ = handle_close(h);
             }
@@ -519,9 +517,10 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             flags |= EXT_RANDOM;
         }
         if let Some(window) = l.window {
+            // The child cannot move its window's channel on (ADR-0317 item 2).
             entry.push(ChannelEntry {
                 handle: window,
-                rights: ChannelObject::RIGHTS,
+                rights: ChannelObject::RIGHTS.without(Rights::TRANSFER),
                 transfer: Transfer::Move,
             });
             flags |= EXT_WINDOW;

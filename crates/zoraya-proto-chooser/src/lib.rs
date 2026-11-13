@@ -14,7 +14,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use zoraya_protocol::{Below, Data, protocol};
+use zoraya_protocol::{Below, Data, Header, Message, decode, protocol};
 
 /// The longest title an application may give; shown inside the chooser's
 /// own sheet, under the heading the compositor draws.
@@ -221,12 +221,47 @@ pub const MAX_WINDOW_ENTRIES: usize = 1024;
 pub mod window_refusal {
     /// The shell's room is untrusted (ADR-0172 while the gate is closed).
     pub const UNTRUSTED: u32 = 0;
-    /// This shell has a window open already (one a run).
+    /// The shell has this program's window open already (one a run), or the
+    /// desktop keeps the rest of its client slots for its own applications.
     pub const BUSY: u32 = 1;
     /// The request was malformed.
     pub const INVALID: u32 = 2;
     /// The compositor or the panel could not make the channel.
     pub const FAILED: u32 = 3;
+}
+
+/// What a message read from the panel is, to a shell waiting for the answer
+/// of transaction `t` to its `OpenWindow`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowReply {
+    /// An answer to an earlier request that was given up on: its handles are
+    /// closed and the wait goes on.
+    Stale,
+    /// `WindowOpened` with its one handle.
+    Opened,
+    /// `WindowRefused` with the code of [`window_refusal`].
+    Refused(u32),
+    /// Neither: its handles are closed and the request has failed.
+    Garbled,
+}
+
+/// Sorts a message from the panel (`handles` handles came with it) for the
+/// shell waiting for transaction `t` (review W1: a reply that comes after the
+/// wait was given up must not be the answer of the next request).
+pub fn window_reply(msg: &[u8], handles: usize, t: u32) -> WindowReply {
+    let Ok((h, _)) = Header::decode(msg) else {
+        return WindowReply::Garbled;
+    };
+    if h.transaction != t {
+        return WindowReply::Stale;
+    }
+    if h.ordinal == WindowOpened::ORDINAL && decode::<WindowOpened>(msg, handles).is_ok() {
+        return WindowReply::Opened;
+    }
+    match decode::<WindowRefused>(msg, handles) {
+        Ok((_, r)) => WindowReply::Refused(r.status.0),
+        Err(_) => WindowReply::Garbled,
+    }
 }
 
 /// The application requests' ordinals.

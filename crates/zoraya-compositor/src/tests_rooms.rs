@@ -1166,3 +1166,44 @@ fn the_settings_glyph_is_a_gear() {
         assert!(at(m, m - gs * 7 / 20 + gs / 12), "the ring at scale {k}");
     }
 }
+
+/// ADR-0317 item 2: the panel hears that a client it made, by its tag, is
+/// gone; a client with no tag is not told.
+#[test]
+fn the_panel_is_told_a_tagged_client_is_gone() {
+    let mut s = setup();
+    let panel = s.panel();
+    let add = |s: &mut Setup, tag: u32| {
+        let end = s.f().channel(64);
+        let m = gui::AddRoomClient {
+            untrusted: 0,
+            colour: 0,
+            tag,
+            room: zoraya_protocol::Data(b""),
+            app: zoraya_protocol::Data(b"netsurf"),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(b"netsurf"),
+        };
+        s.f().send(panel, message(&m, 7), vec![end]);
+        s.c.step();
+        assert_eq!(done(s, panel), status::OK);
+        end
+    };
+    let tagged = add(&mut s, 5);
+    let plain = add(&mut s, 0);
+    let gone = |s: &mut Setup| -> Vec<u32> {
+        s.f()
+            .take(panel)
+            .iter()
+            .filter_map(|m| decode::<gui::ClientGone>(m, 0).ok())
+            .map(|(_, g)| g.tag)
+            .collect()
+    };
+    // An oversized message closes its client.
+    s.f().send(plain, vec![0; 8192], vec![]);
+    s.c.step();
+    assert!(gone(&mut s).is_empty());
+    s.f().send(tagged, vec![0; 8192], vec![]);
+    s.c.step();
+    assert_eq!(gone(&mut s), vec![5]);
+}

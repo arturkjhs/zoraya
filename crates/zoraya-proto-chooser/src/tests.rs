@@ -193,3 +193,24 @@ fn no_message_carries_a_path() {
     assert_eq!(Chosen::ORDINAL, 8);
     assert_eq!(AddApplication::ORDINAL, 16);
 }
+
+/// Review W1: an answer of an earlier transaction is stale, one of the
+/// request's own is sorted by what it is.
+#[test]
+fn a_window_reply_is_sorted_by_its_transaction() {
+    let mut out = [0u8; 64];
+    let n = encode(&WindowOpened {}, 1, &mut out).unwrap();
+    assert_eq!(window_reply(&out[..n], 1, 1), WindowReply::Opened);
+    assert_eq!(window_reply(&out[..n], 1, 2), WindowReply::Stale);
+    assert_eq!(window_reply(&out[..n], 0, 1), WindowReply::Garbled);
+    let r = WindowRefused {
+        status: zoraya_protocol::Below(window_refusal::BUSY),
+    };
+    let n = encode(&r, 5, &mut out).unwrap();
+    assert_eq!(
+        window_reply(&out[..n], 0, 5),
+        WindowReply::Refused(window_refusal::BUSY)
+    );
+    assert_eq!(window_reply(&out[..n], 0, 4), WindowReply::Stale);
+    assert_eq!(window_reply(&out[..2], 0, 1), WindowReply::Garbled);
+}

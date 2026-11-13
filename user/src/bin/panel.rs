@@ -304,9 +304,8 @@ struct State {
     /// `OpenTerminal`, `settings` `SettingsChanged`, nothing else (review
     /// 7f, 8).
     launchers: Vec<Option<(Handle, &'static str, Option<Room>)>>,
-    /// How many windows each launcher channel (a shell's) has been given
-    /// (ADR-0317: at most `MAX_WINDOWS` a shell).
-    windows: Vec<u8>,
+    /// The windows of POSIX programs that are open (ADR-0317 item 2).
+    windows: zoraya_panel::OpenWindows,
     /// The room keeper (ADR-0269): the launch job of every launch comes
     /// from it. Without one, a trusted room launches in the panel's own job.
     keeper: Option<zoraya_user::roomsclient::Keeper>,
@@ -324,8 +323,6 @@ struct State {
 }
 
 const KEY_LAUNCHER: u64 = 100;
-/// The windows of POSIX programs one shell may be given in its life.
-const MAX_WINDOWS: u8 = 8;
 /// The rights of a data directory: ADR-0153's `tree`.
 const TREE: u32 = zoraya_proto_file::rights::ALL & !zoraya_proto_file::rights::PUBLISH;
 
@@ -580,10 +577,7 @@ fn watch_launcher(st: &mut State, end: Handle, app: &'static str, room: Option<R
         }
     };
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
-    if st.windows.len() <= i {
-        st.windows.resize(i + 1, 0);
-    }
-    st.windows[i] = 0;
+    st.windows.orphan(i);
     if port_subscribe(st.port, end, wanted, KEY_LAUNCHER + i as u64, Mode::Level).is_ok() {
         st.launchers[i] = Some((end, app, room));
     } else {
@@ -627,9 +621,11 @@ fn open_window(
 ) -> Result<Handle, u32> {
     use zoraya_proto_chooser::window_refusal as why;
     let record = zoraya_panel::window_record(room, app, title, entries)?;
-    if st.windows.get(i).copied().unwrap_or(MAX_WINDOWS) >= MAX_WINDOWS {
-        return Err(why::BUSY);
-    }
+    // One window a run, and the desktop's own applications keep their slots
+    // (the chooser, and the launchers' clients, are the others).
+    let others = 1 + st.launchers.iter().flatten().count();
+    st.windows
+        .admit(i, &record.app, others, zoraya_compositor::MAX_CLIENTS)?;
     let (client, compositor_end) = channel_create().map_err(|_| why::FAILED)?;
     let tag = st.next_tag;
     st.next_tag = st.next_tag.wrapping_add(1).max(1);
@@ -646,7 +642,7 @@ fn open_window(
         let _ = handle_close(client);
         return Err(why::FAILED);
     }
-    st.windows[i] += 1;
+    st.windows.opened(i, &record.app, tag);
     Ok(client)
 }
 
@@ -670,6 +666,7 @@ fn launcher_requests(st: &mut State, i: usize) {
                 let _ = zoraya_user::port_unsubscribe(st.port, KEY_LAUNCHER + i as u64);
                 let _ = handle_close(end);
                 st.launchers[i] = None;
+                st.windows.orphan(i);
                 return;
             }
         };
@@ -901,7 +898,7 @@ fn main() -> i32 {
         next_tag: 1,
         port,
         launchers: Vec::new(),
-        windows: Vec::new(),
+        windows: zoraya_panel::OpenWindows::default(),
         keeper: channel(8)
             .and_then(|manage| zoraya_user::roomsclient::Keeper::new(manage, channel(9))),
         tracker: zoraya_rooms::Tracker::new(),
@@ -930,7 +927,13 @@ fn main() -> i32 {
             for h in &handles[..sizes.handles as usize] {
                 let _ = handle_close(*h);
             }
-            let Ok((_, d)) = decode::<gui::DockPressed>(&bytes[..sizes.bytes as usize], 0) else {
+            let msg = &bytes[..sizes.bytes as usize];
+            // A client the panel made is gone (ADR-0317 item 2).
+            if let Ok((_, g)) = decode::<gui::ClientGone>(msg, 0) {
+                st.windows.gone(g.tag);
+                continue;
+            }
+            let Ok((_, d)) = decode::<gui::DockPressed>(msg, 0) else {
                 continue;
             };
             // The press against the table the compositor drew (review 7d,

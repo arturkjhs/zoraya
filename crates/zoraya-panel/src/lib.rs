@@ -476,6 +476,69 @@ pub struct WindowRecord {
     pub line: String,
 }
 
+/// Compositor client slots kept for the desktop's own applications (the
+/// terminal, the file manager, the settings window), which a POSIX program's
+/// windows never take (ADR-0317 item 2, review W2).
+pub const RESERVED_CLIENTS: usize = 3;
+
+/// The windows of POSIX programs that are open: each is one compositor client
+/// the panel made (ADR-0317 item 2: one window a run, refused while it is
+/// open). A window is open from `WindowOpened` until the compositor says its
+/// client is gone.
+#[derive(Debug, Default)]
+pub struct OpenWindows {
+    /// `(launcher, app, tag)`; a launcher of `usize::MAX` is a shell that has
+    /// ended, whose window still holds its slot.
+    open: Vec<(usize, String, u32)>,
+}
+
+impl OpenWindows {
+    /// Whether the shell of `launcher` may have a window for `app`: not while
+    /// it has one open, and not if the clients that exist (`others`: the
+    /// chooser and the applications' launchers, counted by the panel) with
+    /// the open windows and this one would leave fewer than
+    /// [`RESERVED_CLIENTS`] of the compositor's `max_clients`.
+    pub fn admit(
+        &self,
+        launcher: usize,
+        app: &str,
+        others: usize,
+        max_clients: usize,
+    ) -> Result<(), u32> {
+        use zoraya_proto_chooser::window_refusal as why;
+        if self.open.iter().any(|(l, a, _)| *l == launcher && a == app) {
+            return Err(why::BUSY);
+        }
+        if others + self.open.len() + 1 + RESERVED_CLIENTS > max_clients {
+            return Err(why::BUSY);
+        }
+        Ok(())
+    }
+
+    /// A window opened.
+    pub fn opened(&mut self, launcher: usize, app: &str, tag: u32) {
+        self.open.push((launcher, String::from(app), tag));
+    }
+
+    /// The compositor's client of `tag` is gone: its window is closed.
+    pub fn gone(&mut self, tag: u32) {
+        self.open.retain(|(_, _, t)| *t != tag);
+    }
+
+    /// The shell of `launcher` ended: it asks for nothing more, and the next
+    /// shell of the slot is not held to its windows.
+    pub fn orphan(&mut self, launcher: usize) {
+        for w in self.open.iter_mut().filter(|w| w.0 == launcher) {
+            w.0 = usize::MAX;
+        }
+    }
+
+    /// How many are open.
+    pub fn count(&self) -> usize {
+        self.open.len()
+    }
+}
+
 /// The shell of `room` asks for a window for `app` (ADR-0317, proposed): the
 /// record to give the compositor, or the reason in
 /// `zoraya_proto_chooser::window_refusal`. The pills are the line's grants

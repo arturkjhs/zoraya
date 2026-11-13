@@ -480,6 +480,17 @@ impl<P: Platform> Compositor<P> {
         let _ = self.platform.write(end, &self.out[..length], &[]);
     }
 
+    /// The client the panel gave `tag` is gone.
+    pub(crate) fn tell_client_gone(&mut self, tag: u32) {
+        let Some(end) = self.client_manager else {
+            return;
+        };
+        let length = reply(&gui::ClientGone { tag }, NO_REPLY, &mut self.out);
+        // A full queue loses it: the panel's count stays high until the
+        // window's shell ends, which is the safe side.
+        let _ = self.platform.write(end, &self.out[..length], &[]);
+    }
+
     /// A room's colour, `None` for `home`.
     pub fn room_colour(&self, r: &Record) -> Option<Color> {
         if r.room.is_empty() {

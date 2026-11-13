@@ -2894,6 +2894,10 @@ impl<P: Platform> Compositor<P> {
         }
         if let Some(c) = self.clients[slot].take() {
             self.platform.close(c.end);
+            // The panel counts the clients it made (ADR-0317 item 2).
+            if c.record.tag != 0 {
+                self.tell_client_gone(c.record.tag);
+            }
         }
         self.prune_refusals();
         self.rehover();

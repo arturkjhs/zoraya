@@ -492,6 +492,14 @@ protocol! {
         kind: u32,
         index: u32,
     }
+
+    /// Compositor to the client manager, unasked: the client the panel gave
+    /// `tag` (`AddRoomClient`) has gone, its channel closed, so that the
+    /// panel may give the window of a POSIX program again and counts the
+    /// clients that are left (ADR-0317 item 2). A new ordinal (ADR-0052).
+    message ClientGone = 45, handles 0 {
+        tag: u32,
+    }
 }
 
 /// The ordinals a client may send.
@@ -509,7 +517,7 @@ pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// manager only (ADR-0168).
 pub const CLIENT_MANAGER_REQUESTS: [u32; 5] = [37, 39, 40, 43, 44];
 /// What the compositor sends the manager unasked.
-pub const MANAGER_EVENTS: [u32; 2] = [36, 41];
+pub const MANAGER_EVENTS: [u32; 3] = [36, 41, 45];
 
 /// `DockPressed`'s kinds.
 pub mod dock {

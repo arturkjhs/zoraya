@@ -319,6 +319,7 @@ fn the_client_managers_messages() {
         kind: dock::ROOM,
         index: 2,
     });
+    total(ClientGone { tag: 7 });
     total(AttachClientManager {});
 }
 
