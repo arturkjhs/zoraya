@@ -2,7 +2,7 @@ name     python3
 summary  run a Python program (CPython 3.15, a POSIX program)
 usage    python3 [-bBIOPqsuV] [-W ARG] [-c CODE | -m MODULE | SCRIPT] [ARG...]
 program  /bin/python3
-operand  [SCRIPT]  read  the program to run (a module next to it is imported only if the line also gives its directory, +r DIR)
+operand  [SCRIPT]  read  the program to run (a module in its directory is imported too: that directory is readable as the current directory)
 operand  [ARG...]  text  the program's arguments (sys.argv); a file a program opens by one of them needs a +r or +w of the line
 option   -c --command CODE text  run CODE, a program given on the line
 option   -m --module MODULE text  run a module of the standard library or of a directory on sys.path, as a script
@@ -26,11 +26,17 @@ CPython 3.15 from the ports (TASK-27 9c, ADR-0320), as a POSIX program with the 
 library, /usr/lib/python3.15) and /etc to read, /dev/null and a /tmp of its own, the current directory to read, and what
 its operands and the line's +r, +w and +net words designate. It is a program like any other here: it can open the
 files and reach the hosts and ports the line gives it, and nothing else. `+net example.org:443 python3 fetch.py` lets the
-script open a connection to that host and port; the system's roots (/system/tls) come with the network, and the ssl
-module trusts those roots and nothing a PYTHON* or SSL_* variable says.
+script open a connection to that host and port; the system's roots (/system/tls) come with the network, and
+ssl.create_default_context() trusts those roots (OpenSSL's default file is /system/tls/roots) and nothing a PYTHON* or
+SSL_* variable says. What a program does with the ssl module is its own: ssl.CERT_NONE and _create_unverified_context()
+turn verification off, and nothing here stops it (curl's -k is refused; a Python program is not mediated).
 
 The environment decides nothing: PYTHONPATH, PYTHONHOME, PYTHONSTARTUP, PYTHONSAFEPATH, PYTHONWARNINGS and the rest are
-not read (the program runs as if with -E), so the files and directories it imports from are the ones the line names.
+not read (the program runs as with -E), and urllib takes no proxy from http_proxy or https_proxy. What it imports from is
+the standard library, and, for a script, the script's own directory: that directory is on sys.path, and the current
+directory is readable (as for every POSIX program), so a module next to the script is imported by it. Run a script from a
+directory you trust, or with -P (or -I). -c and -m put no directory on sys.path: a module in the current directory is not
+imported by them.
 Neither is a per-user site directory used, and no .pyc file is written (the standard library comes with its own). Of
 Python's options, -E, -X, -i, -d, -v, -x and the interactive session are not offered: there is no terminal from zosh
 (ADR-0153), so a program is a script, -c or -m, or standard input read to its end.
