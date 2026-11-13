@@ -411,3 +411,17 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
    by a release; there is no upstream release to pin. A new commit means a new line and a new hash.
 6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
    runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.
+
+## 9d: NetSurf, step 1 (branch `work/9d`, 2026-11-13, in progress)
+
+Done: proposed ADR-0317 (a POSIX program's window: a `window` line in the description, a client channel from the panel
+through the shell, `zoraya-surface` as a static library speaking `zoraya-proto-gui`, `libnsfb` surface in C over five
+functions) and ADR-0318 (NetSurf 3.11 with its own bitmap font for 9d, `zoraya-text` later; the source set). Pinned in
+`ports/sources.lock`, fetched and verified by `make fetch-ports`: netsurf-all 3.11, libpng 1.6.50, IJG libjpeg 9f,
+pkg-config 0.29.2. `make check` passed.
+
+Not done (the next sessions, in order): `make netsurf` (libpng, libjpeg, the NetSurf libraries with `nsgenbind` built
+for the host, `netsurf` with `TARGET=framebuffer`); `crates/zoraya-surface` and the C surface; the `window` key
+in `zoraya-describe`, the panel's request and the shell's `ZPBX` slot; the test pages; HTTPS, forms, downloads; the
+CI step. Host tools: perl, python3, gperf, flex, bison, cmake are on the Mac; `pkg-config` is not (the plan builds the
+pinned one into `build/`); the CI image needs `gperf`, `flex`, `bison` and `pkg-config` added to `tools/ci-apt-install.sh`'s list.
