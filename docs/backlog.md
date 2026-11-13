@@ -126,3 +126,14 @@ fix is for the GUI stack to end with the process that started it (a job of its o
   objects, the refusal only in the clients, contiguous memory, smaller items.
 - `Job::drop`'s `retain` and the `children` growth are linear in a parent's children (one interval each); a long job chain's drop runs in whichever call drops the last handle.
 - Gate rows that are not truly `checked:` (the strict check lists them), the pending `disk-filler-tmp`, INV-0262-4 for `+net`, the architect's decision on ADR-0299, then the full CI.
+
+## Follow-ups from the 9b libposix review (architect, 2026-11-13)
+
+Known limits of the accepted ADR-0314 and ADR-0315, each to be taken up later:
+
+- Service-reply waits inside the library lock: `stop_self` and the tty `TCSADRAIN` reply still hold the library lock while they wait. Move them to Pending waits (ADR-0315 item 1, the `call()` audit; ADR-0302 item 9).
+- The cancel-in-wait leak: a thread cancelled inside a long wait leaks the frames' heap blocks, bounded at about 32 KiB per cancelled thread, usually under 300 bytes. Restructure with the CANCELLED marker so the cancel acts at the top of the call (ADR-0315, the deviation from ADR-0305 item 4).
+- The `check-cancel-points` script is not written (ADR-0305 item 4; ADR-0315).
+- In-QEMU cases for `waitpid` and `accept` in a thread: `waitpid` has a case in `t_posix.c` now; `accept` has none, the session has no loopback server (INV-0302-2, ADR-0302).
+- The HVF `t_cpu` flake: 2696 us against 2 ms on a loaded host, the 30-deep job, 64 units (the `cpu_ceiling_from_a_process` test; the off-HVF limit was fixed on `work/cpu-flake`, the HVF rule is unchanged).
+

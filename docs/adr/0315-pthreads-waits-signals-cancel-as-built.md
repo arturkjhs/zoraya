@@ -1,6 +1,6 @@
 # ADR-0315: `pthread_*` second slice as built: the `Pending` split, the thread table, signals per thread, deferred cancellation
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0100, ADR-0106, ADR-0300, ADR-0301, ADR-0302, ADR-0304, ADR-0305, ADR-0314
 - **Evidence:** CP-18, CP-10, DM-004, DM-058
@@ -222,4 +222,6 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
 - A wait site added to `process.rs` or `net.rs` that does work with side effects before `wait_for`.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.

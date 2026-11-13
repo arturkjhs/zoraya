@@ -1,6 +1,6 @@
 # ADR-0314: `pthread_*` as built in the first slice of part 9b step 2: what is in, what waits for signals and cancellation
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0100, ADR-0141, ADR-0300, ADR-0301, ADR-0302, ADR-0303, ADR-0304, ADR-0305, ADR-0308, ADR-0313
 - **Evidence:** CP-18, DM-058
@@ -128,4 +128,6 @@ code of the first slice.
 - INV-0302-2's test failing on the first two-thread program with a blocked reader.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A, as the record of the first slice (the split of the long waits comes next, as Option C's first step; Option B is refused). Note: ADR-0315 refines item 3 of this ADR: the thread handle now lives in the thread table, it is no longer closed in `__clone`.
