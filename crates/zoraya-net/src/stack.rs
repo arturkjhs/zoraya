@@ -22,6 +22,9 @@ use crate::link::{Counters, Link, LinkDevice, MAX_FRAME};
 /// The identifier of our echo requests.
 const PING_IDENT: u16 = 0x5a50;
 /// The payload of an echo request: 32 bytes, as `ping` sends.
+/// The most requests of one run: `zoraya_proto_net::MAX_PINGS`, which the
+/// reply's `rtts` list holds (INV-0330-1).
+const MAX_PING_COUNT: u32 = zoraya_proto_net::MAX_PINGS;
 const PING_DATA: [u8; 32] = *b"zoraya echo request 0123456789ab";
 /// Milliseconds between two echo requests of one run.
 pub const PING_INTERVAL_US: i64 = 200_000;
@@ -95,7 +98,7 @@ pub enum PingError {
     NoAddress,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PingResult {
     pub target: [u8; 4],
     pub sent: u32,
@@ -103,6 +106,8 @@ pub struct PingResult {
     pub rtt_min_us: u32,
     pub rtt_avg_us: u32,
     pub rtt_max_us: u32,
+    /// The round trip of each request, in order, `u32::MAX` for none.
+    pub rtts: Vec<u32>,
 }
 
 struct PingRun {
@@ -375,7 +380,7 @@ impl<L: Link> Stack<L> {
         if own.is_none() {
             return Err(PingError::NoAddress);
         }
-        if !is_unicast(target) || own == Some(target) || count == 0 || count > 64 {
+        if !is_unicast(target) || own == Some(target) || count == 0 || count > MAX_PING_COUNT {
             return Err(PingError::BadTarget);
         }
         self.runs = self.runs.wrapping_add(1);
@@ -472,6 +477,9 @@ impl<L: Link> Stack<L> {
                 rtt_min_us: rtts.iter().copied().min().unwrap_or(0),
                 rtt_avg_us: (sum / rtts.len().max(1) as u64) as u32,
                 rtt_max_us: rtts.iter().copied().max().unwrap_or(0),
+                rtts: (0..run.count as usize)
+                    .map(|i| run.rtt.get(i).copied().flatten().unwrap_or(u32::MAX))
+                    .collect(),
             };
             self.ping = None;
             // Whatever is still queued in the socket goes with it.

@@ -1,0 +1,67 @@
+# `make run-net` as a person runs it (`make test-hand-run`): the image $(KERNEL),
+# the disk tools/run-disk.sh keeps, and the same QEMU command line
+# (RUN_NET_CMD): interactive mode, the network without `restrict=on`. The
+# Makefile turns @PORT@ and @TLSVALID@ into the ports of tools/test-httpd and
+# its TLS terminator on the host's 127.0.0.1, which the guest reaches at
+# 10.0.2.2. Nothing else is fetched: no name is resolved (this image's
+# settings have no `net.hosts`, and SLIRP's DNS forwarder needs the host's
+# resolver).
+! panicked
+! storage failed
+! there is no volume
+! the file service is gone
+! fsd: mount
+! first process ended
+< Type help to begin, or help tour.
+# A volume, mounted: the prompt is the home, not the root (TASK-26, hand-run).
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+> net status\r
+< net0  up  52:54:00:12:34:56
+< address   10.0.2.15/24 (dhcp, lease
+< gateway   10.0.2.2
+< dns       10.0.2.3 (dhcp)
+< \r\n~>
+> fetch http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+# HTTPS with this image's own roots (rootfs/system/tls/roots, the production
+# store): the shell grants them, `fetch` reads them and the handshake runs to
+# the certificate, which the test PKI signed and no production root does.
+# The full path, with the test PKI's root, is make test-net-fetch's.
+> fetch https://10.0.2.2:@TLSVALID@/\r
+< certificate is not signed by a trusted root
+< \r\n~>
+# `ping` (TASK-26, hand-run): echo requests to the gateway, which SLIRP answers.
+> ping 10.0.2.2\r
+< PING 10.0.2.2: 4 requests
+< 40 bytes from 10.0.2.2: seq=0 time=
+< --- 10.0.2.2 ping statistics ---
+< 4 sent, 4 received, 0% loss
+< rtt min/avg/max =
+< \r\n~>
+> ping -c 2 -W 3 10.0.2.2\r
+< 2 sent, 2 received, 0% loss
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> grants ping 10.0.2.2\r
+< echo only (operand HOST)
+< \r\n~>
+# Wrong use is said: no count, a bad name. (A real name needs the host's resolver:
+# tests/shell/net-dns.script.)
+> ping -c 0 10.0.2.2\r
+< not a count from 1 to 16
+< \r\n~>
+> ping a..b\r
+< not a host name or a dotted IPv4 address
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+x power off
+> poweroff\r

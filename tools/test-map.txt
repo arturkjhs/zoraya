@@ -19,6 +19,8 @@ tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
+tools/check-tls-roots.sh      check
+rootfs/system/tls/        check test-files test-hand-run
 tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
@@ -76,6 +78,8 @@ user/src/bin/settings.rs      test-gui
 user/src/bin/t_gui.rs         test-qemu
 user/src/bin/t_storage.rs     test-qemu
 tests/shell/keeper.script     test-keeper
+tests/shell/hand-run        test-hand-run
+tools/run-disk.sh             test-hand-run
 tests/shell/disk-filler.script test-files
 tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
@@ -100,7 +104,7 @@ user/src/bin/t_net.rs         test-net test-qemu
 # and the tests that start it as init does and through the normal boot.
 crates/zoraya-net/            test-net
 crates/zoraya-proto-net/      test-net
-user/src/bin/netd.rs          test-net
+user/src/bin/netd.rs          test-net test-hand-run
 user/src/bin/net.rs           test-net
 user/src/bin/t_netd.rs        test-net test-qemu
 user/src/netclient.rs         test-net
@@ -124,8 +128,8 @@ tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix
 
 # The shell and its crates.
-user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper
+user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run
 crates/zoraya-shell/          test-boot test-files test-tour-gui
 crates/zoraya-command/        test-boot test-files test-tour-gui
 crates/zoraya-describe/       test-files test-tour-gui
@@ -135,22 +139,24 @@ docs/tour.md                  test-tour-gui
 tests/shell/                  test-boot test-files
 
 # Storage.
-crates/zoraya-fs/             test-files test-crash test-qemu test-posix
+crates/zoraya-fs/             test-files test-crash test-qemu test-posix test-hand-run
 crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix
-tools/zoraya-mkfs/            test-files test-posix
+tools/zoraya-mkfs/            test-files test-posix test-hand-run
 crates/zoraya-proto-file/     test-files test-crash test-gui test-posix
-user/src/bin/fsd.rs           test-files test-crash
+user/src/bin/fsd.rs           test-files test-crash test-hand-run
 user/src/bin/blkd.rs          test-files test-crash
 user/src/files.rs             test-files test-gui
 user/src/stack.rs             test-files test-crash
-rootfs/                       test-files test-gui test-tour-gui
+rootfs/                       test-files test-gui test-tour-gui test-hand-run
 
 # Host tools with tests of their own only.
 tools/mutants/                check
 tools/footprint/              check
 crates/zoraya-dns/           test-net
 crates/zoraya-http/          test-net
-user/src/bin/fetch.rs        test-net test-files
+user/src/bin/fetch.rs        test-net test-files test-hand-run
+user/src/bin/ping.rs         test-net test-files test-hand-run
+user/describe/commands/ping.cmd test-net test-files
 user/src/netconn.rs          test-net
 user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
@@ -160,7 +166,7 @@ crates/zoraya-shell/src/netgrant.rs test-net
 
 # HTTPS and the random service (N5): the TLS crate, ring, the generator, rngd
 # and the test PKI. The files script holds `random`, the net script `fetch https`.
-crates/zoraya-tls/            test-net
+crates/zoraya-tls/            test-net test-hand-run
 crates/zoraya-rng/            test-files test-net
 vendor/                       test-net
 vendor/ring.sha256            check

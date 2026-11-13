@@ -40,6 +40,7 @@ key spc
 window
 screen   mv        move or rename
 screen   net       show the state of the network
+screen   ping      send echo requests to a host and show the replies
 screen   poweroff  turn the machine off
 screen   pwd       print the current directory
 screen   random    show random bytes
@@ -60,6 +61,9 @@ screen   top       each room's use against its limits
 screen   unset     remove a variable
 screen   uptime    time since boot
 screen   wait      wait for background jobs
+prefix -- space: next page, q: quit --
+key spc
+window
 screen Demonstrations: echo-args exit-with fault hello spin stubborn
 screen ~> _
 chord ctrl l

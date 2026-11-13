@@ -536,6 +536,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0298-1 | [ADR-0298](0298-q7-how-the-gates-tests-run.md) | The image of `make test-net` (the production programs) holds none of the strings of the keeper's test hook (the request to end the keeper, its refusal text and the line `init` prints when it answers a reconnect). | `make test-net` (`NET_CRASH_MARKS`, the marks added to ADR-0296's) and `make test-keeper`; both fail when the program to look in is missing. | checked: `make test-net` |
 | INV-0298-2 | [ADR-0298](0298-q7-how-the-gates-tests-run.md) | Every fuzz target of `fuzz/` that a gate row names builds and runs for its time without a finding. | `make test-fuzz`, `make test-fuzz-net`. | checked: `make test-fuzz` |
 | INV-0299-1 | [ADR-0299](0299-q7-subscriptions-are-bounded.md) | A port holds at most 1024 subscriptions and a source has at most 1024; the next `subscribe` fails with `TooMany` (`LimitReached` for a program) and changes nothing. | `cargo test -p zoraya-events`, and `t_bound` for the masked time at the limit. | checked: `make test-unit` (`a_port_holds_a_bounded_number_of_subscriptions`, `a_source_has_a_bounded_number_of_subscriptions`); the masked time at the limit is measured by `t_bound` (`make test-qemu`) |
+| INV-0330-1 | [ADR-0330](0330-ping-command-and-host-operand.md) | The reply of a diagnostic echo has one `rtts` entry per request, in order, and the entries that are not `NO_REPLY` number `received`. | `cargo test -p zoraya-net` (the stack's echo run), `make test-net` (`t_netd`). | checked: `make test-unit` |
+| INV-0330-2 | [ADR-0330](0330-ping-command-and-host-operand.md) | A rule grants echo requests only if its protocols include echo, and a connection only if they include TCP: an echo-only grant opens no connection, a TCP/UDP grant sends no echo, for names and addresses alike. | `cargo test -p zoraya-abi`, `-p zoraya-net`, `-p zoraya-shell netgrant`, `make test-net` (`t_netd`); mutants in `tools/mutants/net-ping.toml`. | checked: `make test-unit` |
 
 ## Counts
 
@@ -692,4 +694,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0297](0297-n6-the-net-word-in-the-shell.md) N6, the `+net` word in the shell where ADR-0224 is silent | 1 |
 | [ADR-0298](0298-q7-how-the-gates-tests-run.md) Q7, how the gate's tests run where ADR-0268 is silent | 2 |
 | [ADR-0299](0299-q7-subscriptions-are-bounded.md) Q7, subscriptions are bounded per port and per source | 1 |
-| **Total** | **530** |
+| [ADR-0330](0330-ping-command-and-host-operand.md) The `ping` command, the `host` operand and a per-request round trip in the diagnostic echo | 2 |
+| **Total** | **532** |

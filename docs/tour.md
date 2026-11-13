@@ -51,6 +51,7 @@ Commands:
 -- space: next page, q: quit --
   mv        move or rename
   net       show the state of the network
+  ping      send echo requests to a host and show the replies
   poweroff  turn the machine off
   pwd       print the current directory
   random    show random bytes
@@ -71,6 +72,7 @@ Commands:
   unset     remove a variable
   uptime    time since boot
   wait      wait for background jobs
+-- space: next page, q: quit --
 Demonstrations: echo-args exit-with fault hello spin stubborn
 ```
 

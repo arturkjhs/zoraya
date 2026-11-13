@@ -14,6 +14,8 @@ pub enum Request<'a> {
     Status,
     /// An echo run to an address.
     Ping { address: [u8; 4] },
+    /// An echo run to a name, which `netd` resolves (ADR-0330).
+    PingName { name: &'a str },
     /// A TCP connection to a name or an address and a port (N3).
     Connect {
         target: ConnectTarget<'a>,
@@ -60,7 +62,7 @@ impl Connection {
         let reach = ReachRule {
             target: Target::Any,
             ports: Ports::ANY,
-            protocols: Protocols::BOTH,
+            protocols: Protocols::ALL,
         };
         let listen = ListenRule {
             ports: Ports::ANY,
@@ -114,8 +116,11 @@ impl Connection {
     pub fn decide(&self, request: Request<'_>) -> Verdict {
         match request {
             Request::Status => verdict(self.rights & rights::STATUS != 0),
-            Request::Ping { address } => {
-                verdict(self.rights & rights::REACH != 0 && self.scope().reaches_address(address))
+            Request::Ping { address } => verdict(
+                self.rights & rights::REACH != 0 && self.scope().allows_echo_address(address),
+            ),
+            Request::PingName { name } => {
+                verdict(self.rights & rights::REACH != 0 && self.scope().allows_echo_name(name))
             }
             Request::Connect { target, port } => {
                 if self.rights & rights::REACH == 0 || port == 0 {

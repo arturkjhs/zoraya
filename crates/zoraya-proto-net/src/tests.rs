@@ -37,18 +37,48 @@ fn reply(dns: &[Address]) -> StatusReply<'_> {
 #[test]
 fn every_message_round_trips_and_decodes_totally() {
     total(GetStatus {});
-    total(Ping {
-        address: 0x0a00_0202,
-        count: Below(4),
-        timeout_ms: Below(2000),
-    });
-    total(PingReply {
+    for name in ["", "google.com", "a"] {
+        let ask = Ping {
+            address: 0x0a00_0202,
+            count: Below(4),
+            timeout_ms: Below(2000),
+            name: Data(name.as_bytes()),
+        };
+        let mut out = [0; 512];
+        let length = encode(&ask, 1, &mut out).unwrap();
+        let (_, back) = decode::<Ping<'_>>(&out[..length], 0).unwrap();
+        assert_eq!(
+            (back.address, back.count.0, back.name.0),
+            (0x0a00_0202, 4, name.as_bytes())
+        );
+        exercise(&out[..length], |bytes| {
+            let _ = decode::<Ping<'_>>(bytes, 0);
+        });
+    }
+    let rtts = [Rtt { us: 10 }, Rtt { us: NO_REPLY }];
+    let ping = PingReply {
         status: Below(status::OK),
+        address: 0x0a00_0202,
         sent: 4,
         received: 4,
         rtt_min_us: 10,
         rtt_avg_us: 20,
         rtt_max_us: 30,
+        rtts: Seq::Of(&rtts),
+    };
+    let mut out = [0; 2048];
+    let length = encode(&ping, 1, &mut out).unwrap();
+    let (_, back) = decode::<PingReply<'_>>(&out[..length], 0).unwrap();
+    assert_eq!(
+        back.rtts
+            .iter()
+            .map(|r| r.us)
+            .collect::<alloc::vec::Vec<_>>(),
+        [10, NO_REPLY]
+    );
+    assert_eq!((back.sent, back.rtt_max_us), (4, 30));
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<PingReply<'_>>(bytes, 0);
     });
     total(Narrowed {
         status: Below(status::NOT_GRANTED),
@@ -234,14 +264,27 @@ fn extra_or_missing_handles_and_values_out_of_range_are_refused() {
         address: 1,
         count: Below(17),
         timeout_ms: Below(1),
+        name: Data(b""),
     };
     assert!(encode(&ping, 1, &mut out).is_err());
     let ping = Ping {
         address: 1,
         count: Below(1),
         timeout_ms: Below(30001),
+        name: Data(b""),
     };
     assert!(encode(&ping, 1, &mut out).is_err());
+    // A name has the bound of connect's: 253 bytes encode, 254 do not.
+    let long = [b'a'; 254];
+    let mut big = [0; 1024];
+    let ping = |name| Ping {
+        address: 0,
+        count: Below(1),
+        timeout_ms: Below(1),
+        name: Data(name),
+    };
+    assert!(encode(&ping(&long[..253]), 1, &mut big).is_ok());
+    assert!(encode(&ping(&long), 1, &mut big).is_err());
 }
 
 #[test]
@@ -280,4 +323,64 @@ fn status_is_printed_in_words() {
     stat.address_source = Below(source::STATIC);
     stat.lease_left = NO_LEASE;
     assert!(render(&stat).contains("10.0.2.15/24 (static)"));
+}
+
+fn view(rtts: &[u32], sent: u32, received: u32) -> PingView<'_> {
+    PingView {
+        host: "10.0.2.2",
+        address: [10, 0, 2, 2],
+        count: sent,
+        sent,
+        received,
+        rtt_min_us: 412,
+        rtt_avg_us: 1500,
+        rtt_max_us: 12_345,
+        rtts,
+    }
+}
+
+#[test]
+fn ping_prints_a_line_per_reply_and_the_summary() {
+    let text = render_ping(&view(&[412, NO_REPLY, 1000, 12_345], 4, 3));
+    assert_eq!(
+        text,
+        "PING 10.0.2.2: 4 requests\n\
+         40 bytes from 10.0.2.2: seq=0 time=0.412 ms\n\
+         40 bytes from 10.0.2.2: seq=2 time=1.000 ms\n\
+         40 bytes from 10.0.2.2: seq=3 time=12.345 ms\n\
+         --- 10.0.2.2 ping statistics ---\n\
+         4 sent, 3 received, 25% loss\n\
+         rtt min/avg/max = 0.412/1.500/12.345 ms\n"
+    );
+}
+
+#[test]
+fn ping_with_no_reply_has_no_lines_and_no_rtt() {
+    let text = render_ping(&view(&[NO_REPLY, NO_REPLY], 2, 0));
+    assert_eq!(
+        text,
+        "PING 10.0.2.2: 2 requests\n--- 10.0.2.2 ping statistics ---\n2 sent, 0 received, 100% loss\n"
+    );
+    // Nothing sent is all lost, not a division by zero.
+    assert!(render_ping(&view(&[], 0, 0)).contains("100% loss"));
+}
+
+#[test]
+fn ping_by_name_shows_the_name_and_the_address_it_resolved_to() {
+    let rtts = [250];
+    let text = render_ping(&PingView {
+        host: "example.org",
+        address: [93, 184, 216, 34],
+        count: 1,
+        sent: 1,
+        received: 1,
+        rtt_min_us: 250,
+        rtt_avg_us: 250,
+        rtt_max_us: 250,
+        rtts: &rtts,
+    });
+    assert!(text.starts_with(
+        "PING example.org (93.184.216.34): 1 requests\n40 bytes from 93.184.216.34: seq=0"
+    ));
+    assert!(text.contains("--- example.org ping statistics ---"));
 }

@@ -588,6 +588,11 @@ test = false
 bench = false
 
 [[bin]]
+name = "ping"
+test = false
+bench = false
+
+[[bin]]
 name = "t_netd"
 test = false
 bench = false

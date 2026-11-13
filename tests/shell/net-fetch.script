@@ -101,6 +101,70 @@
 > grants fetch http://10.0.2.2:@PORT@/\r
 < reach (operand URL)
 < \r\n~>
+# `ping` (proposed ADR-0330): echo requests through netd's diagnostic ping to the
+# gateway, which SLIRP answers even under restrict=on. The host operand designates.
+> ping 10.0.2.2\r
+< PING 10.0.2.2: 4 requests
+< 40 bytes from 10.0.2.2: seq=0 time=
+< --- 10.0.2.2 ping statistics ---
+< 4 sent, 4 received, 0% loss
+< rtt min/avg/max =
+< \r\n~>
+> ping -c 2 -W 3 10.0.2.2\r
+< 2 sent, 2 received, 0% loss
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> grants ping 10.0.2.2\r
+< echo only (operand HOST)
+< \r\n~>
+# A name: netd resolves it (net.hosts here) under an echo-only grant for that name
+# (ADR-0330), and the line shows the address.
+> ping -c 1 test.zoraya\r
+< PING test.zoraya (10.0.2.2): 1 requests
+< 40 bytes from 10.0.2.2: seq=0 time=
+< --- test.zoraya ping statistics ---
+< 1 sent, 1 received, 0% loss
+< \r\n~>
+> grants ping test.zoraya\r
+< test.zoraya
+< echo only (operand HOST)
+< \r\n~>
+# A name nobody granted is not resolved for ping: a value needs a +net word.
+> set n test.zoraya\r
+< \r\n~>
+> ping $n\r
+< from a value, outside the line's network grants
+< +net test.zoraya COMMAND
+< \r\n~>
+# Wrong use is said: no count, a bad name.
+> ping -c 0 10.0.2.2\r
+< not a count from 1 to 16
+< \r\n~>
+> ping a..b\r
+< not a host name or a dotted IPv4 address
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+# A value designates only inside a `+net` word.
+> set h 10.0.2.2\r
+< \r\n~>
+> ping $h\r
+< from a value, outside the line's network grants
+< +net 10.0.2.2 COMMAND
+< \r\n~>
+> +net 10.0.2.2 ping -c 1 $h\r
+< 1 sent, 1 received, 0% loss
+< \r\n~>
+# Nothing answers on an address SLIRP does not route: all lost, status 1.
+> ping -c 1 -W 1 10.0.2.77\r
+< 1 sent, 0 received, 100% loss
+< \r\n~>
+> status\r
+< \r\nexit status 1
+< \r\n~>
 # What goes wrong is said, and the exit status is 1.
 > fetch http://10.0.2.2:@PORT@/status/404\r
 < fetch: http://10.0.2.2:@PORT@/status/404: the server did not give the page (HTTP 404)

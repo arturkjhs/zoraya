@@ -1094,7 +1094,7 @@ mod resolve {
         for _ in 0..20_000 {
             w.turn();
             for a in w.conns.take_lookups() {
-                if let Some((to, bytes)) = service.resolve_done(&w.client, a, w.now) {
+                if let Some((to, bytes)) = service.resolve_done(&mut w.client, a, w.now) {
                     assert_eq!(to, id);
                     return bytes;
                 }
@@ -1178,7 +1178,7 @@ mod resolve {
         for _ in 0..20_000 {
             w.turn();
             for r in w.conns.take_lookups() {
-                if let Some((id, bytes)) = service.resolve_done(&w.client, r, w.now) {
+                if let Some((id, bytes)) = service.resolve_done(&mut w.client, r, w.now) {
                     to.push(id);
                     seen.push((id, answer(&bytes).1));
                     open.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1335,7 +1335,7 @@ mod resolve {
         for _ in 0..20_000 {
             w.turn();
             for a in w.conns.take_lookups() {
-                if let Some((to, _)) = service.resolve_done(&w.client, a, w.now) {
+                if let Some((to, _)) = service.resolve_done(&mut w.client, a, w.now) {
                     assert_eq!(to, root, "only the session's connection is left");
                 }
             }
@@ -1345,5 +1345,265 @@ mod resolve {
             }
         }
         panic!("the lookups did not end");
+    }
+}
+
+/// `ping` by name through the service and the resolver (ADR-0330): the answer
+/// of the DNS server, filtered as `resolve` filters it.
+mod ping_by_name {
+    use super::*;
+    use crate::service::{Action, Service};
+    use zoraya_abi::net::{Target as ScopeTarget, rights};
+    use zoraya_proto_net::{Ping, PingReply, status};
+    use zoraya_protocol::{Below, Data, encode};
+
+    const GATEWAY: [u8; 4] = [10, 0, 2, 2];
+
+    fn echo_scope(rules: &[(ScopeTarget<'_>, Protocols)]) -> Vec<u8> {
+        let reach: Vec<ReachRule<'_>> = rules
+            .iter()
+            .map(|(target, protocols)| ReachRule {
+                target: *target,
+                ports: Ports::ANY,
+                protocols: *protocols,
+            })
+            .collect();
+        scope_with(&reach)
+    }
+
+    fn ask(service: &mut Service, w: &mut World, id: usize, name: &str) -> Action {
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &Ping {
+                address: 0,
+                count: Below(1),
+                timeout_ms: Below(1000),
+                name: Data(name.as_bytes()),
+            },
+            9,
+            &mut out,
+        )
+        .unwrap();
+        service.handle(id, &out[..n], 0, &mut w.client, w.now)
+    }
+
+    /// Asks, and gives the reply to the asker: `None` when a run started
+    /// (at once from the cache, or after the lookup).
+    fn outcome(service: &mut Service, w: &mut World, id: usize, name: &str) -> Option<Vec<u8>> {
+        match ask(service, w, id, name) {
+            Action::Reply(bytes) => Some(bytes),
+            Action::Deferred if w.client.ping_running() => None,
+            Action::Deferred => lookup(service, w),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Runs until the lookup is answered: the reply to the asker, or `None`
+    /// when the run started.
+    fn lookup(service: &mut Service, w: &mut World) -> Option<Vec<u8>> {
+        for _ in 0..20_000 {
+            w.turn();
+            if let Some(a) = w.conns.take_lookups().into_iter().next() {
+                return service.resolve_done(&mut w.client, a, w.now).map(|r| r.1);
+            }
+        }
+        panic!("no answer");
+    }
+
+    /// Lets a started run end and gives its end to the service.
+    fn finish(service: &mut Service, w: &mut World) {
+        assert!(w.client.ping_running(), "a run was started");
+        assert!(w.run_until(10_000_000, |w| !w.client.ping_running()));
+        for e in w.client.take_events() {
+            if let Event::PingDone(r) = e {
+                let _ = service.ping_done(r);
+            }
+        }
+    }
+
+    fn code(bytes: &[u8]) -> u32 {
+        decode::<PingReply<'_>>(bytes, 0).unwrap().1.status.0
+    }
+
+    #[test]
+    fn an_answer_on_this_side_of_the_network_is_pinged_only_under_an_echo_rule_for_it() {
+        let mut w = World::new(Script::Sink, &[]);
+        // The name decides the address: the gateway, the DNS server (both of
+        // this side of the network) or a host beyond.
+        w.peer.dns_script = Box::new(|q| {
+            let address = if q.windows(2).any(|w| w == b"gw") {
+                GATEWAY
+            } else if q.windows(3).any(|w| w == b"dns") {
+                DNS
+            } else {
+                WEB
+            };
+            vec![a_record_reply(q, address, 300)]
+        });
+        let mut service = Service::new();
+        let narrow = |rules: &[(ScopeTarget<'_>, Protocols)]| {
+            Connection::new(rights::REACH, &echo_scope(rules)).unwrap()
+        };
+        let zoraya = (ScopeTarget::Wildcard("zoraya"), Protocols::ECHO);
+        let only_names = service.add(narrow(&[zoraya])).unwrap();
+        // The gateway and the DNS server are refused as local.
+        for name in ["gw.zoraya", "dns.zoraya"] {
+            let reply = outcome(&mut service, &mut w, only_names, name).expect("a refusal");
+            assert_eq!(code(&reply), status::LOCAL, "{name}");
+            assert!(!w.client.ping_running());
+        }
+        // A host beyond them is pinged.
+        assert!(
+            outcome(&mut service, &mut w, only_names, "web.zoraya").is_none(),
+            "the run started"
+        );
+        finish(&mut service, &mut w);
+        // An echo rule for the gateway's address allows that answer.
+        let both = service
+            .add(narrow(&[
+                zoraya,
+                (ScopeTarget::Address(GATEWAY), Protocols::ECHO),
+            ]))
+            .unwrap();
+        assert!(
+            outcome(&mut service, &mut w, both, "gw.zoraya").is_none(),
+            "the run started"
+        );
+        finish(&mut service, &mut w);
+        // A TCP rule for that address is no echo rule.
+        let tcp = service
+            .add(narrow(&[
+                zoraya,
+                (ScopeTarget::Address(GATEWAY), Protocols::TCP),
+            ]))
+            .unwrap();
+        let reply = outcome(&mut service, &mut w, tcp, "gw.zoraya").expect("a refusal");
+        assert_eq!(code(&reply), status::LOCAL);
+    }
+
+    #[test]
+    fn a_non_unicast_answer_is_not_pinged() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, [255, 255, 255, 255], 300)]);
+        let mut service = Service::new();
+        let id = service
+            .add(
+                Connection::new(
+                    rights::REACH,
+                    &echo_scope(&[(ScopeTarget::Any, Protocols::ECHO)]),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let reply = outcome(&mut service, &mut w, id, "any.zoraya").expect("a refusal");
+        assert_ne!(code(&reply), status::OK);
+        assert!(!w.client.ping_running());
+    }
+
+    /// A `ping` of an address, with a 1 ms wait: the run ends at once.
+    fn ping_address(service: &mut Service, w: &mut World, id: usize) -> Action {
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &Ping {
+                address: u32::from_be_bytes(GATEWAY),
+                count: Below(1),
+                timeout_ms: Below(1),
+                name: Data(b""),
+            },
+            9,
+            &mut out,
+        )
+        .unwrap();
+        service.handle(id, &out[..n], 0, &mut w.client, w.now)
+    }
+
+    /// B, with an echo rule for names under `zoraya`, and a resolver that
+    /// never answers (so a named ping of B stays in its lookup).
+    fn world_with_b() -> (World, Service, usize, usize) {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|_| Vec::new());
+        let mut service = Service::new();
+        let a = service.add(Connection::root()).unwrap();
+        let scope = echo_scope(&[(ScopeTarget::Wildcard("zoraya"), Protocols::ECHO)]);
+        let b = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        (w, service, a, b)
+    }
+
+    fn busy(action: Action) {
+        let Action::Reply(bytes) = action else {
+            panic!("busy, got {action:?}");
+        };
+        assert_eq!(code(&bytes), status::BUSY);
+    }
+
+    #[test]
+    fn a_run_whose_connection_went_is_not_handed_to_a_named_ping_that_follows() {
+        // Kills the removal of both defences together (the slot kept by
+        // `remove`, and the stack's own check).
+        let (mut w, mut service, a, b) = world_with_b();
+        assert_eq!(ping_address(&mut service, &mut w, a), Action::Deferred);
+        service.remove(a);
+        busy(ask(&mut service, &mut w, b, "b.zoraya"));
+        assert!(w.run_until(10_000_000, |w| !w.client.ping_running()));
+        for e in w.client.take_events() {
+            if let Event::PingDone(r) = e {
+                assert!(service.ping_done(r).is_none(), "A's result goes to nobody");
+            }
+        }
+        // The slot is free again.
+        assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
+    }
+
+    #[test]
+    fn the_slot_of_a_gone_connection_stays_taken_until_its_run_is_delivered() {
+        // The run is over in the stack, its end not yet delivered: only the
+        // slot (not `ping_running`) keeps B out. Kills a `remove` that clears
+        // the slot.
+        let (mut w, mut service, a, b) = world_with_b();
+        assert_eq!(ping_address(&mut service, &mut w, a), Action::Deferred);
+        service.remove(a);
+        assert!(w.run_until(10_000_000, |w| !w.client.ping_running()));
+        busy(ask(&mut service, &mut w, b, "b.zoraya"));
+        for e in w.client.take_events() {
+            if let Event::PingDone(r) = e {
+                assert!(service.ping_done(r).is_none(), "A's result goes to nobody");
+            }
+        }
+        assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
+    }
+
+    #[test]
+    fn a_named_ping_is_refused_while_the_stack_runs_one_the_slot_does_not_know() {
+        // Defence in depth: the slot is free but a run goes. Kills the removal
+        // of the `ping_running` check.
+        let (mut w, mut service, _a, b) = world_with_b();
+        w.client.ping(GATEWAY, 1, 1_000, w.now).unwrap();
+        busy(ask(&mut service, &mut w, b, "b.zoraya"));
+        assert!(w.client.ping_running());
+    }
+
+    #[test]
+    fn a_named_ping_whose_connection_went_in_its_lookup_frees_the_slot() {
+        // A pings by name and goes; B takes A's id; the lookup ends (nobody
+        // answers): no run for A, and B's own ping is not refused as busy.
+        // Kills the removal of the slot release at the lookup's end.
+        let (mut w, mut service, a, _b) = world_with_b();
+        let scope = echo_scope(&[(ScopeTarget::Wildcard("zoraya"), Protocols::ECHO)]);
+        service.remove(_b);
+        service.remove(a);
+        let a = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        assert_eq!(ask(&mut service, &mut w, a, "a.zoraya"), Action::Deferred);
+        service.remove(a);
+        let b = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        assert_eq!(b, a, "ids are reused");
+        assert!(lookup(&mut service, &mut w).is_none(), "no reply, no run");
+        assert!(!w.client.ping_running());
+        assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
     }
 }

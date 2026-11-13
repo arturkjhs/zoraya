@@ -39,7 +39,7 @@ pub use error::FsError;
 pub use format::{Attr, ObjKind};
 pub use io::{CACHE_ENTRIES, FailReason};
 pub use name::{Name, NameError, RelPath};
-pub use root::{RootSelection, select_root};
+pub use root::{RootSelection, foreign_format_version, select_root};
 pub use time::{Clock, Timestamp};
 pub use volume::{
     COMMIT_THRESHOLD_BLOCKS, DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, DELETE_RESERVE, DirEntry, Handle,

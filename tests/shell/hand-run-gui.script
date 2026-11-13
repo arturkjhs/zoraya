@@ -1,0 +1,22 @@
+# `make run-gui` as a person runs it (`make test-hand-run`): the image
+# $(KERNEL), the disk tools/run-disk.sh keeps, and the same QEMU command line
+# (RUN_GUI_CMD, --net included), with no window (`--display-opts none`) and a QMP socket to
+# read the screen and type (the runner's GUI script, tools/test-runner/src/gui.rs).
+# The desktop's terminal has a shell with its volume: the prompt is the home.
+serial init: gui: gpu on its own page
+serial compd:
+screen Type help to begin, or help tour.
+screen ~> _
+type echo ready\r
+screen ready
+screen ~> _
+# `make run-gui` has the network by default (--net): the terminal's shell has
+# the root connection, the lease is in, and the gateway answers an echo.
+pause 3000
+type net status\r
+prefix net0  up  52:54:00:12:34:56
+type ping -c 1 10.0.2.2\r
+prefix 1 sent, 1 received, 0% loss
+screen ~> _
+type poweroff\r
+exit

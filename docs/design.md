@@ -899,6 +899,10 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 - `make check-user-access` and `make check-host-paths`: the unprivileged load and store forms only in `usercopy.rs`
   (INV-0031-4), and no home-directory paths or email addresses in tracked files outside `docs/research/` and
   `tools/posix-surface/results/`;
+- `make check-tls-roots`: the roots the image ships (`rootfs/system/tls/roots`, Mozilla's store, 108 certificates from the CCADB report of
+  2026-11-12, ADR-0228) on the source: at least 100 blocks, each a DER certificate, none repeated, none of the test PKI's, the
+  header's count, source and date, and `docs/dependencies.md` agreeing; `cargo test -p zoraya-tls --test production_roots` loads every
+  one into the verifier;
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-libposix`, the stage 6c criterion (below, under "How the in-QEMU tests run");
@@ -1311,7 +1315,7 @@ measured for real.
 
 ## Using the desktop
 
-`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window: on macOS at 2048 × 1536 with scale 2,
+`make run-gui` boots with a GPU, keyboard, tablet and the network (`--net`: the Internet through SLIRP, so `fetch` and `ping` work in the terminal; `NET=0 make run-gui` starts without it) and opens QEMU's window: on macOS at 2048 × 1536 with scale 2,
 elsewhere at 1024 × 768 (`GUI_SCALE=1` or `GUI_SCALE=2` chooses). On a Mac the window can be resized and the desktop
 follows it (7g: the bar and the dock follow the width, windows stay in the work area, and from 1920 pixels wide the
 scale is 2, from 1280 on a Retina screen, ADR-0247), and Command is the system key (written System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
@@ -1356,8 +1360,11 @@ that `zoraya-tour` generates from that file (INV-0154-4). This section follows t
 part is built.
 
 - **Getting your bearings** (tour 1 to 3). The shell starts in `/home` (`shell.home`), shown as `~`; `/config` holds
-  `settings`, `start.zosh` and `history` (ADR-0157). `make run` attaches `build/disk.img`, made from `rootfs/` on
-  first use; without a disk the shell starts in `/` and file commands fail. `help` lists the topics, the commands
+  `settings`, `start.zosh` and `history` (ADR-0157). `make run` (and `run-net`, `run-gui`) attaches `build/disk.img`, made from
+  `rootfs/` by `tools/run-disk.sh` on first use and kept; when the on-disk format or `rootfs/system` changes, the old
+  disk becomes `build/disk.img.old` and a new one is made (a disk `fsd` cannot mount gave the prompt `/>` and
+  `fetch` "the file service is gone", TASK-26 hand-run). Without a volume the shell starts in `/` and file commands
+  fail. `make test-hand-run` boots these three machines as a person runs them. `help` lists the topics, the commands
   and the demonstrations a screen at a time; a command that succeeds prints only its result.
 - **Files and the language** (tour 4 to 8, 22 to 24; ADR-0150, ADR-0151; `zoraya_shell::syntax`, `glob`, `eval`).
   Words split only at spaces; `'...'` is literal, `"..."` expands `$name` and `$(...)`. Variables are lists
@@ -1633,8 +1640,11 @@ is not).
 
 `tools/run-qemu.sh --net` (ADR-0230 item 2) puts `virtio-net-device` on transport 16 (page 2, alone, ADR-0091) over
 QEMU's user-mode network (SLIRP: guest `10.0.2.15/24`, gateway `10.0.2.2`); with `--test` it is `restrict=on`, and
-`--net-pcap FILE` keeps the frames (256 bytes each, `--net-capture-all` for whole frames). `--net` with `--gui` is
-refused (ADR-0221 item 8, deferred). `make run-net` is an interactive machine without `restrict`. The service on top of
+`--net-pcap FILE` keeps the frames (256 bytes each, `--net-capture-all` for whole frames). `--net` with `--gui` works
+(N6, ADR-0221 item 8). The three machines a person starts: `make run` (the serial console, no network), `make run-net`
+(the serial console with the network, without `restrict`) and `make run-gui` (the window, with the network unless
+`NET=0`); each is one definition in the Makefile (`RUN_CMD`, `RUN_NET_CMD`, `RUN_GUI_CMD`), which `make test-hand-run`
+boots as it is. The service on top of
 the driver is described under "Network service" below.
 
 - **`ethd`** (`zoraya-virtio-net`, ADR-0221 item 1, proposed ADR-0280). One process, the device at slot 5 and the
@@ -1722,6 +1732,20 @@ stack's TCP client and its resolver are described under "TCP, names and `fetch`"
   `net0  up  52:54:00:12:34:56`, the address with its source and the lease left, the gateway, the DNS servers and the frame
   counters. The `net.*` settings are declared in `netd`'s description (`address` and `prefix` are new setting types):
   `settings net.gateway 10.0.2` is refused.
+- **`ping`** (proposed ADR-0330). `ping [-c COUNT] [-W SECONDS] HOST` (count 1 to 16, default 4; timeout 1 to 30 s, default 2)
+  sends the echo requests of `netd`'s diagnostic `ping` (ADR-0281 item 3; no raw socket), one every 200 ms. HOST is a name or a
+  dotted IPv4 address, written on the line: the description's `host` operand kind gives the command a connection whose rule for
+  that host is ICMP echo only (`Protocols::ECHO` in `zoraya_abi::net`; no TCP, no UDP; `grants ping 10.0.2.2` shows
+  `echo only (operand HOST)`). From a value the host needs a `+net` word that covers it (a `+net` word covers TCP, UDP and
+  echo). A name is resolved by `netd` with its resolver, inside the grant, as `fetch` does; the `Ping` request has the
+  name (`Data<253>`), the reply the address. Output: `PING NAME (ADDRESS): N requests`, a line per reply
+  (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`) and a summary (`4 sent, 4 received, 0% loss`,
+  `rtt min/avg/max = ... ms`); the exit status is 1 when no reply came and 2 for wrong use. `netd` answers when the run ends,
+  so the lines come together at the end. `PingReply` carries each request's round trip (`rtts`). Covered by
+  `tests/shell/net-fetch.script` (`make test-net-fetch`: an address and a `net.hosts` name), `net-dns.script` (names that do not
+  resolve or are local, with the host's resolver), `hand-run-net.script` (`make test-hand-run`, the production image against
+  SLIRP's gateway), `t_netd` (an echo-only grant opens no TCP connection and pings no other host) and the host tests of
+  `zoraya-abi`, `zoraya-net`, `zoraya-shell` and `zoraya-proto-net`.
 - **What SLIRP gives.** Under `restrict=on` (every test) the lease holds the address and its time only: no router and no
   DNS server, so `net status` shows neither. Without `restrict` (`make run-net`) SLIRP gives gateway 10.0.2.2 and DNS
   10.0.2.3. The lease time SLIRP gives is 24 h. ICMP to the gateway 10.0.2.2 is answered by SLIRP either way, and the
