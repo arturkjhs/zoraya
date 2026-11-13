@@ -151,6 +151,8 @@ struct MoveClaim {
     process: Arc<Process>,
     held: Vec<Handle>,
     taken: Vec<zoraya_handle::Entry<Object>>,
+    /// The table keeps a room for the child's handle (ADR-0313 item 8).
+    kept: bool,
 }
 
 impl MoveClaim {
@@ -166,7 +168,26 @@ impl MoveClaim {
             process: process.clone(),
             held,
             taken,
+            kept: false,
         })
+    }
+
+    /// Keeps a room in the caller's table for the child's handle, so that the
+    /// insert after the pause cannot fail with the child already made.
+    fn keep_room(&mut self, handles: &mut HandleTable) -> Result<(), Status> {
+        handles.keep_room()?;
+        self.kept = true;
+        Ok(())
+    }
+
+    /// The child's handle, into the kept room: cannot fail.
+    fn insert_child(&mut self, child: Arc<Process>) -> Result<Handle, Status> {
+        self.kept = false;
+        self.process.handles.lock().insert_kept(
+            Object::Process(child),
+            ProcessObject::RIGHTS,
+            object::next_id(),
+        )
     }
 
     /// Checks `handle` for `rights` and holds it. At most `room` times.
@@ -195,12 +216,15 @@ impl MoveClaim {
 
 impl Drop for MoveClaim {
     fn drop(&mut self) {
-        if self.held.is_empty() {
+        if self.held.is_empty() && !self.kept {
             return;
         }
         let mut handles = self.process.handles.lock();
         for handle in self.held.drain(..) {
             handles.cancel_move(handle);
+        }
+        if self.kept {
+            handles.drop_kept();
         }
     }
 }
@@ -257,7 +281,7 @@ impl Calls<'_> {
         claim: &mut MoveClaim,
     ) -> Result<(HandleTable, Option<Handle>), Status> {
         let mut handles = self.process.handles.lock();
-        handles.reserve()?;
+        claim.keep_room(&mut handles)?;
         if handles
             .entries()
             .any(|(_, e)| matches!(e.object, Object::Pin(_)))
@@ -481,7 +505,7 @@ impl Handlers for Calls<'_> {
         let mut claim = MoveClaim::new(&self.process, request.handle_count())?;
         {
             let mut handles = self.process.handles.lock();
-            handles.reserve()?;
+            claim.keep_room(&mut handles)?;
             for listed in request.handles() {
                 let entry = match listed.transfer {
                     Transfer::Move => claim.hold(&mut handles, listed.handle, Rights::TRANSFER)?,
@@ -514,7 +538,7 @@ impl Handlers for Calls<'_> {
             object::end_subscriptions(&entry);
             self.end_hold_if_unwritable(&entry.object);
         }
-        self.insert(Object::Process(child), ProcessObject::RIGHTS)
+        Ok(claim.insert_child(child)?.raw())
     }
 
     fn process_resume(&mut self, process: Handle) -> Result<u64, Status> {
@@ -1348,12 +1372,8 @@ impl Handlers for Calls<'_> {
             object::end_subscriptions(&entry);
             self.end_hold_if_unwritable(&entry.object);
         }
-        // `snapshot_table` reserved this room, and removing made more.
-        let handle = self.process.handles.lock().insert(
-            Object::Process(child),
-            ProcessObject::RIGHTS,
-            object::next_id(),
-        )?;
+        // `snapshot_table` kept this room, so a sibling cannot have filled it.
+        let handle = claim.insert_child(child)?;
         *LAST_SNAPSHOT.lock() = (timer::now().nanos_since(started), copied.pages);
         Ok(handle.raw())
     }
