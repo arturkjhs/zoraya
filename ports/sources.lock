@@ -7,6 +7,10 @@
 # by the archive GitHub generates for that commit (ports/README.md). lua,
 # sqlite and hello are the sources of W2, W3 and W4 (ADR-0110 items 1 and 10),
 # built inside Zoraya, not on the host.
+# A hash `tar:HEX` is the SHA-256 of the gunzipped archive, and a URL `git+REPO@COMMIT`
+# is fetched with git and archived (libctest: repo.or.cz generates its snapshots on
+# demand with gzip bytes that differ by machine, and puts a bot check in front of
+# them); tools/fetch-ports.sh.
 #
 # name    version                                    sha256                                                            file                                                   url
 musl      1.2.5                                      a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  musl-1.2.5.tar.gz                                      https://musl.libc.org/releases/musl-1.2.5.tar.gz https://sources.buildroot.net/musl/musl-1.2.5.tar.gz
@@ -19,5 +23,5 @@ pdpmake   0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8   779fe0750e11685565de641dbab
 lua       5.5.1                                      1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua-5.5.1.tar.gz                                       https://www.lua.org/ftp/lua-5.5.1.tar.gz
 sqlite    3540100                                    0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9  sqlite-amalgamation-3540100.zip                        https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip
 hello     2.12.3                                     0d5f60154382fee10b114a1c34e785d8b1f492073ae2d3a6f7b147687b366aa0  hello-2.12.3.tar.gz                                    https://ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz https://ftpmirror.gnu.org/hello/hello-2.12.3.tar.gz
-libctest  63e36e934e8f2bedf645303a90b64098e2af6c8f   1618dfc26618f9ca9a6e210404e282ccd4fa4fe4598344bada5c2ad40643aaa8  libc-test-63e36e934e8f2bedf645303a90b64098e2af6c8f.tar.gz https://repo.or.cz/libc-test.git/snapshot/63e36e934e8f2bedf645303a90b64098e2af6c8f.tar.gz
+libctest  63e36e934e8f2bedf645303a90b64098e2af6c8f   tar:698c911c90d49d2c4654f31ab78405fd07b3344bcf2ea3465e4915e4a8fb0672  libc-test-63e36e934e8f2bedf645303a90b64098e2af6c8f.tar.gz git+https://repo.or.cz/libc-test.git@63e36e934e8f2bedf645303a90b64098e2af6c8f
 sqlitesrc 3540100                                    387e7f6cad4797b17848c07d453dc6606917bb356a6cfe5a3abafd38c240c71b  sqlite-src-3540100.zip                                 https://www.sqlite.org/2026/sqlite-src-3540100.zip

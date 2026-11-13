@@ -10,6 +10,10 @@
 # SHA-256 matches the lock; an archive already in the cache with the right
 # hash is left alone. A mismatch is an error and leaves nothing in the cache
 # (INV-0109-4). Only the first form uses the network.
+#
+# Two forms in the lock beyond a plain SHA-256 and URL: a hash written
+# `tar:HEX` is the SHA-256 of the gunzipped file, and a URL written
+# `git+REPO@COMMIT` is fetched with git (the commit id is checked) and archived.
 set -eu
 
 sha256() {
@@ -18,6 +22,35 @@ sha256() {
     else
         shasum -a 256 "$1" | cut -d' ' -f1
     fi
+}
+
+# `same FILE HASH`: HASH is the file's SHA-256, or, written `tar:HEX`, the
+# SHA-256 of the file gunzipped. A snapshot that a server generates on demand
+# (a git hosting site's) has gzip bytes that change from one machine to the
+# next; the tar inside it does not (git's archive is deterministic).
+same() {
+    case $2 in
+    tar:*) gzip -t "$1" 2>/dev/null && [ "$(gzip -dc "$1" 2>/dev/null | sha256 -)" = "${2#tar:}" ] ;;
+    *) [ "$(sha256 "$1")" = "$2" ] ;;
+    esac
+}
+
+# `git_archive URL@COMMIT OUT`: fetches the commit with git (the id is the
+# check of what came), and writes the tar of its tree, gzipped, with the
+# prefix NAME-<7 digits>/ that a hosting site's snapshot has.
+git_archive() {
+    repo=${1%@*}
+    commit=${1##*@}
+    work=$(mktemp -d)
+    ok=1
+    if git -C "$work" init -q && git -C "$work" fetch -q --depth 1 "$repo" "$commit" &&
+        [ "$(git -C "$work" rev-parse FETCH_HEAD)" = "$commit" ]; then
+        base=$(basename "$repo" .git)
+        git -C "$work" archive --format=tar --prefix="$base-$(echo "$commit" | cut -c1-7)/" FETCH_HEAD |
+            gzip -n > "$2" && ok=0
+    fi
+    rm -rf "$work"
+    return $ok
 }
 
 entries() {
@@ -48,7 +81,7 @@ entries "$lock" | while read -r name version hash file urls; do
     path=$cache/$file
     if [ -f "$path" ]; then
         got=$(sha256 "$path")
-        if [ "$got" = "$hash" ]; then
+        if same "$path" "$hash"; then
             [ "$verify_only" = 1 ] || echo "fetch-ports: $file ok"
             continue
         fi
@@ -68,13 +101,23 @@ entries "$lock" | while read -r name version hash file urls; do
     for url in $urls; do
         rm -f "$tmp"
         echo "fetch-ports: $name $version from $url"
-        if ! curl -fsSL --retry "${FETCH_PORTS_RETRIES:-4}" --retry-all-errors --retry-delay 5 \
-            --connect-timeout 30 --max-time 600 -o "$tmp" "$url"; then
-            echo "fetch-ports: download of $url failed" >&2
-            continue
-        fi
+        case $url in
+        git+*)
+            if ! git_archive "${url#git+}" "$tmp"; then
+                echo "fetch-ports: git fetch of $url failed" >&2
+                continue
+            fi
+            ;;
+        *)
+            if ! curl -fsSL --retry "${FETCH_PORTS_RETRIES:-4}" --retry-all-errors --retry-delay 5 \
+                --connect-timeout 30 --max-time 600 -o "$tmp" "$url"; then
+                echo "fetch-ports: download of $url failed" >&2
+                continue
+            fi
+            ;;
+        esac
         got=$(sha256 "$tmp")
-        if [ "$got" != "$hash" ]; then
+        if ! same "$tmp" "$hash"; then
             echo "fetch-ports: $url has SHA-256 $got, the lock says $hash: refused" >&2
             continue
         fi
