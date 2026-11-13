@@ -79,6 +79,9 @@ const TLS_ROOTS: &str = "/system/tls/roots";
 const TLS_ROOTS_DIR: &str = "/system/tls";
 
 const CONSOLE_KEY: u64 = 1;
+/// The panel's window channel (ADR-0317) is readable: outside a request,
+/// only a late answer, closed at once (9e).
+const PANEL_KEY: u64 = 2;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
 /// Jobs at once.
@@ -2187,6 +2190,17 @@ impl Z {
     /// One port packet: a stream's, or a job's end, which is reported as
     /// `at` says (ADR-0158 rule 6). Gives the job in front when it ended.
     fn event(&mut self, packet: &Packet, at: At) -> Option<(jobs::Entry<Job>, Vec<ExitRecord>)> {
+        if packet.key == PANEL_KEY {
+            // `windowclient::ask` reads its own answer before it returns, so
+            // what waits here answers a request whose wait ended: its client
+            // end is closed, and the panel hears `ClientGone` (9e).
+            if let Some(panel) = self.panel
+                && zoraya_user::windowclient::drain_stale(panel).is_none()
+            {
+                let _ = port_unsubscribe(self.port, PANEL_KEY);
+            }
+            return None;
+        }
         if packet.key >= STREAM_KEY {
             if let Some(at) = self.relays.iter().position(|r| r.key == packet.key) {
                 self.pump_relay(at, false);
@@ -4958,6 +4972,17 @@ fn main() -> i32 {
         show(&e);
     }
     z.send_title();
+    // A late answer of the panel is closed when it comes, not at the next
+    // request (9e).
+    if let Some(panel) = z.panel {
+        let _ = port_subscribe(
+            z.port,
+            panel,
+            channel_signals::READABLE,
+            PANEL_KEY,
+            Mode::Level,
+        );
+    }
     let mut shell = Shell::new(z);
     if shell.host.root.is_some()
         && let Ok(text) = shell.host.read_text(START)
