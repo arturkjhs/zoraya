@@ -70,9 +70,12 @@ RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 # The deadline of the TCG, 4-CPU and CI test-qemu-* and test-net runs: 116 tests
-# take 147-176 s under TCG in CI and the suite grows, so 180 s dies under load
-# (slowest green run: 176 s, 70% margin at 300 s). HVF-only runs keep QEMU_TIMEOUT.
-QEMU_SLOW_TIMEOUT ?= 300
+# took 147-176 s under TCG in CI; with 128 tests (stage 9b) the runs took 168,
+# 201 and 267 s, and one run on a slow runner (every timed test 2x slower) did
+# not finish in 300 s. 420 s keeps a 57% margin over the slowest green run.
+# The CI job limit (10 minutes) still holds: about 1 minute of setup + 7.
+# HVF-only runs keep QEMU_TIMEOUT.
+QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 

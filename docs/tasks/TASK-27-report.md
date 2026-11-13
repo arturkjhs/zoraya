@@ -220,3 +220,15 @@ Exit: as step 1, plus `opus-review` on the fork and signal paths.
 
 `MAX_THREADS` 128; the 64 KiB `PT_TLS` bound; `--threads` as a word; `futex_requeue`; a signal thread; `close` as a
 cancellation point; `pthread_getattr_np` for the main thread; omitting dead stacks from the snapshot copy.
+
+### CI timing (2026-11-13): the whole-suite TCG runs and `QEMU_SLOW_TIMEOUT`
+
+CI on `main` (`02d32e5`) failed `test-qemu-tcg-smp4-gicv3` at the 300 s limit (115 of 128 tests done, running
+`room_keeper_from_a_process`). The CI logs keep only the head and tail of a run, so per-test times are not in them. What the
+logs show: the same suite (128 tests) took 201 s (candidate `work/9b-d`, gicv3), 267 s (candidate, gicv2) and 168 s (`main`,
+gicv2) in green runs, and the failed run had every timed figure about 2x the green ones (`t_bound` free_source 2365 ms against
+1215 ms, `t_storage` 100 syncs 1172 ms against 662 ms; the first frame tests 7-11 s against 4-6 s): a slow runner, not a hang.
+Locally (HVF host, `make test-qemu-tcg-default`, one run) the suite passed in about 160 s; `t_thread` took 21 s of it (hand-off
+rounds 11.3 s, interrupts 5.4 s, joined/detached rounds 1.4 s each). `t_thread` has no TCG branch and its round counts are
+invariant figures (INV-0300), so none was reduced. `QEMU_SLOW_TIMEOUT` went from 300 s to 420 s (57% over the slowest green
+run, 267 s); the CI job limit of 10 minutes still holds (about 1 minute of setup plus 7).
