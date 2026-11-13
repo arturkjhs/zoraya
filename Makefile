@@ -547,11 +547,18 @@ APPS_TEST_ROOT := $(BUILD)/apps-root
 APPS_DISK := $(BUILD)/apps-disk.img
 APPS_TEMPLATE := tests/shell/apps.script
 APPS_SCRIPT := $(BUILD)/apps.script
+# The TLS option refusals (ADR-0321) are a run of their own, so that each run
+# stays within its timeout under TCG (each line launches a 6.7 MiB program).
+APPS_REFUSALS_TEMPLATE := tests/shell/apps-refusals.script
+APPS_REFUSALS_SCRIPT := $(BUILD)/apps-refusals.script
+APPS_TCG_TIMEOUT ?= 500
+# The test server outlives every run that uses it (FULL=1: four); it is killed after them.
+APPS_LIFETIME := $(shell expr 2 \* $(QEMU_SLOW_TIMEOUT) + 2 \* $(APPS_TCG_TIMEOUT) + 60)
 APPS_HTTP_READY := $(BUILD)/apps-httpd.port
 APPS_TLS_READY := $(BUILD)/apps-tlsd.ports
 # QEMU options; 512 MiB for the reason RUN_NET_CMD's comment gives.
 APPS_QEMU ?= --mem 512M
-APPS_RUN = $(RUNNER) --timeout $(1) --script $(APPS_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
+APPS_RUN = $(RUNNER) --timeout $(1) --script $(4) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
 # The runs of a program from the volume give their memory back: 16 `curl`s on
 # 128 MiB, where 8 fitted while each run kept its image (TASK-27 9a item 2).
 APPS_LAUNCHES := tests/shell/apps-launches.script
@@ -568,7 +575,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(APPS_TEST_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
 	: > $(APPS_HTTP_READY) && : > $(APPS_TLS_READY) && \
-	{ $(HTTPD) --port 0 --lifetime 400 --ready-file $(APPS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(APPS_TLS_READY) > target/test-logs/test-httpd-apps.log 2>&1 & echo $$! > $(BUILD)/apps-httpd.pid; } && \
+	{ $(HTTPD) --port 0 --lifetime $(APPS_LIFETIME) --ready-file $(APPS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(APPS_TLS_READY) > target/test-logs/test-httpd-apps.log 2>&1 & echo $$! > $(BUILD)/apps-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/apps-httpd.pid); \
 	for i in $$(seq 1 20); do [ -s $(APPS_HTTP_READY) ] && [ -s $(APPS_TLS_READY) ] && break; sleep 0.25; done; \
 	set -- $$(cat $(APPS_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
@@ -577,8 +584,12 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 		echo "[apps] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-apps.log; exit 1; fi; \
 	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		$(APPS_TEMPLATE) > $(APPS_SCRIPT); \
-	$(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-auto,auto); rc=$$?; \
-	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,500,apps-tcg,tcg); rc=$$?; fi; \
+	sed -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+		$(APPS_REFUSALS_TEMPLATE) > $(APPS_REFUSALS_SCRIPT); \
+	$(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-auto,auto,$(APPS_SCRIPT)); rc=$$?; \
+	if [ $$rc = 0 ]; then $(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-refusals-auto,auto,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
+	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-tcg,tcg,$(APPS_SCRIPT)); rc=$$?; fi; \
+	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-refusals-tcg,tcg,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then $(APPS_LAUNCHES_RUN); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \

@@ -130,6 +130,7 @@ tests/posix-net/              test-net
 tests/apps/                  test-apps
 tests/shell/apps.script       test-apps
 tests/shell/apps-launches.script test-apps
+tests/shell/apps-refusals.script test-apps
 ports/apps/                   test-apps test-hand-run
 ports/patches/openssl/        test-apps test-hand-run
 ports/patches/wget/           test-apps test-hand-run
