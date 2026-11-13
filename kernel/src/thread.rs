@@ -248,7 +248,9 @@ pub fn create(
 /// Gives up a thread that never ran and was not listed: its object link is
 /// cut, its figure goes with its record.
 fn undo(thread: &Arc<Thread>) {
-    if let Some(object) = thread.object().lock().take() {
+    // The link is taken first: the lock is not held while `terminated` runs.
+    let object = thread.object().lock().take();
+    if let Some(object) = object {
         object.terminated();
     }
     thread.release_thread();
