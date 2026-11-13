@@ -59,9 +59,11 @@ pause 15000
 shot netsurf-refused
 region 110 175 40 20 9e9e9e
 # "Proceed" on the privacy error page does not turn verification off: the same
-# refusal comes back (the program has no such option, INV-0312-1). The test server's log then shows a
-# second refused handshake (the Makefile requires two): a click that missed the
-# button would leave one.
+# refusal comes back (the program has no such option, INV-0312-1). The test
+# server's log then shows exactly one refused handshake before the mark and at
+# least one after it (the Makefile checks both): a click that missed the button
+# leaves none after it, and a retry of NetSurf's own shows as two before it.
+mark @PORT@ /mark/before-proceed
 click 764 471
 pause 5000
 shot netsurf-refused-again

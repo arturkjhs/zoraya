@@ -625,10 +625,13 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
-		if grep -q '^tls expired: request of' target/test-logs/test-httpd-netsurf.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-netsurf.log \
-		   || [ $$(grep -c '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-netsurf.log) -lt 2 ] \
-		   || grep '^tls expired: ended after' target/test-logs/test-httpd-netsurf.log | grep -qv 'ended after 0 request bytes'; then \
-			echo '[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one, or fewer than two refused handshakes: the click on Proceed missed)'; cat target/test-logs/test-httpd-netsurf.log; rc=1; \
+		log=target/test-logs/test-httpd-netsurf.log; mark='^http: GET /mark/before-proceed '; \
+		before=$$(sed -n "1,\#$$mark#p" $$log | grep -c '^tls expired: ended after 0 request bytes'); \
+		after=$$(sed -n "\#$$mark#,\$$p" $$log | grep -c '^tls expired: ended after 0 request bytes'); \
+		if grep -q '^tls expired: request of' $$log || ! grep -q '^tls valid: request of' $$log \
+		   || ! grep -q "$$mark" $$log || [ "$$before" != 1 ] || [ "$$after" -lt 1 ] \
+		   || grep '^tls expired: ended after' $$log | grep -qv 'ended after 0 request bytes'; then \
+			echo "[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one, or not exactly one refused handshake before the Proceed mark ($$before) and one or more after it ($$after): a retry of its own, or a click on Proceed that missed)"; cat $$log; rc=1; \
 		else echo '[netsurf] ok: NetSurf sent no request byte to the expired-certificate server, also after Proceed'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
