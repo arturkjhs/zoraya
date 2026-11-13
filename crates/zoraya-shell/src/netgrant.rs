@@ -207,7 +207,7 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     }))
 }
 
-/// The rule a `host` operand adds (proposed ADR-0300): the host, any port,
+/// The rule a `host` operand adds (proposed ADR-0330): the host, any port,
 /// TCP only (a mark of the operand's rule; the echo request has no port or
 /// protocol, `Scope::reaches_address`). Designation as for a `url`: a literal
 /// operand adds its own rule, one that came from a value only designates

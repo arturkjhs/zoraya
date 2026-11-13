@@ -158,7 +158,7 @@ protocol! {
         rtt_min_us: u32,
         rtt_avg_us: u32,
         rtt_max_us: u32,
-        /// One entry per request sent, in order (proposed ADR-0300): the
+        /// One entry per request sent, in order (proposed ADR-0330): the
         /// round trip of that request, or `NO_REPLY`.
         rtts: Seq<'a, Rtt, MAX_PINGS_USIZE>,
     }
@@ -353,7 +353,7 @@ mod tests;
 #[cfg(test)]
 zoraya_test_alloc::cap_memory!();
 
-/// One run of `ping`, as the command shows it (proposed ADR-0300).
+/// One run of `ping`, as the command shows it (proposed ADR-0330).
 #[derive(Debug, Clone, Copy)]
 pub struct PingView<'a> {
     pub address: [u8; 4],

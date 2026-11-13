@@ -1,4 +1,4 @@
-# ADR-0300: The `ping` command, the `host` operand and a per-request round trip in the diagnostic echo
+# ADR-0330: The `ping` command, the `host` operand and a per-request round trip in the diagnostic echo
 
 - **Status:** proposed
 - **Date:** 2026-11-13
@@ -44,7 +44,7 @@ ADR-0222's revisit trigger. Far larger; a raw socket is a right of its own.
 - **Follow-up.** A ping that takes a name, or a streaming reply, with the services channel.
 
 ## Invariants
-- **INV-0300-1.** The reply of a diagnostic echo has one `rtts` entry per request, in order, and the entries that are not
+- **INV-0330-1.** The reply of a diagnostic echo has one `rtts` entry per request, in order, and the entries that are not
   `NO_REPLY` number `received`. *Check:* `cargo test -p zoraya-net` (the stack's echo run), `make test-net` (`t_netd`).
 
 ## Open questions

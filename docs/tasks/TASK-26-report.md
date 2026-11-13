@@ -2106,7 +2106,7 @@ Not run: TCG, CI, `make test-changed`. Items 3 to 6 below were done in a follow-
 
 ### Hand-run, items 3 to 6 (same branch; the gate stays closed)
 
-**3. `ping HOST`** (proposed ADR-0300; ADR-0281 item 3 already had `netd`'s diagnostic echo, so no new request).
+**3. `ping HOST`** (proposed ADR-0330; ADR-0281 item 3 already had `netd`'s diagnostic echo, so no new request).
 `ping [-c COUNT] [-W SECONDS] HOST`: count 1 to 16 (default 4), timeout 1 to 30 s (default 2), after `head --lines` and `fetch
 --output` (short and long forms, a value after each). One line per reply (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`), then
 `--- ADDR ping statistics ---`, `4 sent, 4 received, 0% loss`, `rtt min/avg/max = a/b/c ms`; exit 1 when none came, 2 for wrong
@@ -2120,8 +2120,8 @@ run ends, so the lines appear together at the end. The image (`USER_PROGRAMS`, `
 (`docs/tour.md`, `tests/posix/tour*.script`), `tools/test-map.txt` and `docs/design.md` have it. Tests: `tests/shell/net-fetch.script`
 (`make test-net-fetch`, test image: lines, summary, `-c`/`-W`, `grants`, bad count, a name, a value with and without `+net`, a
 silent address with status 1), `tests/shell/hand-run-net.script` (the production image, gateway 10.0.2.2), `t_netd` (`rtts`),
-`cargo test -p zoraya-proto-net`, `-p zoraya-net`, `-p zoraya-shell netgrant`, `-p zoraya-describe`. ADR-0300 is `proposed`;
-index and invariant rows added (INV-0300-1).
+`cargo test -p zoraya-proto-net`, `-p zoraya-net`, `-p zoraya-shell netgrant`, `-p zoraya-describe`. ADR-0330 is `proposed`;
+index and invariant rows added (INV-0330-1).
 
 **4. The image's roots.** Already Mozilla's: `rootfs/system/tls/roots` holds 108 certificates from the CCADB report
 `IncludedCACertificateReportPEMCSV` (Mozilla's included CAs with the Websites trust bit, no distrust date, no applied constraints),

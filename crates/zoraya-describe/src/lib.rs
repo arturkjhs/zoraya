@@ -80,7 +80,7 @@ pub enum Kind {
     Url,
     /// A host: a dotted IPv4 address or a name. The base-system command is
     /// given a network connection whose scope is that host, any port
-    /// (`ping`, proposed ADR-0300).
+    /// (`ping`, proposed ADR-0330).
     Host,
 }
 

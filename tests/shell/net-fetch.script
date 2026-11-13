@@ -101,7 +101,7 @@
 > grants fetch http://10.0.2.2:@PORT@/\r
 < reach (operand URL)
 < \r\n~>
-# `ping` (proposed ADR-0300): echo requests through netd's diagnostic ping to the
+# `ping` (proposed ADR-0330): echo requests through netd's diagnostic ping to the
 # gateway, which SLIRP answers even under restrict=on. The host operand designates.
 > ping 10.0.2.2\r
 < PING 10.0.2.2: 4 requests

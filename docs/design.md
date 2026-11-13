@@ -1732,7 +1732,7 @@ stack's TCP client and its resolver are described under "TCP, names and `fetch`"
   `net0  up  52:54:00:12:34:56`, the address with its source and the lease left, the gateway, the DNS servers and the frame
   counters. The `net.*` settings are declared in `netd`'s description (`address` and `prefix` are new setting types):
   `settings net.gateway 10.0.2` is refused.
-- **`ping`** (proposed ADR-0300). `ping [-c COUNT] [-W SECONDS] HOST` (count 1 to 16, default 4; timeout 1 to 30 s, default 2)
+- **`ping`** (proposed ADR-0330). `ping [-c COUNT] [-W SECONDS] HOST` (count 1 to 16, default 4; timeout 1 to 30 s, default 2)
   sends the echo requests of `netd`'s diagnostic `ping` (ADR-0281 item 3; no raw socket), one every 200 ms. HOST is a
   dotted IPv4 address, written on the line: the description's `host` operand kind gives the command a connection that
   reaches that host and nothing else (`grants ping 10.0.2.2` shows `reach, any port (operand HOST)`); from a value it needs a

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-//! `ping [-c COUNT] [-W SECONDS] HOST` (proposed ADR-0300): echo requests
+//! `ping [-c COUNT] [-W SECONDS] HOST` (proposed ADR-0330): echo requests
 //! through the network service's diagnostic `ping` (ADR-0281 item 3; there is
 //! no raw socket). The shell gave this program a connection that reaches HOST
 //! and nothing else (the `host` operand, ADR-0224 item 2); the service sends
