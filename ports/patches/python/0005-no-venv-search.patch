@@ -13,3 +13,16 @@
      try:
          # prefix2 is just to avoid calculating dirname again later,
          # as the path in venv_prefix is the more common case.
+--- a/Lib/site.py	2026-11-13 15:42:45
++++ b/Lib/site.py	2026-11-13 15:42:45
+@@ -964,6 +964,10 @@
+ def _venv(state):
+     """State-driven implementation of venv(); used by main() for batching."""
+     global PREFIXES, ENABLE_USER_SITE
++
++    if sys.platform == 'zoraya':
++        # TASK-27 9c, ADR-0320 item 5: no virtual environments (see getpath.py).
++        return
+ 
+     env = os.environ
+     if sys.platform == 'darwin' and '__PYVENV_LAUNCHER__' in env:
