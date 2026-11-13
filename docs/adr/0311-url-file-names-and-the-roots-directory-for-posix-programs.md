@@ -73,7 +73,11 @@ plain.
    no `-d @file` of the directory): a `+r` or `+w` of the line is what gives more. Two rules follow. A line that
    designates nothing in the current directory (`curl URL`, `wget -O -`) starts the program in `/bin`, read only: it has
    no relative path to resolve. A line that designates a path *below* the current directory (`-o sub/f`) and nothing at it
-   gets the directory itself read only, as a starting point for the path (`zosh`, `posix_plan`). The alternative, if the
+   gets a placeholder at the current directory's prefix whose connection is dead (a channel with its other end closed, since the bootstrap record wants a directory connection there; `zosh`, `posix_entries`): libposix resolves a
+   relative path from the current directory's entry and places it by the longest prefix over the whole table
+   (`zoraya_resolve::resolve`), so that entry has to supply a prefix, not a readable directory; the program can read
+   nothing through it (`curl -o sub/f -d @x` fails without a `+r`; review of 9a, W1). `-` after `-O` of `wget`
+   (`wget -O -`) is the standard output, so it designates nothing (`grants`, N5). The alternative, if the
    architect prefers it, is `cwd read` as before: the program then reads the whole directory and `-o`/`-O` give it write
    access to the whole directory; this is what 9a first shipped and what review found to be more than the line says.
 

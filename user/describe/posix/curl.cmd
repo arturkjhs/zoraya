@@ -39,7 +39,7 @@ by the shell, as for `fetch`.
 -o FILE creates or replaces FILE. -O saves under the last part of the address's path:
 `curl -O https://example.org/a/b.txt` creates ./b.txt, and the shell works that name out itself, so an address
 whose last part is empty or is not plain letters, digits and . - _ + ~ @ , = is refused (use -o). That one file is
-all the program is given of the current directory: it cannot read, list, create or replace another file there, and
+all the program is given of the current directory: it cannot read, list, create or replace another file there (so `-d @FILE` needs a +r of the line, also with `-o sub/f`), and
 a line with neither option gives it none of it (it starts in /bin, read only). Without either option the page goes
 to the terminal as received, escape sequences included.
 

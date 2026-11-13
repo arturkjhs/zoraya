@@ -195,6 +195,18 @@
 > cat secret.txt\r
 < keep this
 < \r\n~>
+# The same below the directory: -o sub/f gives the path, not the directory
+# (the starting point is a dead connection; review of 9a, W1).
+> mkdir sub\r
+< \r\n~>
+> curl -s -o sub/got.txt -d @secret.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 26
+< \r\n~>
+> grants curl -o sub/got.txt http://10.0.2.2:@PORT@/\r
+< create or replace got.txt (option -o)
+< \r\n~>
 # A +r of the directory gives the read, for exactly what the line says.
 > +r . curl -s -d @secret.txt http://10.0.2.2:@PORT@/\r
 < \r\n~>
@@ -293,7 +305,7 @@
 > status\r
 < \r\nexit status 60
 < \r\n~>
-> wget -q -O - https://expired.zoraya:@TLSEXPIRED@/\r
+> +r . wget -q -O - https://expired.zoraya:@TLSEXPIRED@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 5

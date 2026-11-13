@@ -1488,39 +1488,7 @@ impl Z {
         match grants::trusted_description(&trusted, path) {
             Some(d) => {
                 let d = d.clone();
-                let mut plan = self.plan_with(exec, &d, true)?;
-                // `cwd none` (proposed ADR-0311 item 5): the program is given
-                // no more of the current directory than the line designates.
-                // A path *below* it needs the directory itself to start from,
-                // read only (libposix resolves a relative path from the
-                // current directory's entry); a name *in* it needs nothing
-                // else, and nothing at all gives the program `/bin` to start
-                // in (`posix_entries`).
-                if d.cwd == zoraya_describe::Cwd::None {
-                    let cwd = self.cwd.clone();
-                    let below = plan
-                        .iter()
-                        .any(|e| e.path != cwd && zoraya_resolve::covers(&cwd, &e.path));
-                    // An entry at the current directory itself (whole, or
-                    // narrowed to a name) is the program's starting point.
-                    let at = plan
-                        .iter()
-                        .any(|e| zoraya_resolve::covers(&e.path, &cwd) && e.path == cwd)
-                        || plan.iter().any(|e| {
-                            e.access.name().is_none() && zoraya_resolve::covers(&e.path, &cwd)
-                        });
-                    if below && !at {
-                        plan.insert(
-                            0,
-                            grants::Planned {
-                                path: cwd,
-                                access: grants::Access::Read,
-                                reason: String::from("current directory"),
-                            },
-                        );
-                    }
-                }
-                Ok(plan)
+                self.plan_with(exec, &d, true)
             }
             None => {
                 let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes())
@@ -1631,6 +1599,41 @@ impl Z {
         entries.sort_by_key(|e| core::cmp::Reverse(e.prefix.len()));
         // The current directory is its own entry, or below the one that
         // covers it (review S3: an entry inside a wider one is left out).
+        // A path below the current directory (`-o sub/f`) with nothing at it:
+        // libposix resolves a relative path from the current directory's
+        // entry, which has to supply a prefix only. It is a placeholder with
+        // no handle, so the program can read nothing through it (review of
+        // 9a, W1; ADR-0311 item 5).
+        let below = entries.iter().any(|e| {
+            e.kind == P::Directory
+                && e.prefix != self.cwd
+                && zoraya_resolve::covers(&self.cwd, &e.prefix)
+        });
+        let covered = entries
+            .iter()
+            .any(|e| e.kind == P::Directory && zoraya_resolve::covers(&e.prefix, &self.cwd));
+        if below && !covered {
+            // The record wants a directory connection at the current
+            // directory's entry (`Bootstrap::decode`), so the placeholder is
+            // a connection whose other end is closed: every request on it
+            // fails, and nothing of the directory is reachable through it.
+            let Ok((dead, peer)) = channel_create() else {
+                close(&entries);
+                return Err(zoraya_command::error(
+                    "zosh",
+                    Some(exec.name),
+                    "the current directory cannot be given",
+                    &[],
+                ));
+            };
+            let _ = handle_close(peer);
+            entries.push(posix_child::Entry {
+                prefix: self.cwd.clone(),
+                kind: P::Directory,
+                handle: Some(dead),
+            });
+            entries.sort_by_key(|e| core::cmp::Reverse(e.prefix.len()));
+        }
         let prefixes: Vec<&str> = entries.iter().map(|e| e.prefix.as_str()).collect();
         let found = zoraya_resolve::longest(prefixes.iter().copied(), &self.cwd)
             .filter(|(i, _)| entries[*i].kind == P::Directory)

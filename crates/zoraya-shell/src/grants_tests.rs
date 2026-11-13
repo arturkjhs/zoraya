@@ -667,3 +667,59 @@ fn curl_o_with_no_cwd_is_one_narrowed_entry_and_nothing_else_of_the_directory() 
     let m = merge(&p);
     assert_eq!((m.len(), m[0].name.as_deref()), (1, Some("f.txt")));
 }
+
+const WGET_NO_CWD: &str = "name wget\nsummary get\nusage wget [-O FILE] URL...\noperand URL... url the address\noption -O --output-document FILE create where\ncwd none\n";
+
+#[test]
+fn wget_o_dash_is_the_terminal_and_creates_nothing() {
+    // `-O -` is the standard output (review of 9a, N5).
+    let p = go(
+        WGET_NO_CWD,
+        &["-O", "-", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert!(p.is_empty(), "{p:?}");
+    // A file named otherwise is still one narrowed entry.
+    let p = go(
+        WGET_NO_CWD,
+        &["-O", "x", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(p.len(), 1);
+}
+
+#[test]
+fn curl_o_below_the_directory_and_data_from_a_file_needs_a_grant() {
+    // W1: `-o sub/f` gives the path below the directory, nothing at it; a
+    // `-d @x` file is not given by the plan, so zosh refuses it unless a
+    // `+r` of the line covers it. The plan holds one narrowed entry.
+    let p = go(
+        CURL_NO_CWD,
+        &["-o", "sub/f", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&p),
+        vec![(
+            "/u/p/sub".into(),
+            Access::Create("f".into()),
+            "option -o".into()
+        )]
+    );
+    assert!(
+        p.iter()
+            .all(|e| e.access != Access::Read && e.path != "/u/p")
+    );
+}

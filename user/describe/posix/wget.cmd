@@ -1,6 +1,6 @@
 name     wget
 summary  download a page over HTTP or HTTPS (GNU wget, a POSIX program)
-usage    wget [-qvc] [-O FILE] [-T SECONDS] [-t N] [-U AGENT] [-4] URL...
+usage    wget [-qv] [-O FILE] [-T SECONDS] [-t N] [-U AGENT] [-4] URL...
 program  /bin/wget
 cwd      none
 operand  URL...  url  the address, http(s)://HOST[:PORT]/PATH; this command may reach those hosts and ports only
@@ -27,7 +27,8 @@ off (--no-check-certificate and the rest are not offered). An address from a var
 the shell, as for `fetch`.
 
 -O FILE creates or replaces FILE, the only file in the current directory the program is given: it cannot read, list,
-create or replace another there. Without -O, wget would save under the last part of the address in the current
+create or replace another there (a path below it, -O sub/f, gives that one file and nothing of the directory; -O - is the
+terminal and gives none). Without -O, wget would save under the last part of the address in the current
 directory, which it does not get: give +w . before the command to allow that, or name the file with -O FILE. A
 redirect to a host and port the line does not name fails for want of a connection.
 

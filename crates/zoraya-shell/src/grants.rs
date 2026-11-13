@@ -195,6 +195,12 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             if !kind.is_path() {
                 return Ok(());
             }
+            // `-` after a `create` option of a `cwd none` description is the
+            // standard output (`wget -O -`), not a file named `-`: nothing
+            // to create (review of 9a, N5).
+            if kind == Kind::Create && text == "-" && d.cwd == Cwd::None {
+                return Ok(());
+            }
             let abs = join(line.cwd, 0, text);
             // A text that is no argument's is taken as from a value: the
             // check fails closed.

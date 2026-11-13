@@ -105,8 +105,8 @@ Decisions made without the architect, all in ADR-0310 to ADR-0312 (still `propos
   `create NAME` with the directory's read). Chosen: the preferred fix. `curl.cmd` and `wget.cmd` say `cwd none`; the one
   name reaches the program as a directory handle narrowed to it at the current directory's prefix, and `grants` says
   `create or replace NAME (option -O)` and nothing else for the directory (ADR-0311 item 5, INV-0311-1). A line with no
-  output file starts the program in `/bin`, read only; a path below the directory gets the directory read only as a
-  starting point. Alternative for the architect: `cwd read` as before, and say that `-o`/`-O` write the whole directory.
+  output file starts the program in `/bin`, read only; a path below the directory gets a placeholder entry with a dead connection as a
+  starting point (nothing readable; review W1). Alternative for the architect: `cwd read` as before, and say that `-o`/`-O` write the whole directory.
   Test: `make test-apps` (`grants` lines; `-d @secret.txt` fails with exit 26 for a file the line does not give, and works
   with `+r .`). wget's `.wget-hsts` is gone with HSTS off.
 - **Finding 1.** The patches (`ports/patches/{openssl/0004,curl/0002,wget/0003}`, ADR-0310 item 6, INV-0310-4): no
