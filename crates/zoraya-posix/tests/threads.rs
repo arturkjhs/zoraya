@@ -226,3 +226,27 @@ fn the_main_thread_seen_before_its_thread_pointer_was_set_keeps_its_state() {
         "the other thread's mask does not leak"
     );
 }
+
+#[test]
+fn a_fork_child_keeps_the_calling_thread_only() {
+    let mut r = three();
+    r.p.switch_to(200);
+    r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
+    r.p.signals.shared = bit(USR2);
+    r.p.sys.interrupts.clear();
+    let dropped = r.p.threads_after_fork();
+    assert_eq!(dropped, 2);
+    assert_eq!(r.p.thread_count(), 1);
+    assert_eq!(
+        r.p.threads.list[0].tp, 200,
+        "the caller, not the main thread"
+    );
+    assert_eq!(r.p.threads.list[0].tid, 2, "its tid is kept");
+    assert_eq!(r.p.signals.shared, 0, "the process-pending set is empty");
+    assert_eq!(r.p.signals.blocked, bit(USR1), "the caller's mask is kept");
+    // The table is usable: switching to the same thread changes nothing,
+    // and a new thread can be added.
+    r.p.switch_to(200);
+    r.p.thread_add(500, 5, None);
+    assert_eq!(r.p.thread_count(), 2);
+}

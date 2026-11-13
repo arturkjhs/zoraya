@@ -936,6 +936,7 @@ impl<S: Sys> Posix<S> {
         self.tty_stash.clear();
         self.tty_rest.clear();
         self.signals.pending = 0;
+        self.threads_after_fork();
         self.sigchld = false;
         self.fork_group = -1;
         // The parent's channels are not the child's: nothing to report on.

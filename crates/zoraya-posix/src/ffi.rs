@@ -279,6 +279,22 @@ static LIB_OWNER: AtomicUsize = AtomicUsize::new(NO_OWNER);
 /// heap never calls the library.
 static MEM: Lock = Lock::new();
 
+/// The memory lock across a `fork`'s snapshot (ADR-0306 item 1): taken by the
+/// forking thread, which then allocates nothing until [`unlock_memory`].
+fn lock_memory() {
+    MEM.lock(&Futex);
+}
+
+/// Releases it; in the child (`child`) the copy of the lock is made free
+/// instead: its holder, the forking thread, is the one running.
+fn unlock_memory(child: bool) {
+    if child {
+        MEM.reset();
+    } else {
+        MEM.unlock(&Futex);
+    }
+}
+
 /// Runs `f` with `lock` held.
 fn locked<R>(lock: &Lock, f: impl FnOnce() -> R) -> R {
     lock.lock(&Futex);

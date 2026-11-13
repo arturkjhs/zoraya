@@ -56,6 +56,18 @@
  *                      action; continued, it catches it again and says so
  *   t_posix notstp     INV-0200-2's other half: ignores SIGTSTP, so a
  *                      Ctrl-Z does not stop it
+ *   t_posix tfork      INV-0306-1, -2, -3: fork with running siblings (threads
+ *                      holding malloc, stdio and the library, and two
+ *                      counters on different pages): the child has one thread,
+ *                      mallocs, prints, opens, makes a thread of its own, and
+ *                      sees the counters as of one instant
+ *   t_posix tforkthread
+ *                      fork in a non-main thread; pthread_atfork handlers in
+ *                      their order; the child's pthread_self and join
+ *   t_posix texec      INV-0306-4: exec from a non-main thread while a
+ *                      sibling opens files; the new image has only the
+ *                      inherited descriptors and is waited for once
+ *   t_posix tspawn     posix_spawn and vfork from several threads at once
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
  *                      exec and wait (run with ZORAYA_POSIX_STATS for the
@@ -66,6 +78,7 @@
 #include <glob.h>
 #include <locale.h>
 #include <math.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -1009,6 +1022,311 @@ static void notstp(void)
 		pause_ms(1000);
 }
 
+/* ------------------------------------------------------------ threads
+ * Part 9b: fork and exec in a process with threads (ADR-0306). These need
+ * the broker, so they are here and not in t_threads. */
+
+static volatile int stop_siblings;
+/* Each on a page of its own, so that a copy in steps could tear them. */
+static volatile unsigned long counter_a __attribute__((aligned(16384)));
+static volatile unsigned long counter_b __attribute__((aligned(16384)));
+static volatile unsigned long seq __attribute__((aligned(16384)));
+/* The mapper's published region (INV-0306-6): the child may touch it only
+ * if the copy has it, which it does only if the mapping existed at the
+ * instant of the fork. */
+static volatile unsigned char *volatile region;
+static volatile unsigned char region_byte;
+
+/* Takes in turn: the heap, the library (open, close), stdout's lock, and
+ * counts on two pages. */
+static void *sibling(void *arg)
+{
+	long which = (long)arg;
+	unsigned long n = 0;
+	while (!stop_siblings) {
+		switch (which % 5) {
+		case 0: {
+			void *p = malloc(100 + n % 900);
+			if (p)
+				memset(p, 1, 50);
+			free(p);
+			break;
+		}
+		case 1: {
+			int fd = open("/etc/zoraya/session", O_RDONLY | O_CLOEXEC);
+			if (fd >= 0)
+				close(fd);
+			break;
+		}
+		case 2:
+			flockfile(stdout);
+			for (volatile int i = 0; i < 200; i++)
+				;
+			funlockfile(stdout);
+			break;
+		case 3:
+			seq++;
+			counter_a++;
+			counter_b++;
+			seq++;
+			break;
+		default: {
+			size_t len = (n % 8 == 7) ? (1u << 20) : 65536;
+			unsigned char *m = mmap(NULL, len, PROT_READ | PROT_WRITE,
+						MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			if (m == MAP_FAILED)
+				break;
+			unsigned char v = (unsigned char)(n | 1);
+			memset(m, v, len);
+			region_byte = v;
+			region = m;
+			for (volatile int i = 0; i < 300; i++)
+				;
+			region = NULL;
+			munmap(m, len);
+			break;
+		}
+		}
+		n++;
+		if (n % 64 == 0)
+			pause_ms(1);
+	}
+	return NULL;
+}
+
+#define SIBLINGS 5
+
+static void start_siblings(pthread_t *t)
+{
+	stop_siblings = 0;
+	for (long i = 0; i < SIBLINGS; i++)
+		CHECK(pthread_create(&t[i], NULL, sibling, (void *)i) == 0);
+}
+
+static void stop_and_join(pthread_t *t)
+{
+	stop_siblings = 1;
+	for (int i = 0; i < SIBLINGS; i++)
+		CHECK(pthread_join(t[i], NULL) == 0);
+}
+
+static void *noop_thread(void *a)
+{
+	return a;
+}
+
+/* The child's checks; returns an exit code, 0 for all well. */
+static int fork_child_checks(void)
+{
+	/* The counters were as of one instant: b is a, or one behind it while
+	 * the sibling was between the two increments. */
+	unsigned long a = counter_a, b = counter_b;
+	if (a != b && a != b + 1)
+		return 10;
+	/* A mapping the sibling had published is in the copy whole (a fault
+	 * here ends the child with a signal). The 1 MiB form is read at
+	 * its ends only. */
+	volatile unsigned char *m = region;
+	if (m && m[0] != region_byte && m[0] != 0)
+		return 16;
+	/* The heap, stdio and the library work without waiting. */
+	char *p = malloc(4096);
+	if (!p)
+		return 11;
+	snprintf(p, 4096, "child %d", (int)getpid());
+	free(p);
+	if (printf("") < 0)
+		return 12;
+	int fd = open("/etc/zoraya/session", O_RDONLY);
+	if (fd < 0)
+		return 13;
+	close(fd);
+	/* A thread of its own works in the child. */
+	pthread_t t;
+	void *r;
+	if (pthread_create(&t, NULL, noop_thread, (void *)5) != 0)
+		return 14;
+	if (pthread_join(t, &r) != 0 || r != (void *)5)
+		return 15;
+	return 0;
+}
+
+static void tfork(void)
+{
+	pthread_t t[SIBLINGS];
+	start_siblings(t);
+	pause_ms(20);
+	for (int i = 0; i < 500; i++) {
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0)
+			_exit(fork_child_checks());
+		int status = reap(pid);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			printf("t_posix: tfork: round %d status 0x%x\n", i, status);
+			CHECK(0);
+		}
+	}
+	stop_and_join(t);
+	/* The siblings are unharmed: they ran on, the parent still has them
+	 * all (join worked). */
+	passed();
+}
+
+static int atfork_log[16];
+static int atfork_n;
+static void prep1(void) { atfork_log[atfork_n++] = 1; }
+static void prep2(void) { atfork_log[atfork_n++] = 2; }
+static void par1(void) { atfork_log[atfork_n++] = 11; }
+static void par2(void) { atfork_log[atfork_n++] = 12; }
+static void chi1(void) { atfork_log[atfork_n++] = 21; }
+static void chi2(void) { atfork_log[atfork_n++] = 22; }
+
+static void *fork_in_thread(void *arg)
+{
+	(void)arg;
+	atfork_n = 0;
+	pid_t pid = fork();
+	if (pid == 0) {
+		/* Prepare in reverse order of registration, child in order. */
+		int want[] = { 2, 1, 21, 22 };
+		if (atfork_n != 4)
+			_exit(20);
+		for (int i = 0; i < 4; i++)
+			if (atfork_log[i] != want[i])
+				_exit(21 + i);
+		pthread_t me = pthread_self();
+		if (!pthread_equal(me, pthread_self()))
+			_exit(30);
+		_exit(fork_child_checks());
+	}
+	if (pid < 0)
+		return (void *)1;
+	int status = reap(pid);
+	int want[] = { 2, 1, 11, 12 };
+	if (atfork_n != 4)
+		return (void *)2;
+	for (int i = 0; i < 4; i++)
+		if (atfork_log[i] != want[i])
+			return (void *)3;
+	return (void *)(long)(WIFEXITED(status) ? WEXITSTATUS(status) << 8 : 0xffff);
+}
+
+static void tforkthread(void)
+{
+	CHECK(pthread_atfork(prep1, par1, chi1) == 0);
+	CHECK(pthread_atfork(prep2, par2, chi2) == 0);
+	pthread_t sib[SIBLINGS], th;
+	start_siblings(sib);
+	void *r;
+	CHECK(pthread_create(&th, NULL, fork_in_thread, NULL) == 0);
+	CHECK(pthread_join(th, &r) == 0);
+	if (r != NULL)
+		printf("t_posix: tforkthread: thread returned %p\n", r);
+	CHECK(r == NULL);
+	stop_and_join(sib);
+	passed();
+}
+
+/* exec from a non-main thread: the sibling opens files all the while. */
+static void *exec_thread(void *arg)
+{
+	(void)arg;
+	pause_ms(5);
+	char *argv[] = { "t_posix", "texec-child", NULL };
+	execve(SELF, argv, environ);
+	_exit(99);
+}
+
+static void *opener(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		int fd = open("/etc/zoraya/session", O_RDONLY | O_CLOEXEC);
+		if (fd >= 0)
+			close(fd);
+	}
+	return NULL;
+}
+
+/* The new image: no descriptor above 2 (the opener's were O_CLOEXEC; a
+ * leak would be one the exec copied while it was open without the flag
+ * honoured), and it is alone. */
+static int texec_child(void)
+{
+	for (int fd = 3; fd < 64; fd++)
+		if (fcntl(fd, F_GETFD) != -1)
+			return 40 + fd % 20;
+	return 7;
+}
+
+static void texec(void)
+{
+	for (int i = 0; i < 100; i++) {
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0) {
+			pthread_t a, b, c;
+			if (pthread_create(&a, NULL, opener, NULL) ||
+			    pthread_create(&b, NULL, sibling, (void *)3) ||
+			    pthread_create(&c, NULL, exec_thread, NULL))
+				_exit(98);
+			/* The main thread waits to be ended by the exec. */
+			for (;;)
+				pause_ms(1000);
+		}
+		int status = reap(pid);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 7) {
+			printf("t_posix: texec: round %d status 0x%x\n", i, status);
+			CHECK(0);
+		}
+	}
+	passed();
+}
+
+static void *spawner(void *arg)
+{
+	long id = (long)arg;
+	for (int i = 0; i < 6; i++) {
+		pid_t pid;
+		char *argv[] = { "t_posix", "exit7", NULL };
+		if (id % 2) {
+			if (posix_spawn(&pid, SELF, NULL, NULL, argv, environ) != 0)
+				return (void *)1;
+		} else {
+			pid = vfork();
+			if (pid == 0)
+				_exit(7);
+			if (pid < 0)
+				return (void *)2;
+		}
+		int status = 0;
+		pid_t got;
+		do
+			got = waitpid(pid, &status, 0);
+		while (got == -1 && errno == EINTR);
+		if (got != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7)
+			return (void *)3;
+	}
+	return NULL;
+}
+
+static void tspawn(void)
+{
+	pthread_t t[4];
+	for (long i = 0; i < 4; i++)
+		CHECK(pthread_create(&t[i], NULL, spawner, (void *)i) == 0);
+	for (int i = 0; i < 4; i++) {
+		void *r;
+		CHECK(pthread_join(t[i], &r) == 0);
+		if (r != NULL)
+			printf("t_posix: tspawn: thread %d returned %p\n", i, r);
+		CHECK(r == NULL);
+	}
+	passed();
+}
+
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -1060,6 +1378,16 @@ int main(int argc, char **argv)
 		tstp();
 	else if (!strcmp(argv[1], "notstp"))
 		notstp();
+	else if (!strcmp(argv[1], "tfork"))
+		tfork();
+	else if (!strcmp(argv[1], "tforkthread"))
+		tforkthread();
+	else if (!strcmp(argv[1], "texec"))
+		texec();
+	else if (!strcmp(argv[1], "texec-child"))
+		return texec_child();
+	else if (!strcmp(argv[1], "tspawn"))
+		tspawn();
 	else if (!strcmp(argv[1], "bench"))
 		bench();
 	else

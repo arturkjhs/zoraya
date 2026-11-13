@@ -1,8 +1,8 @@
 /*
  * Part 9b's threads through libposix (ADR-0302, ADR-0303, ADR-0309 item 3):
  * a static C program, built with zcc against libc.a, run by posixrun. One
- * binary with named cases; each prints "t_threads: NAME passed" or a line ending in FAIL and exits 1. Cases that need exec with siblings or the
- * fork freeze are not here (fork with siblings is refused: "forkrefused").
+ * binary with named cases; each prints "t_threads: NAME passed" or a line ending in FAIL and exits 1. Cases that need fork, exec or posix_spawn
+ * (posixrun has no broker) are in tests/posix/t_posix.c (tfork, texec, ...).
  *
  *   t_threads create    create, join, results, pthread_self/equal, detach
  *   t_threads mutex     normal, recursive, errorcheck mutexes; trylock; timedlock
@@ -22,7 +22,6 @@
  *   t_threads cancel    pthread_cancel of a thread blocked in each wait; cleanup handlers; PTHREAD_CANCELED;
  *                       a cancel taken by a mutex wait is still acted on at the next read; a cancel of a thread
  *                       that has ended; a disabled cancel waits for the enable
- *   t_threads forkrefused fork with a sibling thread fails with EAGAIN (until the fork freeze)
  *   t_threads blockedexit exit() flushes stdio while a sibling is blocked in read (exit 4)
  *   t_threads blocked   _Exit from the main thread while a sibling is blocked in read (exit 3)
  *   t_threads overflow  a thread writes far below its stack: the process faults (INV-0302-6)
@@ -1198,32 +1197,6 @@ static void selfkill(void)
 	printf("t_threads: selfkill passed\n");
 }
 
-/* ------------------------------------------------------------ forkrefused */
-
-static void *wait_for_post(void *a)
-{
-	sig_ready = 1;
-	sem_wait(&sig_sem);
-	return a;
-}
-
-static void forkrefused(void)
-{
-	pthread_t t;
-	pid_t pid;
-	OK(sem_init(&sig_sem, 0, 0));
-	sig_ready = 0;
-	OK(pthread_create(&t, NULL, wait_for_post, NULL));
-	wait_flag(&sig_ready);
-	/* A child would inherit the thread table and a lock a sibling may
-	 * hold: refused until the fork freeze. */
-	pid = fork();
-	CHECK(pid == -1 && errno == EAGAIN);
-	OK(sem_post(&sig_sem));
-	OK(pthread_join(t, NULL));
-	printf("t_threads: forkrefused passed\n");
-}
-
 static void *read_for_exit(void *a)
 {
 	char c;
@@ -1298,7 +1271,6 @@ int main(int argc, char **argv)
 	CASE("signals", signals_case)
 	CASE("selfkill", selfkill)
 	CASE("cancel", cancel_case)
-	CASE("forkrefused", forkrefused)
 	if (strcmp(mode, "blockedexit") == 0) {
 		blockedexit();
 		return 0;

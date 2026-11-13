@@ -62,6 +62,13 @@ impl Lock {
         }
     }
 
+    /// Makes the lock free without waking anyone: a `fork` child, whose copy
+    /// of the lock says "held" by a thread that does not exist in it
+    /// (ADR-0306 item 5), and which has no waiter.
+    pub fn reset(&self) {
+        self.state.store(0, Ordering::Release);
+    }
+
     /// True while held (for assertions and tests).
     pub fn is_locked(&self) -> bool {
         self.state.load(Ordering::Relaxed) != 0

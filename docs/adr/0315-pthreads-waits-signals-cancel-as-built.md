@@ -107,10 +107,9 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    Restructuring so that the wait returns to the top of the wrapper before the test is possible (a `CANCELLED` marker through `state()`), and is follow-up work if a
    program cancels threads in a loop.
 6. **Not in this slice** (kept as known limits; see the report): `sigwait`/`sigtimedwait`; `pthread_getattr_np` and thread names; the `check-cancel-points` script;
-   the fork freeze, child reduction, `exec` from a thread, `atfork.c`; `waitpid` and `accept` in a thread are covered by the host retry model and not by an in-QEMU case, because `posixrun` has no broker (a
+   `waitpid` and `accept` in a thread are covered by the host retry model and not by an in-QEMU case, because `posixrun` has no broker (a
    `posix_spawn` there hangs): they belong in `tests/posix/t_posix.c`'s full session.
-   **`fork` with more than one thread is refused with `EAGAIN`** until the freeze lands: the child would inherit the thread table, the deferred-wait mode and possibly a
-   lock (`MEM`, the library's) held by a sibling that does not exist in it (`vfork` is `fork`). Case `forkrefused`.
+   (The temporary refusal of `fork` with siblings, `EAGAIN`, was removed by item 9.)
    `pthread_cancel` reads `t->tid` of its target as musl's own `pthread_kill` does under `killlock`; a cancel racing the target's join is the caller's error as in musl.
 7. **The exit path** (`exit`, `_exit`, the statistics line of `ZORAYA_POSIX_STATS`, the ADR-0110 report) waits for the library lock for at most 500 ms (a 1 ms sleep between tries)
    instead of trying once, so a sibling's short call does not drop the report; after that the report is skipped and the exit goes on. The statistics line is written with the
@@ -119,6 +118,24 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    result of a case does not depend on the order (the interrupt and the cancel flag are sticky), the sleep only makes the interesting order the likely one. Bounded
    loops replace yields where a count is awaited. `overflow` writes a 1 MiB frame's lowest byte below the stack in one jump: it tests the layout (the unmapped gap),
    not a guard page; musl's guard pages are made with `mprotect`, which is `ENOSYS`, so they stay writable and a smaller overrun is not caught.
+9. **`fork` and `exec` with threads as built** (implements ADR-0306; ADR-0306's open question on a sibling blocked in the kernel is decided here as "accept").
+   `fork()` (`ffi/procs.rs`) calls `__zoraya_fork_prepare` (`ports/musl/zoraya/atfork.c`, musl's `fork.c` minus `_Fork`): the `pthread_atfork` prepare handlers, the
+   signal mask (blocked as `__block_app_sigs`), musl's `atfork_locks` (stdio list, atexit, locale, ...), `__inhibit_ptc`, the thread-list lock; then `state()` takes
+   the library lock, and **`MEM` is taken only around `snapshot_process`** (after the snapshot buffer is built, because the encoder allocates; the child resets its copy
+   with `Lock::reset`, the parent unlocks). So no sibling is in the heap or the mapping table during the copy, and the kernel's `Freeze` stops the rest at EL0. Order:
+   musl's locks, thread-list lock, library lock, `MEM` (ADR-0306 item 1 names the thread-list lock first; musl's own `fork` takes its list locks before it, and a thread in
+   `fopen` holds the list lock then the library lock, so this order cannot invert). In the child `Posix::after_fork_in_child` reduces the thread table to the caller
+   (`threads_after_fork`: a new `thread_self` handle, no wait port, empty process-pending set; host test `a_fork_child_keeps_the_calling_thread_only`); after the library
+   lock is released `__zoraya_fork_child` does musl's `__post_Fork` (`next = prev = self`, `__thread_list_lock = 0`, `threads_minus_1 = 0`, `need_locks = -1`), zeroes
+   `atfork_locks`, **frees every `FILE` lock (stdin, stdout, stderr and the open-file list) held by a thread that is not the caller** (musl leaves them locked; INV-0306-1 asks that
+   `printf` works), unmaps the stack and thread block of every other thread on the list (`map_base`, `map_size`), restores the mask and runs the child handlers.
+   `exec` now calls `process_exit(0)` inside `state()`, so the library lock stays held from the descriptor-table copy to the end of the old image (ADR-0306 item 7);
+   a sibling's library call blocks on the lock and the kernel ends the sibling at its next return to EL0. `vfork` is `fork`; `posix_spawn` takes only the library lock.
+   Known limits: (a) a sibling blocked in a kernel call that completes during the copy may write its result into a page already copied or about to be (a torn write across
+   a page boundary of that sibling's own buffer; the buffer is the sibling's, which does not exist in the child); (b) a joinable thread that has ended and was not joined is not on
+   musl's list, so its stack is not unmapped in the child until the child ends; (c) `abort`'s lock is not taken (`abort` is the library's); (d) `defer_waits` stays on in the child
+   (each long wait costs a port, as in a threaded process); (e) INV-0306-3 (usage returns to the single-thread figure) and INV-0306-5 (a refused charge leaves no thread
+   parked) have no in-QEMU check yet.
 
 ## Consequences
 
@@ -138,6 +155,14 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
   `EINTR`, `sem_wait` goes on. *Check:* `make test-posix-threads` (case `signals`).
 - **INV-0315-4.** `pthread_cancel` of a thread blocked in `read`, `nanosleep`, `sem_wait` or `pthread_cond_wait`, or looping on `pthread_testcancel`, runs the cleanup
   handler once and joins with `PTHREAD_CANCELED`. *Check:* `make test-posix-threads` (case `cancel`).
+
+- **INV-0315-5.** A `fork` child of a process whose siblings are running (in the heap, in `open`/`close`, holding stdout's lock, incrementing counters on three pages, mapping and
+  unmapping 64 KiB and 1 MiB) has one thread, can `malloc`, `printf`, `open`, make and join a thread of its own, sees the counters of one instant and any region the sibling had
+  published; the `pthread_atfork` handlers run in musl's order; also when the forking thread is not the main thread. *Check:* `make test-posix` with `tests/posix/threads.script`
+  (`tfork`, `tforkthread`: 500 forks, HVF and TCG in CI).
+- **INV-0315-6.** `exec` from a non-main thread while siblings open files ends the old image, runs the new one once, and leaves it no descriptor above 2. *Check:* the same
+  script (`texec`, 100 execs).
+- **INV-0315-7.** `posix_spawn` and `vfork` from four threads at once all complete with the child's status. *Check:* the same script (`tspawn`).
 
 ## Open questions
 

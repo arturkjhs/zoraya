@@ -129,6 +129,27 @@ impl<S: Sys> Posix<S> {
         Some(self.threads.list.remove(i))
     }
 
+    /// A `fork` child (ADR-0306 item 5): the table keeps the calling thread
+    /// only, under a new handle (the copied one names nothing in the child:
+    /// thread objects are not duplicable), with no wait port, nothing
+    /// interrupted; the process-pending set is empty. Returns the number of
+    /// records dropped. The caller's mask and thread-pending set are in
+    /// `Signals`, as always.
+    pub fn threads_after_fork(&mut self) -> usize {
+        let cur = self.threads.cur;
+        let before = self.threads.list.len();
+        self.threads.list.retain(|r| r.tp == cur);
+        let handle = self.sys.thread_self();
+        if let Some(r) = self.threads.list.first_mut() {
+            r.handle = handle;
+            r.wait_port = None;
+            r.interrupted = false;
+            r.pending = 0;
+        }
+        self.signals.shared = 0;
+        before - self.threads.list.len()
+    }
+
     /// The number of live threads.
     pub fn thread_count(&self) -> usize {
         self.threads.list.len()

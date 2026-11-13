@@ -1761,11 +1761,13 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
             debug_later(p, "exec: commit", e);
             zoraya_rt::process_exit(127);
         }
-        Ok(())
+        // The new image runs: this one ends without atexit or stdio. The
+        // library lock stays held to the end (ADR-0306 item 7): no sibling
+        // opens, closes or dups a descriptor after the table was copied.
+        zoraya_rt::process_exit(0)
     });
     match r {
-        // The new image runs: this one ends without atexit or stdio.
-        Ok(()) => zoraya_rt::process_exit(0),
+        Ok(()) => unreachable!(),
         Err(e) => e,
     }
 }
@@ -1888,15 +1890,36 @@ fn debug_later(p: &mut Posix<RtSys>, what: &str, detail: impl core::fmt::Debug) 
 /// the parent commits, the child sets its facts right.
 #[unsafe(no_mangle)]
 extern "C" fn fork() -> i32 {
-    // Until the fork freeze lands (ADR-0302 open question): a child would
-    // inherit the thread table and the library lock's state with siblings
-    // that do not exist in it, and possibly `MEM` held by one of them.
-    if with(|p| p.thread_count() > 1).unwrap_or(false) {
-        return int(Err(EAGAIN));
-    }
     poll();
+    // musl's part first (ADR-0306 item 1): the `atfork` prepare handlers, the
+    // signal mask, musl's locks and the thread-list lock. Then the library
+    // lock (`state`) and, around the snapshot only, the memory lock.
+    let mut ctx = [0usize; 32];
+    // SAFETY: `atfork.c`; `ctx` is the room its `struct zoraya_fork` asks for
+    // (a static assertion there), and the matching `parent` or `child` call
+    // below is made on every path.
+    unsafe { __zoraya_fork_prepare(ctx.as_mut_ptr()) };
+    let r = fork_locked();
+    match r {
+        // SAFETY: as above; this is the child, in a copy of the caller's
+        // memory with `ctx` as it was, and it holds none of the library's locks.
+        Ok(0) => unsafe { __zoraya_fork_child(ctx.as_mut_ptr()) },
+        // SAFETY: as above.
+        _ => unsafe { __zoraya_fork_parent(ctx.as_mut_ptr()) },
+    }
+    int(r)
+}
+
+unsafe extern "C" {
+    fn __zoraya_fork_prepare(ctx: *mut usize);
+    fn __zoraya_fork_parent(ctx: *mut usize);
+    fn __zoraya_fork_child(ctx: *mut usize);
+}
+
+/// `fork` with musl's locks taken: `Ok(0)` in the child.
+fn fork_locked() -> Result<i32, i32> {
     let started = zoraya_rt::clock_monotonic();
-    let r = state(|p| {
+    state(|p| {
         let hint = core::mem::replace(&mut p.fork_group, -1);
         let (form, pgid) = match hint {
             -1 => (bp::group::INHERIT, 0),
@@ -1936,8 +1959,14 @@ extern "C" fn fork() -> i32 {
             let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
             return Err(EAGAIN);
         };
+        // The memory lock across the call (ADR-0306 item 1): no sibling is
+        // in the heap or the mapping table while the kernel copies, and
+        // the child's copy of the lock is made free below. The kernel
+        // freezes the siblings itself (ADR-0306 item 2).
+        super::lock_memory();
         let before = zoraya_rt::clock_monotonic();
         let snap = zoraya_rt::snapshot_process(&buffer[..length]);
+        super::unlock_memory(matches!(snap, Ok(None)));
         let snapshot_ns = zoraya_rt::clock_monotonic().saturating_sub(before);
         match snap {
             Ok(Some(process)) => {
@@ -1982,8 +2011,7 @@ extern "C" fn fork() -> i32 {
                 })
             }
         }
-    });
-    int(r)
+    })
 }
 
 #[unsafe(no_mangle)]
