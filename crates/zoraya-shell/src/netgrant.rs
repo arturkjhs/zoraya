@@ -207,20 +207,21 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     }))
 }
 
-/// The rule a `host` operand adds (proposed ADR-0330): the host, any port,
-/// TCP only (a mark of the operand's rule; the echo request has no port or
-/// protocol, `Scope::reaches_address`). Designation as for a `url`: a literal
+/// The rule a `host` operand adds (proposed ADR-0330): the address, any port,
+/// TCP only. This is more than an echo needs (`Scope::reaches_address` looks
+/// at the address alone): the connection can also open TCP connections to any
+/// port of the host, which `ping` never does (ADR-0330 Consequences). Designation as for a `url`: a literal
 /// operand adds its own rule, one that came from a value only designates
 /// inside a `+net` word of the line.
 fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result<(), Refused> {
     let literal = value_of(line.args, text).is_some_and(|v| v.literal);
     let host = text.to_ascii_lowercase();
-    let target = match zoraya_http::parse_ipv4(&host) {
-        Some(a) => Named::Address(a),
-        None if valid_name(&host) => Named::Name(host.clone()),
-        // The command says what is wrong with it.
-        None => return Ok(()),
+    // Only a dotted address: no name grant is made (the command refuses a
+    // name and says why; a name rule would not cover the address anyway).
+    let Some(a) = zoraya_http::parse_ipv4(&host) else {
+        return Ok(());
     };
+    let target = Named::Address(a);
     let word = NetWord {
         target,
         ports: Ports::ANY,

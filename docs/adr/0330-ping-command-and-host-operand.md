@@ -19,15 +19,18 @@ Measured: SLIRP answers echo requests to 10.0.2.2 with round trips of 0.2 to 0.5
 
 ## Considered options
 ### Option A: a `host` operand kind (the recommendation)
-A new description kind `host`, beside `url`: a literal operand adds a rule for that host, any port, over TCP only (the
-mark of an operand's rule; `grants` prints `(operand HOST)`); a value designates only inside a `+net` word, as for `url`.
+A new description kind `host`, beside `url`: a literal operand that is a dotted IPv4 address adds a rule for that address,
+any port, over TCP only (`grants` prints `(operand HOST)`); anything else makes no grant. A value designates only inside a
+`+net` word, as for `url`.
 ### Option B: `+net HOST ping HOST` only
 Nothing new in the shell; the person writes the host twice. Rejected as the only way (the `url` precedent), allowed still.
 ### Option C: a `raw` request in the protocol
 ADR-0222's revisit trigger. Far larger; a raw socket is a right of its own.
 
 ## Recommendation
-**Recommendation (not a decision): Option A**, and:
+**Recommendation (not a decision): Option A**, accepting the extra TCP right above for now. The alternative for the architect:
+an echo-only rule, which needs a `Protocols` value (or a rule kind) in `zoraya_abi::net` that grants no port, an ABI change
+to the scope encoding of ADR-0281 item 2. Option A reuses the encoding as it is. And:
 1. `ping [--count N] [--timeout SECONDS] HOST` (`-c`, `-W`), count 1 to 16 (default 4), timeout 1 to 30 s (default 2), one
    request every 200 ms. A line per reply (`40 bytes from A: seq=N time=T ms`), a summary, exit status 1 when none came, 2
    for wrong use.
@@ -40,7 +43,11 @@ ADR-0222's revisit trigger. Far larger; a raw socket is a right of its own.
 
 ## Consequences
 - **Positive.** `ping 10.0.2.2` works under `make run-net`; nothing broader than the host written is granted.
-- **Negative.** No names; the rule an operand adds says TCP though the echo has no protocol; no live lines.
+- **Negative.** No names; no live lines. **The rule is wider than an echo.** `Scope::reaches_address` looks at the address
+  alone, but a `reach` rule has a protocol set and ports, so the `host` operand's rule (TCP, any port) also lets the
+  `ping` process open TCP connections to every port of that host. `ping` never does, and the base-system program is ours,
+  but the connection it holds can. An earlier text of this ADR said nothing broader than the host written is granted; that
+  was inaccurate.
 - **Follow-up.** A ping that takes a name, or a streaming reply, with the services channel.
 
 ## Invariants

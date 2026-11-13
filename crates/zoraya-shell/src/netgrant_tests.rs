@@ -349,6 +349,12 @@ fn a_literal_host_operand_reaches_that_host_and_nothing_else() {
     let s = Scope::decode(&bytes).unwrap();
     assert!(s.reaches_address([10, 0, 2, 2]));
     assert!(!s.reaches_address([10, 0, 2, 3]));
+    // The rule is TCP, any port, of that address and nothing else (the extra
+    // right ADR-0330 states): not UDP, not another host.
+    assert!(s.allows_address([10, 0, 2, 2], 1, Protocols::TCP));
+    assert!(s.allows_address([10, 0, 2, 2], 65535, Protocols::TCP));
+    assert!(!s.allows_address([10, 0, 2, 2], 53, Protocols::UDP));
+    assert!(!s.allows_address([10, 0, 2, 3], 80, Protocols::TCP));
     assert_eq!(
         crate::netgrant::describe(&bytes),
         [format!(
@@ -374,4 +380,12 @@ fn a_host_operand_from_a_value_needs_a_net_word_that_covers_it() {
     );
     // Only the base system's commands are given a network by an operand.
     assert!(go(PING, &[("10.0.2.2", true)], false).unwrap().is_none());
+}
+
+#[test]
+fn a_host_operand_that_is_not_a_dotted_address_makes_no_grant() {
+    for name in ["example.org", "10.0.2", "10.0.2.2.2", "any", "*.org"] {
+        let r = go(PING, &[(name, true)], true).unwrap();
+        assert!(r.is_none(), "{name} made a grant");
+    }
 }
