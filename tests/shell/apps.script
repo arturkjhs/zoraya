@@ -363,8 +363,10 @@
 > status\r
 < \r\nexit status 2
 < \r\n~>
-# After -s the message is silent, the refusal is not.
+# -s hides the refusal's own line, not curl's "is badly used here" after it, and
+# the status is 2.
 > +net expired.zoraya:@TLSEXPIRED@ curl -sk https://expired.zoraya:@TLSEXPIRED@/\r
+< is badly used here
 < \r\n~>
 > status\r
 < \r\nexit status 2
@@ -519,11 +521,142 @@
 > status\r
 < \r\nexit status 2
 < \r\n~>
+# Every other option of ADR-0321 item 1, and spellings that reach one by another name.
+> +net expired.zoraya:@TLSEXPIRED@ curl --ca-native https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --proxy-ca-native https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --ssl-allow-beast https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --proxy-ssl-allow-beast https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl -1 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --tlsv1 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --tlsv1.1 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --proxy-tlsv1 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl -2 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl -3 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --proxy-ciphers aNULL https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --proxy-tls13-ciphers TLS_AES_128_GCM_SHA256 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --no-insecure https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --tls-max 1.1 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ curl --tls-max 1.0 https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/other-root.pem +net expired.zoraya:@TLSEXPIRED@ curl --expand-cacert /etc/test-pki/other-root.pem https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+# wget: abbreviations of a long option, another value, and the FTPS settings that leave TLS.
+> +net expired.zoraya:@TLSEXPIRED@ wget --no-check-cert -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +r /etc/test-pki/hashed +net expired.zoraya:@TLSEXPIRED@ wget --ca-dir=/etc/test-pki/hashed -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --check-certificate=quiet -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --ftps-fallback-to-ftp -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ wget --ftps-clear-data-connection -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< is refused
+< \r\n~>
+> status\r
+< \r\nexit status 2
+< \r\n~>
 # The stricter settings that stay: a TLS version the programs already have.
 > +net test.zoraya:@TLSVALID@ curl -s --tlsv1.2 https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
 > +net test.zoraya:@TLSVALID@ wget -q --secure-protocol=TLSv1_2 -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> +net test.zoraya:@TLSVALID@ curl -s --tls-max 1.2 https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
 x power off
