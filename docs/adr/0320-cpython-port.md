@@ -78,7 +78,7 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    `make python` builds it, `make test-python` boots it. `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and a
    `DISK_SIZE` (default 64M; curl, wget and the Python part need 192M): the volume of `make run` is made with
    `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`.
-9. **Tests.** `tests/python/smoke.py` (the flags, `sqlite3`, `ssl`, `asyncio`, threads, `subprocess`), `tests/python/https_client.py` (an `asyncio` HTTPS client
+9. **Tests.** `tests/python/smoke.py` (the flags, `sqlite3`, `ssl`, `asyncio`, threads, `fork`), `tests/python/https_client.py` (an `asyncio` HTTPS client
    against `tools/test-httpd`'s TLS server, and the refusal of an expired and a wrong-name certificate with 0 request bytes), and
    `tests/python/regr.py`, which runs CPython's `regrtest` over the modules of `tests/python/regr-modules.txt` (the interpreter's core types,
    `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `threading`, `asyncio`'s tasks, futures and locks). Not run: modules that need `AF_UNIX`, a server socket, `ctypes`,
@@ -263,12 +263,12 @@ wmemcmp
 ## Consequences
 - **Positive.** Python programs run from the volume; the standard library's tests exercise threads, `sqlite3` and `ssl` in a way no C test of ours does.
 - **Negative.** 52 MB on a volume; a process with `main` on a thread has an 8 MiB stack of virtual memory (only touched pages cost); `socket.socketpair`,
-  `AF_UNIX`, servers and `subprocess` through `posix_spawn` do not exist; a program that sets `PYTHONPATH` is not obeyed.
+  `AF_UNIX`, servers and `posix_spawn` do not exist; a program that Python starts has no connection to the random service (ADR-0310), so `subprocess.run([sys.executable, ...])` fails at start with "failed to get random numbers"; a program that sets `PYTHONPATH` is not obeyed.
 - **Follow-up.** `bind`, `listen`, `accept` (a Python server) when the network service has them; a larger process stack in the kernel would make patch 0004 unnecessary.
 
 ## Invariants
 - **INV-0320-1.** The interpreter runs with the environment ignored, no byte code written and no user site: `sys.flags.ignore_environment` is 1, `sys.dont_write_bytecode` is true, `sys.flags.no_user_site` is 1. *Check:* `make test-python` (`smoke.py` prints them).
-- **INV-0320-2.** `python3` starts from the volume and imports the standard library, `sqlite3`, `ssl` and `asyncio`, runs a thread and a child process. *Check:* `make test-python` (`smoke.py`).
+- **INV-0320-2.** `python3` starts from the volume and imports the standard library, `sqlite3`, `ssl` and `asyncio`, runs a thread and a `fork` child. *Check:* `make test-python` (`smoke.py`).
 - **INV-0320-3.** An `asyncio` HTTPS client verifies the chain, the time and the name against `/system/tls/roots` and sends no request byte after a failed verification. *Check:* `make test-python` (expired and wrong-name servers: the server's log shows `ended after 0 request bytes`).
 - **INV-0320-4.** The line gives the program the network only with a `+net` word, and the roots only with the network. *Check:* `make test-python` (`grants python3 ...` with and without `+net`).
 - **INV-0320-5.** CPython's own tests of the listed modules pass in the guest. *Check:* `make test-python` (`regr.py`).

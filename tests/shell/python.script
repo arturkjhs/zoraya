@@ -33,7 +33,7 @@
 < ok threads
 < ok ssl
 < ok asyncio
-< ok subprocess
+< ok fork
 < smoke done
 < \r\n~>
 # What the line gives (ADR-0320 item 7): the script and the standard library

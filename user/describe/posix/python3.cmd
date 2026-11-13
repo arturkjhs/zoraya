@@ -38,8 +38,8 @@ Python's options, -E, -X, -i, -d, -v, -x and the interactive session are not off
 Built in, as one program: _socket, select (select only: no poll or epoll), _ssl and _hashlib (OpenSSL 3.5, threads),
 _sqlite3 (SQLite 3.54, no run-time extensions, no WAL), zlib, _asyncio, _thread and threading (ADR-0302). Not here: ctypes,
 shared extension modules (there is no dlopen), readline, curses, tkinter, bz2, lzma, syslog, os.posix_spawn,
-socketpair, AF_UNIX, and bind, listen and accept (a Python program is a client). subprocess works through fork and
-exec, as for any POSIX program.
+socketpair, AF_UNIX, and bind, listen and accept (a Python program is a client). os.fork works. A program that Python starts (subprocess, os.system, exec) has no connection to the random service, so another
+python3 cannot start from it and a C program with TLS cannot seed (ADR-0310: the same as for a program started by dash).
 
 EXAMPLES
   python3 -c 'print(sum(range(10)))'

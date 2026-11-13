@@ -5,7 +5,7 @@ import sys
 
 print("ok flags", sys.flags.ignore_environment, sys.dont_write_bytecode, sys.flags.no_user_site)
 
-import os, math, json, re, hashlib, zlib, datetime, struct, threading, subprocess
+import os, math, json, re, hashlib, zlib, datetime, struct, threading
 
 assert math.isclose(math.sin(math.pi / 6), 0.5)
 assert json.loads(json.dumps({"a": [1, 2.5, None]})) == {"a": [1, 2.5, None]}
@@ -40,7 +40,12 @@ async def main():
 assert asyncio.run(main()) == [1, 4, 9, 16]
 print("ok asyncio")
 
-p = subprocess.run([sys.executable, "-c", "print('child')"], capture_output=True)
-assert p.stdout == b"child\n", p
-print("ok subprocess")
+# A child by fork (no exec: a program started by another has no connection to
+# the random service, so a second python3 cannot start from here; ADR-0310).
+pid = os.fork()
+if pid == 0:
+    os._exit(7)
+_, status = os.waitpid(pid, 0)
+assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 7, status
+print("ok fork")
 print("smoke done")
