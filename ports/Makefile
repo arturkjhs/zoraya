@@ -573,8 +573,10 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	@for b in curl wget; do \
 	  if LC_ALL=C grep -a -q -e '/dev/urandom' -e '/dev/random' $(APPS_ROOT)/bin/$$b; then \
 	    echo "$$b names /dev/urandom or /dev/random"; exit 1; fi; \
-	  if nm $(APPS_ROOT)/bin/$$b | grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method'; then \
-	    echo "$$b links a TLS method before 1.2"; exit 1; fi; done
+	  nm $(APPS_ROOT)/bin/$$b > $(APPS_ROOT)/$$b.nm || { echo "nm failed on $$b"; exit 1; }; \
+	  grep -q -e ' T TLS_method' $(APPS_ROOT)/$$b.nm || { echo "$$b: nm shows no TLS_method (control)"; exit 1; }; \
+	  if grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method' $(APPS_ROOT)/$$b.nm; then \
+	    echo "$$b links a TLS method before 1.2"; exit 1; fi; rm -f $(APPS_ROOT)/$$b.nm; done
 	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
 	@for l in zlib openssl curl wget; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
