@@ -206,7 +206,7 @@ jobs:
       # builds everything, as before. If a restored build is ever wrong, change
       # the prefix `ports-build-v3`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
-        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0317-*.md' 'docs/adr/0320-*.md' | xargs -0 touch -h -t 200001010000
+        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0317-*.md' 'docs/adr/0320-*.md' | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
         uses: actions/cache@v4
         with:
@@ -317,7 +317,10 @@ jobs:
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it), and test-hand-run's
     # three boots, one with the desktop; every other job stays within 10.
-    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'test-apps') || contains(matrix.cmd, 'test-netsurf') || contains(matrix.cmd, 'test-python') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
+    # The python steps (test-python, test-python-regr) take 45: under TCG
+    # regrtest's CI subset and the TLS clients each need most of 30 (ADR-0320
+    # item 9; run 43488132441 was cancelled at 30 with both in one job).
+    timeout-minutes: ${{ contains(matrix.cmd, 'test-python') && 45 || (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'test-apps') || contains(matrix.cmd, 'test-netsurf') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:

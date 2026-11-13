@@ -125,10 +125,5 @@ x PLANTED
 > +net wrong.zoraya:@TLSWRONG@ python3 https_blocking.py wrong.zoraya @TLSWRONG@ urllib\r
 < refused
 < \r\n~>
-# CPython's own tests of the modules in tests/python/regr-modules.txt, through
-# its regrtest (ADR-0320 item 9): the choice and the reason are in regr.py.
-> python3 regr.py\r
-< Result: SUCCESS
-< \r\n~>
 x power off
 > poweroff\r

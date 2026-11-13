@@ -1,8 +1,8 @@
 # CPython, part 9c (proposed ADR-0320): mutants found by hand in the review
-# rounds. Each one is a QEMU run of the whole python.script (about half an hour
-# under HVF, most of it regr.py).
+# rounds. Each one is a QEMU run of python.script (test-python, without
+# regrtest since it became test-python-regr: a few minutes under HVF).
 tests = ["make -s test-python"]
-timeout = 2400
+timeout = 900
 
 [[mutant]]
 id = "P-roots-without-net"

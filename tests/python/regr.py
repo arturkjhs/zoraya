@@ -26,9 +26,13 @@
 # item 5), not thread creation.
 import sys
 
-# One module per line, in regr-modules.txt next to this file (the Makefile
-# copies the same list's files to the volume).
-with open("regr-modules.txt") as f:
+# One module per line, in the list named by the first argument if it ends in
+# .txt (regr-long.txt), else regr-modules.txt, next to this file (the Makefile
+# copies both lists' files to the volume).
+LIST = "regr-modules.txt"
+if len(sys.argv) > 1 and sys.argv[1].endswith(".txt"):
+    LIST = sys.argv.pop(1)
+with open(LIST) as f:
     MODULES = [line.strip() for line in f if line.strip()]
 
 from test.libregrtest.main import main

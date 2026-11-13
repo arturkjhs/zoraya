@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps netsurf test-netsurf test-apps python python-testlib test-python test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -595,70 +595,101 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 # `make python` builds the host python of the same version (build/ports/hostpython),
 # SQLite for the target and the program with its standard library into
 # build/rootfs-python (needs `make fetch-ports` and the OpenSSL of `make apps`'
-# ports once). `make test-python` boots a volume made of rootfs/, that
-# directory and the test suite's subset (tests/python/), runs the script
-# tests/shell/python.script and, in it, tests/python/smoke.py, https_client.py,
-# https_blocking.py and regr.py.
+# ports once). Three steps boot a volume made of rootfs/, that directory and
+# the test suite's subset (tests/python/), each with its own volume and script,
+# so that each is a CI job of its own (ADR-0320 item 9: under TCG the whole of
+# it did not fit one 30-minute job, run 43488132441):
+#   test-python       tests/shell/python.script: smoke.py, grants, the planted
+#                     module, Ctrl-C, the TLS clients (https_client.py,
+#                     https_blocking.py) against the runner's servers
+#   test-python-regr  tests/shell/python-regr.script: regr.py over
+#                     tests/python/regr-modules.txt, the CI subset
+#   test-python-long  the same over tests/python/regr-long.txt, the modules too
+#                     slow for a CI job under TCG; by hand, not in make test
 PYTHON_ROOT := $(BUILD)/rootfs-python
 python:
 	@$(MAKE) -f ports/Makefile python
-PYTHON_TEST_ROOT := $(BUILD)/python-root
-PYTHON_DISK := $(BUILD)/python-disk.img
-PYTHON_TEMPLATE := tests/shell/python.script
-PYTHON_SCRIPT := $(BUILD)/python.script
-PYTHON_HTTP_READY := $(BUILD)/python-httpd.port
-PYTHON_TLS_READY := $(BUILD)/python-tlsd.ports
 PYTHON_QEMU ?= --mem 512M
-PYTHON_TIMEOUT ?= 1800
-# The standard library's own tests: the modules of tests/python/regr-modules.txt,
-# with the support files of Lib/test (every file of its top level that is not
-# a test, support/ and libregrtest/), taken from the source tree (configure's
-# --disable-test-modules leaves Lib/test out of the stage) and compiled by the
-# host python, as the rest of the library is.
+PYTHON_ACCEL ?= auto
+# The runner's limits, below the python CI jobs' 45 minutes
+# (.github/workflows/test.yml), so that a slow run ends with the runner's
+# report and not a cancelled job.
+PYTHON_TIMEOUT ?= 900
+PYTHON_REGR_TIMEOUT ?= 1500
+PYTHON_LONG_TIMEOUT ?= 3600
+# regrtest's options after the list (regr.py): --slowest prints the ten slowest
+# modules, the measurement the CI subset is chosen by.
+PYTHON_REGR_ARGS ?= --slowest
+test-python: PY_TEMPLATE := tests/shell/python.script
+test-python: PY_TIMEOUT = $(PYTHON_TIMEOUT)
+test-python: PY_LIST := regr-modules.txt
+test-python-regr: PY_TEMPLATE := tests/shell/python-regr.script
+test-python-regr: PY_TIMEOUT = $(PYTHON_REGR_TIMEOUT)
+test-python-regr: PY_LIST := regr-modules.txt
+test-python-long: PY_TEMPLATE := tests/shell/python-regr.script
+test-python-long: PY_TIMEOUT = $(PYTHON_LONG_TIMEOUT)
+test-python-long: PY_LIST := regr-long.txt
+# Every path is the step's own ($@), so that test-par may run the steps at once.
+PY_ROOT = $(BUILD)/$@-root
+PY_DISK = $(BUILD)/$@-disk.img
+PY_SCRIPT = $(BUILD)/$@.script
+PY_READY = $(BUILD)/$@-httpd.port
+PY_TLS_READY = $(BUILD)/$@-tlsd.ports
+PY_HTTPD_LOG = target/test-logs/test-httpd-$@.log
+# The standard library's own tests: the modules of tests/python/regr-modules.txt
+# and regr-long.txt, with the support files of Lib/test (every file of its top
+# level that is not a test, support/ and libregrtest/), taken from the source
+# tree (configure's --disable-test-modules leaves Lib/test out of the stage) and
+# compiled by the host python, as the rest of the library is.
 PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
 PYTHON_HOSTPY := $(BUILD)/ports/hostpython/bin/python3.15
-PYTHON_RUN = $(RUNNER) --timeout $(1) --script $(PYTHON_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(PYTHON_DISK) $(PYTHON_QEMU) --accel $(3) $(KERNEL)
 PYTHON_TESTLIB := $(BUILD)/python-testlib
+PYTHON_REGR_FILES := tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt
 # Made once, by ci-build, so that the test jobs need neither the source tree nor
 # the host python (neither is in the build artifact).
-$(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp tests/python/regr-modules.txt tests/python/regr-ignore.txt
+$(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
 	@$(MAKE) --no-print-directory python
 	rm -rf $(PYTHON_TESTLIB).tmp && mkdir -p $(PYTHON_TESTLIB).tmp
 	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
 		case $$n in test_*) ;; *) cp -R $$f $(PYTHON_TESTLIB).tmp/ ;; esac; done
-	for m in $$(sed 's/\..*//' tests/python/regr-modules.txt | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
+	for m in $$(cat tests/python/regr-modules.txt tests/python/regr-long.txt | sed 's/\..*//' | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
 	@# deliberately bad test files do not compile, so the exit status is not read
 	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $(PYTHON_TESTLIB).tmp >/dev/null 2>&1; true
 	rm -rf $(PYTHON_TESTLIB) && mv $(PYTHON_TESTLIB).tmp $(PYTHON_TESTLIB)
 python-testlib: $(PYTHON_TESTLIB)
-test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[python] skipped: QEMU has no user-mode networking"; exit 0; }; \
-	rm -rf $(PYTHON_TEST_ROOT) && mkdir -p $(PYTHON_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYTHON_TEST_ROOT)/ && \
-	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && mkdir -p $(PYTHON_TEST_ROOT)/home && cp tests/python/*.py tests/python/regr-modules.txt tests/python/regr-ignore.txt $(PYTHON_TEST_ROOT)/home/ && \
-	mkdir -p $(PYTHON_TEST_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PYTHON_TEST_ROOT)/usr/lib/python3.15/test/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(PYTHON_TEST_ROOT)/config/settings && \
-	cp tests/net/tls/root.pem $(PYTHON_TEST_ROOT)/system/tls/roots && \
-	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PYTHON_TEST_ROOT)/bin && \
-	target/debug/zoraya-mkfs --size 256M --from $(PYTHON_TEST_ROOT) $(PYTHON_DISK) && \
-	: > $(PYTHON_HTTP_READY) && : > $(PYTHON_TLS_READY) && \
-	{ $(HTTPD) --port 0 --lifetime 1800 --ready-file $(PYTHON_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(PYTHON_TLS_READY) > target/test-logs/test-httpd-python.log 2>&1 & echo $$! > $(BUILD)/python-httpd.pid; } && \
-	httpd=$$(cat $(BUILD)/python-httpd.pid); \
-	for i in $$(seq 1 20); do [ -s $(PYTHON_HTTP_READY) ] && [ -s $(PYTHON_TLS_READY) ] && break; sleep 0.25; done; \
-	set -- $$(cat $(PYTHON_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
-	port=$$(cat $(PYTHON_HTTP_READY)); \
+# The TLS check (INV-0320-3) reads the server's log of test-python only: the
+# regrtest scripts make no connection to it.
+test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[$@] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	rm -rf $(PY_ROOT) && mkdir -p $(PY_ROOT) target/test-logs && cp -R rootfs/. $(PY_ROOT)/ && \
+	cp -R $(PYTHON_ROOT)/. $(PY_ROOT)/ && mkdir -p $(PY_ROOT)/home && cp tests/python/*.py tests/python/regr-*.txt $(PY_ROOT)/home/ && \
+	mkdir -p $(PY_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PY_ROOT)/usr/lib/python3.15/test/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(PY_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(PY_ROOT)/system/tls/roots && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PY_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 256M --from $(PY_ROOT) $(PY_DISK) && \
+	: > $(PY_READY) && : > $(PY_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime $$(( $(PY_TIMEOUT) + 60 )) --ready-file $(PY_READY) --tls-dir tests/net/tls --tls-ready-file $(PY_TLS_READY) > $(PY_HTTPD_LOG) 2>&1 & echo $$! > $(BUILD)/$@-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/$@-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(PY_READY) ] && [ -s $(PY_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(PY_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
+	port=$$(cat $(PY_READY)); \
 	if [ -z "$$port" ] || [ -z "$$tlswrong" ] || ! kill -0 $$httpd 2>/dev/null; then \
-		echo "[python] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-python.log; exit 1; fi; \
+		echo "[$@] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat $(PY_HTTPD_LOG); exit 1; fi; \
 	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
-		$(PYTHON_TEMPLATE) > $(PYTHON_SCRIPT); \
-	$(call PYTHON_RUN,$(PYTHON_TIMEOUT),python-auto,auto); rc=$$?; \
+		-e "s/@REGRLIST@/$(PY_LIST)/g" -e "s/@REGRARGS@/$(PYTHON_REGR_ARGS)/g" $(PY_TEMPLATE) > $(PY_SCRIPT); \
+	$(RUNNER) --timeout $(PY_TIMEOUT) --script $(PY_SCRIPT) --label $(@:test-%=%)-$(PYTHON_ACCEL) -- \
+		$(RUN_QEMU) --test --keys --net --net-open --disk $(PY_DISK) $(PYTHON_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
-	if [ $$rc = 0 ]; then \
-		if grep -q -e '^tls \(expired\|wrong\): request of' -e '^tls \(expired\|wrong\): ended after [1-9]' target/test-logs/test-httpd-python.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-python.log \
-		   || [ "$$(grep -c '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-python.log)" != 3 ] || [ "$$(grep -c '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-python.log)" != 3 ]; then \
-			echo '[python] FAIL: INV-0320-3: a Python program sent request bytes after a refused handshake, or a refused server did not see exactly 3 connections end after 0 request bytes (asyncio, http.client, urllib), or no request on the valid one'; cat target/test-logs/test-httpd-python.log; rc=1; \
+	if [ $$rc = 0 ] && [ $@ = test-python ]; then \
+		if grep -q -e '^tls \(expired\|wrong\): request of' -e '^tls \(expired\|wrong\): ended after [1-9]' $(PY_HTTPD_LOG) || ! grep -q '^tls valid: request of' $(PY_HTTPD_LOG) \
+		   || [ "$$(grep -c '^tls expired: ended after 0 request bytes' $(PY_HTTPD_LOG))" != 3 ] || [ "$$(grep -c '^tls wrong: ended after 0 request bytes' $(PY_HTTPD_LOG))" != 3 ]; then \
+			echo '[python] FAIL: INV-0320-3: a Python program sent request bytes after a refused handshake, or a refused server did not see exactly 3 connections end after 0 request bytes (asyncio, http.client, urllib), or no request on the valid one'; cat $(PY_HTTPD_LOG); rc=1; \
 		else echo '[python] ok: asyncio, http.client and urllib sent no request byte to the refused TLS servers (3 connections each, 0 bytes)'; fi; \
 	fi; \
-	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PYTHON_DISK); rc=$$?; fi; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PY_DISK); rc=$$?; fi; \
+	exit $$rc
+
 # TASK-27 9d (proposed ADR-0317, ADR-0318): NetSurf in a window of the desktop. The
 # image is test-apps' (rootfs/, build/rootfs-apps with `netsurf`, the test PKI's root,
 # test names), the GUI headless with the network, the runner's HTTP and TLS servers
@@ -1367,7 +1398,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python test-python-regr
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and

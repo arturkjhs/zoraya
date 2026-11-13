@@ -23,7 +23,7 @@ tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
 tools/check-tls-roots.sh      check
 tools/test-run-disk.sh        check
-tools/run-disk.sh             check test-hand-run test-apps test-python
+tools/run-disk.sh             check test-hand-run test-apps test-python test-python-regr
 rootfs/system/tls/        check test-files test-hand-run
 tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
@@ -139,19 +139,20 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-regr
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
 user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix
-user/src/posix_child.rs       test-posix test-net test-apps test-netsurf test-python
-ports/patches/python/         test-python
-ports/apps/pyshim.c          test-python
+user/src/posix_child.rs       test-posix test-net test-apps test-netsurf test-python test-python-regr
+ports/patches/python/         test-python test-python-regr
+ports/apps/pyshim.c          test-python test-python-regr
 user/describe/posix/python3.cmd test-python test-files
-tests/python/                test-python
+tests/python/                test-python test-python-regr
 tests/shell/python.script    test-python
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-hand-run
+tests/shell/python-regr.script test-python-regr
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
@@ -159,9 +160,9 @@ tests/libc-test/             test-posix-suites test-posix-threadtest3
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf
 user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps test-netsurf
-crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps test-python
+crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps test-python test-python-regr
 crates/zoraya-command/        test-boot test-files test-tour-gui
-crates/zoraya-describe/       test-files test-tour-gui test-apps test-netsurf test-python
+crates/zoraya-describe/       test-files test-tour-gui test-apps test-netsurf test-python test-python-regr
 crates/zoraya-settings/       test-files test-tour-gui test-gui
 user/describe/                test-files test-tour-gui
 docs/tour.md                  test-tour-gui
@@ -189,7 +190,7 @@ user/describe/commands/ping.cmd test-net test-files
 user/src/netconn.rs          test-net
 user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
-tools/test-httpd/            test-net test-apps test-netsurf test-python
+tools/test-httpd/            test-net test-apps test-netsurf test-python test-python-regr
 tests/shell/net-dns.script   test-net
 # The first lookup of a boot (proposed ADR-0316): the test DNS server with
 # its capture check, and the script.
