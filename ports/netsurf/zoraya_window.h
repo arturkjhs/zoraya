@@ -13,7 +13,10 @@ enum zoraya_window_event_kind {
 	ZW_FOCUS = 4,  /* a: 1 gained */
 	ZW_RESIZE = 5, /* a, b: the new buffer size; read the buffer again */
 	ZW_CLOSE = 6,  /* the person asked to close the window */
-	ZW_GONE = 7    /* the compositor is gone */
+	ZW_GONE = 7,   /* the compositor is gone */
+	ZW_WHEEL = 8   /* a, b: the pixel, c, d: the horizontal and vertical turn as
+	                * int32_t in 120ths of a notch, d > 0 toward the person
+	                * (scroll down), c > 0 to the right (proposed ADR-0322) */
 };
 
 struct zoraya_window_event {

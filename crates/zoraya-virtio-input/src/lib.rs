@@ -18,10 +18,18 @@ pub use zoraya_virtio::Error as TransportError;
 pub mod ev {
     pub const SYN: u16 = 0;
     pub const KEY: u16 = 1;
+    pub const REL: u16 = 2;
     pub const ABS: u16 = 3;
     pub const SYN_REPORT: u16 = 0;
     pub const ABS_X: u16 = 0;
     pub const ABS_Y: u16 = 1;
+    /// Relative axes: the wheels (proposed ADR-0322), in notches or, the
+    /// `HI_RES` ones, in 120ths of a notch. A device that has a `HI_RES`
+    /// axis also sends the notches of it; those are not taken.
+    pub const REL_HWHEEL: u16 = 6;
+    pub const REL_WHEEL: u16 = 8;
+    pub const REL_WHEEL_HI_RES: u16 = 11;
+    pub const REL_HWHEEL_HI_RES: u16 = 12;
     /// Key codes, buttons included, are below this.
     pub const KEY_LIMIT: u16 = 0x300;
 }
@@ -38,6 +46,10 @@ pub const BUFFERS: u16 = 64;
 pub const MAX_FRAME: usize = 64;
 /// The scaled range of an axis.
 pub const AXIS_MAX: u32 = 65535;
+/// One notch of a wheel, and the most one record carries either way
+/// (`zoraya_proto_input::WHEEL_MAX`, proposed ADR-0322).
+pub const WHEEL_STEP: i32 = 120;
+pub const WHEEL_MAX: i32 = 16 * WHEEL_STEP;
 
 const QUEUE: Layout = Layout::new(BUFFERS, 0);
 const EVENTS_AT: usize = QUEUE.end;
@@ -97,9 +109,10 @@ pub struct Record {
     pub value: u32,
 }
 
-/// Record kinds (ADR-0092).
+/// Record kinds (ADR-0092; `WHEEL`, proposed ADR-0322).
 pub const KEY: u32 = 0;
 pub const AXIS: u32 = 1;
+pub const WHEEL: u32 = 2;
 
 pub struct Input<R, S> {
     registers: R,
@@ -107,6 +120,9 @@ pub struct Input<R, S> {
     base: u64,
     queue: Queue,
     kind: Kind,
+    /// The device has the high-resolution vertical and horizontal wheels:
+    /// their notches (`REL_WHEEL`, `REL_HWHEEL`) are then not taken twice.
+    hi_res: (bool, bool),
     frame: [Record; MAX_FRAME],
     length: usize,
     /// Events dropped since the last frame that reached the client.
@@ -140,6 +156,15 @@ fn axis<R: Registers>(r: &mut R, code: u16) -> Result<Axis, Error> {
     Ok(Axis { min, max })
 }
 
+/// Which high-resolution wheels the device declares (vertical,
+/// horizontal).
+fn hi_res_wheels<R: Registers>(r: &mut R) -> (bool, bool) {
+    let mut bits = [0; 128];
+    let size = config_read(r, select::EV_BITS, ev::REL as u8, &mut bits);
+    let has = |code: u16| size > 0 && bits[usize::from(code / 8)] & (1 << (code % 8)) != 0;
+    (has(ev::REL_WHEEL_HI_RES), has(ev::REL_HWHEEL_HI_RES))
+}
+
 /// What the configuration says the device is.
 fn probe<R: Registers>(r: &mut R) -> Result<Kind, Error> {
     let mut bits = [0; 128];
@@ -169,6 +194,10 @@ impl<R: Registers, S: Shared> Input<R, S> {
                 return Err(e);
             }
         };
+        let hi_res = match kind {
+            Kind::Pointer { .. } => hi_res_wheels(&mut registers),
+            Kind::Keyboard => (false, false),
+        };
         let queue = Queue::new(0, QUEUE, base);
         queue.set_up(&mut registers)?;
         ready(&mut registers);
@@ -178,6 +207,7 @@ impl<R: Registers, S: Shared> Input<R, S> {
             base,
             queue,
             kind,
+            hi_res,
             frame: [Record {
                 kind: 0,
                 code: 0,
@@ -264,6 +294,34 @@ impl<R: Registers, S: Shared> Input<R, S> {
                     }),
                     None => self.dropped = self.dropped.saturating_add(1),
                 }
+            }
+            (ev::REL, Kind::Pointer { .. }) => self.wheel(code, value as i32),
+            _ => self.dropped = self.dropped.saturating_add(1),
+        }
+    }
+
+    /// A wheel's turn as a record in 120ths, toward the person and to the
+    /// right above 0; the notches of a wheel that also has its
+    /// high-resolution axis are skipped (not dropped: the same turn comes
+    /// in 120ths). A value past [`WHEEL_MAX`], 0, or another relative axis
+    /// is dropped and counted.
+    fn wheel(&mut self, code: u16, value: i32) {
+        let turn = match code {
+            ev::REL_WHEEL if self.hi_res.0 => return,
+            ev::REL_HWHEEL if self.hi_res.1 => return,
+            ev::REL_WHEEL => value.checked_mul(-WHEEL_STEP).map(|v| (0, v)),
+            ev::REL_HWHEEL => value.checked_mul(WHEEL_STEP).map(|v| (1, v)),
+            ev::REL_WHEEL_HI_RES => value.checked_neg().map(|v| (0, v)),
+            ev::REL_HWHEEL_HI_RES => Some((1, value)),
+            _ => None,
+        };
+        match turn {
+            Some((axis, v)) if v != 0 && v.unsigned_abs() <= WHEEL_MAX.unsigned_abs() => {
+                self.keep(Record {
+                    kind: WHEEL,
+                    code: axis,
+                    value: v as u32,
+                })
             }
             _ => self.dropped = self.dropped.saturating_add(1),
         }

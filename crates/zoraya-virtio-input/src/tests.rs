@@ -436,3 +436,108 @@ fn each_axis_uses_its_own_range() {
 fn the_shared_memory_is_four_pages() {
     assert_eq!(SHARED_MEMORY, 16 * 1024);
 }
+
+/// A tablet with wheels, as QEMU's `virtio-tablet` (`REL_WHEEL` and
+/// `REL_HWHEEL`), or with their high-resolution axes too, as a Linux
+/// mouse that sends both.
+fn wheel_device(hi_res: bool) -> Device {
+    let d = Device::new(DEVICE_INPUT, BASE, SHARED_MEMORY);
+    d.on(move |f, e| {
+        if let Event::Config(0 | 1) = e {
+            let (which, sub) = (f.config[0], f.config[1]);
+            let mut data = [0u8; 128];
+            let size = match (which, sub) {
+                (0x11, 3) => {
+                    data[0] = 0b11;
+                    1
+                }
+                (0x11, 2) => {
+                    data[0] = 1 << ev::REL_HWHEEL;
+                    data[1] = 1 << (ev::REL_WHEEL - 8);
+                    if hi_res {
+                        data[1] |=
+                            (1 << (ev::REL_WHEEL_HI_RES - 8)) | (1 << (ev::REL_HWHEEL_HI_RES - 8));
+                    }
+                    2
+                }
+                (0x12, 0 | 1) => {
+                    data[4..8].copy_from_slice(&1000u32.to_le_bytes());
+                    20
+                }
+                _ => 0,
+            };
+            f.config[2] = size;
+            f.config[8..136].copy_from_slice(&data);
+        }
+    });
+    d
+}
+
+fn wheel(code: u32, value: i32) -> Record {
+    Record {
+        kind: WHEEL,
+        code,
+        value: value as u32,
+    }
+}
+
+/// Proposed ADR-0322: a notch is 120, toward the person (evdev's -1) is
+/// above 0, the horizontal wheel keeps evdev's sign, and a value past the
+/// bound, 0 or another relative axis is dropped and counted.
+#[test]
+fn wheel_notches_become_signed_120ths() {
+    let d = wheel_device(false);
+    let mut input = up(&d);
+    let frames = Frames::default();
+    let neg = |v: i32| v as u32;
+    push(&d, ev::REL, ev::REL_WHEEL, neg(-1)); // toward the person
+    push(&d, ev::REL, ev::REL_WHEEL, 2); // away, two notches
+    push(&d, ev::REL, ev::REL_HWHEEL, 1); // right
+    push(&d, ev::REL, ev::REL_WHEEL, 17); // past 16 notches
+    push(&d, ev::REL, ev::REL_WHEEL, 0);
+    push(&d, ev::REL, ev::REL_WHEEL, neg(i32::MIN)); // overflows when scaled
+    push(&d, ev::REL, 0, 5); // REL_X
+    push(&d, ev::REL, ev::REL_WHEEL_HI_RES, 5000); // past the bound
+    syn(&d);
+    poll(&mut input, &frames, true).unwrap();
+    let expected = vec![wheel(0, 120), wheel(0, -240), wheel(1, 120)];
+    assert_eq!(*frames.borrow(), [(expected, 5)]);
+    // Every record the driver keeps is one the compositor takes.
+    for r in &frames.borrow()[0].0 {
+        let e = zoraya_proto_input::Event {
+            kind: zoraya_protocol::Below(r.kind),
+            code: r.code,
+            value: r.value,
+        };
+        assert!(e.is_valid(), "{r:?}");
+    }
+}
+
+/// A device with the high-resolution wheels: their 120ths are taken, and
+/// the notches it also sends for the same turn are skipped, not counted.
+#[test]
+fn hi_res_wheels_are_taken_once() {
+    let d = wheel_device(true);
+    let mut input = up(&d);
+    let frames = Frames::default();
+    push(&d, ev::REL, ev::REL_WHEEL_HI_RES, 60);
+    push(&d, ev::REL, ev::REL_WHEEL, 1);
+    push(&d, ev::REL, ev::REL_HWHEEL_HI_RES, (-30i32) as u32);
+    push(&d, ev::REL, ev::REL_HWHEEL, (-1i32) as u32);
+    syn(&d);
+    poll(&mut input, &frames, true).unwrap();
+    assert_eq!(*frames.borrow(), [(vec![wheel(0, -60), wheel(1, -30)], 0)]);
+}
+
+/// A keyboard's relative events are not taken: wheels are a pointer's.
+#[test]
+fn a_keyboard_has_no_wheel() {
+    let d = device(Profile::Keyboard);
+    let mut input = up(&d);
+    let frames = Frames::default();
+    push(&d, ev::REL, ev::REL_WHEEL, 1);
+    push(&d, ev::KEY, 30, 1);
+    syn(&d);
+    poll(&mut input, &frames, true).unwrap();
+    assert_eq!(*frames.borrow(), [(vec![key(30, 1)], 1)]);
+}

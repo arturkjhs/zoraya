@@ -458,7 +458,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     }
     // Counted from the send: the compositor says `ClientGone` when the
     // client ends or when it refuses the record (9d re-review, W2).
-    st.windows.launched(tag);
+    st.windows.launched(tag, room.is_some_and(|r| r.untrusted));
     let terminal = if l.app == "term" {
         channel_create().ok()
     } else {
@@ -626,8 +626,7 @@ fn open_window(
     let record = zoraya_panel::window_record(room, app, title, entries)?;
     // One window a run, and the desktop's own applications keep their slots
     // (every client the panel made is counted by its tag, 9d re-review W2).
-    st.windows
-        .admit(i, &record.app, zoraya_compositor::MAX_CLIENTS)?;
+    st.windows.admit(i, &record.app, gui::SESSION_CLIENTS)?;
     let (client, compositor_end) = channel_create().map_err(|_| why::FAILED)?;
     let tag = st.next_tag;
     st.next_tag = st.next_tag.wrapping_add(1).max(1);

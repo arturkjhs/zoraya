@@ -182,6 +182,53 @@ static int zoraya_update(nsfb_t *nsfb, nsfb_bbox_t *box)
 	return 0;
 }
 
+/* The wheel (proposed ADR-0322). NetSurf's framebuffer front end scrolls
+ * 100 pixels for a press of mouse button 4 (up) or 5 (down), as X reports a
+ * wheel; the turns come in 120ths of a notch and each whole notch becomes a
+ * press and its release. A horizontal turn is not offered: libnsfb has no
+ * button for it. At most WHEEL_OWED_MAX notches wait. */
+#define WHEEL_STEP 120
+#define WHEEL_OWED_MAX 64
+static int wheel_rest;    /* 120ths not yet a notch */
+static int wheel_owed;    /* notches to send: > 0 down (5), < 0 up (4) */
+static int wheel_release; /* the button whose release is owed, or 0 */
+
+static void wheel_turn(int32_t dy)
+{
+	long long sum = (long long)wheel_rest + dy;
+	long long owed;
+
+	if (sum > (long long)WHEEL_OWED_MAX * WHEEL_STEP)
+		sum = (long long)WHEEL_OWED_MAX * WHEEL_STEP;
+	if (sum < -(long long)WHEEL_OWED_MAX * WHEEL_STEP)
+		sum = -(long long)WHEEL_OWED_MAX * WHEEL_STEP;
+	owed = (long long)wheel_owed + sum / WHEEL_STEP;
+	if (owed > WHEEL_OWED_MAX)
+		owed = WHEEL_OWED_MAX;
+	if (owed < -WHEEL_OWED_MAX)
+		owed = -WHEEL_OWED_MAX;
+	wheel_owed = (int)owed;
+	wheel_rest = (int)(sum % WHEEL_STEP);
+}
+
+/* The next press or release the wheel owes, if any. */
+static bool wheel_event(nsfb_event_t *event)
+{
+	if (wheel_release != 0) {
+		event->type = NSFB_EVENT_KEY_UP;
+		event->value.keycode = (enum nsfb_key_code_e)wheel_release;
+		wheel_release = 0;
+		return true;
+	}
+	if (wheel_owed == 0)
+		return false;
+	wheel_release = wheel_owed > 0 ? NSFB_KEY_MOUSE_5 : NSFB_KEY_MOUSE_4;
+	wheel_owed += wheel_owed > 0 ? -1 : 1;
+	event->type = NSFB_EVENT_KEY_DOWN;
+	event->value.keycode = (enum nsfb_key_code_e)wheel_release;
+	return true;
+}
+
 static bool zoraya_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
 {
 	struct zoraya_window_event e;
@@ -203,6 +250,8 @@ static bool zoraya_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
 				return true;
 			}
 		}
+		if (wheel_event(event))
+			return true;
 		int got = zoraya_window_poll(&e, timeout < 0);
 		if (got < 0)
 			return false;
@@ -263,6 +312,10 @@ static bool zoraya_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
 			event->type = NSFB_EVENT_CONTROL;
 			event->value.controlcode = NSFB_CONTROL_QUIT;
 			return true;
+		case ZW_WHEEL:
+			/* The move to e.a, e.b came before it as ZW_MOVE. */
+			wheel_turn((int32_t)e.d);
+			continue;
 		case ZW_FOCUS:
 			if (!e.a && held_mods != 0)
 				lost_focus = true;

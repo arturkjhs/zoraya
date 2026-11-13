@@ -47,8 +47,9 @@ pub use rooms::{Cell, DockApp, DockGeometry, Record};
 use window::Buffer;
 pub use window::{Frame, Window, WindowKind, Zone};
 
-/// Client connections at once `[assumption, ADR-0093]`.
-pub const MAX_CLIENTS: usize = 8;
+/// Client connections at once (proposed ADR-0323; 8 before, an assumption of
+/// ADR-0093).
+pub const MAX_CLIENTS: usize = gui::MAX_CLIENTS;
 /// Input drivers at once.
 pub const MAX_INPUTS: usize = 4;
 /// Windows of all clients at once, popups included.
@@ -411,6 +412,10 @@ pub struct Compositor<P: Platform> {
     gesture: Option<(usize, u64)>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
+    /// The wheels' turn this frame, in `gui::WHEEL_STEP`ths (horizontal,
+    /// vertical), sent at its end to the window under the pointer
+    /// (proposed ADR-0322).
+    wheel: (i32, i32),
     switcher: Option<Switcher>,
     /// The screen as last composed with the switcher open: a pointer that
     /// only moves over it is drawn on this, not on a new blur.
@@ -518,6 +523,7 @@ impl<P: Platform> Compositor<P> {
             gesture: None,
             carried: None,
             pending_pointer: false,
+            wheel: (0, 0),
             switcher: None,
             switcher_frame: Vec::new(),
             scene: false,
@@ -938,6 +944,7 @@ impl<P: Platform> Compositor<P> {
                         }
                     }
                     self.pointer_moved_or_pressed();
+                    self.send_wheel();
                 }
             }
             Incoming::Empty => {}
@@ -974,6 +981,16 @@ impl<P: Platform> Compositor<P> {
                     y = v * span(self.height) / i64::from(input::AXIS_MAX);
                 }
                 self.move_pointer(x, y);
+            }
+            input::kind::WHEEL => {
+                // Gathered for the frame, at most `WHEEL_MAX` either way.
+                let v = e.value as i32;
+                let bound = |a: i32| a.saturating_add(v).clamp(-gui::WHEEL_MAX, gui::WHEEL_MAX);
+                if e.code == 0 {
+                    self.wheel.1 = bound(self.wheel.1);
+                } else {
+                    self.wheel.0 = bound(self.wheel.0);
+                }
             }
             _ => self.key_event(e.code, e.value),
         }
@@ -1779,6 +1796,58 @@ impl<P: Platform> Compositor<P> {
             };
             self.send_event(key.client, m);
         }
+    }
+
+    /// After a frame: the wheels' turn to the window under the pointer, as
+    /// the pointer goes (proposed ADR-0322): to a body only, never during a
+    /// drag of a window or an entry, nor with the switcher open, nor to a
+    /// window under a sheet or a sheet still guarded (ADR-0245), nor to a
+    /// legacy surface, whose protocol has no wheel. Focus does not move;
+    /// the modifiers go only to the focused client.
+    fn send_wheel(&mut self) {
+        let (dx, dy) = core::mem::take(&mut self.wheel);
+        if (dx, dy) == (0, 0) {
+            return;
+        }
+        let Some((x, y)) = self.pointer else { return };
+        if self.drag.is_some() || self.carried.is_some() || self.switcher.is_some() {
+            return;
+        }
+        let Some((key, Zone::Body)) = self.under(x, y) else {
+            return;
+        };
+        if self.sheet_of(key).is_some() {
+            return;
+        }
+        let now = self.platform.now();
+        if self
+            .sheet_guards
+            .iter()
+            .any(|g| g.sheet == key && now < g.until)
+        {
+            return;
+        }
+        let Some(i) = self.index(key) else { return };
+        let w = &self.windows[i];
+        let body = w.body_rect();
+        if w.kind == WindowKind::Legacy || !body.contains(x, y) {
+            return;
+        }
+        let s = self.scale.factor();
+        let m = gui::Wheel {
+            dropped: 0,
+            window: key.id,
+            x: (x - body.x) as u32 / s,
+            y: (y - body.y) as u32 / s,
+            dx,
+            dy,
+            modifiers: Flags(if self.focus.is_some_and(|f| f.client == key.client) {
+                self.modifiers_now()
+            } else {
+                0
+            }),
+        };
+        self.send_event(key.client, m);
     }
 
     // ---- windows ----------------------------------------------------------
@@ -2770,6 +2839,10 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(end);
             return status::UNSUPPORTED;
         }
+        if !self.within_client_account(&record) {
+            self.platform.close(end);
+            return status::OVER_QUOTA;
+        }
         let Some(slot) = self.clients.iter().position(Option::is_none) else {
             self.platform.close(end);
             return status::NO_MEMORY;
@@ -3731,7 +3804,8 @@ with_dropped!(
     gui::Pointer,
     gui::Focus,
     gui::WindowFocus,
-    gui::WindowPointerMods
+    gui::WindowPointerMods,
+    gui::Wheel
 );
 
 #[cfg(test)]

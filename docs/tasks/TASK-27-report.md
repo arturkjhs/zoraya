@@ -563,6 +563,56 @@ For the architect's manual check of real sites (a terminal from the desktop, hom
 or `make run-net` shows the dock): `netsurf https://example.org/`, `netsurf http://example.com/`, `netsurf https://www.wikipedia.org/` (a page that
 links to other hosts will show their images missing: add `+net upload.wikimedia.org` words to the line), and `netsurf` alone for the welcome page.
 
+## 9e: the wheel, 32 compositor clients, late window answers (branch `work/9e`, 2026-11-13)
+
+Done (ADRs proposed: ADR-0322, ADR-0323; notes in ADR-0262 and ADR-0317's open questions):
+- **Wheel (ADR-0322).** `zoraya-protocol` takes `i32`; `zoraya-proto-gui` `Wheel` (ordinal 46, a client event: window, logical place,
+  `dx`/`dy` in 120ths of a notch, `dy` > 0 toward the person, at most 64 notches, modifiers to the focused client only);
+  `zoraya-proto-input` record kind `WHEEL` (`Below<3>`); `zoraya-virtio-input` takes `REL_WHEEL`/`REL_HWHEEL` (times 120, the
+  vertical sign turned) or their `HI_RES` axes when declared (the notches then skipped); it dropped every `EV_REL` before. The
+  compositor sums a frame's turns and sends one `Wheel` to the body under the pointer (rules of `WindowPointerMods`: no focus
+  change; nothing during a move, drag or the switcher, under a sheet, to a guarded sheet or a legacy surface). `zoraya-surface`
+  `Event::Wheel` (a `Move` first), `zoraya_window_poll` kind 8 (`ZW_WHEEL`), NetSurf's libnsfb surface presses mouse 5/4 per
+  whole notch (NetSurf scrolls 100 px; no horizontal button in libnsfb); the terminal scrolls three lines a notch
+  (`zoraya_term::WheelLines`). `zoraya-app` ignores it (backlog). The runner's GUI step `wheel X Y up|down [N]` (QMP
+  `wheel-up`/`wheel-down`). Measured: QEMU 11.1.2's virtio tablet delivers them as `REL_WHEEL` (the NetSurf step passes).
+- **Clients (ADR-0323).** `MAX_CLIENTS` 8 -> 32 (= `MAX_WINDOWS`; a client's record is about 1.5 KiB, the windows' copies
+  stay the memory bound); in `zoraya-proto-gui`: `ROOM_CLIENTS` 3, `UNTRUSTED_CLIENTS` 12, `SESSION_CLIENTS` 20. An untrusted
+  room's `AddRoomClient` past its account is `OVER_QUOTA`, counted as the room's refusal, `ClientGone` for its tag. The
+  panel's `OpenWindows` counts the session's clients apart from untrusted rooms' launches and keeps `RESERVED_CLIENTS` (3)
+  out of `SESSION_CLIENTS`. An untrusted client's toplevels were already held to its account's 3 surfaces (`OVER_QUOTA`
+  before `MAX_TOPLEVELS`); unchanged.
+- **Late answers.** `zosh` subscribes the panel's window channel at its prompt and closes any answer that arrives after
+  `windowclient::ask` gave up (`drain_stale`), so its client end no longer holds the compositor's client and the panel's
+  count until the next request.
+- Tests: host tests in `zoraya-proto-gui`, `-proto-input`, `-virtio-input`, `-compositor` (`tests_wheel.rs`, client
+  accounts in `tests_usage.rs`), `-surface`, `-term`, `-panel`, `zoraya-test-runner`; `tests/gui/terminal.script` (wheel
+  through the scrollback), `tests/gui/windows.script` (nine more terminals, eleven clients, the tenth takes keys),
+  `tests/gui/netsurf.script` (`/ns/tall` scrolled 15 notches down and back).
+
+Ran on the Mac (HVF, one QEMU at a time): `make check`; host tests of the ten touched crates (533 passed); `cd fuzz && cargo
++nightly-2026-11-12 check --bins`; `make test-gui GUI_RUNS="terminal:auto:1 windows:auto:1"` (79 and 61 steps; the first
+windows run failed at `poweroff` typed into a panel terminal, which has no power: the script now returns to init's
+terminal); `make netsurf` and `make test-netsurf` (72 steps, also after steps 3 and 4); `make test-hand-run` (all three
+runs). Not run: TCG and scale-2 GUI runs, the fuzzers themselves, `make test`, any candidate run (none tagged).
+Limits: the wheel reaches no `zoraya-app` program (file manager, editor, settings); NetSurf takes no horizontal turn; the
+session's 20 clients are not carved (a session of 32 clients leaves untrusted rooms none, as for windows, ADR-0262).
+
+Review fixes (opus-review of 9e): E1 `t_gui`'s flood opened 4 clients in one untrusted room, past the new `ROOM_CLIENTS`
+(3), and the fourth create panicked; it now opens 3, checks that a fourth is refused (its end closed), and asks one client
+for 4 toplevels (3 admitted, 1 `OVER_QUOTA`); another client of the room is refused too. E2 `tools/test-map.txt`: the
+compositor's, the GUI, input and display protocols' and the virtio GPU and input crates also run `test-qemu`. W3
+`tests_wheel.rs`: a test for each early return of `send_wheel` (a sheet over the window, a sheet in its guard, a legacy
+surface, a carried entry; each fails with its return deleted, checked by hand once) and for overlapping bodies. W4 a
+refusal for a room not yet listed forgets the refusals of rooms without a client (the list is at most the untrusted
+clients plus one); the test checks the other clients and accounts are unchanged. N5 ADR-0323's open question names the
+deviation from ADR-0262's four accounts. N6 `terminal.script` checks the view back at the prompt after the wheel turns
+down; `windows.script` drags the tenth window against the bar before reading it, since its cascade place differs at
+scale 2 (the scale-2 run failed there before). Ran: `make check`; `cargo test -p zoraya-compositor -p zoraya-proto-gui
+-p zoraya-panel` (235 passed); the fuzz crate's `check --bins`; `make test-qemu-auto-default` (`t_gui: all passed`;
+`make test-qemu-one` has no GPU and skips `t_gui`); `make test-gui` for `terminal:auto:1` (82 steps), `windows:auto:1`
+and `windows:auto:2` (62 steps each).
+
 ## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
 
 Result accepted by the architect: the `ubuntu-24.04-arm` runner has no KVM (`/dev/kvm` missing; `-accel kvm` exits 1 with

@@ -43,6 +43,10 @@
 //! rclick X Y        a right click at (X, Y)
 //! mclick MOD X Y    a left click with MOD (shift, ctrl, alt, meta) held
 //! mdrag MOD X Y X2 Y2 [HOLD]  a drag with MOD held at its release
+//! wheel X Y up|down [N]  move the pointer to (X, Y) and turn the wheel N
+//!                   notches (1 if not given, at most 64): QMP's `wheel-up`
+//!                   and `wheel-down` buttons, which QEMU's virtio tablet
+//!                   reports as `REL_WHEEL` (proposed ADR-0322)
 //!
 //! Coordinates are logical pixels: the runner multiplies them by the
 //! display's scale (ADR-0164), which it takes from the screendump's width
@@ -186,6 +190,9 @@ pub enum Step {
     Click(i64, i64),
     DoubleClick(i64, i64),
     RightClick(i64, i64),
+    /// The pointer to a place, then the wheel turned that many notches:
+    /// toward the person (`down`, true) or away.
+    Wheel(i64, i64, bool, u32),
     /// A click with a modifier's QEMU key held.
     ModClick(String, i64, i64),
     /// A drag with a modifier held from before the release.
@@ -281,6 +288,29 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 } else {
                     Step::RightClick(x, y)
                 }
+            }
+            "wheel" => {
+                let v: Vec<&str> = rest.split_whitespace().collect();
+                let place = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+                let (x, y, way, n) = match v[..] {
+                    [x, y, way] => (place(x)?, place(y)?, way, 1),
+                    [x, y, way, n] => (
+                        place(x)?,
+                        place(y)?,
+                        way,
+                        n.parse::<u32>().map_err(|_| bad("not a count"))?,
+                    ),
+                    _ => return Err(bad("wheel X Y up|down [N]")),
+                };
+                let down = match way {
+                    "down" => true,
+                    "up" => false,
+                    _ => return Err(bad("wheel X Y up|down [N]")),
+                };
+                if !(1..=64).contains(&n) {
+                    return Err(bad("a wheel turns 1 to 64 notches"));
+                }
+                Step::Wheel(x, y, down, n)
             }
             "mclick" | "mdrag" => {
                 let (m, rest) = rest.split_once(' ').ok_or_else(|| bad("MOD and a place"))?;
@@ -941,6 +971,7 @@ impl Run {
                 | Step::Click(..)
                 | Step::DoubleClick(..)
                 | Step::RightClick(..)
+                | Step::Wheel(..)
                 | Step::ModClick(..)
                 | Step::ModDrag(..)
                 | Step::Drag(..)
@@ -1240,6 +1271,20 @@ impl Run {
                 std::thread::sleep(AFTER_CLICK);
                 Ok(())
             }
+            Step::Wheel(x, y, down, n) => {
+                let (size, k) = self.display()?;
+                let at = (x * k, y * k);
+                let button = if *down { "wheel-down" } else { "wheel-up" };
+                self.qmp.pointer(at, size, None)?;
+                for _ in 0..*n {
+                    self.qmp
+                        .pointer_batch(at, size, &[(button, true), (button, false)])?;
+                    // One notch a frame of the tablet, as a hand turns it.
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                std::thread::sleep(AFTER_CLICK);
+                Ok(())
+            }
             Step::ModClick(m, x, y) => {
                 let (size, k) = self.display()?;
                 let at = (x * k, y * k);
@@ -1491,6 +1536,14 @@ mod tests {
         );
         assert_eq!(parse("dclick 3 4\n").unwrap(), [Step::DoubleClick(3, 4)]);
         assert_eq!(parse("rclick 3 4\n").unwrap(), [Step::RightClick(3, 4)]);
+        assert_eq!(
+            parse("wheel 3 4 down\nwheel 5 6 up 3\n").unwrap(),
+            [Step::Wheel(3, 4, true, 1), Step::Wheel(5, 6, false, 3)]
+        );
+        assert!(parse("wheel 3 4 left\n").is_err());
+        assert!(parse("wheel 3 4 down 0\n").is_err());
+        assert!(parse("wheel 3 4 down 65\n").is_err());
+        assert!(parse("wheel 3 down\n").is_err());
         assert_eq!(
             parse("mclick meta 3 4\n").unwrap(),
             [Step::ModClick(String::from("meta"), 3, 4)]

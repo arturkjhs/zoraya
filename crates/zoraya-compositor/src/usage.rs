@@ -33,6 +33,17 @@ pub const UNTRUSTED_AREAS: u64 = 8;
 /// Untrusted rooms with surfaces at once (the keeper's four, ADR-0269).
 pub const UNTRUSTED_ACCOUNTS: usize = 4;
 
+// The client columns (proposed ADR-0323) are the surfaces' shape: a client
+// of a room per surface, four accounts, the session the rest, and no more
+// clients than windows.
+const _: () = {
+    use zoraya_proto_gui as gui;
+    assert!(gui::ROOM_CLIENTS == ROOM_SURFACES);
+    assert!(gui::UNTRUSTED_CLIENTS == UNTRUSTED_ACCOUNTS * gui::ROOM_CLIENTS);
+    assert!(gui::SESSION_CLIENTS + gui::UNTRUSTED_CLIENTS == crate::MAX_CLIENTS);
+    assert!(crate::MAX_CLIENTS <= crate::MAX_WINDOWS);
+};
+
 /// An untrusted room's account in the compositor, as `top` would list it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Account {
@@ -101,16 +112,55 @@ impl<P: Platform> Compositor<P> {
             && all_pixels + more_pixels <= UNTRUSTED_AREAS * area
             && (!new_account || rooms.len() < UNTRUSTED_ACCOUNTS);
         if !ok {
-            match self.refusals.iter_mut().find(|(r, _)| *r == room) {
-                Some((_, n)) => *n = n.saturating_add(1),
-                None => self.refusals.push((room, 1)),
-            }
+            self.count_refusal(room);
         }
         ok
     }
 
-    /// Forgets the refusals of rooms that have no client any more, so the
-    /// list is never longer than the clients there are.
+    /// Whether a new client with `record` fits its untrusted room's account
+    /// (proposed ADR-0323): at most `gui::ROOM_CLIENTS` of the room and
+    /// `gui::UNTRUSTED_CLIENTS` of all untrusted rooms. A client that is not
+    /// in an untrusted room is not asked. A refusal is counted for the room
+    /// and changes nothing else (INV-0262-1).
+    pub(crate) fn within_client_account(&mut self, record: &crate::Record) -> bool {
+        if !record.untrusted || record.room.is_empty() {
+            return true;
+        }
+        let mut room = 0;
+        let mut all = 0;
+        for c in self.clients.iter().flatten() {
+            if c.record.untrusted && !c.record.room.is_empty() {
+                all += 1;
+                if c.record.room == record.room {
+                    room += 1;
+                }
+            }
+        }
+        let ok = room < zoraya_proto_gui::ROOM_CLIENTS && all < zoraya_proto_gui::UNTRUSTED_CLIENTS;
+        if !ok {
+            self.count_refusal(record.room.clone());
+        }
+        ok
+    }
+
+    /// Counts a refusal for `room`. A room not listed yet is listed after
+    /// the refusals of rooms without a client are forgotten: a client
+    /// refused for a room that has none (past `UNTRUSTED_CLIENTS`) is
+    /// listed until the next new room's refusal or the next client goes, so
+    /// the list is never longer than the untrusted clients there are, plus
+    /// one.
+    fn count_refusal(&mut self, room: String) {
+        match self.refusals.iter_mut().find(|(r, _)| *r == room) {
+            Some((_, n)) => *n = n.saturating_add(1),
+            None => {
+                self.prune_refusals();
+                self.refusals.push((room, 1));
+            }
+        }
+    }
+
+    /// Forgets the refusals of rooms that have no untrusted client any
+    /// more (see `count_refusal` for the bound this keeps).
     pub(crate) fn prune_refusals(&mut self) {
         let clients = &self.clients;
         self.refusals.retain(|(room, _)| {

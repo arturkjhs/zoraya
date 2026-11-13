@@ -35,6 +35,32 @@ pub fn refusal_text(status: u32) -> &'static str {
     }
 }
 
+/// Reads every message waiting on `panel` and closes what they carry: outside
+/// [`ask`] nothing is asked, so each is an answer that came after its wait
+/// ended, whose client end would otherwise keep the compositor's client,
+/// and the panel's count of the shell's window, alive until the next ask
+/// (9e). The shell calls it when the channel is readable at its prompt;
+/// `None` when a read failed for another reason than an empty queue.
+pub fn drain_stale(panel: Handle) -> Option<usize> {
+    let mut buffer = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
+    let mut handles = [panel; 4];
+    let mut drained = 0;
+    loop {
+        match channel_read(panel, &mut buffer, &mut handles) {
+            Ok(sizes) => {
+                for h in &handles[..sizes.handles as usize] {
+                    let _ = handle_close(*h);
+                }
+                drained += 1;
+            }
+            Err((Status::WouldBlock, _)) => return Some(drained),
+            // A message this cannot take, or the panel gone: the caller
+            // stops listening rather than wake for it again.
+            Err(_) => return None,
+        }
+    }
+}
+
 /// Asks `panel` for a window for `app`: the client end, or the problem.
 pub fn ask(panel: Handle, app: &str, title: &str, entries: &str) -> Result<Handle, String> {
     let m = OpenWindow {

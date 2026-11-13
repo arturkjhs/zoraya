@@ -602,3 +602,29 @@ fn a_reply_is_awaited_while_the_compositor_lives() {
     );
     assert_eq!(got, None, "too long a message is not a reply; then gone");
 }
+
+/// Proposed ADR-0322: a notch is three lines, toward the person is forward
+/// (negative for `scroll_view`), parts of a notch are kept until they make
+/// a line, and an extreme turn is bounded.
+#[test]
+fn wheel_turns_become_lines() {
+    let mut w = WheelLines::default();
+    assert_eq!(w.turn(120), -3);
+    assert_eq!(w.turn(-240), 6);
+    assert_eq!(w.turn(30), 0);
+    assert_eq!(w.turn(10), -1);
+    assert_eq!(w.turn(-40), 1);
+    assert_eq!(w.turn(0), 0);
+    let mut w = WheelLines::default();
+    assert_eq!(w.turn(i32::MIN), SCROLLBACK as isize);
+    assert_eq!(w.turn(i32::MAX), -(SCROLLBACK as isize));
+    let mut t = Term::new(10, 4);
+    for _ in 0..20 {
+        t.write(b"x\n");
+    }
+    let mut w = WheelLines::default();
+    t.scroll_view(w.turn(-120));
+    assert_eq!(t.view(), 3);
+    t.scroll_view(w.turn(i32::MAX));
+    assert_eq!(t.view(), 0);
+}

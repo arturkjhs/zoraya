@@ -502,3 +502,59 @@ fn a_resize_with_a_frame_in_flight_and_damage_after_it() {
     assert_eq!(s.platform.commits.len(), 2);
     assert_eq!(s.platform.commits[1], (0, 0, 40, 30));
 }
+
+fn wheel(s: &mut Surface<Fake>, window: u32, x: u32, y: u32, dx: i32, dy: i32) {
+    s.platform.push(&gui::Wheel {
+        dropped: 0,
+        window,
+        x,
+        y,
+        dx,
+        dy,
+        modifiers: zoraya_protocol::Flags(0),
+    });
+}
+
+/// Proposed ADR-0322: a turn is an event at its pixel, after a move there
+/// if the pointer was elsewhere; another window's, an empty one, or one
+/// outside the buffer is kept inside or dropped.
+#[test]
+fn a_wheel_is_an_event_at_its_pixel() {
+    let mut s = open(2);
+    pointer(&mut s, 5, 6, 0);
+    wheel(&mut s, 3, 5, 6, 0, 120);
+    wheel(&mut s, 3, 8, 6, -30, 0);
+    wheel(&mut s, 4, 8, 6, 0, 120); // another window's
+    wheel(&mut s, 3, 8, 6, 0, 0); // no turn
+    wheel(&mut s, 3, 5000, 4000, 0, i32::MIN);
+    let mut got = Vec::new();
+    while let Some(e) = s.event(false) {
+        got.push(e);
+    }
+    assert_eq!(
+        got,
+        [
+            Event::Move { x: 10, y: 12 },
+            Event::Wheel {
+                x: 10,
+                y: 12,
+                dx: 0,
+                dy: 120
+            },
+            Event::Move { x: 16, y: 12 },
+            Event::Wheel {
+                x: 16,
+                y: 12,
+                dx: -30,
+                dy: 0
+            },
+            Event::Move { x: 199, y: 99 },
+            Event::Wheel {
+                x: 199,
+                y: 99,
+                dx: 0,
+                dy: i32::MIN
+            },
+        ]
+    );
+}

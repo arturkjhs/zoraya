@@ -41,6 +41,66 @@ screen ~> _
 # otherwise reached no window, 2026-11-09).
 click 400 80
 region 130 76 100 4 f7f7f8
+# More clients than the compositor's 8 slots of before (proposed ADR-0323):
+# nine terminals from the panel (System+Enter), eleven clients with this one
+# and the chooser.
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+pause 1500
+chord meta ret
+# The tenth window is waited for, not a fixed time: under CI's TCG the
+# terminals reach the compositor late ("term: waiting for the compositor"),
+# and after 4 s only five windows were up, so the drag below took the fifth
+# (cascaded 160 to the left) and the rows read at (361, 64) began mid-line
+# with "or help tour." (2026-11-13). Each window is cascaded 32 to the
+# right, the ninth of the panel's (n = 9) to the screen's right edge: its
+# frame alone covers x 1004..1020 (the eighth's ends at 1000), so its body
+# there is the tenth window, at both scales (1024 wide logically).
+region 1004 300 16 100 ffffff
+pause 1000
+shot windows-many
+# The tenth window, on top where the cascade meets the work area's corner,
+# has its shell: it takes keys after a click on its title bar. With 8 slots
+# the compositor refused the seventh of them. Where the cascade stops it
+# depends on the terminal's height, which is not the same at both scales
+# (its title bar is at y 196 at scale 1, 209 at scale 2), so it is first
+# dragged by its title bar (y 220 is in it at both) up against the bar,
+# where the compositor stops every window: its body then starts at
+# (361, 64), the bar's 28 and the title bar's 36, at both scales.
+# The drag moves it in steps, and the compositor draws each; under TCG a
+# frame read after the release can still show it on the way, a row or more
+# below its place, and a `screen` there matched the banner a row too low, so
+# that the prompt, read later at its place, was above the match (CI,
+# 2026-11-13). So the click that focuses it comes first: its input follows
+# the release, and its focused title bar, waited for against the bar, is
+# drawn only with the window at its place; then its rows are read.
+drag 560 220 560 30
+click 560 46
+region 600 33 60 4 f7f7f8
+origin 361 64
+screen Type help to begin, or help tour.
+screen ~> _
+pause 500
+type echo eleven clients\r
+screen eleven clients
+screen ~> _
+# A terminal of the panel's has no power to end the machine: back to the
+# first, init's, whose title bar shows above the others.
+click 300 80
+region 130 76 100 4 f7f7f8
 # Keys typed at once after the focusing click can be lost under TCG (the
 # first five of poweroff, locally and on CI); a hand is not that quick.
 pause 500

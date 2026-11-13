@@ -48,8 +48,9 @@ crates/zoraya-stream/         test-qemu
 crates/zoraya-ramdisk/        test-qemu test-boot
 crates/zoraya-elf/            test-qemu test-boot
 
-# The desktop.
-crates/zoraya-compositor/     test-gui
+# The desktop. t_gui (test-qemu) runs compd, gpud and inputd (and plays an input
+# driver): their crates map to test-qemu too.
+crates/zoraya-compositor/     test-gui test-qemu
 crates/zoraya-term/           test-gui test-tour-gui
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
@@ -68,10 +69,11 @@ crates/zoraya-fonts/          test-gui
 crates/zoraya-paint/          test-gui
 crates/zoraya-keymap/         test-gui
 crates/zoraya-panel/          test-gui test-netsurf
-crates/zoraya-proto-gui/      test-gui
-crates/zoraya-proto-display/  test-gui
-crates/zoraya-virtio-gpu/    test-gui
-crates/zoraya-proto-input/    test-gui
+crates/zoraya-proto-gui/      test-gui test-qemu
+crates/zoraya-proto-display/  test-gui test-qemu
+crates/zoraya-virtio-gpu/    test-gui test-qemu
+crates/zoraya-virtio-input/  test-gui test-qemu
+crates/zoraya-proto-input/    test-gui test-qemu
 crates/zoraya-proto-chooser/  test-gui test-netsurf
 crates/zoraya-chooser/        test-gui
 crates/zoraya-fsclient/       test-gui

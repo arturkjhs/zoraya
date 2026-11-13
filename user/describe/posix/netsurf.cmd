@@ -24,7 +24,8 @@ Its resources are in /usr/share/netsurf, which the toolchain set gives. It gets 
 cannot save a page or a download (the chooser comes later); its cache and settings are in memory.
 
 Known limits: JavaScript and SVG are not built; the text uses a bitmap font with Latin characters (ADR-0318);
-there is no wheel, no cursor shape and no clipboard (ADR-0317).
+there is no cursor shape and no clipboard (ADR-0317). The wheel scrolls the page or the frame under the
+pointer, 100 pixels a notch; a horizontal wheel does nothing (libnsfb has no button for it).
 
 EXAMPLES
   netsurf

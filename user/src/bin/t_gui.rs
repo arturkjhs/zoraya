@@ -123,6 +123,21 @@ impl Client {
         decode::<gui::Done>(&reply, 0).expect("Done").1.status.0
     }
 
+    /// A toplevel of `width × height` logical pixels (at most one page of
+    /// buffer at scale 3): its status. Its memory and pixels are not kept.
+    fn create_toplevel(&mut self, width: u32, height: u32) -> u32 {
+        let (memory, _) = surface_memory(1024);
+        let m = message(&gui::CreateToplevel { width, height }, 5);
+        let reply = self.call(&m, &[moved_entry(memory, Rights::READ)]);
+        if let Ok((_, c)) = decode::<gui::Created>(&reply, 0) {
+            return c.status.0;
+        }
+        decode::<ErrorReply>(&reply, 0)
+            .expect("Created or an error")
+            .1
+            .status
+    }
+
     fn create(&mut self, width: u32, height: u32, fill: u32) -> u32 {
         let (memory, pixels) = surface_memory((width * height) as usize);
         pixels.fill(fill);
@@ -497,24 +512,37 @@ fn no_injection(gui: &Gui, a: &mut Client, b: &mut Client) {
     println!("t_gui: no client can inject or read ok");
 }
 
-/// The gate's `service-floods` row, surfaces (ADR-0268 point 3, ADR-0262 item
-/// 2, ADR-0294, INV-0262-1) through the real compositor: the clients of an
-/// untrusted room share its account of `ROOM_SURFACES`; clients of the room
-/// that ask for more are refused with one status each; another untrusted
-/// room and `home` still get their own. This test plays the room's clients
-/// itself; no program from outside the image runs.
+/// The gate's `service-floods` row, clients and surfaces (ADR-0268 point 3,
+/// ADR-0262 item 2, ADR-0294, INV-0262-1, proposed ADR-0323, INV-0323-1)
+/// through the real compositor: an untrusted room's clients are held to
+/// `ROOM_CLIENTS`, one past is refused (its end closed); the clients of the
+/// room share its account of `ROOM_SURFACES`: one client asking for one more
+/// is refused with one status, and so is another client of the room; another
+/// untrusted room and `home` still get their own. This test plays the room's
+/// clients itself; no program from outside the image runs.
 fn surface_flood(gui: &Gui) {
     use zoraya_compositor::usage::ROOM_SURFACES;
-    let mut agent: Vec<Client> = (0..ROOM_SURFACES + 1)
+    use zoraya_proto_gui::ROOM_CLIENTS;
+    let mut agent: Vec<Client> = (0..ROOM_CLIENTS)
         .map(|_| Client::in_room(gui, "agent", true))
         .collect();
-    let results: Vec<u32> = agent
-        .iter_mut()
-        .map(|c| c.create(8, 8, 0x00aa_aaaa))
+    // One client past the room's: the compositor closes its end.
+    let past = Client::in_room(gui, "agent", true);
+    settle(gui);
+    let closed = zoraya_user::object_get_signals(past.end)
+        .is_ok_and(|s| s & channel_signals::PEER_CLOSED != 0);
+    assert!(
+        closed,
+        "a client past ROOM_CLIENTS is refused, its end closed"
+    );
+    let _ = handle_close(past.end);
+    // One client asks for one surface more than the room's account.
+    let results: Vec<u32> = (0..=ROOM_SURFACES)
+        .map(|_| agent[0].create_toplevel(8, 8))
         .collect();
     let (admitted, refused): (Vec<u32>, Vec<u32>) = results.iter().partition(|s| **s == status::OK);
     println!(
-        "t_gui: untrusted room agent: {} surfaces admitted, {} refused (status {:?}); another room and home admitted",
+        "t_gui: untrusted room agent: a client past {ROOM_CLIENTS} refused; {} surfaces admitted, {} refused (status {:?}); another room and home admitted",
         admitted.len(),
         refused.len(),
         refused.first()
@@ -525,13 +553,12 @@ fn surface_flood(gui: &Gui) {
         [status::OVER_QUOTA],
         "the refusal is OVER_QUOTA (8)"
     );
-    // The refused client is done (the compositor serves 8 clients at once).
-    let refused_at = results
-        .iter()
-        .position(|s| *s != status::OK)
-        .expect("one refused");
-    let _ = handle_close(agent.remove(refused_at).end);
-    settle(gui);
+    // The account is the room's, not the client's.
+    assert_eq!(
+        agent[1].create(8, 8, 0x00aa_aaaa),
+        status::OVER_QUOTA,
+        "another client of the room shares its account"
+    );
     // Another untrusted room has its own account, and home is not asked.
     let mut other = Client::in_room(gui, "other", true);
     assert_eq!(
@@ -545,20 +572,22 @@ fn surface_flood(gui: &Gui) {
         status::OK,
         "home is not refused"
     );
-    // Surfaces given back are given again.
+    // Surfaces and a client given back are given again.
     let _ = handle_close(agent.remove(0).end);
     settle(gui);
+    assert_eq!(
+        agent[0].create(8, 8, 0x00aa_aaaa),
+        status::OK,
+        "closed surfaces free room"
+    );
     let mut again = Client::in_room(gui, "agent", true);
     assert_eq!(
         again.create(8, 8, 0x00aa_aaaa),
         status::OK,
-        "a closed surface frees room"
+        "a closed client frees a place"
     );
-    // Every client opened here goes. The compositor serves MAX_CLIENTS (8)
-    // at once; the five this left open, with `a` and `b`, left the later
-    // tests one free slot, which full_redraw's client, closed just before,
-    // could still hold when switcher_cost's connected: refused, PeerClosed
-    // (the CI run of candidate/work-q7-a).
+    // Every client opened here goes, so that the later tests find the
+    // slots they had before.
     for c in agent.into_iter().chain([other, home, again]) {
         let _ = handle_close(c.end);
     }
