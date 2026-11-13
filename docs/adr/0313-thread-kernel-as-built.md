@@ -82,6 +82,17 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
    its kernel stack go back to the job in `thread_exit` or at its leave (`Paid::release_exited`); the memory itself is freed by the
    reaper at the next switch. The refund is made before the `clear` store and its wake (which may yield, in steps of 64, with
    that many joiners), so a joiner woken by the store always sees the figures refunded.
+6. **A failed first lists-making gives back the member list if it can** (review of step 1). `Members::shrink` builds the smaller
+   list with `try_reserve_exact` and swaps it in (the kernel allocator has no `realloc`, and `Vec::shrink_to` cannot fail
+   softly). If that fails, the large list stays and so does its charge: `multi_cost` records it (while no lists exist), the next
+   `ensure_multi` pays only the rest, and the teardown refunds it.
+7. **A `Move` list holds its handles from the check to the child** (review of step 1; refines ADR-0042 and ADR-0102's "nothing of
+   the caller's changes until the child exists"). `spawn` and `snapshot_process` pause between their check and the removal of the
+   moved handles; a sibling could move the same handle out meanwhile, leaving it in the child and in a receiver (a handle without
+   DUPLICATE twice). `zoraya_handle::Table::begin_move` marks the entry held: no other call finds, duplicates, closes or moves it
+   (they see `BadHandle`) until the call ends the hold, by taking the entry or by giving it back on failure. Other calls that
+   check, pause and remove were listed: `channel_write` checks and removes under one lock; `dma_unpin` removes after a
+   repeatable `unpin`, which gives nobody more rights. A handle listed twice in one `Move` list now fails with `BadHandle`.
 
 ## Consequences
 

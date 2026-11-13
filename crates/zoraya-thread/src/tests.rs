@@ -216,7 +216,7 @@ fn shrink_and_release_give_the_room_back() {
     m.join(0, 0).unwrap();
     m.reserve_all().unwrap();
     assert!(m.capacity() >= MAX_THREADS);
-    m.shrink();
+    m.shrink().unwrap();
     assert!(m.capacity() < MAX_THREADS);
     assert_eq!(m.len(), 1, "the live entry stays");
     m.reserve_all().unwrap();
@@ -224,4 +224,27 @@ fn shrink_and_release_give_the_room_back() {
     m.release();
     assert_eq!(m.capacity(), 0);
     assert!(m.is_empty());
+}
+
+/// `shrink` builds the smaller list first and swaps it in: the members and
+/// their order survive, the room is the live count (or one), and a list that
+/// is small already is left alone. (Its failure path, an `Err` that leaves
+/// the large list, needs an allocator that fails: the kernel's QEMU test
+/// covers the charge that follows.)
+#[test]
+fn shrink_keeps_the_members_in_order() {
+    let mut m = Members::<u64>::new_small().unwrap();
+    m.join(0, 10).unwrap();
+    m.reserve_all().unwrap();
+    m.join(1, 11).unwrap();
+    m.join(2, 12).unwrap();
+    m.shrink().unwrap();
+    assert!(m.capacity() < MAX_THREADS);
+    assert_eq!(m.len(), 3);
+    let room = m.capacity();
+    m.shrink().unwrap();
+    assert_eq!(m.capacity(), room);
+    assert!(!m.leave(0).owner);
+    assert!(!m.leave(1).owner);
+    assert!(m.leave(2).owner);
 }
