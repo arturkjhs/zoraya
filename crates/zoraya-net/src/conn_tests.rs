@@ -1403,7 +1403,7 @@ mod ping_by_name {
     fn lookup(service: &mut Service, w: &mut World) -> Option<Vec<u8>> {
         for _ in 0..20_000 {
             w.turn();
-            for a in w.conns.take_lookups() {
+            if let Some(a) = w.conns.take_lookups().into_iter().next() {
                 return service.resolve_done(&mut w.client, a, w.now).map(|r| r.1);
             }
         }

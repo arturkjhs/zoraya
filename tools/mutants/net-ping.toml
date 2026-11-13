@@ -36,3 +36,22 @@ find = 'if !protocols.within(Protocols::BOTH) {'
 replace = 'if false {'
 note = "a listen rule with the echo bit"
 tests = ["cargo test -q -p zoraya-abi --lib net"]
+
+# The local-answer refusal of a ping by name (conn_tests::ping_by_name).
+[[mutant]]
+id = "N-named-ping-local-answer"
+file = "crates/zoraya-net/src/service.rs"
+find = '''|| !is_local(stack, *a, now_us)
+                    || scope.allows_echo_address(*a))'''
+replace = '''|| true
+                    || scope.allows_echo_address(*a))'''
+note = "review of 62a7474 (3): the gateway and the DNS server pinged without an echo rule"
+tests = ["cargo test -q -p zoraya-net --lib ping_by_name"]
+
+[[mutant]]
+id = "N-named-ping-any-rule-covers-local"
+file = "crates/zoraya-net/src/service.rs"
+find = "|| scope.allows_echo_address(*a))"
+replace = "|| true)"
+note = "review of 62a7474 (3): a TCP rule for a local answer counted as an echo rule"
+tests = ["cargo test -q -p zoraya-net --lib ping_by_name"]

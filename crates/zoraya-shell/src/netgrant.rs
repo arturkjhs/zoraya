@@ -211,6 +211,8 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
 /// address, for ICMP echo requests and nothing else: no TCP, no UDP, no
 /// port. Designation as for a `url`: a literal operand adds its own rule, one
 /// that came from a value only designates inside a `+net` word of the line.
+/// A `+net HOST:PORT` word does not cover this rule (it has a port, the echo
+/// none): the person writes `+net HOST` (ADR-0330, known limits).
 fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result<(), Refused> {
     let literal = value_of(line.args, text).is_some_and(|v| v.literal);
     let host = text.to_ascii_lowercase();

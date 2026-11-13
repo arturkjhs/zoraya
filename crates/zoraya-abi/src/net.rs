@@ -21,7 +21,8 @@
 //!          length u8 (0..=32, the host bits zero); Any 4: nothing
 //! ports    0xFF for any port, or a count 1..=8 and that many (low, high)
 //!          pairs of u16, little endian, 1 <= low <= high
-//! protocols u8, 1 (TCP), 2 (UDP) or 3 (both)
+//! protocols u8, a set of bits: 1 (TCP), 2 (UDP), 4 (echo, ADR-0330); 1 to 7
+//!          in a reach rule, 1 to 3 in a listen rule
 //! ```
 //!
 //! Decisions where the ADR is silent (docs/adr/0281): addresses are IPv4 (the

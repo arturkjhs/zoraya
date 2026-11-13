@@ -40,7 +40,8 @@ by the architect.
    address pinged. It is a change of ADR-0281's message, in the one place every client is in this tree.
 3. **`Ping` takes a name** (`Data<253>`, the bound of `Connect`'s and `Resolve`'s; empty means `address`). `netd` checks the
    name against a rule that grants echo, resolves it with its resolver (a `net.hosts` entry or the DNS), and pings the first
-   answer that is not on this machine's side of the network unless an echo rule covers it (ADR-0223 item 4, as `resolve`).
+   unicast answer, other than our own address, that `is_local` does not count (this machine, the gateway, the DNS servers)
+   unless an echo rule covers it (ADR-0223 item 4, as `resolve`).
    One ping at a time covers the lookup too.
 4. **`Protocols` gains `ECHO` (4) and `ALL` (7)** in `zoraya_abi::net` (`BOTH` stays TCP and UDP). A reach rule's protocols
    decide what the rule grants: a connection (TCP) needs TCP, a ping needs ECHO, so an echo-only grant refuses every
@@ -54,6 +55,23 @@ by the architect.
   echo requests to the host written and do nothing else.
 - **Negative.** No live lines. A `+net` word now also grants echo. A name resolves through the person's resolver for a
   ping, as for a fetch. Any code that built a reach rule with `BOTH` and expected a ping through it must use `ALL`.
+- **Known limits (review of 62a7474).**
+  - *`resolve` is not echo-gated.* `Request::Resolve` asks a rule that covers the name on any protocol, so an echo-only rule
+    for a name also lets that connection `resolve` the name and read the whole address list. Same name, nothing beyond what
+    `ping` shows leaks (the pinged address is in the reply anyway); kept, and INV-0330-2 does not cover `resolve`.
+  - *What counts as this side of the network.* `is_local` counts this machine's address, the gateway and the DNS servers only:
+    other hosts of the subnet and its broadcast address pass, as they do for `resolve` and `fetch`. A named ping skips a
+    non-unicast answer and our own address, and uses the first remaining answer; an answer that `is_local` counts needs an
+    echo rule that covers that address.
+  - *Ports and echo disagree.* An echo rule has no port. A `+net example.org:443` word covers TCP, UDP and echo on port 443
+    only, and the `host` operand's rule (any port) is not inside it, so `+net example.org:443 ping $h` is refused; write
+    `+net example.org ping $h`.
+  - *One ping at a time.* The slot is one per `netd`, and a ping by name holds it from the request through the lookup (the
+    resolver's own wait, up to 8 s) to the end of the run. One holder of an echo grant can keep every other connection `Busy`
+    for that time. A connection that goes while its run goes keeps the slot taken until the run ends (its result goes to
+    nobody).
+  - *No UDP request.* The protocol has no datagram request yet, so the UDP side of an echo-only rule is tested in
+    `zoraya-abi` only.
 - **Follow-up.** A streaming reply, with the services channel.
 
 ## Invariants
