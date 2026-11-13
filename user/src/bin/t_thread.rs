@@ -14,16 +14,17 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::SeqCst};
 
 use zoraya_abi::quota::JobLimits;
 use zoraya_abi::spawn::Encoder;
+use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
-    DEADLINE_INFINITE, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags, MemoryFlags,
-    ObjectType, Rights, Status,
+    ChannelEntry, DEADLINE_INFINITE, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags,
+    MemoryFlags, ObjectType, Rights, Status,
 };
 use zoraya_user::{
-    assert_err, clock_monotonic, console_entry, event_create, futex_wait, futex_wake, handle_close,
-    handle_duplicate, image, job_create, job_get_usage, job_kill, job_set_limits, memory_create,
-    memory_map, memory_unmap, println, process_exit, raw_syscall, sleep_until,
-    sleep_until_interrupted, spawn, startup, thread_create, thread_exit, thread_interrupt,
-    thread_self, thread_yield, wait_exit,
+    assert_err, channel_create, channel_write, clock_monotonic, console_entry, event_create,
+    futex_wait, futex_wake, handle_close, handle_duplicate, image, job_create, job_get_usage,
+    job_kill, job_set_limits, memory_create, memory_map, memory_unmap, println, process_exit,
+    raw_syscall, sleep_until, sleep_until_interrupted, spawn, startup, thread_create, thread_exit,
+    thread_interrupt, thread_self, thread_yield, wait_exit,
 };
 
 const FREE_FRAMES: u64 = 0x7006;
@@ -610,6 +611,93 @@ fn creating_calls_leave_no_handles() {
     println!("t_thread: creating calls ok");
 }
 
+// ---- a sibling moves a handle away while spawn pauses (review of step 1).
+
+static MV_GO: AtomicU32 = AtomicU32::new(0);
+static MV_VIA: AtomicU64 = AtomicU64::new(0);
+static MV_HANDLE: AtomicU64 = AtomicU64::new(0);
+static MV_RESULT: AtomicU64 = AtomicU64::new(0);
+
+extern "C" fn mover(arg: u64) -> ! {
+    while MV_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    let via = Handle::new(MV_VIA.load(SeqCst)).expect("via");
+    let handle = Handle::new(MV_HANDLE.load(SeqCst)).expect("handle");
+    let entry = ChannelEntry {
+        handle,
+        rights: Rights::READ,
+        transfer: Transfer::Move,
+    };
+    let result = match channel_write(via, b"", &[entry]) {
+        Ok(()) => 0,
+        Err(status) => status as u64,
+    };
+    MV_RESULT.store(result, SeqCst);
+    MV_GO.store(2, SeqCst);
+    thread_exit(arg, 0, 0)
+}
+
+/// `spawn` checks its `Move` entries, then `process::create` pauses; a
+/// sibling that moves the same handle (a channel end, which has no
+/// DUPLICATE) out meanwhile must not leave it in both the child and the
+/// receiver. Exactly one of the two calls succeeds. `FORCE_SWITCH` hands the
+/// CPU to the sibling at the pause. The rounds where the spawn won show that
+/// the sibling's attempt was made in the window.
+fn spawn_holds_moved_handles() {
+    let mut spawn_won = 0;
+    for _ in 0..4 {
+        let (a, b) = channel_create().expect("pair");
+        let (c, d) = channel_create().expect("via");
+        MV_GO.store(0, SeqCst);
+        MV_VIA.store(c.raw(), SeqCst);
+        MV_HANDLE.store(a.raw(), SeqCst);
+        MV_RESULT.store(0, SeqCst);
+        let (t, flag) = start(mover, OWN_BASE);
+        let mut buffer = [0; 512];
+        let program = image("exit-with");
+        let mut e = Encoder::new(&mut buffer, JOB, program);
+        e.handle(console_entry());
+        e.handle(zoraya_abi::spawn::HandleEntry {
+            slot: 8,
+            handle: a,
+            rights: Rights::READ,
+            transfer: Transfer::Move,
+        });
+        e.arg(b"exit-with");
+        e.arg(b"0");
+        let length = e.finish().expect("room");
+        raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+        MV_GO.store(1, SeqCst);
+        let spawned = spawn(&buffer[..length]);
+        raw_syscall(FORCE_SWITCH, [0; 6]);
+        while MV_GO.load(SeqCst) != 2 {
+            thread_yield();
+        }
+        let written = MV_RESULT.load(SeqCst) == 0;
+        assert_ne!(
+            spawned.is_ok(),
+            written,
+            "one handle without DUPLICATE went to the child and to a receiver (spawn {spawned:?}, write ok {written})"
+        );
+        if let Ok(child) = spawned {
+            spawn_won += 1;
+            assert_eq!(wait_exit(child).reason, ExitReason::Exited);
+            handle_close(child).expect("close");
+        } else {
+            handle_close(a).expect("the handle is still here");
+        }
+        handle_close(program).expect("image");
+        for h in [b, c, d] {
+            handle_close(h).expect("close");
+        }
+        join(flag);
+        handle_close(t).expect("close");
+    }
+    assert!(spawn_won >= 1, "the sibling never ran inside the spawn");
+    println!("t_thread: spawn holds moved handles ok ({spawn_won} of 4 won by spawn)");
+}
+
 // ---- INV-0313-3: 70 joiners woken by one `clear` store see the refund.
 
 const CLEAR_WAITERS: usize = 70;
@@ -1083,7 +1171,7 @@ fn main() -> i32 {
         Some(role @ (b"sweep-exit" | b"sweep-fault" | b"sweep-kill")) => return sweep_child(role),
         _ => {}
     }
-    let steps: [(&str, fn()); 15] = [
+    let steps: [(&str, fn()); 16] = [
         ("create", create_and_exit),
         ("refusals", refusals_change_nothing),
         ("joined", join_and_unmap_rounds),
@@ -1094,6 +1182,7 @@ fn main() -> i32 {
         ("interrupts", interrupts),
         ("maplock", map_lock_contention),
         ("creating", creating_calls_leave_no_handles),
+        ("movehold", spawn_holds_moved_handles),
         ("clear", clear_refund_precedes_the_wake),
         ("quota", quota),
         ("ending", ending),

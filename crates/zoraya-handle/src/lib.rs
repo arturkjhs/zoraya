@@ -30,6 +30,9 @@ pub struct Entry<T> {
 struct Slot<T> {
     generation: u64,
     entry: Option<Entry<T>>,
+    /// A call that checked this handle and will move it away holds it
+    /// (`begin_move`); nobody else sees or takes it until the move ends.
+    moving: bool,
 }
 
 /// `slots[0]` is slot 1: slot 0 does not exist.
@@ -65,7 +68,7 @@ impl<T> Table<T> {
 
     pub fn get(&self, handle: Handle) -> Option<&Entry<T>> {
         let slot = self.slots.get((handle.slot() as usize).checked_sub(1)?)?;
-        if slot.generation == handle.generation() {
+        if slot.generation == handle.generation() && !slot.moving {
             slot.entry.as_ref()
         } else {
             None
@@ -126,6 +129,7 @@ impl<T> Table<T> {
             self.slots.push(Slot {
                 generation: 0,
                 entry: None,
+                moving: false,
             });
         }
         self.cursor = index + 1;
@@ -154,6 +158,7 @@ impl<T> Table<T> {
                 self.slots.push(Slot {
                     generation: 0,
                     entry: None,
+                    moving: false,
                 });
             }
         }
@@ -171,13 +176,39 @@ impl<T> Table<T> {
         let slot = self
             .slots
             .get_mut((handle.slot() as usize).checked_sub(1)?)?;
-        if slot.generation != handle.generation() {
+        if slot.generation != handle.generation() || slot.moving {
             return None;
         }
         let entry = slot.entry.take()?;
         slot.generation = slot.generation.wrapping_add(1) & MAX_GENERATION;
         self.count -= 1;
         Some(entry)
+    }
+
+    /// Ends a held move: the entry leaves, as by [`Table::remove`].
+    pub fn finish_move(&mut self, handle: Handle) -> Option<Entry<T>> {
+        let slot = self
+            .slots
+            .get_mut((handle.slot() as usize).checked_sub(1)?)?;
+        if slot.generation != handle.generation() || !slot.moving {
+            return None;
+        }
+        slot.moving = false;
+        let entry = slot.entry.take()?;
+        slot.generation = slot.generation.wrapping_add(1) & MAX_GENERATION;
+        self.count -= 1;
+        Some(entry)
+    }
+
+    /// Ends a held move without taking the entry: the handle is visible again.
+    pub fn cancel_move(&mut self, handle: Handle) {
+        if let Some(slot) = (handle.slot() as usize)
+            .checked_sub(1)
+            .and_then(|i| self.slots.get_mut(i))
+            && slot.generation == handle.generation()
+        {
+            slot.moving = false;
+        }
     }
 
     /// Takes one entry out, for closing a whole table.
@@ -222,6 +253,7 @@ impl<T> Table<T> {
             copy.push(Slot {
                 generation: self.slots.get(i).map_or(0, |s| s.generation),
                 entry: None,
+                moving: false,
             });
         }
         Ok(Table {
@@ -255,6 +287,17 @@ impl<T> Table<T> {
 }
 
 impl<T: Clone> Table<T> {
+    /// Checks `handle` for `rights` and holds it for a move: until
+    /// [`Table::finish_move`] or [`Table::cancel_move`] no other call finds,
+    /// duplicates, closes or moves it, so what the caller checked is what it
+    /// moves, however long it pauses in between. Returns a copy of the entry.
+    pub fn begin_move(&mut self, handle: Handle, rights: Rights) -> Result<Entry<T>, Status> {
+        let entry = self.check(handle, rights)?.clone();
+        // `check` found the slot.
+        self.slots[handle.slot() as usize - 1].moving = true;
+        Ok(entry)
+    }
+
     /// A copy of `handle` with exactly `rights`. Asking for a right the handle
     /// lacks is `AccessDenied`, so a bug shows instead of narrowing silently.
     pub fn duplicate(&mut self, handle: Handle, rights: Rights, id: u64) -> Result<Handle, Status> {
@@ -275,6 +318,36 @@ mod tests {
         .union(Rights::TRANSFER)
         .union(Rights::WAIT)
         .union(Rights::SIGNAL);
+
+    #[test]
+    fn a_held_handle_is_seen_by_no_one_and_comes_back_or_goes() {
+        let mut t = Table::new();
+        let a = t.insert(10, ALL, 1).unwrap();
+        let held = t.begin_move(a, Rights::TRANSFER).unwrap();
+        assert_eq!(held.object, 10);
+        assert_eq!(t.get(a), None);
+        assert_eq!(
+            t.begin_move(a, Rights::TRANSFER).unwrap_err(),
+            Status::BadHandle
+        );
+        assert_eq!(t.duplicate(a, ALL, 2), Err(Status::BadHandle));
+        assert_eq!(t.remove(a), None);
+        assert_eq!(t.len(), 1);
+        t.cancel_move(a);
+        assert_eq!(t.get(a).unwrap().object, 10);
+        t.begin_move(a, Rights::TRANSFER).unwrap();
+        assert_eq!(t.finish_move(a).unwrap().object, 10);
+        assert_eq!(t.get(a), None);
+        assert_eq!(t.finish_move(a), None);
+        assert!(t.is_empty());
+        // Without TRANSFER nothing is held.
+        let b = t.insert(1, Rights::WAIT, 3).unwrap();
+        assert_eq!(
+            t.begin_move(b, Rights::TRANSFER).unwrap_err(),
+            Status::AccessDenied
+        );
+        assert!(t.get(b).is_some());
+    }
 
     #[test]
     fn a_handle_finds_its_object() {

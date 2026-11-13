@@ -143,6 +143,68 @@ struct Calls<'f> {
     frame: &'f Frame,
 }
 
+/// The handles a `Move` list holds from its check until the child exists
+/// (ADR-0313 item 8): held handles are seen, duplicated, closed and moved by
+/// no sibling, so the checked entry is the one that leaves, however long the
+/// call pauses. Dropping the claim gives them all back; `finish` takes them.
+struct MoveClaim {
+    process: Arc<Process>,
+    held: Vec<Handle>,
+    taken: Vec<zoraya_handle::Entry<Object>>,
+}
+
+impl MoveClaim {
+    /// Room for `room` handles, so that `hold` and `finish` allocate nothing.
+    fn new(process: &Arc<Process>, room: usize) -> Result<MoveClaim, Status> {
+        let mut held = Vec::new();
+        held.try_reserve_exact(room).map_err(|_| Status::NoMemory)?;
+        let mut taken = Vec::new();
+        taken
+            .try_reserve_exact(room)
+            .map_err(|_| Status::NoMemory)?;
+        Ok(MoveClaim {
+            process: process.clone(),
+            held,
+            taken,
+        })
+    }
+
+    /// Checks `handle` for `rights` and holds it. At most `room` times.
+    fn hold(
+        &mut self,
+        handles: &mut HandleTable,
+        handle: Handle,
+        rights: Rights,
+    ) -> Result<zoraya_handle::Entry<Object>, Status> {
+        let entry = handles.begin_move(handle, rights)?;
+        self.held.push(handle);
+        Ok(entry)
+    }
+
+    /// The held entries, out of the table in one hold of its lock.
+    fn finish(&mut self) -> Vec<zoraya_handle::Entry<Object>> {
+        let mut handles = self.process.handles.lock();
+        for handle in self.held.drain(..) {
+            if let Some(entry) = handles.finish_move(handle) {
+                self.taken.push(entry);
+            }
+        }
+        core::mem::take(&mut self.taken)
+    }
+}
+
+impl Drop for MoveClaim {
+    fn drop(&mut self) {
+        if self.held.is_empty() {
+            return;
+        }
+        let mut handles = self.process.handles.lock();
+        for handle in self.held.drain(..) {
+            handles.cancel_move(handle);
+        }
+    }
+}
+
 /// What the last `snapshot_process` cost: nanoseconds with interrupts
 /// masked, and pages copied. For the measurements of TASK-16.
 pub static LAST_SNAPSHOT: crate::sync::SpinLock<(u64, u64)> = crate::sync::SpinLock::new((0, 0));
@@ -192,6 +254,7 @@ impl Calls<'_> {
     fn snapshot_table(
         &self,
         request: &SnapshotRequest<'_>,
+        claim: &mut MoveClaim,
     ) -> Result<(HandleTable, Option<Handle>), Status> {
         let mut handles = self.process.handles.lock();
         handles.reserve()?;
@@ -238,6 +301,11 @@ impl Calls<'_> {
             ),
             None => None,
         };
+        // Last, after every check: the moved handles are held until the child
+        // exists, as in `spawn`. A handle listed twice fails here.
+        for m in request.moves() {
+            claim.hold(&mut handles, m.handle, Rights::TRANSFER)?;
+        }
         Ok((table, self_handle))
     }
 
@@ -406,15 +474,18 @@ impl Handlers for Calls<'_> {
         };
         // Nothing of the caller's changes until the child exists (INV-0042-3).
         let mut table = HandleTable::new();
+        // The moved handles stay held from the check until the child exists:
+        // `process::create` pauses, and a sibling must not move one away
+        // meanwhile (a second copy of a handle without DUPLICATE).
+        let mut claim = MoveClaim::new(&self.process, request.handle_count())?;
         {
             let mut handles = self.process.handles.lock();
             handles.reserve()?;
             for listed in request.handles() {
-                let needed = match listed.transfer {
-                    Transfer::Move => Rights::TRANSFER,
-                    Transfer::Duplicate => Rights::DUPLICATE,
+                let entry = match listed.transfer {
+                    Transfer::Move => claim.hold(&mut handles, listed.handle, Rights::TRANSFER)?,
+                    Transfer::Duplicate => handles.check(listed.handle, Rights::DUPLICATE)?.clone(),
                 };
-                let entry = handles.check(listed.handle, needed)?;
                 if !entry.rights.contains(listed.rights) {
                     return Err(Status::AccessDenied);
                 }
@@ -436,16 +507,11 @@ impl Handlers for Calls<'_> {
             dispositions: request.dispositions,
             suspended: request.suspended,
         })?;
-        for listed in request.handles() {
-            if listed.transfer == Transfer::Move {
-                let entry = self.process.handles.lock().remove(listed.handle);
-                if let Some(entry) = entry {
-                    steps::before(object::weight(&entry));
-                    steps::count(1);
-                    object::end_subscriptions(&entry);
-                    self.end_hold_if_unwritable(&entry.object);
-                }
-            }
+        for entry in claim.finish() {
+            steps::before(object::weight(&entry));
+            steps::count(1);
+            object::end_subscriptions(&entry);
+            self.end_hold_if_unwritable(&entry.object);
         }
         self.insert(Object::Process(child), ProcessObject::RIGHTS)
     }
@@ -1221,7 +1287,8 @@ impl Handlers for Calls<'_> {
                 group
             }
         };
-        let (table, self_handle) = self.snapshot_table(&request)?;
+        let mut claim = MoveClaim::new(&self.process, request.move_count())?;
+        let (table, self_handle) = self.snapshot_table(&request, &mut claim)?;
         // The child's slot first, then its full copy, both paid by the child's
         // job (ADR-0261 point 6): a limit refuses the call with no effect.
         let mut count = Paid::new(Some(&job));
@@ -1273,14 +1340,11 @@ impl Handlers for Calls<'_> {
             suspended: request.suspended,
         })?;
         // The child exists: only now do the moved handles leave (INV-0102-2).
-        for moved in request.moves() {
-            let entry = self.process.handles.lock().remove(moved.handle);
-            if let Some(entry) = entry {
-                steps::before(object::weight(&entry));
-                steps::count(1);
-                object::end_subscriptions(&entry);
-                self.end_hold_if_unwritable(&entry.object);
-            }
+        for entry in claim.finish() {
+            steps::before(object::weight(&entry));
+            steps::count(1);
+            object::end_subscriptions(&entry);
+            self.end_hold_if_unwritable(&entry.object);
         }
         // `snapshot_table` reserved this room, and removing made more.
         let handle = self.process.handles.lock().insert(
