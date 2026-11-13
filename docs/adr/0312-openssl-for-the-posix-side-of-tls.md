@@ -1,6 +1,6 @@
 # ADR-0312: OpenSSL 3 for the POSIX side of TLS, in place of BearSSL
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0100, ADR-0109, ADR-0227, ADR-0228, ADR-0310
 - **Evidence:** CP-27
@@ -50,4 +50,6 @@ choice of library only; item 3 (the roots) and every other item of ADR-0228 stan
 - OpenSSL 3.5's end of support; a program that needs a TLS API OpenSSL lacks.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A. OpenSSL 3.5 LTS, static, built per ADR-0310 item 1. ADR-0228 item 2 is superseded for the choice of library only; item 3 (the roots) and the rest of ADR-0228 stand.
