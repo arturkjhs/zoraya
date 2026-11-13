@@ -93,6 +93,11 @@ window
 screen ~> echo wheel-mark
 screen wheel-mark
 wheel 300 300 down 10
+# Back at the prompt before any key: typing would snap to it anyway. The
+# prompt's row is off the view while it is moved up, so this waits for the
+# turn.
+window
+screen ~> _
 type echo wheel-back\r
 screen wheel-back
 screen ~> _
