@@ -98,7 +98,26 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
    DUPLICATE twice). `zoraya_handle::Table::begin_move` marks the entry held: no other call finds, duplicates, closes or moves it
    (they see `BadHandle`) until the call ends the hold, by taking the entry or by giving it back on failure. Other calls that
    check, pause and remove were listed: `channel_write` checks and removes under one lock; `dma_unpin` removes after a
-   repeatable `unpin`, which gives nobody more rights. A handle listed twice in one `Move` list now fails with `BadHandle`.
+   repeatable `unpin`, which gives nobody more rights.
+
+   *What other calls see.* A sibling's `close`, `duplicate`, `handle_type`, `wait`, `port_subscribe` or `channel_write` of a held
+   handle gets `BadHandle`, and the handle is back if the holding call fails (a program that races a move of its own handle has a
+   bug, and sees it). For `spawn` the hold lasts the child's creation; for `snapshot_process` the whole memory copy, from the check
+   to the child. `Table::entries()` still yields held entries: a sibling's `snapshot_table` copies a held handle that has
+   `DUPLICATE` into its own child (no right is widened: the holder still moves it, and the copy is what `duplicate` would have made),
+   and `end_hold_if_unwritable` counts it as a writable handle, which is correct while the move is not finished.
+
+   *One handle named twice in a list.* One rule everywhere, as `channel_write` has it: a handle named twice in one list where at
+   least one entry is a `Move` is `InvalidArgument`, in either order. `spawn` and `snapshot_process` refuse it in the decode
+   (`zoraya-abi`), before any table is looked at, so nothing changes; `channel_write` refuses it in its check. Two `Duplicate`
+   entries of one handle are allowed in `spawn` and `channel_write` (they widen nothing). Tested in `t_spawn` and `t_snapshot`
+   (the earlier text of this item said `BadHandle`; the decode's `InvalidArgument` is what a program sees).
+8. **The child's handle has a kept room** (review of step 1; outside item 7's delta). `spawn` and `snapshot_process` pause in the
+   creation of the child, and with no `Move` entry to free a slot a sibling could fill the caller's table meanwhile, so that the
+   insert of the child's handle failed with `LimitReached` after the child existed. `Table::keep_room` keeps one room from the
+   check on (no other insert, `reserve` or `reserve_many` takes it, and the slot vector has capacity for it); `insert_kept` takes
+   it and cannot fail; a failed call gives it back (`MoveClaim`'s drop). Tested in `t_thread` (`keeproom`: the table has one free
+   slot, a sibling tries to take it while the spawn pauses) and in `zoraya-handle`.
 
 ## Consequences
 
