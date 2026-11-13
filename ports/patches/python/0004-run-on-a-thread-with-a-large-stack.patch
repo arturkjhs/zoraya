@@ -1,0 +1,43 @@
+--- a/Programs/python.c	2026-11-13 15:32:05
++++ b/Programs/python.c	2026-11-13 15:32:05
+@@ -8,6 +8,40 @@
+ {
+     return Py_Main(argc, argv);
+ }
++#elif defined(__zoraya__)
++/* TASK-27 9c, ADR-0320 item 5: a Zoraya process starts on a 64 KiB stack
++   (zoraya_abi::spawn::USER_STACK_SIZE), where CPython's own stack-overflow
++   guard (_PyOS_STACK_MARGIN_BYTES * 2 = 32 KiB reserve) leaves almost nothing
++   and the interpreter fails at its first import. The interpreter runs on a
++   thread with a stack of 8 MiB (the guard assumes 4 MB); the main thread
++   waits for its status. */
++#include <pthread.h>
++#include <stdlib.h>
++
++struct zoraya_main { int argc; char **argv; int status; };
++
++static void *
++zoraya_main_thread(void *p)
++{
++    struct zoraya_main *m = p;
++    m->status = Py_BytesMain(m->argc, m->argv);
++    return NULL;
++}
++
++int
++main(int argc, char **argv)
++{
++    struct zoraya_main m = { argc, argv, 1 };
++    pthread_attr_t attr;
++    pthread_t t;
++    if (pthread_attr_init(&attr) != 0
++        || pthread_attr_setstacksize(&attr, 8u << 20) != 0
++        || pthread_create(&t, &attr, zoraya_main_thread, &m) != 0) {
++        return Py_BytesMain(argc, argv);
++    }
++    pthread_join(t, NULL);
++    return m.status;
++}
+ #else
+ int
+ main(int argc, char **argv)
