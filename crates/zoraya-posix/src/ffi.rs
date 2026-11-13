@@ -322,12 +322,28 @@ fn with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
     r
 }
 
-/// As [`with`], if the library lock is free: `None` otherwise (and before
-/// start-up).
-fn try_with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
+/// How long the exit path waits for the library lock before it gives the
+/// statistics up: a sibling's short broker round trip, not a wait.
+const EXIT_LOCK_BUDGET_NS: u64 = 500_000_000;
+
+/// As [`with`], but waits for the library lock for at most `budget_ns` (a
+/// sleep of 1 ms between tries) and gives up after that: `None` then, and
+/// before start-up. For the exit path, which must end the process even if a
+/// sibling holds the lock for good (it is in a service call, ADR-0314 item
+/// 2), but should not drop the ADR-0110 report because a sibling held it
+/// for a moment.
+fn try_with_for<R>(budget_ns: u64, f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
     let me = thread_pointer();
-    if LIB_OWNER.load(Ordering::Relaxed) == me || !LIB.try_lock() {
+    if LIB_OWNER.load(Ordering::Relaxed) == me {
         return None;
+    }
+    let end = zoraya_rt::clock_monotonic().saturating_add(budget_ns);
+    while !LIB.try_lock() {
+        let now = zoraya_rt::clock_monotonic();
+        if now >= end {
+            return None;
+        }
+        zoraya_rt::sleep_until(now.saturating_add(1_000_000).min(end));
     }
     LIB_OWNER.store(me, Ordering::Relaxed);
     // SAFETY: `LIB` is held, so this is the only reference.
@@ -989,7 +1005,7 @@ fn print_stats() {
     if !wanted {
         return;
     }
-    let _ = try_with(|p| {
+    let line = try_with_for(EXIT_LOCK_BUDGET_NS, |p| {
         use core::fmt::Write;
         let s = p.stats;
         let mut line = String::new();
@@ -1015,8 +1031,13 @@ fn print_stats() {
                 mean(s.snapshot_ns, s.forks)
             );
         }
-        let _ = p.write(2, User::new(line.as_ptr() as u64, line.len()));
+        line
     });
+    if let Some(line) = line {
+        // Written with the lock free: a full pipe makes the write ask for a
+        // wait (`PENDING`), which `restartable` makes outside the lock.
+        let _ = procs::restartable(|p| p.write(2, User::new(line.as_ptr() as u64, line.len())));
+    }
 }
 
 // ------------------------------------------------------------ the report
@@ -1085,10 +1106,12 @@ fn restart_stats(_p: &mut Posix<RtSys>) {}
 /// `exit_group`).
 fn exit(code: i64) -> ! {
     print_stats();
-    // A sibling may hold the library lock for ever (it waits in a library
-    // call, ADR-0314 item 2): the report is skipped rather than the exit
-    // lost.
-    let _ = try_with(report_stats);
+    // A sibling may hold the library lock for ever (a service call that does
+    // not end, ADR-0315 item 1): the report is skipped after a bounded wait
+    // rather than the exit lost.
+    if cfg!(feature = "stats") {
+        let _ = try_with_for(EXIT_LOCK_BUDGET_NS, report_stats);
+    }
     zoraya_rt::process_exit((code & 0xff) as i32)
 }
 
