@@ -984,6 +984,16 @@ impl Z {
         Self::net_grant_with(exec, d, true, &self.cwd)
     }
 
+    /// Whether the line gives a POSIX program of the image a connection that
+    /// reaches a host: the one condition for `/system/tls` (INV-0311-2),
+    /// for the run and for `grants` alike.
+    fn posix_reaches(&mut self, exec: &Exec<'_>, path: &str) -> bool {
+        self.posix_net_scope(exec, path)
+            .ok()
+            .flatten()
+            .is_some_and(|(r, _)| r & zoraya_abi::net::rights::REACH != 0)
+    }
+
     /// The connection a POSIX program of the image gets for a literal `url`
     /// operand (ADR-0224 item 2, ADR-0225 item 2; N4): `narrow` from the
     /// shell's own, with `reach` and the scope of that host and port. None
@@ -1417,7 +1427,7 @@ impl Z {
         // (rule 10), so it is the directory `/system/tls`, which holds the
         // roots file and nothing else (`make check-tls-roots`); `grants`
         // says "with the network" as for a native program.
-        let with_roots = net.is_some();
+        let with_roots = net.is_some() && self.posix_reaches(exec, path);
         let planned = self
             .posix_plan(exec, path)
             .map(|mut plan| {
@@ -3625,13 +3635,7 @@ impl Z {
                 Ok(mut plan) => {
                     // As a run adds it: the roots come with a network the
                     // line gives a POSIX program (proposed ADR-0311 item 4).
-                    if !native
-                        && self
-                            .posix_net_scope(exec, &path)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|(r, _)| r & zoraya_abi::net::rights::REACH != 0)
-                    {
+                    if !native && self.posix_reaches(exec, &path) {
                         plan.push(grants::Planned {
                             path: String::from(TLS_ROOTS_DIR),
                             access: grants::Access::Read,
