@@ -83,7 +83,10 @@ pub struct Service {
     lookups: Vec<Lookup>,
     next_token: u32,
     /// The connection and transaction a running `ping` answers.
-    ping: Option<(usize, u32)>,
+    /// `None` as owner: the connection is gone but its run (or lookup) is
+    /// not over, so the slot stays taken until it is (nobody else gets its
+    /// result).
+    ping: Option<(Option<usize>, u32)>,
 }
 
 impl Default for Service {
@@ -167,9 +170,13 @@ impl Service {
         for l in self.lookups.iter_mut().filter(|l| l.conn == Some(id)) {
             l.conn = None;
         }
-        if self.ping.is_some_and(|(owner, _)| owner == id) {
-            // Its reply has nowhere to go; the run itself finishes on its own.
-            self.ping = None;
+        if let Some((owner, _)) = self.ping.as_mut()
+            && *owner == Some(id)
+        {
+            // Its reply has nowhere to go; the run finishes on its own and the
+            // slot stays taken until `ping_done` (or the lookup's end) frees it,
+            // so that no other connection is given this run's result.
+            *owner = None;
         }
     }
 
@@ -225,7 +232,7 @@ impl Service {
                     }
                     return match stack.ping(address, m.count.0, timeout, now_us) {
                         Ok(()) => {
-                            self.ping = Some((id, t));
+                            self.ping = Some((Some(id), t));
                             Action::Deferred
                         }
                         Err(e) => Action::Reply(ping_reply(ping_code(e), None, t)),
@@ -243,7 +250,10 @@ impl Service {
                 if connection.decide(Request::PingName { name }) != Verdict::Allowed {
                     return Action::Reply(ping_reply(code::NOT_GRANTED, None, t));
                 }
-                if self.ping.is_some() || self.lookups.iter().any(|l| l.conn == Some(id)) {
+                if self.ping.is_some()
+                    || stack.ping_running()
+                    || self.lookups.iter().any(|l| l.conn == Some(id))
+                {
                     return Action::Reply(ping_reply(code::BUSY, None, t));
                 }
                 let account = connection.account();
@@ -262,7 +272,7 @@ impl Service {
                 };
                 match stack.resolve_as(token, owner, name, now_us) {
                     Start::Pending => {
-                        self.ping = Some((id, t));
+                        self.ping = Some((Some(id), t));
                         self.lookups.push(Lookup {
                             token,
                             conn: Some(id),
@@ -494,6 +504,12 @@ impl Service {
         let at = self.lookups.iter().position(|l| l.token == answer.token)?;
         let l = self.lookups.swap_remove(at);
         self.accounts.release(l.account, Kind::Resolutions);
+        if l.ping.is_some() && l.conn.is_none() {
+            // The connection went while the name was looked up: no run started,
+            // the slot goes back.
+            self.ping = None;
+            return None;
+        }
         let id = l.conn?;
         if let Some(start) = l.ping {
             // A `ping` by name: the run starts now, or the reply says why not;
@@ -537,16 +553,24 @@ impl Service {
         now_us: i64,
     ) -> Option<Vec<u8>> {
         let scope = zoraya_abi::net::Scope::decode(scope).unwrap_or(zoraya_abi::net::Scope::EMPTY);
-        // As `resolve` does: an answer of this machine's side of the network
-        // counts only if an echo rule covers that address too.
+        // As `resolve` does: an answer that is this machine, its gateway or
+        // its DNS servers (`is_local`; other hosts of the subnet and its
+        // broadcast address are not counted) is used only if an echo rule
+        // covers that address too. A non-unicast answer or our own address is
+        // never pinged.
+        let own = stack.address();
         let usable = found.addresses.iter().copied().find(|a| {
-            found.from_hosts || !is_local(stack, *a, now_us) || scope.allows_echo_address(*a)
+            crate::config::is_unicast(*a)
+                && Some(*a) != own
+                && (found.from_hosts
+                    || !is_local(stack, *a, now_us)
+                    || scope.allows_echo_address(*a))
         });
         let failure = match usable {
             None => code::LOCAL,
             Some(address) => match stack.ping(address, start.count, start.timeout_us, now_us) {
                 Ok(()) => {
-                    self.ping = Some((id, t));
+                    self.ping = Some((Some(id), t));
                     return None;
                 }
                 Err(e) => ping_code(e),
@@ -559,7 +583,8 @@ impl Service {
     /// The reply to the run that ended: the connection and the bytes, or
     /// `None` if its connection is gone.
     pub fn ping_done(&mut self, result: PingResult) -> Option<(usize, Vec<u8>)> {
-        let (id, t) = self.ping.take()?;
+        let (owner, t) = self.ping.take()?;
+        let id = owner?;
         let rtts: Vec<Rtt> = result
             .rtts
             .iter()

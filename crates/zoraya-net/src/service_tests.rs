@@ -612,3 +612,53 @@ fn ping_by_name_resolves_inside_the_service_and_needs_an_echo_rule_for_the_name(
         Verdict::NotGranted
     );
 }
+
+#[test]
+fn a_run_whose_connection_went_is_not_given_to_the_next_asker() {
+    // A pings (16 requests) and goes; B, with an echo rule for a name, asks
+    // for a ping by name while A's run still goes. B is told Busy, and when
+    // A's run ends nobody is handed its address and round trips.
+    let mut net = Net::new(hosts_config());
+    let mut service = Service::new();
+    let a = service.add(Connection::root()).unwrap();
+    assert_eq!(
+        service.handle(a, &ping_message(SERVER_IP, 16), 0, &mut net.client, net.now),
+        Action::Deferred
+    );
+    service.remove(a);
+    let b = service
+        .add(
+            Connection::new(
+                rights::REACH,
+                &scope_for(Target::Name("other"), Protocols::ECHO),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let Action::Reply(r) = service.handle(
+        b,
+        &ping_name_message("other", 1),
+        0,
+        &mut net.client,
+        net.now,
+    ) else {
+        panic!("busy");
+    };
+    assert_eq!(decode::<PingReply>(&r, 0).unwrap().1.status.0, status::BUSY);
+    // The same by address: busy too.
+    assert!(
+        finish_ping(&mut service, &mut net).is_none(),
+        "A's end goes to nobody"
+    );
+    // The slot is free again.
+    assert_eq!(
+        service.handle(
+            b,
+            &ping_name_message("other", 1),
+            0,
+            &mut net.client,
+            net.now
+        ),
+        Action::Deferred
+    );
+}
