@@ -1,6 +1,6 @@
 # ADR-0311: The `names` key for `curl -O`, and the roots directory a POSIX program with the network is given
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0153, ADR-0156, ADR-0224, ADR-0228, ADR-0297, ADR-0310
 - **Evidence:** CP-28, DM-072
@@ -101,4 +101,6 @@ plain.
 - A program whose saved name is not derivable from one URL operand.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A (the one-name create entry; `cwd none`). The `cwd read` alternative is refused.

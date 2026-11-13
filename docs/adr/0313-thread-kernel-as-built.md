@@ -157,3 +157,5 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
 Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
 
 The architect accepted it as recommended: the five refinements, including the bounded window between the refund and the reaper's free (item 5).
+
+Later the same day the architect confirmed items 6, 7 and 8 (the shrink with `try_reserve_exact`, the Move hold, the kept room), which the step-1 reviews added after the first acceptance.
