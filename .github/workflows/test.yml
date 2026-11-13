@@ -121,8 +121,9 @@ jobs:
     needs: [plan, image]
     if: ${{ needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
-    # 30: a cold ports cache builds OpenSSL, curl and wget as well (TASK-27 9a).
-    timeout-minutes: 30
+    # 45: a cold ports cache builds OpenSSL, curl and wget (TASK-27 9a) and NetSurf with
+    # its libraries (9d) as well.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
