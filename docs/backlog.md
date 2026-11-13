@@ -164,3 +164,5 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 - A wheel/scroll event in the compositor protocol (after 9d): add the event to `zoraya-proto-gui`, deliver it to the focused client, and map it in `zoraya-surface` and NetSurf's `libnsfb` surface (ADR-0317; the protocol has no wheel event today, so 9d offers no wheel).
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs.
 
+- The compositor's 8 client slots (`MAX_CLIENTS` in `crates/zoraya-compositor/src/lib.rs`) are too few for a desktop: raise the limit and count a room's windows against the room's quota (ADR-0317 and the panel's per-program window rule; the quota ADRs 0260 to 0270). Until then the panel keeps a reserve of client slots for system apps.
+
