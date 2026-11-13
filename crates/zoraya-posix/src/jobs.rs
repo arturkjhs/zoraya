@@ -107,7 +107,8 @@ impl<S: Sys> Posix<S> {
     /// process's own handle for a request when a handler is installed, and
     /// the children's jobs while `SIGCHLD` is caught and unblocked.
     pub fn interrupt_sources(&self, out: &mut Vec<(S::H, u32)>) {
-        if self.signals.handlers_installed()
+        // A thread in `sigwait` listens as a handler would (ADR-0315 item 10).
+        if (self.signals.handlers_installed() || self.sigwait_active())
             && let Some(me) = self.self_handle
         {
             out.push((me, process_signals::REQUEST_PENDING));

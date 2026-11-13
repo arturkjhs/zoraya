@@ -27,6 +27,29 @@ void __testcancel(void)
 		__cancel();
 }
 
+/* For a wait that must put its state back before the thread ends
+ * (sigwait, ADR-0315 item 10): the cancel state is set to disabled so that the
+ * library's waits do not end the thread; the old state is returned for
+ * __zoraya_cancel_end. __zoraya_cancel_seen says whether a cancel that the old
+ * state would have acted on is pending. */
+int __zoraya_cancel_begin(void)
+{
+	pthread_t self = __pthread_self();
+	int old = self->canceldisable;
+	self->canceldisable = PTHREAD_CANCEL_DISABLE;
+	return old;
+}
+
+int __zoraya_cancel_seen(int old)
+{
+	return old != PTHREAD_CANCEL_DISABLE && __pthread_self()->cancel;
+}
+
+void __zoraya_cancel_end(int old)
+{
+	__pthread_self()->canceldisable = old;
+}
+
 /* A cancellation point is entered (ADR-0305): 0 to go on; a pending, enabled
  * cancel ends the thread (or, in masked mode, is reported as -ECANCELED
  * without making the call). */

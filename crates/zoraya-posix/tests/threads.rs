@@ -322,3 +322,70 @@ fn no_handler_can_be_installed_for_musls_internal_numbers() {
         assert_eq!(r.p.signals.set(n, Some(HANDLER)), Err(EINVAL), "{n}");
     }
 }
+
+const TERM: u32 = 15;
+const CHLD: u32 = 17;
+
+#[test]
+fn a_thread_in_sigwait_makes_the_default_signals_of_its_set_deliverable() {
+    use zoraya_abi::Disposition;
+    let mut r = three();
+    // SIGTERM ends a process by default; SIGCHLD is dropped by the kernel.
+    assert_eq!(r.p.effective_disposition(TERM), Disposition::Terminate);
+    assert_eq!(r.p.effective_disposition(CHLD), Disposition::Ignore);
+    r.p.sigwait_begin(bit(TERM) | bit(CHLD)).unwrap();
+    assert_eq!(r.p.effective_disposition(TERM), Disposition::Deliver);
+    assert_eq!(r.p.effective_disposition(CHLD), Disposition::Deliver);
+    assert_eq!(r.p.effective_disposition(2), Disposition::Terminate);
+    // A second thread waits for SIGTERM too; the first ends its wait: the
+    // second still needs the delivery.
+    r.p.switch_to(200);
+    r.p.sigwait_begin(bit(TERM)).unwrap();
+    r.p.switch_to(100);
+    r.p.sigwait_end(0);
+    assert_eq!(r.p.effective_disposition(TERM), Disposition::Deliver);
+    assert_eq!(r.p.effective_disposition(CHLD), Disposition::Ignore);
+    r.p.switch_to(200);
+    r.p.sigwait_end(0);
+    assert_eq!(r.p.effective_disposition(TERM), Disposition::Terminate);
+}
+
+#[test]
+fn a_process_in_sigwait_listens_for_its_requests_with_no_handler() {
+    let mut r = three();
+    r.p.signals.set(USR1, Some(Action::DEFAULT)).unwrap();
+    r.p.signals.set(USR2, Some(Action::DEFAULT)).unwrap();
+    r.p.self_handle = Some(77);
+    let mut out = Vec::new();
+    r.p.interrupt_sources(&mut out);
+    assert!(out.is_empty(), "no handler, no wait: nothing to listen to");
+    r.p.sigwait_begin(bit(TERM)).unwrap();
+    r.p.interrupt_sources(&mut out);
+    assert_eq!(out.len(), 1, "the process's request signal");
+}
+
+#[test]
+fn a_sigwait_that_ends_for_any_reason_puts_the_mask_and_the_wait_back() {
+    // A cancel ends the thread after the wait's own cleanup (ADR-0315 item
+    // 10): the state it leaves must not route signals to a dying thread.
+    let mut r = three();
+    r.p.switch_to(200);
+    r.p.signals.mask(SIG_SETMASK, Some(bit(USR2))).unwrap();
+    let old = r.p.sigwait_begin(bit(USR1)).unwrap();
+    assert_eq!(old, bit(USR2));
+    assert_eq!(r.p.signals.blocked, bit(USR1) | bit(USR2));
+    r.p.sigwait_end(old);
+    assert_eq!(r.p.signals.blocked, bit(USR2));
+    assert!(!r.p.sigwait_active());
+    // Thread 3 blocks USR1; a process-directed USR1 now goes to thread 1,
+    // not to thread 2 that no longer waits (and blocks it).
+    r.p.switch_to(300);
+    r.p.signals.mask(SIG_SETMASK, Some(bit(USR1))).unwrap();
+    r.p.switch_to(200);
+    r.p.signals.mask(SIG_SETMASK, Some(bit(USR1))).unwrap();
+    r.p.switch_to(300);
+    assert_eq!(r.p.signals.take(USR1), Taken::Pending);
+    r.p.route(USR1, false);
+    let to: Vec<_> = r.p.sys.interrupts.iter().map(|x| x.0).collect();
+    assert!(!to.contains(&1002), "not to thread 2: {to:?}");
+}

@@ -194,7 +194,7 @@ pub(super) fn write_fd(fd: i32, u: User) -> Result<usize, i32> {
 /// and the broker's record for the stop and continue signals (item 9).
 fn sync_disposition(p: &mut Posix<RtSys>, n: u32) {
     if let Some(kind) = zoraya_abi::posix::signal::kind(n) {
-        let _ = p.sys.set_disposition(kind, p.signals.kernel_disposition(n));
+        let _ = p.sys.set_disposition(kind, p.effective_disposition(n));
     }
 }
 
@@ -459,11 +459,26 @@ fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
     testcancel();
     // `SIGKILL` and `SIGSTOP` cannot be waited for.
     let set = set & !(crate::signals::bit(9) | crate::signals::bit(19));
+    // The wait must put its state back before a cancel ends the thread
+    // (ADR-0315 item 10): the library's waits do not act on a cancel while it
+    // runs, the loop looks at the flag itself, and the thread ends last.
+    // SAFETY: musl's cancel state of this thread; `cancel_end` puts it back.
+    let cancel = unsafe { __zoraya_cancel_begin() };
     let old = state(|p| {
-        p.set_sigwait(set);
-        p.signals.mask(crate::signals::SIG_BLOCK, Some(set))
-    })?;
+        let old = p.sigwait_begin(set)?;
+        sync_sigwait(p, set);
+        Ok(old)
+    });
+    let Ok(old) = old else {
+        // SAFETY: as above.
+        unsafe { __zoraya_cancel_end(cancel) };
+        return Err(old.unwrap_err());
+    };
     let result = loop {
+        // SAFETY: as above.
+        if unsafe { __zoraya_cancel_seen(cancel) } != 0 {
+            break Err(if cancel == 0 { EINTR } else { ECANCELED });
+        }
         let d = deliver();
         let got = with(|p| {
             let ready = (p.signals.pending | p.signals.shared) & set;
@@ -487,17 +502,33 @@ fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
         }
         match state(|p| p.wait_for(&[], deadline)) {
             Err(EINTR) | Ok(_) => {}
+            // `wait_for` listens to this process's requests while a thread is
+            // in `sigwait`, so this is not reached with a live process.
             Err(EINVAL) => zoraya_rt::sleep_until(u64::MAX),
             Err(e) => break Err(e),
         }
-        testcancel();
     };
     let _ = state(|p| {
-        p.set_sigwait(0);
-        p.signals.mask(SIG_SETMASK, Some(old))
+        p.sigwait_end(old);
+        sync_sigwait(p, set);
+        Ok(())
     });
+    // SAFETY: as above.
+    unsafe { __zoraya_cancel_end(cancel) };
     poll();
+    // A cancel ends the thread now, with the mask and the wait undone.
+    testcancel();
     result
+}
+
+/// The kernel dispositions of the signals of `set` after a thread began or
+/// ended waiting for them.
+fn sync_sigwait(p: &mut Posix<RtSys>, set: u64) {
+    for n in 1..=zoraya_abi::posix::signal::MAX {
+        if set & crate::signals::bit(n) != 0 {
+            sync_disposition(p, n);
+        }
+    }
 }
 
 /// Fills a `siginfo_t` (128 bytes) for a signal taken by a wait: number and

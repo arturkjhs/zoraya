@@ -380,6 +380,9 @@ unsafe extern "C" {
     /// musl's (`cancel.c`): ends the calling thread if a cancel is pending
     /// and enabled.
     fn __testcancel();
+    fn __zoraya_cancel_begin() -> i32;
+    fn __zoraya_cancel_seen(old: i32) -> i32;
+    fn __zoraya_cancel_end(old: i32);
     fn __errno_location() -> *mut i32;
     fn fdopen(fd: i32, mode: *const c_char) -> *mut u8;
     fn __fmodeflags(mode: *const c_char) -> i32;

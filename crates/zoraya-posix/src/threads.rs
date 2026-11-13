@@ -15,6 +15,7 @@ use crate::errno::{EINVAL, ESRCH};
 use crate::process::Posix;
 use crate::signals::{SIG_IGN, bit};
 use crate::sys::Sys;
+use zoraya_abi::Disposition;
 use zoraya_abi::posix::signal;
 
 /// One thread.
@@ -259,6 +260,49 @@ impl<S: Sys> Posix<S> {
         if let Some(r) = self.threads.list.iter_mut().find(|r| r.tp == cur) {
             r.sigwait = set;
         }
+    }
+
+    /// Whether the calling thread is in a `sigwait`.
+    pub fn sigwait_active(&self) -> bool {
+        let cur = self.threads.cur;
+        self.threads
+            .list
+            .iter()
+            .any(|r| r.tp == cur && r.sigwait != 0)
+    }
+
+    /// The signals some thread waits for in a `sigwait`.
+    pub fn sigwait_union(&self) -> u64 {
+        self.threads.list.iter().fold(0, |a, r| a | r.sigwait)
+    }
+
+    /// The kernel disposition for signal `n`: its action's (ADR-0106 item 1),
+    /// except that a signal with the default action which a thread waits for
+    /// in `sigwait` is delivered to the library (ADR-0315 item 10, a deviation
+    /// from ADR-0106 item 2): the default would end the process, or the
+    /// kernel drop it, though the set is blocked and a thread waits for it.
+    pub fn effective_disposition(&self, n: u32) -> Disposition {
+        if self.signals.action(n).handler == crate::signals::SIG_DFL
+            && self.sigwait_union() & bit(n) != 0
+            && !zoraya_abi::posix::signal::is_stop_or_continue(n)
+        {
+            Disposition::Deliver
+        } else {
+            self.signals.kernel_disposition(n)
+        }
+    }
+
+    /// `sigwait` begins: the calling thread waits for `set`, which is blocked
+    /// meanwhile; the old mask is returned for [`Posix::sigwait_end`].
+    pub fn sigwait_begin(&mut self, set: u64) -> Result<u64, i32> {
+        self.set_sigwait(set);
+        self.signals.mask(crate::signals::SIG_BLOCK, Some(set))
+    }
+
+    /// `sigwait` ends, on every path: the wait is over and the mask is back.
+    pub fn sigwait_end(&mut self, old: u64) {
+        self.set_sigwait(0);
+        let _ = self.signals.mask(crate::signals::SIG_SETMASK, Some(old));
     }
 
     /// Whether the calling thread was interrupted since it last looked; and
