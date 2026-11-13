@@ -13,6 +13,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::SeqCst};
 
 use zoraya_abi::quota::JobLimits;
 use zoraya_abi::snapshot::{Encoder as SnapshotEncoder, Move};
@@ -34,6 +35,7 @@ use zoraya_user::{
 };
 use zoraya_user::{
     clock_monotonic, job_resume, job_suspend, port_subscribe, port_wait, sleep_until,
+    thread_create, thread_exit, thread_yield,
 };
 
 const OUTSIDE: u64 = 9;
@@ -625,6 +627,20 @@ fn the_move_list_is_all_or_nothing() {
     let memory = memory_create(4096, MemoryFlags::NONE).expect("memory");
     let no_transfer = handle_duplicate(memory, Rights::READ.union(Rights::DUPLICATE)).expect("dup");
     let cases: &[(&[Move], Status)] = &[
+        // ADR-0313 item 7: one handle twice is refused whole, at the decode.
+        (
+            &[
+                Move {
+                    slot: 30,
+                    handle: b,
+                },
+                Move {
+                    slot: 31,
+                    handle: b,
+                },
+            ],
+            Status::InvalidArgument,
+        ),
         (
             &[
                 Move {
@@ -736,6 +752,113 @@ fn the_move_list_is_all_or_nothing() {
     channel_read(a, &mut message, &mut []).expect("through the moved end");
     close(&filler);
     close(&[child, a, c, d, f, memory, no_transfer]);
+}
+
+// ---- a sibling moves a handle away while the snapshot waits for the map lock.
+
+const FORCE_SWITCH: u64 = 0x701a;
+const STEPPED_PAGES: u64 = 256;
+const THREAD_STACK: u64 = 16 * 1024;
+static RACE_GO: AtomicU32 = AtomicU32::new(0);
+static RACE_RETURNED: AtomicU32 = AtomicU32::new(0);
+static RACE_IN_WINDOW: AtomicU32 = AtomicU32::new(0);
+static RACE_OBJECT: AtomicU64 = AtomicU64::new(0);
+static RACE_VIA: AtomicU64 = AtomicU64::new(0);
+static RACE_HANDLE: AtomicU64 = AtomicU64::new(0);
+static RACE_BASE: AtomicU64 = AtomicU64::new(0);
+static RACE_RESULT: AtomicU64 = AtomicU64::new(0);
+
+extern "C" fn racer(clear: u64) -> ! {
+    while RACE_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    // Holds the mapping lock across its step points: the snapshot, which has
+    // checked and held its move list, waits for it.
+    let object = h(RACE_OBJECT.load(SeqCst));
+    let base = memory_map(object, 0, STEPPED_PAGES * 4096, MapFlags::WRITE).expect("stepped map");
+    RACE_BASE.store(base, SeqCst);
+    // The map is done and the snapshot has not returned: the CPU is this
+    // thread's until it ends its slice or blocks, so this write is inside it.
+    RACE_IN_WINDOW.store(u32::from(RACE_RETURNED.load(SeqCst) == 0), SeqCst);
+    let entry = ChannelEntry {
+        handle: h(RACE_HANDLE.load(SeqCst)),
+        rights: Rights::READ,
+        transfer: Transfer::Move,
+    };
+    let result = match channel_write(h(RACE_VIA.load(SeqCst)), b"", &[entry]) {
+        Ok(()) => 0,
+        Err(status) => status as u64,
+    };
+    RACE_RESULT.store(result, SeqCst);
+    RACE_GO.store(2, SeqCst);
+    thread_exit(clear, 0, 0)
+}
+
+/// ADR-0313 item 7: `snapshot_process` holds its `Move` entries from the
+/// check, through the copy, until the child exists. The call waits for the
+/// map lock held by a sibling's stepped map; when that ends, the sibling
+/// goes on at EL0 (the freeze is not yet on) and moves the held handle into
+/// a channel. With the hold that write is `BadHandle`; without it the
+/// handle would leave in the write and in the child.
+fn snapshot_holds_moved_handles() {
+    let object = memory_create(STEPPED_PAGES * 4096, MemoryFlags::NONE).expect("object");
+    RACE_OBJECT.store(object.raw(), SeqCst);
+    let stack_object = memory_create(THREAD_STACK, MemoryFlags::NONE).expect("stack object");
+    let stack = memory_map(stack_object, 0, THREAD_STACK, MapFlags::WRITE).expect("stack");
+    close(&[stack_object]);
+    for _ in 0..3 {
+        let (a, b) = channel_create().expect("pair");
+        let (c, d) = channel_create().expect("via");
+        RACE_GO.store(0, SeqCst);
+        RACE_RETURNED.store(0, SeqCst);
+        RACE_IN_WINDOW.store(0, SeqCst);
+        RACE_VIA.store(c.raw(), SeqCst);
+        RACE_HANDLE.store(b.raw(), SeqCst);
+        // SAFETY: the stack's lowest word is the thread's `clear` word; the
+        // mapping stays until the thread has cleared it.
+        let clear = unsafe { &*(stack as *const AtomicU32) };
+        clear.store(1, SeqCst);
+        let entry = racer as extern "C" fn(u64) -> !;
+        let thread =
+            thread_create(entry as usize as u64, stack + THREAD_STACK, stack, 0).expect("thread");
+        raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+        RACE_GO.store(1, SeqCst);
+        thread_yield();
+        let made = snap(
+            JOB,
+            &[Move {
+                slot: 30,
+                handle: b,
+            }],
+            0,
+            false,
+        );
+        RACE_RETURNED.store(1, SeqCst);
+        raw_syscall(FORCE_SWITCH, [0; 6]);
+        let Some(child) = made.expect("snapshot") else {
+            child_exit(true, 0);
+        };
+        while RACE_GO.load(SeqCst) != 2 || clear.load(SeqCst) != 0 {
+            thread_yield();
+        }
+        assert_eq!(
+            RACE_IN_WINDOW.load(SeqCst),
+            1,
+            "the sibling's write was not made inside the snapshot"
+        );
+        assert_eq!(
+            RACE_RESULT.load(SeqCst),
+            Status::BadHandle as u64,
+            "a handle held by the snapshot was moved by a sibling"
+        );
+        assert_err!(handle_type(b), Status::BadHandle); // the child has it
+        assert_eq!(wait_exit(child).code, 0);
+        memory_unmap(RACE_BASE.load(SeqCst), STEPPED_PAGES * 4096).expect("unmap the map");
+        close(&[thread, child, a, c, d]);
+    }
+    memory_unmap(stack, THREAD_STACK).expect("unmap");
+    close(&[object]);
+    println!("t_snapshot: snapshot holds moved handles ok");
 }
 
 /// INV-0102-2 and -3 at every allocation: with fewer and fewer frames left,
@@ -984,6 +1107,7 @@ fn inner() -> i32 {
     the_child_starts_with_the_parents_registers();
     the_childs_table_mirrors_the_parents();
     the_move_list_is_all_or_nothing();
+    snapshot_holds_moved_handles();
     frame_exhaustion_gives_everything_back();
     a_child_in_a_suspended_job_waits();
     the_job_must_be_ours_and_open();
