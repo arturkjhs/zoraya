@@ -588,6 +588,72 @@ fn creating_calls_leave_no_handles() {
     println!("t_thread: creating calls ok");
 }
 
+// ---- INV-0313-3: 70 joiners woken by one `clear` store see the refund.
+
+const CLEAR_WAITERS: usize = 70;
+static CLEAR_GO: AtomicU32 = AtomicU32::new(0);
+static CLEAR_WORD: AtomicU64 = AtomicU64::new(0);
+static CLEAR_READY: AtomicU32 = AtomicU32::new(0);
+static CLEAR_SEEN: AtomicU64 = AtomicU64::new(0);
+
+extern "C" fn clear_target(arg: u64) -> ! {
+    while CLEAR_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    thread_exit(arg, 0, 0)
+}
+
+extern "C" fn clear_waiter(arg: u64) -> ! {
+    let at = CLEAR_WORD.load(SeqCst);
+    CLEAR_READY.fetch_add(1, SeqCst);
+    while word(at).load(SeqCst) != 0 {
+        let _ = futex_wait(at, 1, DEADLINE_INFINITE);
+    }
+    let used = job_get_usage(JOB, false).expect("usage").threads.used;
+    CLEAR_SEEN.fetch_max(used, SeqCst);
+    thread_exit(arg, 0, 0)
+}
+
+/// The `clear` store wakes 70 waiters, 64 at a time with a step point
+/// between; a woken one reads the job's `threads` figure while the exiting
+/// thread is paused in the wake. It must already be refunded. The sweep wake
+/// is `FORCE_SWITCH`ed so that the pause hands over the CPU.
+fn clear_refund_precedes_the_wake() {
+    CLEAR_GO.store(0, SeqCst);
+    CLEAR_READY.store(0, SeqCst);
+    CLEAR_SEEN.store(0, SeqCst);
+    let (target, target_base) = start(clear_target, OWN_BASE);
+    CLEAR_WORD.store(target_base, SeqCst);
+    let before = job_get_usage(JOB, false).expect("usage").threads.used;
+    let mut waiters = [(Handle::new(1).expect("slot"), 0u64); CLEAR_WAITERS];
+    for w in waiters.iter_mut() {
+        *w = start(clear_waiter, OWN_BASE);
+    }
+    while CLEAR_READY.load(SeqCst) < CLEAR_WAITERS as u32 {
+        thread_yield();
+    }
+    sleep_until(clock_monotonic() + 20 * MS);
+    raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+    CLEAR_GO.store(1, SeqCst);
+    for (_, base) in waiters {
+        join(base);
+    }
+    raw_syscall(FORCE_SWITCH, [0; 6]);
+    join(target_base);
+    // `before` counts the target and the main thread; a waiter that saw the
+    // target still counted would have read `before + CLEAR_WAITERS`.
+    assert_eq!(
+        CLEAR_SEEN.load(SeqCst),
+        before + CLEAR_WAITERS as u64 - 1,
+        "INV-0313-3: a joiner saw the figure before the refund"
+    );
+    for (t, _) in waiters {
+        handle_close(t).expect("close");
+    }
+    handle_close(target).expect("close");
+    println!("t_thread: clear refund ok");
+}
+
 // ---- the quota (INV-0307-1), in a child job with threads = 3.
 
 extern "C" fn parked(arg: u64) -> ! {
@@ -870,7 +936,7 @@ fn main() -> i32 {
         Some(b"full") => return full_process_child(),
         _ => {}
     }
-    let steps: [(&str, fn()); 13] = [
+    let steps: [(&str, fn()); 14] = [
         ("create", create_and_exit),
         ("refusals", refusals_change_nothing),
         ("joined", join_and_unmap_rounds),
@@ -881,6 +947,7 @@ fn main() -> i32 {
         ("interrupts", interrupts),
         ("maplock", map_lock_contention),
         ("creating", creating_calls_leave_no_handles),
+        ("clear", clear_refund_precedes_the_wake),
         ("quota", quota),
         ("ending", ending),
         ("full", full_process),

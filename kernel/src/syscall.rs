@@ -1362,6 +1362,10 @@ impl Handlers for Calls<'_> {
         {
             let _ = self.unmap_exact(unmap_base.0, unmap_length.0);
         }
+        // The figures go back before the store and the wake: a joiner woken
+        // by the store sees them refunded, and the wake itself may yield
+        // (INV-0313-3). `end_thread_record` finds nothing left to give.
+        sched::current().release_thread();
         if clear.0 != 0
             && clear.0.is_multiple_of(4)
             && let Ok(word) = UserSlice::new(clear.0, 4)

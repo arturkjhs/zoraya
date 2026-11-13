@@ -80,8 +80,8 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
    but its deadline, an interrupt or the ending.
 5. **A thread that ends refunds at the call** (confirms ADR-0307 item 7, and says which): its `threads` figure, its record and
    its kernel stack go back to the job in `thread_exit` or at its leave (`Paid::release_exited`); the memory itself is freed by the
-   reaper at the next switch. A joiner woken by the `clear` store therefore always sees the figures refunded, with no
-   yield in between.
+   reaper at the next switch. The refund is made before the `clear` store and its wake (which may yield, in steps of 64, with
+   that many joiners), so a joiner woken by the store always sees the figures refunded.
 
 ## Consequences
 
@@ -98,7 +98,7 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
 - **INV-0313-2.** A futex waiter that returns for any reason leaves no node on the process's wait list: after any mixture of
   wakes, time-outs and interrupts, a `futex_wake` of the address wakes none. *Check:* `t_thread` in `make test-qemu`.
 - **INV-0313-3.** A thread that has stored its `clear` word has already given its `threads` figure and kernel memory back: the job's
-  usage read right after `join` and the close of the thread's handle equals its value before the thread was made, with no yield between. *Check:* `t_thread` in `make test-qemu`.
+  usage read right after `join` and the close of the thread's handle equals its value before the thread was made: the refund precedes the store and the wake of the `clear` word, which may yield with 64 or more waiters. *Check:* `t_thread` in `make test-qemu`.
 
 ## Open questions
 
