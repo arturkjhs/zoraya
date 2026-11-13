@@ -247,13 +247,15 @@ pub unsafe extern "C" fn zoraya_window_open(title: *const c_char, width: u32, he
         let bytes = unsafe { core::ffi::CStr::from_ptr(title) }.to_bytes();
         String::from_utf8_lossy(bytes).into_owned()
     };
-    let Some(Some(end)) = with(|p| p.window.take()) else {
-        return -1;
-    };
+    // The channel is taken only once the window lock is held: a call that
+    // gets `busy` leaves it where it was, for the next call (review N2).
     window(-1, |slot| {
         if slot.is_some() {
             return -1;
         }
+        let Some(Some(end)) = with(|p| p.window.take()) else {
+            return -1;
+        };
         let gui = Gui {
             end,
             buffers: Vec::new(),

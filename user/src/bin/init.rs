@@ -838,7 +838,15 @@ fn main() -> i32 {
                 random,
                 keeper,
                 services,
-                shell_window.take().filter(|_| terminal.is_some()),
+                match shell_window.take() {
+                    Some(w) if terminal.is_some() => Some(w),
+                    // No terminal to give it to: not left open (N5).
+                    Some(w) => {
+                        let _ = handle_close(w);
+                        None
+                    }
+                    None => None,
+                },
             )
         };
         let Some(shell) = shell else {
