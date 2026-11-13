@@ -19,10 +19,11 @@
 #     test_locale_caching, test_locale_compiled);
 #   - they ask for a very large thread stack, which does not fit the machine
 #     (test_highly_nested_objects_decoding: MemoryError).
-# test_threading is not listed: its fork-from-threads and stack-size stress
-# cases ran 8 minutes and failed with "Out of memory" at thread creation
-# (a finding recorded in docs/design.md); test_thread, test_threading_local
-# and test_queue stand for the threads.
+# test_threading is listed, with the cases that start another interpreter or
+# name a thread over 15 bytes left out (regr-ignore.txt). It once failed with
+# "OSError: Out of memory"; that was os.fork (no copy-on-write: a child copies the
+# whole writable space, and the interpreter's stack was 8 MiB then, ADR-0320
+# item 5), not thread creation.
 import sys
 
 # One module per line, in regr-modules.txt next to this file (the Makefile

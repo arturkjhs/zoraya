@@ -1,4 +1,4 @@
-# ADR-0320: CPython 3.15 as a port: a static build with `zcc`, the shims, five patches, the environment policy
+# ADR-0320: CPython 3.15 as a port: a static build with `zcc`, the shims, six patches, the environment policy
 
 - **Status:** proposed
 - **Date:** 2026-11-13
@@ -26,13 +26,13 @@ later) reserves 32 KiB at the top of the stack for its overflow guard and raises
 4. Honesty about what is absent (no `dlopen`, no `AF_UNIX`, no server sockets, no `socketpair`).
 
 ## Considered options
-### Option A: a static build, a small shim library, five patches (the recommendation)
+### Option A: a static build, a small shim library, six patches (the recommendation)
 - **Description:** `ports/Makefile` builds the host Python of the same version (for `--with-build-python` and to compile the
   library's byte code), SQLite for the target, `libpyshim.a` (`ports/apps/pyshim.c`), and CPython with `MODULE_BUILDTYPE=static`.
 - **Evidence for:** drivers 1 to 4; the build ran end to end, `python3 -c` runs in the guest.
 - **Evidence against:** 15 MB per image that holds it; the shims return an error where the call has no meaning, and a program
   that depends on it fails at run time.
-- **Cost:** *(measured)* 224 lines of C, 5 patches of 20 to 50 lines each.
+- **Cost:** *(measured)* 224 lines of C, 6 patches of 20 to 50 lines each.
 - **Precedent:** Alpine, Termux and Redox's port build CPython static with a similar list of `ac_cv_*`.
 
 ### Option B: no patches, only `libpyshim` and configure answers
@@ -60,26 +60,39 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    value a caller handles, or an error, never a silent success of an action that did not happen.
 4. **Names `libc.a` adds** (the block below): libm, `atol`, the wide-character string functions and a few others that CPython's
    configure finds in the headers; they follow ADR-0310's rule that `libc.a` exports what musl's own source gives and `libposix` already serves.
-5. **Patches** (`ports/patches/python/`, every change under `__zoraya__` or in a file only this port reads):
+5. **Patches** (`ports/patches/python/`, every change under `__zoraya__` or `sys.platform == 'zoraya'`, or in a file only this port reads):
    `0001` `_ssl` reads and writes the socket's descriptor through a file-descriptor BIO (OpenSSL is `no-sock`);
-   `0002` the interpreter starts with `use_environment=0`, `write_bytecode=0` and `user_site_directory=0` (item 6);
+   `0002` the interpreter starts with `use_environment=0`, `write_bytecode=0` and `user_site_directory=0`, and `-c` and `-m` put no directory
+   on `sys.path` (item 6);
    `0003` `asyncio`'s self-pipe is the two ends of `os.pipe()` where `_socket` has no `socketpair`;
-   `0004` `main` runs the interpreter on a thread with an 8 MiB stack and joins it (a process starts on 64 KiB; the interpreter
-   assumes 4 MB); the thread library's stack of that size is the process's own memory, taken when used;
-   `0005` `getpath` does not look for `pyvenv.cfg` (there are no virtual environments, and the search read `/pyvenv.cfg` and `/bin/pyvenv.cfg`, which a program is not given).
-6. **Environment policy.** `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONWARNINGS`, `SSL_CERT_FILE` and the others decide nothing (the
-   program runs as with `-E`); no byte code is written; no per-user site directory. The standard library's byte code is compiled once
-   by the host's Python, `unchecked-hash` (the volume keeps no modification time to check against). `ssl.create_default_context()`
-   loads no file the environment names; a program names `/system/tls/roots` itself (the system's roots, given with the network, ADR-0311 item 2).
+   `0004` `main` runs the interpreter on a thread with a 2 MiB stack and ends the process from that thread with `exit(status)` (a process starts
+   on 64 KiB, and CPython's overflow guard keeps 32 KiB; in a `fork` child the thread is the only one left, and its return would end the
+   process with status 0). A thread that cannot be started is an error message and status 1, not a run on 64 KiB. The stack is not "taken
+   when used": libposix commits a mapping in full (ADR-0031, ADR-0303) and a `fork` child copies it, so each `python3` costs 2 MiB more
+   and each `fork` child 2 MiB (8 MiB was measured: 11 children at once on a 512 MiB machine, against 15 with 2 MiB and 16 with 1 MiB; 2 MiB
+   was kept with a margin over 1 MiB, which also passed the deep-nesting cases of `json`, `ast`, `compile`, `pickle` and `copy`);
+   `0005` `getpath` does not look for `pyvenv.cfg` (there are no virtual environments, and the search read `/pyvenv.cfg` and `/bin/pyvenv.cfg`, which a program is not given);
+   `0006` `urllib.request.getproxies()` is empty when the interpreter ignores the environment (it did not look at the flag, so `https_proxy` would
+   have sent a request where the line did not say it goes).
+6. **Environment policy.** `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONWARNINGS`, `SSL_CERT_FILE`, `http_proxy` and the others decide nothing (the
+   program runs as with `-E`); no byte code is written; no per-user site directory. `-c` and `-m` do not put the current directory on `sys.path`
+   (a downloaded `ssl.py` would otherwise be imported by `+net bank:443 python3 -c 'import ssl...'` with the line's grants); a script puts its
+   own directory on it, and the current directory is readable as for every POSIX program, so **a module next to a script is imported by it**:
+   `python3.cmd` says so, and `-P` or `-I` turns it off. (`cwd none` was considered: the script operand grants the file only, so a script could not read
+   its own data files without a `+r`, unlike every other POSIX program here; not taken.) The standard library's byte code is compiled once
+   by the host's Python, `unchecked-hash` (the volume keeps no modification time to check against). `ssl.create_default_context()` finds the roots with no
+   `cafile`: OpenSSL's `OPENSSLDIR` is `/system/tls` and the OpenSSL patch 0003 makes `X509_CERT_FILE` that directory's `roots` (the system's roots, given with the
+   network, ADR-0311 item 2); no environment variable changes it. **Python is not mediated**: `ssl.CERT_NONE` and `ssl._create_unverified_context()` are the script's
+   own choice, as `SSL_set_verify(NONE)` is a C program's; curl's refused `-k` has no counterpart here. The checks of INV-0320-3 are of the default context.
 7. **Description policy** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set: `/bin /usr /etc` to read, a `/tmp` of its
-   own, the current directory to read, what its operands and `+r`, `+w`, `+net` give; the network only with `+net HOST:PORT`, and the roots
+   own, the current directory to read, what its operands and `+r`, `+w`, `+net` give (the files and directories a script imports from are the standard library and its own directory, item 6); the network only with `+net HOST:PORT`, and the roots
    with it. Options offered: `-c -m -b -B -I -O -P -q -s -u -V -W`; not `-E -X -i -d -v -x` and no interactive session (no terminal from zosh, ADR-0153).
 8. **Sizes and files.** The image part is `build/rootfs-python` (`/bin/python3`, 15.5 MB, and `/usr/lib/python3.15`, 37 MB, 1226 files, 52 MB in all);
-   `make python` builds it, `make test-python` boots it. `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and a
+   `make python` builds it (the host Python is minimal, `--without-ensurepip`: the CI container has no zlib headers, and `compileall` needs none), `make test-python` boots it. CI's build artifact and ports cache leave out the Python source, host and build trees and the stage (about 600 MB the tests do not read): `ports/Makefile` depends on two marker files, and `make ci-build` precompiles the test subset into `build/python-testlib`. `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and a
    `DISK_SIZE` (default 64M; curl, wget and the Python part need 192M): the volume of `make run` is made with
    `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`.
-9. **Tests.** `tests/python/smoke.py` (the flags, `sqlite3`, `ssl`, `asyncio`, threads, `fork`), `tests/python/https_client.py` (an `asyncio` HTTPS client
-   against `tools/test-httpd`'s TLS server, and the refusal of an expired and a wrong-name certificate with 0 request bytes), and
+9. **Tests.** `tests/python/smoke.py` (the flags, `sqlite3`, `ssl`, `asyncio`, threads, `fork` and the status of a child that exits or raises, no proxy from the environment), `tests/python/https_client.py` (an `asyncio` HTTPS client
+   against `tools/test-httpd`'s TLS server, with a `cafile` and with the default context, and the refusal of an expired and a wrong-name certificate with 0 request bytes), `tests/python/https_blocking.py` (the same with `http.client` and `urllib`, which go through the file-descriptor BIO of patch 0001), `planted.py` and `usesplanted.py` (`-c` and `-m` do not import a module of the current directory; a script imports from its own), and
    `tests/python/regr.py`, which runs CPython's `regrtest` over the modules of `tests/python/regr-modules.txt` (the interpreter's core types,
    `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `threading`, `asyncio`'s tasks, futures and locks). Not run: modules that need `AF_UNIX`, a server socket, `ctypes`,
    shared modules or a terminal; each is recorded in `docs/design.md` where known.
@@ -262,20 +275,20 @@ wmemcmp
 
 ## Consequences
 - **Positive.** Python programs run from the volume; the standard library's tests exercise threads, `sqlite3` and `ssl` in a way no C test of ours does.
-- **Negative.** 52 MB on a volume; a process with `main` on a thread has an 8 MiB stack of virtual memory (only touched pages cost); `socket.socketpair`,
+- **Negative.** 52 MB on a volume; a process with `main` on a thread has a 2 MiB stack that is committed in full, and a `fork` child copies it (no copy-on-write); `socket.socketpair`,
   `AF_UNIX`, servers and `posix_spawn` do not exist; a program that Python starts has no connection to the random service (ADR-0310), so `subprocess.run([sys.executable, ...])` fails at start with "failed to get random numbers"; a program that sets `PYTHONPATH` is not obeyed.
 - **Follow-up.** `bind`, `listen`, `accept` (a Python server) when the network service has them; a larger process stack in the kernel would make patch 0004 unnecessary.
 
 ## Invariants
 - **INV-0320-1.** The interpreter runs with the environment ignored, no byte code written and no user site: `sys.flags.ignore_environment` is 1, `sys.dont_write_bytecode` is true, `sys.flags.no_user_site` is 1. *Check:* `make test-python` (`smoke.py` prints them).
 - **INV-0320-2.** `python3` starts from the volume and imports the standard library, `sqlite3`, `ssl` and `asyncio`, runs a thread and a `fork` child. *Check:* `make test-python` (`smoke.py`).
-- **INV-0320-3.** An `asyncio` HTTPS client verifies the chain, the time and the name against `/system/tls/roots` and sends no request byte after a failed verification. *Check:* `make test-python` (expired and wrong-name servers: the server's log shows `ended after 0 request bytes`).
-- **INV-0320-4.** The line gives the program the network only with a `+net` word, and the roots only with the network. *Check:* `make test-python` (`grants python3 ...` with and without `+net`).
+- **INV-0320-3.** An `asyncio` HTTPS client verifies the chain, the time and the name against `/system/tls/roots` and sends no request byte after a failed verification. *Check:* `make test-python` (expired and wrong-name servers, with `asyncio`, `http.client` and `urllib`: the server's log shows `ended after 0 request bytes`). Of the default context; a script can turn verification off (item 6).
+- **INV-0320-4.** The line gives the program the network only with a `+net` word, and the roots only with the network. *Check:* `make test-python` (`grants python3 ...` with `+net` shows the roots and the net line; without it shows neither, `x` steps of the script).
 - **INV-0320-5.** CPython's own tests of the listed modules pass in the guest. *Check:* `make test-python` (`regr.py`).
 
 ## Open questions
-- `test_threading` fails (thread creation: `Out of memory`, with many forks from threads and large stack sizes); which of libposix, the kernel's thread quota (ADR-0307) or the 512 MiB machine is the limit is not known.
-- Whether the roots should be loaded by `ssl.create_default_context()` without a `cafile` (a patch to `_ssl`'s default paths); today a program names the file.
+- *(Measured, 9c; recorded as findings, not decisions.)* The `OSError: Out of memory` of the first `test_threading` run was **`os.fork`** (`fork_locked` maps `NoMemory` and `OverQuota` to `ENOMEM`, procs.rs), not `pthread_create` (whose failure is `RuntimeError("can't start new thread")`). There is no copy-on-write: a child copies the whole writable space, the interpreter's stack and every thread's stack included. Measured on 512 MiB: with the 8 MiB stack, 11 children at once, then `ENOMEM`; with 2 MiB 15, with 1 MiB 16. With the 2 MiB stack the whole of `test_threading` runs with no `Out of memory` (43 failures and 9 errors, all of them cases that start another interpreter, a `subprocess` child, or `pthread_setname_np` of a name over 15 bytes, which musl refuses with `ERANGE`; they are in `tests/python/regr-ignore.txt`), and the module is in the subset. Not run: the same with `--mem 2G`, and `test_threading` again at 8 MiB (the 8 MiB statements rest on the fork counts).
+- *(Measured, 9c.)* `MAPPING_SLOTS` (libposix, 256, the kernel's own limit per process, ADR-0300): 4000 threads (2000 joined, 2000 daemon) and 30 `fork` + `waitpid` leave the free count flat (248 free at the start, 247 after; probed with private `mmap`s). Not flat but a limit: deep Python recursion (`sys.setrecursionlimit(10**7)`) ends with `MemoryError` at about 33,000 frames, because each frame-chunk and each obmalloc arena (1 MiB) is one mapping; the default limit of 1000 is far from it. Raising the table alone is not safe (the kernel limit is the same number); left as it is.
 - Whether the modules of `regr-modules.txt` can grow once `AF_UNIX` and server sockets exist.
 - The Sigstore bundle of the archive: verification by `make fetch-ports` (needs a tool that is not on the host).
 

@@ -18,7 +18,7 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +
-+#define ZORAYA_PY_STACK (8u << 20)
++#define ZORAYA_PY_STACK (2u << 20)
 +
 +struct zoraya_main { int argc; char **argv; };
 +

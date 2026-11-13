@@ -15,3 +15,4 @@ test_threading_local
 test_asyncio.test_tasks
 test_asyncio.test_futures
 test_asyncio.test_locks
+test_threading

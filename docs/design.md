@@ -2066,7 +2066,7 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
 volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
 
 - **The build.** `ports/sources.lock` pins the archive by the SHA-256 python.org publishes (the Sigstore bundle it also
-  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/host`, for
+  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/host`, minimal: `--without-ensurepip`, no zlib needed; for
   `--with-build-python` and for compiling the library's byte code), SQLite for the target (`THREADSAFE=1`, no extension
   loading, no WAL, FTS5), `libpyshim.a` (`ports/apps/pyshim.c`: `execv`, `madvise`, `msync`, `sched_yield`, `pause`, `dirfd`,
   `gethostbyname` over `getaddrinfo`, `getprotobyname`, `getservbyname`, `hstrerror`...) and CPython itself, into
@@ -2075,11 +2075,10 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   (no `dlopen`), `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`.
 - **Patches** (`ports/patches/python/`): `_ssl` uses a file-descriptor BIO (OpenSSL has no sockets); the environment, byte code
   files and the per-user site directory are off; `asyncio`'s self-pipe is `os.pipe()` (no `socketpair`); `main` runs the interpreter
-  on a thread with an 8 MiB stack, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB; no `pyvenv.cfg`
-  search. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`.
+  on a thread with a 2 MiB stack (committed in full, copied by every `fork` child; measured 8, 2 and 1 MiB, ADR-0320 item 5) and ends the process with `exit(status)` from it, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB; no `pyvenv.cfg`
+  search; `-c` and `-m` put no directory on `sys.path`; `urllib` takes no proxy from the environment. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`.
 - **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
-  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. A script names its own `cafile`:
-  `ssl.create_default_context()` alone finds no roots. `PYTHON*` variables decide nothing.
+  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. `ssl.create_default_context()` finds the roots with no `cafile` (OpenSSL's `OPENSSLDIR` is `/system/tls`). `PYTHON*` variables decide nothing. A script imports from the standard library and its own directory (the current directory is readable), not from the current directory under `-c` or `-m`. Python is not mediated: a script can turn verification off (`ssl.CERT_NONE`), unlike curl's refused `-k`.
 - **The volume.** `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and `DISK_SIZE` (default 64M, in
   the disk's key): curl, wget and Python do not fit in 64M, so `make run` with Python is
   `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`. `make test-python` makes its own 256M disk.
@@ -2088,10 +2087,9 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   (`tests/python/https_client.py`) against `tools/test-httpd`'s TLS server with the test PKI's root, the refusal of an expired and a
   wrong-name certificate with 0 request bytes at the server, and `tests/python/regr.py`: CPython's regrtest over the modules of
   `tests/python/regr-modules.txt`.
-- **Known limits.** `test_threading` (CPython's own) was run and not kept: its fork-from-threads and thread-stack cases ran 8.5 minutes and failed with `OSError: Out of memory` at thread creation (10 errors, 42 failures); `test_thread`, `test_threading_local` and `test_queue` stand for the threads, and a larger thread stack (`threading.stack_size`) fails with `MemoryError` (`test_json`'s deeply nested case). Found, not fixed. A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it is in the subset since the stack is 2 MiB, with the cases that start another interpreter left out (ADR-0320 open questions; `test_thread`, `test_threading_local` and `test_queue` too). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`; threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
   `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
-  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 8 MiB of stack as virtual memory (only
-  touched pages cost). The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
+  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
 
