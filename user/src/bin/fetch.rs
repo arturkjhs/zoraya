@@ -84,8 +84,9 @@ fn why(e: ConnectError) -> &'static str {
     match e {
         ConnectError::Refused(status::NOT_GRANTED) => "the network is not granted to this command",
         ConnectError::Refused(_) | ConnectError::Unavailable => "the network is not available",
-        ConnectError::TimedOut => "the network service did not answer in time",
+        ConnectError::TimedOut => "the network service did not answer",
         ConnectError::Failed(reason::UNRESOLVABLE) => "the name has no address",
+        ConnectError::Failed(reason::LOOKUP_TIMED_OUT) => "the name lookup timed out",
         ConnectError::Failed(reason::REFUSED) => "the connection was refused",
         ConnectError::Failed(reason::UNREACHABLE) => "there is no route to the host",
         ConnectError::Failed(reason::TIMED_OUT) => "the host did not answer",

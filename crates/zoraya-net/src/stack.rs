@@ -12,8 +12,9 @@ use smoltcp::socket::dhcpv4::{self, Event as DhcpEvent};
 use smoltcp::socket::icmp::{self, Endpoint as IcmpEndpoint};
 use smoltcp::time::Instant;
 use smoltcp::wire::{
-    DhcpOption, DhcpRepr, EthernetAddress, HardwareAddress, Icmpv4Packet, Icmpv4Repr, IpAddress,
-    IpCidr, Ipv4Address, Ipv4Cidr,
+    ArpOperation, ArpPacket, ArpRepr, DhcpOption, DhcpRepr, EthernetAddress, EthernetFrame,
+    EthernetProtocol, EthernetRepr, HardwareAddress, Icmpv4Packet, Icmpv4Repr, IpAddress, IpCidr,
+    Ipv4Address, Ipv4Cidr,
 };
 
 use crate::config::{Config, Mode, is_unicast};
@@ -26,8 +27,9 @@ const PING_IDENT: u16 = 0x5a50;
 /// reply's `rtts` list holds (INV-0330-1).
 const MAX_PING_COUNT: u32 = zoraya_proto_net::MAX_PINGS;
 const PING_DATA: [u8; 32] = *b"zoraya echo request 0123456789ab";
-/// Milliseconds between two echo requests of one run.
-pub const PING_INTERVAL_US: i64 = 200_000;
+/// Microseconds between two echo requests of one run (the protocol's
+/// `zoraya_proto_net::PING_INTERVAL_US`, which clients wait by).
+pub const PING_INTERVAL_US: i64 = zoraya_proto_net::PING_INTERVAL_US as i64;
 /// DHCP option 12, the host name.
 const OPTION_HOSTNAME: u8 = 12;
 /// The most frames one `poll` moves each way, so that a flood cannot hold
@@ -35,6 +37,13 @@ const OPTION_HOSTNAME: u8 = 12;
 pub const BURST: usize = 64;
 /// The shortest delay `poll` asks for on account of a run, in microseconds.
 pub const MIN_DELAY_US: i64 = 1_000;
+/// How long an ARP probe of a neighbour counts as fresh: the stack probes
+/// the gateway again on a lookup only after this (smoltcp keeps a neighbour
+/// for 60 s from its last frame).
+pub const PROBE_FRESH_US: i64 = 30_000_000;
+/// The most neighbours one probe round asks for: the gateway and
+/// `zoraya_proto_net::MAX_DNS` servers.
+const MAX_PROBES: usize = 1 + zoraya_proto_net::MAX_DNS;
 
 /// Why a stack could not be made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +146,10 @@ pub struct Stack<L: Link> {
     /// Runs started, for their identifiers.
     runs: u16,
     events: Vec<Event>,
+    /// Neighbours to ask for with an ARP request at the next `poll`.
+    probes: Vec<[u8; 4]>,
+    /// When each neighbour was last asked for.
+    probed: Vec<([u8; 4], i64)>,
     /// TCP connections and the resolver (`tcp`, `dns`).
     pub(crate) extra: crate::tcp::Extra,
 }
@@ -189,6 +202,8 @@ impl<L: Link> Stack<L> {
             ping: None,
             runs: 0,
             events: Vec::new(),
+            probes: Vec::new(),
+            probed: Vec::new(),
             extra: crate::tcp::Extra::default(),
         };
         stack.seed_ports(seed);
@@ -220,6 +235,7 @@ impl<L: Link> Stack<L> {
             } => {
                 stack.apply(address, prefix, Some(gateway));
                 stack.static_up = true;
+                stack.probe_neighbours(now_us);
             }
             Mode::Unconfigured => {}
         }
@@ -283,6 +299,7 @@ impl<L: Link> Stack<L> {
         }
         self.dhcp_events(now_us);
         self.ping_step(now_us);
+        self.send_probes(now_us);
         for _ in 0..BURST {
             if self
                 .iface
@@ -350,6 +367,7 @@ impl<L: Link> Stack<L> {
                         );
                         self.lease = Some(lease);
                         self.events.push(Event::Configured);
+                        self.probe_neighbours(now_us);
                     }
                 }
                 Some(None) => {
@@ -357,11 +375,103 @@ impl<L: Link> Stack<L> {
                     if self.lease.is_some() {
                         self.clear();
                         self.lease = None;
+                        self.probes.clear();
+                        self.probed.clear();
                         self.events.push(Event::Deconfigured);
                     }
                 }
                 None => break,
             }
+        }
+    }
+
+    /// Asks for the gateway and the DNS servers on the link with ARP
+    /// requests at the next `poll`, unless they were asked for within
+    /// [`PROBE_FRESH_US`]. Called when the interface is configured, so that
+    /// the first lookup and the first connection after it find their
+    /// neighbours known. smoltcp itself asks for a neighbour only when a
+    /// packet waits for it, and then for no other neighbour during the next
+    /// second (its cache's rate limit): the first lookup's answer, and the
+    /// SYN or echo request to the gateway that follows, waited that second.
+    pub(crate) fn probe_neighbours(&mut self, now_us: i64) {
+        let status = self.status(now_us);
+        let mut wanted: Vec<[u8; 4]> = Vec::with_capacity(MAX_PROBES);
+        wanted.push(status.gateway);
+        wanted.extend(status.dns.iter().copied().take(MAX_PROBES - 1));
+        for target in wanted {
+            self.probe(target, now_us);
+        }
+    }
+
+    /// Asks for the gateway at the next `poll` unless it was asked for
+    /// within [`PROBE_FRESH_US`]: a lookup is going out, and its answer is
+    /// as a rule an address behind the gateway (smoltcp forgets a neighbour
+    /// 60 s after its last frame, and would ask for the gateway only once
+    /// the lookup's own ARP request is a second old).
+    pub(crate) fn probe_gateway(&mut self, now_us: i64) {
+        let gateway = self.status(now_us).gateway;
+        self.probe(gateway, now_us);
+    }
+
+    fn probe(&mut self, target: [u8; 4], now_us: i64) {
+        // IPv4 is the stack's one protocol: the first address is the one.
+        let Some(IpCidr::Ipv4(cidr)) = self.iface.ip_addrs().first().copied() else {
+            return;
+        };
+        let on_link = cidr.contains_addr(&Ipv4Address::from(target));
+        let fresh = self
+            .probed
+            .iter()
+            .any(|(a, at)| *a == target && now_us - *at < PROBE_FRESH_US);
+        if !is_unicast(target)
+            || !on_link
+            || octets(cidr.address()) == target
+            || fresh
+            || self.probes.contains(&target)
+            || self.probes.len() >= MAX_PROBES
+        {
+            return;
+        }
+        self.probes.push(target);
+    }
+
+    /// Sends the ARP requests [`Stack::probe`] queued; one that cannot be
+    /// sent now (no transmit slot) waits for the next `poll`.
+    fn send_probes(&mut self, now_us: i64) {
+        let Some(own) = self.iface.ipv4_addr() else {
+            self.probes.clear();
+            return;
+        };
+        while let Some(&target) = self.probes.first() {
+            if !self.device.link.can_send() {
+                return;
+            }
+            self.probes.remove(0);
+            let arp = ArpRepr::EthernetIpv4 {
+                operation: ArpOperation::Request,
+                source_hardware_addr: EthernetAddress(self.mac),
+                source_protocol_addr: own,
+                target_hardware_addr: EthernetAddress([0; 6]),
+                target_protocol_addr: Ipv4Address::from(target),
+            };
+            let eth = EthernetRepr {
+                src_addr: EthernetAddress(self.mac),
+                dst_addr: EthernetAddress::BROADCAST,
+                ethertype: EthernetProtocol::Arp,
+            };
+            let mut frame = [0u8; 14 + 28];
+            let mut f = EthernetFrame::new_unchecked(&mut frame[..]);
+            eth.emit(&mut f);
+            arp.emit(&mut ArpPacket::new_unchecked(f.payload_mut()));
+            if self.device.link.send(&frame) {
+                self.device.counters.frames_out += 1;
+            } else {
+                self.device.counters.dropped += 1;
+            }
+            // Bounded: an entry older than the freshness counts for nothing.
+            self.probed
+                .retain(|(a, at)| *a != target && now_us - *at < PROBE_FRESH_US);
+            self.probed.push((target, now_us));
         }
     }
 
@@ -492,6 +602,12 @@ impl<L: Link> Stack<L> {
     /// The changes since the last call.
     pub fn take_events(&mut self) -> Vec<Event> {
         core::mem::take(&mut self.events)
+    }
+
+    /// Whether the interface waits for a DHCP lease: its address and (unless
+    /// `net.dns` names them) its servers are still to come (ADR-0316).
+    pub(crate) fn lease_pending(&self) -> bool {
+        matches!(self.config.mode, Mode::Dhcp) && self.lease.is_none()
     }
 
     pub fn status(&self, now_us: i64) -> Status {

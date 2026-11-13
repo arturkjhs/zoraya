@@ -76,7 +76,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: FORCE test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -285,11 +285,12 @@ NET_FWD_PORT := 47015
 NET_SCRIPT := tests/shell/net.script
 # INV-0296-1: a string of each of the test image's Crash paths (feature
 # net-test), as PROGRAM:STRING: netd's end on request, init's request on its
-# control connection and its look for the volume's file. The shell's `net
+# control connection and its look for the volume's file, and netd's read of
+# the test DNS port (ADR-0316's test hook). The shell's `net
 # crash` only asks init, which then has no such path. test-net checks that
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
-NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper'
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper' 'netd:net-test-dns-port'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
@@ -328,7 +329,8 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
 	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
 	$(MAKE) --no-print-directory test-net-fetch && \
-	$(MAKE) --no-print-directory test-net-posix
+	$(MAKE) --no-print-directory test-net-posix && \
+	$(MAKE) --no-print-directory test-net-lookup
 
 # N3 (ADR-0222, ADR-0223): `fetch` in the guest against the host-side test
 # server (tools/test-httpd: 127.0.0.1 only, bounded, gone after 300 s or when
@@ -388,6 +390,58 @@ test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		if [ -n "$$CI" ] && [ "$(NET_DNS)" != 1 ]; then echo "[net-dns] SKIP: SLIRP's DNS forwarder needs the host's resolver (NET_DNS=1 runs it on CI)"; \
 		else $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel auto $(KERNEL); rc=$$?; fi; \
 	fi; \
+	exit $$rc
+
+# The first lookup of a boot over the wire (proposed ADR-0316): a fresh boot
+# whose first network command is `ping NAME`, then `fetch` by name, against
+# tools/test-dns on the host's 127.0.0.1 (the disk's `net.dns = 10.0.2.2`,
+# which SLIRP maps there), which answers late or never. The script checks
+# what the commands say (the answer, or "the name lookup timed out" at
+# netd's bound); `zoraya-test-dns --check-pcap` checks the capture: one ARP
+# request for the server before the first query, and the echo request and
+# the SYN leaving within 0.5 s of their answers (netd acted on the answer
+# at once; before the fix the run waited for the client's timeout). The
+# server listens on a free port, not 53 (root only): the image is the test
+# image, whose `netd` reads that port from /config/net-test-dns-port.
+TEST_DNS := target/debug/zoraya-test-dns
+NET_LOOKUP_ROOT := $(BUILD)/net-lookup-root
+NET_LOOKUP_DISK := $(BUILD)/net-lookup-disk.img
+NET_LOOKUP_SCRIPT := $(BUILD)/net-lookup.script
+NET_LOOKUP_PCAP := target/test-logs/test-net-lookup.pcap
+NET_LOOKUP_DNS_READY := $(BUILD)/net-lookup-dns.port
+NET_LOOKUP_HTTP_READY := $(BUILD)/net-lookup-httpd.port
+NET_LOOKUP_DNS_LOG := target/test-logs/test-dns.log
+
+$(TEST_DNS): tools/test-dns/src/main.rs
+	$(CARGO) build -q -p zoraya-test-dns
+
+test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-lookup] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	mkdir -p $(NET_LOOKUP_ROOT) target/test-logs && cp -R rootfs/. $(NET_LOOKUP_ROOT)/ && \
+	rm -f $(NET_LOOKUP_PCAP) && : > $(NET_LOOKUP_DNS_READY) && : > $(NET_LOOKUP_HTTP_READY) && \
+	{ $(TEST_DNS) --port 0 --lifetime 300 --ready-file $(NET_LOOKUP_DNS_READY) \
+		--answer slow.zoraya=10.0.2.2@3000 --answer slowweb.zoraya=10.0.2.2@3000 \
+		--silent silent.zoraya --silent silentweb.zoraya > $(NET_LOOKUP_DNS_LOG) 2>&1 & echo $$! > $(BUILD)/net-lookup-dns.pid; } && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_LOOKUP_HTTP_READY) > target/test-logs/test-httpd-lookup.log 2>&1 & echo $$! > $(BUILD)/net-lookup-httpd.pid; } && \
+	dns=$$(cat $(BUILD)/net-lookup-dns.pid); httpd=$$(cat $(BUILD)/net-lookup-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_LOOKUP_DNS_READY) ] && [ -s $(NET_LOOKUP_HTTP_READY) ] && break; sleep 0.25; done; \
+	dnsport=$$(cat $(NET_LOOKUP_DNS_READY)); port=$$(cat $(NET_LOOKUP_HTTP_READY)); \
+	if [ -z "$$dnsport" ] || [ -z "$$port" ] || ! kill -0 $$dns 2>/dev/null || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[net-lookup] FAIL: the test servers did not start"; cat $(NET_LOOKUP_DNS_LOG); kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
+	if ! { printf 'net.dns = 10.0.2.2\n' > $(NET_LOOKUP_ROOT)/config/settings && \
+		echo "$$dnsport" > $(NET_LOOKUP_ROOT)/config/net-test-dns-port && \
+		target/debug/zoraya-mkfs --size 16M --from $(NET_LOOKUP_ROOT) $(NET_LOOKUP_DISK); }; then \
+		echo "[net-lookup] FAIL: the disk was not made"; kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@SUM1K@/$$($(HTTPD) --checksum 1000)/" tests/shell/net-lookup.script > $(NET_LOOKUP_SCRIPT); \
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_LOOKUP_SCRIPT) --label net-lookup-auto -- \
+		$(RUN_QEMU) --test --keys --net --net-open --net-pcap $(NET_LOOKUP_PCAP) --disk $(NET_LOOKUP_DISK) --accel auto $(NET_TEST_KERNEL); rc=$$?; \
+	kill $$httpd $$dns 2>/dev/null; wait $$httpd $$dns 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		$(TEST_DNS) --check-pcap $(NET_LOOKUP_PCAP) --server 10.0.2.2 --server-port $$dnsport --first slow.zoraya \
+			--then-echo slow.zoraya --then-syn slowweb.zoraya; rc=$$?; \
+		[ $$rc = 0 ] && echo "[net-lookup] ok: the capture shows the first lookup and what followed it at once"; \
+	fi; \
+	if [ $$rc != 0 ]; then echo "[net-lookup] FAIL (the DNS server's log: $(NET_LOOKUP_DNS_LOG))"; tail -20 $(NET_LOOKUP_DNS_LOG); fi; \
 	exit $$rc
 
 # N6 (ADR-0230 item 8): the throughput and latency numbers of the network, from

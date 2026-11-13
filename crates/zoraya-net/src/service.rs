@@ -538,6 +538,37 @@ impl Service {
         Some((id, bytes))
     }
 
+    /// The answers the resolver gave in this turn of `netd`'s loop
+    /// (`Conns::take_lookups`, after `Conns::turn` polled the stack): the
+    /// replies to write, and the loop's next delay given `delay`, the one the
+    /// turn computed. A `ping` by name whose run starts here starts after
+    /// that poll, so `delay` knows nothing of it: the loop comes back at once
+    /// (`Some(0)`), and its next turn sends the first request and counts the
+    /// run's own turns. Without that the loop slept on a delay of before the
+    /// run (none at all with no other timer), and the run waited for
+    /// something else to wake `netd`: the first `ping NAME` of a boot, whose
+    /// name was not cached, ended with the client's wait ("the network
+    /// service did not answer").
+    pub fn answer_lookups<L: Link>(
+        &mut self,
+        stack: &mut Stack<L>,
+        answers: Vec<Answer>,
+        delay: Option<i64>,
+        now_us: i64,
+    ) -> (Option<i64>, Vec<(usize, Vec<u8>)>) {
+        let running = stack.ping_running();
+        let replies: Vec<_> = answers
+            .into_iter()
+            .filter_map(|a| self.resolve_done(stack, a, now_us))
+            .collect();
+        let delay = if !running && stack.ping_running() {
+            Some(0)
+        } else {
+            delay
+        };
+        (delay, replies)
+    }
+
     /// Starts the run of a `ping` by name on the first usable address of the
     /// answer. `None` when the run started (the reply comes with its end);
     /// else the reply that says why not, with the slot given back.
@@ -625,6 +656,7 @@ fn fail_code(f: ResolveFail) -> u32 {
         ResolveFail::NoSuchName | ResolveFail::NoAnswer | ResolveFail::Failure => {
             code::UNRESOLVABLE
         }
+        ResolveFail::TimedOut => code::TIMED_OUT,
     }
 }
 

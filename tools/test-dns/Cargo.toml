@@ -1,0 +1,11 @@
+[package]
+name = "zoraya-test-dns"
+description = "A bounded test DNS server on 127.0.0.1 for make test-net-lookup, with answers that come late or never, and the check of the step's capture."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

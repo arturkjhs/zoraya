@@ -948,6 +948,10 @@ name = "zoraya-test-alloc"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-test-dns"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-test-httpd"
 version = "0.1.0"
 dependencies = [

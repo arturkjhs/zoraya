@@ -487,10 +487,14 @@ impl Netd {
         for account in self.conns.take_released() {
             self.service.connection_ended(account);
         }
-        for answer in self.conns.take_lookups() {
-            if let Some((id, bytes)) = self.service.resolve_done(&mut self.stack, answer, now) {
-                self.write_to(id, &bytes);
-            }
+        // A `ping` by name whose run starts here makes the loop come back at
+        // once: its delay above is from before the run.
+        let lookups = self.conns.take_lookups();
+        let (delay, replies) = self
+            .service
+            .answer_lookups(&mut self.stack, lookups, delay, now);
+        for (id, bytes) in replies {
+            self.write_to(id, &bytes);
         }
         for event in self.stack.take_events() {
             match event {
@@ -555,20 +559,30 @@ fn failed(why: u32) -> Vec<u8> {
     out
 }
 
-/// The settings, read once from the `/config` connection, then closed.
-fn settings() -> Vec<u8> {
+/// The settings, read once from the `/config` connection, then closed; in
+/// the test image also `/config/net-test-dns-port`, the port of
+/// `make test-net-lookup`'s DNS server (`None` everywhere else).
+fn settings() -> (Vec<u8>, Option<u16>) {
     let end = slot(CONFIG);
     if handle_type(end) != Ok("channel") {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     let config = File { end };
-    let bytes = config
-        .open("settings", 0, zoraya_proto_file::rights::READ)
-        .ok()
-        .and_then(|f| read_all(&f).ok())
-        .unwrap_or_default();
+    let read = |name: &str| {
+        config
+            .open(name, 0, zoraya_proto_file::rights::READ)
+            .ok()
+            .and_then(|f| read_all(&f).ok())
+    };
+    let bytes = read("settings").unwrap_or_default();
+    #[cfg(feature = "net-test")]
+    let port = read("net-test-dns-port")
+        .and_then(|b| core::str::from_utf8(&b).ok()?.trim().parse::<u16>().ok())
+        .filter(|p| *p != 0);
+    #[cfg(not(feature = "net-test"))]
+    let port = None;
     drop(config);
-    bytes
+    (bytes, port)
 }
 
 /// INV-0221-1: `netd` holds no `Device`, `Interrupt` or `Pin`. Its start-up
@@ -589,7 +603,8 @@ fn main() -> i32 {
     if !check_table() {
         return 1;
     }
-    let (config, problems) = config::read(&settings());
+    let (settings, dns_port) = settings();
+    let (config, problems) = config::read(&settings);
     for p in problems {
         println!("{p}");
     }
@@ -653,10 +668,18 @@ fn main() -> i32 {
     let now = clock_monotonic();
     let seed =
         now ^ u64::from_le_bytes([mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 0x5a, 0x50]);
-    let Ok(stack) = Stack::new(nic, mac, config, (now / 1000) as i64, seed) else {
+    #[cfg_attr(not(feature = "net-test"), allow(unused_mut))] // the test port below
+    let Ok(mut stack) = Stack::new(nic, mac, config, (now / 1000) as i64, seed) else {
         println!("netd: the driver's address is not a unicast address");
         return 1;
     };
+    #[cfg(feature = "net-test")]
+    if let Some(port) = dns_port {
+        stack.set_dns_port_for_test(port);
+        println!("netd: the DNS servers' port is {port} (test image)");
+    }
+    #[cfg(not(feature = "net-test"))]
+    let _ = dns_port;
     let mut netd = Netd {
         port,
         stack,

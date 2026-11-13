@@ -161,7 +161,10 @@ fn connect_and_the_connection_channel_messages_round_trip_and_are_total() {
     total(Failed {
         reason: Below(reason::OVER_QUOTA),
     });
-    assert!(encode(&Failed { reason: Below(7) }, 1, &mut out).is_err());
+    total(Failed {
+        reason: Below(reason::LOOKUP_TIMED_OUT),
+    });
+    assert!(encode(&Failed { reason: Below(8) }, 1, &mut out).is_err());
     // N4: the account's budget, with its handle.
     let scope = zoraya_abi::net::Scope::EMPTY.as_bytes();
     let carve = NarrowAccount {
@@ -186,7 +189,10 @@ fn connect_and_the_connection_channel_messages_round_trip_and_are_total() {
     total(Narrowed {
         status: Below(status::OVER_QUOTA),
     });
-    assert!(encode(&Narrowed { status: Below(8) }, 1, &mut out).is_err());
+    total(Narrowed {
+        status: Below(status::TIMED_OUT),
+    });
+    assert!(encode(&Narrowed { status: Below(9) }, 1, &mut out).is_err());
     // N4: `resolve` and its answer.
     let length = encode(
         &Resolve {
@@ -383,4 +389,22 @@ fn ping_by_name_shows_the_name_and_the_address_it_resolved_to() {
         "PING example.org (93.184.216.34): 1 requests\n40 bytes from 93.184.216.34: seq=0"
     ));
     assert!(text.contains("--- example.org ping statistics ---"));
+}
+
+#[test]
+fn a_ping_by_name_is_answered_within_the_lookup_bound_and_its_run() {
+    // Proposed ADR-0316: the client's wait comes from these, one definition.
+    assert_eq!(
+        ping_answer_us(false, 4, 2000),
+        3 * PING_INTERVAL_US + 2_000_000
+    );
+    assert_eq!(
+        ping_answer_us(true, 4, 2000),
+        LOOKUP_US + 3 * PING_INTERVAL_US + 2_000_000
+    );
+    assert_eq!(ping_answer_us(true, 0, 0), LOOKUP_US);
+    assert_eq!(
+        ping_answer_us(true, MAX_PINGS, 30_000),
+        LOOKUP_US + 15 * PING_INTERVAL_US + 30_000_000
+    );
 }

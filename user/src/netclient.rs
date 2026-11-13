@@ -26,7 +26,8 @@ use crate::{
 };
 
 /// How long a call waits for its reply: `netd` answers at once, except a
-/// `ping`, which takes its run.
+/// `ping`, which takes its lookup and its run (`ping_host`); this is also the
+/// margin a longer wait adds to `netd`'s own bound.
 pub const WAIT_NS: u64 = 5_000_000_000;
 
 /// Writes `bytes` (with `entries`) to `conn` and reads the one reply, waiting
@@ -159,8 +160,11 @@ pub fn ping_host(
         count: Below(count),
         timeout_ms: Below(timeout_ms),
     });
-    // A name is resolved first: up to the resolver's own bounds.
-    let wait = 2 * WAIT_NS + u64::from(count) * 200_000_000 + u64::from(timeout_ms) * 1_000_000;
+    // `netd` answers within its lookup bound (a name) and the run's turns and
+    // timeout, whatever the servers do (proposed ADR-0316): a wait that ends
+    // first means a `netd` that is gone or stuck.
+    let answer_us = zoraya_proto_net::ping_answer_us(!name.is_empty(), count, timeout_ms);
+    let wait = answer_us * 1000 + WAIT_NS;
     let reply = exchange(conn, &message, &[], wait)?;
     let (_, p) = decode::<PingReply>(&reply, 0).ok()?;
     Some(PingOutcome {
