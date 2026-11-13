@@ -10,7 +10,7 @@ names    --remote-name URL
 option   -s --silent  print no progress meter or error message
 option   -S --show-error  with --silent, still print an error message
 option   -f --fail  fail with exit status 22 and no page on an HTTP error status
-option   -L --location  follow a redirect, to a host and port the line also names
+option   -L --location  follow a redirect, to a host and port the line also names (from https, to https only)
 option   -i --include  print the response headers before the page
 option   -I --head  ask for the headers only
 option   -v --verbose  print the request and the response headers on the error stream
@@ -22,6 +22,7 @@ option   -X --request METHOD text  the request method, if not GET
 option   -d --data DATA text  send DATA as the body of a POST (a leading @ reads a file: only one that a +r or +w of the line gives)
 option   -4 --ipv4  use IPv4 (the only family there is)
 exit     0  transferred
+exit     2  an option refused by the program (one that turns the TLS checks off or replaces the roots)
 exit     6  could not resolve the host
 exit     7  could not connect
 exit     22  an HTTP error status, with --fail
@@ -33,7 +34,8 @@ curl 8.23.0 from the ports (ADR-0109, TASK-27 9a), as a POSIX program with the t
 (static, with threads built in, used by neither program). It gets a connection that reaches the host and port of each URL written on the line and nothing
 else, and, with it, /system/tls (the system's roots, read only): a certificate that is expired, is for another name
 or is signed by no root in /system/tls/roots is refused before any request is sent, and there is no option to turn
-that off (-k, --cacert and the rest of curl's are not offered). An address from a variable or a command is refused
+that off: -k, --cacert and the rest of curl's are not offered, and refused by the program (exit 2) when a line that
+matches no description gives them (ADR-0321). An address from a variable or a command is refused
 by the shell, as for `fetch`.
 
 -o FILE creates or replaces FILE. -O saves under the last part of the address's path:

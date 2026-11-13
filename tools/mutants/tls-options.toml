@@ -1,0 +1,23 @@
+# curl and wget refuse the options that weaken TLS (ADR-0321, INV-0321-1). The
+# mutants change a line of the ports' patches without changing its line count,
+# so the patch still applies; each one rebuilds curl and wget (the worker needs
+# the ports cache in build/ports/src) and runs one QEMU configuration. Found by
+# hand in the review of the TLS options patches: with the refusal gone, the
+# second line still keeps the check on, so the program fails the transfer
+# (exit 35, 60 or 5) and the script's "is refused" line is not seen.
+tests = ["make -s test-apps"]
+timeout = 3000
+
+[[mutant]]
+id = "TLS-curl-tlsv1-accepted"
+file = "ports/patches/curl/0003-refuse-tls-weakening-options.patch"
+find = '+    case C_TLSV1:'
+replace = '+    /* C_TLSV1 */'
+note = "INV-0321-1: curl -1 and --tlsv1 are refused by their option code"
+
+[[mutant]]
+id = "TLS-wget-cadirectory-accepted"
+file = "ports/patches/wget/0004-refuse-tls-weakening-options.patch"
+find = '+        || !strcmp (name, "cadirectory")'
+replace = '+        || !strcmp (name, "cadirectory_")'
+note = "INV-0321-1: wget --ca-directory and its abbreviation --ca-dir are refused by the setting's name"

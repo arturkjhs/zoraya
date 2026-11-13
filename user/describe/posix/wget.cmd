@@ -14,6 +14,7 @@ option   -4 --inet4-only  use IPv4 (the only family there is)
 option   --max-redirect N text  how many redirects to follow, 20 if not given
 exit     0  downloaded
 exit     1  generic error
+exit     2  an option refused by the program (one that turns the TLS checks off or replaces the roots)
 exit     3  could not write the file
 exit     4  network failure
 exit     5  the certificate could not be verified
@@ -23,7 +24,8 @@ GNU wget 1.25.0 from the ports (ADR-0109, TASK-27 9a), as a POSIX program with t
 (static, with threads built in, used by neither program). It gets a connection that reaches the host and port of each URL written on the line and
 nothing else, and, with it, /system/tls (the system's roots, read only): a certificate that is expired, is for
 another name or is signed by no root in /system/tls/roots fails the transfer, and there is no option to turn that
-off (--no-check-certificate and the rest are not offered). An address from a variable or a command is refused by
+off: --no-check-certificate and the rest are not offered, and refused by the program (exit 2) when a line that
+matches no description gives them (ADR-0321). An address from a variable or a command is refused by
 the shell, as for `fetch`.
 
 -O FILE creates or replaces FILE, the only file in the current directory the program is given: it cannot read, list,

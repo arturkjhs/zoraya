@@ -297,7 +297,7 @@ jobs:
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it), and test-hand-run's
     # three boots, one with the desktop; every other job stays within 10.
-    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
+    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3') || contains(matrix.cmd, 'test-apps') || contains(matrix.cmd, 'test-netsurf') || contains(matrix.cmd, 'test-python')) && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:

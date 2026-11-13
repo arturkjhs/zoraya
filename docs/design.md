@@ -2063,7 +2063,9 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   files by `-o` and `-O`, bodies of 70,000 to 1,000,000 bytes by size, 404 and a refused port with their exit
   statuses, an expired and a wrong-name certificate refused by both with the server's log showing no request byte, a plain
   server on an HTTPS address, by number, `-k` and `--no-check-certificate` as usage mistakes, `grants` for both, a refused
-  `-O` name, a value as URL with and without `+net`, and wget without `-O` creating nothing), `make test-hand-run` (the
+  `-O` name, a value as URL with and without `+net`, and wget without `-O` creating nothing; and in a QEMU run of its own,
+  `tests/shell/apps-refusals.script`, every option of ADR-0321 refused with `+net` to the test servers, the expired
+  and wrong-name ones' log showing no request byte), `make test-hand-run` (the
   production image: plain HTTP with both programs, HTTPS to the certificate and refused there, `grants curl -O`).
 - **Known limits.** *Memory:* the leak found in 9a (each launch of `curl` or `wget` kept about 8.5 MiB: `posix_child::load`
   kept a duplicate of the image's memory object) is fixed (`work/9a-leak`); `tests/shell/apps-launches.script` (in `make test-apps`)
