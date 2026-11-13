@@ -40,7 +40,7 @@ async def main():
 assert asyncio.run(main()) == [1, 4, 9, 16]
 print("ok asyncio")
 
-p = subprocess.run(["/bin/echo", "child"], capture_output=True)
+p = subprocess.run([sys.executable, "-c", "print('child')"], capture_output=True)
 assert p.stdout == b"child\n", p
 print("ok subprocess")
 print("smoke done")
