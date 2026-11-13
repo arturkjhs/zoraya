@@ -288,14 +288,11 @@ fn the_fourth_field_counts_threads_and_a_refusal_changes_nothing_else() {
         (r.at, r.field, r.used, r.limit),
         (room, Field::Threads, 3, 3)
     );
-    for node in 0..a.counters.len() {
+    for (now, was) in a.counters.iter().zip(&before) {
         for field in [Field::Memory, Field::Processes, Field::User] {
-            assert_eq!(a.counters[node].get(field), before[node].get(field));
+            assert_eq!(now.get(field), was.get(field));
         }
-        assert_eq!(
-            a.counters[node].get(Field::Threads).used,
-            before[node].get(Field::Threads).used
-        );
+        assert_eq!(now.get(Field::Threads).used, was.get(Field::Threads).used);
     }
     assert_eq!(a.counters[room].get(Field::Threads).refused, 1);
     refund(&mut a, cmd, Field::Threads, 1);

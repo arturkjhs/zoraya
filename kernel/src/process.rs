@@ -1,15 +1,18 @@
-//! Processes (ADR-0003, ADR-0004, ADR-0031, ADR-0033, ADR-0034, ADR-0041). A
-//! process has one thread at this stage.
+//! Processes (ADR-0003, ADR-0004, ADR-0031, ADR-0033, ADR-0034, ADR-0041,
+//! ADR-0300). A process has from one to `MAX_THREADS` threads.
 //!
-//! A process ends on its own thread: whoever else ends it sets the exit it
-//! wants and wakes it, and it acts on that at its next return to EL0 or as it
-//! starts, so it runs no user instruction after the request, and nothing is
-//! torn down under a thread blocked in the kernel.
+//! A process ends in two phases (ADR-0300 item 6). Whoever ends it fixes the
+//! exit record once and wakes the first of its threads; each thread acts on
+//! the record at its next return to EL0 or as it starts, wakes its siblings
+//! (the first to leave does, in steps), and leaves. The thread whose leave
+//! empties the list is the owner and tears the process down, so it runs no
+//! user instruction after the request, and nothing is torn down under a
+//! thread that is still running or blocked in the kernel.
 
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use zoraya_abi::spawn::{
     STARTUP_BLOCK, STARTUP_BLOCK_MAX, STARTUP_HEADER_SIZE, Strings, USER_STACK_SIZE,
@@ -24,6 +27,7 @@ use zoraya_abi::{POWER, PowerObject};
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, PHDR_SIZE, Program, Segment};
 use zoraya_events::{RequestQueue, SourceId};
 use zoraya_pagetable::{Attributes, MemoryType};
+use zoraya_thread::Members;
 
 use crate::arch::{Frame, mmu};
 use crate::charge::{self, Paid};
@@ -34,7 +38,8 @@ use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
 use crate::object::{self, HandleTable, MemoryImage, Object};
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
-use crate::{arch, port, println, ramdisk, steps};
+use crate::thread::Multi;
+use crate::{arch, port, println, ramdisk, steps, thread};
 
 const _: () = assert!(USER_STACK_TOP == USER_HIGH - PAGE_SIZE);
 
@@ -131,16 +136,28 @@ pub struct Process {
     paid: SpinLock<Paid>,
     source: SourceId,
     pub handles: SpinLock<HandleTable>,
-    /// Its thread, until exit: how a request reaches a process that is not
-    /// running.
-    thread: SpinLock<Option<Arc<Thread>>>,
+    /// Its threads, until exit: how a request reaches a process that is not
+    /// running (ADR-0300 item 1).
+    members: SpinLock<Members<Arc<Thread>>>,
+    /// The futex and mapping-lock lists, made at the first second thread or
+    /// futex wait (`thread::ensure_multi`), and what they were charged.
+    multi: SpinLock<Option<Arc<Multi>>>,
+    multi_cost: AtomicU64,
     requests: SpinLock<Requests>,
     suspended: AtomicBool,
     /// Its job tree is suspended (ADR-0105 item 8): it runs no user
     /// instruction until `job_resume`.
     stopped: AtomicBool,
-    /// Its thread waits in [`park_if_stopped`] for `stopped` to clear.
-    parked: AtomicBool,
+    /// A fork is copying its space (ADR-0306 item 2): its threads but the
+    /// caller park at their next return to EL0, like `stopped`.
+    frozen: AtomicBool,
+    /// One thread waiting in [`park_if_stopped`], the one `cont` wakes; it
+    /// wakes the other parked threads itself, in steps (ADR-0300 item 7).
+    park_head: SpinLock<Option<Arc<Thread>>>,
+    /// The first thread to leave an ending process woke the others.
+    swept: AtomicBool,
+    /// The mapping lock is held (ADR-0301 item 6).
+    map_locked: AtomicBool,
     /// A user address to read as the process ends, and what was there.
     #[cfg(feature = "qemu-test")]
     watch: SpinLock<(u64, Option<u64>)>,
@@ -170,14 +187,48 @@ impl Process {
     }
 
     /// Its job tree was resumed: a thread waiting to return to EL0 goes on.
+    /// One parked thread is woken, as one is for an end (ADR-0300 item 7), so
+    /// the cost under the job tree's lock is one wake whatever the number of
+    /// threads; it wakes the others from its own context.
     pub fn cont(&self) {
         self.stopped.store(false, Ordering::Relaxed);
-        if self.parked.swap(false, Ordering::Relaxed) {
-            let thread = self.thread.lock().clone();
-            if let Some(thread) = thread {
-                sched::wake(thread);
-            }
+        self.wake_park_head();
+    }
+
+    fn wake_park_head(&self) {
+        let head = self.park_head.lock().take();
+        if let Some(head) = head {
+            sched::wake(head);
         }
+    }
+
+    pub(crate) fn members(&self) -> &SpinLock<Members<Arc<Thread>>> {
+        &self.members
+    }
+
+    pub(crate) fn multi(&self) -> &SpinLock<Option<Arc<Multi>>> {
+        &self.multi
+    }
+
+    pub(crate) fn multi_cost(&self) -> &AtomicU64 {
+        &self.multi_cost
+    }
+
+    pub(crate) fn paid(&self) -> &SpinLock<Paid> {
+        &self.paid
+    }
+
+    pub(crate) fn map_locked(&self) -> &AtomicBool {
+        &self.map_locked
+    }
+
+    /// A fork starts or ends its freeze (`thread::Freeze`).
+    pub(crate) fn set_frozen(&self, on: bool) {
+        self.frozen.store(on, Ordering::Relaxed);
+    }
+
+    fn must_park(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed) || self.frozen.load(Ordering::Relaxed)
     }
 
     /// Blocks a kernel thread until the process has ended. Any number may wait.
@@ -251,7 +302,7 @@ impl Process {
 
     #[cfg(feature = "qemu-test")]
     pub fn thread(&self) -> Option<Arc<Thread>> {
-        self.thread.lock().clone()
+        self.members.lock().first().cloned()
     }
 
     /// Whether this process must end, at its next chance.
@@ -259,11 +310,20 @@ impl Process {
         self.requests.lock().exit.is_some()
     }
 
-    /// Asks the process to end with `record`, unless it was already asked.
+    /// Asks the process to end with `record`, unless it was already asked: the
+    /// first phase (ADR-0300 item 6). One thread is woken, the first of the
+    /// list, never all: the walks of `Job::kill` call this under the job tree's
+    /// spinlock, and a process can have 128 threads. A thread that is running
+    /// or ready sees the record at its next return to EL0; the one woken wakes
+    /// the rest from its own context, in steps, before it leaves.
     pub fn request_exit(&self, record: ExitRecord) {
         self.requests.lock().exit.get_or_insert(record);
-        let thread = self.thread.lock().clone();
-        if let Some(thread) = thread {
+        let first = {
+            let mut members = self.members.lock();
+            members.begin_end();
+            members.first().cloned()
+        };
+        if let Some(thread) = first {
             sched::wake(thread);
         }
     }
@@ -324,7 +384,7 @@ impl Process {
             return Err(Status::BadState);
         }
         port::clear_signals(self.source, process_signals::SUSPENDED);
-        let thread = self.thread.lock().clone();
+        let thread = self.members.lock().first().cloned();
         if let Some(thread) = thread {
             sched::wake(thread);
         }
@@ -541,6 +601,10 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     // takes a page (ADR-0263, INV-0263-1).
     let mut count = Paid::new(Some(&start.job));
     count.process()?;
+    // Then the first thread's figure, before the process takes a page
+    // (ADR-0307 item 1): the field that refuses is the first passed in the
+    // order processes, threads, memory.
+    let first = sched::reserve_thread(&start.job)?;
     let mut space = AddressSpace::new(Some(&start.job))?;
     let mut pages = 0;
     for segment in program.segments() {
@@ -571,7 +635,7 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
         start.dispositions,
         start.suspended,
     )?;
-    let thread = sched::spawn_user(process.clone(), program.entry, USER_STACK_TOP)?;
+    let thread = sched::spawn_user(process.clone(), program.entry, USER_STACK_TOP, first)?;
     admit(process, thread, start.suspended)
 }
 
@@ -609,6 +673,7 @@ fn assemble(
     let mut count = count;
     count.kernel(charge::arc_cost::<Process>().saturating_add(extra))?;
     let source = port::new_source(bits).map_err(|_| OutOfMemory)?;
+    let members = Members::new_small().map_err(|_| OutOfMemory)?;
     let ttbr0 = space.ttbr0();
     let process = charge::prepaid_arc(Process {
         name: owned,
@@ -622,7 +687,13 @@ fn assemble(
         paid: SpinLock::new(count),
         source,
         handles: SpinLock::new(handles),
-        thread: SpinLock::new(None),
+        members: SpinLock::new(members),
+        multi: SpinLock::new(None),
+        multi_cost: AtomicU64::new(0),
+        park_head: SpinLock::new(None),
+        frozen: AtomicBool::new(false),
+        swept: AtomicBool::new(false),
+        map_locked: AtomicBool::new(false),
         requests: SpinLock::new(Requests {
             dispositions,
             queue: RequestQueue::new(),
@@ -630,7 +701,6 @@ fn assemble(
         }),
         suspended: AtomicBool::new(suspended),
         stopped: AtomicBool::new(false),
-        parked: AtomicBool::new(false),
         #[cfg(feature = "qemu-test")]
         watch: SpinLock::new((0, None)),
     });
@@ -646,9 +716,10 @@ fn admit(
     thread: Arc<Thread>,
     suspended: bool,
 ) -> Result<Arc<Process>, SpawnError> {
-    *process.thread.lock() = Some(thread.clone());
+    // Room for the first thread was made with the list; the join cannot fail.
+    let _ = process.members.lock().join(thread.id(), thread.clone());
     if let Err(status) = process.job.admit(&process) {
-        *process.thread.lock() = None;
+        process.members.lock().leave(thread.id());
         sched::discard(thread);
         return Err(match status {
             Status::BadState => SpawnError::JobClosed,
@@ -668,6 +739,9 @@ pub struct Snapshot<'a> {
     pub job: Arc<Job>,
     /// The child's slot in its job's count, taken before the copy.
     pub count: Paid,
+    /// The child's first thread's figure in its job's count, taken with
+    /// `count` (ADR-0307 item 1).
+    pub first: Paid,
     pub handles: HandleTable,
     /// Where the child gets a handle to itself.
     pub self_handle: Option<Handle>,
@@ -703,7 +777,7 @@ pub fn create_snapshot(s: Snapshot<'_>) -> Result<Arc<Process>, SpawnError> {
         }
     }
     // From here a failure must break the cycle the self handle makes.
-    let result = sched::spawn_user_from(process.clone(), s.frame, s.tpidr_el0)
+    let result = sched::spawn_user_from(process.clone(), s.frame, s.tpidr_el0, s.first)
         .map_err(SpawnError::from)
         .and_then(|thread| admit(process.clone(), thread, s.suspended));
     if result.is_err() {
@@ -827,6 +901,7 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
         memory: Some(free - free / KERNEL_RESERVE_DIVISOR),
         processes: None,
         cpu: None,
+        threads: None,
     })
     .map_err(|_| SpawnError::NoMemory)?;
     let mut handles = kernel_handles(job.clone())?;
@@ -884,14 +959,90 @@ pub fn spawn_bytes_suspended(name: &str, file: &[u8]) -> Result<Arc<Process>, Sp
     spawn_bytes_as(name, file, true)
 }
 
-/// Ends the running process (ADR-0041). Every kind of exit comes here.
+/// Ends the running process (ADR-0041). Every kind of exit comes here: the
+/// record is fixed, if no one fixed one first, and the calling thread leaves.
 pub fn exit_current(record: ExitRecord) -> ! {
+    {
+        let thread = sched::current();
+        let process = thread.process().expect("a process is running");
+        process.request_exit(record);
+    }
+    leave_current()
+}
+
+/// The running thread leaves because its process is ending, or because it
+/// called `thread_exit` (the second phase of ADR-0300 item 6). The thread
+/// whose leave empties the list is the owner and tears the process down;
+/// any other ends here. Does not return.
+pub fn leave_current() -> ! {
     // This function does not return, so nothing it holds at the end would
     // ever be dropped: every count goes before `sched::exit_current`.
-    let process = sched::current()
-        .process()
-        .expect("a process is running")
-        .clone();
+    let (process, id) = {
+        let thread = sched::current();
+        (
+            thread.process().expect("a process is running").clone(),
+            thread.id(),
+        )
+    };
+    // The first to leave an ending process wakes the others, in steps and
+    // outside every lock; each finds the record and leaves.
+    if process.exit_requested() && !process.swept.swap(true, Ordering::Relaxed) {
+        thread::wake_siblings(&process);
+    }
+    end_thread_record(&process);
+    // From here to the switch nothing yields: the thread is out of the list
+    // and a teardown may begin as soon as it is off the CPU.
+    arch::save_and_mask_interrupts();
+    let left = process.members.lock().leave(id);
+    if left.began_end {
+        // The last thread's exit ends the process as `Exited` with code 0
+        // (ADR-0300 item 3).
+        process.requests.lock().exit.get_or_insert(ExitRecord {
+            code: 0,
+            reason: ExitReason::Exited,
+            detail: 0,
+            request_kind: None,
+        });
+    }
+    if left.owner {
+        teardown(process);
+    }
+    // Not the owner: wake the new first thread, so that a sibling the
+    // steps skipped is still reached (ADR-0300 item 6).
+    if process.exit_requested() {
+        let first = process.members.lock().first().cloned();
+        if let Some(first) = first {
+            sched::wake(first);
+        }
+    }
+    drop(process);
+    sched::exit_current()
+}
+
+/// What a thread does with its own record when it leaves: gives the `threads`
+/// figure back (ADR-0307 item 7), cuts its object's link and asserts
+/// `TERMINATED`, and leaves the park slot.
+fn end_thread_record(process: &Process) {
+    let thread = sched::current();
+    thread.release_thread();
+    let object = thread.object().lock().take();
+    if let Some(object) = object {
+        object.terminated();
+    }
+    let mut head = process.park_head.lock();
+    if head.as_ref().is_some_and(|h| Arc::ptr_eq(h, &thread)) {
+        *head = None;
+    }
+}
+
+/// The owner's teardown (ADR-0041): every other thread has left. Does not
+/// return.
+fn teardown(process: Arc<Process>) -> ! {
+    let record = process
+        .requests
+        .lock()
+        .exit
+        .expect("the record was fixed before the end");
     // A pause first, so that this exit's first part is not added to the last
     // part of the exit that ran just before it (the scheduler switches from
     // one dying thread to the next with IRQ masked throughout): without it a
@@ -924,7 +1075,7 @@ pub fn exit_current(record: ExitRecord) -> ! {
     }
     // The mappings next, for the same reason, while the space is still the
     // running one: dropping a mapping may free the object it was the last
-    // holder of. The process has one thread, which is here.
+    // holder of. This thread is the process's last (the owner).
     loop {
         let holder = process.space.lock().as_mut().and_then(|s| s.pop_mapping());
         let Some(holder) = holder else { break };
@@ -938,8 +1089,9 @@ pub fn exit_current(record: ExitRecord) -> ! {
     unsafe { mmu::set_user_table(None) };
     // From here to `sched::exit_current` nothing may block or yield: the
     // scheduler would install `process.ttbr0()` again, a root freed below
-    // with an ASID another process may already hold. A process has one
-    // thread, so no other CPU can be using the space either.
+    // with an ASID another process may already hold. No other thread of the
+    // process exists (the owner is the last to leave), so no other CPU can be
+    // using the space either.
     let space = process.space.lock().take();
     #[cfg(feature = "qemu-test")]
     {
@@ -949,10 +1101,18 @@ pub fn exit_current(record: ExitRecord) -> ! {
         }
     }
     drop(space);
-    // A zombie holds its record, not the table's memory.
+    // A zombie holds its record, not the table's memory, nor the lists of
+    // its threads.
     let table = core::mem::take(&mut *process.handles.lock());
     drop(table);
     process.paid.lock().release_kernel(handle_table_cost());
+    let multi = process.multi.lock().take();
+    if multi.is_some() {
+        let cost = process.multi_cost.swap(0, Ordering::Relaxed);
+        process.paid.lock().release_kernel(cost);
+    }
+    drop(multi);
+    *process.park_head.lock() = None;
     let waiters = {
         let mut exit = process.exit.lock();
         exit.record = Some(record);
@@ -966,8 +1126,6 @@ pub fn exit_current(record: ExitRecord) -> ! {
     port::set_signals(process.source, process_signals::TERMINATED);
     process.job.leave(&process);
     process.paid.lock().release_process();
-    let thread = process.thread.lock().take();
-    drop(thread);
     for waiter in waiters {
         sched::wake(waiter);
     }
@@ -975,21 +1133,38 @@ pub fn exit_current(record: ExitRecord) -> ! {
     sched::exit_current()
 }
 
-/// Waits while the process's job tree is suspended, unless it is to end.
-/// Called on the thread's own stack with interrupts masked, on the way to
-/// EL0 (or by a walk of the job tree that waits its turn, with no lock held,
-/// `job::Exclusive`); its process holds the thread, and [`Process::cont`] or
-/// an exit request wakes it.
+/// Waits while the process's job tree is suspended or a fork is copying its
+/// space, unless it is to end. Called on the thread's own stack with
+/// interrupts masked, on the way to EL0 (or by a walk of the job tree that
+/// waits its turn, with no lock held, `job::Exclusive`); [`Process::cont`], a
+/// thaw or an exit request wakes it. The thread woken by `cont` wakes the
+/// other parked threads, in steps (ADR-0300 item 7).
 pub(crate) fn park_if_stopped() {
     let thread = sched::current();
     let Some(process) = thread.process() else {
         return;
     };
-    while process.stopped.load(Ordering::Relaxed) && !process.exit_requested() {
-        process.parked.store(true, Ordering::Relaxed);
+    let mut waited = false;
+    while process.must_park() && !process.exit_requested() {
+        waited = true;
+        thread.parked().store(true, Ordering::Relaxed);
+        {
+            let mut head = process.park_head.lock();
+            if head.is_none() {
+                *head = Some(thread.clone());
+            }
+        }
         sched::block_current();
     }
-    process.parked.store(false, Ordering::Relaxed);
+    thread.parked().store(false, Ordering::Relaxed);
+    if waited {
+        let mut head = process.park_head.lock();
+        if head.as_ref().is_some_and(|h| Arc::ptr_eq(h, &thread)) {
+            *head = None;
+        }
+        drop(head);
+        thread::wake_parked(process);
+    }
 }
 
 /// Whether the running process is stopped and not to end, so that
@@ -1001,14 +1176,14 @@ pub(crate) fn current_is_stopped() -> bool {
         .is_some_and(|p| p.stopped.load(Ordering::Relaxed) && !p.exit_requested())
 }
 
-/// Ends the running process if it was asked to.
+/// Leaves if the process was asked to end.
 fn exit_if_requested() {
-    let record = {
+    let ending = {
         let thread = sched::current();
-        thread.process().and_then(|p| p.requests.lock().exit.take())
+        thread.process().is_some_and(|p| p.exit_requested())
     };
-    if let Some(record) = record {
-        exit_current(record);
+    if ending {
+        leave_current();
     }
 }
 

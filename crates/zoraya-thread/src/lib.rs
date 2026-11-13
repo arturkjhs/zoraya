@@ -71,13 +71,28 @@ pub struct Members<T> {
 impl<T> Members<T> {
     /// A list with room for `MAX_THREADS`, or the allocation's failure.
     pub fn new() -> Result<Members<T>, TryReserveError> {
+        let mut members = Members::new_small()?;
+        members.reserve_all()?;
+        Ok(members)
+    }
+
+    /// A list with room for the process's first thread only: a process that
+    /// never makes a second pays for no more (`reserve_all` grows it, at the
+    /// first `thread_create`).
+    pub fn new_small() -> Result<Members<T>, TryReserveError> {
         let mut list = Vec::new();
-        list.try_reserve_exact(MAX_THREADS)?;
+        list.try_reserve_exact(1)?;
         Ok(Members {
             list,
             ending: false,
             owned: false,
         })
+    }
+
+    /// Makes room for `MAX_THREADS`, so that no join allocates. Idempotent.
+    pub fn reserve_all(&mut self) -> Result<(), TryReserveError> {
+        let more = MAX_THREADS.saturating_sub(self.list.len());
+        self.list.try_reserve_exact(more)
     }
 
     /// The bytes of list space `new` reserves, for the charge.
@@ -102,7 +117,7 @@ impl<T> Members<T> {
         if self.ending {
             return Err(JoinError::Ending);
         }
-        if self.list.len() >= MAX_THREADS {
+        if self.list.len() >= MAX_THREADS || self.list.len() >= self.list.capacity() {
             return Err(JoinError::Full);
         }
         self.list.push((id, thread));
@@ -117,6 +132,8 @@ impl<T> Members<T> {
         } else if self.list.len() >= MAX_THREADS {
             Err(JoinError::Full)
         } else {
+            // Room in the list itself is made by `reserve_all`, which the
+            // caller does before it joins a second thread.
             Ok(())
         }
     }

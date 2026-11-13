@@ -426,6 +426,17 @@ impl AddressSpace {
         );
     }
 
+    /// Whether the page holding `va` is mapped writable for EL0 (ADR-0300
+    /// item 2: a new thread's stack must be). The main stack is in the table
+    /// but in no mapping record, so the table is asked.
+    pub fn user_writable(&self, va: u64) -> bool {
+        self.table.translate(&self.memory, va).is_some_and(|m| {
+            m.attributes.write
+                && m.attributes.user
+                && m.attributes.memory == zoraya_pagetable::MemoryType::Normal
+        })
+    }
+
     /// Whether a mapping is exactly `[va, va + length)`.
     pub fn is_mapped_exactly(&self, va: u64, length: u64) -> bool {
         self.mappings

@@ -413,6 +413,10 @@ static TESTS: &[Test] = &[
         run: handles_and_rights_hold_from_user_space,
     },
     Test {
+        name: "threads_and_futexes_keep_their_rules",
+        run: threads_and_futexes_keep_their_rules,
+    },
+    Test {
         name: "spawn_keeps_its_rules",
         run: spawn_keeps_its_rules,
     },
@@ -1341,6 +1345,12 @@ fn images_from_a_process() {
 /// ADR-0105 item 8 (INV-0105-5) and the latency of suspending 16 processes.
 fn job_suspend_from_a_process() {
     assert_eq!(run_program("t_suspend"), exited(0));
+}
+
+/// ADR-0300, ADR-0301 and ADR-0307: threads, the wait on an address and the
+/// threads quota, at the raw ABI.
+fn threads_and_futexes_keep_their_rules() {
+    assert_eq!(run_program("t_thread"), exited(0));
 }
 
 /// ADR-0261 and ADR-0263: limits on jobs, from processes.

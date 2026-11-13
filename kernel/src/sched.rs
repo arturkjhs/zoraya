@@ -16,7 +16,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use zoraya_abi::Status;
 use zoraya_cpu::RunQueue;
@@ -73,8 +73,39 @@ pub struct Thread {
     _stack: Option<KernelStack>,
     process: Option<Arc<Process>>,
     /// A user thread's stack and record are its process's job's (ADR-0261
-    /// point 5); the boot and kernel threads have no payer.
-    _paid: Paid,
+    /// point 5); the boot and kernel threads have no payer. Behind a lock
+    /// because `thread_exit` gives the `threads` figure back at the call
+    /// (ADR-0307 item 7), while the record lives on until the reaper.
+    paid: SpinLock<Paid>,
+    /// Names the thread in its process's list (ADR-0300 item 1).
+    id: u64,
+    /// `thread_interrupt` was called and no wait has consumed it (ADR-0300
+    /// item 5). One-shot.
+    interrupted: AtomicBool,
+    /// The thread is blocked where `thread_interrupt` may wake it:
+    /// `futex_wait` and `sleep_until`, never `port_wait` (INV-0006-6).
+    interruptible: AtomicBool,
+    /// A `futex_wake` took this thread off its process's wait list (ADR-0301
+    /// item 1): the waker sets it under the list's lock before it wakes.
+    woken: AtomicBool,
+    /// The thread waits in `park_if_stopped` (job suspend or a fork's freeze).
+    parked: AtomicBool,
+    /// The object `thread_self` and `thread_create` name it by, if any.
+    object: SpinLock<Option<Arc<crate::thread::ThreadObject>>>,
+}
+
+static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_thread_id() -> u64 {
+    NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        if self.process.is_some() {
+            crate::thread::thread_gone();
+        }
+    }
 }
 
 // SAFETY: `context` is only touched by `schedule`, with interrupts masked, on
@@ -85,6 +116,68 @@ unsafe impl Send for Thread {}
 unsafe impl Sync for Thread {}
 
 impl Thread {
+    fn build(
+        context: Context,
+        state: u8,
+        stack: Option<KernelStack>,
+        process: Option<Arc<Process>>,
+        paid: Paid,
+    ) -> Thread {
+        if process.is_some() {
+            crate::thread::thread_made();
+        }
+        Thread {
+            context: UnsafeCell::new(context),
+            state: AtomicU8::new(state),
+            _stack: stack,
+            process,
+            paid: SpinLock::new(paid),
+            id: next_thread_id(),
+            interrupted: AtomicBool::new(false),
+            interruptible: AtomicBool::new(false),
+            woken: AtomicBool::new(false),
+            parked: AtomicBool::new(false),
+            object: SpinLock::new(None),
+        }
+    }
+
+    /// Its id in its process's list.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub(crate) fn interrupted(&self) -> &AtomicBool {
+        &self.interrupted
+    }
+
+    pub(crate) fn interruptible(&self) -> &AtomicBool {
+        &self.interruptible
+    }
+
+    pub(crate) fn woken(&self) -> &AtomicBool {
+        &self.woken
+    }
+
+    pub(crate) fn parked(&self) -> &AtomicBool {
+        &self.parked
+    }
+
+    pub(crate) fn object(&self) -> &SpinLock<Option<Arc<crate::thread::ThreadObject>>> {
+        &self.object
+    }
+
+    /// Gives back what the thread cost its job when it ends: the `threads`
+    /// figure, the record and the kernel stack, at the `thread_exit` call and
+    /// not at the reaper's free (ADR-0307 item 7).
+    pub(crate) fn release_thread(&self) {
+        self.paid.lock().release_exited();
+    }
+
+    /// Whether the thread is blocked (for `thread_interrupt`'s wake).
+    pub(crate) fn is_blocked_now(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == BLOCKED
+    }
+
     /// The process this thread belongs to.
     pub fn process(&self) -> Option<&Arc<Process>> {
         self.process.as_ref()
@@ -146,13 +239,13 @@ pub fn preemptions() -> u64 {
 
 fn boot_thread() -> Arc<Thread> {
     // uncharged: the boot thread, made before the heap can refuse.
-    Arc::new(Thread {
-        context: UnsafeCell::new(Context::default()),
-        state: AtomicU8::new(RUNNING),
-        _stack: None,
-        process: None,
-        _paid: Paid::default(),
-    })
+    Arc::new(Thread::build(
+        Context::default(),
+        RUNNING,
+        None,
+        None,
+        Paid::default(),
+    ))
 }
 
 /// Makes the running code the boot thread and creates the idle thread. Call
@@ -174,13 +267,13 @@ fn new_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> 
     let stack = KernelStack::new()?;
     let context = Context::new_kernel(entry as usize, arg, stack.top(), stack.limit());
     // uncharged: kernel threads have no paying job
-    uncharged_arc(Thread {
-        context: UnsafeCell::new(context),
-        state: AtomicU8::new(READY),
-        _stack: Some(stack),
-        process: None,
-        _paid: Paid::default(),
-    })
+    uncharged_arc(Thread::build(
+        context,
+        READY,
+        Some(stack),
+        None,
+        Paid::default(),
+    ))
 }
 
 /// Reserves queue room for one more thread, so that the scheduler itself never
@@ -204,30 +297,74 @@ pub fn spawn_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMe
     Ok(thread)
 }
 
-/// Makes `process`'s thread, to go to EL0 at `pc` with `sp`. It is blocked:
-/// [`wake`] starts it, and [`discard`] gives it up.
-pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>, Status> {
-    let paid = thread_paid(&process)?;
+/// What the first thread of a process costs the process's job in the
+/// `threads` field: charged before the process takes a page, right after its
+/// slot in the count, so the field that refuses is the first passed in the
+/// order processes, threads, memory (ADR-0307 item 1).
+pub fn reserve_thread(job: &Arc<crate::job::Job>) -> Result<Paid, Status> {
+    let mut paid = Paid::new(Some(job));
+    paid.thread()?;
+    Ok(paid)
+}
+
+/// Makes `process`'s first thread, to go to EL0 at `pc` with `sp`. It is
+/// blocked: [`wake`] starts it, and [`discard`] gives it up. `paid` came from
+/// [`reserve_thread`].
+pub fn spawn_user(
+    process: Arc<Process>,
+    pc: u64,
+    sp: u64,
+    paid: Paid,
+) -> Result<Arc<Thread>, Status> {
+    let paid = thread_paid(&process, paid)?;
     let stack = KernelStack::new().map_err(|_| Status::NoMemory)?;
     let frame = stack.push_user_frame(pc, sp);
     let context = Context::new_user(frame, stack.limit());
-    let thread = charge::prepaid_arc(Thread {
-        context: UnsafeCell::new(context),
-        state: AtomicU8::new(BLOCKED),
-        _stack: Some(stack),
-        process: Some(process),
-        _paid: paid,
-    })?;
+    let thread = charge::prepaid_arc(Thread::build(
+        context,
+        BLOCKED,
+        Some(stack),
+        Some(process),
+        paid,
+    ))?;
+    count_new().map_err(|_| Status::NoMemory)?;
+    Ok(thread)
+}
+
+/// As [`spawn_user`], for a thread `thread_create` makes (ADR-0300 item 2):
+/// `x0 = argument` and `TPIDR_EL0 = tls`, every other register zero. The
+/// `threads` figure is charged here, with the record and the kernel stack, and
+/// nothing is changed if a charge or an allocation fails.
+pub fn spawn_user_thread(
+    process: Arc<Process>,
+    pc: u64,
+    sp: u64,
+    argument: u64,
+    tls: u64,
+) -> Result<Arc<Thread>, Status> {
+    let paid = reserve_thread(process.job())?;
+    let paid = thread_paid(&process, paid)?;
+    let stack = KernelStack::new().map_err(|_| Status::NoMemory)?;
+    let frame = stack.push_user_frame(pc, sp);
+    stack.set_first_argument(argument);
+    let context = Context::new_user_with_tls(frame, stack.limit(), tls);
+    let thread = charge::prepaid_arc(Thread::build(
+        context,
+        BLOCKED,
+        Some(stack),
+        Some(process),
+        paid,
+    ))?;
     count_new().map_err(|_| Status::NoMemory)?;
     Ok(thread)
 }
 
 /// What a user thread costs its process's job: the record, the kernel stack
 /// and a place in each of the scheduler's three lists (ready, parked, dead).
-fn thread_paid(process: &Process) -> Result<Paid, Status> {
-    let mut paid = Paid::new(Some(process.job()));
+fn thread_paid(process: &Process, mut paid: Paid) -> Result<Paid, Status> {
     let queues = 3 * core::mem::size_of::<usize>() as u64;
     paid.kernel(charge::arc_cost::<Thread>() + THREAD_STACK_SIZE as u64 + queues)?;
+    let _ = process;
     Ok(paid)
 }
 
@@ -238,18 +375,19 @@ pub fn spawn_user_from(
     process: Arc<Process>,
     frame: &arch::Frame,
     tpidr_el0: u64,
+    paid: Paid,
 ) -> Result<Arc<Thread>, Status> {
-    let paid = thread_paid(&process)?;
+    let paid = thread_paid(&process, paid)?;
     let stack = KernelStack::new().map_err(|_| Status::NoMemory)?;
     let at = stack.push_user_frame_copy(frame, zoraya_abi::Status::Ok as u64, 0);
     let context = Context::new_user_with_tls(at, stack.limit(), tpidr_el0);
-    let thread = charge::prepaid_arc(Thread {
-        context: UnsafeCell::new(context),
-        state: AtomicU8::new(BLOCKED),
-        _stack: Some(stack),
-        process: Some(process),
-        _paid: paid,
-    })?;
+    let thread = charge::prepaid_arc(Thread::build(
+        context,
+        BLOCKED,
+        Some(stack),
+        Some(process),
+        paid,
+    ))?;
     count_new().map_err(|_| Status::NoMemory)?;
     Ok(thread)
 }
@@ -528,7 +666,9 @@ pub fn block_until(deadline: Deadline) -> Result<(), zoraya_time::QueueFull> {
     Ok(())
 }
 
-/// Blocks until `deadline`. An error if the deadline queue is full.
+/// Blocks until `deadline`. An error if the deadline queue is full. For
+/// kernel threads; a user thread's `sleep_until` is `thread::sleep_until`.
+#[cfg(feature = "qemu-test")]
 pub fn sleep_until(deadline: Deadline) -> Result<(), zoraya_time::QueueFull> {
     let daif = arch::save_and_mask_interrupts();
     let held = match deadline {

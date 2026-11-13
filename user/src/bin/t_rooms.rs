@@ -71,6 +71,7 @@ fn limits(memory: Option<u64>, processes: Option<u32>) -> JobLimits {
         memory,
         processes,
         cpu: None,
+        threads: None,
     }
 }
 

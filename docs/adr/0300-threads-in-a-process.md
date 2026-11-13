@@ -233,6 +233,11 @@ mapping calls per process.
 - Whether `MAX_THREADS` should be 64: musl's thread list walks (`__synccall`, `pthread_getattr`) are linear.
 - A cheaper kernel stack (16 KiB) for threads: the steps of ADR-0270 and the user copies need depth; measure what a thread's calls use.
 - A native `thread_wait` (join by handle) is not added: musl's join is a futex wait on the `clear` word.
+- Note of part 9b step 1 (ADR-0001 rule 6): `t_thread` checks INV-0300-2 for the entry, the stack, the handle table and the
+  process bound, not yet for the system bound (1,000 threads need a guest with more than 128 MiB for their kernel stacks) nor
+  the memory limit, and INV-0300-3 for `process_exit`, a fault and `job_kill` with three spinning siblings, not yet for the
+  sibling parked by a CPU ceiling nor the one inside a stepped `memory_map`. Those two rows stay "not yet applicable" until the
+  remaining variants exist.
 
 ## Revisit triggers
 

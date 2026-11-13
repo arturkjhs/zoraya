@@ -5,17 +5,17 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE, USAGE_SIZE_CPU};
+use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE, USAGE_SIZE_THREADS};
 use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
-    Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
-    Detail, DeviceObject, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason,
-    ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags,
-    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer,
-    PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind,
-    Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject,
-    StreamWriteObject, UsageFlags, request_value,
+    Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, Count,
+    DEADLINE_INFINITE, Detail, DeviceObject, DirectoryEntry, Disposition, EntryPoint, EventObject,
+    ExitCode, ExitReason, ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags,
+    JobObject, MapFlags, MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out,
+    Packet, PacketBuffer, PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex,
+    RelativePath, RequestKind, Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status,
+    StreamReadObject, StreamWriteObject, UsageFlags, Word32, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_elf::{EHDR_SIZE, Header, Program};
@@ -36,6 +36,7 @@ use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
 use crate::stream::Stream;
+use crate::thread::{self, MapGuard};
 use crate::{console, port, print, ramdisk, sched, steps, timer};
 
 /// Longest `console_write`.
@@ -135,6 +136,9 @@ fn deadline(raw: zoraya_abi::Deadline) -> Deadline {
 struct Calls<'f> {
     process: Arc<Process>,
     exit: Option<ExitRecord>,
+    /// `thread_exit` ran: the calling thread leaves after the call, and the
+    /// process goes on unless it was the last (ADR-0300 item 3).
+    end_thread: bool,
     /// The caller's registers at its `svc`, for `snapshot_process`.
     frame: &'f Frame,
 }
@@ -264,6 +268,43 @@ impl Calls<'_> {
         drop(claim);
     }
 
+    /// Unmaps the mapping that is exactly `[va, va + length)`, in steps, with
+    /// the mapping lock held by the caller.
+    fn unmap_exact(&self, va: u64, length: u64) -> Result<(), Status> {
+        {
+            let space = self.process.space.lock();
+            let space = space.as_ref().ok_or(Status::BadState)?;
+            if !space.is_mapped_exactly(va, length) {
+                return Err(Status::InvalidArgument);
+            }
+        }
+        // Unmapping goes on to its end whatever the process was asked
+        // (ADR-0270): a pause after each step, no cancel.
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut done = 0;
+        while done < length {
+            let n = step.min(length - done);
+            {
+                let mut space = self.process.space.lock();
+                let space = space.as_mut().ok_or(Status::BadState)?;
+                space.unmap_range(va, done, n);
+            }
+            done += n;
+            if done < length {
+                steps::pause();
+            }
+        }
+        let holder = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space
+                .unmap_commit(va, length)
+                .map_err(|_| Status::InvalidArgument)?
+        };
+        drop(holder);
+        Ok(())
+    }
+
     fn insert(&self, object: Object, rights: Rights) -> Result<u64, Status> {
         let handle = self
             .process
@@ -308,8 +349,8 @@ impl Handlers for Calls<'_> {
     }
 
     fn sleep_until(&mut self, at: zoraya_abi::Deadline) -> Result<u64, Status> {
-        sched::sleep_until(deadline(at)).map_err(|_| Status::NoMemory)?;
-        Ok(0)
+        // 1 when `thread_interrupt` ended it early, else 0 (ADR-0300 item 5).
+        thread::sleep_until(deadline(at))
     }
 
     fn handle_close(&mut self, handle: Handle) -> Result<u64, Status> {
@@ -660,6 +701,10 @@ impl Handlers for Calls<'_> {
             MappingError::Quota => Status::OverQuota,
             _ => Status::NoMemory,
         };
+        // The mapping lock for the whole call (ADR-0301 item 6): another
+        // thread of the process may not map between `map_reserve` and
+        // `map_commit`. Dropped on every return, `Cancelled` ones included.
+        let _map = MapGuard::acquire(&self.process)?;
         let va = {
             let mut space = self.process.space.lock();
             let space = space.as_mut().ok_or(Status::BadState)?;
@@ -706,38 +751,8 @@ impl Handlers for Calls<'_> {
     }
 
     fn memory_unmap(&mut self, address: Address, length: Size) -> Result<u64, Status> {
-        let (va, length) = (address.0, length.0);
-        {
-            let space = self.process.space.lock();
-            let space = space.as_ref().ok_or(Status::BadState)?;
-            if !space.is_mapped_exactly(va, length) {
-                return Err(Status::InvalidArgument);
-            }
-        }
-        // Unmapping goes on to its end whatever the process was asked
-        // (ADR-0270): a pause after each step, no cancel.
-        let step = (steps::STEP as u64) * FRAME_SIZE;
-        let mut done = 0;
-        while done < length {
-            let n = step.min(length - done);
-            {
-                let mut space = self.process.space.lock();
-                let space = space.as_mut().ok_or(Status::BadState)?;
-                space.unmap_range(va, done, n);
-            }
-            done += n;
-            if done < length {
-                steps::pause();
-            }
-        }
-        let holder = {
-            let mut space = self.process.space.lock();
-            let space = space.as_mut().ok_or(Status::BadState)?;
-            space
-                .unmap_commit(va, length)
-                .map_err(|_| Status::InvalidArgument)?
-        };
-        drop(holder);
+        let _map = MapGuard::acquire(&self.process)?;
+        self.unmap_exact(address.0, length.0)?;
         Ok(0)
     }
 
@@ -1189,6 +1204,15 @@ impl Handlers for Calls<'_> {
         // job (ADR-0261 point 6): a limit refuses the call with no effect.
         let mut count = Paid::new(Some(&job));
         count.process()?;
+        // Then the child's first thread, in the order processes, threads,
+        // memory (ADR-0307 item 1).
+        let first = sched::reserve_thread(&job)?;
+        // The mapping lock for the whole call, and the other threads of the
+        // caller parked at their next return to EL0, so that the copy sees one
+        // memory and no one maps or unmaps meanwhile (ADR-0306 item 2). Both
+        // are released on every return.
+        let _map = MapGuard::acquire(&self.process)?;
+        let _freeze = thread::Freeze::new(&self.process);
         let mut copied = Copied::default();
         // The copy in steps (ADR-0270): the plan, the child and its objects
         // with no lock held, then up to `STEP` pages at a time under the
@@ -1219,6 +1243,7 @@ impl Handlers for Calls<'_> {
             space,
             job,
             count,
+            first,
             handles: table,
             self_handle,
             frame: self.frame,
@@ -1292,6 +1317,65 @@ impl Handlers for Calls<'_> {
             .raw())
     }
 
+    fn thread_create(
+        &mut self,
+        entry: EntryPoint,
+        stack: Address,
+        argument: Opaque,
+        tls: Address,
+    ) -> Result<u64, Status> {
+        thread::create(&self.process, entry.0, stack.0, argument.0, tls.0)
+    }
+
+    fn thread_exit(
+        &mut self,
+        clear: Address,
+        unmap_base: Address,
+        unmap_length: Size,
+    ) -> Result<u64, Status> {
+        // In this order (ADR-0300 item 3). A mismatch or a bad address is
+        // ignored: the thread is ending.
+        if unmap_length.0 != 0
+            && let Ok(_map) = MapGuard::acquire(&self.process)
+        {
+            let _ = self.unmap_exact(unmap_base.0, unmap_length.0);
+        }
+        if clear.0 != 0
+            && clear.0.is_multiple_of(4)
+            && let Ok(word) = UserSlice::new(clear.0, 4)
+            && word.write(&0u32.to_le_bytes()).is_ok()
+        {
+            let _ = thread::futex_wake(&self.process, clear.0, Count::MAX);
+        }
+        self.end_thread = true;
+        Ok(0)
+    }
+
+    fn thread_self(&mut self) -> Result<u64, Status> {
+        thread::this(&self.process)
+    }
+
+    fn thread_interrupt(&mut self, target: Handle) -> Result<u64, Status> {
+        let Object::Thread(object) = self.object(target, Rights::SIGNAL)? else {
+            return Err(Status::BadHandle);
+        };
+        thread::interrupt(&object)?;
+        Ok(0)
+    }
+
+    fn futex_wait(
+        &mut self,
+        address: Address,
+        expected: Word32,
+        at: zoraya_abi::Deadline,
+    ) -> Result<u64, Status> {
+        thread::futex_wait(&self.process, address.0, expected.0, deadline(at))
+    }
+
+    fn futex_wake(&mut self, address: Address, count: Count) -> Result<u64, Status> {
+        thread::futex_wake(&self.process, address.0, count.0)
+    }
+
     fn job_set_limits(&mut self, job: Handle, limits: Bytes) -> Result<u64, Status> {
         let job = self.job(job, Rights::LIMIT)?;
         if limits.0.length != LIMITS_SIZE as u64 {
@@ -1309,9 +1393,10 @@ impl Handlers for Calls<'_> {
             return Err(Status::BufferTooSmall);
         }
         // Written first, then cleared: a bad address clears nothing.
-        // The first version's 88 bytes, or the record with the CPU words.
+        // The first version's 88 bytes, the record with the CPU words, or the
+        // one with the thread words too (ADR-0307 item 2).
         let usage = job.usage(false).encode();
-        target.write(&usage[..target.len().min(USAGE_SIZE_CPU)])?;
+        target.write(&usage[..target.len().min(USAGE_SIZE_THREADS)])?;
         if flags.clears() {
             job.usage(true);
         }
@@ -1563,6 +1648,7 @@ pub fn dispatch(frame: &mut Frame) {
     ];
     let process = sched::current().process().cloned();
     let mut exit = None;
+    let mut end_thread = false;
     let result = match process {
         Some(process) if svc_immediate(frame.esr) == 0 => {
             // INV-0002-2: every `#[personality_only]` call is refused here
@@ -1573,10 +1659,12 @@ pub fn dispatch(frame: &mut Frame) {
                 let mut calls = Calls {
                     process,
                     exit: None,
+                    end_thread: false,
                     frame,
                 };
                 let result = zoraya_abi::dispatch(&mut calls, number, &registers);
                 exit = calls.exit;
+                end_thread = calls.end_thread;
                 result
             }
         }
@@ -1584,6 +1672,9 @@ pub fn dispatch(frame: &mut Frame) {
     };
     if let Some(record) = exit {
         process::exit_current(record);
+    }
+    if end_thread {
+        process::leave_current();
     }
     let (status, value) = match result {
         Ok(value) => (Status::Ok, value),

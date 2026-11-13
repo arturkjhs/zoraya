@@ -1007,6 +1007,7 @@ fn a_snapshot_at_a_limit_is_refused_whole() {
             memory: None,
             processes: Some(1),
             cpu: None,
+            threads: None,
         },
     )
     .expect("limits");
@@ -1052,6 +1053,7 @@ fn a_snapshot_at_a_limit_is_refused_whole() {
             memory: Some(64 << 10),
             processes: None,
             cpu: None,
+            threads: None,
         },
     )
     .expect("limits");

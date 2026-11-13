@@ -38,6 +38,7 @@ crates/zoraya-cpu/            test-qemu
 crates/zoraya-events/         test-qemu
 crates/zoraya-channel/        test-qemu
 crates/zoraya-time/           test-qemu
+crates/zoraya-thread/         test-qemu
 crates/zoraya-console/        test-qemu test-boot
 crates/zoraya-stream/         test-qemu
 crates/zoraya-ramdisk/        test-qemu test-boot
@@ -85,6 +86,7 @@ tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
+user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu test-net
 user/src/mmio.rs              test-gui test-qemu test-net test-files

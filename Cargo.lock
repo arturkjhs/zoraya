@@ -637,6 +637,7 @@ dependencies = [
  "zoraya-pmm",
  "zoraya-ramdisk",
  "zoraya-stream",
+ "zoraya-thread",
  "zoraya-time",
 ]
 
