@@ -135,6 +135,9 @@ processes, CPU in ADR-0264) gains a field. *ADR-0266 point 1* (five words) stays
 - Whether 3 per process is right: measure CPython's `threading` tests and the stress test of ADR-0309.
 - `--threads` as a typed word.
 - Whether kernel threads and services should count (ADR-0264 point 7: never capped).
+- Note of part 9b step 1 (ADR-0001 rule 6): INV-0307-1 is checked for `thread_create` in a job with `threads = 3`
+  (`t_thread`) and for the walk (`cargo test -p zoraya-charge`); the `spawn` and `snapshot_process` refusals at the figure are
+  not tested in QEMU yet, so the row stays "not yet applicable". INV-0307-5 needs `libposix` (step 2).
 
 ## Revisit triggers
 

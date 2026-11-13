@@ -252,10 +252,11 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   not global. With no current process, `EPD0` is set and `TTBR0` is 0.
 - **User layout.** Programs from 4 MiB up; a 64 KiB stack mapped in full, ending one page below 2^47, with an unmapped
   page below it.
-- **Processes.** One thread each. All memory is mapped at creation, so there is no demand paging. A process ends on
-  its own thread: anyone else sets the exit it wants and wakes it, and it acts on that at its next return to EL0, or
-  before its first instruction. At exit it releases its memory, ASID and handles, and stays as a zombie holding only
-  its `ExitRecord` until its last handle goes.
+- **Processes.** One address space, one handle table, and from one to 128 threads (below, "Threads in a process").
+  All memory is mapped at creation, so there is no demand paging. A process ends in two phases: anyone else (or one of its
+  threads) fixes the exit record once and wakes the first thread; each thread acts on it at its next return to EL0, or
+  before its first instruction, and leaves. The thread whose leave empties the list releases the memory, ASID and
+  handles, and the process stays as a zombie holding only its `ExitRecord` until its last handle goes.
 - **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u64` of 16 bits of slot and 48 of generation (ADR-0057), 1024 slots, a rights
   mask that only decreases. Port handles have no `DUPLICATE`, so closing one closes the port.
 - **Jobs (`kernel/src/job.rs`).** A tree, at most 32 deep, with one lock over membership and walks. `job_signal` and
@@ -279,6 +280,34 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   embeds them in `.rodata`. A kernel built without the Makefile has an empty one.
 - **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb` and `sttrb`, which check permissions as EL0
   does.
+
+### Threads in a process (stage 9b, step 1: the kernel; ADR-0300, 0301, 0307, 0313)
+
+The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zoraya-thread`, and `t_thread` at the raw ABI.
+
+- **Calls 56 to 61.** `thread_create(entry, stack, argument, tls)` makes a thread of the caller's process that starts at
+  `entry` with `x0 = argument`, `SP = stack` and `TPIDR_EL0 = tls`, and returns a handle (rights `WAIT | SIGNAL`, not duplicable,
+  signal `TERMINATED`). `thread_exit(clear, unmap_base, unmap_length)` unmaps its own stack if asked, stores 0 at `clear` and
+  wakes its waiters, refunds its figures and leaves. `thread_self` makes a handle to the caller. `thread_interrupt(thread)`
+  sets a one-shot flag that ends the target's next or current `futex_wait` or `sleep_until` early (`Ok` with value 1; no new
+  `Status`); `port_wait` is not touched. `futex_wait(address, expected, deadline)` and `futex_wake(address, count)` are the
+  wait on a word of the process's own memory (no requeue, no cross-process key). The wait reads the word and lists the thread
+  with interrupts masked; the lists are made at a process's first `thread_create` or `futex_wait` and charged then.
+- **Limits.** 128 threads a process, 1,000 user threads in the system; the deadline queue has 1,024 entries (a binary heap,
+  at most 12 heap positions written by an insert, a cancel or a pop) and `on_interrupt` runs at most 64 due entries a pass.
+  A process's mapping calls (`memory_map`, `memory_unmap`, the unmap in `thread_exit`, `snapshot_process`) take a sleeping
+  per-process lock for the whole call, steps included, released by a guard on every path.
+- **Ending.** `request_exit` fixes the record and wakes one thread, never all (`Job::kill` calls it under the tree's lock).
+  The first thread to leave wakes the others in steps of 64 and each leaver wakes the new first one. `job_suspend` parks every
+  thread at its next return to EL0; `cont` wakes one parked thread, which wakes the rest in steps. A fork takes the same park
+  for its siblings (`thread::Freeze`) while `snapshot_process` copies.
+- **Quota.** `threads` is a field of its own (`QuotaField::Threads = 3`), counts every live thread (the first of each process
+  included), is charged after the process's slot and before its memory, and is refunded at `thread_exit`. The limits
+  record's bytes 16 to 20 hold it (0 = none) and the usage record is 152 bytes. The room keeper derives `3 x procs`; `init`
+  gives the session 600.
+- **Not done yet.** The `libposix` and musl side (pthreads, signals, cancellation, `fork`'s locks), `grants` printing the
+  figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the CPU-ceiling and stepped-map variants of the
+  ending test (see the notes in ADR-0300, 0301 and 0307, and the report).
 
 ## Filesystem engine (as built)
 

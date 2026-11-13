@@ -24,7 +24,11 @@ fn parameters_come_from_the_allow_list() {
                 Param::Opaque => assert!(
                     matches!(
                         s.name,
-                        "port_subscribe" | "port_unsubscribe" | "port_queue" | "device_write"
+                        "port_subscribe"
+                            | "port_unsubscribe"
+                            | "port_queue"
+                            | "device_write"
+                            | "thread_create"
                     ),
                     "{}",
                     s.name
@@ -40,11 +44,28 @@ fn parameters_come_from_the_allow_list() {
                             | "image_create"
                             | "device_read"
                             | "device_write"
+                            | "thread_exit"
                     ),
                     "{}",
                     s.name
                 ),
-                Param::Address => assert_eq!(s.name, "memory_unmap"),
+                // ADR-0301 and ADR-0300 add the calls that take an address in
+                // the caller's own space; none names an object by it.
+                Param::Address => assert!(
+                    matches!(
+                        s.name,
+                        "memory_unmap"
+                            | "thread_create"
+                            | "thread_exit"
+                            | "futex_wait"
+                            | "futex_wake"
+                    ),
+                    "{}",
+                    s.name
+                ),
+                // INV-0301-5, INV-0308-5: the futex calls alone.
+                Param::Word32 => assert_eq!(s.name, "futex_wait"),
+                Param::Count => assert_eq!(s.name, "futex_wake"),
                 Param::Out => assert_eq!(s.name, "channel_read"),
                 Param::RangeIndex => assert!(
                     matches!(
@@ -78,8 +99,10 @@ fn only_thread_creation_takes_an_entry_point() {
     }
 }
 
-/// INV-0006-2: blocking calls take handles, a `Deadline` and a packet buffer,
-/// so no signal mask, no array to scan and no relative timeout.
+/// INV-0006-2 as amended by ADR-0308 (INV-0308-5, INV-0301-5): blocking calls
+/// take handles, a `Deadline` and a packet buffer, so no signal mask, no array
+/// to scan and no relative timeout; `futex_wait` alone also takes an address
+/// and the 32-bit word it expects there. Three blocking calls, not two.
 #[test]
 fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
     let mut blocking = 0;
@@ -87,14 +110,50 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
         blocking += 1;
         assert!(s.params.contains(&Param::Deadline), "{}", s.name);
         for p in s.params {
+            let futex = s.name == "futex_wait" && matches!(p, Param::Address | Param::Word32);
             assert!(
-                matches!(p, Param::Handle | Param::Deadline | Param::Packets),
+                futex || matches!(p, Param::Handle | Param::Deadline | Param::Packets),
                 "{}",
                 s.name
             );
         }
     }
-    assert_eq!(blocking, 2);
+    assert_eq!(blocking, 3);
+    let futex = SYSCALLS.iter().find(|s| s.name == "futex_wait").unwrap();
+    assert!(futex.blocking);
+    assert_eq!(
+        futex.params,
+        &[Param::Address, Param::Word32, Param::Deadline]
+    );
+}
+
+/// INV-0300-1: a thread's handle has neither `DUPLICATE` nor `TRANSFER`, and
+/// the type waits on `TERMINATED`.
+#[test]
+fn a_thread_handle_cannot_be_duplicated_or_transferred() {
+    let row = OBJECT_TYPES.iter().find(|t| t.name == "thread").unwrap();
+    assert!(!row.rights.contains(Rights::DUPLICATE));
+    assert!(!row.rights.contains(Rights::TRANSFER));
+    assert!(row.rights.contains(Rights::WAIT.union(Rights::SIGNAL)));
+    assert_eq!(row.duplication, Duplication::NotDuplicable);
+    assert_eq!(
+        row.waiting,
+        Waiting::Signals(thread_signals::TERMINATED),
+        "ADR-0300 item 2"
+    );
+}
+
+/// ADR-0301 item 2 and INV-0044-2: the counts and words that do not fit are
+/// refused, never truncated.
+#[test]
+fn futex_arguments_are_checked_and_never_truncated() {
+    assert_eq!(Count::decode(&[0]), Err(Status::InvalidArgument));
+    assert_eq!(Count::decode(&[1]), Ok(Count(1)));
+    assert_eq!(Count::decode(&[128]), Ok(Count(128)));
+    assert_eq!(Count::decode(&[129]), Err(Status::InvalidArgument));
+    assert_eq!(Count::decode(&[1 << 32]), Err(Status::InvalidArgument));
+    assert_eq!(Word32::decode(&[u64::from(u32::MAX)]), Ok(Word32(u32::MAX)));
+    assert_eq!(Word32::decode(&[1 << 32]), Err(Status::InvalidArgument));
 }
 
 /// INV-0006-6: the vocabulary has no `Interrupted`. `Status::ALL` and the enum
@@ -156,7 +215,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 15);
+    assert_eq!(OBJECT_TYPES.len(), 16);
     for t in OBJECT_TYPES {
         if let Waiting::Signals(bits) = t.waiting {
             assert_ne!(bits, 0, "{}", t.name);
@@ -378,6 +437,12 @@ echo! {
     device_transport(device: Handle, index: RangeIndex);
     device_read(device: Handle, offset: Size, width: Size);
     device_write(device: Handle, offset: Size, value: Opaque, width: Size);
+    thread_create(entry: EntryPoint, stack: Address, argument: Opaque, tls: Address);
+    thread_exit(clear: Address, unmap_base: Address, unmap_length: Size);
+    thread_self();
+    thread_interrupt(thread: Handle);
+    futex_wait(address: Address, expected: Word32, deadline: Deadline);
+    futex_wake(address: Address, count: Count);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.

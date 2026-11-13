@@ -181,6 +181,10 @@ in one queue" becomes the derived size of item 5. *ADR-0031:* the mapping lock o
   number that confirms the 64-pop pass).
 - Whether a broadcast to 100 waiters needs a requeue after all: measure with the stress test of ADR-0309.
 - `futex_wait` on several words (GR-011's lesson on multi-wait): not needed by musl; deferred.
+- Note of part 9b step 1 (ADR-0001 rule 6): INV-0301-4 (`t_bound` extended) and the in-QEMU half of INV-0301-7 (1,000 timed
+  waiters) are not implemented yet: 1,000 threads cost about 64 MiB of kernel stacks, more than the 128 MiB test guest has free.
+  The host half of INV-0301-7 (`cargo test -p zoraya-time`, at most 12 heap positions written at 1,024 entries) is checked.
+  `t_thread` runs INV-0301-1 with 100,000 hand-offs.
 
 ## Revisit triggers
 

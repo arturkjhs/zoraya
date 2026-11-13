@@ -7,6 +7,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+extern crate std;
+
 const NANOS_PER_SEC: u128 = 1_000_000_000;
 
 /// A point on the monotonic clock, in nanoseconds since the clock started.
@@ -93,7 +96,8 @@ impl Clock {
     }
 }
 
-/// Names an entry of a [`DeadlineQueue`]. Ids are not reused.
+/// Names an entry of a [`DeadlineQueue`]. Ids are not reused: the low 16
+/// bits are the entry's slot, the rest a sequence number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerId(u64);
 
@@ -104,25 +108,50 @@ pub struct QueueFull;
 #[derive(Debug, Clone, Copy)]
 struct Entry<T> {
     at: Instant,
-    id: TimerId,
+    /// The insertion sequence number: the tie-break, and half of the id.
+    seq: u64,
     value: T,
+    /// Where this entry's slot is in `heap` (the back-index, ADR-0301 item
+    /// 5), so that a cancel finds it without a scan.
+    pos: u16,
 }
 
-/// At most `N` pending deadlines, earliest first; entries with equal
-/// deadlines keep insertion order.
+/// At most `N` (below 65,536) pending deadlines in a binary min-heap by
+/// `(deadline, insertion order)`: insert, cancel and pop move at most
+/// `2 * log2(N)` entries, with interrupts masked (ADR-0301 item 5,
+/// INV-0301-7). Entries with equal deadlines keep insertion order.
+///
+/// `slots` holds the entries where they were put and never moves them;
+/// `heap` holds slot numbers in heap order; `free` is a stack of unused slots.
 #[derive(Debug)]
 pub struct DeadlineQueue<T, const N: usize> {
-    entries: [Option<Entry<T>>; N],
+    slots: [Option<Entry<T>>; N],
+    heap: [u16; N],
+    free: [u16; N],
     len: usize,
-    next_id: u64,
+    free_len: usize,
+    next_seq: u64,
+    /// Heap positions written by the last operation (for the move bound).
+    moves: usize,
 }
 
 impl<T: Copy, const N: usize> DeadlineQueue<T, N> {
     pub const fn new() -> DeadlineQueue<T, N> {
+        assert!(N < 1 << 16);
+        let mut free = [0u16; N];
+        let mut i = 0;
+        while i < N {
+            free[i] = (N - 1 - i) as u16;
+            i += 1;
+        }
         DeadlineQueue {
-            entries: [None; N],
+            slots: [None; N],
+            heap: [0; N],
+            free,
             len: 0,
-            next_id: 0,
+            free_len: N,
+            next_seq: 0,
+            moves: 0,
         }
     }
 
@@ -134,56 +163,135 @@ impl<T: Copy, const N: usize> DeadlineQueue<T, N> {
         self.len == 0
     }
 
-    fn at(&self, i: usize) -> Option<&Entry<T>> {
-        self.entries.get(i).and_then(Option::as_ref)
+    /// The heap positions the last `insert`, `cancel` or `pop_due` wrote.
+    pub const fn last_moves(&self) -> usize {
+        self.moves
+    }
+
+    fn entry(&self, position: usize) -> Entry<T> {
+        // The heap holds only slots in use.
+        self.slots[usize::from(self.heap[position])].expect("a heap slot is in use")
+    }
+
+    fn key(&self, position: usize) -> (Instant, u64) {
+        let e = self.entry(position);
+        (e.at, e.seq)
+    }
+
+    fn place(&mut self, position: usize, slot: u16) {
+        self.heap[position] = slot;
+        if let Some(e) = self.slots[usize::from(slot)].as_mut() {
+            e.pos = position as u16;
+        }
+        self.moves += 1;
+    }
+
+    fn sift_up(&mut self, mut position: usize) {
+        let slot = self.heap[position];
+        let key = self.key(position);
+        while position > 0 {
+            let parent = (position - 1) / 2;
+            if self.key(parent) <= key {
+                break;
+            }
+            let up = self.heap[parent];
+            self.place(position, up);
+            position = parent;
+        }
+        self.place(position, slot);
+    }
+
+    fn sift_down(&mut self, mut position: usize) {
+        let slot = self.heap[position];
+        let key = self.key(position);
+        loop {
+            let left = 2 * position + 1;
+            if left >= self.len {
+                break;
+            }
+            let right = left + 1;
+            let child = if right < self.len && self.key(right) < self.key(left) {
+                right
+            } else {
+                left
+            };
+            if self.key(child) >= key {
+                break;
+            }
+            let up = self.heap[child];
+            self.place(position, up);
+            position = child;
+        }
+        self.place(position, slot);
     }
 
     pub fn insert(&mut self, at: Instant, value: T) -> Result<TimerId, QueueFull> {
-        if self.len == N {
+        if self.free_len == 0 {
             return Err(QueueFull);
         }
-        let position = (0..self.len)
-            .find(|i| self.at(*i).is_some_and(|e| e.at > at))
-            .unwrap_or(self.len);
-        self.entries[position..=self.len].rotate_right(1);
-        let id = TimerId(self.next_id);
-        self.next_id += 1;
-        self.entries[position] = Some(Entry { at, id, value });
+        self.moves = 0;
+        self.free_len -= 1;
+        let slot = self.free[self.free_len];
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        let position = self.len;
+        self.slots[usize::from(slot)] = Some(Entry {
+            at,
+            seq,
+            value,
+            pos: position as u16,
+        });
+        self.heap[position] = slot;
         self.len += 1;
-        Ok(id)
+        self.sift_up(position);
+        Ok(TimerId(seq << 16 | u64::from(slot)))
     }
 
-    fn remove_at(&mut self, position: usize) {
-        self.entries[position] = None;
-        self.entries[position..self.len].rotate_left(1);
+    /// Takes the entry at heap `position` out and restores the heap order.
+    fn remove_at(&mut self, position: usize) -> Entry<T> {
+        self.moves = 0;
+        let slot = self.heap[position];
+        let gone = self.slots[usize::from(slot)]
+            .take()
+            .expect("a heap slot is in use");
+        self.free[self.free_len] = slot;
+        self.free_len += 1;
         self.len -= 1;
+        if position < self.len {
+            let last = self.heap[self.len];
+            self.place(position, last);
+            // The moved entry may belong above or below this position.
+            self.sift_up(position);
+            let now = usize::from(self.slots[usize::from(last)].map_or(0, |e| e.pos));
+            self.sift_down(now);
+        }
+        gone
     }
 
     /// Removes the entry, if it is still pending.
     pub fn cancel(&mut self, id: TimerId) -> bool {
-        match (0..self.len).find(|i| self.at(*i).is_some_and(|e| e.id == id)) {
-            Some(position) => {
-                self.remove_at(position);
+        let slot = (id.0 & 0xffff) as usize;
+        match self.slots.get(slot).copied().flatten() {
+            Some(e) if e.seq == id.0 >> 16 => {
+                self.remove_at(usize::from(e.pos));
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
     /// The earliest pending deadline.
     pub fn earliest(&self) -> Option<Instant> {
-        self.at(0).map(|e| e.at)
+        (self.len > 0).then(|| self.entry(0).at)
     }
 
     /// Removes and returns the earliest entry whose deadline is at or before
     /// `now`.
     pub fn pop_due(&mut self, now: Instant) -> Option<T> {
-        let first = self.at(0).copied()?;
-        if first.at > now {
+        if self.len == 0 || self.entry(0).at > now {
             return None;
         }
-        self.remove_at(0);
-        Some(first.value)
+        Some(self.remove_at(0).value)
     }
 }
 
@@ -370,6 +478,57 @@ mod tests {
             let earliest = model.iter().flatten().map(|m| m.1).min();
             assert_eq!(q.earliest(), earliest.map(t));
         }
+    }
+
+    /// INV-0301-7: no insert, cancel or pop writes more than 12 heap
+    /// positions at 1024 entries, and the queue still matches the order.
+    #[test]
+    fn heap_operations_move_at_most_twelve_entries_at_1024() {
+        let mut rng = Rng(0x5eed);
+        let mut q = DeadlineQueue::<u64, 1024>::new();
+        let mut ids: std::vec::Vec<TimerId> = std::vec::Vec::new();
+        let mut worst = 0;
+        let mut now = 0;
+        for round in 0..60_000u64 {
+            match rng.next() % 5 {
+                0..=2 => {
+                    if let Ok(id) = q.insert(t(now + rng.next() % 5000), round) {
+                        ids.push(id);
+                    }
+                    worst = worst.max(q.last_moves());
+                }
+                3 => {
+                    if !ids.is_empty() {
+                        let i = (rng.next() as usize) % ids.len();
+                        let id = ids.swap_remove(i);
+                        // It may have expired already.
+                        q.cancel(id);
+                        worst = worst.max(q.last_moves());
+                    }
+                }
+                _ => {
+                    now += rng.next() % 40;
+                    let mut last = 0;
+                    while q.pop_due(t(now)).is_some() {
+                        worst = worst.max(q.last_moves());
+                        last += 1;
+                    }
+                    let _ = last;
+                }
+            }
+        }
+        assert!(worst <= 12, "{worst}");
+        assert!(worst > 0);
+    }
+
+    #[test]
+    fn a_cancelled_id_is_never_reused_for_another_entry() {
+        let mut q = DeadlineQueue::<u32, 2>::new();
+        let a = q.insert(t(5), 1).unwrap();
+        assert!(q.cancel(a));
+        let b = q.insert(t(5), 2).unwrap();
+        assert!(!q.cancel(a), "the old id names nothing now");
+        assert!(q.cancel(b));
     }
 }
 

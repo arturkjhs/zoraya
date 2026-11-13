@@ -413,6 +413,10 @@ static TESTS: &[Test] = &[
         run: handles_and_rights_hold_from_user_space,
     },
     Test {
+        name: "threads_and_futexes_keep_their_rules",
+        run: threads_and_futexes_keep_their_rules,
+    },
+    Test {
         name: "spawn_keeps_its_rules",
         run: spawn_keeps_its_rules,
     },
@@ -1343,6 +1347,12 @@ fn job_suspend_from_a_process() {
     assert_eq!(run_program("t_suspend"), exited(0));
 }
 
+/// ADR-0300, ADR-0301 and ADR-0307: threads, the wait on an address and the
+/// threads quota, at the raw ABI.
+fn threads_and_futexes_keep_their_rules() {
+    assert_eq!(run_program("t_thread"), exited(0));
+}
+
 /// ADR-0261 and ADR-0263: limits on jobs, from processes.
 fn quotas_from_a_process() {
     assert_eq!(run_program("t_quota"), exited(0));
@@ -2066,13 +2076,13 @@ fn settle() {
 fn nothing_is_left_after_spawn_exit_close() {
     let snapshot = || {
         settle();
+        // The settled figures first: they drain the reaper and yield, which
+        // must not happen with `EVENTS` held (a sibling taking it would
+        // panic with "lock taken twice").
+        let free = frames::settled_stats().free;
+        let live = heap::settled_stats().live;
         let events = port::EVENTS.lock();
-        (
-            frames::settled_stats().free,
-            heap::settled_stats().live,
-            events.live(),
-            events.subscription_count(),
-        )
+        (free, live, events.live(), events.subscription_count())
     };
     let round = || assert_eq!(run_program("t_leak"), exited(0));
     // The first rounds grow what is kept for reuse, such as the run queue.

@@ -485,6 +485,11 @@ test = false
 bench = false
 
 [[bin]]
+name = "t_thread"
+test = false
+bench = false
+
+[[bin]]
 name = "memhog"
 test = false
 bench = false

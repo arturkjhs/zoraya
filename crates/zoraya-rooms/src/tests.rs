@@ -1539,3 +1539,30 @@ fn the_tracker_reads_a_share_over_the_interval_and_repeats_it_when_asked_too_soo
     assert_eq!(t.readings(&[], 14 * s).len(), 0);
     assert_eq!(t.readings(&[rec(s)], 15 * s)[0].cpu_pct, None);
 }
+
+/// INV-0307-3: a room's thread ceiling is three times its processes figure,
+/// the session's is 600 for its 200 processes, and the untrusted rooms' job
+/// gets three times its 96.
+#[test]
+fn thread_ceilings_are_three_times_the_processes_figure() {
+    assert_eq!(threads_for(32), Some(96));
+    assert_eq!(threads_for(96), Some(288));
+    assert_eq!(threads_for(200), Some(600));
+    assert_eq!(threads_for(0), None, "0 on the wire is no limit");
+    assert_eq!(threads_for(u32::MAX), Some(u32::MAX - 1), "saturates");
+    let line = rooms::Limits {
+        procs: Some(32),
+        ..Default::default()
+    };
+    assert_eq!(job_limits(&line).threads, Some(96));
+    assert_eq!(job_limits(&rooms::Limits::default()).threads, None);
+    let m = Machine {
+        session_mem: 1 << 30,
+        session_procs: 200,
+        free_disk: 1 << 30,
+    };
+    let untrusted = m.untrusted();
+    assert_eq!(threads_for(untrusted.procs), Some(untrusted.procs * 3));
+    // Nothing a room gets can exceed what the session holds for its processes.
+    assert!(untrusted.procs * THREADS_PER_PROCESS <= 600);
+}

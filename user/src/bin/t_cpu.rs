@@ -106,6 +106,7 @@ fn cpu(permille: u32) -> JobLimits {
         memory: None,
         processes: None,
         cpu: Some(permille),
+        threads: None,
     }
 }
 

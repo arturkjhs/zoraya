@@ -31,17 +31,20 @@ pub enum Field {
     Processes,
     /// The part of `Memory` that is user frames. Counted, never limited.
     User,
+    /// Live threads, the first of each process included (ADR-0307).
+    Threads,
 }
 
 impl Field {
     /// Every field, in the order of [`Counters`].
-    pub const ALL: [Field; 3] = [Field::Memory, Field::Processes, Field::User];
+    pub const ALL: [Field; 4] = [Field::Memory, Field::Processes, Field::User, Field::Threads];
 
     const fn index(self) -> usize {
         match self {
             Field::Memory => 0,
             Field::Processes => 1,
             Field::User => 2,
+            Field::Threads => 3,
         }
     }
 }
@@ -68,7 +71,7 @@ pub struct Counter {
 
 /// The counters of a node.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Counters([Counter; 3]);
+pub struct Counters([Counter; 4]);
 
 impl Counters {
     pub const fn new() -> Counters {
@@ -78,7 +81,7 @@ impl Counters {
                 used: 0,
                 peak: 0,
                 refused: 0,
-            }; 3],
+            }; 4],
         )
     }
 

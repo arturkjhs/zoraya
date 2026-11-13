@@ -637,6 +637,7 @@ dependencies = [
  "zoraya-pmm",
  "zoraya-ramdisk",
  "zoraya-stream",
+ "zoraya-thread",
  "zoraya-time",
 ]
 
@@ -973,6 +974,13 @@ version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
  "zoraya-tokens",
+]
+
+[[package]]
+name = "zoraya-thread"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
 ]
 
 [[package]]
