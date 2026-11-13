@@ -634,6 +634,16 @@ HOSTPY := $(HOSTPY_PREFIX)/bin/python$(PYMM)
 $(PYTHON_SRC): $(LOCK) $(wildcard ports/patches/python/*.patch)
 	$(call unpack,python,ports/patches/python)
 	@touch $@
+# What the python stamp depends on are markers, not the trees: CI's test jobs
+# take build/ without the source and host trees (they are 500 MB the tests do
+# not read, W10), and a missing tree would make make rebuild the whole port.
+# A marker is older than the output built from it; the tree is made, if it
+# is missing, by the marker's own rule.
+PYTHON_SRC_STAMP := $(OBJ)/python-src.stamp
+$(PYTHON_SRC_STAMP): $(LOCK) $(wildcard ports/patches/python/*.patch)
+	rm -rf $(PYTHON_SRC)
+	@$(MAKE) -f ports/Makefile $(PYTHON_SRC)
+	@mkdir -p $(dir $@) && touch $@
 # The host build is made from an unpatched tree of its own: the patches are
 # for Zoraya, and the host python only has to be the same version. It is minimal
 # on purpose: no ensurepip (it needs the zlib module, and the CI container has no
@@ -642,7 +652,11 @@ HOSTPY_SRC := $(WORK)/Python-$(PYVER)-host
 $(HOSTPY_SRC): $(LOCK)
 	$(call unpack,python,ports/patches/none)
 	@touch $@
-hostpython: $(HOSTPY)
+HOSTPY_STAMP := $(OBJ)/hostpython.stamp
+hostpython: $(HOSTPY_STAMP)
+$(HOSTPY_STAMP): $(LOCK)
+	@$(MAKE) -f ports/Makefile $(HOSTPY)
+	@mkdir -p $(dir $@) && touch $@
 $(HOSTPY): $(HOSTPY_SRC)
 	rm -rf $(WORK)/hostpython-build && mkdir -p $(WORK)/hostpython-build
 	@cd $(WORK)/hostpython-build && $(call logged,$(HOSTPY_SRC)/configure --prefix=$(HOSTPY_PREFIX) --without-ensurepip,hostpython-configure)
@@ -690,7 +704,7 @@ PYTHON_STAGE := $(PORTS)/python-stage
 # own subset from the stage), IDLE, tkinter and turtle, ensurepip, the
 # embedding's configuration and the documentation topics. Sizes: docs/design.md.
 PYTHON_TRIM := test idlelib idle_test tkinter turtledemo turtle.py ensurepip config-$(PYMM)-* pydoc_data __phello__
-$(PYTHON_ROOT)/.stamp: $(PYTHON_SRC) $(HOSTPY) $(DEPS)/lib/libssl.a $(DEPS)/lib/libsqlite3.a $(DEPS)/lib/libpyshim.a $(DEPS)/lib/libzshim.a ports/config.site
+$(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a $(DEPS)/lib/libsqlite3.a $(DEPS)/lib/libpyshim.a $(DEPS)/lib/libzshim.a ports/config.site
 	rm -rf $(PYTHON_BUILD) $(PYTHON_STAGE) $(PYTHON_ROOT) && mkdir -p $(PYTHON_BUILD)
 	@cd $(PYTHON_BUILD) && $(call logged,$(CROSS_ENV) $(PYTHON_CACHE) MACHDEP=zoraya MODULE_BUILDTYPE=static PKG_CONFIG=false OPT="-DNDEBUG -O2" \
 	  $(PYTHON_SRC)/configure $(PYTHON_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \

@@ -452,7 +452,7 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
 - Not run: TCG; CI (no candidate tag, as told); `make test-changed`; the independent review (opus-review).
 
 ### Limits found (recorded in `docs/design.md`)
-- A program that Python starts has no random connection (ADR-0310, the same as under `dash`): another `python3` fails at start. Seven test cases of the listed modules start interpreters and are left out (`tests/python/regr-ignore.txt`, each with its reason).
+- A program that Python starts has no random connection (ADR-0310, the same as under `dash`): another `python3` fails at start. Nine test cases of the listed modules start interpreters and are left out (`tests/python/regr-ignore.txt`, each with its reason).
 - `test_threading` (CPython's) ran 8.5 minutes and failed at thread creation with `Out of memory` (10 errors, 42 failures); not fixed, not in the subset; `test_thread`, `test_threading_local` and `test_queue` pass. A very large thread stack gives `MemoryError`.
 - No `socketpair`, `AF_UNIX`, server sockets, `posix_spawn`, shared modules, `ctypes`.
 - The shell prints hints for `/dev/urandom` and `/system/tls/roots` after a script that touches them without the grants.

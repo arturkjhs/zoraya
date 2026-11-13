@@ -1,6 +1,6 @@
 # TASK-27 9c, ADR-0320: the driver of the standard library's own tests in
 # Zoraya. It runs CPython's regrtest (test.libregrtest) over the modules
-# listed in regr-modules.txt, one process, no worker processes (the interpreter is the
+# listed in regr-modules.txt, one process, no worker processes (regrtest's default without -j; the interpreter is the
 # unit under test, not the job control). The list is a choice, not the suite:
 # the modules that use what this port adds or changes (the interpreter's core
 # types and the `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `threading`,
@@ -36,7 +36,7 @@ from test.libregrtest.main import main
 # directory is the program's own /tmp (regrtest otherwise builds one from the
 # build directory it was configured in, which does not exist here), and its
 # subdirectory (os.makedirs asks for `/` itself first, and the program is not
-# given a stat of `/`, so the directory is one level below /tmp); worker processes are not used (-j1: one process, the interpreter under test).
+# given a stat of `/`, so the directory is one level below /tmp).
 if not any(a.startswith("--tempdir") for a in sys.argv[1:]):
     sys.argv[1:1] = ["--tempdir", "/tmp/regr"]
 sys.argv[1:1] = ["--ignorefile", "regr-ignore.txt"]

@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps test-apps python test-python test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps test-apps python python-testlib test-python test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -594,7 +594,8 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 # build/rootfs-python (needs `make fetch-ports` and the OpenSSL of `make apps`'
 # ports once). `make test-python` boots a volume made of rootfs/, that
 # directory and the test suite's subset (tests/python/), runs the script
-# tests/shell/python.script and, in it, tests/python/ruler.py.
+# tests/shell/python.script and, in it, tests/python/smoke.py, https_client.py,
+# https_blocking.py and regr.py.
 PYTHON_ROOT := $(BUILD)/rootfs-python
 python:
 	@$(MAKE) -f ports/Makefile python
@@ -614,16 +615,24 @@ PYTHON_TIMEOUT ?= 1800
 PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
 PYTHON_HOSTPY := $(BUILD)/ports/host/bin/python3.15
 PYTHON_RUN = $(RUNNER) --timeout $(1) --script $(PYTHON_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(PYTHON_DISK) $(PYTHON_QEMU) --accel $(3) $(KERNEL)
-test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python
+PYTHON_TESTLIB := $(BUILD)/python-testlib
+# Made once, by ci-build, so that the test jobs need neither the source tree nor
+# the host python (neither is in the build artifact).
+$(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp tests/python/regr-modules.txt tests/python/regr-ignore.txt
+	@$(MAKE) --no-print-directory python
+	rm -rf $(PYTHON_TESTLIB).tmp && mkdir -p $(PYTHON_TESTLIB).tmp
+	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
+		case $$n in test_*) ;; *) cp -R $$f $(PYTHON_TESTLIB).tmp/ ;; esac; done
+	for m in $$(sed 's/\..*//' tests/python/regr-modules.txt | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
+	@# deliberately bad test files do not compile, so the exit status is not read
+	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $(PYTHON_TESTLIB).tmp >/dev/null 2>&1; true
+	rm -rf $(PYTHON_TESTLIB) && mv $(PYTHON_TESTLIB).tmp $(PYTHON_TESTLIB)
+python-testlib: $(PYTHON_TESTLIB)
+test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[python] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(PYTHON_TEST_ROOT) && mkdir -p $(PYTHON_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYTHON_TEST_ROOT)/ && \
 	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && mkdir -p $(PYTHON_TEST_ROOT)/home && cp tests/python/*.py tests/python/regr-modules.txt tests/python/regr-ignore.txt $(PYTHON_TEST_ROOT)/home/ && \
-	T=$(PYTHON_TEST_ROOT)/usr/lib/python3.15/test && mkdir -p $$T && \
-	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
-		case $$n in test_*) ;; *) cp -R $$f $$T/ ;; esac; done && \
-	for m in $$(sed 's/\..*//' tests/python/regr-modules.txt | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $$T/; done && \
-	(: deliberately bad test files do not compile, so the exit status is not read; \
-	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $$T >/dev/null 2>&1; true) && \
+	mkdir -p $(PYTHON_TEST_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PYTHON_TEST_ROOT)/usr/lib/python3.15/test/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(PYTHON_TEST_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(PYTHON_TEST_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PYTHON_TEST_ROOT)/bin && \
@@ -1321,6 +1330,7 @@ TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net ch
 ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
 	$(MAKE) -f ports/Makefile ports workloads apps python
+	@$(MAKE) -s python-testlib
 	@$(MAKE) -s posix-image
 	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
 	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint

@@ -191,7 +191,7 @@ jobs:
       # builds everything, as before. If a restored build is ever wrong, change
       # the prefix `ports-build-v3`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
-        run: git ls-files -z ports tools/zcc | xargs -0 touch -h -t 200001010000
+        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-ignore.txt | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
         uses: actions/cache@v4
         with:
@@ -205,14 +205,20 @@ jobs:
             build/rootfs-posix
             build/rootfs-apps
             build/rootfs-python
-            build/ports/host
-            build/ports/python-stage
+            build/python-testlib
             build/workloads
-          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**') }}
+            !build/ports/work/Python-*
+            !build/ports/work/hostpython-build
+            !build/ports/work/python-build
+          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
-        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental build target
+        # Not the python port's source, host and build trees, nor its stage
+        # (about 600 MB): the tests read build/rootfs-python and
+        # build/python-testlib, and ports/Makefile's markers
+        # (build/ports/obj/python-src.stamp, hostpython.stamp) tell make they are built.
+        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental --exclude='build/ports/work/Python-*' --exclude=build/ports/work/hostpython-build --exclude=build/ports/work/python-build --exclude=build/ports/host --exclude=build/ports/python-stage build target
       - uses: actions/upload-artifact@v4
         with:
           name: build
