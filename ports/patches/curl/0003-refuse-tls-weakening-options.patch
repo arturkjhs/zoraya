@@ -1,13 +1,13 @@
 diff -ruN a/src/config2setopts.c b/src/config2setopts.c
---- a/src/config2setopts.c	2026-11-13 17:04:20
-+++ b/src/config2setopts.c	2026-11-13 17:04:27
-@@ -1207,7 +1207,28 @@
+--- a/src/config2setopts.c	2026-10-14 07:54:05
++++ b/src/config2setopts.c	2026-11-13 17:21:32
+@@ -1207,8 +1207,39 @@
                          CURLSH *share)
  {
    const char *use_proto;
 -  CURLcode result = url_proto_and_rewrite(&per->url, config, &use_proto);
 +  CURLcode result;
-+
+ 
 +#ifdef __zoraya__
 +  /* Second line behind the option table (ADR-0321): whatever set them, the
 +     verification flags and the roots are the built-in ones. */
@@ -18,6 +18,16 @@ diff -ruN a/src/config2setopts.c b/src/config2setopts.c
 +  config->ssl_revoke_best_effort = FALSE;
 +  config->ssl_allow_beast = FALSE;
 +  config->proxy_ssl_allow_beast = FALSE;
++  config->native_ca_store = FALSE;
++  config->proxy_native_ca_store = FALSE;
++  /* No floor below TLS 1.2: -1, --tlsv1.0, --tlsv1.1 and a --tls-max below
++     1.2 (which lowers the minimum to it) leave the default; --proxy-tlsv1
++     likewise. */
++  if(config->ssl_version < 3)
++    config->ssl_version = 0;
++  if(config->ssl_version_max && (config->ssl_version_max < 3))
++    config->ssl_version_max = 0;
++  config->proxy_ssl_version = CURL_SSLVERSION_DEFAULT;
 +  curlx_safefree(config->cacert);
 +  curlx_safefree(config->capath);
 +  curlx_safefree(config->proxy_cacert);
@@ -28,13 +38,46 @@ diff -ruN a/src/config2setopts.c b/src/config2setopts.c
 +  curlx_safefree(config->proxy_cipher13_list);
 +#endif
 +  result = url_proto_and_rewrite(&per->url, config, &use_proto);
- 
++
    /* Avoid having this setopt added to the --libcurl source output. */
    if(!result)
+     result = curl_easy_setopt(curl, CURLOPT_SHARE, share);
+@@ -1251,6 +1282,13 @@
+     result = mail_and_sasl_setopts(config, curl);
+   if(!setopt_bad(result))
+     result = misc_setopts(config, curl);
++#ifdef __zoraya__
++  /* A transfer that starts on https follows redirects to https only, unless
++     --proto-redir names others (ADR-0321): -L does not leave TLS unasked. */
++  if(!setopt_bad(result) && !config->proto_redir_present &&
++     (use_proto == proto_https))
++    result = curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
++#endif
+ 
+   if(!result && config->synthetic_error)
+     result = CURLE_FAILED_INIT;
 diff -ruN a/src/tool_getparam.c b/src/tool_getparam.c
---- a/src/tool_getparam.c	2026-11-13 17:04:20
-+++ b/src/tool_getparam.c	2026-11-13 17:04:20
-@@ -3038,6 +3038,45 @@
+--- a/src/tool_getparam.c	2026-11-13 17:20:58
++++ b/src/tool_getparam.c	2026-11-13 17:21:21
+@@ -2713,6 +2713,17 @@
+     break;
+   case C_TLS_MAX: /* --tls-max */
+     err = str2tls_max(&config->ssl_version_max, nextarg);
++#ifdef __zoraya__
++    /* A maximum below TLS 1.2 also lowers the minimum to it (tlsversion() in
++       config2setopts.c), the floor --tlsv1.0 sets: refused like it
++       (ADR-0321). */
++    if(!err && config->ssl_version_max && (config->ssl_version_max < 3)) {
++      errorf("--tls-max %s is refused: TLS verification and the roots cannot "
++             "be turned off, replaced or weakened", nextarg);
++      config->ssl_version_max = 0;
++      err = PARAM_BAD_USE;
++    }
++#endif
+     if(!err && (config->ssl_version_max < config->ssl_version)) {
+       errorf("--tls-max set lower than minimum accepted version");
+       err = PARAM_BAD_USE;
+@@ -3038,6 +3049,45 @@
        }
        toggle = !(a->desc & ARG_NO);
      }
