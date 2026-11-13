@@ -909,6 +909,11 @@ fn main() -> i32 {
         told_usage: String::new(),
         cost: (0, 0, 0),
     };
+    // The first shell's channel (slot 10, ADR-0317): it may ask for the
+    // window of a POSIX program, as a terminal's shell launched here does.
+    if let Some(first) = channel(10) {
+        watch_launcher(&mut st, first, "term", None);
+    }
     let mut next_reload = clock_monotonic() + RELOAD_NS;
     let mut bytes = alloc::vec![0u8; 512];
     loop {

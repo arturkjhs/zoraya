@@ -459,8 +459,10 @@ pub fn terminal(room: Option<&Room>) -> Launch {
     launch
 }
 
-/// The slot of a trusted room shell's channel to the panel (ADR-0317).
-pub const WINDOW_SLOT: u32 = 9;
+/// The slot of a shell's channel to the panel for a POSIX program's window
+/// (ADR-0317): 14, as `init` gives the first shell its own. Slots 9 to 13 are
+/// the shell's network, random service, keeper and services channel.
+pub const WINDOW_SLOT: u32 = 14;
 
 /// What the compositor is told of a POSIX program's window
 /// (`AddRoomClient`'s fields).
@@ -485,7 +487,7 @@ pub fn window_record(
     entries: &str,
 ) -> Result<WindowRecord, u32> {
     use zoraya_proto_chooser::window_refusal as why;
-    // untrusted-gate: refusal (ADR-0317 INV-0317-1, `make check-untrusted-gate`)
+    // untrusted-gate: window-refusal (ADR-0317 INV-0317-1, `make check-untrusted-gate`)
     // A window of a POSIX program only in a trusted room.
     if room.is_some_and(|r| r.untrusted) {
         return Err(why::UNTRUSTED);
