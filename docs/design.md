@@ -2004,7 +2004,7 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
 
 - **The ports.** `ports/sources.lock` pins OpenSSL 3.5.9 (the LTS line), zlib 1.3.1, curl 8.23.0 and wget 1.25.0. `make apps`
   (`ports/Makefile`, after `make fetch-ports`) builds them with `zcc` into `build/ports/deps` (the libraries) and
-  `build/rootfs-apps/bin/{curl,wget}` (6.7 MiB each, static, no debug information). OpenSSL is `no-shared no-dso no-threads
+  `build/rootfs-apps/bin/{curl,wget}` (6.7 MiB each, static, no debug information). OpenSSL is `no-shared no-dso threads
   no-engine no-asm no-async no-sock no-dgram no-quic no-secure-memory no-ssl3 no-tls1 no-tls1_1 no-dtls`
   `--with-rand-seed=getrandom` (TLS 1.2 and 1.3 only; no `/dev/urandom` code at all), with four patches: `getrandom` is its
   seed source, no `posix_memalign`, the default certificate file is `/system/tls/roots`, and the library reads no environment
@@ -2053,7 +2053,7 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   it runs out. `make run-net` and the apps' tests therefore run on 512 MiB. Not found in 9a; the report records what was
   ruled out. *Other launchers:* a program started by `dash` or `make` has no random connection, so OpenSSL cannot seed.
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
-  *Threads:* OpenSSL is built without them until 9b.
+  *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
 ## The network on the desktop, and when it fails (stage 8, N6)
 

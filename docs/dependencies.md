@@ -138,7 +138,7 @@ measured T1 workloads).
 | libc-test | `63e36e934e8f2bedf645303a90b64098e2af6c8f` | MIT | the thread tests of musl's conformance suite, built by `make test-posix-suites` (ADR-0309); a test input, never in the image or `libc.a`; pinned by commit, fetched with git from repo.or.cz (its snapshot URLs sit behind a bot check and their gzip bytes differ by machine), and its lock hash is of the gunzipped tar (`ports/sources.lock`, `tools/fetch-ports.sh`) |
 | SQLite source tree | 3540100 | public domain | `test/threadtest3.c` (ADR-0309 item 2); a test input |
 | GNU hello | 2.12.3 | GPL-3.0-or-later | W4's source, in the image only, built inside Zoraya |
-| OpenSSL | 3.5.9 (LTS) | Apache-2.0 | `libssl.a` and `libcrypto.a` for curl and wget, static, no threads (TASK-27 9a, ADR-0310, ADR-0312). Why not in-house: a TLS 1.3 client and a certificate verifier are not small things to write; the native side's `zoraya-tls` is rustls |
+| OpenSSL | 3.5.9 (LTS) | Apache-2.0 | `libssl.a` and `libcrypto.a` for curl and wget, static, with threads (TASK-27 9a, ADR-0310, ADR-0312). Why not in-house: a TLS 1.3 client and a certificate verifier are not small things to write; the native side's `zoraya-tls` is rustls |
 | zlib | 1.3.1 | zlib | `libz.a` for curl and wget (TASK-27 9a) |
 | curl | 8.23.0 | curl (MIT-like, its `COPYING`) | `/bin/curl` on the volume of `make run` and the apps' tests (TASK-27 9a) |
 | GNU wget | 1.25.0 | GPL-3.0-or-later | `/bin/wget`, same (TASK-27 9a) |

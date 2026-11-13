@@ -60,7 +60,7 @@ called path reaches in a small archive linked into those two programs; extend th
 1. **Ports.** `ports/sources.lock` pins OpenSSL 3.5.9 (the 3.5 LTS line, Apache-2.0), zlib 1.3.1 (the zlib licence),
    curl 8.23.0 (the curl licence, MIT-like) and wget 1.25.0 (GPL-3.0-or-later, as make and hello already are). `make
    apps` (`ports/Makefile`) builds them with `zcc` into `build/ports/deps` and the two programs into
-   `build/rootfs-apps/bin`. OpenSSL: `./Configure linux-generic64 no-shared no-dso no-threads no-engine no-asm
+   `build/rootfs-apps/bin`. OpenSSL: `./Configure linux-generic64 no-shared no-dso threads no-engine no-asm
    no-async no-sock no-dgram no-quic no-secure-memory no-comp no-legacy no-autoload-config no-ssl3 no-tls1 no-tls1_1
    no-dtls` (and their `-method` forms) `--with-rand-seed=getrandom`: TLS 1.2 and 1.3 are the only protocols and
    `getrandom` the only entropy source, with no `/dev/urandom` or `/dev/random` code compiled in. `linux-generic64` is a
@@ -68,7 +68,7 @@ called path reaches in a small archive linked into those two programs; extend th
    them the unoffered `bind`, `listen`, `accept`, `gethostbyname` and `poll`; curl uses its own BIO. Four patches
    (`ports/patches/openssl/`, each under `__zoraya__`): `getrandom` as the seed source (`rand_unix.c`: no
    weak-symbol or `dlsym` lookup), no `posix_memalign` (`mem.c`), `/system/tls/roots` as the default
-   certificate file (`common.h`), and no environment and no configuration file (item 6). curl: HTTP and HTTPS only, synchronous name resolution (no threads), no proxy, cookies,
+   certificate file (`common.h`), and no environment and no configuration file (item 6). curl: HTTP and HTTPS only, synchronous name resolution (`--disable-threaded-resolver`, although pthreads exist now: the programs stay single-threaded), no proxy, cookies,
    netrc or configuration file (item 6), CA bundle `/system/tls/roots`. wget: OpenSSL, zlib, IPv6 code built in (`getaddrinfo`
    answers IPv4 only), no libpsl or PCRE; one patch replaces `SSL_set_fd` by a plain-fd BIO (OpenSSL has no sockets
    here). Its configure runs with the host triple `aarch64-unknown-linux-musl` for gnulib's guesses only (gnulib
@@ -143,7 +143,7 @@ tzset
   `_ssl`, NetSurf's libcurl) is one OpenSSL and one `getrandom`.
 - **Negative.** A second place a name can live (the shim); `docs/design.md` says so. `rand` and `srand` are exported
   although weak. The ports build takes minutes cold (OpenSSL); CI caches it with the other ports.
-- **Follow-up.** 9b rebuilds OpenSSL with threads. `getrandom` for programs started by a launcher other than `zosh`.
+- **Follow-up.** OpenSSL is rebuilt with `threads` (done in 9a after 9b's libposix pthreads: `CRYPTO_THREAD_*` over `pthread_rwlock_*`, `pthread_once` and thread-local keys of the musl code; curl and wget stay single-threaded, their configure says `--disable-threaded-resolver` and `--disable-threads`); its test is `tests/apps/tlsthreads.c` in `make test-apps` (ADR-0309 item 4: 4 threads, 12 handshakes each against the test PKI: valid served, expired and wrong-name refused with 0 request bytes). The SHA-256/AES-GCM/`RAND_bytes` check of ADR-0309 item 4 (`tests/posix/ossl_threads.c`) is not written. `getrandom` for programs started by a launcher other than `zosh`.
   The `tls.roots` setting of ADR-0229 is not followed by C programs: they read `/system/tls/roots` only.
 
 ## Invariants

@@ -20,7 +20,7 @@ exit     5  the certificate could not be verified
 exit     8  the server answered with an error status
 ---
 GNU wget 1.25.0 from the ports (ADR-0109, TASK-27 9a), as a POSIX program with the toolchain set, over OpenSSL 3.5
-(static, no threads). It gets a connection that reaches the host and port of each URL written on the line and
+(static, with threads built in, used by neither program). It gets a connection that reaches the host and port of each URL written on the line and
 nothing else, and, with it, /system/tls (the system's roots, read only): a certificate that is expired, is for
 another name or is signed by no root in /system/tls/roots fails the transfer, and there is no option to turn that
 off (--no-check-certificate and the rest are not offered). An address from a variable or a command is refused by

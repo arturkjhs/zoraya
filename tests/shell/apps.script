@@ -85,6 +85,22 @@
 > stat tls.bin\r
 < file size 1000000
 < \r\n~>
+# OpenSSL with threads (ADR-0309 item 4): four threads handshake at once over
+# one context. Against the valid server every handshake succeeds and returns the
+# page; against the expired and the wrong-name servers all are refused (the
+# Makefile checks that the servers saw no request byte).
+> tlsthreads https://test.zoraya:@TLSVALID@/\r
+< 12 handshakes from 4 threads, all verified and served
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> tlsthreads -r https://expired.zoraya:@TLSEXPIRED@/\r
+< 12 handshakes from 4 threads, all refused
+< \r\n~>
+> tlsthreads -r https://wrong.zoraya:@TLSWRONG@/\r
+< 12 handshakes from 4 threads, all refused
+< \r\n~>
 # Refused before any byte of the request is sent; the Makefile checks the
 # server's log for the same. There is no option to turn the check off.
 > curl https://expired.zoraya:@TLSEXPIRED@/\r

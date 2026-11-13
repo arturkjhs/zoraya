@@ -531,6 +531,10 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 APPS_ROOT := $(BUILD)/rootfs-apps
 apps:
 	@$(MAKE) -f ports/Makefile apps
+# The OpenSSL-with-threads test program (tests/apps/tlsthreads.c), for test-apps only.
+TLSTHREADS_BIN := $(BUILD)/ports/obj/apps/tlsthreads
+$(TLSTHREADS_BIN): apps tests/apps/tlsthreads.c
+	@$(MAKE) -f ports/Makefile tlsthreads
 
 APPS_TEST_ROOT := $(BUILD)/apps-root
 APPS_DISK := $(BUILD)/apps-disk.img
@@ -546,10 +550,10 @@ APPS_RUN = $(RUNNER) --timeout $(1) --script $(APPS_SCRIPT) --label $(2) -- $(RU
 APPS_LAUNCHES := tests/shell/apps-launches.script
 APPS_LAUNCHES_RUN = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(APPS_LAUNCHES) --label apps-launches -- $(RUN_QEMU) --test --keys --disk $(APPS_DISK) --mem 128M --accel auto $(KERNEL)
 
-test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
+test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN)
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[apps] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(APPS_TEST_ROOT) && mkdir -p $(APPS_TEST_ROOT) target/test-logs && cp -R rootfs/. $(APPS_TEST_ROOT)/ && \
-	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && \
+	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && cp $(TLSTHREADS_BIN) $(APPS_TEST_ROOT)/bin/tlsthreads && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(APPS_TEST_ROOT)/system/tls/roots && \
 	mkdir -p $(APPS_TEST_ROOT)/etc/test-pki/hashed && cp tests/net/tls/other-root.pem $(APPS_TEST_ROOT)/etc/test-pki/ && \

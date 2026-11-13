@@ -30,7 +30,7 @@ exit     35  the TLS handshake failed
 exit     60  the certificate is not signed by a trusted root, is expired, or is for another name
 ---
 curl 8.23.0 from the ports (ADR-0109, TASK-27 9a), as a POSIX program with the toolchain set, over OpenSSL 3.5
-(static, no threads). It gets a connection that reaches the host and port of each URL written on the line and nothing
+(static, with threads built in, used by neither program). It gets a connection that reaches the host and port of each URL written on the line and nothing
 else, and, with it, /system/tls (the system's roots, read only): a certificate that is expired, is for another name
 or is signed by no root in /system/tls/roots is refused before any request is sent, and there is no option to turn
 that off (-k, --cacert and the rest of curl's are not offered). An address from a variable or a command is refused

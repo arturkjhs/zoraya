@@ -117,6 +117,7 @@ user/describe/commands/net.cmd test-net test-files
 tests/shell/net.script        test-net
 tests/shell/net-posix.script  test-net
 tests/posix-net/              test-net
+tests/apps/                  test-apps
 tests/shell/apps.script       test-apps
 tests/shell/apps-launches.script test-apps
 ports/apps/                   test-apps test-hand-run

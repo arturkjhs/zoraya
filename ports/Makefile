@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: suites apps zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: suites apps tlsthreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -449,7 +449,7 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX
 # zlib, OpenSSL, curl and wget for the volume (ADR-0310), built by zcc into
 # $(APPS_ROOT) (bin/curl, bin/wget). The libraries go into $(DEPS), not into
 # the sysroot: they are for these two programs, not for every program that
-# tcc builds in Zoraya. OpenSSL is static, without threads (until 9b),
+# tcc builds in Zoraya. OpenSSL is static, with threads (musl pthreads in libposix, ADR-0302; 9a step 2 of ADR-0309),
 # shared objects, dynamic loading, engines or assembly; its entropy is
 # libposix's getrandom (ports/patches/openssl/0001-*), its roots file is
 # /system/tls/roots (ADR-0228 item 3) and curl's and wget's are the same.
@@ -486,7 +486,7 @@ $(OPENSSL): $(LOCK) $(wildcard ports/patches/openssl/*.patch)
 # and /dev/random code: INV-0310-5). The patches under __zoraya__ also make the
 # library read no environment variable and load no openssl.cnf; curl and wget read no
 # configuration file or environment variable for trust (INV-0310-4).
-OPENSSL_OPTS := no-shared no-dso no-threads no-engine no-asm no-async no-afalgeng no-ui-console no-secure-memory \
+OPENSSL_OPTS := no-shared no-dso threads no-engine no-asm no-async no-afalgeng no-ui-console no-secure-memory \
 	no-sock no-dgram no-quic no-tests no-docs no-comp no-ssl3 no-ssl3-method no-weak-ssl-ciphers no-legacy no-autoload-config \
 	no-tls1 no-tls1_1 no-tls1-method no-tls1_1-method no-dtls no-dtls1-method no-dtls1_2-method --with-rand-seed=getrandom
 $(DEPS)/lib/libssl.a: $(OPENSSL) $(DEPS)/lib/libz.a $(SYSROOT_STAMP)
@@ -504,6 +504,16 @@ $(DEPS)/lib/libzshim.a: ports/apps/zshim.c $(SYSROOT_STAMP)
 	@mkdir -p $(DEPS)/lib $(OBJ)/apps
 	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/zshim.o ports/apps/zshim.c
 	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/zshim.o
+
+# The test program of ADR-0309 item 4 (OpenSSL with threads): four threads
+# share one context and run handshakes at the same time. It is built here,
+# against the OpenSSL above, but is not part of $(APPS_ROOT): `make test-apps`
+# copies it to its own volume.
+TLSTHREADS_BIN := $(OBJ)/apps/tlsthreads
+tlsthreads: $(TLSTHREADS_BIN)
+$(TLSTHREADS_BIN): tests/apps/tlsthreads.c $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a
+	@mkdir -p $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -I$(DEPS)/include -o $@ tests/apps/tlsthreads.c -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim
 
 CURL := $(WORK)/curl-$(call lock_ver,curl)
 CURL_BIN := $(CURL)/src/curl
