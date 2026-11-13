@@ -1315,7 +1315,7 @@ measured for real.
 
 ## Using the desktop
 
-`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window: on macOS at 2048 × 1536 with scale 2,
+`make run-gui` boots with a GPU, keyboard, tablet and the network (`--net`: the Internet through SLIRP, so `fetch` and `ping` work in the terminal; `NET=0 make run-gui` starts without it) and opens QEMU's window: on macOS at 2048 × 1536 with scale 2,
 elsewhere at 1024 × 768 (`GUI_SCALE=1` or `GUI_SCALE=2` chooses). On a Mac the window can be resized and the desktop
 follows it (7g: the bar and the dock follow the width, windows stay in the work area, and from 1920 pixels wide the
 scale is 2, from 1280 on a Retina screen, ADR-0247), and Command is the system key (written System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
@@ -1640,8 +1640,11 @@ is not).
 
 `tools/run-qemu.sh --net` (ADR-0230 item 2) puts `virtio-net-device` on transport 16 (page 2, alone, ADR-0091) over
 QEMU's user-mode network (SLIRP: guest `10.0.2.15/24`, gateway `10.0.2.2`); with `--test` it is `restrict=on`, and
-`--net-pcap FILE` keeps the frames (256 bytes each, `--net-capture-all` for whole frames). `--net` with `--gui` is
-refused (ADR-0221 item 8, deferred). `make run-net` is an interactive machine without `restrict`. The service on top of
+`--net-pcap FILE` keeps the frames (256 bytes each, `--net-capture-all` for whole frames). `--net` with `--gui` works
+(N6, ADR-0221 item 8). The three machines a person starts: `make run` (the serial console, no network), `make run-net`
+(the serial console with the network, without `restrict`) and `make run-gui` (the window, with the network unless
+`NET=0`); each is one definition in the Makefile (`RUN_CMD`, `RUN_NET_CMD`, `RUN_GUI_CMD`), which `make test-hand-run`
+boots as it is. The service on top of
 the driver is described under "Network service" below.
 
 - **`ethd`** (`zoraya-virtio-net`, ADR-0221 item 1, proposed ADR-0280). One process, the device at slot 5 and the

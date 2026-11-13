@@ -1,8 +1,10 @@
 # Zoraya build and test entry points. See docs/design.md, "Where things are".
 #
 #   make build      build the kernel (build/zoraya-kernel.elf)
-#   make run        boot it interactively (Ctrl-A X quits QEMU)
-#   make run-gui    the same with a GPU, keyboard and tablet, in a window
+#   make run        boot it interactively (Ctrl-A X quits QEMU), no network
+#   make run-net    the same with the network (Internet through the host)
+#   make run-gui    the same with a GPU, keyboard and tablet, in a window, with
+#                   the network (NET=0 make run-gui: without it)
 #   make test-unit  host tests (cargo test) for crates/ and tools/
 #   make test-qemu  in-QEMU tests under several machine configurations
 #   make test-boot  boot the normal kernel, run the shell script under each
@@ -139,15 +141,20 @@ FORCE:
 # `make test-hand-run` boots as they are (the image $(KERNEL), a disk made by
 # tools/run-disk.sh, this command line): $(1) is the disk; RUN_GUI_CMD's $(2)
 # is empty for a person and `--display-opts none` for the test, which has no
-# window.
+# window. `make run`: the serial console, no network. `make run-net`: the serial
+# console and the network. `make run-gui`: the window and the network (the GUI
+# and the network work together since N6); `NET=0 make run-gui` leaves the
+# network out (the test boots RUN_GUI_CMD as it is, so with NET=1).
+NET ?= 1
 RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
 RUN_NET_CMD = $(RUN_QEMU) --net --disk $(1) $(KERNEL)
-RUN_GUI_CMD = $(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
+RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
 
 run: $(KERNEL) $(DISK)
 	$(call RUN_CMD,$(DISK))
 
-# The GUI (ADR-0097): a window on the host; the serial line stays here.
+# The GUI (ADR-0097): a window on the host; the serial line stays here. The
+# network is on by default (`--net`, as `make run-net`): NET=0 starts without.
 # On macOS the window is on a Retina screen as a rule: twice the pixels,
 # scale 2 (the architect's check of 2026-11-10); GUI_SCALE=1 gives 1024x768.
 GUI_SCALE ?= $(if $(filter Darwin,$(shell uname -s)),2,1)
