@@ -1,11 +1,48 @@
-# TASK-27 9d: NetSurf in a window (exploratory).
+# TASK-27 9d (ADR-0317, ADR-0318): NetSurf in a window of the desktop, on the
+# runner's HTTP and TLS servers (tools/test-httpd, pages under /ns/). The page is
+# a blue block from a style sheet (200 x 60), a green image (100 x 60, a PNG)
+# and a form; the result page is yellow. Coordinates are logical pixels: the
+# window's frame is at (105, 103), its page from (105, 168).
 serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
 pause 3000
+# The window shows the grants of its line as pills (ADR-0317): the roots to read
+# and the one host and port it may reach.
 type netsurf http://10.0.2.2:@PORT@/ns/page\r
 pause 15000
-shot netsurf-page
+region 110 175 150 40 0000ff
+region 110 235 80 40 00ff00
+region 400 300 100 40 ffffff
+shot netsurf-http
+# The form: type into the field, submit with Return; the result page is yellow.
+click 160 302
+type zoraya\r
+pause 6000
+shot netsurf-result
+region 400 300 100 40 ffff00
+region 110 400 150 40 ffff00
+# Closed by its cross: the program ends and the terminal has the keys again.
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed\r
+screen closed
+# HTTPS against the test PKI's root (the same pages, a trusted certificate).
+type netsurf https://test.zoraya:@TLSVALID@/ns/page\r
+pause 20000
+region 110 175 150 40 0000ff
+region 110 235 80 40 00ff00
+shot netsurf-https
+click 122 119
+pause 3000
+click 300 87
+pause 500
+# An expired certificate is refused by the roots, as for curl: no page.
+type netsurf https://expired.zoraya:@TLSEXPIRED@/ns/page\r
+pause 15000
+shot netsurf-refused
 click 122 119
 pause 3000
 click 300 87

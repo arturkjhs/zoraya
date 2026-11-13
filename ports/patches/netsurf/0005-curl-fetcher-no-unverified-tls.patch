@@ -1,0 +1,14 @@
+--- a/netsurf/content/fetchers/curl.c
++++ b/netsurf/content/fetchers/curl.c
+@@ -1248,7 +1248,10 @@
+ 	/* Force-enable SSL session ID caching, as some distros are odd. */
+ 	SETOPT(CURLOPT_SSL_SESSIONID_CACHE, 1);
+ 
+-	if (urldb_get_cert_permissions(f->url)) {
++	/* Zoraya (ADR-0228 INV-0228-3): there is no way to turn verification off.
++	 * The "Proceed" button of the privacy error page records a permission; it is
++	 * not honoured, and the same refusal comes back. */
++	if (0 && urldb_get_cert_permissions(f->url)) {
+ 		/* Disable certificate verification */
+ 		SETOPT(CURLOPT_SSL_VERIFYPEER, 0L);
+ 		SETOPT(CURLOPT_SSL_VERIFYHOST, 0L);
