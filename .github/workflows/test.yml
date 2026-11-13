@@ -13,9 +13,12 @@
 # changed paths to steps (tools/test-map.txt, as make test-changed does) and
 # adds a smoke set (boot, the shell's files script, one GUI run, the POSIX
 # hello script). The full set (every job of tools/ci-tests.txt, what make test
-# runs) runs on main, nightly (schedule, on main), on demand (a manual run
-# with full=true) and on a tag `candidate-full/NAME`, which the orchestrator
-# pushes before a stage's tag. A manual run without full=true is planned like
+# runs) runs on a push to main, nightly (schedule, on main), on demand (a
+# manual run with full=true) and on a tag `candidate-full/NAME`, which the
+# orchestrator pushes before a stage's tag. The one exception: a push to main
+# whose every changed path is under docs/ and that changes no posix-surface
+# block of an ADR (tools/plan-lib.sh, docs_only) runs only the document checks
+# (the plan's doc_checks); build and tests are skipped, so the run is green. A manual run without full=true is planned like
 # a candidate. A new push to a branch cancels its older run; on main every
 # merge keeps its own run, since a stage's tag waits for that run.
 #
@@ -95,6 +98,8 @@ jobs:
     outputs:
       tests: ${{ steps.plan.outputs.tests }}
       build: ${{ steps.plan.outputs.build }}
+      docs_only: ${{ steps.plan.outputs.docs_only }}
+      doc_checks: ${{ steps.plan.outputs.doc_checks }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -105,13 +110,20 @@ jobs:
         id: plan
         env:
           FULL_INPUT: ${{ inputs.full }}
+          BEFORE: ${{ github.event.before }}
         run: |
           full=0
           case "$GITHUB_REF" in
             refs/heads/main | refs/tags/candidate-full/*) full=1 ;;
           esac
           if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$FULL_INPUT" = true ]; then full=1; fi
-          FULL=$full tools/ci-plan.sh origin/main | tee plan.txt >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = refs/heads/main ] && [ "$GITHUB_EVENT_NAME" = push ]; then
+            # A push to main: the full set unless only docs/ changed.
+            full=0
+            DOCS_BEFORE=$BEFORE DOCS_AFTER=$GITHUB_SHA tools/ci-plan.sh origin/main | tee plan.txt >> "$GITHUB_OUTPUT"
+          else
+            FULL=$full tools/ci-plan.sh origin/main | tee plan.txt >> "$GITHUB_OUTPUT"
+          fi
           grep '^summary=' plan.txt | sed 's/^summary=//' >> "$GITHUB_STEP_SUMMARY"
 
   # The ports, the sysroot, libc.a, the kernels, the user programs, the host
@@ -212,7 +224,10 @@ jobs:
 
   # Steps that need nothing built.
   checks:
-    needs: image
+    needs: [image, plan]
+    # plan is skipped on a branch push; a docs-only push to main keeps only
+    # the commands in the plan's doc_checks (the steps below).
+    if: ${{ !cancelled() && needs.image.result == 'success' && (needs.plan.result == 'success' || needs.plan.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -240,18 +255,23 @@ jobs:
           - make check-ethd-maps
           - make check-tls-roots
           - make check-run-disk
+          - make check-ci-plan
     name: ${{ matrix.cmd }}
+    env:
+      RUN_IT: ${{ needs.plan.outputs.docs_only != '1' || contains(needs.plan.outputs.doc_checks, matrix.cmd) }}
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        if: ${{ needs.image.outputs.ref == '' }}
+        if: ${{ needs.image.outputs.ref == '' && env.RUN_IT == 'true' }}
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2.7.5
+        if: ${{ env.RUN_IT == 'true' }}
         with:
           shared-key: checks
           key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
           save-if: ${{ matrix.cmd == 'make clippy' }}
       - name: Run
+        if: ${{ env.RUN_IT == 'true' }}
         run: ${{ matrix.cmd }}
 
   # Steps that run what the build job built. Before the archive is unpacked
