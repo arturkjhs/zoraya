@@ -9,7 +9,7 @@
 ADR-0228 item 2 says: "POSIX: BearSSL as a port in the sysroot (MIT), configured with the time from `time()` and entropy
 from `getrandom`, so that curl builds with `--with-bearssl`; Mbed TLS (under its Apache-2.0 option) is the port to add
 when a program needs TLS 1.3, since BearSSL has none." TASK-27 (the architect's, after ADR-0228) names OpenSSL 3, static,
-`no-shared`, `no-dso`, `threads` (musl pthreads in libposix; OpenSSL is rebuilt with them in 9a, ADR-0310 follow-up), `no-engine`, for curl and wget in 9a, CPython's `_ssl` in 9c and NetSurf's
+`no-shared`, `no-dso`, `no-threads` until 9b, `no-engine`, for curl and wget in 9a, CPython's `_ssl` in 9c and NetSurf's
 libcurl in 9d. This ADR records the change so that ADR-0228 and the code agree; it does not touch ADR-0228's native side
 (`zoraya-tls` over rustls), its roots, its names rule or its invariants.
 
@@ -38,13 +38,14 @@ choice of library only; item 3 (the roots) and every other item of ADR-0228 stan
 - **Negative.** A large dependency (about 28 MB of archive, 6.7 MB linked into each program); two TLS implementations
   now exist in the system (rustls for native programs, OpenSSL for C), each with its own verifier reading the same
   roots; a vulnerability in either needs its own update.
-- **Follow-up.** `docs/dependencies.md` lists OpenSSL and zlib as ported libraries; OpenSSL is built with threads (ADR-0310 follow-up).
+- **Follow-up.** `docs/dependencies.md` lists OpenSSL and zlib as ported libraries; 9b builds OpenSSL with threads.
 
 ## Invariants
 - **INV-0312-1.** A C program built on this OpenSSL verifies the chain against `/system/tls/roots`, the time of the system's clock and the name it connected to, and sends no request byte after a failed verification. *Check:* `make test-apps` (expired and wrong-name servers: the server's log shows `ended after 0 request bytes`).
 
 ## Open questions
 - Whether native programs' rustls and C programs' OpenSSL should one day share a verifier (rustls-ffi); not now.
+- Note (ADR-0001 rule 6, 9a): the `no-threads` of the task's option list was lifted as planned; OpenSSL is rebuilt with `threads` over the 9b pthreads. The rebuild is recorded in ADR-0310's Follow-up, not here.
 
 ## Revisit triggers
 - OpenSSL 3.5's end of support; a program that needs a TLS API OpenSSL lacks.
