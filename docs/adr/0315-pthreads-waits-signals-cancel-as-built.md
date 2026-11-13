@@ -123,30 +123,46 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    signal mask (blocked as `__block_app_sigs`), musl's `atfork_locks` (stdio list, atexit, locale, ...), `__inhibit_ptc`, the thread-list lock; then `state()` takes
    the library lock, and **`MEM` is taken only around `snapshot_process`** (after the snapshot buffer is built, because the encoder allocates; the child resets its copy
    with `Lock::reset`, the parent unlocks). So no sibling is in the heap or the mapping table during the copy, and the kernel's `Freeze` stops the rest at EL0. Order:
-   musl's locks, thread-list lock, library lock, `MEM` (ADR-0306 item 1 names the thread-list lock first; musl's own `fork` takes its list locks before it, and a thread in
-   `fopen` holds the list lock then the library lock, so this order cannot invert). In the child `Posix::after_fork_in_child` reduces the thread table to the caller
+   musl's locks, thread-list lock, library lock, `MEM` (ADR-0306 item 1 names the thread-list lock first). The order cannot invert, because **nothing takes a musl lock while it holds the library lock or `MEM`**
+   (the library's code does not call into musl's locked code under `LIB`). `fopen` does not hold the open-file list lock while it calls the library (it opens first and
+   adds the `FILE` to the list after); the real list-lock-then-`LIB` nesting is `fflush(NULL)` and `__stdio_exit`, which hold the list lock and flush each `FILE`, whose
+   write enters the library: list lock, then `LIB`, never the reverse. In the child `Posix::after_fork_in_child` reduces the thread table to the caller
    (`threads_after_fork`: a new `thread_self` handle, no wait port, empty process-pending set; host test `a_fork_child_keeps_the_calling_thread_only`); after the library
    lock is released `__zoraya_fork_child` does musl's `__post_Fork` (`next = prev = self`, `__thread_list_lock = 0`, `threads_minus_1 = 0`, `need_locks = -1`), zeroes
-   `atfork_locks`, **frees every `FILE` lock (stdin, stdout, stderr and the open-file list) held by a thread that is not the caller** (musl leaves them locked; INV-0306-1 asks that
-   `printf` works), unmaps the stack and thread block of every other thread on the list (`map_base`, `map_size`), restores the mask and runs the child handlers.
+   `atfork_locks` and the two words of `__vmlock_lockptr` (as musl's `fork.c` does), **frees every `FILE` lock (stdin, stdout, stderr and the open-file list) held by a thread that is not the caller** (musl leaves them locked; INV-0306-1 asks that
+   `printf` works; a lock of -1, "never locked", stays; the buffer of a `FILE` freed this way can hold a half-written record of the dead thread, as the lock is free
+   but the data is what the sibling left), unmaps the stack and thread block of every other thread on the list (`map_base`, `map_size`), restores the mask and runs the child handlers.
    `exec` now calls `process_exit(0)` inside `state()`, so the library lock stays held from the descriptor-table copy to the end of the old image (ADR-0306 item 7);
    a sibling's library call blocks on the lock and the kernel ends the sibling at its next return to EL0. `vfork` is `fork`; `posix_spawn` takes only the library lock.
    Known limits: (a) a sibling blocked in a kernel call that completes during the copy may write its result into a page already copied or about to be (a torn write across
-   a page boundary of that sibling's own buffer; the buffer is the sibling's, which does not exist in the child); (b) a joinable thread that has ended and was not joined is not on
-   musl's list, so its stack is not unmapped in the child until the child ends; (c) `abort`'s lock is not taken (`abort` is the library's); (d) `defer_waits` stays on in the child
+   a page boundary of that sibling's own buffer; the buffer is the sibling's, which does not exist in the child); (b) **deviation from accepted ADR-0306 item 5** ("a joinable zombie's too"; needs the architect's acceptance): a joinable thread that has ended and was not joined
+   is not on musl's list, so the child does not unmap its stack; it stays mapped, and charged to the child's job, until the child ends (it can never be joined there;
+   the parent's zombies are in the child's copy of the table only, and the child's table is reduced to the caller); (c) `abort`'s lock is not taken (`abort` is the library's); (d) `defer_waits` stays on in the child
    (each long wait costs a port, as in a threaded process); (e) INV-0306-3 (usage returns to the single-thread figure) and INV-0306-5 (a refused charge leaves no thread
    parked) have no in-QEMU check yet.
 10. **Third slice** (sigwait, attributes, rounds). `sigwait`, `sigtimedwait` and `sigwaitinfo` (`ffi/procs.rs`, `wait_signals`) block the set for the call, take a signal of it from the
    thread-pending or process-pending set, wait with `wait_for` and the thread's port, and give `EAGAIN` at the deadline, `EINTR` when a handler of another signal ran;
-   a thread in the wait is a target of routing (`ThreadRec::sigwait`, host test). They are in `posix-surface-T9.txt` with `pthread_getattr_np`, `pthread_getname_np`, `pthread_setname_np`
+   a thread in the wait is a target of routing (`ThreadRec::sigwait`, host test).
+   **Signals from other processes (deviation from accepted ADR-0106 item 2, needs the architect's acceptance).** A process with no handler has `SIG_DFL` dispositions in
+   the kernel (`Terminate` for the terminating signals, `Ignore` for the rest), so a `sigwait` for a signal sent by another process would end the process (SIGTERM, SIGINT,
+   SIGUSR1; INV-0106-4 lets a blocked `SIG_DFL` terminating signal end the process) or never be seen (SIGCHLD, SIGWINCH), and with no handler the wait had no source and slept
+   forever. While a thread is in the wait (`ThreadRec::sigwait` non-zero) the kernel disposition of each `SIG_DFL` signal of the set (but the stop and continue signals,
+   which are the broker's) is `Deliver` (`Posix::effective_disposition`, set and restored in `wait_signals` with the union over all threads in the wait, so one thread
+   ending does not disarm another), and the wait listens to the process's own request signal as a handler would (`interrupt_sources`). Both are undone on every exit of the
+   wait (signal, timeout, `EINTR`, cancel). So a process that is in `sigwait` takes `process_take_request` calls and set-disposition calls that INV-0106-2's list does not name:
+   **`sigwait`, `sigwaitinfo` and `sigtimedwait` are on that list** here (INV-0315-8). Cancel: the wait runs with the cancel state disabled (`__zoraya_cancel_begin`), looks at
+   the flag itself at the top of each round, ends its state (`sigwait` cleared, mask restored, dispositions restored), and only then calls `testcancel`, so a cancelled
+   thread leaves no blocked mask and no routing target behind. Known limit: a signal taken from the pending sets clears the thread-pending and the process-pending bit of the
+   number together, so two instances (one `pthread_kill`, one `kill`) become one where Linux returns two. The `siginfo_t` of a wait has `SI_USER` and no sender. They are in `posix-surface-T9.txt` with `pthread_getattr_np`, `pthread_getname_np`, `pthread_setname_np`
    (`ports/musl/zoraya/attr.c`; names live in the thread table; the main thread's stack is the kernel's 64 KiB). `open`/`openat` are cancellation points (item 5's list; the
    1000-round test found they were not). The statistics line has `futex=N` (INV-0302-5). `posix-stats --no-thread-calls` checks INV-0308-3 against the call log's union; it
    was written and unit-tested but not run over fresh logs of all the T1 workloads (`make test-posix-long`), so INV-0308-3 stays "not yet applicable".
    Test layout: cases that need `kill(getpid())` or `fork` cannot run under `posixrun` (no broker: `getpid()` is 0 there and `kill` of oneself goes to the broker and hangs),
-   so `treroute`, `tsig`, `twait`, `tfork*`, `texec`, `tspawn` are in `tests/posix/t_posix.c`. **Suites (ADR-0309):** `make test-posix-suites` builds and runs 13 thread tests of musl's libc-test
-   (pinned in `ports/sources.lock`, `libctest`; `tests/libc-test/threads-excluded.txt` names the 12 left out with reasons: asynchronous cancel, robust mutexes (`ENOSYS`), priority inheritance,
-   named semaphores, dynamic loading, tests that fork or fill memory). SQLite's `threadtest3` is pinned (`sqlitesrc`) and builds, but every scenario fails at its first write with
-   `SQLITE_IOERR_LOCK` because `fcntl` record locks (`F_SETLK`) are `EINVAL`: it is `make posix-threadtest3`, not a step, until record locks have an ADR.
+   so `treroute`, `tsig`, `tsigdfl`, `twait`, `tfork*`, `texec`, `tspawn` are in `tests/posix/t_posix.c`. **Suites (ADR-0309):** `make test-posix-suites` builds and runs 13 thread tests of musl's libc-test
+   (pinned in `ports/sources.lock`, `libctest`; `tests/libc-test/threads-excluded.txt` names the 12 left out with reasons: asynchronous cancel, `pthread_cancel-points` (does not link:
+   `shm_open` is not exported; its six cancel scenarios pass on a copy without it), robust mutexes (`ENOSYS`), priority inheritance, named semaphores, dynamic loading, tests that
+   fork or fill memory). SQLite's `threadtest3` is pinned (`sqlitesrc`) and builds, but every scenario fails at its first write with
+   `SQLITE_IOERR_LOCK` because `fcntl` record locks (`F_SETLK`) are `EINVAL`: it is `make posix-threadtest3`, not a step, until record locks have an ADR. The 3850 is not a threads defect and is out of 9b's scope: record locks need an ADR of their own (see the open questions).
 
 ## Consequences
 
@@ -170,10 +186,13 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
 - **INV-0315-5.** A `fork` child of a process whose siblings are running (in the heap, in `open`/`close`, holding stdout's lock, incrementing counters on three pages, mapping and
   unmapping 64 KiB and 1 MiB) has one thread, can `malloc`, `printf`, `open`, make and join a thread of its own, sees the counters of one instant and any region the sibling had
   published; the `pthread_atfork` handlers run in musl's order; also when the forking thread is not the main thread. *Check:* `make test-posix` with `tests/posix/threads.script`
-  (`tfork`, `tforkthread`: 500 forks, HVF and TCG in CI).
-- **INV-0315-6.** `exec` from a non-main thread while siblings open files ends the old image, runs the new one once, and leaves it no descriptor above 2. *Check:* the same
-  script (`texec`, 100 execs).
+  (`tfork`, `tforkthread`: 500 forks, every fourth child then execs, HVF and TCG in CI).
+- **INV-0315-6.** `exec` from a non-main thread while siblings open files and write to a pipe ends the old image, runs the new one once, leaves it no descriptor above 2 but the
+  pipe's, and no write of the old image follows the new image's first. *Check:* the same script (`texec`, 100 execs).
 - **INV-0315-7.** `posix_spawn` and `vfork` from four threads at once all complete with the child's status. *Check:* the same script (`tspawn`).
+- **INV-0315-8.** `sigwait`, `sigwaitinfo` and `sigtimedwait` take a signal of the set sent by another process while its action is `SIG_DFL` (the process survives, also for a
+  default-ignored signal); a cancelled `sigwait` leaves the mask and the wait undone; the kernel dispositions are back when the wait ends. *Check:* `cargo test -p zoraya-posix
+  --test threads` (the `sigwait` cases) and `make test-posix` with `tests/posix/threads.script` (`tsigdfl`).
 
 ## Open questions
 
@@ -181,6 +200,8 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
 - `fcntl` record locks (`F_SETLK`, `F_GETLK`): needed by SQLite's unix VFS; a per-process emulation (success when no other process holds a conflicting lock) would unblock `threadtest3`; a decision for the architect.
 - Robust mutexes (`pthread_mutexattr_setrobust`) are `ENOSYS`; whether a thread that ends holding a mutex should be visible to the others is open.
 - Not checked yet: INV-0306-3 (usage returns to one thread's figure) and INV-0306-5 (a refused charge leaves no thread parked); INV-0308-3 as above; the mapping-count measurement of a 128-thread process (risk 10) was not made.
+- `fcntl` record locks need their own ADR (SQLite's unix VFS; out of 9b's scope).
+- ADR-0106 item 2 / INV-0106-2 and ADR-0306 item 5 are deviated from as items 9 and 10 say; the architect accepts the deviations or asks for a superseding ADR.
 - The `check-cancel-points` script (INV-0305-3) is not written; the points are the calls named in item 5.
 - Whether the wait should hand the cancel back to the top of the wrapper (item 5, the bounded leak).
 
