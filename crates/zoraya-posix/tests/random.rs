@@ -123,3 +123,35 @@ fn a_fork_child_has_no_connection() {
     let u = r.arena.user(0, 4);
     assert_eq!(r.p.getrandom(u, 0), Err(ENOSYS));
 }
+
+#[test]
+fn a_signal_after_the_first_chunk_returns_the_bytes_written_and_before_it_eintr() {
+    use zoraya_posix::signals::Action;
+    // Before any byte: EINTR and the buffer untouched.
+    let (mut r, _) = rigged(Mode::Honest);
+    let me = r.p.sys.channel_create().unwrap().0;
+    r.p.self_handle = Some(me);
+    r.p.signals
+        .set(
+            10,
+            Some(Action {
+                handler: 0x4000,
+                mask: 0,
+                flags: 0,
+            }),
+        )
+        .unwrap();
+    r.poke(0, &[0xAA; 5000]);
+    r.p.sys.signal_after_waits = Some(0);
+    let u = r.arena.user(0, 5000);
+    assert_eq!(r.p.getrandom(u, 0), Err(EINTR));
+    assert_eq!(r.peek(0, 5000), vec![0xAA; 5000]);
+    // After the first 2 KiB chunk: the count of what was written, and only
+    // that much of the buffer changed.
+    r.p.sys.signal_after_waits = Some(1);
+    let u = r.arena.user(0, 5000);
+    assert_eq!(r.p.getrandom(u, 0), Ok(2048));
+    let got = r.peek(0, 5000);
+    assert!(got[..2048].iter().any(|&b| b != 0xAA));
+    assert_eq!(got[2048..], vec![0xAA; 5000 - 2048]);
+}

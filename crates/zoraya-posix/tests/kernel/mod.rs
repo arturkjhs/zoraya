@@ -426,6 +426,10 @@ pub struct Fake {
     /// Run when a wait finds nothing yet, before the services: what another
     /// process would do meanwhile (drain a stream, close its reader).
     pub meanwhile: Option<Meanwhile>,
+    /// A signal source: the wait point after this many more waits (counting
+    /// `wait_any` calls) finds the process's `REQUEST_PENDING` asserted, as
+    /// the kernel would when a signal request is queued (ADR-0106 item 3).
+    pub signal_after_waits: Option<u32>,
 }
 
 impl Fake {
@@ -437,6 +441,7 @@ impl Fake {
             craft: None,
             craft_skip: 0,
             meanwhile: None,
+            signal_after_waits: None,
         }
     }
 }
@@ -544,6 +549,26 @@ impl Sys for Fake {
     fn wait(&mut self, h: H, wanted: u32) -> Result<u32, Status> {
         self.waits += 1;
         self.run_until(h, wanted)
+    }
+
+    fn wait_any(
+        &mut self,
+        sources: &[(H, u32)],
+        _deadline: Option<u64>,
+    ) -> Result<(usize, u32), Status> {
+        let pending = zoraya_abi::process_signals::REQUEST_PENDING;
+        if let Some(n) = self.signal_after_waits {
+            if n == 0 {
+                self.signal_after_waits = None;
+                if let Some(i) = sources.iter().position(|&(_, w)| w == pending) {
+                    return Ok((i, pending));
+                }
+            } else {
+                self.signal_after_waits = Some(n - 1);
+            }
+        }
+        let &(h, wanted) = sources.first().ok_or(Status::InvalidArgument)?;
+        self.wait(h, wanted).map(|s| (0, s))
     }
 
     fn stream_create(&mut self) -> Result<(H, H), Status> {

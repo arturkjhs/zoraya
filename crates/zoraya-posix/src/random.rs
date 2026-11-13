@@ -33,7 +33,9 @@ const CHUNK: usize = 2048;
 
 impl<S: Sys> Posix<S> {
     /// Fills `into` from the random service: all of it, or an error and
-    /// nothing a caller may use. `flags` other than the two above are
+    /// nothing written; once a chunk has been written, a failure returns the
+    /// number of bytes written so far instead (a short count, never an
+    /// error beside written bytes). `flags` other than the two above are
     /// `EINVAL`.
     pub fn getrandom(&mut self, into: User, flags: u32) -> Result<usize, i32> {
         if flags & !(GRND_NONBLOCK | GRND_RANDOM) != 0 {
@@ -49,12 +51,19 @@ impl<S: Sys> Posix<S> {
             // boundary restarts or reports; the service being gone or
             // sending nonsense is `EIO`, a request that cannot be built
             // `EINVAL`.
-            let size = self
-                .net_call_with(conn, &Bytes { count: part as u32 }, &[], true)
-                .map_err(|e| if e == EINTR || e == EINVAL { e } else { EIO })?;
+            // After a first chunk has been copied out, a failure is not an
+            // error: the call returns what it wrote, as Linux's does
+            // (`getrandom(2)`: interrupted after some bytes, it returns
+            // their number), so that no failure leaves bytes in a buffer
+            // that the caller must treat as untouched (INV-0310-1).
+            let fail = |e: i32, done: usize| if done > 0 { Ok(done) } else { Err(e) };
+            let size = match self.net_call_with(conn, &Bytes { count: part as u32 }, &[], true) {
+                Ok(size) => size,
+                Err(e) => return fail(if e == EINTR || e == EINVAL { e } else { EIO }, done),
+            };
             let bytes = match decode::<BytesReply>(&self.input[..size], 0) {
                 Ok((_, r)) if r.bytes.0.len() == part => r.bytes.0.to_vec(),
-                _ => return Err(EIO),
+                _ => return fail(EIO, done),
             };
             self.sys.copy_out(into.part(done, part), &bytes);
             done += part;
