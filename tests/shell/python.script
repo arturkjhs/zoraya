@@ -50,7 +50,7 @@
 # An asyncio HTTPS client against the test PKI's valid server, and the refusal
 # of an expired and of a wrong-name certificate before any request byte.
 > +net test.zoraya:@TLSVALID@ python3 https_client.py test.zoraya @TLSVALID@\r
-< status HTTP/1.0 200
+< status HTTP/1.1 200
 < body Zoraya test page
 < \r\n~>
 > +net expired.zoraya:@TLSEXPIRED@ python3 https_client.py expired.zoraya @TLSEXPIRED@\r
