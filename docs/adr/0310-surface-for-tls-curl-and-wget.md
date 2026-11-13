@@ -160,6 +160,10 @@ tzset
   rule 10), not the file; the directory holds the file alone (`make check-tls-roots`). `grants` shows `/system/tls  read
   (with the network)`, not the file as ADR-0228 item 3 words it.
 - OpenSSL 4.x exists; 3.5 is the LTS and TASK-27 says 3.
+- Note (ADR-0001 rule 6, 2026-11-13): item 6's "no option to turn that off" held only through the shell's description; a line
+  that matches no description ran the programs with default settings and kept its `+net` words, so `-k` and
+  `--no-check-certificate` took effect. It now holds in the programs (curl's and wget's option handling refuses them): the
+  proposed ADR-0321 states the options and its invariants. The invariants of this ADR are unchanged.
 
 ## Revisit triggers
 - A program that needs `bind`, `listen` or `accept` (a server): the shim's refusals become real calls in `libc.a`.
