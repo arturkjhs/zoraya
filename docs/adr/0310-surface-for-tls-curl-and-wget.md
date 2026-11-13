@@ -61,13 +61,15 @@ called path reaches in a small archive linked into those two programs; extend th
    curl 8.23.0 (the curl licence, MIT-like) and wget 1.25.0 (GPL-3.0-or-later, as make and hello already are). `make
    apps` (`ports/Makefile`) builds them with `zcc` into `build/ports/deps` and the two programs into
    `build/rootfs-apps/bin`. OpenSSL: `./Configure linux-generic64 no-shared no-dso no-threads no-engine no-asm
-   no-async no-sock no-dgram no-quic no-secure-memory no-comp no-legacy no-autoload-config`. `linux-generic64` is a
+   no-async no-sock no-dgram no-quic no-secure-memory no-comp no-legacy no-autoload-config no-ssl3 no-tls1 no-tls1_1
+   no-dtls` (and their `-method` forms) `--with-rand-seed=getrandom`: TLS 1.2 and 1.3 are the only protocols and
+   `getrandom` the only entropy source, with no `/dev/urandom` or `/dev/random` code compiled in. `linux-generic64` is a
    build recipe's name only: `zcc` defines nothing of Linux (INV-0143-1). `no-sock` removes the socket BIOs, and with
-   them the unoffered `bind`, `listen`, `accept`, `gethostbyname` and `poll`; curl uses its own BIO. Three patches
+   them the unoffered `bind`, `listen`, `accept`, `gethostbyname` and `poll`; curl uses its own BIO. Four patches
    (`ports/patches/openssl/`, each under `__zoraya__`): `getrandom` as the seed source (`rand_unix.c`: no
-   weak-symbol or `dlsym` lookup, no fallback), no `posix_memalign` (`mem.c`), and `/system/tls/roots` as the default
-   certificate file (`common.h`). curl: HTTP and HTTPS only, synchronous name resolution (no threads), no proxy, cookies,
-   netrc or configuration file, CA bundle `/system/tls/roots`. wget: OpenSSL, zlib, IPv6 code built in (`getaddrinfo`
+   weak-symbol or `dlsym` lookup), no `posix_memalign` (`mem.c`), `/system/tls/roots` as the default
+   certificate file (`common.h`), and no environment and no configuration file (item 6). curl: HTTP and HTTPS only, synchronous name resolution (no threads), no proxy, cookies,
+   netrc or configuration file (item 6), CA bundle `/system/tls/roots`. wget: OpenSSL, zlib, IPv6 code built in (`getaddrinfo`
    answers IPv4 only), no libpsl or PCRE; one patch replaces `SSL_set_fd` by a plain-fd BIO (OpenSSL has no sockets
    here). Its configure runs with the host triple `aarch64-unknown-linux-musl` for gnulib's guesses only (gnulib
    answers the run tests it cannot run by the C library's name, and Zoraya's is musl; with the triple `zoraya` its
@@ -81,10 +83,10 @@ called path reaches in a small archive linked into those two programs; extend th
 3. **`getrandom`.** `zoraya-posix`'s `Posix` has a `random` connection beside `net`. `getrandom(buf, n, flags)` is one
    `Bytes` request per 2 KiB on it (`zoraya-rng`'s protocol), the whole of `n` or `-1`: no connection is `ENOSYS`
    (nothing weaker is substituted), an unknown flag is `EINVAL`, a short or wrong answer or a gone service is `EIO`
-   and the buffer is untouched. A `fork` child has none (a channel end cannot be duplicated, ADR-0102 item 3), as it has
+   and the buffer is untouched, a signal to deliver during the wait is `EINTR` (the call restarts or reports as any other). A `fork` child has none (a channel end cannot be duplicated, ADR-0102 item 3), as it has
    no network. The bootstrap's second message gains a form `ZPBX` plus one flag byte (`EXT_NET`, `EXT_RANDOM`) with the
    handles in the order SELF, net, random; `ZPBS` and `ZPBN` are unchanged. `zosh` makes one `Share` of its random
-   connection for each POSIX program it starts, with no word on the line (ADR-0227 item 3). Other launchers (the
+   connection for each POSIX program it starts, with no word on the line (ADR-0227 item 3). The service lets one connection make 64 others (`zoraya_rng::MAX_CHILDREN`): the shell's 65th live program connection is refused, that program starts without one and its `getrandom` is `ENOSYS`. Other launchers (the
    broker's `spawn` from a POSIX parent) give none yet: a `curl` started by `dash` has no entropy and fails to seed.
 4. **The shim.** `ports/apps/zshim.c` is `libzshim.a`, linked last into `curl` and `wget` only, never into `libc.a`:
    `select` (= `pselect`, which `libc.a` exports), `bind`, `listen`, `accept`, `link`, `setsid`, `setresuid`,
@@ -100,6 +102,15 @@ called path reaches in a small archive linked into those two programs; extend th
    the image's own (`user/describe/posix/curl.cmd`, `wget.cmd`, INV-0153-6); a program on the volume under any other
    name gets none. This is also the generic way to add programs built outside the repository that TASK-27 asks for
    (`EXTRA_ROOT`), without descriptions for programs this repository does not know.
+6. **Nothing from the environment or a file decides what a program trusts** (review of 9a, finding 1; INV-0228-1). Under
+   `__zoraya__`: OpenSSL's `ossl_safe_getenv` returns nothing (so `OPENSSL_CONF`, `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+   `RANDFILE`, `OPENSSL_MODULES` and the proxy names are not read) and `ossl_config_int` loads no `openssl.cnf`, whatever
+   flag asks (wget passes `OPENSSL_INIT_LOAD_CONFIG`); curl does not look up `CURL_CA_BUNDLE`, `SSL_CERT_DIR` or
+   `SSL_CERT_FILE` (`cacertpaths`), does not read `.curlrc` (`CURL_HOME`, `XDG_CONFIG_HOME`, `HOME`), refuses `--config`
+   and writes no key log for `SSLKEYLOGFILE`; wget reads no `WGETRC`, `$HOME/.wgetrc`, `SYSTEM_WGETRC` or `/etc/wgetrc`
+   (there is none on the image), refuses `--config` and `-e`, has HSTS off (so it writes no `~/.wget-hsts`, which no grant
+   names) and no proxy. The descriptions do not offer the options that name roots or turn the check off either; both
+   layers hold, and `make test-apps` tests the patches with the home directory readable (`+r .`).
 
 ```posix-surface-added
 feof_unlocked
@@ -139,6 +150,8 @@ tzset
 - **INV-0310-1.** `getrandom` returns bytes only from the random service's reply on the program's own connection: without the connection it fails with `ENOSYS`, on any failure it writes nothing to the buffer and never falls back to another source, and a `fork` child has no connection. *Check:* `cargo test -p zoraya-posix --test random`; the guest's TLS handshakes in `make test-apps` draw on it (OpenSSL starts no handshake it cannot seed).
 - **INV-0310-2.** The files of `EXTRA_ROOT` are on the volume only outside `/system`, and `tools/run-disk.sh` makes a new disk when their checksum changes. *Check:* `make test-hand-run` (the disk is made from `build/rootfs-apps`; a stale key replaces it) and `tools/test-run-disk.sh`.
 - **INV-0310-3.** No port of this ADR is compiled with `__linux__` defined, and every change of `ports/patches/openssl/` is under a `__zoraya__` guard. *Check:* the end of `make apps` (a prerequisite of `make test-apps`) reads the compile commands of the logs of `zlib`, `openssl`, `curl` and `wget` and the OpenSSL patches, as `make check-ports` does for the other ports (INV-0109-2, INV-0143-1).
+- **INV-0310-4.** curl and wget read no configuration file and no environment variable that names roots, a configuration or a proxy; OpenSSL reads no environment variable and loads no `openssl.cnf`. *Check:* `make test-apps` (an untrusted certificate is refused with `.curlrc`, `.wgetrc`, `WGETRC` and `SYSTEM_WGETRC` giving `insecure` or `check_certificate = off`, the server's log showing 0 request bytes; `CURL_CA_BUNDLE`, `SSL_CERT_FILE`, `SSL_CERT_DIR` and `OPENSSL_CONF` naming files that do not exist change nothing).
+- **INV-0310-5.** The OpenSSL of the apps has no TLS before 1.2 and no entropy source but `getrandom`: neither program links `TLSv1_method`, `TLSv1_1_method`, `SSLv3_method` or `DTLSv1_method`, and neither names `/dev/urandom` or `/dev/random`. *Check:* the end of `make apps` (a prerequisite of `make test-apps`).
 
 ## Open questions
 - A POSIX program started by `dash` or `make` (posix_spawn through the broker) has no random connection: `getrandom`

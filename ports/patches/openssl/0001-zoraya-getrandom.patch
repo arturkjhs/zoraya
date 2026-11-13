@@ -20,9 +20,9 @@
 +    /*
 +     * Zoraya (TASK-27 9a, ADR-0310): libposix's getrandom asks the random
 +     * service (ADR-0227) over the connection the shell gave the program.
-+     * No weak-symbol or DSO lookup (a static archive would not link the
-+     * weak name in), and no fallback: a program without the connection
-+     * gets -1 and OpenSSL reports that it cannot seed.
++     * The build is --with-rand-seed=getrandom: no /dev/urandom or /dev/random
++     * fallback is compiled in, so a program without the connection gets -1
++     * and OpenSSL reports that it cannot seed. No weak-symbol or DSO lookup.
       */
 +    return getrandom(buf, buflen, 0);
 +#endif

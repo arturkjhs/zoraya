@@ -480,9 +480,15 @@ $(OPENSSL): $(LOCK) $(wildcard ports/patches/openssl/*.patch)
 	@touch $@
 # linux-generic64 is OpenSSL's portable 64-bit target (no assembly, no CPU
 # probing); no-secure-memory leaves out mmap/mlock tricks, no-async the
-# ucontext coroutines.
+# ucontext coroutines. TLS 1.2 and 1.3 are the only protocols compiled in
+# (no SSL 3, TLS 1.0, TLS 1.1 or DTLS: INV-0310-5), and the only entropy
+# source is getrandom (--with-rand-seed=getrandom leaves out the /dev/urandom
+# and /dev/random code: INV-0310-5). The patches under __zoraya__ also make the
+# library read no environment variable and load no openssl.cnf; curl and wget read no
+# configuration file or environment variable for trust (INV-0310-4).
 OPENSSL_OPTS := no-shared no-dso no-threads no-engine no-asm no-async no-afalgeng no-ui-console no-secure-memory \
-	no-sock no-dgram no-quic no-tests no-docs no-comp no-ssl3 no-ssl3-method no-weak-ssl-ciphers no-legacy no-autoload-config
+	no-sock no-dgram no-quic no-tests no-docs no-comp no-ssl3 no-ssl3-method no-weak-ssl-ciphers no-legacy no-autoload-config \
+	no-tls1 no-tls1_1 no-tls1-method no-tls1_1-method no-dtls no-dtls1-method no-dtls1_2-method --with-rand-seed=getrandom
 $(DEPS)/lib/libssl.a: $(OPENSSL) $(DEPS)/lib/libz.a $(SYSROOT_STAMP)
 	@mkdir -p $(DEPS)
 	@cd $(OPENSSL) && $(call logged,$(CROSS_ENV) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
@@ -563,6 +569,12 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
 	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no entropy source but getrandom, and no TLS before 1.2 (INV-0310-5)"
+	@for b in curl wget; do \
+	  if LC_ALL=C grep -a -q -e '/dev/urandom' -e '/dev/random' $(APPS_ROOT)/bin/$$b; then \
+	    echo "$$b names /dev/urandom or /dev/random"; exit 1; fi; \
+	  if nm $(APPS_ROOT)/bin/$$b | grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method'; then \
+	    echo "$$b links a TLS method before 1.2"; exit 1; fi; done
 	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
 	@for l in zlib openssl curl wget; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
