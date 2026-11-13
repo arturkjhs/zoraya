@@ -77,7 +77,7 @@ Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-1
 | `make test-hand-run` | passed: the production `run-net` image with `curl` and `wget`: HTTP works, HTTPS reaches the certificate and is refused (curl exit 60, wget "cannot verify") |
 
 Not run here: `make test-changed` as a whole, `test-net`, `test-posix*`, `test-tour-gui`, `test-gui`, `test-crash`, `test-qemu` (CI's candidate run
-covers them), TCG for anything but `test-apps`, mutation testing. Disk: 42 GB free at the start, about 38 GB at the end; the worktree
+covers them), TCG for anything but `test-apps`, mutation testing. Disk: 44 GB free at the start, 42 GB at the end; the worktree
 is `zoraya-9a` with its own `target/` and `build/`. The CI workflow changed: the build job also builds `make apps` (cache paths and `ports-build-v3`; timeout 30 minutes).
 
 ### Decisions
