@@ -1,7 +1,7 @@
 name     ping
 summary  send echo requests to a host and show the replies
 usage    ping [--count N] [--timeout SECONDS] HOST
-operand  HOST  host  the IPv4 address to ping, dotted; this command may reach that host only
+operand  HOST  host  the host to ping, a name or a dotted IPv4 address; this command may send echo requests to that host only
 option   -c --count N text  how many echo requests, 1 to 16; 4 if not given
 option   -W --timeout SECONDS text  how long to wait for the last reply, 1 to 30; 2 if not given
 cwd      none
@@ -14,10 +14,12 @@ each reply (`64 bytes from ADDRESS: seq=N time=T ms`), then a summary: how many
 were sent and received, the loss, and the shortest, mean and longest round trip.
 The network service sends the requests; this command holds no raw socket.
 
-The shell gives the command a network connection that reaches HOST and nothing
-else, and only when HOST is written on the line: an address that comes from a
-variable or a command is refused unless a +net word on the line covers it.
-HOST is a dotted address; a name is not looked up yet. The network service
+The shell gives the command a network connection that may send ICMP echo
+requests to HOST and nothing else (no TCP connection, no datagram), and only
+when HOST is written on the line: a host that comes from a variable or a
+command is refused unless a +net word on the line covers it. A name is looked
+up by the network service, inside that grant; the line `PING NAME (ADDRESS)`
+shows what it came to. The network service
 sends the requests and answers when the run has ended (the last reply or the
 timeout), so the lines appear together at the end, not one by one. A request
 that got no reply has no line.

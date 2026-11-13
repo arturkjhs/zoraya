@@ -2157,3 +2157,17 @@ checked for lost requests (`t_netd`'s lost run, a host test with replies 1 and 3
 a run is clamped to `MAX_PINGS`; the `host` operand makes a grant only for a dotted address, and ADR-0330 now says plainly that its
 rule (TCP, any port of the address) is wider than an echo, with the echo-only alternative for the architect. Only `NET=0` turns the
 network off in `make run-gui`; the variable keeps its name.
+
+**Architect's changes to the ping fix (2026-11-13), done.** (1) `ping NAME` works like `fetch`: `Ping` carries a name
+(`Data<253>`), `netd` checks it against an echo rule, resolves it (a `net.hosts` entry or the DNS), refuses an answer on this
+machine's side of the network as `resolve` does, and the reply and the output line show the address
+(`PING example.org (A.B.C.D): 4 requests`). (2) The ping grant is echo only: `Protocols::ECHO` (4) and `ALL` (7) in
+`zoraya_abi::net`, `BOTH` stays TCP and UDP; a listen rule with the echo bit does not decode; the `host` operand makes an
+echo-only rule (a name or an address); the root scope and `+net` words are `ALL`; `netd` refuses a connection under an echo-only
+grant and an echo under a TCP/UDP-only grant. The N4 restriction to dotted addresses is undone. ADR-0330 records both decisions
+in its "Architect's decision" section, status still `proposed`, and gains INV-0330-2. Tests: `zoraya-abi` (echo rule grants no
+TCP/UDP, listen refuses the echo bit), `zoraya-net` service (ping by name from `net.hosts`, refusals), `zoraya-shell`
+(`echo only (operand HOST)`, names), `zoraya-proto-net` (name bound 253, round trips, text), `t_netd` (an echo-only connection
+pings the gateway, not the DNS server, resolves no name it was not given, opens no TCP connection to any of three ports; a
+TCP/UDP-only connection cannot ping), `tools/mutants/net-ping.toml` (three more mutants, killed by hand). There is no UDP
+request in the protocol yet: the UDP side of the rule is tested in `zoraya-abi` only.

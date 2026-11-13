@@ -128,6 +128,8 @@ fn narrow_with<'a, M: zoraya_protocol::Message<'a>>(conn: Handle, m: &M) -> Resu
 pub struct PingOutcome {
     /// A `status` code of `zoraya_proto_net::status`.
     pub status: u32,
+    /// The address pinged (the one the name resolved to).
+    pub address: [u8; 4],
     pub sent: u32,
     pub received: u32,
     pub rtt_min_us: u32,
@@ -139,16 +141,31 @@ pub struct PingOutcome {
 
 /// `ping`: `count` echo requests to `address`.
 pub fn ping(conn: Handle, address: [u8; 4], count: u32, timeout_ms: u32) -> Option<PingOutcome> {
+    ping_host(conn, "", address, count, timeout_ms)
+}
+
+/// `ping` a host named `name` (resolved by the network service; empty to use
+/// `address`).
+pub fn ping_host(
+    conn: Handle,
+    name: &str,
+    address: [u8; 4],
+    count: u32,
+    timeout_ms: u32,
+) -> Option<PingOutcome> {
     let message = request(&Ping {
         address: u32::from_be_bytes(address),
+        name: Data(name.as_bytes()),
         count: Below(count),
         timeout_ms: Below(timeout_ms),
     });
-    let wait = WAIT_NS + u64::from(count) * 200_000_000 + u64::from(timeout_ms) * 1_000_000;
+    // A name is resolved first: up to the resolver's own bounds.
+    let wait = 2 * WAIT_NS + u64::from(count) * 200_000_000 + u64::from(timeout_ms) * 1_000_000;
     let reply = exchange(conn, &message, &[], wait)?;
     let (_, p) = decode::<PingReply>(&reply, 0).ok()?;
     Some(PingOutcome {
         status: p.status.0,
+        address: p.address.to_be_bytes(),
         sent: p.sent,
         received: p.received,
         rtt_min_us: p.rtt_min_us,
@@ -159,13 +176,13 @@ pub fn ping(conn: Handle, address: [u8; 4], count: u32, timeout_ms: u32) -> Opti
 }
 
 /// The scope of a launcher's root connection: every name and address, every
-/// port, both protocols, and every listening port (ADR-0221 item 4).
+/// port, TCP, UDP and echo, and every listening port (ADR-0221 item 4).
 pub fn root_scope() -> Vec<u8> {
     use zoraya_abi::net::{ListenRule, Ports, Protocols, ReachRule, Target, encode};
     let reach = ReachRule {
         target: Target::Any,
         ports: Ports::ANY,
-        protocols: Protocols::BOTH,
+        protocols: Protocols::ALL,
     };
     let listen = ListenRule {
         ports: Ports::ANY,

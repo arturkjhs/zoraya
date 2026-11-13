@@ -140,18 +140,24 @@ protocol! {
         dns: Seq<'a, Address, MAX_DNS>,
     }
 
-    /// `count` echo requests to `address`, one every 200 ms, answered when
-    /// the last reply or the timeout is in (rights `reach`, and a reach rule
-    /// covering the address). A diagnostic, not a socket (proposed
-    /// ADR-0281).
-    message Ping = 2, handles 0 {
+    /// `count` echo requests to `name` (a host name `netd` resolves; empty to
+    /// use `address`), one every 200 ms, answered when the last reply or the
+    /// timeout is in (rights `reach`, and a reach rule that grants echo and
+    /// covers the name or the address; ADR-0330). A diagnostic, not a socket
+    /// (proposed ADR-0281).
+    message Ping<'a> = 2, handles 0 {
         address: u32,
         count: Below<17>,
         /// How long to wait for the last reply, in milliseconds.
         timeout_ms: Below<30001>,
+        /// Last: a field of variable length ends the fixed ones.
+        name: Data<'a, 253>,
     }
     message PingReply<'a> = 2, handles 0 {
         status: Code,
+        /// The address pinged: `address` of the request, or the one the name
+        /// resolved to.
+        address: u32,
         sent: u32,
         received: u32,
         /// Round trips in microseconds; zero when nothing came back.
@@ -356,7 +362,12 @@ zoraya_test_alloc::cap_memory!();
 /// One run of `ping`, as the command shows it (proposed ADR-0330).
 #[derive(Debug, Clone, Copy)]
 pub struct PingView<'a> {
+    /// The host as the person wrote it: a name, or the dotted address.
+    pub host: &'a str,
+    /// The address pinged (what a name resolved to).
     pub address: [u8; 4],
+    /// Requests asked for.
+    pub count: u32,
     pub sent: u32,
     pub received: u32,
     pub rtt_min_us: u32,
@@ -371,12 +382,19 @@ fn millis(us: u32) -> String {
     format!("{}.{:03}", us / 1000, us % 1000)
 }
 
-/// `ping`'s text: one line per reply (`40 bytes from A: seq=N time=T ms`),
+/// `ping`'s text: a heading (`PING NAME (A.B.C.D): N requests`, without the
+/// parenthesis when the host is the address), one line per reply (`40 bytes from A: seq=N time=T ms`),
 /// then the summary with the loss in whole percent (rounded down) and the
 /// shortest, mean and longest round trip. A request with no reply has no line.
 pub fn render_ping(v: &PingView<'_>) -> String {
     let [a, b, c, d] = v.address;
     let mut out = String::new();
+    let dotted = format!("{a}.{b}.{c}.{d}");
+    if v.host == dotted {
+        out += &format!("PING {dotted}: {} requests\n", v.count);
+    } else {
+        out += &format!("PING {} ({dotted}): {} requests\n", v.host, v.count);
+    }
     for (seq, us) in v.rtts.iter().enumerate() {
         if *us != NO_REPLY {
             out += &format!(
@@ -390,7 +408,7 @@ pub fn render_ping(v: &PingView<'_>) -> String {
     } else {
         100 - (u64::from(v.received.min(v.sent)) * 100 / u64::from(v.sent)) as u32
     };
-    out += &format!("--- {a}.{b}.{c}.{d} ping statistics ---\n");
+    out += &format!("--- {} ping statistics ---\n", v.host);
     out += &format!("{} sent, {} received, {loss}% loss\n", v.sent, v.received);
     if v.received > 0 {
         out += &format!(

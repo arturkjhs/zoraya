@@ -117,14 +117,33 @@
 < \r\nsucceeded (exit status 0)
 < \r\n~>
 > grants ping 10.0.2.2\r
-< reach, any port (operand HOST)
+< echo only (operand HOST)
 < \r\n~>
-# Wrong use is said: no count, a name, no network grant for a value.
+# A name: netd resolves it (net.hosts here) under an echo-only grant for that name
+# (ADR-0330), and the line shows the address.
+> ping -c 1 test.zoraya\r
+< PING test.zoraya (10.0.2.2): 1 requests
+< 40 bytes from 10.0.2.2: seq=0 time=
+< --- test.zoraya ping statistics ---
+< 1 sent, 1 received, 0% loss
+< \r\n~>
+> grants ping test.zoraya\r
+< test.zoraya
+< echo only (operand HOST)
+< \r\n~>
+# A name nobody granted is not resolved for ping: a value needs a +net word.
+> set n test.zoraya\r
+< \r\n~>
+> ping $n\r
+< from a value, outside the line's network grants
+< +net test.zoraya COMMAND
+< \r\n~>
+# Wrong use is said: no count, a bad name.
 > ping -c 0 10.0.2.2\r
 < not a count from 1 to 16
 < \r\n~>
-> ping example.org\r
-< ping takes a dotted IPv4 address
+> ping a..b\r
+< not a host name or a dotted IPv4 address
 < \r\n~>
 > status\r
 < \r\nexit status 2

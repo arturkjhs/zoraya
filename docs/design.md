@@ -1733,15 +1733,19 @@ stack's TCP client and its resolver are described under "TCP, names and `fetch`"
   counters. The `net.*` settings are declared in `netd`'s description (`address` and `prefix` are new setting types):
   `settings net.gateway 10.0.2` is refused.
 - **`ping`** (proposed ADR-0330). `ping [-c COUNT] [-W SECONDS] HOST` (count 1 to 16, default 4; timeout 1 to 30 s, default 2)
-  sends the echo requests of `netd`'s diagnostic `ping` (ADR-0281 item 3; no raw socket), one every 200 ms. HOST is a
-  dotted IPv4 address, written on the line: the description's `host` operand kind gives the command a connection that
-  reaches that host and nothing else (`grants ping 10.0.2.2` shows `reach, any port (operand HOST)`); from a value it needs a
-  `+net` word that covers it. It prints a line per reply (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`) and a summary
-  (`4 sent, 4 received, 0% loss`, `rtt min/avg/max = ... ms`); the exit status is 1 when no reply came and 2 for wrong use.
-  `netd` answers when the run ends, so the lines come together at the end. `PingReply` carries each request's round trip
-  (`rtts`). Known limits: no names (a name rule does not cover the address it resolves to, so a ping by name needs a request
-  that takes a name); no live lines. Covered by `tests/shell/net-fetch.script` (`make test-net-fetch`), `hand-run-net.script`
-  (`make test-hand-run`, the production image against SLIRP's gateway) and `cargo test -p zoraya-proto-net` (the text).
+  sends the echo requests of `netd`'s diagnostic `ping` (ADR-0281 item 3; no raw socket), one every 200 ms. HOST is a name or a
+  dotted IPv4 address, written on the line: the description's `host` operand kind gives the command a connection whose rule for
+  that host is ICMP echo only (`Protocols::ECHO` in `zoraya_abi::net`; no TCP, no UDP; `grants ping 10.0.2.2` shows
+  `echo only (operand HOST)`). From a value the host needs a `+net` word that covers it (a `+net` word covers TCP, UDP and
+  echo). A name is resolved by `netd` with its resolver, inside the grant, as `fetch` does; the `Ping` request has the
+  name (`Data<253>`), the reply the address. Output: `PING NAME (ADDRESS): N requests`, a line per reply
+  (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`) and a summary (`4 sent, 4 received, 0% loss`,
+  `rtt min/avg/max = ... ms`); the exit status is 1 when no reply came and 2 for wrong use. `netd` answers when the run ends,
+  so the lines come together at the end. `PingReply` carries each request's round trip (`rtts`). Covered by
+  `tests/shell/net-fetch.script` (`make test-net-fetch`: an address and a `net.hosts` name), `net-dns.script` (names that do not
+  resolve or are local, with the host's resolver), `hand-run-net.script` (`make test-hand-run`, the production image against
+  SLIRP's gateway), `t_netd` (an echo-only grant opens no TCP connection and pings no other host) and the host tests of
+  `zoraya-abi`, `zoraya-net`, `zoraya-shell` and `zoraya-proto-net`.
 - **What SLIRP gives.** Under `restrict=on` (every test) the lease holds the address and its time only: no router and no
   DNS server, so `net status` shows neither. Without `restrict` (`make run-net`) SLIRP gives gateway 10.0.2.2 and DNS
   10.0.2.3. The lease time SLIRP gives is 24 h. ICMP to the gateway 10.0.2.2 is answered by SLIRP either way, and the

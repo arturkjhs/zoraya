@@ -488,7 +488,7 @@ impl Netd {
             self.service.connection_ended(account);
         }
         for answer in self.conns.take_lookups() {
-            if let Some((id, bytes)) = self.service.resolve_done(&self.stack, answer, now) {
+            if let Some((id, bytes)) = self.service.resolve_done(&mut self.stack, answer, now) {
                 self.write_to(id, &bytes);
             }
         }

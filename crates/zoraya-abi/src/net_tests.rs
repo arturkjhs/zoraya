@@ -229,7 +229,9 @@ fn ports_and_protocols_are_checked() {
     assert!(Ports::ranges(&[(6, 5)]).is_none());
     assert!(Ports::ranges(&[(1, 1); 9]).is_none());
     assert!(Protocols::from_raw(0).is_none());
-    assert!(Protocols::from_raw(4).is_none());
+    assert!(Protocols::from_raw(8).is_none());
+    assert_eq!(Protocols::from_raw(4), Some(Protocols::ECHO));
+    assert_eq!(Protocols::from_raw(7), Some(Protocols::ALL));
     let mut bytes = one(Target::Any, Ports::one(80), Protocols::TCP);
     let last = bytes.len() - 1;
     bytes[last] = 0;
@@ -376,4 +378,39 @@ fn narrowing_examples() {
     assert!(listen.allows_listen(80, Protocols::TCP));
     assert!(!listen.allows_listen(81, Protocols::TCP));
     assert!(!listen.allows_listen(80, Protocols::UDP));
+}
+
+#[test]
+fn an_echo_rule_grants_echo_and_no_connection_and_no_datagram() {
+    // ADR-0330: ICMP echo is a protocol of its own in a reach rule.
+    let echo = one(Target::Name("example.org"), Ports::ANY, Protocols::ECHO);
+    let s = Scope::decode(&echo).unwrap();
+    assert!(s.allows_echo_name("example.org"));
+    assert!(!s.allows_echo_name("other.org"));
+    for port in [1, 80, 65535] {
+        assert!(!s.allows_name("example.org", port, Protocols::TCP));
+        assert!(!s.allows_name("example.org", port, Protocols::UDP));
+    }
+    let by_address_bytes = one(Target::Address([10, 0, 2, 2]), Ports::ANY, Protocols::ECHO);
+    let by_address = Scope::decode(&by_address_bytes).unwrap();
+    assert!(by_address.allows_echo_address([10, 0, 2, 2]));
+    assert!(!by_address.allows_echo_address([10, 0, 2, 3]));
+    assert!(!by_address.allows_address([10, 0, 2, 2], 80, Protocols::TCP));
+    assert!(!by_address.allows_address([10, 0, 2, 2], 53, Protocols::UDP));
+    // A rule of TCP and UDP grants no echo.
+    let tcp_bytes = one(Target::Address([10, 0, 2, 2]), Ports::ANY, Protocols::BOTH);
+    let tcp = Scope::decode(&tcp_bytes).unwrap();
+    assert!(!tcp.allows_echo_address([10, 0, 2, 2]));
+    // An echo rule narrows only to echo: a child of TCP is not inside it.
+    let tcp_child = one(Target::Address([10, 0, 2, 2]), Ports::ANY, Protocols::TCP);
+    assert!(!Scope::decode(&tcp_child).unwrap().within(&by_address));
+    let echo_child = one(Target::Address([10, 0, 2, 2]), Ports::ANY, Protocols::ECHO);
+    assert!(Scope::decode(&echo_child).unwrap().within(&by_address));
+    // A listen rule with the echo bit does not encode (and so does not decode).
+    let mut out = vec![0u8; 64];
+    let listen = ListenRule {
+        ports: Ports::ANY,
+        protocols: Protocols::ALL,
+    };
+    assert!(encode(&[], &[listen], &mut out).is_none());
 }

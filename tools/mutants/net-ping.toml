@@ -11,3 +11,28 @@ file = "crates/zoraya-net/src/stack.rs"
 find = '.map(|i| run.rtt.get(i).copied().flatten().unwrap_or(u32::MAX))'
 replace = '.map(|i| run.rtt.get(i).copied().flatten().unwrap_or(0))'
 note = "review of hand-run W2"
+
+# ADR-0330: an echo grant is echo only, and an echo needs an echo grant.
+[[mutant]]
+id = "N-echo-address-any-protocol"
+file = "crates/zoraya-abi/src/net.rs"
+find = '.any(|r| r.target.covers_address(address) && r.protocols.contains(Protocols::ECHO))'
+replace = '.any(|r| r.target.covers_address(address))'
+note = "ping under a TCP/UDP-only grant"
+tests = ["cargo test -q -p zoraya-abi --lib net", "cargo test -q -p zoraya-net --lib ping"]
+
+[[mutant]]
+id = "N-echo-name-any-protocol"
+file = "crates/zoraya-abi/src/net.rs"
+find = '.any(|r| r.target.covers_name(name) && r.protocols.contains(Protocols::ECHO))'
+replace = '.any(|r| r.target.covers_name(name))'
+note = "ping by name under a TCP/UDP-only grant"
+tests = ["cargo test -q -p zoraya-abi --lib net", "cargo test -q -p zoraya-net --lib ping"]
+
+[[mutant]]
+id = "N-listen-takes-echo"
+file = "crates/zoraya-abi/src/net.rs"
+find = 'if !protocols.within(Protocols::BOTH) {'
+replace = 'if false {'
+note = "a listen rule with the echo bit"
+tests = ["cargo test -q -p zoraya-abi --lib net"]

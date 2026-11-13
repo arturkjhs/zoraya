@@ -68,11 +68,15 @@ fn status_of(conn: Handle) -> Option<Seen> {
 }
 
 fn one_rule(target: Target<'_>) -> Vec<u8> {
+    rule_of(target, Protocols::ALL)
+}
+
+fn rule_of(target: Target<'_>, protocols: Protocols) -> Vec<u8> {
     let mut out = alloc::vec![0u8; 128];
     let rule = ReachRule {
         target,
         ports: Ports::ANY,
-        protocols: Protocols::BOTH,
+        protocols,
     };
     let n = encode_scope(&[rule], &[], &mut out).expect("a scope");
     out.truncate(n);
@@ -286,6 +290,51 @@ fn main() -> i32 {
         .expect("a connection for one address");
     assert_eq!(ping(one, GATEWAY, 1).status, status::OK);
     assert_eq!(ping(one, DNS, 1).status, status::NOT_GRANTED);
+    // ADR-0330: the grant `ping` gets is echo and nothing else. An echo-only
+    // rule for the gateway answers an echo to it, and refuses an echo to any
+    // other host, a name it does not name, and every connection (TCP) to the
+    // gateway itself; a rule of TCP and UDP alone refuses the echo. (There is
+    // no UDP request yet: the rule's UDP side is `zoraya-abi`'s test.)
+    let echo_only = netclient::narrow(
+        root,
+        rights::REACH,
+        &rule_of(Target::Address(GATEWAY), Protocols::ECHO),
+    )
+    .expect("an echo-only connection");
+    let echoed = ping(echo_only, GATEWAY, 2);
+    assert_eq!((echoed.status, echoed.received), (status::OK, 2));
+    assert_eq!(echoed.address, GATEWAY);
+    assert_eq!(ping(echo_only, DNS, 1).status, status::NOT_GRANTED);
+    let named = netclient::ping_host(echo_only, "localhost", [0; 4], 1, 1000).expect("a reply");
+    assert_eq!(named.status, status::NOT_GRANTED, "a name no rule names");
+    for port in [80, 53, 8080] {
+        assert!(
+            matches!(
+                zoraya_user::netconn::connect(echo_only, "", GATEWAY, port, 2_000_000_000),
+                Err(zoraya_user::netconn::ConnectError::Refused(
+                    status::NOT_GRANTED
+                ))
+            ),
+            "an echo grant opened a TCP connection to port {port}"
+        );
+    }
+    let tcp_only = netclient::narrow(
+        root,
+        rights::REACH,
+        &rule_of(Target::Address(GATEWAY), Protocols::BOTH),
+    )
+    .expect("a TCP and UDP connection");
+    assert_eq!(ping(tcp_only, GATEWAY, 1).status, status::NOT_GRANTED);
+    // And the parent's echo-only scope cannot be widened by a child.
+    assert_eq!(
+        netclient::narrow(
+            echo_only,
+            rights::REACH,
+            &one_rule(Target::Address(GATEWAY))
+        )
+        .err(),
+        Some(status::NOT_GRANTED)
+    );
     assert_eq!(
         status_of(one).expect("a reply").get().status.0,
         status::NOT_GRANTED,
@@ -348,6 +397,7 @@ fn main() -> i32 {
                 address: u32::from_be_bytes(GATEWAY),
                 count: zoraya_protocol::Below(16),
                 timeout_ms: zoraya_protocol::Below(3000),
+                name: zoraya_protocol::Data(b""),
             },
             1,
             &mut out,

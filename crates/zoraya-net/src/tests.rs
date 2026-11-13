@@ -647,7 +647,7 @@ fn narrow_never_gives_a_right_or_a_scope_the_caller_lacked() {
         let rule = ReachRule {
             target,
             ports: Ports::ANY,
-            protocols: Protocols::BOTH,
+            protocols: Protocols::ALL,
         };
         let n = encode(&[rule], &[], &mut out).unwrap();
         out.truncate(n);

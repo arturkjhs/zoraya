@@ -342,24 +342,37 @@ fn a_launcher_with_no_root_refuses_a_line_that_needs_the_network() {
 }
 
 #[test]
-fn a_literal_host_operand_reaches_that_host_and_nothing_else() {
+fn a_literal_host_operand_grants_echo_to_that_host_and_nothing_else() {
     let (r, bytes) =
         scope_of(go(PING, &[("-c", true), ("2", true), ("10.0.2.2", true)], true).unwrap());
     assert_eq!(r, rights::REACH);
     let s = Scope::decode(&bytes).unwrap();
-    assert!(s.reaches_address([10, 0, 2, 2]));
-    assert!(!s.reaches_address([10, 0, 2, 3]));
-    // The rule is TCP, any port, of that address and nothing else (the extra
-    // right ADR-0330 states): not UDP, not another host.
-    assert!(s.allows_address([10, 0, 2, 2], 1, Protocols::TCP));
-    assert!(s.allows_address([10, 0, 2, 2], 65535, Protocols::TCP));
-    assert!(!s.allows_address([10, 0, 2, 2], 53, Protocols::UDP));
-    assert!(!s.allows_address([10, 0, 2, 3], 80, Protocols::TCP));
+    assert!(s.allows_echo_address([10, 0, 2, 2]));
+    assert!(!s.allows_echo_address([10, 0, 2, 3]));
+    // ADR-0330: the rule is echo and no connection and no datagram, on no port.
+    for port in [1, 53, 80, 65535] {
+        assert!(!s.allows_address([10, 0, 2, 2], port, Protocols::TCP));
+        assert!(!s.allows_address([10, 0, 2, 2], port, Protocols::UDP));
+    }
+    assert_eq!(
+        crate::netgrant::describe(&bytes),
+        [format!("net: {:<24}echo only (operand HOST)", "10.0.2.2")]
+    );
+}
+
+#[test]
+fn a_host_operand_by_name_grants_echo_to_that_name_only() {
+    let (_, bytes) = scope_of(go(PING, &[("Example.ORG", true)], true).unwrap());
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_echo_name("example.org"));
+    assert!(!s.allows_echo_name("www.example.org"));
+    assert!(!s.allows_name("example.org", 80, Protocols::TCP));
+    assert!(!s.allows_name("example.org", 53, Protocols::UDP));
     assert_eq!(
         crate::netgrant::describe(&bytes),
         [format!(
-            "net: {:<24}reach, any port (operand HOST)",
-            "10.0.2.2"
+            "net: {:<24}echo only (operand HOST)",
+            "example.org"
         )]
     );
 }
@@ -372,20 +385,21 @@ fn a_host_operand_from_a_value_needs_a_net_word_that_covers_it() {
         r.hint.as_deref(),
         Some("if that is meant: +net 10.0.2.2 COMMAND")
     );
+    // A `+net` word covers echo too (TCP, UDP and echo), a value inside it designates.
     let covered = go_nets(PING, &[("10.0.2.2", false)], &["10.0.2.0/24"], true).unwrap();
     assert!(
         Scope::decode(&scope_of(covered).1)
             .unwrap()
-            .reaches_address([10, 0, 2, 2])
+            .allows_echo_address([10, 0, 2, 2])
     );
     // Only the base system's commands are given a network by an operand.
     assert!(go(PING, &[("10.0.2.2", true)], false).unwrap().is_none());
 }
 
 #[test]
-fn a_host_operand_that_is_not_a_dotted_address_makes_no_grant() {
-    for name in ["example.org", "10.0.2", "10.0.2.2.2", "any", "*.org"] {
-        let r = go(PING, &[(name, true)], true).unwrap();
-        assert!(r.is_none(), "{name} made a grant");
+fn a_host_operand_that_is_not_a_host_makes_no_grant() {
+    for bad in ["10.0.2", "10.0.2.2.2", "a..b", "*.org", "a b"] {
+        let r = go(PING, &[(bad, true)], true).unwrap();
+        assert!(r.is_none(), "{bad} made a grant");
     }
 }

@@ -1094,7 +1094,7 @@ mod resolve {
         for _ in 0..20_000 {
             w.turn();
             for a in w.conns.take_lookups() {
-                if let Some((to, bytes)) = service.resolve_done(&w.client, a, w.now) {
+                if let Some((to, bytes)) = service.resolve_done(&mut w.client, a, w.now) {
                     assert_eq!(to, id);
                     return bytes;
                 }
@@ -1178,7 +1178,7 @@ mod resolve {
         for _ in 0..20_000 {
             w.turn();
             for r in w.conns.take_lookups() {
-                if let Some((id, bytes)) = service.resolve_done(&w.client, r, w.now) {
+                if let Some((id, bytes)) = service.resolve_done(&mut w.client, r, w.now) {
                     to.push(id);
                     seen.push((id, answer(&bytes).1));
                     open.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1335,7 +1335,7 @@ mod resolve {
         for _ in 0..20_000 {
             w.turn();
             for a in w.conns.take_lookups() {
-                if let Some((to, _)) = service.resolve_done(&w.client, a, w.now) {
+                if let Some((to, _)) = service.resolve_done(&mut w.client, a, w.now) {
                     assert_eq!(to, root, "only the session's connection is left");
                 }
             }

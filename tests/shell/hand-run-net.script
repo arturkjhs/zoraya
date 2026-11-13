@@ -50,14 +50,15 @@
 < \r\nsucceeded (exit status 0)
 < \r\n~>
 > grants ping 10.0.2.2\r
-< reach, any port (operand HOST)
+< echo only (operand HOST)
 < \r\n~>
-# Wrong use is said: no count, a name, no network grant for a value.
+# Wrong use is said: no count, a bad name. (A real name needs the host's resolver:
+# tests/shell/net-dns.script.)
 > ping -c 0 10.0.2.2\r
 < not a count from 1 to 16
 < \r\n~>
-> ping example.org\r
-< ping takes a dotted IPv4 address
+> ping a..b\r
+< not a host name or a dotted IPv4 address
 < \r\n~>
 > status\r
 < \r\nexit status 2
