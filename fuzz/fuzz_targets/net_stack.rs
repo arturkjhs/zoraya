@@ -11,7 +11,7 @@
 //! 3. messages from the driver for `Nic::pump`, then whatever it queued;
 //! 4. requests for `Service::handle` on a root connection and on a
 //!    connection narrowed from it with an account (ordinal 7, then the
-//!    requests go to both, and `narrow` on the child), then `resolve_done`
+//!    requests go to both, and `narrow` on the child), then `answer_lookups`
 //!    with fuzzed tokens (ones in the lookups' range among them);
 //! 5. a ping answered by echo replies with the run's identifier and the input
 //!    as payload;
@@ -370,6 +370,7 @@ fuzz_target!(|data: &[u8]| {
             }
             // Answers of the resolver with fuzzed tokens: unknown ones, ones
             // in the range of the lookups, and ones that wrap.
+            let mut answers = Vec::new();
             for (i, c) in rest.chunks_exact(4).enumerate() {
                 let raw = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
                 let token = if i % 2 == 0 {
@@ -383,10 +384,20 @@ fuzz_target!(|data: &[u8]| {
                         from_hosts: raw & 2 != 0,
                     })
                 } else {
-                    Err(zoraya_net::dns::ResolveFail::Failure)
+                    // Every way a lookup ends, not only a failed one.
+                    Err(match (raw >> 8) % 6 {
+                        0 => zoraya_net::dns::ResolveFail::Failure,
+                        1 => zoraya_net::dns::ResolveFail::TimedOut,
+                        2 => zoraya_net::dns::ResolveFail::NoServer,
+                        3 => zoraya_net::dns::ResolveFail::NoSuchName,
+                        4 => zoraya_net::dns::ResolveFail::Busy,
+                        _ => zoraya_net::dns::ResolveFail::NoAnswer,
+                    })
                 };
-                let _ = service.resolve_done(&mut rig.fixed, Resolved { token, result }, rig.now);
+                answers.push(Resolved { token, result });
             }
+            // As `netd`'s loop hands a turn's answers over.
+            let _ = service.answer_lookups(&mut rig.fixed, answers, None, rig.now);
             for id in ids {
                 service.remove(id);
             }

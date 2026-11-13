@@ -1780,7 +1780,8 @@ stack's TCP client and its resolver are described under "TCP, names and `fetch`"
   (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`) and a summary (`4 sent, 4 received, 0% loss`,
   `rtt min/avg/max = ... ms`); the exit status is 1 when no reply came and 2 for wrong use. `netd` answers when the run ends,
   so the lines come together at the end. `PingReply` carries each request's round trip (`rtts`). Covered by
-  `tests/shell/net-fetch.script` (`make test-net-fetch`: an address and a `net.hosts` name), `net-dns.script` (names that do not
+  `tests/shell/net-fetch.script` (`make test-net-fetch`: an address and a `net.hosts` name), `net-lookup.script` (`make
+  test-net-lookup`: the first command of a boot, by name over the wire, answered late or never), `net-dns.script` (names that do not
   resolve or are local, with the host's resolver), `hand-run-net.script` (`make test-hand-run`, the production image against
   SLIRP's gateway), `t_netd` (an echo-only grant opens no TCP connection and pings no other host) and the host tests of
   `zoraya-abi`, `zoraya-net`, `zoraya-shell` and `zoraya-proto-net`.
@@ -1831,7 +1832,21 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
 - **The resolver** (`zoraya_net::dns`; the decoder is `zoraya-dns`). `net.hosts` first (and exempt from the local rule),
   then a cache of 64 names kept for the answer's TTL up to an hour, then A queries over one UDP socket to the servers of
   `status` (`net.dns`, else the lease's), attempts at 0, 1, 2 and 4 s to the servers in turn, up to 8 queries at once,
-  giving up at 8 s. An answer counts only from a configured server's port 53, with an identifier and question of a query in
+  giving up at 8 s (`zoraya_proto_net::LOOKUP_US`) with `status::TIMED_OUT` (`reason::LOOKUP_TIMED_OUT` for a `connect`;
+  proposed ADR-0316): "the name lookup timed out" in `ping` and `fetch`, `EAI_AGAIN` and `ETIMEDOUT` in `libposix`, apart
+  from `Unresolvable` (no such name, no A record, a server that said it failed). Every client's wait derives from that
+  bound (`ping_answer_us`, `CONNECT_ATTEMPT_US`) plus 5 s, so "the network service did not answer" means a `netd` that is
+  gone or stuck. A query to a server whose MAC is unknown is not lost: smoltcp keeps it in the socket and sends it with
+  the ARP reply. smoltcp asks for one neighbour per second, though, so the stack asks for the gateway and the DNS servers
+  on the link itself (an ARP request it builds) when the interface is configured, and for the gateway when a lookup goes
+  out and its last request is older than 30 s (`PROBE_FRESH_US`; smoltcp forgets a neighbour 60 s after its last frame):
+  the connection or echo request that follows a first lookup does not wait that second. The answer to a `ping` by name
+  comes inside a turn, after the stack's poll, so `Service::answer_lookups` makes the loop come back at once when its
+  run starts there (before the fix of proposed ADR-0316 the loop slept on the delay of before the run, none at all, and
+  the first `ping NAME` of a boot ended with the client's wait). A lookup asked while a DHCP lease is still to come
+  (no `net.dns` and no lease, or the lease gone) is kept under its normal bound and goes out once the lease is there;
+  `NoServer` (a static interface with no `net.dns`) is `status::UNAVAILABLE` and, for a `connect`, `reason::UNREACHABLE`.
+  An answer counts only from a configured server's port 53, with an identifier and question of a query in
   flight; the decoder takes an address only from a record owned by the name or by a CNAME chain from it. An address that is
   loopback, link-local, multicast, unspecified, the interface's own, the gateway or a DNS server is refused with `Local`
   unless an address rule covers it (ADR-0223 item 4). Not built: AAAA, TCP for a truncated answer, negative caching, a
@@ -1857,7 +1872,13 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   (`make test-net-fetch`) against `tools/test-httpd`, a bounded server on the host's 127.0.0.1 that the guest reaches at
   10.0.2.2: a page byte for byte, bodies of 1,000,000 (length), 300,000 (chunked, by name), 70,000 (until close) and
   4,000,000 bytes by checksum, a file written and read back, 404, a redirect, a cut connection, a refused port, SLIRP's DNS
-  forwarder answering `localhost` (refused as local) and `nothing.invalid` (unresolvable), and bad URLs. The step runs the
+  forwarder answering `localhost` (refused as local) and `nothing.invalid` (unresolvable), and bad URLs. `make
+  test-net-lookup` (`tests/shell/net-lookup.script`, part of `make test-net`) boots the test image against
+  `tools/test-dns`, a bounded DNS server on the host's 127.0.0.1 that answers late (3 s) or never: the boot's first network
+  command is `ping` by name, then `fetch` by name, then the two silent names ("the name lookup timed out") and one that
+  does not exist; its `netd` takes the server's port from `/config/net-test-dns-port` (feature `net-test` only; port 53
+  needs root). `zoraya-test-dns --check-pcap` then reads the run's capture: one ARP request for the server before the
+  first query, and the echo request and the SYN within 0.5 s of their answers. The step runs the
   network without `restrict=on` (`tools/run-qemu.sh --net-open`); every other step keeps it. The fuzz target
   `fuzz/fuzz_targets/net_dns_http.rs` was compiled and driven with 400,000 random inputs in a scratch crate (not run under
   libFuzzer: no nightly toolchain here).
@@ -2313,6 +2334,8 @@ tools/
   test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol, plays serial and GUI
                           scripts (serial text with SGR sequences dropped); zoraya-crash-test
   test-summary.sh         make test's summary, with the logs in build/logs/
+  test-dns/               zoraya-test-dns: make test-net-lookup's DNS server on 127.0.0.1 (late or no answers)
+                          and the check of the step's capture
   mutants/                zoraya-mutants and its mutation lists (*.toml)
   adr-check/              zoraya-adr-check: ADR-0001 invariants
   mkramdisk/              zoraya-mkramdisk: packs user programs, and their descriptions as NAME.cmd

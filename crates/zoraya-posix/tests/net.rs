@@ -345,6 +345,7 @@ fn resolve_statuses_become_getaddrinfo_codes() {
         (status::UNRESOLVABLE, sock::EAI_NONAME, 0),
         (status::LOCAL, sock::EAI_NONAME, 0),
         (status::UNAVAILABLE, sock::EAI_AGAIN, 0),
+        (status::TIMED_OUT, sock::EAI_AGAIN, 0),
     ] {
         let mut t = rigged(Script {
             resolve: (st, vec![]),
@@ -382,6 +383,7 @@ fn a_refused_connect_is_the_errno_of_its_status_or_reason() {
         (reason::REFUSED, ECONNREFUSED),
         (reason::UNREACHABLE, ENETUNREACH),
         (reason::TIMED_OUT, ETIMEDOUT),
+        (reason::LOOKUP_TIMED_OUT, ETIMEDOUT),
         (reason::UNRESOLVABLE, EHOSTUNREACH),
         (reason::LOCAL, EHOSTUNREACH),
         (reason::OVER_QUOTA, ENOBUFS),

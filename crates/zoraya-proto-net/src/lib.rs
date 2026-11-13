@@ -22,7 +22,7 @@ use zoraya_abi::net::MAX_SCOPE_BYTES;
 use zoraya_protocol::{Below, Data, Seq, protocol};
 
 /// One of `status`.
-pub type Code = Below<8>;
+pub type Code = Below<9>;
 
 /// The status of every reply.
 pub mod status {
@@ -42,17 +42,21 @@ pub mod status {
     /// budget asks for more than the account or the column can give.
     pub const OVER_QUOTA: u32 = 5;
     /// A `resolve`: the name has no address (no such name, no A record, or
-    /// no answer in time).
+    /// a server that failed).
     pub const UNRESOLVABLE: u32 = 6;
     /// A `resolve`: every address the name has is local and no address rule
     /// covers it (ADR-0223 item 4).
     pub const LOCAL: u32 = 7;
+    /// A `resolve` or a `ping` by name: no server answered within
+    /// [`LOOKUP_US`](super::LOOKUP_US) (proposed ADR-0316).
+    pub const TIMED_OUT: u32 = 8;
 }
 
 /// Why a `connect` failed, as `Failed` says it on the connection channel
 /// (ADR-0222 item 3).
 pub mod reason {
-    /// The name has no address, or the servers did not answer.
+    /// The name has no address (no such name, no A record, or a server
+    /// that failed).
     pub const UNRESOLVABLE: u32 = 0;
     /// The peer answered with a reset.
     pub const REFUSED: u32 = 1;
@@ -69,10 +73,13 @@ pub mod reason {
     /// item 4; N4): connections or pending resolutions. `libposix` says
     /// `ENOBUFS`.
     pub const OVER_QUOTA: u32 = 6;
+    /// The name's lookup timed out: no server answered within
+    /// [`LOOKUP_US`](super::LOOKUP_US) (proposed ADR-0316).
+    pub const LOOKUP_TIMED_OUT: u32 = 7;
 }
 
 /// One of `reason`.
-pub type Reason = Below<7>;
+pub type Reason = Below<8>;
 
 /// Why an established connection ended abnormally, as `Reset` says it.
 pub mod reset {
@@ -90,6 +97,27 @@ pub mod source {
     pub const NONE: u32 = 0;
     pub const DHCP: u32 = 1;
     pub const STATIC: u32 = 2;
+}
+
+/// How long `netd`'s resolver works on one name, in microseconds: it asks
+/// its servers in turn (at 0, 1, 2 and 4 s) and, if none answered, gives up
+/// at this bound and answers `status::TIMED_OUT` (`reason::LOOKUP_TIMED_OUT`
+/// for a `connect`). A client that waits for a reply which may need a lookup
+/// waits at least this long (proposed ADR-0316): `netd` always answers.
+pub const LOOKUP_US: u64 = 8_000_000;
+/// Microseconds between two echo requests of one `ping` run.
+pub const PING_INTERVAL_US: u64 = 200_000;
+/// How long one address of a `connect` gets to answer the SYN, in
+/// microseconds (smoltcp retries inside it).
+pub const CONNECT_ATTEMPT_US: u64 = 10_000_000;
+
+/// The longest `netd` takes to answer a `ping` of `count` requests with
+/// `timeout_ms`, in microseconds: the lookup if it is by name, the requests'
+/// turns, and the wait for the last reply. A client adds its own margin.
+pub const fn ping_answer_us(by_name: bool, count: u32, timeout_ms: u32) -> u64 {
+    let lookup = if by_name { LOOKUP_US } else { 0 };
+    let turns = if count > 0 { count as u64 - 1 } else { 0 };
+    lookup + turns * PING_INTERVAL_US + timeout_ms as u64 * 1000
 }
 
 /// The most addresses one `resolve` answers.

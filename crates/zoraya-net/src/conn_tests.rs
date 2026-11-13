@@ -309,6 +309,7 @@ struct World {
     finished: Vec<(usize, Fake)>,
     scope: Vec<u8>,
     steps: Vec<Step>,
+    queues: Rc<RefCell<Queues>>,
 }
 
 fn scope_with(reach: &[ReachRule<'_>]) -> Vec<u8> {
@@ -321,9 +322,13 @@ fn scope_with(reach: &[ReachRule<'_>]) -> Vec<u8> {
 
 impl World {
     fn new(script: Script, hosts: &[(&str, [u8; 4])]) -> World {
-        let (a, b, _) = End::pair();
+        World::with_dns(script, hosts, vec![DNS])
+    }
+
+    fn with_dns(script: Script, hosts: &[(&str, [u8; 4])], dns: Vec<[u8; 4]>) -> World {
+        let (a, b, queues) = End::pair();
         let mut config = static_config();
-        config.dns = vec![DNS];
+        config.dns = dns;
         config.hosts = hosts.iter().map(|(n, a)| (n.to_string(), *a)).collect();
         World {
             client: Stack::new(a, CLIENT_MAC, config, 0, 3).unwrap(),
@@ -333,6 +338,7 @@ impl World {
             finished: Vec::new(),
             scope: Connection::root().scope_bytes().to_vec(),
             steps: Vec::new(),
+            queues,
         }
     }
 
@@ -729,7 +735,7 @@ fn an_answer_that_is_local_is_refused_unless_an_address_rule_covers_it() {
 }
 
 #[test]
-fn a_name_that_does_not_exist_or_is_not_answered_is_unresolvable() {
+fn a_name_that_does_not_exist_is_unresolvable_and_one_not_answered_times_out() {
     let mut w = World::new(Script::Sink, &[]);
     w.peer.dns_script = Box::new(|q| {
         let mut m = q.to_vec();
@@ -741,14 +747,16 @@ fn a_name_that_does_not_exist_or_is_not_answered_is_unresolvable() {
     w.connect(&fake, Target::Name("nothing.zoraya".into()), 80);
     assert!(w.run_until(5_000_000, |_| fake.failed().is_some()));
     assert_eq!(fake.failed(), Some(reason::UNRESOLVABLE));
-    // No answer at all: it gives up after its schedule, having asked again.
+    // No answer at all: it gives up after its schedule, having asked again,
+    // and says the lookup timed out (proposed ADR-0316), not that the name
+    // has no address.
     let mut w = World::new(Script::Sink, &[]);
     w.peer.dns_script = Box::new(|_| Vec::new());
     let fake = Fake::new(1024);
     w.connect(&fake, Target::Name("silent.zoraya".into()), 80);
     assert!(!w.run_until(7_000_000, |_| fake.failed().is_some()));
     assert!(w.run_until(2_000_000, |_| fake.failed().is_some()));
-    assert_eq!(fake.failed(), Some(reason::UNRESOLVABLE));
+    assert_eq!(fake.failed(), Some(reason::LOOKUP_TIMED_OUT));
     assert!(
         w.peer.dns_queries >= 3,
         "asked {} times",
@@ -827,7 +835,8 @@ fn an_answer_from_a_host_that_is_not_the_server_is_ignored() {
         w.turn();
     }
     assert!(w.run_until(10_000_000, |_| fake.failed().is_some()));
-    assert_eq!(fake.failed(), Some(reason::UNRESOLVABLE));
+    // The real server never answered: the lookup timed out.
+    assert_eq!(fake.failed(), Some(reason::LOOKUP_TIMED_OUT));
     assert!(w.client.dns_rejected() >= 1);
 }
 
@@ -856,6 +865,17 @@ fn resolve_refuses_bad_names_and_a_full_table_and_a_missing_server() {
         no_server.resolve(0, "a.zoraya", 0),
         Start::Failed(ResolveFail::NoServer)
     );
+}
+
+#[test]
+fn a_connect_by_name_with_no_server_is_unreachable_not_unresolvable() {
+    // A static interface with no `net.dns`: nobody to ask, which is a
+    // network problem and not "the name has no address" (ADR-0316).
+    let mut w = World::with_dns(Script::Sink, &[], Vec::new());
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("a.zoraya".into()), 80);
+    assert!(w.run_until(1_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::UNREACHABLE));
 }
 
 #[test]
@@ -1606,4 +1626,231 @@ mod ping_by_name {
         assert!(!w.client.ping_running());
         assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
     }
+}
+
+/// The targets of the ARP requests the client sent, in order.
+fn arp_requests(frames: &[Vec<u8>]) -> Vec<[u8; 4]> {
+    frames
+        .iter()
+        .filter(|f| f.len() >= 42 && f[12..14] == [0x08, 0x06] && f[20..22] == [0, 1])
+        .map(|f| [f[38], f[39], f[40], f[41]])
+        .collect()
+}
+
+/// Whether `frame` is a UDP datagram to port 53.
+fn is_dns_query(frame: &[u8]) -> bool {
+    frame.len() >= 42
+        && frame[12..14] == [0x08, 0x00]
+        && frame[23] == 17
+        && frame[36..38] == [0, 53]
+}
+
+#[test]
+fn the_first_query_to_a_server_whose_address_is_not_known_leaves_with_the_arp_reply() {
+    // The architect's first hypothesis for "the first `ping NAME` fails": the
+    // query sent while the server's MAC is unknown is dropped. It is not:
+    // smoltcp keeps the datagram in the socket, asks with ARP, and sends it
+    // as soon as the reply fills its cache, long before the resolver's
+    // retry at 1 s. The query starts before the stack's first poll, so no
+    // probe has asked for the server yet.
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 60)]);
+    let token = crate::conn::LOOKUP_BASE + 1;
+    assert_eq!(
+        w.client.resolve(token, "first.zoraya", w.now),
+        Start::Pending
+    );
+    // Woken as `netd` is: by a frame, or at the delay the turn asked for.
+    let mut answers = Vec::new();
+    while answers.is_empty() && w.now < 1_000_000 {
+        w.peer.poll(w.now);
+        let (delay, _) = w.conns.turn(&mut w.client, w.now, |_, _, _| {});
+        answers.extend(w.conns.take_lookups());
+        w.peer.poll(w.now);
+        if !answers.is_empty() {
+            break;
+        }
+        w.now += if w.client.link().has_input() {
+            100
+        } else {
+            delay.unwrap_or(1_000_000).max(1)
+        };
+    }
+    assert!(w.now < 100_000, "answered at {} us", w.now);
+    assert_eq!(w.peer.dns_queries, 1, "one query, no retry needed");
+    assert_eq!(answers[0].token, token);
+    assert_eq!(
+        answers[0].result.as_ref().map(|f| f.addresses.clone()),
+        Ok(vec![WEB])
+    );
+    // The query left after an ARP request for the server.
+    let q = w.queues.borrow();
+    let first_query = q.from_client.iter().position(|f| is_dns_query(f)).unwrap();
+    assert!(arp_requests(&q.from_client[..first_query]).contains(&DNS));
+}
+
+/// ARP requests the client sent for `target`.
+fn asked_for(w: &World, target: [u8; 4]) -> usize {
+    arp_requests(&w.queues.borrow().from_client)
+        .iter()
+        .filter(|a| **a == target)
+        .count()
+}
+
+#[test]
+fn a_lookup_asks_for_the_gateway_unless_it_was_asked_for_recently() {
+    // smoltcp asks for one neighbour a second: after the lookup's own ARP
+    // request, the SYN or echo request to the gateway that follows the
+    // answer waited a second when the gateway was not known. The stack asks
+    // for the gateway and the servers itself when the interface is
+    // configured, and for the gateway when a lookup goes out, at most once
+    // per `PROBE_FRESH_US`.
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 1)]);
+    w.run_until(100_000, |_| false);
+    assert_eq!(asked_for(&w, SERVER_IP), 1, "the gateway, when configured");
+    assert_eq!(asked_for(&w, DNS), 1, "the server, when configured");
+    let lookup = |w: &mut World, name: &str| {
+        let token = crate::conn::LOOKUP_BASE + 7;
+        assert_eq!(w.client.resolve(token, name, w.now), Start::Pending);
+        w.run_until(500_000, |_| false);
+        let _ = w.conns.take_lookups();
+    };
+    lookup(&mut w, "a.zoraya");
+    assert_eq!(asked_for(&w, SERVER_IP), 1, "fresh: not asked again");
+    assert_eq!(asked_for(&w, DNS), 1, "the server answered: known");
+    w.run_until(crate::stack::PROBE_FRESH_US, |_| false);
+    lookup(&mut w, "b.zoraya");
+    assert_eq!(
+        asked_for(&w, SERVER_IP),
+        2,
+        "stale: asked again with the lookup"
+    );
+}
+
+fn ping_name_request(name: &str, count: u32) -> Vec<u8> {
+    let mut out = vec![0u8; 512];
+    let n = zoraya_protocol::encode(
+        &zoraya_proto_net::Ping {
+            address: 0,
+            count: zoraya_protocol::Below(count),
+            timeout_ms: zoraya_protocol::Below(2000),
+            name: zoraya_protocol::Data(name.as_bytes()),
+        },
+        5,
+        &mut out,
+    )
+    .unwrap();
+    out.truncate(n);
+    out
+}
+
+/// One turn of `netd`'s loop as `user/src/bin/netd.rs` makes it: the
+/// connections' turn (which polls the stack), the lookups the service
+/// answers, the events. The replies go to `replies`; returns the delay the
+/// loop sleeps on.
+fn netd_turn(
+    w: &mut World,
+    service: &mut crate::service::Service,
+    replies: &mut Vec<(usize, Vec<u8>)>,
+) -> Option<i64> {
+    w.peer.poll(w.now);
+    let (delay, finished) = w.conns.turn(&mut w.client, w.now, |_, _, _| {});
+    w.finished.extend(finished);
+    let lookups = w.conns.take_lookups();
+    let (delay, r) = service.answer_lookups(&mut w.client, lookups, delay, w.now);
+    replies.extend(r);
+    for e in w.client.take_events() {
+        if let Event::PingDone(result) = e {
+            replies.extend(service.ping_done(result));
+        }
+    }
+    w.peer.poll(w.now);
+    delay
+}
+
+/// Runs `netd`'s loop for at most `limit_us` of time, waking only as `netd`
+/// does: for a frame from the peer, or when the delay its last turn asked
+/// for is over. `false` if it went to sleep with nothing that would wake it,
+/// or the limit passed, before `done`.
+fn run_as_netd(
+    w: &mut World,
+    service: &mut crate::service::Service,
+    replies: &mut Vec<(usize, Vec<u8>)>,
+    limit_us: i64,
+    done: impl Fn(&[(usize, Vec<u8>)]) -> bool,
+) -> bool {
+    let end = w.now + limit_us;
+    while w.now < end {
+        let delay = netd_turn(w, service, replies);
+        if done(replies) {
+            return true;
+        }
+        if w.client.link().has_input() {
+            w.now += 100;
+            continue;
+        }
+        match delay {
+            Some(d) => w.now += d.max(1),
+            // `port_wait` with no deadline and no frame to come.
+            None => return false,
+        }
+    }
+    false
+}
+
+#[test]
+fn a_ping_by_name_answered_over_the_wire_starts_its_run_without_another_wake_up() {
+    // The cause of "the first `ping NAME` of a boot fails" (TASK-26's hand
+    // run): the answer came in the turn's poll, the run started after it,
+    // and the loop slept on the delay it had computed before the run, which
+    // with no other timer was none at all. The run, and its reply, waited
+    // for something else to wake `netd`; the client gave up first.
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 300)]);
+    // The stack settles first (its probes are answered or not): nothing is
+    // due, the loop sleeps until a request comes.
+    w.run_until(2_000_000, |_| false);
+    let mut service = crate::service::Service::new();
+    let id = service.add(Connection::root()).unwrap();
+    let action = service.handle(
+        id,
+        &ping_name_request("web.zoraya", 2),
+        0,
+        &mut w.client,
+        w.now,
+    );
+    assert_eq!(action, crate::service::Action::Deferred);
+    let mut replies = Vec::new();
+    assert!(
+        run_as_netd(&mut w, &mut service, &mut replies, 5_000_000, |r| !r
+            .is_empty()),
+        "netd went to sleep with the run pending, or did not answer in time"
+    );
+    assert_eq!(w.peer.dns_queries, 1);
+    let (to, bytes) = &replies[0];
+    assert_eq!(*to, id);
+    let (_, r) = zoraya_protocol::decode::<zoraya_proto_net::PingReply>(bytes, 0).unwrap();
+    assert_eq!(r.status.0, zoraya_proto_net::status::OK);
+    assert_eq!(r.address, u32::from_be_bytes(WEB));
+    assert_eq!((r.sent, r.received), (2, 2));
+    // A name from the cache starts its run inside the request; that path
+    // never depended on the late answer.
+    let action = service.handle(
+        id,
+        &ping_name_request("web.zoraya", 1),
+        0,
+        &mut w.client,
+        w.now,
+    );
+    assert_eq!(action, crate::service::Action::Deferred);
+    replies.clear();
+    assert!(run_as_netd(
+        &mut w,
+        &mut service,
+        &mut replies,
+        3_000_000,
+        |r| !r.is_empty()
+    ));
+    assert_eq!(w.peer.dns_queries, 1);
 }
