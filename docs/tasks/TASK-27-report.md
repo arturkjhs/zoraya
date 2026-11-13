@@ -9,7 +9,7 @@ Running report, updated after each part. Part 9b's design was written by a Sonne
 |---|---|---|
 | **9a TLS for C, zlib, curl, wget** | implemented on `work/9a` (merged with `origin/main` at `a0cfc1f`, so it has 9b's kernel and libposix threads); ADR-0312 accepted 2026-11-13; ADR-0310 and ADR-0311 `proposed` (they only add decisions); OpenSSL rebuilt with threads; not merged; tests in the section "9a: OpenSSL with threads" below | |
 | **9b POSIX threads** | **design accepted 2026-11-13** (ADR-0300 to ADR-0309 accepted by the architect as recommended; ADR-0308 supersedes ADR-0100's "no threads" and the other places it lists); kernel step implemented on `work/9b`; ADR-0313 (the kernel as built) accepted 2026-11-13; libposix step on `work/9b-libc` (ADR-0314, ADR-0315 proposed). Next: 9a, then 9b implementation and 9d in parallel, then 9c. Thread calls stay 56 to 61 (the highest call on main is 55, `device_write`) | |
-| 9c CPython | not started | |
+| 9c CPython | implemented on `work/9c` (ADR-0320 `proposed`; `make python`, `make test-python`); gate closed, no candidate tag; see "9c: CPython" below | |
 | 9d NetSurf | not started | |
 | image addition (`EXTRA_ROOT`) | done inside 9a (`tools/run-disk.sh`, `make check-run-disk`), without descriptions for unknown programs; already on `work/9a` | |
 
@@ -427,3 +427,39 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
    by a release; there is no upstream release to pin. A new commit means a new line and a new hash.
 6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
    runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.
+
+## 9c: CPython (branch `work/9c`, 2026-11-13)
+
+### What exists
+- `ports/sources.lock` pins Python-3.15.2.tar.xz by the SHA-256 python.org publishes (`8b5536d2...797de`); python.org also publishes a
+  Sigstore bundle, and checking it is optional and not done (an earlier note here and in the session said python.org published no SHA-256: wrong, corrected on the architect's word).
+- `make python` (`ports/Makefile`): host Python 3.15.2 (`build/ports/host`), SQLite for the target, `libpyshim.a` (`ports/apps/pyshim.c`), the static
+  cross build with `zcc`, the install, byte code compiled by the host Python (`unchecked-hash`), and `build/rootfs-python`: `bin/python3` 15.5 MB and
+  `usr/lib/python3.15` 37 MB, 1226 files, 52 MB in all (`du` 52,364 KiB). The recipe ran end to end three times in this session (each patch change rebuilds it from the unpacked source).
+- Five patches in `ports/patches/python/` (`_ssl` fd BIO; environment, byte code and user site off; `asyncio` self-pipe on `os.pipe`; `main` on an 8 MiB thread stack; no `pyvenv.cfg` search in `getpath.py` and `site.py`), `ac_cv_header_sys_ioctl_h=no`
+  (so `set_blocking` uses `fcntl`: libposix's `ioctl` serves terminals only).
+- `user/describe/posix/python3.cmd`; `tools/run-disk.sh` with several colon-separated `EXTRA_ROOT`s and `DISK_SIZE`; `tests/python/` (`smoke.py`, `https_client.py`, `regr.py`, `regr-modules.txt`, `regr-ignore.txt`), `tests/shell/python.script`, `make test-python`;
+  CI wiring (`TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`, `tools/plan-lib.sh`, the workflow's cache paths and 30-minute timeout, `ci-build` builds `python`).
+- ADR-0320 (`proposed`, INV-0320-1 to -5), `docs/design.md` section "CPython (stage 9, 9c)".
+
+### What was run (HVF, M4, this session)
+- `make python`: ok (3 times). `make adr-check` and `make check`: ok after the ADR and the index (before the CI wiring; `make check-ci-jobs` ok after it).
+- Found by running, fixed: a process starts on a 64 KiB stack and CPython's overflow guard keeps 32 KiB, so the first `import` gave `RecursionError` (patch 0004); `os.set_blocking` failed with `ENOTTY` (ioctl `FIONBIO`: configure without `<sys/ioctl.h>`);
+  the shell hinted about `/pyvenv.cfg` (patch 0005); `ssl.create_default_context()` refuses the test PKI's certificates (no Authority Key Identifier, `VERIFY_X509_STRICT`): the test client clears that flag alone; `regrtest` needs `--tempdir` below `/tmp` (the program is not given a `stat` of `/`).
+- In the guest, one run of each part (by hand, in a harness with the same disk and script lines; the full `make test-python` run is in the last item): `python3 -V`; `-c`; exit statuses; `smoke.py` (flags `1 True 1`, `sqlite3` 3.54.1, `ssl` OpenSSL 3.5.9, `asyncio`, a thread, `fork`); `grants python3 ...` with and without `+net`;
+  the `asyncio` HTTPS client: `HTTP/1.1 200`, the page; an expired certificate refused ("certificate has expired"), a wrong-name one refused ("Hostname mismatch"), the server's log showing `ended after 0 request bytes` for both; `regr.py`: 17 modules, 3,114 tests, 51 skipped, `Result: SUCCESS`, 31 s.
+- Not run: TCG; CI; a full `make test-python` from a clean tree to the end is item below if present; `make test-changed`; the independent review.
+
+### Limits found (recorded in `docs/design.md`)
+- A program that Python starts has no random connection (ADR-0310, the same as under `dash`): another `python3` fails at start. Seven test cases of the listed modules start interpreters and are left out (`tests/python/regr-ignore.txt`, each with its reason).
+- `test_threading` (CPython's) ran 8.5 minutes and failed at thread creation with `Out of memory` (10 errors, 42 failures); not fixed, not in the subset; `test_thread`, `test_threading_local` and `test_queue` pass. A very large thread stack gives `MemoryError`.
+- No `socketpair`, `AF_UNIX`, server sockets, `posix_spawn`, shared modules, `ctypes`.
+- The shell prints hints for `/dev/urandom` and `/system/tls/roots` after a script that touches them without the grants.
+
+### Decisions (taken without asking, as told)
+Patch 0004 (the thread) over a larger initial stack in the kernel (an ABI constant for every process); no weakening of Python's hash randomization for a child with no random connection (the test cases are left out instead);
+no `-E`-style environment variable honoured; `test_threading` out of the subset; the client test clears `VERIFY_X509_STRICT` and not the test PKI's certificates (shared with other steps).
+
+### For the independent review (opus-review)
+Patch 0001 (`_ssl` BIO) and 0004 (the thread and the exit path: `exit()` from a non-main thread); the shims in `pyshim.c` (`dirfd`, `gethostbyname`, `execv`); the surface block of ADR-0320 (170 names added to `libc.a`);
+the environment policy (patch 0002) as a security boundary; `tools/run-disk.sh`'s colon-separated roots and the key; the `test_threading` out-of-memory finding.
