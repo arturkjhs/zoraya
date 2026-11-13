@@ -1,0 +1,82 @@
+diff -ruN a/src/config2setopts.c b/src/config2setopts.c
+--- a/src/config2setopts.c	2026-11-13 17:04:20
++++ b/src/config2setopts.c	2026-11-13 17:04:27
+@@ -1207,7 +1207,28 @@
+                         CURLSH *share)
+ {
+   const char *use_proto;
+-  CURLcode result = url_proto_and_rewrite(&per->url, config, &use_proto);
++  CURLcode result;
++
++#ifdef __zoraya__
++  /* Second line behind the option table (ADR-0321): whatever set them, the
++     verification flags and the roots are the built-in ones. */
++  config->insecure_ok = FALSE;
++  config->doh_insecure_ok = FALSE;
++  config->proxy_insecure_ok = FALSE;
++  config->ssl_no_revoke = FALSE;
++  config->ssl_revoke_best_effort = FALSE;
++  config->ssl_allow_beast = FALSE;
++  config->proxy_ssl_allow_beast = FALSE;
++  curlx_safefree(config->cacert);
++  curlx_safefree(config->capath);
++  curlx_safefree(config->proxy_cacert);
++  curlx_safefree(config->proxy_capath);
++  curlx_safefree(config->cipher_list);
++  curlx_safefree(config->proxy_cipher_list);
++  curlx_safefree(config->cipher13_list);
++  curlx_safefree(config->proxy_cipher13_list);
++#endif
++  result = url_proto_and_rewrite(&per->url, config, &use_proto);
+ 
+   /* Avoid having this setopt added to the --libcurl source output. */
+   if(!result)
+diff -ruN a/src/tool_getparam.c b/src/tool_getparam.c
+--- a/src/tool_getparam.c	2026-11-13 17:04:20
++++ b/src/tool_getparam.c	2026-11-13 17:04:20
+@@ -3038,6 +3038,45 @@
+       }
+       toggle = !(a->desc & ARG_NO);
+     }
++#ifdef __zoraya__
++    /* TLS verification and the roots at /system/tls/roots cannot be turned
++       off, replaced or weakened (ADR-0228 item 3, INV-0312-1, ADR-0321):
++       every option that does so is refused here, by its identity in the
++       option table, so --no-X, --expand-X, -k and -ks all end here. */
++    switch(a->cmd) {
++    case C_INSECURE:
++    case C_PROXY_INSECURE:
++    case C_DOH_INSECURE:
++    case C_CACERT:
++    case C_CAPATH:
++    case C_PROXY_CACERT:
++    case C_PROXY_CAPATH:
++    case C_CA_NATIVE:
++    case C_PROXY_CA_NATIVE:
++    case C_SSL_NO_REVOKE:
++    case C_SSL_REVOKE_BEST_EFFORT:
++    case C_SSL_ALLOW_BEAST:
++    case C_PROXY_SSL_ALLOW_BEAST:
++    case C_SSLV2:
++    case C_SSLV3:
++    case C_TLSV1:
++    case C_TLSV1_0:
++    case C_TLSV1_1:
++    case C_PROXY_TLSV1:
++    case C_CIPHERS:
++    case C_PROXY_CIPHERS:
++    case C_TLS13_CIPHERS:
++    case C_PROXY_TLS13_CIPHERS:
++      errorf("--%s is refused: TLS verification and the roots cannot be "
++             "turned off, replaced or weakened", a->lname);
++      err = PARAM_BAD_USE;
++      break;
++    default:
++      break;
++    }
++    if(err)
++      break;
++#endif
+     if((a->desc & ARG_TLS) && !feature_ssl) {
+       err = PARAM_LIBCURL_DOESNT_SUPPORT;
+       break;

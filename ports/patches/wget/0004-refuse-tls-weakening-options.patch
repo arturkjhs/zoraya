@@ -1,0 +1,55 @@
+diff -ruN a/src/init.c b/src/init.c
+--- a/src/init.c	2026-11-13 17:04:36
++++ b/src/init.c	2026-11-13 17:04:36
+@@ -944,6 +944,34 @@
+   if ((unsigned) comind >= countof (commands))
+     return NULL;
+ 
++#ifdef __zoraya__
++  /* TLS verification and the roots at /system/tls/roots cannot be turned
++     off, replaced or weakened (ADR-0228 item 3, INV-0312-1, ADR-0321).  Every
++     setting, from the command line, passes here, so the refusal does not
++     depend on which option or which spelling set it.  */
++  {
++    const char *name = commands[comind].name;
++    bool refuse = false;
++
++    if (!strcmp (name, "checkcertificate")
++        || !strcmp (name, "cacertificate")
++        || !strcmp (name, "cadirectory")
++        || !strcmp (name, "ciphers"))
++      refuse = true;
++    else if (!strcmp (name, "secureprotocol"))
++      refuse = !(c_strcasecmp (val, "auto") == 0
++                 || c_strcasecmp (val, "TLSv1_2") == 0
++                 || c_strcasecmp (val, "TLSv1_3") == 0);
++    if (refuse)
++      {
++        fprintf (stderr, _("%s is refused: TLS verification and the roots "
++                           "cannot be turned off, replaced or weakened\n"),
++                 com);
++        exit (WGET_EXIT_PARSE_ERROR);
++      }
++  }
++#endif
++
+   DEBUGP (("Setting %s (%s) to %s\n", com, commands[comind].name, val));
+   return commands[comind].action (com, val, commands[comind].place);
+ }
+diff -ruN a/src/openssl.c b/src/openssl.c
+--- a/src/openssl.c	2026-11-13 17:04:36
++++ b/src/openssl.c	2026-11-13 17:04:36
+@@ -342,6 +342,13 @@
+       goto error;
+     }
+ 
++#ifdef __zoraya__
++  /* Second line behind setval_internal (ADR-0321): the roots are the
++     built-in ones and the certificate is checked, whatever set the options. */
++  opt.ca_cert = NULL;
++  opt.ca_directory = NULL;
++  opt.check_cert = CHECK_CERT_ON;
++#endif
+   SSL_CTX_set_default_verify_paths (ssl_ctx);
+   SSL_CTX_load_verify_locations (ssl_ctx, opt.ca_cert, opt.ca_directory);
+ 
