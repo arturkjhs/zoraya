@@ -55,3 +55,37 @@ find = "|| scope.allows_echo_address(*a))"
 replace = "|| true)"
 note = "review of 62a7474 (3): a TCP rule for a local answer counted as an echo rule"
 tests = ["cargo test -q -p zoraya-net --lib ping_by_name"]
+
+# The slot of a ping whose connection went (service.rs `remove`, `resolve_done`);
+# conn_tests::ping_by_name.
+[[mutant]]
+id = "N-ping-remove-clears-slot"
+file = "crates/zoraya-net/src/service.rs"
+find = '''            *owner = None;
+        }
+    }'''
+replace = '''            *owner = None;
+            self.ping = None;
+        }
+    }'''
+note = "remove frees the slot while the run goes on: the next asker is handed the run's result"
+tests = ["cargo test -q -p zoraya-net --lib ping"]
+
+[[mutant]]
+id = "N-ping-named-no-running-check"
+file = "crates/zoraya-net/src/service.rs"
+find = '''                    || stack.ping_running()
+'''
+replace = '''
+'''
+note = "a named ping does not look at the stack's own run"
+tests = ["cargo test -q -p zoraya-net --lib ping"]
+
+[[mutant]]
+id = "N-ping-lookup-end-keeps-slot"
+file = "crates/zoraya-net/src/service.rs"
+find = '''            self.ping = None;
+            return None;'''
+replace = '''            return None;'''
+note = "the lookup of a gone connection ends without freeing the slot: Busy for ever"
+tests = ["cargo test -q -p zoraya-net --lib ping"]

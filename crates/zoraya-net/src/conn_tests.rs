@@ -1499,4 +1499,111 @@ mod ping_by_name {
         assert_ne!(code(&reply), status::OK);
         assert!(!w.client.ping_running());
     }
+
+    /// A `ping` of an address, with a 1 ms wait: the run ends at once.
+    fn ping_address(service: &mut Service, w: &mut World, id: usize) -> Action {
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &Ping {
+                address: u32::from_be_bytes(GATEWAY),
+                count: Below(1),
+                timeout_ms: Below(1),
+                name: Data(b""),
+            },
+            9,
+            &mut out,
+        )
+        .unwrap();
+        service.handle(id, &out[..n], 0, &mut w.client, w.now)
+    }
+
+    /// B, with an echo rule for names under `zoraya`, and a resolver that
+    /// never answers (so a named ping of B stays in its lookup).
+    fn world_with_b() -> (World, Service, usize, usize) {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|_| Vec::new());
+        let mut service = Service::new();
+        let a = service.add(Connection::root()).unwrap();
+        let scope = echo_scope(&[(ScopeTarget::Wildcard("zoraya"), Protocols::ECHO)]);
+        let b = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        (w, service, a, b)
+    }
+
+    fn busy(action: Action) {
+        let Action::Reply(bytes) = action else {
+            panic!("busy, got {action:?}");
+        };
+        assert_eq!(code(&bytes), status::BUSY);
+    }
+
+    #[test]
+    fn a_run_whose_connection_went_is_not_handed_to_a_named_ping_that_follows() {
+        // Kills the removal of both defences together (the slot kept by
+        // `remove`, and the stack's own check).
+        let (mut w, mut service, a, b) = world_with_b();
+        assert_eq!(ping_address(&mut service, &mut w, a), Action::Deferred);
+        service.remove(a);
+        busy(ask(&mut service, &mut w, b, "b.zoraya"));
+        assert!(w.run_until(10_000_000, |w| !w.client.ping_running()));
+        for e in w.client.take_events() {
+            if let Event::PingDone(r) = e {
+                assert!(service.ping_done(r).is_none(), "A's result goes to nobody");
+            }
+        }
+        // The slot is free again.
+        assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
+    }
+
+    #[test]
+    fn the_slot_of_a_gone_connection_stays_taken_until_its_run_is_delivered() {
+        // The run is over in the stack, its end not yet delivered: only the
+        // slot (not `ping_running`) keeps B out. Kills a `remove` that clears
+        // the slot.
+        let (mut w, mut service, a, b) = world_with_b();
+        assert_eq!(ping_address(&mut service, &mut w, a), Action::Deferred);
+        service.remove(a);
+        assert!(w.run_until(10_000_000, |w| !w.client.ping_running()));
+        busy(ask(&mut service, &mut w, b, "b.zoraya"));
+        for e in w.client.take_events() {
+            if let Event::PingDone(r) = e {
+                assert!(service.ping_done(r).is_none(), "A's result goes to nobody");
+            }
+        }
+        assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
+    }
+
+    #[test]
+    fn a_named_ping_is_refused_while_the_stack_runs_one_the_slot_does_not_know() {
+        // Defence in depth: the slot is free but a run goes. Kills the removal
+        // of the `ping_running` check.
+        let (mut w, mut service, _a, b) = world_with_b();
+        w.client.ping(GATEWAY, 1, 1_000, w.now).unwrap();
+        busy(ask(&mut service, &mut w, b, "b.zoraya"));
+        assert!(w.client.ping_running());
+    }
+
+    #[test]
+    fn a_named_ping_whose_connection_went_in_its_lookup_frees_the_slot() {
+        // A pings by name and goes; B takes A's id; the lookup ends (nobody
+        // answers): no run for A, and B's own ping is not refused as busy.
+        // Kills the removal of the slot release at the lookup's end.
+        let (mut w, mut service, a, _b) = world_with_b();
+        let scope = echo_scope(&[(ScopeTarget::Wildcard("zoraya"), Protocols::ECHO)]);
+        service.remove(_b);
+        service.remove(a);
+        let a = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        assert_eq!(ask(&mut service, &mut w, a, "a.zoraya"), Action::Deferred);
+        service.remove(a);
+        let b = service
+            .add(Connection::new(rights::REACH, &scope).unwrap())
+            .unwrap();
+        assert_eq!(b, a, "ids are reused");
+        assert!(lookup(&mut service, &mut w).is_none(), "no reply, no run");
+        assert!(!w.client.ping_running());
+        assert_eq!(ask(&mut service, &mut w, b, "b.zoraya"), Action::Deferred);
+    }
 }
