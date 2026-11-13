@@ -19,7 +19,7 @@
 #     test_locale_caching, test_locale_compiled);
 #   - they ask for a very large thread stack, which does not fit the machine
 #     (test_highly_nested_objects_decoding: MemoryError).
-# test_threading is listed, with the cases that start another interpreter or
+# test_threading is NOT in the CI subset (regr-modules.txt): on HVF it took 15.5 of the 16 minutes of the run and ended 'env changed' from an OSError in do_fork_and_wait (fork out of memory), so under TCG it would pass the 30 minute job limit; run it by hand. Its notes below still hold: with the cases that start another interpreter or
 # name a thread over 15 bytes left out (regr-ignore.txt). It once failed with
 # "OSError: Out of memory"; that was os.fork (no copy-on-write: a child copies the
 # whole writable space, and the interpreter's stack was 8 MiB then, ADR-0320
