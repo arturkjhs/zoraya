@@ -1,0 +1,57 @@
+# The thread kernel of part 9b step 1 (ADR-0300, ADR-0301, ADR-0313): the
+# sweep and its chain, the refund before the wake, the creating calls' undo.
+# Minutes per mutant: one QEMU configuration. Added by the review of step 1,
+# whose surviving mutants these were (t_thread ended with only main blocked).
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "T-no-sweep"
+file = "kernel/src/process.rs"
+find = 'thread::wake_siblings(&process);'
+replace = ''
+note = "INV-0300-3: the first leaver of an ending process wakes the others (t_thread sweep)"
+
+[[mutant]]
+id = "T-no-chain-wake"
+file = "kernel/src/process.rs"
+find = 'sched::wake(first);'
+replace = ''
+note = "ADR-0300 item 6: each leaver wakes the new first thread, so siblings past the first step are reached"
+
+[[mutant]]
+id = "T-loop-ignores-exit"
+file = "kernel/src/thread.rs"
+find = 'break Err(Status::Cancelled);'
+replace = ''
+note = "INV-0301-5: a futex waiter woken by the sweep sees the ending and leaves"
+
+[[mutant]]
+id = "T-request-exit-wakes-nobody"
+file = "kernel/src/process.rs"
+find = 'sched::wake(thread);'
+occurrence = 1
+replace = ''
+note = "request_exit wakes the first thread; with nobody woken the process ends only at a deadline"
+
+[[mutant]]
+id = "T-refund-after-wake"
+file = "kernel/src/syscall.rs"
+find = 'sched::current().release_thread();'
+replace = ''
+note = "INV-0313-3: the refund precedes the clear store and its wake (t_thread clear)"
+
+[[mutant]]
+id = "T-device-map-unlocked"
+file = "kernel/src/syscall.rs"
+find = '''        let _map = MapGuard::acquire(&self.process)?;
+        let mapping = device.begin_mapping()?;'''
+replace = '''        let mapping = device.begin_mapping()?;'''
+note = "ADR-0301 item 6: device_map takes the mapping lock; no test reaches it (needs a device handle in a threaded process): expected to survive"
+
+[[mutant]]
+id = "T-stream-keeps-handles"
+file = "kernel/src/syscall.rs"
+find = 'let gone = [handles.remove(read), handles.remove(write)];'
+replace = 'let gone: [Option<_>; 2] = [None, None];'
+note = "a failed stream_create takes both handles back; the pause that exposes it needs a heap growth, so expected to survive"

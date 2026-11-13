@@ -143,6 +143,10 @@ fn create_and_exit() {
         thread_create(entry_of(tls_probe), base + SMALL_STACK, base, 0xabcd_0000).expect("thread");
     join(base);
     assert_eq!(SEEN_TLS.load(SeqCst), 0xabcd_0000);
+    // The thread has ended (its object is cut): the handle still open here
+    // refuses an interrupt as a bad state (ADR-0300 item 5).
+    settle();
+    assert_err!(thread_interrupt(t), Status::BadState);
     handle_close(t).expect("close");
     println!("t_thread: create ok");
 }
@@ -462,6 +466,24 @@ fn interrupts() {
         // The thread has ended: its handle was closed by it, so the interrupt
         // of a stale handle is a bad handle.
         assert_err!(thread_interrupt(target), Status::BadHandle);
+        handle_close(t).expect("close");
+    }
+    // The other order, forced: the waiter is blocked in the futex (a sleep
+    // of the main thread lets it get there) before the interrupt.
+    for _ in 0..100 {
+        BLOCKED.store(0, SeqCst);
+        RESULT.store(0, SeqCst);
+        let base = new_stack();
+        word(base).store(1, SeqCst);
+        let t = thread_create(entry_of(waiter), base + SMALL_STACK, base, 0).expect("thread");
+        while BLOCKED.load(SeqCst) == 0 {
+            thread_yield();
+        }
+        sleep_until(clock_monotonic() + 2 * MS);
+        let target = Handle::new(TARGET.load(SeqCst)).expect("handle");
+        thread_interrupt(target).expect("interrupt a blocked thread");
+        join(base);
+        assert_eq!(RESULT.load(SeqCst), 2, "the blocked wait returned early");
         handle_close(t).expect("close");
     }
     // INV-0313-2: no node of a thread that is not waiting stays on the list.
@@ -865,7 +887,130 @@ fn ending() {
     println!("t_thread: ending ok");
 }
 
-// ---- a process full of threads: the bound, and a kill with 127 sleepers.
+// ---- INV-0301-5/INV-0300-3: the sweep reaches every sibling, however it sleeps.
+
+const SWEEP_FUTEX: usize = 90;
+const SWEEP_SLEEP: usize = 30;
+static SWEEP_WORD: AtomicU32 = AtomicU32::new(0);
+
+extern "C" fn sweep_futex(_: u64) -> ! {
+    let c = counters(SHARED.load(SeqCst));
+    c[0].fetch_add(1, SeqCst);
+    loop {
+        let _ = futex_wait(&SWEEP_WORD as *const AtomicU32 as u64, 0, DEADLINE_INFINITE);
+    }
+}
+
+extern "C" fn sweep_sleep(_: u64) -> ! {
+    let c = counters(SHARED.load(SeqCst));
+    c[0].fetch_add(1, SeqCst);
+    loop {
+        sleep_until(clock_monotonic() + 100_000 * MS);
+    }
+}
+
+extern "C" fn sweep_trigger(role: u64) -> ! {
+    let c = counters(SHARED.load(SeqCst));
+    while c[1].load(SeqCst) == 0 {
+        thread_yield();
+    }
+    if role == 0 {
+        process_exit(5)
+    }
+    // SAFETY: deliberately invalid: the page at 0 is never mapped.
+    unsafe { core::ptr::write_volatile(core::ptr::without_provenance_mut::<u64>(8), 1) };
+    thread_exit(0, 0, 0)
+}
+
+/// 121 threads, none runnable: 90 in a futex wait with no deadline, 30 in a
+/// sleep of 100 s, and the main thread in a futex wait. Whatever ends the
+/// process must reach them all through the sweep and its chain (more than
+/// one step of 64), not through a deadline.
+fn sweep_child(role: &[u8]) -> i32 {
+    let object = Handle::new(8).expect("slot");
+    let shared = memory_map(object, 0, 4096, MapFlags::WRITE).expect("map shared");
+    SHARED.store(shared, SeqCst);
+    for i in 0..SWEEP_FUTEX + SWEEP_SLEEP {
+        let base = new_stack();
+        let entry = if i < SWEEP_FUTEX {
+            sweep_futex
+        } else {
+            sweep_sleep
+        };
+        thread_create(entry_of(entry), base + SMALL_STACK, 0, 0).expect("sibling");
+    }
+    match role {
+        b"sweep-exit" | b"sweep-fault" => {
+            let base = new_stack();
+            let kind = u64::from(role == b"sweep-fault");
+            thread_create(entry_of(sweep_trigger), base + SMALL_STACK, kind, 0).expect("trigger");
+        }
+        _ => {}
+    }
+    loop {
+        let _ = futex_wait(&SWEEP_WORD as *const AtomicU32 as u64, 0, DEADLINE_INFINITE);
+    }
+}
+
+fn ends_with_sleepers(role: &[u8]) {
+    let shared = memory_create(4096, MemoryFlags::NONE).expect("shared");
+    let view = memory_map(shared, 0, 4096, MapFlags::WRITE).expect("view");
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    let mut buffer = [0; 512];
+    let program = image("t_thread");
+    let mut e = Encoder::new(&mut buffer, room, program);
+    e.handle(console_entry());
+    e.handle(zoraya_user::dup(
+        8,
+        shared,
+        Rights::READ.union(Rights::WRITE).union(Rights::DUPLICATE),
+    ));
+    e.arg(role);
+    let length = e.finish().expect("room");
+    let child = spawn(&buffer[..length]).expect("spawn");
+    handle_close(program).expect("image");
+    let c = counters(view);
+    let start = clock_monotonic();
+    while c[0].load(SeqCst) < (SWEEP_FUTEX + SWEEP_SLEEP) as u64 {
+        assert!(
+            clock_monotonic() - start < 20_000 * MS,
+            "siblings not ready"
+        );
+        thread_yield();
+    }
+    // Let the last of them reach its wait.
+    sleep_until(clock_monotonic() + 50 * MS);
+    let trigger = clock_monotonic();
+    if role == b"sweep-kill" {
+        job_kill(room).expect("kill");
+    } else {
+        c[1].store(1, SeqCst);
+    }
+    let record = wait_exit(child);
+    let took = clock_monotonic() - trigger;
+    match role {
+        b"sweep-exit" => assert_eq!((record.reason, record.code), (ExitReason::Exited, 5)),
+        b"sweep-fault" => assert_eq!(record.reason, ExitReason::Fault),
+        _ => assert_eq!(record.reason, ExitReason::Killed),
+    }
+    // Far below any deadline in the child (100 s), and below the 1 s of the
+    // sleeps the older case used: the sweep woke them.
+    assert!(took < 400 * MS, "the process took {} ms to end", took / MS);
+    handle_close(child).expect("close");
+    handle_close(room).expect("close");
+    memory_unmap(view, 4096).expect("unmap");
+    handle_close(shared).expect("close");
+    settle();
+}
+
+fn sweeping() {
+    ends_with_sleepers(b"sweep-exit");
+    ends_with_sleepers(b"sweep-fault");
+    ends_with_sleepers(b"sweep-kill");
+    println!("t_thread: sweep ok");
+}
+
+// ---- a process full of threads: the bound, and a wake of 127 sleepers.
 
 static GO: AtomicU32 = AtomicU32::new(0);
 
@@ -903,7 +1048,8 @@ fn full_process_child() -> i32 {
         woken += futex_wake(&GO as *const AtomicU32 as u64, 128).expect("wake");
         thread_yield();
     }
-    // Then park everyone again and be killed by the parent.
+    // The sleepers have all left by now; the process ends by the main
+    // thread's return. (Ending with 127 sleepers still blocked is `sweeping`.)
     0
 }
 
@@ -934,9 +1080,10 @@ fn main() -> i32 {
         Some(b"quota") => return quota_child(),
         Some(role @ (b"spin-exit" | b"spin-fault" | b"spin-park")) => return spin_child(role),
         Some(b"full") => return full_process_child(),
+        Some(role @ (b"sweep-exit" | b"sweep-fault" | b"sweep-kill")) => return sweep_child(role),
         _ => {}
     }
-    let steps: [(&str, fn()); 14] = [
+    let steps: [(&str, fn()); 15] = [
         ("create", create_and_exit),
         ("refusals", refusals_change_nothing),
         ("joined", join_and_unmap_rounds),
@@ -950,6 +1097,7 @@ fn main() -> i32 {
         ("clear", clear_refund_precedes_the_wake),
         ("quota", quota),
         ("ending", ending),
+        ("sweep", sweeping),
         ("full", full_process),
     ];
     for (name, run) in steps {
