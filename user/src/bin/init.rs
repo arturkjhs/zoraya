@@ -101,6 +101,8 @@ fn session() -> Handle {
             memory: own.map(|m| m / 4 * 3),
             processes: Some(SESSION_PROCESSES),
             cpu: None,
+            // Three times the processes (ADR-0307 item 4, INV-0307-3).
+            threads: zoraya_rooms::threads_for(SESSION_PROCESSES),
         };
         zoraya_user::job_set_limits(job, &limits).ok()?;
         Some(job)

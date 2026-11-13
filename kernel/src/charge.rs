@@ -68,6 +68,7 @@ impl<'a> Tree for JobTree<'a> {
 fn refused(r: Refusal<&Job>) -> Status {
     let field = match r.field {
         Field::Processes => QuotaField::Processes,
+        Field::Threads => QuotaField::Threads,
         _ => QuotaField::Memory,
     };
     LAST_REFUSED.store(field as u64, Ordering::Relaxed);
@@ -104,6 +105,20 @@ pub fn refund_process(job: &Job) {
     walk::refund(&mut JobTree(PhantomData), job, Field::Processes, 1);
 }
 
+/// Charges one live thread to `job` and its ancestors, or refuses.
+pub fn charge_thread(job: &Job) -> Result<(), Status> {
+    let result = {
+        let _walk = WALK.lock();
+        walk::charge(&mut JobTree(PhantomData), job, Field::Threads, 1)
+    };
+    result.map_err(refused)
+}
+
+pub fn refund_thread(job: &Job) {
+    let _walk = WALK.lock();
+    walk::refund(&mut JobTree(PhantomData), job, Field::Threads, 1);
+}
+
 /// The counters of `job` for `job_get_usage`, with the limit each has
 /// (its own, not the effective one), and the signal cleared if asked.
 pub fn counters(job: &Job) -> Counters {
@@ -111,13 +126,20 @@ pub fn counters(job: &Job) -> Counters {
     *job.acct().lock()
 }
 
-/// Sets `memory` and `processes` limits together, or neither (INV-0261-3).
-pub fn set_limits(job: &Job, memory: Option<u64>, processes: Option<u32>) -> Result<(), Status> {
+/// Sets `memory`, `processes` and `threads` limits together, or none
+/// (INV-0261-3, ADR-0307 item 2).
+pub fn set_limits(
+    job: &Job,
+    memory: Option<u64>,
+    processes: Option<u32>,
+    threads: Option<u32>,
+) -> Result<(), Status> {
     let _walk = WALK.lock();
     let mut tree = JobTree(PhantomData);
     let before = tree.counters(job);
     let result = walk::set_limit(&mut tree, job, Field::Memory, memory)
-        .and_then(|()| walk::set_limit(&mut tree, job, Field::Processes, processes.map(u64::from)));
+        .and_then(|()| walk::set_limit(&mut tree, job, Field::Processes, processes.map(u64::from)))
+        .and_then(|()| walk::set_limit(&mut tree, job, Field::Threads, threads.map(u64::from)));
     match result {
         Ok(()) => Ok(()),
         Err(_) => {
@@ -135,6 +157,7 @@ pub struct Paid {
     user: u64,
     kernel: u64,
     process: bool,
+    thread: bool,
 }
 
 impl Paid {
@@ -144,6 +167,7 @@ impl Paid {
             user: 0,
             kernel: 0,
             process: false,
+            thread: false,
         }
     }
 
@@ -176,6 +200,30 @@ impl Paid {
         Ok(())
     }
 
+    /// Charges one live thread (ADR-0307 item 1). Taken after the process's
+    /// slot and before its memory, so the field that refuses is the first
+    /// that would be passed.
+    pub fn thread(&mut self) -> Result<(), Status> {
+        if let Some(job) = &self.job
+            && !self.thread
+        {
+            charge_thread(job)?;
+        }
+        self.thread = true;
+        Ok(())
+    }
+
+    /// The thread ended: its place in the count goes, its memory stays until
+    /// the record is dropped (`thread_exit`, ADR-0307 item 7).
+    pub fn release_thread(&mut self) {
+        if self.thread {
+            if let Some(job) = &self.job {
+                refund_thread(job);
+            }
+            self.thread = false;
+        }
+    }
+
     /// The process ended: its slot in the count goes, its memory stays until
     /// the object is dropped.
     pub fn release_process(&mut self) {
@@ -185,6 +233,15 @@ impl Paid {
             }
             self.process = false;
         }
+    }
+
+    /// A thread ended: the `threads` figure and the kernel memory it holds go
+    /// back at once (ADR-0307 item 7). The record and the stack are freed
+    /// a little later, by the reaper.
+    pub fn release_exited(&mut self) {
+        self.release_thread();
+        let held = self.kernel;
+        self.release_kernel(held);
     }
 
     /// Gives back `bytes` of kernel memory taken with [`Paid::kernel`].
@@ -223,6 +280,9 @@ impl Drop for Paid {
             }
             if self.process {
                 refund_process(job);
+            }
+            if self.thread {
+                refund_thread(job);
             }
         }
     }

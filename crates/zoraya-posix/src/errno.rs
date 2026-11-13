@@ -133,6 +133,9 @@ pub fn from_refusal(field: Option<QuotaField>, call: Call) -> i32 {
     match field {
         Some(QuotaField::Memory) => ENOMEM,
         Some(QuotaField::Processes) => EAGAIN,
+        // pthread_create's code for a limit on the number of threads
+        // (ADR-0307 item 6).
+        Some(QuotaField::Threads) => EAGAIN,
         None => from_status(Status::OverQuota, call),
     }
 }

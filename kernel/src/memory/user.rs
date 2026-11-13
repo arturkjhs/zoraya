@@ -413,8 +413,9 @@ impl AddressSpace {
     /// The third part: the range is mapped; records it and keeps `holder`.
     pub fn map_commit(&mut self, va: u64, length: u64, attributes: Attributes, holder: Holder) {
         let index = self.mappings.partition_point(|m| m.va < va);
-        // The room was reserved by `map_reserve`, and nothing else maps in
-        // between: the process's one thread is in this call.
+        // `map_reserve` reserved the list's room (it records no mapping), and
+        // nothing else maps in between: the caller holds the process's
+        // mapping lock (ADR-0301 item 6).
         self.mappings.insert(
             index,
             Mapping {
@@ -424,6 +425,17 @@ impl AddressSpace {
                 holder,
             },
         );
+    }
+
+    /// Whether the page holding `va` is mapped writable for EL0 (ADR-0300
+    /// item 2: a new thread's stack must be). The main stack is in the table
+    /// but in no mapping record, so the table is asked.
+    pub fn user_writable(&self, va: u64) -> bool {
+        self.table.translate(&self.memory, va).is_some_and(|m| {
+            m.attributes.write
+                && m.attributes.user
+                && m.attributes.memory == zoraya_pagetable::MemoryType::Normal
+        })
     }
 
     /// Whether a mapping is exactly `[va, va + length)`.

@@ -35,6 +35,7 @@ mod sync;
 mod syscall;
 #[cfg(feature = "qemu-test")]
 mod testing;
+mod thread;
 mod timer;
 
 #[cfg(not(feature = "qemu-test"))]

@@ -5,17 +5,17 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE, USAGE_SIZE_CPU};
+use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE, USAGE_SIZE_THREADS};
 use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
-    Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
-    Detail, DeviceObject, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason,
-    ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags,
-    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer,
-    PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind,
-    Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject,
-    StreamWriteObject, UsageFlags, request_value,
+    Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, Count,
+    DEADLINE_INFINITE, Detail, DeviceObject, DirectoryEntry, Disposition, EntryPoint, EventObject,
+    ExitCode, ExitReason, ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags,
+    JobObject, MapFlags, MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out,
+    Packet, PacketBuffer, PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex,
+    RelativePath, RequestKind, Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status,
+    StreamReadObject, StreamWriteObject, UsageFlags, Word32, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_elf::{EHDR_SIZE, Header, Program};
@@ -36,6 +36,7 @@ use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
 use crate::stream::Stream;
+use crate::thread::{self, MapGuard};
 use crate::{console, port, print, ramdisk, sched, steps, timer};
 
 /// Longest `console_write`.
@@ -135,8 +136,97 @@ fn deadline(raw: zoraya_abi::Deadline) -> Deadline {
 struct Calls<'f> {
     process: Arc<Process>,
     exit: Option<ExitRecord>,
+    /// `thread_exit` ran: the calling thread leaves after the call, and the
+    /// process goes on unless it was the last (ADR-0300 item 3).
+    end_thread: bool,
     /// The caller's registers at its `svc`, for `snapshot_process`.
     frame: &'f Frame,
+}
+
+/// The handles a `Move` list holds from its check until the child exists
+/// (ADR-0313 item 7): held handles are seen, duplicated, closed and moved by
+/// no sibling, so the checked entry is the one that leaves, however long the
+/// call pauses. Dropping the claim gives them all back; `finish` takes them.
+struct MoveClaim {
+    process: Arc<Process>,
+    held: Vec<Handle>,
+    taken: Vec<zoraya_handle::Entry<Object>>,
+    /// The table keeps a room for the child's handle (ADR-0313 item 8).
+    kept: bool,
+}
+
+impl MoveClaim {
+    /// Room for `room` handles, so that `hold` and `finish` allocate nothing.
+    fn new(process: &Arc<Process>, room: usize) -> Result<MoveClaim, Status> {
+        let mut held = Vec::new();
+        held.try_reserve_exact(room).map_err(|_| Status::NoMemory)?;
+        let mut taken = Vec::new();
+        taken
+            .try_reserve_exact(room)
+            .map_err(|_| Status::NoMemory)?;
+        Ok(MoveClaim {
+            process: process.clone(),
+            held,
+            taken,
+            kept: false,
+        })
+    }
+
+    /// Keeps a room in the caller's table for the child's handle, so that the
+    /// insert after the pause cannot fail with the child already made.
+    fn keep_room(&mut self, handles: &mut HandleTable) -> Result<(), Status> {
+        handles.keep_room()?;
+        self.kept = true;
+        Ok(())
+    }
+
+    /// The child's handle, into the kept room: cannot fail.
+    fn insert_child(&mut self, child: Arc<Process>) -> Result<Handle, Status> {
+        self.kept = false;
+        self.process.handles.lock().insert_kept(
+            Object::Process(child),
+            ProcessObject::RIGHTS,
+            object::next_id(),
+        )
+    }
+
+    /// Checks `handle` for `rights` and holds it. At most `room` times.
+    fn hold(
+        &mut self,
+        handles: &mut HandleTable,
+        handle: Handle,
+        rights: Rights,
+    ) -> Result<zoraya_handle::Entry<Object>, Status> {
+        let entry = handles.begin_move(handle, rights)?;
+        self.held.push(handle);
+        Ok(entry)
+    }
+
+    /// The held entries, out of the table in one hold of its lock.
+    fn finish(&mut self) -> Vec<zoraya_handle::Entry<Object>> {
+        let mut handles = self.process.handles.lock();
+        for handle in self.held.drain(..) {
+            if let Some(entry) = handles.finish_move(handle) {
+                self.taken.push(entry);
+            }
+        }
+        core::mem::take(&mut self.taken)
+    }
+}
+
+impl Drop for MoveClaim {
+    fn drop(&mut self) {
+        if self.held.is_empty() && !self.kept {
+            return;
+        }
+        let mut handles = self.process.handles.lock();
+        for handle in self.held.drain(..) {
+            handles.cancel_move(handle);
+        }
+        if self.kept {
+            handles.drop_kept();
+        }
+    }
 }
 
 /// What the last `snapshot_process` cost: nanoseconds with interrupts
@@ -188,9 +278,10 @@ impl Calls<'_> {
     fn snapshot_table(
         &self,
         request: &SnapshotRequest<'_>,
+        claim: &mut MoveClaim,
     ) -> Result<(HandleTable, Option<Handle>), Status> {
         let mut handles = self.process.handles.lock();
-        handles.reserve()?;
+        claim.keep_room(&mut handles)?;
         if handles
             .entries()
             .any(|(_, e)| matches!(e.object, Object::Pin(_)))
@@ -234,13 +325,19 @@ impl Calls<'_> {
             ),
             None => None,
         };
+        // Last, after every check: the moved handles are held until the child
+        // exists, as in `spawn`. (A handle listed twice never gets here: the
+        // decode refuses it, ADR-0313 item 7.)
+        for m in request.moves() {
+            claim.hold(&mut handles, m.handle, Rights::TRANSFER)?;
+        }
         Ok((table, self_handle))
     }
 
     /// INV-0295-3: the hold of a transport device ends with the last handle
     /// of this process that can write it. Called with the table unlocked
     /// after a handle to `object` left it, by a close or by a `Move` (spawn,
-    /// channel_write, snapshot). A process has one thread, so nothing adds a
+    /// channel_write, snapshot). Nothing here pauses, so no sibling adds a
     /// handle meanwhile; and the kernel is not preempted on its one CPU
     /// (design.md, Scheduler), so the process a moved handle went to runs
     /// only after the hold has ended.
@@ -262,6 +359,43 @@ impl Calls<'_> {
             .as_mut()
             .and_then(|s| s.let_go(device));
         drop(claim);
+    }
+
+    /// Unmaps the mapping that is exactly `[va, va + length)`, in steps, with
+    /// the mapping lock held by the caller.
+    fn unmap_exact(&self, va: u64, length: u64) -> Result<(), Status> {
+        {
+            let space = self.process.space.lock();
+            let space = space.as_ref().ok_or(Status::BadState)?;
+            if !space.is_mapped_exactly(va, length) {
+                return Err(Status::InvalidArgument);
+            }
+        }
+        // Unmapping goes on to its end whatever the process was asked
+        // (ADR-0270): a pause after each step, no cancel.
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut done = 0;
+        while done < length {
+            let n = step.min(length - done);
+            {
+                let mut space = self.process.space.lock();
+                let space = space.as_mut().ok_or(Status::BadState)?;
+                space.unmap_range(va, done, n);
+            }
+            done += n;
+            if done < length {
+                steps::pause();
+            }
+        }
+        let holder = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space
+                .unmap_commit(va, length)
+                .map_err(|_| Status::InvalidArgument)?
+        };
+        drop(holder);
+        Ok(())
     }
 
     fn insert(&self, object: Object, rights: Rights) -> Result<u64, Status> {
@@ -308,8 +442,8 @@ impl Handlers for Calls<'_> {
     }
 
     fn sleep_until(&mut self, at: zoraya_abi::Deadline) -> Result<u64, Status> {
-        sched::sleep_until(deadline(at)).map_err(|_| Status::NoMemory)?;
-        Ok(0)
+        // 1 when `thread_interrupt` ended it early, else 0 (ADR-0300 item 5).
+        thread::sleep_until(deadline(at))
     }
 
     fn handle_close(&mut self, handle: Handle) -> Result<u64, Status> {
@@ -365,15 +499,18 @@ impl Handlers for Calls<'_> {
         };
         // Nothing of the caller's changes until the child exists (INV-0042-3).
         let mut table = HandleTable::new();
+        // The moved handles stay held from the check until the child exists:
+        // `process::create` pauses, and a sibling must not move one away
+        // meanwhile (a second copy of a handle without DUPLICATE).
+        let mut claim = MoveClaim::new(&self.process, request.handle_count())?;
         {
             let mut handles = self.process.handles.lock();
-            handles.reserve()?;
+            claim.keep_room(&mut handles)?;
             for listed in request.handles() {
-                let needed = match listed.transfer {
-                    Transfer::Move => Rights::TRANSFER,
-                    Transfer::Duplicate => Rights::DUPLICATE,
+                let entry = match listed.transfer {
+                    Transfer::Move => claim.hold(&mut handles, listed.handle, Rights::TRANSFER)?,
+                    Transfer::Duplicate => handles.check(listed.handle, Rights::DUPLICATE)?.clone(),
                 };
-                let entry = handles.check(listed.handle, needed)?;
                 if !entry.rights.contains(listed.rights) {
                     return Err(Status::AccessDenied);
                 }
@@ -395,18 +532,13 @@ impl Handlers for Calls<'_> {
             dispositions: request.dispositions,
             suspended: request.suspended,
         })?;
-        for listed in request.handles() {
-            if listed.transfer == Transfer::Move {
-                let entry = self.process.handles.lock().remove(listed.handle);
-                if let Some(entry) = entry {
-                    steps::before(object::weight(&entry));
-                    steps::count(1);
-                    object::end_subscriptions(&entry);
-                    self.end_hold_if_unwritable(&entry.object);
-                }
-            }
+        for entry in claim.finish() {
+            steps::before(object::weight(&entry));
+            steps::count(1);
+            object::end_subscriptions(&entry);
+            self.end_hold_if_unwritable(&entry.object);
         }
-        self.insert(Object::Process(child), ProcessObject::RIGHTS)
+        Ok(claim.insert_child(child)?.raw())
     }
 
     fn process_resume(&mut self, process: Handle) -> Result<u64, Status> {
@@ -653,13 +785,16 @@ impl Handlers for Calls<'_> {
         // In steps of `STEP` pages with no lock held between them
         // (ADR-0270): the range is in the table of no mapping until the last
         // step, and a `job_kill` between steps unmaps what was done. The
-        // process's one thread is in this call, so nothing else changes its
-        // space meanwhile.
+        // mapping lock is held, so no other thread maps or unmaps meanwhile.
         let to_status = |e| match e {
             MappingError::Limit => Status::LimitReached,
             MappingError::Quota => Status::OverQuota,
             _ => Status::NoMemory,
         };
+        // The mapping lock for the whole call (ADR-0301 item 6): another
+        // thread of the process may not map between `map_reserve` and
+        // `map_commit`. Dropped on every return, `Cancelled` ones included.
+        let _map = MapGuard::acquire(&self.process)?;
         let va = {
             let mut space = self.process.space.lock();
             let space = space.as_mut().ok_or(Status::BadState)?;
@@ -706,38 +841,8 @@ impl Handlers for Calls<'_> {
     }
 
     fn memory_unmap(&mut self, address: Address, length: Size) -> Result<u64, Status> {
-        let (va, length) = (address.0, length.0);
-        {
-            let space = self.process.space.lock();
-            let space = space.as_ref().ok_or(Status::BadState)?;
-            if !space.is_mapped_exactly(va, length) {
-                return Err(Status::InvalidArgument);
-            }
-        }
-        // Unmapping goes on to its end whatever the process was asked
-        // (ADR-0270): a pause after each step, no cancel.
-        let step = (steps::STEP as u64) * FRAME_SIZE;
-        let mut done = 0;
-        while done < length {
-            let n = step.min(length - done);
-            {
-                let mut space = self.process.space.lock();
-                let space = space.as_mut().ok_or(Status::BadState)?;
-                space.unmap_range(va, done, n);
-            }
-            done += n;
-            if done < length {
-                steps::pause();
-            }
-        }
-        let holder = {
-            let mut space = self.process.space.lock();
-            let space = space.as_mut().ok_or(Status::BadState)?;
-            space
-                .unmap_commit(va, length)
-                .map_err(|_| Status::InvalidArgument)?
-        };
-        drop(holder);
+        let _map = MapGuard::acquire(&self.process)?;
+        self.unmap_exact(address.0, length.0)?;
         Ok(0)
     }
 
@@ -748,16 +853,27 @@ impl Handlers for Calls<'_> {
         let target = UserSlice::of(ends.0)?;
         target.write(&[0; 16])?;
         let pair = Pair::new(Some(self.process.job()))?;
+        heap::pause_if_asked();
         let mut handles = self.process.handles.lock();
         handles.reserve_many(2)?;
         let mut record = [0; 16];
+        let mut made = [None; 2];
         for end in 0..2 {
             let object = Object::Channel(pair.clone(), end);
             let handle = handles.insert(object, ChannelObject::RIGHTS, object::next_id())?;
+            made[end] = Some(handle);
             record[end * 8..end * 8 + 8].copy_from_slice(&handle.raw().to_le_bytes());
         }
-        drop(handles);
-        target.write(&record)?;
+        // `Pair::new` may have paused, and a sibling may have unmapped `ends`
+        // since: if the record cannot be written, the handles come out again.
+        if let Err(e) = target.write(&record) {
+            let gone: [_; 2] = made.map(|h| h.and_then(|h| handles.remove(h)));
+            drop(handles);
+            for entry in gone.into_iter().flatten() {
+                object::close(entry);
+            }
+            return Err(e);
+        }
         Ok(0)
     }
 
@@ -934,7 +1050,8 @@ impl Handlers for Calls<'_> {
             at += 8;
         }
         drop(handles);
-        // This range was just written, and a process has one thread.
+        // This range was just written, and no step point lies between (the
+        // kernel is not preempted), so no sibling has unmapped it.
         values.write(&zeros[..at])?;
         Ok(0)
     }
@@ -949,6 +1066,9 @@ impl Handlers for Calls<'_> {
         let target = UserSlice::of(out.0)?;
         target.write(&[0; 16])?;
         let offset = device.offset(index.0).ok_or(Status::InvalidArgument)?;
+        // Every mapping call takes the mapping lock (ADR-0301 item 6): a
+        // sibling's stepped map holds a reserved address between its parts.
+        let _map = MapGuard::acquire(&self.process)?;
         let mapping = device.begin_mapping()?;
         // Device-nGnRnE, never executable (INV-0054-1).
         let attributes = Attributes {
@@ -1032,7 +1152,8 @@ impl Handlers for Calls<'_> {
         let value = value.0 as u32;
         device.check_register(offset.0, width.0)?;
         // The first write makes this process the transport's holder, and a
-        // second holder is refused (INV-0295-3). A process has one thread.
+        // second holder is refused (INV-0295-3). Nothing pauses here, and the
+        // space's lock is held, so two threads cannot both become the holder.
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
         let held = space.hold(&device)?;
@@ -1079,7 +1200,8 @@ impl Handlers for Calls<'_> {
             let mut record = [0; 16];
             record[..8].copy_from_slice(&address.to_le_bytes());
             record[8..].copy_from_slice(&length.to_le_bytes());
-            // This range was just written, and a process has one thread.
+            // This range was just written, and no step point lies between (the
+            // kernel is not preempted), so no sibling has unmapped it.
             target.at(i as u64 * 16)?.write(&record)?;
         }
         Ok(handle.raw())
@@ -1124,21 +1246,28 @@ impl Handlers for Calls<'_> {
         target.write(&[0; 16])?;
         // The table's lock is not held while the stream is built: its
         // memory object prepares the heap, which may pause (ADR-0270
-        // point 2). The room for both ends is kept by the reservation (a
-        // process has one thread).
-        self.process.handles.lock().reserve_many(2)?;
+        // point 2). A sibling thread runs at that pause: it may use up free
+        // slots or unmap `ends`. So the room is made after the last pause,
+        // and the record is written with the table locked, and both handles
+        // are taken out again if it cannot be (the caller is told of none).
         let (reader, writer) = Stream::create(Some(self.process.job()))?;
         let mut handles = self.process.handles.lock();
+        handles.reserve_many(2)?;
         let read = Object::StreamRead(reader);
         let read = handles.insert(read, StreamReadObject::RIGHTS, object::next_id())?;
         let write = Object::StreamWrite(writer);
         let write = handles.insert(write, StreamWriteObject::RIGHTS, object::next_id())?;
-        drop(handles);
         let mut record = [0; 16];
         record[..8].copy_from_slice(&read.raw().to_le_bytes());
         record[8..].copy_from_slice(&write.raw().to_le_bytes());
-        // This range was just written, and a process has one thread.
-        target.write(&record)?;
+        if let Err(e) = target.write(&record) {
+            let gone = [handles.remove(read), handles.remove(write)];
+            drop(handles);
+            for entry in gone.into_iter().flatten() {
+                object::close(entry);
+            }
+            return Err(e);
+        }
         Ok(0)
     }
 
@@ -1184,11 +1313,21 @@ impl Handlers for Calls<'_> {
                 group
             }
         };
-        let (table, self_handle) = self.snapshot_table(&request)?;
+        let mut claim = MoveClaim::new(&self.process, request.move_count())?;
+        let (table, self_handle) = self.snapshot_table(&request, &mut claim)?;
         // The child's slot first, then its full copy, both paid by the child's
         // job (ADR-0261 point 6): a limit refuses the call with no effect.
         let mut count = Paid::new(Some(&job));
         count.process()?;
+        // Then the child's first thread, in the order processes, threads,
+        // memory (ADR-0307 item 1).
+        let first = sched::reserve_thread(&job)?;
+        // The mapping lock for the whole call, and the other threads of the
+        // caller parked at their next return to EL0, so that the copy sees one
+        // memory and no one maps or unmaps meanwhile (ADR-0306 item 2). Both
+        // are released on every return.
+        let _map = MapGuard::acquire(&self.process)?;
+        let _freeze = thread::Freeze::new(&self.process);
         let mut copied = Copied::default();
         // The copy in steps (ADR-0270): the plan, the child and its objects
         // with no lock held, then up to `STEP` pages at a time under the
@@ -1219,6 +1358,7 @@ impl Handlers for Calls<'_> {
             space,
             job,
             count,
+            first,
             handles: table,
             self_handle,
             frame: self.frame,
@@ -1226,21 +1366,14 @@ impl Handlers for Calls<'_> {
             suspended: request.suspended,
         })?;
         // The child exists: only now do the moved handles leave (INV-0102-2).
-        for moved in request.moves() {
-            let entry = self.process.handles.lock().remove(moved.handle);
-            if let Some(entry) = entry {
-                steps::before(object::weight(&entry));
-                steps::count(1);
-                object::end_subscriptions(&entry);
-                self.end_hold_if_unwritable(&entry.object);
-            }
+        for entry in claim.finish() {
+            steps::before(object::weight(&entry));
+            steps::count(1);
+            object::end_subscriptions(&entry);
+            self.end_hold_if_unwritable(&entry.object);
         }
-        // `snapshot_table` reserved this room, and removing made more.
-        let handle = self.process.handles.lock().insert(
-            Object::Process(child),
-            ProcessObject::RIGHTS,
-            object::next_id(),
-        )?;
+        // `snapshot_table` kept this room, so a sibling cannot have filled it.
+        let handle = claim.insert_child(child)?;
         *LAST_SNAPSHOT.lock() = (timer::now().nanos_since(started), copied.pages);
         Ok(handle.raw())
     }
@@ -1292,6 +1425,69 @@ impl Handlers for Calls<'_> {
             .raw())
     }
 
+    fn thread_create(
+        &mut self,
+        entry: EntryPoint,
+        stack: Address,
+        argument: Opaque,
+        tls: Address,
+    ) -> Result<u64, Status> {
+        thread::create(&self.process, entry.0, stack.0, argument.0, tls.0)
+    }
+
+    fn thread_exit(
+        &mut self,
+        clear: Address,
+        unmap_base: Address,
+        unmap_length: Size,
+    ) -> Result<u64, Status> {
+        // In this order (ADR-0300 item 3). A mismatch or a bad address is
+        // ignored: the thread is ending.
+        if unmap_length.0 != 0
+            && let Ok(_map) = MapGuard::acquire(&self.process)
+        {
+            let _ = self.unmap_exact(unmap_base.0, unmap_length.0);
+        }
+        // The figures go back before the store and the wake: a joiner woken
+        // by the store sees them refunded, and the wake itself may yield
+        // (INV-0313-3). `end_thread_record` finds nothing left to give.
+        sched::current().release_thread();
+        if clear.0 != 0
+            && clear.0.is_multiple_of(4)
+            && let Ok(word) = UserSlice::new(clear.0, 4)
+            && word.write(&0u32.to_le_bytes()).is_ok()
+        {
+            let _ = thread::futex_wake(&self.process, clear.0, Count::MAX);
+        }
+        self.end_thread = true;
+        Ok(0)
+    }
+
+    fn thread_self(&mut self) -> Result<u64, Status> {
+        thread::this(&self.process)
+    }
+
+    fn thread_interrupt(&mut self, target: Handle) -> Result<u64, Status> {
+        let Object::Thread(object) = self.object(target, Rights::SIGNAL)? else {
+            return Err(Status::BadHandle);
+        };
+        thread::interrupt(&object)?;
+        Ok(0)
+    }
+
+    fn futex_wait(
+        &mut self,
+        address: Address,
+        expected: Word32,
+        at: zoraya_abi::Deadline,
+    ) -> Result<u64, Status> {
+        thread::futex_wait(&self.process, address.0, expected.0, deadline(at))
+    }
+
+    fn futex_wake(&mut self, address: Address, count: Count) -> Result<u64, Status> {
+        thread::futex_wake(&self.process, address.0, count.0)
+    }
+
     fn job_set_limits(&mut self, job: Handle, limits: Bytes) -> Result<u64, Status> {
         let job = self.job(job, Rights::LIMIT)?;
         if limits.0.length != LIMITS_SIZE as u64 {
@@ -1309,9 +1505,10 @@ impl Handlers for Calls<'_> {
             return Err(Status::BufferTooSmall);
         }
         // Written first, then cleared: a bad address clears nothing.
-        // The first version's 88 bytes, or the record with the CPU words.
+        // The first version's 88 bytes, the record with the CPU words, or the
+        // one with the thread words too (ADR-0307 item 2).
         let usage = job.usage(false).encode();
-        target.write(&usage[..target.len().min(USAGE_SIZE_CPU)])?;
+        target.write(&usage[..target.len().min(USAGE_SIZE_THREADS)])?;
         if flags.clears() {
             job.usage(true);
         }
@@ -1432,6 +1629,10 @@ pub mod test_calls {
     /// development host and pushed every CI test-qemu run past its 300 s;
     /// with 1 ms the whole of `t_suspend` took 39 s there.
     pub const FORCED_SLICE_NS: u64 = 1_000_000;
+    /// Makes `heap::prepare` pause once on every call (x0 = 1) or not (0):
+    /// a creating call then always lets a sibling run before it makes its
+    /// handles. The test that sets it clears it.
+    pub const PAUSE_IN_PREPARE: u64 = 0x701b;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1474,6 +1675,11 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             } else {
                 0
             });
+            Some(Ok(0))
+        }
+        test_calls::PAUSE_IN_PREPARE => {
+            crate::memory::heap::PAUSE_IN_PREPARE
+                .store(a0 != 0, core::sync::atomic::Ordering::Relaxed);
             Some(Ok(0))
         }
         test_calls::DIAGNOSE_UNITS => {
@@ -1563,6 +1769,7 @@ pub fn dispatch(frame: &mut Frame) {
     ];
     let process = sched::current().process().cloned();
     let mut exit = None;
+    let mut end_thread = false;
     let result = match process {
         Some(process) if svc_immediate(frame.esr) == 0 => {
             // INV-0002-2: every `#[personality_only]` call is refused here
@@ -1573,10 +1780,12 @@ pub fn dispatch(frame: &mut Frame) {
                 let mut calls = Calls {
                     process,
                     exit: None,
+                    end_thread: false,
                     frame,
                 };
                 let result = zoraya_abi::dispatch(&mut calls, number, &registers);
                 exit = calls.exit;
+                end_thread = calls.end_thread;
                 result
             }
         }
@@ -1584,6 +1793,9 @@ pub fn dispatch(frame: &mut Frame) {
     };
     if let Some(record) = exit {
         process::exit_current(record);
+    }
+    if end_thread {
+        process::leave_current();
     }
     let (status, value) = match result {
         Ok(value) => (Status::Ok, value),

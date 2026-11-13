@@ -184,6 +184,63 @@ pub fn sleep_until(nanos: u64) {
     let _ = stubs::sleep_until::<Svc>(Deadline(nanos));
 }
 
+/// As [`sleep_until`], and true if `thread_interrupt` ended it early
+/// (ADR-0300 item 5).
+pub fn sleep_until_interrupted(nanos: u64) -> bool {
+    matches!(stubs::sleep_until::<Svc>(Deadline(nanos)), Ok(1))
+}
+
+/// Makes a thread of this process that starts at `entry` with `x0 =
+/// argument`, `SP = stack` and `TPIDR_EL0 = tls` (ADR-0300 item 2).
+pub fn thread_create(entry: u64, stack: u64, argument: u64, tls: u64) -> Result<Handle, Status> {
+    handle(stubs::thread_create::<Svc>(
+        zoraya_abi::EntryPoint(entry),
+        Address(stack),
+        Opaque(argument),
+        Address(tls),
+    )?)
+}
+
+/// Ends the calling thread (ADR-0300 item 3): unmaps `[unmap_base,
+/// +unmap_length)` if the length is not 0, stores 0 at `clear` and wakes its
+/// waiters if it is not 0, and does not return.
+pub fn thread_exit(clear: u64, unmap_base: u64, unmap_length: u64) -> ! {
+    let _ = stubs::thread_exit::<Svc>(Address(clear), Address(unmap_base), Size(unmap_length));
+    // The kernel does not return from this call.
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// A new handle to the calling thread (ADR-0300 item 4).
+pub fn thread_self() -> Result<Handle, Status> {
+    handle(stubs::thread_self::<Svc>()?)
+}
+
+/// Makes the thread's next (or current) `futex_wait` or `sleep_until` return
+/// early (ADR-0300 item 5).
+pub fn thread_interrupt(thread: Handle) -> Result<(), Status> {
+    stubs::thread_interrupt::<Svc>(thread).map(|_| ())
+}
+
+/// Waits while the 32-bit word at `address` is `expected`, until `deadline`
+/// (ADR-0301). `Ok(false)` when woken, `Ok(true)` when interrupted (a spurious
+/// wake the caller re-checks), `WouldBlock` if the word differed,
+/// `DeadlineExceeded` at the deadline.
+pub fn futex_wait(address: u64, expected: u32, deadline: u64) -> Result<bool, Status> {
+    stubs::futex_wait::<Svc>(
+        Address(address),
+        zoraya_abi::Word32(expected),
+        Deadline(deadline),
+    )
+    .map(|v| v == 1)
+}
+
+/// Wakes up to `count` (1 to 128) threads waiting on `address`; how many.
+pub fn futex_wake(address: u64, count: u32) -> Result<u32, Status> {
+    stubs::futex_wake::<Svc>(Address(address), zoraya_abi::Count(count)).map(|n| n as u32)
+}
+
 pub fn handle_close(h: Handle) -> Result<(), Status> {
     stubs::handle_close::<Svc>(h).map(|_| ())
 }
@@ -240,7 +297,7 @@ pub fn job_set_limits(job: Handle, limits: &zoraya_abi::quota::JobLimits) -> Res
 
 /// A job's limits and use; `clear` also clears its `OVER_QUOTA` signal.
 pub fn job_get_usage(job: Handle, clear: bool) -> Result<zoraya_abi::quota::JobUsage, Status> {
-    let mut out = [0u8; zoraya_abi::quota::USAGE_SIZE_CPU];
+    let mut out = [0u8; zoraya_abi::quota::USAGE_SIZE_THREADS];
     let flags = if clear {
         zoraya_abi::UsageFlags::CLEAR
     } else {

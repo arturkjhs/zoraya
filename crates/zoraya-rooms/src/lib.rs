@@ -206,12 +206,28 @@ fn done(tx: u32, out: &mut [u8]) -> Reply {
     }
 }
 
-/// The job limits a line carries (memory, processes, CPU in thousandths).
+/// Threads a room may run for each process it may have (ADR-0307 item 4).
+pub const THREADS_PER_PROCESS: u32 = 3;
+
+/// The thread ceiling the keeper derives from a processes figure (ADR-0307
+/// item 4, INV-0307-3): three times it, saturating, and none when the
+/// figure is 0 (0 on the wire is "no limit" and a room that may run no
+/// process runs no thread anyway).
+pub fn threads_for(procs: u32) -> Option<u32> {
+    procs
+        .checked_mul(THREADS_PER_PROCESS)
+        .or(Some(u32::MAX - 1))
+        .filter(|t| *t != 0)
+}
+
+/// The job limits a line carries (memory, processes, CPU in thousandths); the
+/// threads are derived from the processes (ADR-0307 item 4).
 pub fn job_limits(l: &Limits) -> JobLimits {
     JobLimits {
         memory: l.mem,
         processes: l.procs,
         cpu: l.cpu.map(|p| p * 10),
+        threads: l.procs.and_then(threads_for),
     }
 }
 
@@ -328,6 +344,7 @@ impl<E: Env> Keeper<E> {
                 memory: Some(u.mem),
                 processes: Some(u.procs),
                 cpu: Some(u.cpu * 10),
+                threads: threads_for(u.procs),
             };
             let job = env.create_job(Parent::Session, &limits).ok()?;
             events.push(Event::Created {

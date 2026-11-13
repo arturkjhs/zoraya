@@ -235,7 +235,7 @@ impl Job {
     pub fn set_limits(&self, limits: JobLimits) -> Result<(), Status> {
         let old = self.cpu.lock().limit;
         cpu::set_limit(self, limits.cpu)?;
-        let result = charge::set_limits(self, limits.memory, limits.processes);
+        let result = charge::set_limits(self, limits.memory, limits.processes, limits.threads);
         if result.is_err() {
             cpu::restore_limit(self, old);
         }
@@ -259,6 +259,7 @@ impl Job {
             }
         };
         let (memory, processes) = (field(Field::Memory), field(Field::Processes));
+        let threads = field(Field::Threads);
         let user = counters.get(Field::User).used;
         let state = self.state.lock();
         // Charges kept alive from outside after the last process ended.
@@ -270,6 +271,7 @@ impl Job {
         JobUsage {
             memory,
             processes,
+            threads,
             user,
             kernel: memory.used.saturating_sub(user),
             held,

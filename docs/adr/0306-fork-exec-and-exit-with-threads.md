@@ -147,6 +147,11 @@ rule. *ADR-0104 item 6* gains the lock.
 ## Open questions
 
 - Whether the freeze should skip threads blocked in a futex wait (they cannot write): an optimization.
+- Note from the review of part 9b step 1: the freeze (INV-0306-6, item 2) parks siblings only at their next return to EL0,
+  so a sibling blocked in the kernel (a `port_wait`, a `channel_read` that completes) can still finish its call and write its
+  result into the parent's memory while the copy is in steps (the copy pauses at step points). A write across a page boundary
+  can then come out torn in the child (one page copied before the write, the next after). Step 2 (the fork in `libposix`)
+  must decide: wait for siblings to leave the kernel before the copy, or accept and document it.
 - The child's unmap of dead stacks costs a call per thread; a `snapshot_process` flag that omits them would save the copy
   (a new kernel input: deferred).
 
