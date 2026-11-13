@@ -61,6 +61,8 @@ struct Window {
     /// Input that did not fit in `pending`.
     dropped: u32,
     port: Handle,
+    /// The wheel's turns not yet a line (proposed ADR-0322).
+    wheel: zoraya_term::WheelLines,
     /// `KEY_WRITABLE` is subscribed.
     waiting: bool,
     message: Vec<u8>,
@@ -330,6 +332,18 @@ impl Window {
                 }
                 // The close button: the terminal ends, as `exit` does.
                 20 => zoraya_user::process_exit(0),
+                // The wheel moves the view through the scrollback, as
+                // Shift+PageUp does (proposed ADR-0322).
+                46 => {
+                    if let Ok((_, w)) = decode::<gui::Wheel>(bytes, 0)
+                        && w.window == self.id
+                    {
+                        let lines = self.wheel.turn(w.dy);
+                        if lines != 0 {
+                            self.term.scroll_view(lines);
+                        }
+                    }
+                }
                 16 => {
                     let Ok((_, k)) = decode::<gui::Key>(bytes, 0) else {
                         continue;
@@ -474,6 +488,7 @@ fn main() -> i32 {
         pending: Vec::new(),
         dropped: 0,
         port,
+        wheel: zoraya_term::WheelLines::default(),
         waiting: false,
         // As large as any message: a `Paste` carries up to 32 KiB, and a
         // read into less is an error (review 7f's check).

@@ -198,7 +198,10 @@ pub(super) fn after_fork_in_child() {
 /// code point or 0, `c` 1 for a press, `d` the modifier bits), 2 pointer moved
 /// (`a`, `b` the pixel), 3 button (`a`, `b` the pixel, `c` the button bit,
 /// `d` 1 for a press), 4 focus (`a` 1 gained), 5 resize (`a`, `b` the new size:
-/// read the buffer again), 6 close requested, 7 the compositor is gone.
+/// read the buffer again), 6 close requested, 7 the compositor is gone, 8 a
+/// wheel turned (`a`, `b` the pixel, `c` and `d` the horizontal and vertical
+/// turn as `int32_t` in 120ths of a notch, `d` above 0 toward the person:
+/// proposed ADR-0322).
 #[repr(C)]
 pub struct WindowEvent {
     kind: u32,
@@ -224,6 +227,7 @@ fn encode(e: Event) -> WindowEvent {
             pressed,
         } => (3, x, y, button, pressed as u32),
         Event::Focus(g) => (4, g as u32, 0, 0, 0),
+        Event::Wheel { x, y, dx, dy } => (8, x, y, dx as u32, dy as u32),
         Event::Resize { width, height } => (5, width, height, 0, 0),
         Event::Close => (6, 0, 0, 0, 0),
         Event::Gone => (7, 0, 0, 0, 0),

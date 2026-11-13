@@ -183,7 +183,7 @@ macro_rules! integer {
     )*};
 }
 
-integer!(u8, u16, u32, u64);
+integer!(u8, u16, u32, u64, i32);
 
 impl Field<'_> for bool {
     const VARIABLE: bool = false;

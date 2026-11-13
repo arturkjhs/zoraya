@@ -1130,6 +1130,8 @@ dependencies = [
 name = "zoraya-virtio-input"
 version = "0.1.0"
 dependencies = [
+ "zoraya-proto-input",
+ "zoraya-protocol",
  "zoraya-test-alloc",
  "zoraya-virtio",
 ]

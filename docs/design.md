@@ -454,7 +454,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   the old one is unreferenced and its pin released.
 - **`inputd`** (`zoraya-virtio-input`, ADR-0092). One process per device; it reads the configuration to learn whether
   it drives a keyboard or an absolute pointer, keeps 64 event buffers offered, checks every event, and sends one
-  `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535. A frame that does not fit is dropped and
+  `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535 and a pointer's wheels (`REL_WHEEL`,
+  `REL_HWHEEL`, or their `HI_RES` axes when the device has them) as `WHEEL` records in 120ths of a notch, positive
+  toward the person and to the right (proposed ADR-0322). A frame that does not fit is dropped and
   counted, and the count goes with the next one.
 - **`compd`** (`zoraya-compositor`, ADR-0093, ADR-0094). The loop runs over a `Platform` trait, so it is tested on
   the host. Slot 5 is the manager channel from `init`, 6 the display driver, 7 to 10 input drivers. A client
@@ -465,12 +467,14 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   Decision): one is in flight, what is composed meanwhile goes out as one rectangle when the driver answers, and a
   driver that misses 2 s is dropped and reported to `init` (`DisplayHung`), which restarts it. Windows are
   placed by the compositor (16, 16, then cascaded by 32). Keys go to the focused surface, translated by the US layout of
-  `zoraya-keymap`; pointer events to the surface under the pointer. A button press focuses and raises; F12 moves focus
+  `zoraya-keymap`; pointer events to the surface under the pointer, and a frame's wheel turns, summed, as one `Wheel`
+  (ordinal 46) to the toplevel or popup body under it, never during a move, a drag or the switcher, and with the
+  modifiers only to the focused client (proposed ADR-0322). A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
   At most 8 clients. With no display driver it goes on; a new one gets the same framebuffer and one full flush.
 - **`term`** (`zoraya-term`, `zoraya-text`, ADR-0096, ADR-0162). A compositor client with an 80 × 24 grid of 8 × 18
   cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14), 668 × 460 pixels, and
-  500 lines of scrollback (Shift with Page Up or Page Down). It parses the VT subset of ADR-0096 with ADR-0154's faint
+  500 lines of scrollback (Shift with Page Up or Page Down, or the wheel, three lines a notch). It parses the VT subset of ADR-0096 with ADR-0154's faint
   (SGR 2, ended by 22: half way to the background), draws bold (SGR 1) with JetBrains Mono Bold, takes its colours
   from the `term.*` tokens of the light set, answers no query, and sends the shell the bytes keys make
   (`zoraya-proto-term`): it holds up to 4 KiB of keys the shell has not read yet and sends them as soon as the shell's

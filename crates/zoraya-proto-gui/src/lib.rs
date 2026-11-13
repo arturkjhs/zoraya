@@ -526,15 +526,41 @@ protocol! {
     message ClientGone = 45, handles 0 {
         tag: u32,
     }
+
+    /// The wheel turned (or a touchpad scrolled) over a window's body
+    /// (proposed ADR-0322), to the client of the window under the pointer,
+    /// as `WindowPointerMods` goes: `(x, y)` is the pointer in logical
+    /// pixels of that body. `dx` and `dy` are in [`WHEEL_STEP`]ths of one
+    /// notch of a wheel (a high-resolution device sends parts of a notch):
+    /// `dy` above 0 is the wheel turned toward the person, the view moving
+    /// down the content; `dx` above 0 is to the right. Each is at most
+    /// [`WHEEL_MAX`] either way; a receiver still saturates. `modifiers` as
+    /// in `WindowPointerMods`: only to the focused client.
+    message Wheel = 46, handles 0 {
+        dropped: u32,
+        window: u32,
+        x: u32,
+        y: u32,
+        dx: i32,
+        dy: i32,
+        modifiers: Flags<{ modifiers::ALL }>,
+    }
 }
+
+/// One notch of a wheel in `Wheel`'s units (the 120 of Linux's
+/// `REL_WHEEL_HI_RES` and of Windows' `WHEEL_DELTA`, proposed ADR-0322).
+pub const WHEEL_STEP: i32 = 120;
+/// The most `Wheel` carries either way: 64 notches, what the compositor
+/// gathers in one round at most.
+pub const WHEEL_MAX: i32 = 64 * WHEEL_STEP;
 
 /// The ordinals a client may send.
 pub const CLIENT_REQUESTS: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 /// The client requests only a system client may send (proposed ADR-0245).
 pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 16] = [
-    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+pub const CLIENT_EVENTS: [u32; 17] = [
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 46,
 ];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];

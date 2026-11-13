@@ -25,6 +25,30 @@ use zoraya_tokens::{Appearance, Color, Scale, space, text};
 
 /// Lines kept above the screen `[assumption, ADR-0096]`.
 pub const SCROLLBACK: usize = 500;
+/// Lines one notch of a wheel scrolls the view (proposed ADR-0322).
+pub const WHEEL_LINES: i32 = 3;
+
+/// A wheel's turns as lines of the view (proposed ADR-0322): 120ths of a
+/// notch are gathered until they make a line, so a high-resolution wheel
+/// scrolls as far as one with notches.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WheelLines {
+    rest: i32,
+}
+
+impl WheelLines {
+    /// The lines `dy` (above 0: toward the person) moves the view, for
+    /// [`Term::scroll_view`]: positive back into the scrollback, so a turn
+    /// toward the person is negative.
+    pub fn turn(&mut self, dy: i32) -> isize {
+        let per_line = 120 / WHEEL_LINES;
+        // At most a screenful of scrollback either way in one turn.
+        let bound = per_line * SCROLLBACK as i32;
+        let sum = self.rest.saturating_add(dy).clamp(-bound, bound);
+        self.rest = sum % per_line;
+        -(sum / per_line) as isize
+    }
+}
 /// Numeric parameters of one control sequence.
 pub const MAX_PARAMS: usize = 8;
 /// Bytes of an `OSC`, `DCS` or similar string before it is cut.

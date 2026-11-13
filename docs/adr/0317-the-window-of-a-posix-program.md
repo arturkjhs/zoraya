@@ -151,6 +151,13 @@ zoraya_window_poll
   Proceed (the runner's `mark` step) and requires exactly one refused handshake before the mark and one or more
   after it.
 
+- *Note (9e, proposed ADR-0322):* the protocol now has a wheel event (`Wheel`, ordinal 46, in 120ths of a notch, to
+  the body under the pointer). Item 4's and item 7's "no wheel" no longer hold: `zoraya-surface` gives
+  `Event::Wheel` (a `Move` to its pixel first), `libc.a`'s `zoraya_window_poll` gives it as kind 8
+  (`ZW_WHEEL`), and the C surface turns each whole notch toward the person into a press and release of
+  `NSFB_KEY_MOUSE_5` (away: `NSFB_KEY_MOUSE_4`), which NetSurf's framebuffer front end scrolls by 100 pixels; a
+  horizontal turn is not offered. The change is ADR-0322's; this ADR's decision is unchanged.
+
 ## Revisit triggers
 - A second POSIX graphical program with different needs (video, GL), or a measured frame cost above 16 ms for a full
   window under HVF.

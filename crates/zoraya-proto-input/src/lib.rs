@@ -17,14 +17,23 @@ pub mod kind {
     pub const KEY: u32 = 0;
     /// `code` 0 is x, 1 is y; `value` is scaled to `0..=65535`.
     pub const AXIS: u32 = 1;
+    /// A wheel turned (proposed ADR-0322): `code` 0 is the vertical wheel,
+    /// 1 the horizontal one; `value` is an `i32` in its two's complement,
+    /// in 120ths of a notch (`zoraya_proto_gui::WHEEL_STEP`), not 0 and at
+    /// most [`WHEEL_MAX`] either way. Above 0 is toward the person (the
+    /// view moves down) and to the right: the driver turns evdev's sign of
+    /// `REL_WHEEL`, which is the other way.
+    pub const WHEEL: u32 = 2;
 }
 
 pub const KEY_LIMIT: u32 = 0x300;
 pub const AXIS_MAX: u32 = 65535;
+/// The most one wheel record carries either way: 16 notches.
+pub const WHEEL_MAX: i32 = 16 * 120;
 
 protocol! {
     record Event {
-        kind: Below<2>,
+        kind: Below<3>,
         code: u32,
         value: u32,
     }
@@ -42,7 +51,11 @@ impl Event {
     pub fn is_valid(&self) -> bool {
         match self.kind.0 {
             kind::KEY => self.code < KEY_LIMIT && self.value <= 2,
-            _ => self.code <= 1 && self.value <= AXIS_MAX,
+            kind::AXIS => self.code <= 1 && self.value <= AXIS_MAX,
+            _ => {
+                let v = self.value as i32;
+                self.code <= 1 && v != 0 && v.unsigned_abs() <= WHEEL_MAX.unsigned_abs()
+            }
         }
     }
 }
@@ -81,7 +94,7 @@ mod tests {
         exercise(&out[..length], |bytes| {
             if let Ok((_, m)) = decode::<Frame<'_>>(bytes, 0) {
                 assert!(m.events.iter().count() <= MAX_FRAME);
-                assert!(m.events.iter().all(|e| e.kind.0 < 2));
+                assert!(m.events.iter().all(|e| e.kind.0 < 3));
             }
         });
     }
@@ -114,6 +127,13 @@ mod tests {
         assert!(e(kind::AXIS, 1, AXIS_MAX).is_valid());
         assert!(!e(kind::AXIS, 2, 0).is_valid());
         assert!(!e(kind::AXIS, 0, AXIS_MAX + 1).is_valid());
+        // Wheels (proposed ADR-0322): signed, not zero, bounded, two codes.
+        let w = |code, v: i32| e(kind::WHEEL, code, v as u32);
+        assert!(w(0, 120).is_valid() && w(0, -120).is_valid() && w(1, 1).is_valid());
+        assert!(w(0, WHEEL_MAX).is_valid() && w(1, -WHEEL_MAX).is_valid());
+        assert!(!w(0, 0).is_valid() && !w(2, 120).is_valid());
+        assert!(!w(0, WHEEL_MAX + 1).is_valid() && !w(0, -WHEEL_MAX - 1).is_valid());
+        assert!(!w(0, i32::MIN).is_valid());
     }
 }
 

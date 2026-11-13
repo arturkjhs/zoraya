@@ -49,6 +49,11 @@ pub enum Event {
         button: u32,
         pressed: bool,
     },
+    /// A wheel turned over the window at a pixel (proposed ADR-0322): `dx`
+    /// and `dy` in 120ths of a notch (`zoraya_proto_gui::WHEEL_STEP`),
+    /// `dy` above 0 toward the person (scroll down), `dx` to the right. A
+    /// `Move` to the pixel comes first when the pointer was elsewhere.
+    Wheel { x: u32, y: u32, dx: i32, dy: i32 },
     /// The window has the keyboard, or lost it.
     Focus(bool),
     /// The buffer has a new size, in physical pixels: read it again.
@@ -369,16 +374,41 @@ impl<P: Platform> Surface<P> {
                     self.pointer_event(p.x, p.y, p.buttons.0);
                 }
             }
+            46 => {
+                if let Ok((_, w)) = decode::<gui::Wheel>(got, 0)
+                    && w.window == self.window
+                    && (w.dx, w.dy) != (0, 0)
+                {
+                    let (x, y) = self.place(w.x, w.y);
+                    if (x, y) != self.pointer {
+                        self.pointer = (x, y);
+                        self.events.push_back(Event::Move { x, y });
+                    }
+                    self.events.push_back(Event::Wheel {
+                        x,
+                        y,
+                        dx: w.dx,
+                        dy: w.dy,
+                    });
+                }
+            }
             _ => {}
         }
+    }
+
+    /// A logical place as a pixel of the buffer, kept inside it.
+    fn place(&self, lx: u32, ly: u32) -> (u32, u32) {
+        let k = self.scale;
+        (
+            lx.saturating_mul(k).min(self.size.0.saturating_sub(1)),
+            ly.saturating_mul(k).min(self.size.1.saturating_sub(1)),
+        )
     }
 
     /// The pointer message of the compositor is a state, not a change: the
     /// events are what differs from the last one.
     fn pointer_event(&mut self, lx: u32, ly: u32, now: u32) {
-        let k = self.scale;
-        let x = lx.saturating_mul(k).min(self.size.0.saturating_sub(1));
-        let y = ly.saturating_mul(k).min(self.size.1.saturating_sub(1));
+        let (x, y) = self.place(lx, ly);
         if (x, y) != self.pointer {
             self.pointer = (x, y);
             self.events.push_back(Event::Move { x, y });
