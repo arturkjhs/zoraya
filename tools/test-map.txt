@@ -6,6 +6,7 @@
 #
 # PREFIX                      STEPS
 docs/                         check
+docs/adr/posix-surface-T9.txt  check test-libposix test-posix-threads test-posix-suites
 README                        check
 CLAUDE.md                     check
 .github/                      check
@@ -27,9 +28,9 @@ tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
-kernel/                       test-qemu test-boot test-net
+kernel/                       test-qemu test-boot test-net test-posix-threads test-posix-suites
 crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
-crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-gui test-net
+crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-posix-suites test-gui test-net
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
@@ -40,6 +41,7 @@ crates/zoraya-cpu/            test-qemu
 crates/zoraya-events/         test-qemu
 crates/zoraya-channel/        test-qemu
 crates/zoraya-time/           test-qemu
+crates/zoraya-thread/         test-qemu
 crates/zoraya-console/        test-qemu test-boot
 crates/zoraya-stream/         test-qemu
 crates/zoraya-ramdisk/        test-qemu test-boot
@@ -86,6 +88,7 @@ tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
+user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu test-net
 user/src/mmio.rs              test-gui test-qemu test-net test-files
@@ -125,16 +128,17 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix test-posix-gui test-net test-apps
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-net test-apps
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
-user/src/bin/posixrun.rs      test-libposix test-posix
+user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix
 user/src/posix_child.rs       test-posix test-net test-apps
-ports/                        test-libposix test-posix test-posix-gui test-net test-apps test-hand-run
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-net test-apps test-hand-run
 tests/posix/                  test-posix test-posix-gui test-tour-gui
-tests/posix-core/             test-libposix
+tests/posix-core/             test-libposix test-posix-threads test-posix-suites
+tests/libc-test/             test-posix-suites
 
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run
@@ -171,6 +175,10 @@ user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
 tools/test-httpd/            test-net
 tests/shell/net-dns.script   test-net
+# The first lookup of a boot (proposed ADR-0316): the test DNS server with
+# its capture check, and the script.
+tools/test-dns/              test-net
+tests/shell/net-lookup.script test-net
 crates/zoraya-shell/src/netgrant.rs test-net
 
 # HTTPS and the random service (N5): the TLS crate, ring, the generator, rngd

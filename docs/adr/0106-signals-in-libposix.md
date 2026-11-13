@@ -279,6 +279,10 @@ the three named.
 - Reaction latency in a compute loop: a synthetic test (ADR-0004's open question), for the record.
 - Whether `SI_USER` with a sender pid is worth a `detail` convention from the broker (`detail` is 32 bits: a pid fits,
   but then `WTERMSIG`'s "valid signal number" test must change). Not for stage 6.
+- Note (ADR-0001 rule 6, part 9b; ADR-0315 item 10, proposed): INV-0106-2's list is extended by `sigwait`, `sigwaitinfo` and `sigtimedwait`, which take
+  `process_take_request` calls and `process_set_disposition` calls while a thread is in the wait, and item 2's mapping is deviated from for the signals of a
+  waiting thread whose action is `SIG_DFL` (kernel disposition `Deliver` for the length of the wait). The host test of INV-0106-2 does not call them; the
+  architect accepts the deviation or asks for a superseding ADR.
 
 ## Revisit triggers
 

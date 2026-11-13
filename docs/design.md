@@ -252,10 +252,11 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   not global. With no current process, `EPD0` is set and `TTBR0` is 0.
 - **User layout.** Programs from 4 MiB up; a 64 KiB stack mapped in full, ending one page below 2^47, with an unmapped
   page below it.
-- **Processes.** One thread each. All memory is mapped at creation, so there is no demand paging. A process ends on
-  its own thread: anyone else sets the exit it wants and wakes it, and it acts on that at its next return to EL0, or
-  before its first instruction. At exit it releases its memory, ASID and handles, and stays as a zombie holding only
-  its `ExitRecord` until its last handle goes.
+- **Processes.** One address space, one handle table, and from one to 128 threads (below, "Threads in a process").
+  All memory is mapped at creation, so there is no demand paging. A process ends in two phases: anyone else (or one of its
+  threads) fixes the exit record once and wakes the first thread; each thread acts on it at its next return to EL0, or
+  before its first instruction, and leaves. The thread whose leave empties the list releases the memory, ASID and
+  handles, and the process stays as a zombie holding only its `ExitRecord` until its last handle goes.
 - **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u64` of 16 bits of slot and 48 of generation (ADR-0057), 1024 slots, a rights
   mask that only decreases. Port handles have no `DUPLICATE`, so closing one closes the port.
 - **Jobs (`kernel/src/job.rs`).** A tree, at most 32 deep, with one lock over membership and walks. `job_signal` and
@@ -279,6 +280,43 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   embeds them in `.rodata`. A kernel built without the Makefile has an empty one.
 - **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb` and `sttrb`, which check permissions as EL0
   does.
+
+### Threads in a process (stage 9b, step 1: the kernel; ADR-0300, 0301, 0307, 0313)
+
+The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zoraya-thread`, and `t_thread` at the raw ABI.
+
+- **Calls 56 to 61.** `thread_create(entry, stack, argument, tls)` makes a thread of the caller's process that starts at
+  `entry` with `x0 = argument`, `SP = stack` and `TPIDR_EL0 = tls`, and returns a handle (rights `WAIT | SIGNAL`, not duplicable,
+  signal `TERMINATED`). `thread_exit(clear, unmap_base, unmap_length)` unmaps its own stack if asked, stores 0 at `clear` and
+  wakes its waiters, refunds its figures and leaves. `thread_self` makes a handle to the caller. `thread_interrupt(thread)`
+  sets a one-shot flag that ends the target's next or current `futex_wait` or `sleep_until` early (`Ok` with value 1; no new
+  `Status`); `port_wait` is not touched. `futex_wait(address, expected, deadline)` and `futex_wake(address, count)` are the
+  wait on a word of the process's own memory (no requeue, no cross-process key). The wait reads the word and lists the thread
+  with interrupts masked; the lists are made at a process's first `thread_create` or `futex_wait` and charged then.
+- **Limits.** 128 threads a process, 1,000 user threads in the system; the deadline queue has 1,024 entries (a binary heap,
+  at most 12 heap positions written by an insert, a cancel or a pop) and `on_interrupt` runs at most 64 due entries a pass.
+  A process's mapping calls (`memory_map`, `memory_unmap`, the unmap in `thread_exit`, `snapshot_process`) take a sleeping
+  per-process lock for the whole call, steps included, released by a guard on every path.
+- **Ending.** `request_exit` fixes the record and wakes one thread, never all (`Job::kill` calls it under the tree's lock).
+  The first thread to leave wakes the others in steps of 64 and each leaver wakes the new first one. `job_suspend` parks every
+  thread at its next return to EL0; `cont` wakes one parked thread, which wakes the rest in steps. A fork takes the same park
+  for its siblings (`thread::Freeze`) while `snapshot_process` copies.
+- **Quota.** `threads` is a field of its own (`QuotaField::Threads = 3`), counts every live thread (the first of each process
+  included), is charged after the process's slot and before its memory, and is refunded at `thread_exit`. The limits
+  record's bytes 16 to 20 hold it (0 = none) and the usage record is 152 bytes. The room keeper derives `3 x procs`; `init`
+  gives the session 600.
+- **`libposix` and musl (first slice, ADR-0314).** musl's `src/thread` is compiled over the shim: `__clone` (Rust, in
+  `crates/zoraya-posix/src/ffi.rs`) makes the thread with `thread_create`, `SYS_futex` is `futex_wait`/`futex_wake`
+  (`zoraya_posix_futex`), `SYS_exit` is `thread_exit` and `__unmapself` gives a detached thread's stack and object back. Two
+  futex locks (`crates/zoraya-posix/src/lock.rs`): the library lock around `Posix`, the memory lock around the heap and the
+  mapping table (256 entries). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
+  condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio). Known limits: a
+  library call that waits holds the library lock (the `Pending` split of ADR-0302 item 9 is the next slice); no signal reaches a
+  thread and `pthread_cancel` only sets a flag (ADR-0304, ADR-0305 are next); `fork` with siblings, `exec` and `exit` from a
+  non-main thread are untested.
+- **Not done yet.** Signals, cancellation of a blocked thread and `fork`'s locks in `libposix`, `grants` printing the
+  figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the CPU-ceiling and stepped-map variants of the
+  ending test (see the notes in ADR-0300, 0301 and 0307, and the report).
 
 ## Filesystem engine (as built)
 
@@ -1742,7 +1780,8 @@ stack's TCP client and its resolver are described under "TCP, names and `fetch`"
   (`40 bytes from 10.0.2.2: seq=0 time=0.412 ms`) and a summary (`4 sent, 4 received, 0% loss`,
   `rtt min/avg/max = ... ms`); the exit status is 1 when no reply came and 2 for wrong use. `netd` answers when the run ends,
   so the lines come together at the end. `PingReply` carries each request's round trip (`rtts`). Covered by
-  `tests/shell/net-fetch.script` (`make test-net-fetch`: an address and a `net.hosts` name), `net-dns.script` (names that do not
+  `tests/shell/net-fetch.script` (`make test-net-fetch`: an address and a `net.hosts` name), `net-lookup.script` (`make
+  test-net-lookup`: the first command of a boot, by name over the wire, answered late or never), `net-dns.script` (names that do not
   resolve or are local, with the host's resolver), `hand-run-net.script` (`make test-hand-run`, the production image against
   SLIRP's gateway), `t_netd` (an echo-only grant opens no TCP connection and pings no other host) and the host tests of
   `zoraya-abi`, `zoraya-net`, `zoraya-shell` and `zoraya-proto-net`.
@@ -1793,7 +1832,21 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
 - **The resolver** (`zoraya_net::dns`; the decoder is `zoraya-dns`). `net.hosts` first (and exempt from the local rule),
   then a cache of 64 names kept for the answer's TTL up to an hour, then A queries over one UDP socket to the servers of
   `status` (`net.dns`, else the lease's), attempts at 0, 1, 2 and 4 s to the servers in turn, up to 8 queries at once,
-  giving up at 8 s. An answer counts only from a configured server's port 53, with an identifier and question of a query in
+  giving up at 8 s (`zoraya_proto_net::LOOKUP_US`) with `status::TIMED_OUT` (`reason::LOOKUP_TIMED_OUT` for a `connect`;
+  proposed ADR-0316): "the name lookup timed out" in `ping` and `fetch`, `EAI_AGAIN` and `ETIMEDOUT` in `libposix`, apart
+  from `Unresolvable` (no such name, no A record, a server that said it failed). Every client's wait derives from that
+  bound (`ping_answer_us`, `CONNECT_ATTEMPT_US`) plus 5 s, so "the network service did not answer" means a `netd` that is
+  gone or stuck. A query to a server whose MAC is unknown is not lost: smoltcp keeps it in the socket and sends it with
+  the ARP reply. smoltcp asks for one neighbour per second, though, so the stack asks for the gateway and the DNS servers
+  on the link itself (an ARP request it builds) when the interface is configured, and for the gateway when a lookup goes
+  out and its last request is older than 30 s (`PROBE_FRESH_US`; smoltcp forgets a neighbour 60 s after its last frame):
+  the connection or echo request that follows a first lookup does not wait that second. The answer to a `ping` by name
+  comes inside a turn, after the stack's poll, so `Service::answer_lookups` makes the loop come back at once when its
+  run starts there (before the fix of proposed ADR-0316 the loop slept on the delay of before the run, none at all, and
+  the first `ping NAME` of a boot ended with the client's wait). A lookup asked while a DHCP lease is still to come
+  (no `net.dns` and no lease, or the lease gone) is kept under its normal bound and goes out once the lease is there;
+  `NoServer` (a static interface with no `net.dns`) is `status::UNAVAILABLE` and, for a `connect`, `reason::UNREACHABLE`.
+  An answer counts only from a configured server's port 53, with an identifier and question of a query in
   flight; the decoder takes an address only from a record owned by the name or by a CNAME chain from it. An address that is
   loopback, link-local, multicast, unspecified, the interface's own, the gateway or a DNS server is refused with `Local`
   unless an address rule covers it (ADR-0223 item 4). Not built: AAAA, TCP for a truncated answer, negative caching, a
@@ -1819,7 +1872,13 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   (`make test-net-fetch`) against `tools/test-httpd`, a bounded server on the host's 127.0.0.1 that the guest reaches at
   10.0.2.2: a page byte for byte, bodies of 1,000,000 (length), 300,000 (chunked, by name), 70,000 (until close) and
   4,000,000 bytes by checksum, a file written and read back, 404, a redirect, a cut connection, a refused port, SLIRP's DNS
-  forwarder answering `localhost` (refused as local) and `nothing.invalid` (unresolvable), and bad URLs. The step runs the
+  forwarder answering `localhost` (refused as local) and `nothing.invalid` (unresolvable), and bad URLs. `make
+  test-net-lookup` (`tests/shell/net-lookup.script`, part of `make test-net`) boots the test image against
+  `tools/test-dns`, a bounded DNS server on the host's 127.0.0.1 that answers late (3 s) or never: the boot's first network
+  command is `ping` by name, then `fetch` by name, then the two silent names ("the name lookup timed out") and one that
+  does not exist; its `netd` takes the server's port from `/config/net-test-dns-port` (feature `net-test` only; port 53
+  needs root). `zoraya-test-dns --check-pcap` then reads the run's capture: one ARP request for the server before the
+  first query, and the echo request and the SYN within 0.5 s of their answers. The step runs the
   network without `restrict=on` (`tools/run-qemu.sh --net-open`); every other step keeps it. The fuzz target
   `fuzz/fuzz_targets/net_dns_http.rs` was compiled and driven with 400,000 random inputs in a scratch crate (not run under
   libFuzzer: no nightly toolchain here).
@@ -2333,6 +2392,8 @@ tools/
   test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol, plays serial and GUI
                           scripts (serial text with SGR sequences dropped); zoraya-crash-test
   test-summary.sh         make test's summary, with the logs in build/logs/
+  test-dns/               zoraya-test-dns: make test-net-lookup's DNS server on 127.0.0.1 (late or no answers)
+                          and the check of the step's capture
   mutants/                zoraya-mutants and its mutation lists (*.toml)
   adr-check/              zoraya-adr-check: ADR-0001 invariants
   mkramdisk/              zoraya-mkramdisk: packs user programs, and their descriptions as NAME.cmd

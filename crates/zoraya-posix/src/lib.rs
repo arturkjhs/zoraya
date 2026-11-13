@@ -15,6 +15,7 @@ extern crate std;
 pub mod errno;
 pub mod fd;
 pub mod jobs;
+pub mod lock;
 pub mod net;
 pub mod path;
 pub mod process;
@@ -23,6 +24,7 @@ pub mod signals;
 pub mod socket;
 pub mod stat;
 pub mod sys;
+pub mod threads;
 pub mod wait;
 
 #[cfg(all(target_arch = "aarch64", target_os = "none"))]

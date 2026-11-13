@@ -1,0 +1,103 @@
+# The thread kernel of part 9b step 1 (ADR-0300, ADR-0301, ADR-0313): the
+# sweep and its chain, the refund before the wake, the creating calls' undo.
+# Minutes per mutant: one QEMU configuration. Added by the review of step 1,
+# whose surviving mutants these were (t_thread ended with only main blocked).
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "T-no-sweep"
+file = "kernel/src/process.rs"
+find = 'thread::wake_siblings(&process);'
+replace = ''
+note = "INV-0300-3: the first leaver wakes the others. EQUIVALENT (run of step-1 review; kept in the list as such, the sweep stays per ADR-0313 item 1): the chain wake alone reaches every sibling, one leaver after another, so the sweep only shortens the end; with 121 blocked siblings the end is still within 400 ms. Equivalent by function, not by time"
+
+[[mutant]]
+id = "T-no-chain-wake"
+file = "kernel/src/process.rs"
+find = 'sched::wake(first);'
+replace = ''
+note = "ADR-0300 item 6: each leaver wakes the new first thread, so siblings past the first step are reached"
+
+[[mutant]]
+id = "T-loop-ignores-exit"
+file = "kernel/src/thread.rs"
+find = 'break Err(Status::Cancelled);'
+replace = ''
+note = "INV-0301-5: a futex waiter woken by the sweep sees the ending and leaves"
+
+[[mutant]]
+id = "T-request-exit-wakes-nobody"
+file = "kernel/src/process.rs"
+find = 'sched::wake(thread);'
+occurrence = 1
+replace = ''
+note = "request_exit wakes the first thread; with nobody woken the process ends only at a deadline"
+
+[[mutant]]
+id = "T-refund-after-wake"
+file = "kernel/src/syscall.rs"
+find = 'sched::current().release_thread();'
+replace = ''
+note = "INV-0313-3: the refund precedes the clear store and its wake (t_thread clear)"
+
+[[mutant]]
+id = "T-device-map-unlocked"
+file = "kernel/src/syscall.rs"
+find = '''        let _map = MapGuard::acquire(&self.process)?;
+        let mapping = device.begin_mapping()?;'''
+replace = '''        let mapping = device.begin_mapping()?;'''
+note = "ADR-0301 item 6: device_map takes the mapping lock. KILLED (t_devices device_map_waits_for_a_stepped_map: a sibling's 256-page map under FORCE_SWITCH while the main thread maps the device; without the lock device_map fails with NoMemory beside the reserved range)"
+
+[[mutant]]
+id = "T-stream-keeps-handles"
+file = "kernel/src/syscall.rs"
+find = 'let gone = [handles.remove(read), handles.remove(write)];'
+replace = 'let gone: [Option<_>; 2] = [None, None];'
+note = "a failed stream_create takes both handles back. KILLED (t_thread creating_calls_leave_no_handles: PAUSE_IN_PREPARE and FORCE_SWITCH make the sibling unmap the buffer in every round)"
+
+[[mutant]]
+id = "T-snapshot-no-hold"
+file = "kernel/src/syscall.rs"
+find = '''            claim.hold(&mut handles, m.handle, Rights::TRANSFER)?;
+'''
+replace = ''
+note = "ADR-0313 item 7: snapshot_process holds its Move entries through the copy. KILLED by hand (t_snapshot snapshot_holds_moved_handles: a sibling's write moves the handle while the snapshot waits for the map lock)"
+
+[[mutant]]
+id = "T-spawn-no-kept-room"
+file = "kernel/src/syscall.rs"
+find = '''            claim.keep_room(&mut handles)?;
+            for listed'''
+replace = '''            handles.reserve()?;
+            for listed'''
+note = "ADR-0313 item 8: spawn keeps a room for the child's handle across the pause. KILLED by hand (t_thread keeproom)"
+
+[[mutant]]
+id = "T-snapshot-handle-twice"
+file = "crates/zoraya-abi/src/snapshot.rs"
+find = 'if a.slot == b.slot || a.handle == b.handle {'
+replace = 'if a.slot == b.slot {'
+note = "ADR-0313 item 7: a handle named twice in a snapshot's move list is InvalidArgument. KILLED by hand (t_snapshot the_move_list_is_all_or_nothing)"
+
+[[mutant]]
+id = "T-spawn-handle-twice"
+file = "crates/zoraya-abi/src/spawn.rs"
+find = 'if a.slot == b.slot || (moved && a.handle == b.handle) {'
+replace = 'if a.slot == b.slot || (moved && a.handle == b.handle && false) {'
+note = "ADR-0313 item 7: a handle named twice in a spawn list with a Move is InvalidArgument. KILLED by hand (t_spawn a_handle_named_twice_with_a_move_is_refused)"
+
+[[mutant]]
+id = "T-exec-exit-outside-state"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = '''        zoraya_rt::process_exit(0)
+    });
+    match r {
+        Ok(()) => unreachable!(),'''
+replace = '''        Ok(())
+    });
+    match r {
+        Ok(()) => zoraya_rt::process_exit(0),'''
+tests = ["make -s test-posix POSIX_SCRIPTS=tests/posix/threads.script"]
+timeout = 1500
+note = "INV-0315-6 / ADR-0306 item 7: the old image ends inside state(), the library lock held, so no sibling writes after the new image's first write; ending outside it releases the lock first (texec 'O' after 'N'). Run by hand at 9b review: texec fails in round 1 (killed)"

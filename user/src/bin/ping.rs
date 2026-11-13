@@ -76,6 +76,8 @@ fn main() -> i32 {
     } else {
         lower.as_str()
     };
+    // `netd` answers every ping, a lookup that timed out included; no reply
+    // within its bound is a `netd` that is gone or stuck.
     let Some(r) = netclient::ping_host(net, name, address.unwrap_or([0; 4]), count, seconds * 1000)
     else {
         c.error(None, "the network service did not answer");
@@ -99,6 +101,10 @@ fn main() -> i32 {
         }
         status::UNRESOLVABLE => {
             c.error(Some(host), "the name has no address");
+            return 1;
+        }
+        status::TIMED_OUT => {
+            c.error(Some(host), "the name lookup timed out");
             return 1;
         }
         status::LOCAL => {

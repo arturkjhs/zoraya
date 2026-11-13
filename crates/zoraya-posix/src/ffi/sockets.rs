@@ -66,6 +66,7 @@ extern "C" fn socket(domain: i32, ty: i32, protocol: i32) -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn connect(fd: i32, addr: *const u8, len: u32) -> i32 {
+    testcancel();
     poll();
     // SAFETY: C's contract: `addr` is a `struct sockaddr` of `len` bytes.
     let r = unsafe { copy_bytes(addr, len as usize) }.and_then(|a| {
@@ -80,6 +81,7 @@ extern "C" fn connect(fd: i32, addr: *const u8, len: u32) -> i32 {
 fn recv_flags(fd: i32, buf: *mut u8, n: usize, flags: i32) -> Result<usize, i32> {
     crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
     let u = user(buf, n)?;
+    testcancel();
     poll();
     let dontwait = flags & sock::MSG_DONTWAIT != 0;
     restartable(|p| p.sock_read(fd, u, dontwait))
@@ -88,6 +90,7 @@ fn recv_flags(fd: i32, buf: *mut u8, n: usize, flags: i32) -> Result<usize, i32>
 fn send_flags(fd: i32, buf: *const u8, n: usize, flags: i32) -> Result<usize, i32> {
     crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
     let u = user(buf, n)?;
+    testcancel();
     poll();
     let dontwait = flags & sock::MSG_DONTWAIT != 0;
     let r = restartable(|p| p.sock_write(fd, u, dontwait));

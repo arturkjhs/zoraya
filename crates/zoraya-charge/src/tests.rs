@@ -267,3 +267,37 @@ fn user_memory_is_a_part_of_memory() {
     assert!(charge_memory(&mut a, room, 11, Kind::User).is_err());
     assert_eq!(a.counters[room].get(Field::User).used, 60);
 }
+
+/// INV-0307-1: a job with `threads = N` allows N live threads in its
+/// subtree; the N+1th is refused by the field `Threads`, and nothing else
+/// changes (the other fields' counters are as before).
+#[test]
+fn the_fourth_field_counts_threads_and_a_refusal_changes_nothing_else() {
+    let mut a = Arena::new();
+    let room = a.add_child(0);
+    let cmd = a.add_child(room);
+    set_limit(&mut a, room, Field::Threads, Some(3)).unwrap();
+    charge(&mut a, cmd, Field::Memory, 500).unwrap();
+    charge(&mut a, cmd, Field::Processes, 1).unwrap();
+    for _ in 0..3 {
+        charge(&mut a, cmd, Field::Threads, 1).unwrap();
+    }
+    let before = a.counters.clone();
+    let r = charge(&mut a, cmd, Field::Threads, 1).unwrap_err();
+    assert_eq!(
+        (r.at, r.field, r.used, r.limit),
+        (room, Field::Threads, 3, 3)
+    );
+    for (now, was) in a.counters.iter().zip(&before) {
+        for field in [Field::Memory, Field::Processes, Field::User] {
+            assert_eq!(now.get(field), was.get(field));
+        }
+        assert_eq!(now.get(Field::Threads).used, was.get(Field::Threads).used);
+    }
+    assert_eq!(a.counters[room].get(Field::Threads).refused, 1);
+    refund(&mut a, cmd, Field::Threads, 1);
+    charge(&mut a, cmd, Field::Threads, 1).unwrap();
+    // A sibling room is not limited by this one.
+    let other = a.add_child(0);
+    charge(&mut a, other, Field::Threads, 100).unwrap();
+}

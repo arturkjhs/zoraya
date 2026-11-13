@@ -121,6 +121,42 @@ fn a_refused_spawn_changes_nothing() {
     handle_close(child_image).expect("close");
 }
 
+/// ADR-0313 item 7: a handle named twice in one list, once at least as a
+/// `Move`, is `InvalidArgument` in either order (as `channel_write` does),
+/// and nothing of the caller changes; two `Duplicate` entries of one handle
+/// are fine, since they widen nothing.
+fn a_handle_named_twice_with_a_move_is_refused() {
+    let both = Rights::WRITE
+        .union(Rights::TRANSFER)
+        .union(Rights::DUPLICATE);
+    let x = handle_duplicate(CONSOLE, both).expect("dup");
+    let moved = |slot| HandleEntry {
+        slot,
+        handle: x,
+        rights: Rights::WRITE,
+        transfer: Transfer::Move,
+    };
+    let cases: [(&str, [HandleEntry; 2]); 3] = [
+        ("move, move", [moved(1), moved(2)]),
+        ("move, duplicate", [moved(1), dup(2, x, Rights::WRITE)]),
+        ("duplicate, move", [dup(1, x, Rights::WRITE), moved(2)]),
+    ];
+    for (name, list) in cases {
+        let status = spawn_role("empty", &list, false);
+        assert_eq!(status.err(), Some(Status::InvalidArgument), "{name}");
+        console_write(x, b"").expect("still here");
+    }
+    let child = spawn_role(
+        "empty",
+        &[dup(1, x, Rights::WRITE), dup(2, x, Rights::WRITE)],
+        false,
+    )
+    .expect("two duplicates of one handle");
+    wait_exit(child);
+    handle_close(child).expect("close");
+    handle_close(x).expect("close");
+}
+
 /// INV-0003-4: the job is not optional, and needs its right.
 fn a_process_needs_a_job() {
     let mut buffer = [0; 256];
@@ -347,6 +383,7 @@ fn main() -> i32 {
     a_move_leaves_the_parent_without_the_handle();
     rights_cannot_grow_on_the_way();
     a_refused_spawn_changes_nothing();
+    a_handle_named_twice_with_a_move_is_refused();
     a_process_needs_a_job();
     an_image_needs_its_right();
     suspended_means_not_started();

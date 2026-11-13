@@ -125,6 +125,13 @@ pub(super) fn restartable<R>(
 /// A signal of the process's own (ADR-0106 item 8): `raise`, `kill` of
 /// oneself, `SIGPIPE` on a write.
 fn raise_signal(n: u32) -> Result<(), i32> {
+    raise_signal_for(n, false)
+}
+
+/// As [`raise_signal`]; `process` is set for a signal directed at the process
+/// (`kill` of oneself): one this thread blocks goes to a thread that does not
+/// (ADR-0304 item 3), instead of staying pending here.
+fn raise_signal_for(n: u32, process: bool) -> Result<(), i32> {
     if n == 0 {
         return Ok(());
     }
@@ -135,7 +142,16 @@ fn raise_signal(n: u32) -> Result<(), i32> {
         stop_self(n);
         return Ok(());
     }
-    match with(|p| p.signals.take(n)).unwrap_or(Taken::Drop) {
+    let taken = with(|p| {
+        let was_pending = p.signals.pending & crate::signals::bit(n) != 0;
+        let t = p.signals.take(n);
+        if process && t == Taken::Pending {
+            p.route(n, was_pending);
+        }
+        t
+    })
+    .unwrap_or(Taken::Drop);
+    match taken {
         Taken::Run(a) => run_handler(n, a),
         Taken::Default(crate::signals::DefaultAction::Terminate) => {
             zoraya_rt::process_exit_terminated(n)
@@ -144,6 +160,12 @@ fn raise_signal(n: u32) -> Result<(), i32> {
         Taken::Default(_) | Taken::Drop | Taken::Pending => {}
     }
     Ok(())
+}
+
+/// Delivers what is deliverable to this thread; true if a handler ran
+/// (ADR-0304 item 11).
+pub(super) fn deliver_ran() -> bool {
+    deliver().ran
 }
 
 /// After a write: `EPIPE` is `SIGPIPE` first (ADR-0106 item 8).
@@ -155,11 +177,13 @@ pub(super) fn after_write(r: Result<usize, i32>) -> Result<usize, i32> {
 }
 
 pub(super) fn read_fd(fd: i32, u: User) -> Result<usize, i32> {
+    testcancel();
     poll();
     restartable(|p| p.read(fd, u))
 }
 
 pub(super) fn write_fd(fd: i32, u: User) -> Result<usize, i32> {
+    testcancel();
     poll();
     after_write(restartable(|p| p.write(fd, u)))
 }
@@ -170,7 +194,7 @@ pub(super) fn write_fd(fd: i32, u: User) -> Result<usize, i32> {
 /// and the broker's record for the stop and continue signals (item 9).
 fn sync_disposition(p: &mut Posix<RtSys>, n: u32) {
     if let Some(kind) = zoraya_abi::posix::signal::kind(n) {
-        let _ = p.sys.set_disposition(kind, p.signals.kernel_disposition(n));
+        let _ = p.sys.set_disposition(kind, p.effective_disposition(n));
     }
 }
 
@@ -380,6 +404,7 @@ extern "C" fn sigismember(set: *const u64, n: i32) -> i32 {
 /// `sigsuspend` (ADR-0106 items 2 and 3): the mask for the wait, a wait on
 /// the process's requests and the children, until a handler runs.
 fn suspend_with(mask: Option<u64>) -> i32 {
+    testcancel();
     let old = match mask {
         Some(m) => match state(|p| p.signals.mask(SIG_SETMASK, Some(m))) {
             Ok(o) => Some(o),
@@ -424,6 +449,172 @@ extern "C" fn pause() -> i32 {
     suspend_with(None)
 }
 
+/// `sigtimedwait` and its kin (ADR-0304 item 3, ADR-0315 item 10): waits until
+/// a signal of `set` is pending for this thread or for the process, takes it
+/// off (no handler runs for it) and returns its number. `set` is blocked
+/// meanwhile, as POSIX asks the caller to have done; the mask is put back.
+/// Other signals with handlers run their handlers, and the wait is then
+/// `EINTR`. `deadline` is absolute on the monotonic clock; `EAGAIN` once it passes.
+fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
+    testcancel();
+    // `SIGKILL` and `SIGSTOP` cannot be waited for.
+    let set = set & !(crate::signals::bit(9) | crate::signals::bit(19));
+    // The wait must put its state back before a cancel ends the thread
+    // (ADR-0315 item 10): the library's waits do not act on a cancel while it
+    // runs, the loop looks at the flag itself, and the thread ends last.
+    // SAFETY: musl's cancel state of this thread; `cancel_end` puts it back.
+    let cancel = unsafe { __zoraya_cancel_begin() };
+    let old = state(|p| {
+        let old = p.sigwait_begin(set)?;
+        sync_sigwait(p, set);
+        Ok(old)
+    });
+    let Ok(old) = old else {
+        // SAFETY: as above.
+        unsafe { __zoraya_cancel_end(cancel) };
+        return Err(old.unwrap_err());
+    };
+    let mut cancelled = false;
+    let result = loop {
+        // SAFETY: as above.
+        if unsafe { __zoraya_cancel_seen(cancel) } != 0 {
+            cancelled = true;
+            break Err(if cancel == 0 { EINTR } else { ECANCELED });
+        }
+        let d = deliver();
+        let got = with(|p| {
+            let ready = (p.signals.pending | p.signals.shared) & set;
+            if ready == 0 {
+                return None;
+            }
+            let n = ready.trailing_zeros() + 1;
+            p.signals.pending &= !crate::signals::bit(n);
+            p.signals.shared &= !crate::signals::bit(n);
+            Some(n)
+        })
+        .flatten();
+        if let Some(n) = got {
+            break Ok(n);
+        }
+        if d.ran {
+            break Err(EINTR);
+        }
+        if deadline.is_some_and(|t| zoraya_rt::clock_monotonic() >= t) {
+            break Err(EAGAIN);
+        }
+        match state(|p| p.wait_for(&[], deadline)) {
+            Err(EINTR) | Ok(_) => {}
+            // `wait_for` listens to this process's requests while a thread is
+            // in `sigwait`, so this is not reached with a live process.
+            Err(EINVAL) => zoraya_rt::sleep_until(u64::MAX),
+            Err(e) => break Err(e),
+        }
+    };
+    let _ = state(|p| {
+        // Requests still queued join the pending sets first: the kernel
+        // would end the process on a queued one when `Terminate` comes back.
+        p.drain_requests();
+        p.sigwait_end(old);
+        sync_sigwait(p, set);
+        Ok(())
+    });
+    // SAFETY: as above.
+    unsafe { __zoraya_cancel_end(cancel) };
+    poll();
+    // A cancel the loop saw ends the thread now, with the mask and the wait
+    // undone; a signal taken is returned, not lost to a later cancel.
+    if cancelled {
+        testcancel();
+    }
+    result
+}
+
+/// The kernel dispositions of the signals of `set` after a thread began or
+/// ended waiting for them.
+fn sync_sigwait(p: &mut Posix<RtSys>, set: u64) {
+    for n in 1..=zoraya_abi::posix::signal::MAX {
+        if set & crate::signals::bit(n) != 0 {
+            sync_disposition(p, n);
+        }
+    }
+}
+
+/// Fills a `siginfo_t` (128 bytes) for a signal taken by a wait: number and
+/// `SI_USER`; the sender is not known.
+///
+/// # Safety
+///
+/// `info` is NULL or a writable `siginfo_t`.
+unsafe fn write_siginfo(info: *mut u8, n: u32) {
+    if !info.is_null() {
+        // SAFETY: the caller's contract; musl's layout puts `si_signo` at 0.
+        unsafe {
+            ptr::write_bytes(info, 0, 128);
+            (info as *mut i32).write(n as i32);
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn sigtimedwait(set: *const u64, info: *mut u8, timeout: *const [i64; 2]) -> i32 {
+    // SAFETY: C's contract: `set` is a `sigset_t`.
+    let Some(set) = (unsafe { read_set(set) }) else {
+        return int(Err(EFAULT));
+    };
+    let deadline = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: C's contract: `timeout` is a `struct timespec`.
+        let [sec, nsec] = unsafe { timeout.read() };
+        if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
+            return int(Err(EINVAL));
+        }
+        Some(
+            zoraya_rt::clock_monotonic()
+                .saturating_add((sec as u64).saturating_mul(1_000_000_000))
+                .saturating_add(nsec as u64)
+                .min(u64::MAX - 1),
+        )
+    };
+    match wait_signals(set, deadline) {
+        Ok(n) => {
+            // SAFETY: as above, `info` is NULL or a `siginfo_t`.
+            unsafe { write_siginfo(info, n) };
+            n as i32
+        }
+        Err(e) => int(Err(e)),
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn sigwaitinfo(set: *const u64, info: *mut u8) -> i32 {
+    sigtimedwait(set, info, ptr::null())
+}
+
+/// `sigwait` returns the error number, and does not stop for a handler.
+#[unsafe(no_mangle)]
+extern "C" fn sigwait(set: *const u64, sig: *mut i32) -> i32 {
+    loop {
+        match sigtimedwait(set, ptr::null_mut(), ptr::null()) {
+            -1 => {
+                // SAFETY: musl's errno.
+                let e = unsafe { *__errno_location() };
+                if e == EINTR {
+                    continue;
+                }
+                return e;
+            }
+            n => {
+                if !sig.is_null() {
+                    // SAFETY: C's contract: `sig` is an int.
+                    unsafe { sig.write(n) };
+                }
+                return 0;
+            }
+        }
+    }
+}
+
 /// `nanosleep`'s core (ADR-0106 item 10): the port's deadline, `EINTR`
 /// with the time left when a handler ran.
 fn sleep_until(deadline: u64) -> Result<(), u64> {
@@ -451,6 +642,7 @@ fn sleep_until(deadline: u64) -> Result<(), u64> {
 }
 
 pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
+    testcancel();
     poll();
     match sleep_until(deadline) {
         Ok(()) => 0,
@@ -468,6 +660,7 @@ pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
 
 /// `waitpid` and its kin (ADR-0104 item 11).
 fn wait_child(pid: i32, status: *mut i32, options: i32) -> i32 {
+    testcancel();
     poll();
     match restartable(|p| p.waitpid(pid, options)) {
         Ok(Some((child, s))) => {
@@ -538,6 +731,9 @@ extern "C" fn pselect(
     timeout: *const [i64; 2],
     sigmask: *const u64,
 ) -> i32 {
+    // A cancellation point, acted on before any buffer is built.
+    // A cancellation point, acted on before any buffer is built.
+    testcancel();
     if !(0..=1024).contains(&nfds) {
         return int(Err(EINVAL));
     }
@@ -692,7 +888,7 @@ extern "C" fn kill(pid: i32, sig: i32) -> i32 {
     }
     let me = with(|p| p.facts.pid as i32).unwrap_or(0);
     let r = if pid == me && me > 0 {
-        raise_signal(n)
+        raise_signal_for(n, true)
     } else {
         state(|p| p.kill_other(pid, n))
     };
@@ -1731,11 +1927,16 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
             debug_later(p, "exec: commit", e);
             zoraya_rt::process_exit(127);
         }
-        Ok(())
+        // The new image runs: this one ends without atexit or stdio. The
+        // library lock stays held to the end (ADR-0306 item 7): no sibling
+        // opens, closes or dups a descriptor after the table was copied,
+        // and none writes after the new image's first write (INV-0315-6).
+        // Ending after `state` returns would release the lock first (the
+        // mutant T-exec-exit-outside-state in tools/mutants/threads-9b.toml).
+        zoraya_rt::process_exit(0)
     });
     match r {
-        // The new image runs: this one ends without atexit or stdio.
-        Ok(()) => zoraya_rt::process_exit(0),
+        Ok(()) => unreachable!(),
         Err(e) => e,
     }
 }
@@ -1859,8 +2060,35 @@ fn debug_later(p: &mut Posix<RtSys>, what: &str, detail: impl core::fmt::Debug) 
 #[unsafe(no_mangle)]
 extern "C" fn fork() -> i32 {
     poll();
+    // musl's part first (ADR-0306 item 1): the `atfork` prepare handlers, the
+    // signal mask, musl's locks and the thread-list lock. Then the library
+    // lock (`state`) and, around the snapshot only, the memory lock.
+    let mut ctx = [0usize; 32];
+    // SAFETY: `atfork.c`; `ctx` is the room its `struct zoraya_fork` asks for
+    // (a static assertion there), and the matching `parent` or `child` call
+    // below is made on every path.
+    unsafe { __zoraya_fork_prepare(ctx.as_mut_ptr()) };
+    let r = fork_locked();
+    match r {
+        // SAFETY: as above; this is the child, in a copy of the caller's
+        // memory with `ctx` as it was, and it holds none of the library's locks.
+        Ok(0) => unsafe { __zoraya_fork_child(ctx.as_mut_ptr()) },
+        // SAFETY: as above.
+        _ => unsafe { __zoraya_fork_parent(ctx.as_mut_ptr()) },
+    }
+    int(r)
+}
+
+unsafe extern "C" {
+    fn __zoraya_fork_prepare(ctx: *mut usize);
+    fn __zoraya_fork_parent(ctx: *mut usize);
+    fn __zoraya_fork_child(ctx: *mut usize);
+}
+
+/// `fork` with musl's locks taken: `Ok(0)` in the child.
+fn fork_locked() -> Result<i32, i32> {
     let started = zoraya_rt::clock_monotonic();
-    let r = state(|p| {
+    state(|p| {
         let hint = core::mem::replace(&mut p.fork_group, -1);
         let (form, pgid) = match hint {
             -1 => (bp::group::INHERIT, 0),
@@ -1900,8 +2128,14 @@ extern "C" fn fork() -> i32 {
             let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
             return Err(EAGAIN);
         };
+        // The memory lock across the call (ADR-0306 item 1): no sibling is
+        // in the heap or the mapping table while the kernel copies, and
+        // the child's copy of the lock is made free below. The kernel
+        // freezes the siblings itself (ADR-0306 item 2).
+        super::lock_memory();
         let before = zoraya_rt::clock_monotonic();
         let snap = zoraya_rt::snapshot_process(&buffer[..length]);
+        super::unlock_memory(matches!(snap, Ok(None)));
         let snapshot_ns = zoraya_rt::clock_monotonic().saturating_sub(before);
         match snap {
             Ok(Some(process)) => {
@@ -1924,6 +2158,11 @@ extern "C" fn fork() -> i32 {
                 // item 5): its own facts, a port of its own.
                 p.sys.port = None;
                 p.after_fork_in_child(prepared.pid, prepared.pgid);
+                // The copied kernel dispositions may carry a sibling's
+                // `sigwait` (ADR-0315 item 10); the thread is gone here.
+                for n in 1..=zoraya_abi::posix::signal::MAX {
+                    sync_disposition(p, n);
+                }
                 super::restart_stats(p);
                 Ok(0)
             }
@@ -1946,8 +2185,7 @@ extern "C" fn fork() -> i32 {
                 })
             }
         }
-    });
-    int(r)
+    })
 }
 
 #[unsafe(no_mangle)]

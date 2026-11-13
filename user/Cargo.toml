@@ -70,7 +70,9 @@ zoraya-describe = { path = "../crates/zoraya-describe" }
 # The image of `make test-net-fetch` only (ADR-0296 item 5): `init`, `netd`
 # and `zosh` build the test of the network's restart. The ramdisk every other
 # kernel embeds is built without it, so no volume can turn it on.
-net-test = []
+# `netd` also takes its DNS servers' port from `/config/net-test-dns-port`
+# (`make test-net-lookup`, whose test server cannot bind port 53).
+net-test = ["zoraya-net/test-dns-port"]
 
 [lints]
 workspace = true
@@ -479,6 +481,11 @@ bench = false
 
 [[bin]]
 name = "t_quota"
+test = false
+bench = false
+
+[[bin]]
+name = "t_thread"
 test = false
 bench = false
 

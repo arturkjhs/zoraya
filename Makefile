@@ -65,18 +65,21 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd netd net fetch ping t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd rooms t_rooms memhog diskfill random broker ttyd
+	ethd netd net fetch ping t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_thread t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd rooms t_rooms memhog diskfill random broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 # The deadline of the TCG, 4-CPU and CI test-qemu-* and test-net runs: 116 tests
-# take 147-176 s under TCG in CI and the suite grows, so 180 s dies under load
-# (slowest green run: 176 s, 70% margin at 300 s). HVF-only runs keep QEMU_TIMEOUT.
-QEMU_SLOW_TIMEOUT ?= 300
+# took 147-176 s under TCG in CI; with 128 tests (stage 9b) the runs took 168,
+# 201 and 267 s, and one run on a slow runner (every timed test 2x slower) did
+# not finish in 300 s. 420 s keeps a 57% margin over the slowest green run.
+# The CI job limit (10 minutes) still holds: about 1 minute of setup + 7.
+# HVF-only runs keep QEMU_TIMEOUT.
+QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: FORCE apps test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \ test-posix-threads
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -288,11 +291,12 @@ NET_FWD_PORT := 47015
 NET_SCRIPT := tests/shell/net.script
 # INV-0296-1: a string of each of the test image's Crash paths (feature
 # net-test), as PROGRAM:STRING: netd's end on request, init's request on its
-# control connection and its look for the volume's file. The shell's `net
+# control connection and its look for the volume's file, and netd's read of
+# the test DNS port (ADR-0316's test hook). The shell's `net
 # crash` only asks init, which then has no such path. test-net checks that
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
-NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper'
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper' 'netd:net-test-dns-port'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
@@ -331,7 +335,8 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
 	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
 	$(MAKE) --no-print-directory test-net-fetch && \
-	$(MAKE) --no-print-directory test-net-posix
+	$(MAKE) --no-print-directory test-net-posix && \
+	$(MAKE) --no-print-directory test-net-lookup
 
 # N3 (ADR-0222, ADR-0223): `fetch` in the guest against the host-side test
 # server (tools/test-httpd: 127.0.0.1 only, bounded, gone after 300 s or when
@@ -391,6 +396,58 @@ test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		if [ -n "$$CI" ] && [ "$(NET_DNS)" != 1 ]; then echo "[net-dns] SKIP: SLIRP's DNS forwarder needs the host's resolver (NET_DNS=1 runs it on CI)"; \
 		else $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel auto $(KERNEL); rc=$$?; fi; \
 	fi; \
+	exit $$rc
+
+# The first lookup of a boot over the wire (proposed ADR-0316): a fresh boot
+# whose first network command is `ping NAME`, then `fetch` by name, against
+# tools/test-dns on the host's 127.0.0.1 (the disk's `net.dns = 10.0.2.2`,
+# which SLIRP maps there), which answers late or never. The script checks
+# what the commands say (the answer, or "the name lookup timed out" at
+# netd's bound); `zoraya-test-dns --check-pcap` checks the capture: one ARP
+# request for the server before the first query, and the echo request and
+# the SYN leaving within 0.5 s of their answers (netd acted on the answer
+# at once; before the fix the run waited for the client's timeout). The
+# server listens on a free port, not 53 (root only): the image is the test
+# image, whose `netd` reads that port from /config/net-test-dns-port.
+TEST_DNS := target/debug/zoraya-test-dns
+NET_LOOKUP_ROOT := $(BUILD)/net-lookup-root
+NET_LOOKUP_DISK := $(BUILD)/net-lookup-disk.img
+NET_LOOKUP_SCRIPT := $(BUILD)/net-lookup.script
+NET_LOOKUP_PCAP := target/test-logs/test-net-lookup.pcap
+NET_LOOKUP_DNS_READY := $(BUILD)/net-lookup-dns.port
+NET_LOOKUP_HTTP_READY := $(BUILD)/net-lookup-httpd.port
+NET_LOOKUP_DNS_LOG := target/test-logs/test-dns.log
+
+$(TEST_DNS): tools/test-dns/src/main.rs
+	$(CARGO) build -q -p zoraya-test-dns
+
+test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-lookup] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	mkdir -p $(NET_LOOKUP_ROOT) target/test-logs && cp -R rootfs/. $(NET_LOOKUP_ROOT)/ && \
+	rm -f $(NET_LOOKUP_PCAP) && : > $(NET_LOOKUP_DNS_READY) && : > $(NET_LOOKUP_HTTP_READY) && \
+	{ $(TEST_DNS) --port 0 --lifetime 300 --ready-file $(NET_LOOKUP_DNS_READY) \
+		--answer slow.zoraya=10.0.2.2@3000 --answer slowweb.zoraya=10.0.2.2@3000 \
+		--silent silent.zoraya --silent silentweb.zoraya > $(NET_LOOKUP_DNS_LOG) 2>&1 & echo $$! > $(BUILD)/net-lookup-dns.pid; } && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_LOOKUP_HTTP_READY) > target/test-logs/test-httpd-lookup.log 2>&1 & echo $$! > $(BUILD)/net-lookup-httpd.pid; } && \
+	dns=$$(cat $(BUILD)/net-lookup-dns.pid); httpd=$$(cat $(BUILD)/net-lookup-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_LOOKUP_DNS_READY) ] && [ -s $(NET_LOOKUP_HTTP_READY) ] && break; sleep 0.25; done; \
+	dnsport=$$(cat $(NET_LOOKUP_DNS_READY)); port=$$(cat $(NET_LOOKUP_HTTP_READY)); \
+	if [ -z "$$dnsport" ] || [ -z "$$port" ] || ! kill -0 $$dns 2>/dev/null || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[net-lookup] FAIL: the test servers did not start"; cat $(NET_LOOKUP_DNS_LOG); kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
+	if ! { printf 'net.dns = 10.0.2.2\n' > $(NET_LOOKUP_ROOT)/config/settings && \
+		echo "$$dnsport" > $(NET_LOOKUP_ROOT)/config/net-test-dns-port && \
+		target/debug/zoraya-mkfs --size 16M --from $(NET_LOOKUP_ROOT) $(NET_LOOKUP_DISK); }; then \
+		echo "[net-lookup] FAIL: the disk was not made"; kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@SUM1K@/$$($(HTTPD) --checksum 1000)/" tests/shell/net-lookup.script > $(NET_LOOKUP_SCRIPT); \
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_LOOKUP_SCRIPT) --label net-lookup-auto -- \
+		$(RUN_QEMU) --test --keys --net --net-open --net-pcap $(NET_LOOKUP_PCAP) --disk $(NET_LOOKUP_DISK) --accel auto $(NET_TEST_KERNEL); rc=$$?; \
+	kill $$httpd $$dns 2>/dev/null; wait $$httpd $$dns 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		$(TEST_DNS) --check-pcap $(NET_LOOKUP_PCAP) --server 10.0.2.2 --server-port $$dnsport --first slow.zoraya \
+			--then-echo slow.zoraya --then-syn slowweb.zoraya; rc=$$?; \
+		[ $$rc = 0 ] && echo "[net-lookup] ok: the capture shows the first lookup and what followed it at once"; \
+	fi; \
+	if [ $$rc != 0 ]; then echo "[net-lookup] FAIL (the DNS server's log: $(NET_LOOKUP_DNS_LOG))"; tail -20 $(NET_LOOKUP_DNS_LOG); fi; \
 	exit $$rc
 
 # N6 (ADR-0230 item 8): the throughput and latency numbers of the network, from
@@ -687,6 +744,82 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
+# Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,
+# from posixrun, on the same image as test-libposix with /bin/t_threads.
+POSIX_THREADS := $(BUILD)/posix-threads
+POSIX_THREADS_SCRIPT := tests/posix-core/threads.script
+test-posix-threads: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc
+	@$(MAKE) -s -f ports/Makefile check-libc
+	rm -rf $(POSIX_THREADS) && mkdir -p $(POSIX_THREADS)/root/bin $(POSIX_THREADS)/root/work
+	cp -R rootfs/. $(POSIX_THREADS)/root/
+	tools/zcc -O2 -o $(POSIX_THREADS)/root/bin/t_threads tests/posix-core/t_threads.c
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_threads
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_THREADS)/root $(POSIX_THREADS)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_THREADS)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_THREADS)/disk.img || exit 1; done
+
+# Part 9b's thread suites (ADR-0309 items 1 and 2): musl's libc-test thread
+# tests (tests/libc-test/threads-excluded.txt names what is left out and why),
+# each run by posixrun on the image of test-libposix. They need
+# `make fetch-ports` once, as the ports do; the sources are unpacked by
+# `make -f ports/Makefile suites`.
+POSIX_SUITES := $(BUILD)/posix-suites
+test-posix-suites: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc
+	@$(MAKE) -s -f ports/Makefile check-libc
+	@$(MAKE) -s -f ports/Makefile suites
+	rm -rf $(POSIX_SUITES) && mkdir -p $(POSIX_SUITES)/root/bin/lct $(POSIX_SUITES)/root/work
+	cp -R rootfs/. $(POSIX_SUITES)/root/
+	tests/libc-test/build.sh $(BUILD)/ports/workloads/libctest $(POSIX_SUITES)/lct
+	cp $(POSIX_SUITES)/lct/bin/* $(POSIX_SUITES)/root/bin/lct/
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(POSIX_SUITES)/root/bin/lct/*
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/root $(POSIX_SUITES)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_SUITES)/lct/script --label posix-suites-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_SUITES)/disk.img || exit 1; done
+
+# SQLite's threadtest3 (ADR-0309 item 2), NOT a step of make test: it builds and
+# starts, and every scenario fails at its first write with SQLITE_IOERR_LOCK
+# (3850) because libposix has no `fcntl` record locks (F_SETLK is EINVAL), which
+# needs a decision of its own. Run by hand with `make posix-threadtest3` once
+# they exist.
+posix-threadtest3: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc suites
+	@$(MAKE) -s -f ports/Makefile workloads
+	rm -rf $(POSIX_SUITES)/tt && mkdir -p $(POSIX_SUITES)/tt/root/bin $(POSIX_SUITES)/tt/root/work
+	cp -R rootfs/. $(POSIX_SUITES)/tt/root/
+	tools/zcc -O2 -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL \
+	  -I$(BUILD)/ports/workloads/sqlite -I$(BUILD)/ports/workloads/sqlitesrc/src -I$(BUILD)/ports/workloads/sqlitesrc/test \
+	  -o $(POSIX_SUITES)/tt/root/bin/threadtest3 $(BUILD)/ports/workloads/sqlitesrc/test/threadtest3.c \
+	  $(BUILD)/ports/workloads/sqlite/sqlite3.c $(BUILD)/ports/workloads/sqlitesrc/src/test_multiplex.c \
+	  tests/libc-test/strerror_r.c
+	target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/tt/root $(POSIX_SUITES)/tt/disk.img
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/threadtest3.script --label posix-threadtest3 -- \
+	  $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/tt/disk.img --accel auto $(KERNEL)
+
+# musl's pthread_cancel-points without its shm_open scenario (shm_open is T3,
+# ADR-0005, not exported, not in 9b's scope; tests/libc-test/threads-excluded.txt):
+# the six cancel scenarios (sem_wait, sem_timedwait, pthread_join, each blocking
+# and not) run on a copy of the source with that one scenario deleted. NOT a
+# step of make test; run by hand with `make posix-cancel-points`.
+posix-cancel-points: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc suites
+	rm -rf $(POSIX_SUITES)/cp && mkdir -p $(POSIX_SUITES)/cp/root/bin $(POSIX_SUITES)/cp/root/work
+	cp -R rootfs/. $(POSIX_SUITES)/cp/root/
+	sed '/execute_shm_open, cleanup_shm/d' $(BUILD)/ports/workloads/libctest/src/functional/pthread_cancel-points.c \
+	  > $(POSIX_SUITES)/cp/cancel-points-noshm.c
+	tools/zcc -O2 -w -I$(BUILD)/ports/workloads/libctest/src/common -o $(POSIX_SUITES)/cp/root/bin/cancel-points \
+	  $(POSIX_SUITES)/cp/cancel-points-noshm.c $(BUILD)/ports/workloads/libctest/src/common/print.c
+	target/debug/zoraya-mkfs --size 32M --from $(POSIX_SUITES)/cp/root $(POSIX_SUITES)/cp/disk.img
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script tests/libc-test/cancel-points.script --label posix-cancel-points -- \
+	  $(RUN_QEMU) --test --keys --disk $(POSIX_SUITES)/cp/disk.img --accel auto $(KERNEL)
+
 # The POSIX session (TASK-21, ADR-0110): dash on ttyd through the broker, on
 # an image of the ports' root (make ports' build/rootfs-posix), rootfs/ and
 # tests/posix/rootfs (with /etc/zoraya/session and /tests/wN.sh), in
@@ -736,7 +869,7 @@ posix-image: $(KERNEL) tools-storage
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
 # set from the first measured durations (TASK-22) with a margin of about
 # three; QEMU_TIMEOUT for the others.
-POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-term=600 \
+POSIX_TIMEOUTS := threads=900 w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-term=600 \
 	w10=600 w4=1800 w5-jobs=300 tour=900 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
 # W8's five builds: w8.script runs them in one boot; w8-BUILD.script runs one
 # (CI's jobs, ADR-0213's Decision).
@@ -772,8 +905,8 @@ endef
 # scenarios.
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
-	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/zosh.script \
-	tests/posix/tour.script
+	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/threads.script \
+	tests/posix/zosh.script tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
@@ -807,6 +940,7 @@ posix-calls:
 	target/debug/posix-stats --calls $(BUILD)/sysroot/usr/lib/zoraya-calls.txt \
 	  docs/adr/posix-surface-T1.txt tools/posix-surface/results/dynamic-programs.tsv \
 	  docs/adr/0211-acceptance-choices-of-stage-6e.md \
+	  --no-thread-calls docs/adr/posix-surface-T9.txt \
 	  $(foreach r,$(POSIX_T1_RUNS),$(wildcard $(foreach a,auto hvf tcg,$(POSIX_LOGS)/posix-$(r)-$(a).log))) \
 	  --require $(POSIX_T1_RUNS)
 
@@ -1064,6 +1198,16 @@ check-tls-roots:
 # INV-0310-2: tools/run-disk.sh and EXTRA_ROOT, on a scratch layout.
 check-run-disk:
 	tools/test-run-disk.sh
+# Every mutant of tools/mutants/*.toml still applies: its `find` occurs in
+# its file as the list says. A missing one is code that moved, or a mutant's
+# `replace` that was committed by mistake (the texec failure of 9b).
+# In make check over every list but four whose 15 stale mutants no longer
+# apply (docs/backlog.md); MUTANT_LISTS= names other lists.
+MUTANT_STALE := compositor-settings fs-limits fs-service kernel-objects
+MUTANT_LISTS ?= $(filter-out tools/mutants/Cargo.toml $(MUTANT_STALE:%=tools/mutants/%.toml),$(wildcard tools/mutants/*.toml))
+check-mutant-lists:
+	@$(CARGO) build -q -p zoraya-mutants
+	@target/debug/zoraya-mutants --check $(MUTANT_LISTS)
 
 check-test-caps:
 	@bad=""; \
@@ -1092,7 +1236,7 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
 TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk test-apps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
@@ -1118,7 +1262,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-mutant-lists check-run-disk
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

@@ -1,0 +1,159 @@
+# ADR-0313: Threads in the kernel as built: the owner is the last to leave, lazy thread lists, parked threads woken by one
+
+- **Status:** accepted
+- **Date:** 2026-11-13
+- **Depends on:** ADR-0270, ADR-0285, ADR-0300, ADR-0301, ADR-0306, ADR-0307
+- **Evidence:** CP-10, CP-14, DM-004, GR-011, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
+
+## Context
+
+The kernel half of part 9b (ADR-0300, ADR-0301, ADR-0307, accepted 2026-11-13) was implemented. Five places where the
+accepted text leaves a choice, or says a thing the code does differently without changing what it guarantees, are recorded
+here instead of changed silently (CLAUDE.md "Decisions"). The thread is a part of the process only in the sense DM-004 warns about
+if every feature needs a retrofitted rule; these refinements keep each rule local to one function. Nothing here changes a decision of the architect; each item says
+which sentence it refines. Measured on the development host under HVF: `t_thread` (the raw-ABI test of step 1) runs 100,000
+futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
+
+## Decision drivers
+
+1. Every guarantee of ADR-0300 item 6 (no sibling runs after the record is fixed; the space is freed with no thread running or
+   ready) must hold with the least new machinery in the kernel (ADR-0270 bound, one CPU).
+2. A process that never makes a second thread pays nothing for the feature (ADR-0261, ADR-0260's per-process figures; the
+   existing tests compare usage to the byte).
+3. A wake that is not for the waiter (a resume, an exit sweep) must not look like a futex wake or end a sleep (GR-011 point 4:
+   spurious wakes are part of the futex contract, so the waiter re-checks).
+4. Nothing is asynchronous (CP-10): a thread leaves only at a return to EL0 or in a blocked call. Every limit is refused at the
+   request (CP-14).
+
+## Considered options
+
+### Option A: Exactly the accepted text: the owner is the thread that fixed the record, and waits for the count to reach one
+- **Description:** The asker owns the teardown and sleeps until every sibling has counted itself out, then tears down.
+- **Evidence for:** Matches ADR-0300 item 6 word for word.
+- **Evidence against:** The owner needs a second wait (a counter and a wake) with a lock-free handshake and a rule for the case
+  that the asker is a different process (`job_kill`), where "the last to leave" is named anyway. Two roles for one job.
+- **Cost:** *(estimate)* 80 lines more than Option B and one more sleeping state.
+- **Precedent:** Zircon's process teardown waits for its threads to be dead (alternatives-postmortem.md#fuchsia--zircon-incl-starnix).
+
+### Option B: The owner is the thread whose leave empties the list (this ADR)
+- **Description:** The record is fixed once (first phase, as accepted). Every thread leaves when it sees the record. The thread
+  whose leave leaves the list empty runs the teardown. Nobody waits for a count.
+- **Evidence for:** Driver 1. The accepted guarantees hold: after the record is fixed no thread runs a user instruction (each
+  leaves at its next return to EL0 or in its blocked call), and the space is freed by the last, with none running or ready
+  (a leaver is out of the list and off the CPU before the next thread runs, because it does not yield between its removal and
+  `sched::exit_current`, on one CPU). The "one owner" invariant is a pure function of the list (`zoraya_thread::Members::leave`,
+  model-checked, INV-0300-6).
+- **Evidence against:** The owner may be a thread that did not ask; it uses the record the asker fixed.
+- **Cost:** *(estimate)* less than A.
+- **Precedent:** the last close of a reference-counted object.
+
+### Option C: Make the thread lists and the futex node part of every process
+- **Description:** Reserve 128 entries for the thread list, the futex wait list and the mapping-lock waiters when the process is made.
+- **Evidence for:** No lazy path.
+- **Evidence against:** About 8 KiB more for every process (255 of them, charged to the creator's job), which moves every
+  usage figure of every existing test and the memory of rooms with no thread in them (driver 2).
+- **Cost:** *(estimate)* none in code, 2 MiB of kernel memory at the process limit.
+- **Precedent:** Linux's `task_struct` per thread, paid by all.
+
+## Recommendation
+
+**Recommendation (not a decision): Option B, with Option A's guarantees, and the five refinements.**
+
+1. **The owner** (refines ADR-0300 item 6, "the owner waits for the count to reach one"). The thread whose leave empties the
+   list owns the teardown. `Members::leave` names it once; a process that was not ending and loses its last thread (a `thread_exit`
+   of the last one) begins its end in the same leave, as `Exited` with code 0 (ADR-0300 item 3). The first thread to leave an
+   ending process wakes its siblings in steps of 64 (`thread::wake_siblings`), and each leaver also wakes the new first thread,
+   so a sibling that the index-based steps skipped as the list shortened is still reached.
+2. **Lazy lists** (refines ADR-0300 item 1 and ADR-0301 item 7). A process's thread list starts with room for its first thread.
+   The first `thread_create` or `futex_wait` of a process makes the futex list and the mapping-lock waiter list, each with
+   room for 128, and grows the thread list to 128 (`thread::ensure_multi`), charged once to the process's job and refunded at
+   its end. Every later wait and creation allocates nothing, as ADR-0301 item 7 requires. A refused `thread_create` changes nothing
+   from its first call on: the lists are made after the last check that can refuse, and kept if a later step fails.
+3. **Resume wakes one parked thread** (refines ADR-0300 item 7, "`cont` wakes one parked thread"). A parked thread registers as the
+   process's park head; `cont` wakes that thread, and it wakes the other parked threads, in steps, from its own context. The
+   same park serves a fork's freeze (`thread::Freeze`, ADR-0306 item 2): the threads other than the caller park at their next
+   return to EL0 and run again when the guard drops.
+4. **Wakes that are not for the thread are harmless** (refines ADR-0301 item 1, "returns `Ok` with 0 when woken"). A futex waiter
+   is woken for the futex only if its node was taken off the list by a waker, which sets the thread's `woken` flag under the
+   list's lock first. A wake from anything else (an exit sweep, a resume) finds the flag clear, and the waiter checks, in
+   this order, the ending, `thread_interrupt`, its deadline, and then blocks again. `sleep_until` is never woken by anything
+   but its deadline, an interrupt or the ending.
+5. **A thread that ends refunds at the call** (confirms ADR-0307 item 7, and says which): its `threads` figure, its record and
+   its kernel stack go back to the job in `thread_exit` or at its leave (`Paid::release_exited`); the memory itself is freed by the
+   reaper at the next switch. The refund is made before the `clear` store and its wake (which may yield, in steps of 64, with
+   that many joiners), so a joiner woken by the store always sees the figures refunded.
+   *Bound (review of step 1).* The refund comes before the stack is freed, so for a short time the job is charged less than the
+   kernel holds. Only a thread that yields after the refund is in that state: the 64 or more `clear` waiters being woken, and the
+   single sweeper; each leaves one record and one kernel stack uncharged until its own switch (the reaper frees them at the next
+   switch). Transient and bounded by 128 threads. A visible effect: a joiner's next `thread_create` passes the job's `threads`
+   quota while the exiting thread is still listed in the process, so at 128 threads `has_room` then answers `LimitReached`
+   (the process list, not the quota, is the limit).
+6. **A failed first lists-making gives back the member list if it can** (review of step 1). `Members::shrink` builds the smaller
+   list with `try_reserve_exact` and swaps it in (the kernel allocator has no `realloc`, and `Vec::shrink_to` cannot fail
+   softly). If that fails, the large list stays and so does its charge: `multi_cost` records it (while no lists exist), the next
+   `ensure_multi` pays only the rest, and the teardown refunds it.
+7. **A `Move` list holds its handles from the check to the child** (review of step 1; refines ADR-0042 and ADR-0102's "nothing of
+   the caller's changes until the child exists"). `spawn` and `snapshot_process` pause between their check and the removal of the
+   moved handles; a sibling could move the same handle out meanwhile, leaving it in the child and in a receiver (a handle without
+   DUPLICATE twice). `zoraya_handle::Table::begin_move` marks the entry held: no other call finds, duplicates, closes or moves it
+   (they see `BadHandle`) until the call ends the hold, by taking the entry or by giving it back on failure. Other calls that
+   check, pause and remove were listed: `channel_write` checks and removes under one lock; `dma_unpin` removes after a
+   repeatable `unpin`, which gives nobody more rights.
+
+   *What other calls see.* A sibling's `close`, `duplicate`, `handle_type`, `wait`, `port_subscribe` or `channel_write` of a held
+   handle gets `BadHandle`, and the handle is back if the holding call fails (a program that races a move of its own handle has a
+   bug, and sees it). For `spawn` the hold lasts the child's creation; for `snapshot_process` the whole memory copy, from the check
+   to the child. `Table::entries()` still yields held entries: a sibling's `snapshot_table` copies a held handle that has
+   `DUPLICATE` into its own child (no right is widened: the holder still moves it, and the copy is what `duplicate` would have made),
+   and `end_hold_if_unwritable` counts it as a writable handle, which is correct while the move is not finished.
+
+   *One handle named twice in a list.* One rule everywhere, as `channel_write` has it: a handle named twice in one list where at
+   least one entry is a `Move` is `InvalidArgument`, in either order. `spawn` and `snapshot_process` refuse it in the decode
+   (`zoraya-abi`), before any table is looked at, so nothing changes; `channel_write` refuses it in its check. Two `Duplicate`
+   entries of one handle are allowed in `spawn` and `channel_write` (they widen nothing). Tested in `t_spawn` and `t_snapshot`
+   (the earlier text of this item said `BadHandle`; the decode's `InvalidArgument` is what a program sees).
+8. **The child's handle has a kept room** (review of step 1; outside item 7's delta). `spawn` and `snapshot_process` pause in the
+   creation of the child, and with no `Move` entry to free a slot a sibling could fill the caller's table meanwhile, so that the
+   insert of the child's handle failed with `LimitReached` after the child existed. `Table::keep_room` keeps one room from the
+   check on (no other insert, `reserve` or `reserve_many` takes it, and the slot vector has capacity for it); `insert_kept` takes
+   it and cannot fail; a failed call gives it back (`MoveClaim`'s drop). Tested in `t_thread` (`keeproom`: the table has one free
+   slot, a sibling tries to take it while the spawn pauses) and in `zoraya-handle`.
+
+## Consequences
+
+- **Positive.** No owner handshake; a process pays nothing for threads it never makes; the guarantees of the accepted ADRs hold.
+- **Negative.** The first thread-making call of a process allocates 8 KiB once (charged); a process killed while a sibling is
+  in a stepped call waits for that call's next step point, as ADR-0300 item 6 already says.
+- **Follow-up.** `t_bound`'s extension (ADR-0301 INV-0301-4) measures the sweeps; the fork half of the freeze is exercised by
+  `libposix` (step 2 of part 9b).
+
+## Invariants
+
+- **INV-0313-1.** Exactly one thread of a process runs its teardown, and it is the thread whose leave empties the list; a process
+  that was not ending and loses its last thread is ended by that leave. *Check:* `cargo test -p zoraya-thread`.
+- **INV-0313-2.** A futex waiter that returns for any reason leaves no node on the process's wait list: after any mixture of
+  wakes, time-outs and interrupts, a `futex_wake` of the address wakes none. *Check:* `t_thread` in `make test-qemu`.
+- **INV-0313-3.** A thread that has stored its `clear` word has already given its `threads` figure and kernel memory back (the memory half is checked with one joiner, the figure also with 70 joiners woken across a yield): the job's
+  usage read right after `join` and the close of the thread's handle equals its value before the thread was made: the refund precedes the store and the wake of the `clear` word, which may yield with 64 or more waiters. *Check:* `t_thread` in `make test-qemu`.
+
+## Open questions
+
+- Whether the lists should be made at the first `thread_create` only, and `futex_wait` in a process that has never made a
+  thread should answer `WouldBlock` or `BadState` (a program that waits on a word with no other thread can only time out).
+- Whether the park head should be a list when a process has many parked threads after a long suspend (one wake plus steps is
+  128 wakes at most).
+- Items 6, 7 and 8 (`Members::shrink` with `try_reserve_exact`; the hold on a `Move`d handle; the room kept for the
+  spawn's child) were added during review after the architect accepted items 1 to 5, and the Context's "five places" and
+  the recorded decision's "five refinements" count only items 1 to 5. They refine the implementation without changing
+  any accepted guarantee. The architect is asked to confirm them. The index row summarises items 1 to 5 only and is
+  left as it is.
+
+## Revisit triggers
+
+- SMP: the owner's guarantee "off the CPU before the next thread runs" needs a count or a fence.
+- A measured sweep cost (ADR-0301 INV-0301-4) over ADR-0270's bound.
+
+## Architect's decision
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+The architect accepted it as recommended: the five refinements, including the bounded window between the refund and the reaper's free (item 5).

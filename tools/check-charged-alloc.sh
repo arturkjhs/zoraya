@@ -25,7 +25,7 @@ echo "$hits" | while IFS= read -r hit; do
 	esac
 done || fail=1
 
-for f in syscall channel stream port object process job sched memory/object memory/user; do
+for f in syscall channel stream port object process job sched thread memory/object memory/user; do
 	found=$(grep -n -E '\b(Arc|Box)::(new|from)\(' "kernel/src/$f.rs" | grep -v -E '^[0-9]+:[[:space:]]*//' || true)
 	# A line with `// uncharged:` above it is a boot or kernel object.
 	found=$(echo "$found" | while IFS= read -r l; do

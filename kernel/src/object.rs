@@ -16,6 +16,7 @@ use crate::memory::object::MemoryObject;
 use crate::port::{self, Port};
 use crate::process::Process;
 use crate::stream::{ReadEnd, WriteEnd};
+use crate::thread::ThreadObject;
 
 pub type HandleTable = zoraya_handle::Table<Object>;
 pub type Entry = zoraya_handle::Entry<Object>;
@@ -69,6 +70,9 @@ pub enum Object {
     /// A byte stream's read end (ADR-0101); each handle holds the `Arc`.
     StreamRead(Arc<ReadEnd>),
     StreamWrite(Arc<WriteEnd>),
+    /// A thread of a process of this job (ADR-0300 item 2): not duplicable
+    /// and not transferable.
+    Thread(Arc<ThreadObject>),
 }
 
 impl Object {
@@ -86,6 +90,7 @@ impl Object {
             (O::Channel(a, x), O::Channel(b, y)) => Arc::ptr_eq(a, b) && x == y,
             (O::StreamRead(a), O::StreamRead(b)) => Arc::ptr_eq(a, b),
             (O::StreamWrite(a), O::StreamWrite(b)) => Arc::ptr_eq(a, b),
+            (O::Thread(a), O::Thread(b)) => Arc::ptr_eq(a, b),
             (O::Image(Image::Memory(a)), O::Image(Image::Memory(b))) => Arc::ptr_eq(a, b),
             _ => false,
         }
@@ -108,6 +113,7 @@ impl Object {
             Object::Channel(..) => "channel",
             Object::StreamRead(_) => "stream-read",
             Object::StreamWrite(_) => "stream-write",
+            Object::Thread(_) => "thread",
         }
     }
 
@@ -137,6 +143,7 @@ impl Object {
             Object::Job(j) => (j.source(), zoraya_abi::JobObject::WAITING),
             Object::StreamRead(e) => (e.source(), zoraya_abi::StreamReadObject::WAITING),
             Object::StreamWrite(e) => (e.source(), zoraya_abi::StreamWriteObject::WAITING),
+            Object::Thread(t) => (t.source(), zoraya_abi::ThreadObject::WAITING),
             Object::Console => (
                 crate::console::source()?,
                 zoraya_abi::ConsoleObject::WAITING,

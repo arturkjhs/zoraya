@@ -30,6 +30,9 @@ pub struct Entry<T> {
 struct Slot<T> {
     generation: u64,
     entry: Option<Entry<T>>,
+    /// A call that checked this handle and will move it away holds it
+    /// (`begin_move`); nobody else sees or takes it until the move ends.
+    moving: bool,
 }
 
 /// `slots[0]` is slot 1: slot 0 does not exist.
@@ -38,6 +41,9 @@ pub struct Table<T> {
     slots: Vec<Slot<T>>,
     cursor: usize,
     count: usize,
+    /// Rooms kept by [`Table::keep_room`] for a later
+    /// [`Table::insert_kept`]: no other insert may take them.
+    kept: usize,
 }
 
 impl<T> Default for Table<T> {
@@ -52,6 +58,7 @@ impl<T> Table<T> {
             slots: Vec::new(),
             cursor: 0,
             count: 0,
+            kept: 0,
         }
     }
 
@@ -65,7 +72,7 @@ impl<T> Table<T> {
 
     pub fn get(&self, handle: Handle) -> Option<&Entry<T>> {
         let slot = self.slots.get((handle.slot() as usize).checked_sub(1)?)?;
-        if slot.generation == handle.generation() {
+        if slot.generation == handle.generation() && !slot.moving {
             slot.entry.as_ref()
         } else {
             None
@@ -96,23 +103,51 @@ impl<T> Table<T> {
 
     /// Makes room, so that the next [`Table::insert`] cannot fail.
     pub fn reserve(&mut self) -> Result<(), Status> {
+        if self.count + self.kept >= MAX_HANDLES as usize {
+            return Err(Status::LimitReached);
+        }
         match self.free_index() {
             None => Err(Status::LimitReached),
-            Some(index) if index == self.slots.len() => {
-                self.slots.try_reserve(1).map_err(|_| Status::NoMemory)
-            }
+            Some(index) if index == self.slots.len() => self
+                .slots
+                .try_reserve(1 + self.kept)
+                .map_err(|_| Status::NoMemory),
             Some(_) => Ok(()),
         }
+    }
+
+    /// Keeps room for one handle that only [`Table::insert_kept`] can take,
+    /// so that a call that pauses before it adds its result cannot find the
+    /// table full then. Give it back with [`Table::drop_kept`] if the call
+    /// ends without inserting.
+    pub fn keep_room(&mut self) -> Result<(), Status> {
+        // `reserve` leaves the slot room for this one and every kept one.
+        self.reserve()?;
+        self.kept += 1;
+        Ok(())
+    }
+
+    /// Gives back the room [`Table::keep_room`] kept.
+    pub fn drop_kept(&mut self) {
+        self.kept = self.kept.saturating_sub(1);
+    }
+
+    /// [`Table::insert`] into the room [`Table::keep_room`] kept. Cannot
+    /// fail while the room is kept.
+    pub fn insert_kept(&mut self, object: T, rights: Rights, id: u64) -> Result<Handle, Status> {
+        self.drop_kept();
+        self.insert(object, rights, id)
     }
 
     /// Makes room for `count` more, so that that many [`Table::insert`]s
     /// cannot fail.
     pub fn reserve_many(&mut self, count: usize) -> Result<(), Status> {
-        if self.count + count > MAX_HANDLES as usize {
+        if self.count + self.kept + count > MAX_HANDLES as usize {
             return Err(Status::LimitReached);
         }
-        // `insert` appends while the table can grow, even past free slots.
-        let slots = (self.slots.len() + count).min(MAX_HANDLES as usize);
+        // `insert` appends while the table can grow, even past free slots, and
+        // each append asks `reserve` for room for itself and every kept one.
+        let slots = (self.slots.len() + count + self.kept).min(MAX_HANDLES as usize);
         self.slots
             .try_reserve(slots - self.slots.len())
             .map_err(|_| Status::NoMemory)
@@ -126,6 +161,7 @@ impl<T> Table<T> {
             self.slots.push(Slot {
                 generation: 0,
                 entry: None,
+                moving: false,
             });
         }
         self.cursor = index + 1;
@@ -154,6 +190,7 @@ impl<T> Table<T> {
                 self.slots.push(Slot {
                     generation: 0,
                     entry: None,
+                    moving: false,
                 });
             }
         }
@@ -171,13 +208,39 @@ impl<T> Table<T> {
         let slot = self
             .slots
             .get_mut((handle.slot() as usize).checked_sub(1)?)?;
-        if slot.generation != handle.generation() {
+        if slot.generation != handle.generation() || slot.moving {
             return None;
         }
         let entry = slot.entry.take()?;
         slot.generation = slot.generation.wrapping_add(1) & MAX_GENERATION;
         self.count -= 1;
         Some(entry)
+    }
+
+    /// Ends a held move: the entry leaves, as by [`Table::remove`].
+    pub fn finish_move(&mut self, handle: Handle) -> Option<Entry<T>> {
+        let slot = self
+            .slots
+            .get_mut((handle.slot() as usize).checked_sub(1)?)?;
+        if slot.generation != handle.generation() || !slot.moving {
+            return None;
+        }
+        slot.moving = false;
+        let entry = slot.entry.take()?;
+        slot.generation = slot.generation.wrapping_add(1) & MAX_GENERATION;
+        self.count -= 1;
+        Some(entry)
+    }
+
+    /// Ends a held move without taking the entry: the handle is visible again.
+    pub fn cancel_move(&mut self, handle: Handle) {
+        if let Some(slot) = (handle.slot() as usize)
+            .checked_sub(1)
+            .and_then(|i| self.slots.get_mut(i))
+            && slot.generation == handle.generation()
+        {
+            slot.moving = false;
+        }
     }
 
     /// Takes one entry out, for closing a whole table.
@@ -222,12 +285,14 @@ impl<T> Table<T> {
             copy.push(Slot {
                 generation: self.slots.get(i).map_or(0, |s| s.generation),
                 entry: None,
+                moving: false,
             });
         }
         Ok(Table {
             slots: copy,
             cursor: self.cursor,
             count: 0,
+            kept: 0,
         })
     }
 
@@ -255,6 +320,17 @@ impl<T> Table<T> {
 }
 
 impl<T: Clone> Table<T> {
+    /// Checks `handle` for `rights` and holds it for a move: until
+    /// [`Table::finish_move`] or [`Table::cancel_move`] no other call finds,
+    /// duplicates, closes or moves it, so what the caller checked is what it
+    /// moves, however long it pauses in between. Returns a copy of the entry.
+    pub fn begin_move(&mut self, handle: Handle, rights: Rights) -> Result<Entry<T>, Status> {
+        let entry = self.check(handle, rights)?.clone();
+        // `check` found the slot.
+        self.slots[handle.slot() as usize - 1].moving = true;
+        Ok(entry)
+    }
+
     /// A copy of `handle` with exactly `rights`. Asking for a right the handle
     /// lacks is `AccessDenied`, so a bug shows instead of narrowing silently.
     pub fn duplicate(&mut self, handle: Handle, rights: Rights, id: u64) -> Result<Handle, Status> {
@@ -275,6 +351,67 @@ mod tests {
         .union(Rights::TRANSFER)
         .union(Rights::WAIT)
         .union(Rights::SIGNAL);
+
+    #[test]
+    fn kept_room_is_for_the_kept_insert_only() {
+        let mut t: Table<u32> = Table::new();
+        for i in 0..MAX_HANDLES - 1 {
+            t.insert(i, Rights::NONE, 0).unwrap();
+        }
+        // One room left: kept, then no one else gets it.
+        t.keep_room().unwrap();
+        assert_eq!(t.reserve(), Err(Status::LimitReached));
+        assert_eq!(t.insert(1, Rights::NONE, 0), Err(Status::LimitReached));
+        assert_eq!(t.reserve_many(1), Err(Status::LimitReached));
+        assert_eq!(t.keep_room(), Err(Status::LimitReached));
+        t.insert_kept(7, Rights::NONE, 0).unwrap();
+        assert_eq!(t.len(), MAX_HANDLES as usize);
+        // Given back, it is free again.
+        let mut u: Table<u32> = Table::new();
+        u.keep_room().unwrap();
+        u.drop_kept();
+        for i in 0..MAX_HANDLES {
+            u.insert(i, Rights::NONE, 0).unwrap();
+        }
+    }
+
+    #[test]
+    fn reserve_many_counts_the_kept_room() {
+        let mut t: Table<u32> = Table::new();
+        t.keep_room().unwrap();
+        t.reserve_many(3).unwrap();
+        assert!(t.slots.capacity() >= t.slots.len() + 3 + t.kept);
+    }
+
+    #[test]
+    fn a_held_handle_is_seen_by_no_one_and_comes_back_or_goes() {
+        let mut t = Table::new();
+        let a = t.insert(10, ALL, 1).unwrap();
+        let held = t.begin_move(a, Rights::TRANSFER).unwrap();
+        assert_eq!(held.object, 10);
+        assert_eq!(t.get(a), None);
+        assert_eq!(
+            t.begin_move(a, Rights::TRANSFER).unwrap_err(),
+            Status::BadHandle
+        );
+        assert_eq!(t.duplicate(a, ALL, 2), Err(Status::BadHandle));
+        assert_eq!(t.remove(a), None);
+        assert_eq!(t.len(), 1);
+        t.cancel_move(a);
+        assert_eq!(t.get(a).unwrap().object, 10);
+        t.begin_move(a, Rights::TRANSFER).unwrap();
+        assert_eq!(t.finish_move(a).unwrap().object, 10);
+        assert_eq!(t.get(a), None);
+        assert_eq!(t.finish_move(a), None);
+        assert!(t.is_empty());
+        // Without TRANSFER nothing is held.
+        let b = t.insert(1, Rights::WAIT, 3).unwrap();
+        assert_eq!(
+            t.begin_move(b, Rights::TRANSFER).unwrap_err(),
+            Status::AccessDenied
+        );
+        assert!(t.get(b).is_some());
+    }
 
     #[test]
     fn a_handle_finds_its_object() {

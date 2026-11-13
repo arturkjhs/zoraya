@@ -1,48 +1,290 @@
 # TASK-27 report: stage 9, applications
 
-Running report, updated after each part. This file is created on branch `work/9a` (the task file alone is on `main`);
-branch `work/9b-design` has a file of the same name with the 9b design: when both merge, keep that file's "9b" section
-and this file's "9a" section, and the newer Status block.
+Running report, updated after each part. Part 9b's design was written by a Sonnet session on branch `work/9b-design`
+(reading, ADRs and plan only: nothing was built, no test was run; `make adr-check` and `make check` are the only commands run).
 
-## Status for the architect
+## Status for the architect (2026-11-12, `origin/main` at `6390dc6`)
 
 | Part | State | Tag |
 |---|---|---|
-| 9a TLS for C, zlib, curl, wget | implemented on `work/9a`, not merged; tests below; waits for the independent review and the candidate CI | |
-| 9b POSIX threads | see the file on `work/9b-design` | |
+| 9a TLS for C, zlib, curl, wget | not started | |
+| **9b POSIX threads** | **design accepted 2026-11-13** (ADR-0300 to ADR-0309 accepted by the architect as recommended; ADR-0308 supersedes ADR-0100's "no threads" and the other places it lists); kernel step implemented on `work/9b`; ADR-0313 (the kernel as built) accepted 2026-11-13; libposix step on `work/9b-libc` (ADR-0314, ADR-0315 proposed). Next: 9a, then 9b implementation and 9d in parallel, then 9c. Thread calls stay 56 to 61 (the highest call on main is 55, `device_write`) | |
 | 9c CPython | not started | |
 | 9d NetSurf | not started | |
-| image addition (`EXTRA_ROOT`) | done inside 9a (`tools/run-disk.sh`), without descriptions for unknown programs | |
+| image addition (`EXTRA_ROOT`) | not started | |
 
-### Proposed ADRs of 9a
+### The ADRs of part 9b (all accepted 2026-11-13; they were `proposed`; one line each is a recommendation, not a decision)
 
-| ADR | Recommendation in one line |
-|---|---|
-| [0310](../adr/0310-surface-for-tls-curl-and-wget.md) | OpenSSL 3.5, zlib, curl, wget pinned and built by `zcc` (`make apps` into `build/rootfs-apps`); 22 names added to `libc.a`; `getrandom` over `rngd` through a `ZPBX` bootstrap flag; a shim of 13 names inside the two programs; `EXTRA_ROOT` in `tools/run-disk.sh`. |
-| [0311](../adr/0311-url-file-names-and-the-roots-directory-for-posix-programs.md) | The description key `names OPTION OPERAND` for `curl -O` (the shell derives the one file to create, or refuses the line); a POSIX program with a network also gets `/system/tls` read-only. |
-| [0312](../adr/0312-openssl-for-the-posix-side-of-tls.md) | OpenSSL 3 replaces BearSSL as the C TLS library: **this changes ADR-0228 item 2**, which TASK-27 (your later text) does, so by the task's own rule this part does not merge until you accept ADR-0312 (or tell me to take it out and build another library). |
+| ADR | Title | Recommendation in one line |
+|---|---|---|
+| [0300](../adr/0300-threads-in-a-process.md) | Threads in a process | Thread objects named by handles inside the process: `thread_create(entry, stack, argument, tls)`, `thread_exit(clear, unmap)`, `thread_self`, `thread_interrupt` (calls 56 to 59); at most 128 per process; the end of a process is two-phase (the asker wakes one thread per process, which wakes its siblings in steps); a thread that exits frees its stack and charge and closes its own handles; **no new `Status`** (an interrupt is an early `Ok` of `futex_wait` and `sleep_until`, ADR-0006 rule 5 stands). |
+| [0301](../adr/0301-wait-and-wake-on-an-address.md) | Waiting on an address | Two typed calls `futex_wait(address, expected, deadline)` and `futex_wake(address, count)`, private to a process; no requeue, no priority inheritance (musl's requeue becomes a wake); calls 60 and 61; the deadline queue is sized `MAX_THREADS_SYSTEM` + kernel timers + reserved (1024 if it fits) and becomes a heap; a per-process mapping lock, also held by `fork`'s copy. |
+| [0302](../adr/0302-pthreads-in-libposix.md) | `pthread_*` in `libposix` | Keep musl's own `src/thread` over a shim; a library lock plus a memory lock; waits that can last are made outside the lock (`Pending` and retry); one port per thread; `PROCESS_SHARED` and priority inheritance refused with `ENOTSUP`. |
+| [0303](../adr/0303-thread-local-storage.md) | Thread-local storage | The thread pointer is an argument of `thread_create` (no set-tls call); musl lays TLS out inside the stack mapping, which the creating job pays for. |
+| [0304](../adr/0304-signals-with-threads.md) | Signals with threads | Per-thread masks and pending sets, per-process pending set; `pthread_kill` thread-directed; a process's request is taken by any waiting thread and routed to the lowest-tid thread that has it unblocked; no handler under a library lock. |
+| [0305](../adr/0305-thread-cancellation.md) | Cancellation | Deferred only: a flag plus `thread_interrupt`, tested in the wrappers outside the lock; asynchronous mode acts as deferred; one patch to musl's `pthread_cancel.c`. |
+| [0306](../adr/0306-fork-exec-and-exit-with-threads.md) | `fork`, `exec`, exit | `fork` takes the locks and freezes the other threads for the copy, the child has one thread and unmaps the others' stacks; `exec` holds the library lock until the old image ends; `exit` is the two-phase end. |
+| [0307](../adr/0307-thread-quotas.md) | Thread quotas | A `threads` figure of its own (answers ADR-0260's open question), counting every live thread, derived as 3 x `procs` (room 96, untrusted rooms 288, session 600); old records stay valid; `EAGAIN`. |
+| [0308](../adr/0308-posix-threads-enter-the-tier-list.md) | Threads enter the tier list | **The superseding ADR**: lists every accepted sentence the nine ADRs change (ADR-0100 items 2 and 5, ADR-0141, ADR-0180 item 9, ADR-0041, ADR-0102 item 5, ADR-0104 item 6, ADR-0106 items 2 and 5, ADR-0260, ADR-0261, ADR-0263, ADR-0285, INV-0006-2's lint, `pthread_create` on INV-0005-2's deny list); tier T9 with a list file; ADR-0100 itself stays `accepted`. |
+| [0309](../adr/0309-how-9b-is-tested.md) | How 9b is tested | musl's libc-test thread tests as the conformance subset (Open POSIX Test Suite rejected), SQLite `threadtest3`, our `t_threads.c` stress program, OpenSSL rebuilt with threads. |
 
 ### Items for the architect
 
-1. **ADR-0312 changes an accepted decision (ADR-0228 item 2).** TASK-27 names OpenSSL, ADR-0228 says BearSSL then Mbed TLS.
-   Accept ADR-0312 or say which. Nothing else of 9a changes an accepted text (ADR-0310 adds names by the ADR-0210/0287
-   mechanism; ADR-0311 adds a description key and a grant for the image's own descriptions).
-2. **A defect found, not fixed: about 8.5 MiB of memory is not given back at each launch of `curl` or `wget`** (8 launches on
-   128 MiB, 23 on 256 MiB, 40 or more on 512 MiB; the 9th launch on 128 MiB says "over quota"). Ruled out by measurement:
-   the network and `getrandom` (`curl --version` does the same), `posix_child::load` and the file service's attached
-   object (`grants curl` ×30 does not leak), the shell's handles (`slots` is the same after each run), time (a 2 s pause
-   between launches changes nothing), the shell's `Vec` of the whole file (replaced; it moved the count from 5 to 8). What is
-   left: the launch of a large image itself (the loader's copy, the child's `/proc/self/exe` handle, the broker's process
-   handle or the kernel's reaper). Small programs probably leak in proportion and nobody saw it. `make run-net`
-   now boots 512 MiB (as `make run-gui` and `test-posix` already did), and the apps' tests use 512 MiB. Whoever does 9b should
-   look at this first: threads add stacks to it.
-3. Manual checks for 9a: none are needed to accept it. To try by hand (needs `make fetch-ports` once): `make apps`, then
-   `make run-net`, and in the guest `curl -O https://example.org/index.html`, `wget -O page.html https://example.org/`,
-   `grants curl -O https://example.org/index.html`. The guest has no resolver in the test image; `make run-net` has SLIRP's.
-4. Choices made without you, cheap to reverse: wget's configure runs with the host triple `aarch64-unknown-linux-musl` (gnulib's
-   guesses only; the compiler is `zcc`); `rand`/`srand` are exported (wget wants them; OpenSSL never calls them); `-k`,
-   `--cacert`, `--no-check-certificate` are not options of the descriptions (a line with them is a usage mistake and the program
-   gets no network at all); there is no `/etc/wgetrc` (removed after review: wget reads no configuration file).
+1. **Accept ADR-0300 to ADR-0308 or change them.** TASK-27's rule is that a part merges only if none of its proposed ADRs
+   changes an accepted decision. Each of ADR-0300 to ADR-0308 does (ADR-0308 item 1 lists every sentence: ADR-0100 items 2
+   and 5, ADR-0141, ADR-0180 item 9, ADR-0005's deny-list row, ADR-0041, ADR-0105 item 8, ADR-0102 items 2 and 5,
+   ADR-0104 item 6, ADR-0106 items 2 and 5, ADR-0260's table rows, ADR-0261 point 1, ADR-0263 point 4, ADR-0285 point 4,
+   INV-0006-2's lint). So the 9b implementation can be written on its branch, but **it does not merge until all of
+   ADR-0300 to ADR-0308 are accepted** (ADR-0309 changes no accepted text). The task's done criterion ("ADR-0100's 'no
+   threads' is superseded by an accepted ADR") is met by your accepting ADR-0308; agents did not and will not set any
+   status. ADR-0100 is not edited. Not superseded: ADR-0006 rule 5 and INV-0006-6 (no `Interrupted` status was added).
+2. **Choices made without you that are cheap to reverse now and dear later:** the thread is a kernel object with a
+   handle (not a `clone`-style call); futex without requeue and PI; musl's pthread code kept (a patch to
+   `pthread_cancel.c` and one for `pshared`); the `threads` quota counts the first thread of a process too and has no
+   typed word yet (`--threads` deferred); `fork` freezes the other threads for the copy; `PTHREAD_PROCESS_SHARED` is refused;
+   `MAX_THREADS` 128 per process.
+3. **The plan needs part 9a for one item only** (OpenSSL rebuilt with threads, step 4.2); steps 1 to 3 and the rest of step 4
+   do not. 9a has not started (curl was deferred from stage 8 on 2026-11-12), so step 4.2 is **outside 9b's done
+   criterion until 9a is merged**; 9b merges without it and the step is recorded as pending.
+4. **Confirm ADR-0313 items 6 to 8.** They (`Members::shrink` with `try_reserve_exact`, the hold on a `Move`d handle,
+   the room kept for the spawn's child) were added by the step-1 reviews after you accepted items 1 to 5; they refine the
+   implementation and change no accepted guarantee. Recorded in the ADR's open questions; its text and status are untouched.
+5. Merge conflict note for the orchestrator: this file is new on `work/9b-design`; `work/9-docs` may create the same
+   path. Keep the Status block of whichever is newer and this file's "9b" section below.
+
+Manual checks the architect must do for 9b: none. Measurements: none yet (design only). Time and model: one Sonnet session
+for the design.
+
+## 9b: POSIX threads
+
+### What exists today (read, not measured), and what the design rests on
+
+- A process has one thread (`Process::thread`, `kernel/src/process.rs`); the only user-thread call is `thread_yield`;
+  `Param::EntryPoint` exists in `zoraya-abi` for a `thread_create` that does not exist (INV-0004-1 names it).
+- A user thread blocks in two places only: `port_wait` (`kernel/src/port.rs`, whose waiter list already holds several
+  threads) and `sleep_until`. `TPIDR_EL0` is saved at each switch and a snapshot child gets the caller's value.
+- Every mapping has an unmapped page below the next one (`AddressSpace::find_gap`), so thread stacks get a guard for free;
+  there are 256 mappings and 1024 handle slots per process, hence 128 threads at most.
+- `map_reserve`/`map_commit` assume one thread in the call (ADR-0270 steps): a mapping lock is needed (ADR-0301 item 6).
+- `zoraya-posix` keeps all state in one cell with a panic on re-entry (`ffi.rs` `with`), plus an unlocked heap, mapping
+  table and call counters; its waits are `Sys::wait`, `Sys::wait_any`, `nanosleep` and the stream retries.
+- musl 1.2.5's `src/thread` (about 3,200 lines) reaches the system only through `__syscall(SYS_futex|exit|tkill|
+  rt_sigprocmask|set_robust_list|sched_*|mprotect ...)` plus `__clone`, `__unmapself`, `__syscall_cp_asm`; the existing shim
+  already makes an unrouted `SYS_*` a compile error. Read from the unpacked tree in a sibling worktree's build directory.
+- Not verified because nothing was built: that the retained files compile as listed, the names in libc-test's tree, the
+  cost of a 1024-entry deadline queue insert with interrupts masked, the exact list of long waits.
+
+### Implementation plan: four large steps
+
+Each step goes to a fresh `general-purpose` Sonnet subagent in its own worktree off the branch `work/9b` (made from `main`
+after the architect's acceptance, or earlier on the proposed ADRs if the orchestrator wants to start; merge waits for item 1),
+`CARGO_BUILD_JOBS=3`, one QEMU test at a time, `make check` before every commit, `make test-changed` under HVF while working.
+Kernel code, `unsafe` and the security boundaries (the futex's user read, the two-phase end, the freeze) go to
+`opus-review` (CLAUDE.md "Models and loops"). The first step that works in an ADR's area implements its invariants' checks
+(ADR-0001 rule 6) and flips the status column of `docs/adr/invariants.md` from `not yet applicable (stage 9)` to
+`checked: <command>`. Line counts are estimates.
+
+**Step 1: kernel, ABI and quotas** (about 1,800 lines plus 1,200 of tests; ADR-0300, 0301, 0307; INV-0300-*, 0301-*, 0307-*).
+1. `crates/zoraya-thread` (new, `no_std`, `zoraya_test_alloc::cap_memory!()` in lib and tests): the bounded thread list,
+   the two-phase end state machine (one wake per process under `TREE`, the woken thread wakes its siblings in steps) and the
+   FIFO wait list keyed by address with the 64-per-step wake; host tests including
+   an exhaustive interleaving model (INV-0300-6, INV-0301-2's model half). Add to `Cargo.toml` workspace and `tools/test-map.txt`.
+2. `crates/zoraya-abi/src/lib.rs`: calls 56 `thread_create`, 57 `thread_exit`, 58 `thread_self`, 59 `thread_interrupt`,
+   60 `futex_wait`, 61 `futex_wake` (the numbers follow the highest call on `main`, 52, plus `work/n6`'s 53 to 55; the
+   step takes the next free numbers if another branch has merged first); **no new `Status`** (17 stays free, INV-0006-6's
+   `Status::ALL.len() == 17` is untouched); argument types `Word32` and `Count`; the `thread`
+   object type (signal `TERMINATED`, rights `WAIT | SIGNAL`, not duplicable); `quota.rs` (threads word at bytes 16 to 20,
+   `QuotaField::Threads = 3`, usage record 152 bytes, decoders total); `crates/zoraya-charge/src/lib.rs` (`Field::Threads`);
+   `crates/zoraya-rt/src/lib.rs` stubs. Tests: the table lints (INV-0300-1) and **the amended INV-0006-2 lint in
+   `crates/zoraya-abi/src/tests.rs`** (`Address` and `Word32` allowed for `futex_wait` only, three blocking calls instead
+   of two; INV-0308-5, INV-0301-5), decoder tests (INV-0307-2).
+   `crates/zoraya-time`: `DeadlineQueue` becomes a binary min-heap with a back-index (INV-0301-7).
+3. Kernel: `kernel/src/sched.rs` (thread record gains `interrupted`, the futex node, the process slot; `spawn_user` for
+   `thread_create`), `process.rs` (thread list, `ending` flag and owner, park and wake of all threads, `snapshot_freeze` used
+   by `snapshot_process`, mapping lock), `syscall.rs` (the six calls; the aligned 32-bit user read through the fault-resume
+   path), `sleep_until` and `futex_wait` (consume `interrupted`; early `Ok` with value 1; `port_wait` is not touched, the library wakes
+   it with a user packet), `object.rs` and `job.rs`/`charge.rs` (the thread type and
+   the `threads` charge in the order processes, threads, memory), `timer.rs` (`QUEUE_SIZE` derived from `MAX_THREADS_SYSTEM`, with a `const` assertion; `on_interrupt` pops at most 64 per pass),
+   `job.rs` (`request_exit`/`cont` wake one thread per process, never all, under `TREE`), `thread_exit` (refunds record, stack
+   and `threads` at the call, reaper frees the kernel stack, the object keeps only `TERMINATED`), `memory/user.rs`
+   (the lock around `map_reserve` to `map_commit` and unmap, an RAII guard released on every `Cancelled` path, also taken by
+   `snapshot_process` for its whole call), `steps.rs` (units for wake and thread end).
+4. Plumbing: `job_set_limits`/`job_get_usage` for the new field; `crates/zoraya-rooms` derives `threads = 3 x procs`; `init`
+   sets the session job to 600 and the keeper the untrusted job to 288 (INV-0307-3); `grants` prints the derived figure.
+5. In-QEMU tests in `kernel/src/testing.rs` with user programs `user/src/bin/t_thread.rs` (raw ABI, no libposix): INV-0300-2
+   to 0300-5, INV-0301-1 to 0301-4 and 0301-6, INV-0307-1 and 0307-4, the freeze (INV-0306-5's kernel half), `t_bound`
+   extended with 128 waiters **and a `job_kill`/`job_resume` of 4 processes x 128 threads** (INV-0301-4), a capped job with a
+   parked sibling (INV-0300-3), 2,000 detached threads checking slots and usage (INV-0300-7), a sibling looping on
+   `mmap`/`munmap` during a `snapshot_process` (INV-0306-6, kernel half), 1000 timed waiters filling the deadline queue
+   (INV-0301-7). `tools/test-map.txt` lines for `kernel/src/*`, `crates/zoraya-thread/`.
+Exit: `make check`, `make test-changed`, the candidate run on HVF and TCG, `opus-review` with no open error.
+
+**Step 2: the thread core of `libposix`** (about 1,500 lines plus tests; ADR-0302, 0303, 0308; INV-0302-*, 0303-*, 0308-1/2).
+1. Audit first (a table in this report): every call site of `Sys::wait`, `wait_any`, `sleep_until`, the stream retries and
+   the service reply waits, each marked long or short (ADR-0302 item 9).
+1b. **Measure the mapping count:** run a CPython-sized program (or a stand-in with its image, heap and library mappings) and
+   count its mappings of the 256; with 128 thread stacks on top the sum must fit. If it does not, `MAX_THREADS` falls or
+   the library merges mappings; record the figure in this report (ADR-0300 open question).
+2. `crates/zoraya-posix/src/lock.rs` (futex mutex over a `Wait` trait, model-tested, INV-0302-3), `MEM_LOCK` around the
+   heap, mapping table and counters, `with()` taking the lock; the thread table and tids (main = 1); per-thread port;
+   `Pending` split of the long waits in `process.rs`, `net.rs`, `jobs.rs`, `fd.rs` with wrapper retry loops in
+   `ffi.rs` and `ffi/procs.rs`; host tests with a fake kernel of two threads (`crates/zoraya-posix/tests/kernel`).
+3. musl side: `ports/musl/musl.mk` (retain `src/thread`), `ports/musl/excluded.txt` (the files of ADR-0302 item 1),
+   `ports/musl/zoraya/syscall.h` (the new routes), `clone.c`, `unmapself.c`, `0002-no-pshared.patch`; delete the Rust
+   stubs of `sem_*`, `pthread_setcancelstate`, `pthread_testcancel` and the cleanup functions; Rust `pthread_getattr_np`,
+   the three scheduling calls (`ENOTSUP`), `sysconf` values (ADR-0308 item 4); the errno table (`OverQuota(Threads)` to `EAGAIN`, INV-0302-7);
+   **the thread's exit path closes its own thread handle and port** before `thread_exit` (detached and joinable alike).
+4. `docs/adr/posix-surface-T9.txt`, `tools/posix-surface-check` (third list, deny list without `pthread_create`),
+   `make check-ports`; `make test-libposix` extended.
+5. Tests (`tests/posix/t_posix.c` or a new `t_pthread.c` with a script step): create, join, detach, mutex, cond, once,
+   keys, TLS and `errno` per thread (INV-0303-1/2/4), the blocked-`read`-and-`write` pair (INV-0302-2), stack guard
+   (INV-0302-6), quota `EAGAIN` (INV-0303-3), no futex call without threads (INV-0302-5).
+Exit: as step 1; `make test-posix`, `make test-libposix` unchanged results for the single-threaded workloads.
+
+**Step 3: signals, cancellation, `fork`, `exec`, exit** (about 1,000 lines plus tests; ADR-0304, 0305, 0306).
+1. `crates/zoraya-posix/src/signals.rs` per-thread mask and pending sets, the routing rule, `sigwait`, `pthread_kill`,
+   `tkill` route; **the futex shim's three outcomes after an early return** (`-EINTR` only if a handler ran, 0 as a spurious
+   wake otherwise, `-ECANCELED` for a masked cancel; ADR-0304 item 11); host model (INV-0304-1, 0304-5, 0304-7, 0304-8,
+   0305-5).
+2. `ports/musl/zoraya/0003-deferred-cancel.patch`, the `__syscall_cp` definition in the shim, `__testcancel` in the wrappers
+   outside the lock, `tools/check-cancel-points.sh` and a `check-cancel-points` entry in the Makefile's `CHECK_STEPS`
+   (INV-0305-3), `sigaction` refusing 32 to 34.
+3. `ports/musl/zoraya/atfork.c`, the `fork` wrapper changes in `ffi/procs.rs` (locks, freeze via `snapshot_process`, child
+   reduction and unmap of dead stacks), `exec` holding the library lock, `exit` from any thread.
+4. In-QEMU `libposix` tests for INV-0304-2/3/4/6/7/8, INV-0305-1/2/4/5, INV-0306-1 to 0306-4 and 0306-6.
+Exit: as step 1, plus `opus-review` on the fork and signal paths.
+
+**Step 4: the suites, OpenSSL, CI and the docs** (about 800 lines of scripts and C plus pinned inputs; ADR-0309).
+1. `ports/sources.lock` lines for the libc-test commit and `sqlite-src-3540100.zip` (hashes recorded at first fetch, trust on
+   first use as ADR-0109 accepts; libc-test pinned to an archive whose bytes do not change, an immutable mirror asset or the
+   file as first fetched, kept in `build/ports/src`),
+   `ports/Makefile` targets, `tools/fetch-ports.sh`; `tests/posix/threads.script`, `threads-excluded.txt`, `t_threads.c`;
+   `make test-posix-threads`; lines in `tools/ci-tests.txt` and `tools/test-map.txt` (`make check-ci-jobs`).
+2. **After 9a (outside 9b's done criterion until 9a is merged):** OpenSSL rebuilt with `threads` (the 9a port's configure line), `tests/posix/ossl_threads.c`, 9a's `curl`
+   test repeated. If 9a is not merged, steps 1 to 3 and 4.1 still merge; 4.2 waits and is noted here.
+3. `docs/design.md` as-built text (threads, futex, quotas, signals, the quota table), `docs/backlog.md` (known limits:
+   async cancel, compute loops, kernel stack size, requeue), `docs/dependencies.md` (no crate added; state it), invariants
+   statuses, this report, ADR open-question notes where a check could not be written (ADR-0001 rule 6).
+4. Final review by `opus-review`, `candidate-full/` run, HVF and TCG; then `stage-9b` is the architect's tag.
+
+### Test plan and the choices in it
+
+- **Conformance subset: musl's libc-test** (MIT, `src/functional` and `src/regression` programs named `pthread_*`, `sem_*`,
+  `tls_*`, `thrd*`, `cnd*` and the fork/spawn ones), pinned by commit and SHA-256. Why: musl's thread code is what ADR-0302
+  retains, so its author's tests are the right oracle; the programs are standalone with an exit status; MIT. **Open POSIX
+  Test Suite rejected** for the build: GPL, about a thousand assertions of which many test options Zoraya refuses on
+  purpose (process-shared, priority, real-time), which would need a second expected-failure source of truth. Exclusions
+  live in `tests/posix/threads-excluded.txt`, each with a reason (ADR-0309 item 1).
+- **SQLite:** `threadtest3.c` from `sqlite-src-3540100.zip` with the pinned amalgamation; shared-memory (WAL) scenarios
+  excluded with the reason or rerun in rollback-journal mode.
+- **Stress:** `t_threads.c`, ten cases (mutex counter, condvar ring with timed waits and broadcast, 100,000 `pthread_once`
+  races, 2,000 create/join cycles, quota exhaustion and recovery, cancellation in each wait, `fork` with a sibling
+  holding each lock, signals, `exit`/`exec` with siblings running, TLS).
+- **OpenSSL with threads:** 8 threads of hashes, AES-GCM and `RAND_bytes` against single-threaded results; 4 threads of HTTPS
+  to the runner's TLS test server; 9a's `curl -O` unchanged.
+- **Both accelerators:** one step `test-posix-threads`; HVF in `make test-changed`; TCG in the candidate and nightly sets
+  with TCG-scaled limits. Kernel invariants run in `make test-qemu`.
+
+### Risks (most serious first)
+
+1. **The two-phase process end** (ADR-0300 item 6): a sibling parked by a CPU ceiling, blocked in a step point, or woken
+   during teardown is the kind of race that shows once in a hundred TCG runs. Mitigation: the host model first, the
+   INV-0300-3 test with spinners, `opus-review`, and a rule that the owner frees nothing until the count is one.
+2. **Splitting the long waits out of the library lock** (ADR-0302 item 9): 8,800 lines of host-tested logic, one wait missed
+   is a deadlock only a two-thread test finds. Mitigation: the audit table, INV-0302-2 repeated per wait, and a debug
+   assertion that a long wait is never entered with the lock held.
+3. **The mapping lock and the stepped calls** (ADR-0301 item 6): a new sleeping kernel mutex taken in `memory_create`'s
+   path and held by `fork`'s whole copy (ADR-0306 item 2); a `job_kill` between steps must still free everything
+   (INV-0270-2) while a second thread waits on the lock, and every `Cancelled` path must drop it (RAII guard).
+4. **musl details found only by compiling:** the exact file exclusions, whether `pthread_create` needs `madvise`,
+   `__vm_wait`'s use of futex on the shim, `pthread_getattr_np`. The step records each in `excluded.txt` as ADR-0141 did.
+5. **Memory:** 64 KiB of kernel stack plus a 128 KiB default user stack per thread, all committed (no demand paging): a
+   128-thread test uses about 25 MiB; room limits in tests must allow it. A fork child copies every stack until it unmaps
+   them (ADR-0306 item 5).
+6. **The deadline queue**: sized from `MAX_THREADS_SYSTEM` (services and trusted jobs have no thread figure), about 40 bytes an
+   entry; decided as a heap so insert, cancel and pop are 10 moves, not a linear scan and rotate under a masked spinlock
+   (ADR-0301 item 5, INV-0301-7). The measure of the heap under TCG is still open (INV-0270-1's 2 ms bound).
+7. **Thundering herd** on `REQUEST_PENDING` and on broadcast without requeue (ADR-0304 item 4, ADR-0301 item 4); measured
+   by the stress cases, with a signal thread and `futex_requeue` as the recorded upgrades.
+8. **Pinned inputs:** libc-test is a git snapshot (hash stability of the archive is not guaranteed: pin an immutable mirror
+   asset or keep the file first fetched in the ports cache, `build/ports/src`); the hash is recorded at first fetch (trust on
+   first use, ADR-0109); `make test` must not need the network, so both go through `tools/fetch-ports.sh`.
+9. **SQLite's `threadtest3`** needs record locks and, for WAL, shared memory; scenarios may fail for reasons that are not
+   threads. The exclusion rule keeps that honest.
+10. **Mappings:** 128 stacks, the heap and the image's mappings may not fit in 256 mappings; a CPython-sized program is
+    measured in step 2 (item 1b).
+11. **Scheduling fairness** with 128 threads of one job under a CPU ceiling (ADR-0285's park cap of 16 per pick): covered by
+    the existing `t_cpu`, to be extended with a multi-threaded spinner.
+
+### Open points left for the implementation sessions (decided as stated unless a measurement says otherwise)
+
+`MAX_THREADS` 128; the 64 KiB `PT_TLS` bound; `--threads` as a word; `futex_requeue`; a signal thread; `close` as a
+cancellation point; `pthread_getattr_np` for the main thread; omitting dead stacks from the snapshot copy.
+
+### CI timing (2026-11-13): the whole-suite TCG runs and `QEMU_SLOW_TIMEOUT`
+
+CI on `main` (`02d32e5`) failed `test-qemu-tcg-smp4-gicv3` at the 300 s limit (115 of 128 tests done, running
+`room_keeper_from_a_process`). The CI logs keep only the head and tail of a run, so per-test times are not in them. What the
+logs show: the same suite (128 tests) took 201 s (candidate `work/9b-d`, gicv3), 267 s (candidate, gicv2) and 168 s (`main`,
+gicv2) in green runs, and the failed run had every timed figure about 2x the green ones (`t_bound` free_source 2365 ms against
+1215 ms, `t_storage` 100 syncs 1172 ms against 662 ms; the first frame tests 7-11 s against 4-6 s): a slow runner, not a hang.
+Locally (HVF host, `make test-qemu-tcg-default`, one run) the suite passed in about 160 s; `t_thread` took 21 s of it (hand-off
+rounds 11.3 s, interrupts 5.4 s, joined/detached rounds 1.4 s each). `t_thread` has no TCG branch and its round counts are
+invariant figures (INV-0300), so none was reduced. `QEMU_SLOW_TIMEOUT` went from 300 s to 420 s (57% over the slowest green
+run, 267 s); the CI job limit of 10 minutes still holds (about 1 minute of setup plus 7).
+
+### CI flake (2026-11-13): `t_cpu`'s masked-time limit off HVF
+
+`cpu_ceiling_from_a_process` failed three times at `t_cpu.rs:181`, twice on TCG (factor 12, limit 2 ms x 64 = 128 ms): `the exit
+of 40 sleepers: 156708320 ns masked` (`main` `c1e1b34`, `test-qemu-auto-default`) and `rooms next to a woken process: 144941856 ns`.
+The failing interval held 55 units of work, the same 55 as the same subtest in a green TCG run of the same day (1579 us, job
+`tcg-smp4-gicv3` of `main`'s run 43387452404) and under HVF locally: 87 us on `c1e1b34`, 106 us on `120ee31` (before 9b), 55
+units on both; every other subtest's units are equal too (58, 64). So the time was the host's (the vCPU stalled with IRQ masked),
+not a regression of 9b's teardown or the deadline heap. Off HVF `t_cpu` now takes `t_bound`'s limit of 1 s for the time and keeps
+`MAX_UNITS` (ADR-0270) as the check; under HVF the 2 ms limit is unchanged. The one HVF failure (2696 us on a loaded host, the deep
+job) is left as is (`docs/backlog.md`).
+
+## 9b step 2, second slice of `libposix` threads (branch `work/9b-libc`)
+
+What exists (ADR-0315, proposed; ADR-0314 items 2 to 4 are refined by it):
+
+- **The `Pending` split** (INV-0302-2): `Posix::wait_for` returns `errno::PENDING` once the process has a thread; the boundary's `state()` waits on a
+  port of its own with the library lock free and runs the method again with the outcome (`Resume`); a write keeps its progress. Host tests: `tests/files.rs`
+  (`deferred`). In QEMU: `t_threads waits` (a reader in `read`, a sleeper, a `pselect`, while the main thread calls `getpid`, `open`, `write`, `stat`, `printf` 20 times
+  within 0.3 s) and `blockedexit` (`exit()` flushes stdio while a sibling is blocked in `read`).
+- **The thread table, per-thread signal state, `tkill`, `rt_sigprocmask`, routing of process signals** (`threads.rs`, host tests `tests/threads.rs`); musl's
+  `__block_*_sigs` now save the mask (they were no-ops and left `pthread_create`'s `sig_mask` uninitialised: found by the test).
+  `t_threads signals`: `pthread_kill` wakes a thread in `read` and in `nanosleep` (`EINTR`, handler on that thread) and in `sem_wait` (goes on); masks are per thread.
+- **Deferred cancellation** (`cancel.c`): `pthread_cancel` interrupts the target; futex waits act on the flag before and after; library waits call `__testcancel` once woken.
+  `t_threads cancel`: `read`, `nanosleep`, `sem_wait`, `pthread_cond_wait` and a `pthread_testcancel` loop, cleanup handler once, `PTHREAD_CANCELED`.
+
+Ran in this session (HVF, after merging `origin/work/9b` at its head of 2026-11-13): `make check` (16 of 16), `cargo test -p zoraya-posix` (all),
+`make test-posix-threads` (all 17 cases), `make test-libposix`, `make ports` with `check-ports` (dash, busybox, make, pdpmake, tcc and toybox link the threaded `libc.a`;
+tcc builds a hello world for Zoraya), and `make test-posix` limited to `hello`, `smoke` and `invariants` (signals, EINTR, raise, execmask, blocked: the single-thread paths
+through the thread table). Not run: the rest of `make test-posix`, TCG, `make test-changed`.
+
+Not done (the next session; each is in ADR-0315 item 6 or below):
+
+- Fork freeze and child reduction (ADR-0306: the kernel `Freeze` is in `work/9b`, the library side is not), `exec` holding the lock, `atfork.c`; tests for fork with siblings running and exec from a thread.
+- `sigwait`/`sigtimedwait`, `kill(getpid())` from a thread that blocks the signal (stays in that thread), `pthread_getattr_np`, thread names, `check-cancel-points`, async-signal tests of INV-0304-3/-5/-7/-8 (1000-round forms), INV-0305-2/-4/-5.
+- In-QEMU cases for `waitpid`, `accept` and `sem_wait` (as a library wait) in a thread: `posixrun` has no broker, so `posix_spawn` and `fork` hang there; they belong in `tests/posix/t_posix.c`.
+- The suites of step 4: libc-test functional subset, SQLite `threadtest3` (SQLite is a pinned port, the amalgamation only: `threadtest3.c` needs the source zip), `threads-excluded.txt`, the mapping-count measurement, INV-0302-5 and INV-0308-3 checks, a TCG run of `test-posix-threads`.
+
+## 9b step 2, third slice of `libposix` threads (branch `work/9b-libc`)
+
+What exists (ADR-0315 items 9 and 10, INV-0315-5 to -7):
+
+- **Fork with siblings and `exec` from a thread** (ADR-0306): `ports/musl/zoraya/atfork.c` (prepare, parent, child: musl's `fork.c` and `__post_Fork` around the snapshot, stdio locks of dead
+  threads freed, other threads' stacks unmapped in the child), `MEM` taken around `snapshot_process` only, the thread table reduced in the child (`threads_after_fork`), `exec` holds
+  the library lock to the end of the old image. The `EAGAIN` guard is gone. `tests/posix/t_posix.c`: `tfork` (500 forks, five kinds of sibling), `tforkthread`, `texec` (100 execs), `tspawn`.
+- **`sigwait`, `sigtimedwait`, `sigwaitinfo`**, `pthread_getattr_np`, `pthread_getname_np`, `pthread_setname_np`; `open` is a cancellation point.
+- **1000-round cases** in `t_threads`: `handlerlock`, `condsig`, `cancelrounds`, `maskedcancel`; in `t_posix`: `treroute`, `tsig`, `twait`.
+- **Suites:** `make test-posix-suites` (13 libc-test thread tests; exclusions with reasons in `tests/libc-test/threads-excluded.txt`), wired into `TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`,
+  `tools/plan-lib.sh`. `tests/posix/threads.script` runs in `make test-posix` (both accelerators in CI). `make posix-threadtest3` is not a step (no `fcntl` record locks).
+
+Not done: INV-0306-3 and -5 checks; INV-0308-3 over fresh logs of all workloads; the mapping-count measurement; a TCG run of `test-posix-threads` and the full `make test-posix` (see the final report of the session); `accept` in a thread (no loopback server in the session).
+
+---
 
 ## 9a: TLS for C programs, zlib, curl, wget
 

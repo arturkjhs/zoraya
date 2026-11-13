@@ -1,0 +1,108 @@
+# Part 9b's thread tests through libposix (ADR-0302, ADR-0309 item 3): C
+# programs built by zcc against libc.a with musl's src/thread over the shim,
+# run by posixrun on make test-posix-threads's image (rootfs/ with
+# /bin/t_threads).
+! panicked
+! ZORAYA-PANIC
+! (errno
+< \r\n~> 
+> posixrun /bin/t_threads create\r
+< t_threads: create passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads mutex\r
+< t_threads: mutex passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cond\r
+< t_threads: cond passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads once\r
+< t_threads: once passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads tls\r
+< t_threads: tls passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cycles\r
+< t_threads: cycles passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads locks\r
+< t_threads: locks passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads stdio\r
+< t_threads: stdio passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads limit\r
+< t_threads: limit passed
+< posixrun: exit 0
+< \r\n~> 
+# exit() from a thread ends the process while a sibling spins (ADR-0300 item 6).
+> posixrun /bin/t_threads exit\r
+< t_threads: exiting from a thread
+< posixrun: exit 7
+< \r\n~> 
+# The main thread leaves first; the process ends with the last thread.
+> posixrun /bin/t_threads mainexit\r
+< t_threads: main thread leaving
+< t_threads: last thread leaving
+< posixrun: exit 0
+< \r\n~> 
+# Long waits are made outside the library lock (INV-0302-2, ADR-0302 item 9).
+> posixrun /bin/t_threads attr\r
+< t_threads: attr passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads handlerlock\r
+< t_threads: handlerlock passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads condsig\r
+< t_threads: condsig passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cancelrounds\r
+< t_threads: cancelrounds passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads maskedcancel\r
+< t_threads: maskedcancel passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads waits\r
+< t_threads: waits passed
+< posixrun: exit 0
+< \r\n~> 
+# Signals per thread (ADR-0304) and deferred cancellation of a blocked thread (ADR-0305).
+> posixrun /bin/t_threads signals\r
+< t_threads: signals passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads selfkill\r
+< t_threads: selfkill passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cancel\r
+< t_threads: cancel passed
+< posixrun: exit 0
+< \r\n~> 
+# exit() flushes stdio (a write) while a sibling is blocked in read.
+> posixrun /bin/t_threads blockedexit\r
+< t_threads: flushed at exit
+< posixrun: exit 4
+< \r\n~> 
+# A sibling blocked in read held the library lock (ADR-0314 item 2); _Exit
+# still ends the process.
+> posixrun /bin/t_threads blocked\r
+< posixrun: exit 3
+< \r\n~> 
+# INV-0302-6: a thread that overruns its stack faults the process.
+> posixrun /bin/t_threads overflow\r
+< posixrun: ended Fault
+< \r\n~> 
+> poweroff\r

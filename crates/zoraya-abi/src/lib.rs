@@ -247,6 +247,12 @@ pub mod job_signals {
     pub const OVER_QUOTA: u32 = 1 << 3;
 }
 
+/// Signal bits of a thread (ADR-0300 item 2).
+pub mod thread_signals {
+    /// The thread has ended (`thread_exit`, or its process ended).
+    pub const TERMINATED: u32 = 1 << 0;
+}
+
 /// Signal bits of the console (ADR-0060).
 pub mod console_signals {
     /// Asserted exactly while input waits.
@@ -378,6 +384,10 @@ object_types! {
         Waiting::Signals(stream_signals::WRITABLE | stream_signals::PEER_CLOSED),
         COMMON.union(Rights::WRITE).union(Rights::WAIT),
         Duplicable;
+    ThreadObject "thread"
+        Waiting::Signals(thread_signals::TERMINATED),
+        Rights::WAIT.union(Rights::SIGNAL),
+        NotDuplicable;
 }
 
 /// `Deadline::Infinite` on the wire. Any other value is an instant in
@@ -608,6 +618,11 @@ pub enum Param {
     Address,
     /// Code to run. Only thread creation may take one (INV-0004-1).
     EntryPoint,
+    /// A 32-bit word the caller expects to find at an address: only
+    /// `futex_wait` takes one (ADR-0301, ADR-0308).
+    Word32,
+    /// A number of things to wake: only `futex_wake` takes one (ADR-0301).
+    Count,
 }
 
 impl Param {
@@ -788,6 +803,64 @@ impl Arg for Address {
 
     fn encode(&self, r: &mut [u64]) {
         r[0] = self.0;
+    }
+}
+
+/// The address of the first instruction of a new thread. The kernel checks
+/// that it is a user address aligned to 4 (ADR-0300 item 2); it never runs it
+/// on any thread but the one `thread_create` makes (INV-0004-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryPoint(pub u64);
+
+impl Arg for EntryPoint {
+    const PARAM: Param = Param::EntryPoint;
+
+    fn decode(r: &[u64]) -> Result<EntryPoint, Status> {
+        Ok(EntryPoint(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// A 32-bit value compared with the word at a futex address. A register
+/// wider than 32 bits is refused, never truncated (INV-0044-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Word32(pub u32);
+
+impl Arg for Word32 {
+    const PARAM: Param = Param::Word32;
+
+    fn decode(r: &[u64]) -> Result<Word32, Status> {
+        Ok(Word32(word(r[0])?))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
+    }
+}
+
+/// How many waiters `futex_wake` wakes: 1 to 128 (ADR-0301 item 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Count(pub u32);
+
+impl Count {
+    pub const MAX: u32 = 128;
+}
+
+impl Arg for Count {
+    const PARAM: Param = Param::Count;
+
+    fn decode(r: &[u64]) -> Result<Count, Status> {
+        match word(r[0])? {
+            n @ 1..=Count::MAX => Ok(Count(n)),
+            _ => Err(Status::InvalidArgument),
+        }
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
     }
 }
 
@@ -1155,6 +1228,13 @@ syscalls! {
     53 DeviceTransport device_transport(device: Handle, index: RangeIndex) false;
     54 DeviceRead device_read(device: Handle, offset: Size, width: Size) false;
     55 DeviceWrite device_write(device: Handle, offset: Size, value: Opaque, width: Size) false;
+    56 ThreadCreate thread_create(
+        entry: EntryPoint, stack: Address, argument: Opaque, tls: Address) false;
+    57 ThreadExit thread_exit(clear: Address, unmap_base: Address, unmap_length: Size) false;
+    58 ThreadSelf thread_self() false;
+    59 ThreadInterrupt thread_interrupt(thread: Handle) false;
+    60 FutexWait futex_wait(address: Address, expected: Word32, deadline: Deadline) true;
+    61 FutexWake futex_wake(address: Address, count: Count) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then

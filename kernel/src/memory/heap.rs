@@ -160,6 +160,24 @@ pub fn uncharged_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
     arc.ok_or(OutOfMemory)
 }
 
+/// The test kernel's pause (see [`PAUSE_IN_PREPARE`]); nothing in a release
+/// build. `channel_create`, whose build never reaches [`prepare`] on a warm
+/// heap, calls it too, after `Pair::new`, where a growth would have paused.
+#[inline(always)]
+pub fn pause_if_asked() {
+    #[cfg(feature = "qemu-test")]
+    if PAUSE_IN_PREPARE.load(core::sync::atomic::Ordering::Relaxed) {
+        steps::pause();
+    }
+}
+
+/// Makes [`prepare`] call its step point once before it looks at the heap
+/// (the test kernel's `PAUSE_IN_PREPARE` call). Without it a warm heap never
+/// pauses, and the undo of a creating call has no test that reaches it.
+#[cfg(feature = "qemu-test")]
+pub static PAUSE_IN_PREPARE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 /// Makes the next `uncharged_arc` fail, as an exhausted heap would.
 #[cfg(feature = "qemu-test")]
 pub static FAIL_NEXT_ARC: core::sync::atomic::AtomicBool =
@@ -200,6 +218,9 @@ pub fn block_size(layout: Layout) -> usize {
 /// fails or not as it did before. The pages mapped ahead are what the
 /// heap's next growth takes; [`stats`]'s `backing` counts them.
 pub fn prepare(bytes: usize) {
+    // The test kernel can make every call pause once, whatever the heap
+    // holds, so that a sibling runs inside a creating call (`t_thread`).
+    pause_if_asked();
     prepare_in_steps(bytes, steps::pause);
 }
 

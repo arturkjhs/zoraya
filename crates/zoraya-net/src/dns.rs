@@ -30,7 +30,10 @@ pub const CACHE_ENTRIES: usize = 64;
 /// When each attempt goes out, from the start (microseconds); the query
 /// gives up at [`GIVE_UP_US`]. Attempt `i` goes to server `i % servers`.
 const ATTEMPTS_US: [i64; 4] = [0, 1_000_000, 2_000_000, 4_000_000];
-const GIVE_UP_US: i64 = 8_000_000;
+/// The protocol's bound on a lookup (`zoraya_proto_net::LOOKUP_US`): what
+/// clients wait for, so the one definition is there.
+const GIVE_UP_US: i64 = zoraya_proto_net::LOOKUP_US as i64;
+const _: () = assert!(ATTEMPTS_US[ATTEMPTS_US.len() - 1] < GIVE_UP_US);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveFail {
@@ -40,8 +43,10 @@ pub enum ResolveFail {
     NoSuchName,
     /// The name has no A record.
     NoAnswer,
-    /// The server failed, or did not answer in time.
+    /// The server failed (an answer that says so).
     Failure,
+    /// No server answered within [`GIVE_UP_US`].
+    TimedOut,
     /// [`MAX_QUERIES`] queries are in flight.
     Busy,
     /// No DNS server is known.
@@ -115,6 +120,21 @@ pub struct Resolver {
     rng: u64,
     /// Answers that were not accepted, for `status`-like counters.
     pub rejected: u64,
+    /// The servers' port when not 53: `make test-net-lookup`'s image only
+    /// (feature `test-dns-port`), whose test server cannot bind 53.
+    #[cfg(feature = "test-dns-port")]
+    port: Option<u16>,
+}
+
+impl Resolver {
+    /// The port queries go to and answers must come from.
+    fn server_port(&self) -> u16 {
+        #[cfg(feature = "test-dns-port")]
+        if let Some(p) = self.port {
+            return p;
+        }
+        53
+    }
 }
 
 impl Resolver {
@@ -186,7 +206,9 @@ impl<L: Link> Stack<L> {
                 from_hosts: false,
             });
         }
-        if self.status(now_us).dns.is_empty() {
+        // With a lease on its way the query waits for it, under its normal
+        // deadline (ADR-0316); with none to come, there is no server.
+        if self.status(now_us).dns.is_empty() && !self.lease_pending() {
             return Start::Failed(ResolveFail::NoServer);
         }
         if self.extra.resolver.queries.len() >= MAX_QUERIES {
@@ -209,7 +231,17 @@ impl<L: Link> Stack<L> {
             started_us: now_us,
             sent: 0,
         });
+        // Its answer is as a rule an address behind the gateway.
+        self.probe_gateway(now_us);
         Start::Pending
+    }
+
+    /// Sends queries to `port` instead of 53 and takes answers only from it:
+    /// for the image of `make test-net-lookup`, whose test server runs
+    /// without the right to bind port 53. Not in any other build.
+    #[cfg(feature = "test-dns-port")]
+    pub fn set_dns_port_for_test(&mut self, port: u16) {
+        self.extra.resolver.port = Some(port);
     }
 
     /// Forgets the query of `token`, if it is still out.
@@ -229,6 +261,7 @@ impl<L: Link> Stack<L> {
             return false;
         };
         let servers = self.status(now_us).dns;
+        let waiting = self.lease_pending();
         let mut buf = [0u8; MAX_MESSAGE + 1];
         loop {
             let socket = self.sockets.get_mut::<udp::Socket>(handle);
@@ -238,7 +271,7 @@ impl<L: Link> Stack<L> {
             let IpAddress::Ipv4(from) = meta.endpoint.addr;
             let r = &mut self.extra.resolver;
             // Only a server we asked, from its DNS port.
-            if meta.endpoint.port != 53 || !servers.contains(&from.octets()) || n < 2 {
+            if meta.endpoint.port != r.server_port() || !servers.contains(&from.octets()) || n < 2 {
                 r.rejected += 1;
                 continue;
             }
@@ -312,11 +345,21 @@ impl<L: Link> Stack<L> {
                 let due = q.sent < ATTEMPTS_US.len() && age >= ATTEMPTS_US[q.sent];
                 (due, age >= GIVE_UP_US, q.sent, q.id, q.name.clone())
             };
+            // Waiting for the lease: nothing goes out, no attempt is used up,
+            // and only the bound ends the query.
+            if waiting && !give_up {
+                i += 1;
+                continue;
+            }
             if give_up || servers.is_empty() {
                 let q = self.extra.resolver.queries.remove(i);
                 self.extra.resolver.done.push(Resolved {
                     token: q.token,
-                    result: Err(ResolveFail::Failure),
+                    result: Err(if give_up {
+                        ResolveFail::TimedOut
+                    } else {
+                        ResolveFail::NoServer
+                    }),
                 });
                 continue;
             }
@@ -324,7 +367,8 @@ impl<L: Link> Stack<L> {
                 let mut out = [0u8; MAX_QUERY];
                 if let Ok(n) = zoraya_dns::encode_query(id, &name, &mut out) {
                     let server = servers[attempt % servers.len()];
-                    let to = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from(server)), 53);
+                    let port = self.extra.resolver.server_port();
+                    let to = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from(server)), port);
                     let socket = self.sockets.get_mut::<udp::Socket>(handle);
                     // A refusal (no route, buffer full) is an attempt used.
                     sent_any |= socket.send_slice(&out[..n], to).is_ok();
@@ -338,16 +382,21 @@ impl<L: Link> Stack<L> {
 
     /// Microseconds until a query needs attention, if one is out.
     pub fn dns_delay(&self, now_us: i64) -> Option<i64> {
+        let waiting = self.lease_pending();
         self.extra
             .resolver
             .queries
             .iter()
             .map(|q| {
-                let next = ATTEMPTS_US
-                    .get(q.sent)
-                    .copied()
-                    .unwrap_or(GIVE_UP_US)
-                    .min(GIVE_UP_US);
+                let next = if waiting {
+                    GIVE_UP_US
+                } else {
+                    ATTEMPTS_US
+                        .get(q.sent)
+                        .copied()
+                        .unwrap_or(GIVE_UP_US)
+                        .min(GIVE_UP_US)
+                };
                 (q.started_us + next - now_us).max(0)
             })
             .min()
@@ -357,6 +406,12 @@ impl<L: Link> Stack<L> {
     pub fn dns_port(&self) -> Option<u16> {
         let h = self.extra.resolver.socket?;
         Some(self.sockets.get::<udp::Socket>(h).endpoint().port)
+    }
+
+    /// Attempts sent by the queries in flight, for tests.
+    #[cfg(test)]
+    pub(crate) fn dns_attempts(&self) -> usize {
+        self.extra.resolver.queries.iter().map(|q| q.sent).sum()
     }
 
     /// Queries in flight.

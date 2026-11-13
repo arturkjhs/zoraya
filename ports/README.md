@@ -41,6 +41,8 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | pdpmake | 2.0.4, commit `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` | public domain (`LICENSE`, the Unlicense) | none |
 | Lua | 5.5.1 | MIT (`doc/readme.html`) | none; W2's source, built inside Zoraya |
 | SQLite | 3.54.1 (amalgamation 3540100) | public domain (the blessing at the head of `sqlite3.c`) | none; W3's source, built inside Zoraya |
+| libc-test | `63e36e934e8f2bedf645303a90b64098e2af6c8f` (fetched with git from repo.or.cz/libc-test.git, ADR-0309; the hash is of the tar, see below; the archive was taken at first fetch, ADR-0109 trust on first use) | MIT (its `COPYRIGHT`) | none; `make test-posix-suites` builds its thread tests (ADR-0309), which `tests/libc-test/threads-excluded.txt` narrows. repo.or.cz generates snapshot tarballs on demand, so the archive's bytes (and its hash) can change with its software: keep the fetched archive in `ports/cache` and mirror it if the hash ever fails |
+| SQLite source tree | 3.54.1 (`sqlite-src-3540100.zip`) | public domain | none; `test/threadtest3.c` for ADR-0309 item 2 |
 | GNU hello | 2.12.3 | GPL-3.0-or-later (`COPYING`, `src/hello.c`) | none; W4's source, built inside Zoraya |
 | OpenSSL | 3.5.9 | Apache-2.0 (`LICENSE.txt`) | `patches/openssl/0001-zoraya-getrandom.patch` (the seed source is libposix's `getrandom`), `0002-no-posix_memalign.patch`, `0003-roots-file.patch` (`/system/tls/roots`); TASK-27 9a, ADR-0310 |
 | zlib | 1.3.1 | zlib (the licence at the end of `zlib.h`) | none |
@@ -56,6 +58,14 @@ unpacks them into `build/ports/workloads/`, with tcc's tree (the ports' patches
 applied, for W1), and `make posix-image` copies them into the image (ADR-0110 item
 1). pdpmake, like tcc, is pinned by commit in TASK-02 and here by GitHub's archive
 of it; its SHA-256 was taken by TASK-22.
+
+libc-test (`libctest`) is pinned by commit too, but repo.or.cz puts a bot check in front of its
+snapshot URLs and generates the gzip on demand, so its bytes are not stable across machines. Its lock line
+therefore has a URL `git+https://repo.or.cz/libc-test.git@COMMIT` (`tools/fetch-ports.sh` fetches that commit with
+git, checks the commit id, and archives the tree with git's deterministic `git archive`) and a hash written
+`tar:HEX`, the SHA-256 of the gunzipped archive. The cached file is then ours (`gzip -n`), and `--verify` hashes
+what is inside it. Any other entry may use either form. `sqlitesrc` is a fixed file from sqlite.org and needs
+neither.
 
 TASK-02 pinned tcc by commit and fetched it with git. The cache holds the archive
 GitHub generates for that commit from the mirror `TinyCC/tinycc` (TASK-02 read tcc

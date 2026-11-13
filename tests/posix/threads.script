@@ -1,0 +1,33 @@
+# Part 9b: fork, exec and spawn in a process with threads (ADR-0306), through
+# the broker, from dash, in the POSIX session.
+! -FAIL
+! panicked
+! ZORAYA-PANIC
+! ZORAYA-FAULT
+< PSURF> 
+> t_posix tfork\r
+< t_posix: tfork passed
+< PSURF> 
+> t_posix tforkthread\r
+< t_posix: tforkthread passed
+< PSURF> 
+> t_posix texec\r
+< t_posix: texec passed
+< PSURF> 
+> t_posix tspawn\r
+< t_posix: tspawn passed
+< PSURF> 
+> t_posix tsig\r
+< t_posix: tsig passed
+< PSURF> 
+> t_posix tsigdfl\r
+< t_posix: tsigdfl passed
+< PSURF> 
+> t_posix treroute\r
+< t_posix: treroute passed
+< PSURF> 
+> t_posix twait\r
+< t_posix: twait passed
+< PSURF> 
+> exit\r
+< BROKER-STATS

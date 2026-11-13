@@ -14,6 +14,8 @@ make test-qemu-tcg-smp4-gicv3
 make test-boot
 make test-files
 make test-libposix
+make test-posix-threads
+make test-posix-suites
 make test-posix-gui
 make test-tour-gui POSIX_ACCELS="auto"
 make test-tour-gui POSIX_ACCELS="tcg"
@@ -35,6 +37,7 @@ make test-posix POSIX_SCRIPTS="tests/posix/w9-term.script" POSIX_ACCELS="tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/w10.script" POSIX_ACCELS="auto tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/invariants.script" POSIX_ACCELS="auto tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/scenarios.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/threads.script" POSIX_ACCELS="auto tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/zosh.script" POSIX_ACCELS="auto tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="auto"
 make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="tcg"

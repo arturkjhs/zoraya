@@ -84,6 +84,7 @@ fn limits(memory: Option<u64>, processes: Option<u32>) -> JobLimits {
         memory,
         processes,
         cpu: None,
+        threads: None,
     }
 }
 
@@ -118,6 +119,7 @@ fn the_rules_of_setting_limits() {
         memory,
         processes,
         cpu: Some(cpu),
+        threads: None,
     };
     let (room_limits, below_limits) = ((Some(2 * MIB), Some(3)), (Some(MIB), Some(2)));
     assert_err!(

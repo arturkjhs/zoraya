@@ -135,6 +135,8 @@ measured T1 workloads).
 | pdpmake | `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` (2.0.4) | public domain (the Unlicense) | `/bin/pdpmake`, TASK-02's comparison make for W2 and W4 (ADR-0110) |
 | Lua | 5.5.1 | MIT | W2's source, in the image only, built inside Zoraya |
 | SQLite | 3540100 | public domain | W3's source, in the image only, built inside Zoraya |
+| libc-test | `63e36e934e8f2bedf645303a90b64098e2af6c8f` | MIT | the thread tests of musl's conformance suite, built by `make test-posix-suites` (ADR-0309); a test input, never in the image or `libc.a`; pinned by commit, fetched with git from repo.or.cz (its snapshot URLs sit behind a bot check and their gzip bytes differ by machine), and its lock hash is of the gunzipped tar (`ports/sources.lock`, `tools/fetch-ports.sh`) |
+| SQLite source tree | 3540100 | public domain | `test/threadtest3.c` (ADR-0309 item 2); a test input |
 | GNU hello | 2.12.3 | GPL-3.0-or-later | W4's source, in the image only, built inside Zoraya |
 | OpenSSL | 3.5.9 (LTS) | Apache-2.0 | `libssl.a` and `libcrypto.a` for curl and wget, static, no threads (TASK-27 9a, ADR-0310, ADR-0312). Why not in-house: a TLS 1.3 client and a certificate verifier are not small things to write; the native side's `zoraya-tls` is rustls |
 | zlib | 1.3.1 | zlib | `libz.a` for curl and wget (TASK-27 9a) |

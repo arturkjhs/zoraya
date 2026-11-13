@@ -12,10 +12,28 @@ use crate::arch::timer as hw;
 use crate::irq;
 use crate::sync::SpinLock;
 
-/// Deadlines pending at once: every live process can sleep (ADR-0031 bounds
-/// them at 255), with room for the kernel's own. A full queue is an error for
-/// the caller.
-const QUEUE_SIZE: usize = 288;
+/// Live user threads at once, in the whole system (ADR-0300 item 1): the
+/// bound on the deadline queue's users. Services and the trusted jobs have no
+/// thread figure of their own, so this is what limits them.
+pub const MAX_THREADS_SYSTEM: usize = 1000;
+
+/// Deadlines the kernel itself may hold beside the threads' (the scheduler's
+/// slice and release are in [`RESERVED`]; this is for device and driver
+/// timers), an upper bound.
+const KERNEL_TIMERS: usize = 22;
+
+/// Deadlines pending at once: every user thread of the system can hold one
+/// (a timed `futex_wait`, `port_wait` or `sleep_until`), with room for the
+/// kernel's own and the two reserved entries (ADR-0301 item 5, INV-0301-7). A
+/// full queue is an error for the caller. About 40 bytes an entry.
+const QUEUE_SIZE: usize = 1024;
+
+const _: () = assert!(QUEUE_SIZE >= MAX_THREADS_SYSTEM + KERNEL_TIMERS + RESERVED);
+
+/// Due entries `on_interrupt` runs per pass; the comparator is left in the
+/// past if more are due, so the interrupt comes again at once and IRQ is
+/// unmasked between passes (ADR-0301 item 5, ADR-0270).
+const POP_PER_PASS: usize = 64;
 
 /// A deadline's callback. It runs in interrupt context, with IRQ masked and
 /// no lock held, so it may arm further deadlines.
@@ -106,7 +124,7 @@ fn on_interrupt() {
     // One snapshot: a callback that arms a deadline in the past is served by
     // the next interrupt, so it cannot hold this loop forever.
     let now = now();
-    loop {
+    for _ in 0..POP_PER_PASS {
         let due = QUEUE.lock().pop_due(now);
         match due {
             Some(entry) => (entry.callback)(entry.arg),

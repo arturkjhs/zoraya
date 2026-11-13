@@ -11,6 +11,9 @@ license.workspace = true
 # smoltcp answers echo requests addressed to the interface. Off in `netd`
 # (ADR-0281 item 3); the host tests turn it on for their scripted peer.
 echo-reply = ["smoltcp/auto-icmp-echo-reply"]
+# The resolver's server port can be set (`Stack::set_dns_port_for_test`):
+# only the image of `make test-net-lookup` (the user crate's `net-test`).
+test-dns-port = []
 
 [dependencies]
 smoltcp = { version = "=0.14.0", default-features = false, features = [

@@ -104,6 +104,20 @@ impl KernelStack {
         frame
     }
 
+    /// Sets `x0` in the frame [`KernelStack::push_user_frame`] wrote: the
+    /// argument of a thread `thread_create` made (ADR-0300 item 2).
+    ///
+    /// # Safety
+    ///
+    /// No thread has run on this stack since `push_user_frame`, and none runs
+    /// on it during the call: nothing else reads or writes the frame.
+    pub unsafe fn set_first_argument(&self, x0: u64) {
+        let frame = (self.top() - EXCEPTION_FRAME as u64) as *mut crate::arch::Frame;
+        // SAFETY: the frame at the top of a mapped stack (as in
+        // `push_user_frame`); the caller promises that nothing else touches it.
+        unsafe { (*frame).x[0] = x0 };
+    }
+
     /// Writes the frame for a first return to EL0 at the top of the stack, and
     /// returns its address.
     pub fn push_user_frame(&self, pc: u64, sp: u64) -> u64 {

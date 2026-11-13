@@ -41,7 +41,7 @@ ELF_CHECK := $(ROOT)/target/debug/zoraya-elf-check
 TIER_LIST := docs/adr/posix-surface-T1.txt
 # The names libc.a may export: the generated list, and the blocks of the ADRs
 # that add names (posix-surface-check's LIST+ADR form).
-ADDED_ADRS := docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
+ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md
 empty :=
@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: apps zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: suites apps zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -610,6 +610,18 @@ $(WORKLOADS)/sqlite: $(LOCK)
 $(WORKLOADS)/hello: $(LOCK)
 	@mkdir -p $(WORKLOADS)
 	$(call unpack,hello,ports/patches/hello)
+	@touch $@
+# The thread suites of part 9b (ADR-0309): musl's libc-test and SQLite's source
+# tree (its test/threadtest3.c), unpacked for `make test-posix-suites`. Test
+# inputs only: nothing of them enters libc.a or the rootfs.
+suites: $(WORKLOADS)/libctest $(WORKLOADS)/sqlitesrc
+$(WORKLOADS)/libctest: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,libctest,ports/patches/libctest)
+	@touch $@
+$(WORKLOADS)/sqlitesrc: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,sqlitesrc,ports/patches/sqlitesrc)
 	@touch $@
 $(WORKLOADS_STAMP): $(addprefix $(WORKLOADS)/,tcc lua sqlite hello)
 	@mkdir -p $(dir $@) && touch $@
