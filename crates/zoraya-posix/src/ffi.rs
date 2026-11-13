@@ -223,7 +223,23 @@ impl Sys for RtSys {
     fn slot_of(&self, h: Handle) -> u32 {
         h.slot()
     }
+
+    fn thread_self(&mut self) -> Option<Handle> {
+        zoraya_rt::thread_self().ok()
+    }
+
+    fn interrupt(&mut self, h: Handle, port: Option<Handle>) {
+        let _ = zoraya_rt::thread_interrupt(h);
+        if let Some(port) = port {
+            let _ = zoraya_rt::port_queue(port, USER_WAKE, 0);
+        }
+    }
 }
+
+/// The key of the packet that wakes a thread out of a port wait for another
+/// thread's sake (ADR-0304 item 11); the subscriptions' keys are small.
+const USER_WAKE: u64 = u64::MAX;
+
 
 // ------------------------------------------------------------ the state
 
@@ -297,7 +313,11 @@ fn with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
     LIB_OWNER.store(me, Ordering::Relaxed);
     // SAFETY: `LIB` is held, so this is the only reference.
     let state = unsafe { &mut *STATE.state.get() };
-    let r = state.as_mut().map(f);
+    let r = state.as_mut().map(|p| {
+        // The signal state is this thread's from here (ADR-0304 item 1).
+        p.switch_to(me);
+        f(p)
+    });
     LIB_OWNER.store(NO_OWNER, Ordering::Relaxed);
     LIB.unlock(&Futex);
     r
@@ -320,10 +340,20 @@ fn try_with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
 }
 
 unsafe extern "C" {
+    /// musl's (`cancel.c`): ends the calling thread if a cancel is pending
+    /// and enabled.
+    fn __testcancel();
     fn __errno_location() -> *mut i32;
     fn fdopen(fd: i32, mode: *const c_char) -> *mut u8;
     fn __fmodeflags(mode: *const c_char) -> i32;
     fn longjmp(env: *mut u8, value: i32) -> !;
+}
+
+/// A cancellation point of the calling thread; never holds a lock.
+fn testcancel() {
+    // SAFETY: `cancel.c`'s function; it only reads the thread's own flags
+    // and ends the thread, which holds no library lock here.
+    unsafe { __testcancel() };
 }
 
 fn set_errno(e: i32) {
@@ -388,8 +418,23 @@ fn state<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R,
 /// other's packets (ADR-0302 item 5). The port lives for the one wait.
 fn wait_unlocked(sources: &[(Handle, u32)], deadline: Option<u64>) -> Result<(usize, u32), Status> {
     let port = zoraya_rt::port_create()?;
-    let r = port_wait_any(port, sources, deadline);
+    // Tell the table where this thread waits, so that another thread can wake
+    // it; and do not wait if something was already sent (ADR-0304 items 2, 3).
+    let skip = with(|p| p.set_wait_port(Some(port))).unwrap_or(false);
+    let r = if skip {
+        Ok((usize::MAX, 0))
+    } else {
+        port_wait_any(port, sources, deadline)
+    };
+    let _ = with(|p| {
+        p.set_wait_port(None);
+        p.take_interrupted()
+    });
     let _ = zoraya_rt::handle_close(port);
+    if matches!(r, Ok((usize::MAX, _))) {
+        // A cancel point (ADR-0305): the lock is free here.
+        testcancel();
+    }
     r
 }
 
@@ -418,6 +463,9 @@ fn port_wait_any(
         let _ = zoraya_rt::port_unsubscribe(port, i as u64 + 1);
     }
     waited?;
+    if packets[0].key == USER_WAKE {
+        return Ok((usize::MAX, 0));
+    }
     let key = packets[0].key as usize;
     if key == 0 || key > sources.len() {
         return Err(Status::BadState);
@@ -1120,15 +1168,35 @@ extern "C" fn __clone(
         (sp as *mut Start).write(Start { function, argument });
         ptid.write(tid as i32);
     }
+    // The record first: the new thread may run, and take the library lock,
+    // before this returns.
+    let _ = with(|p| p.thread_add(tls, tid, None));
     let entry: extern "C" fn(*const Start) -> ! = thread_start;
     match zoraya_rt::thread_create(entry as usize as u64, sp as u64, sp as u64, tls as u64) {
         Ok(handle) => {
-            // Nothing in this slice uses the handle (ADR-0314 item 3): close
-            // it so that no slot outlives the thread.
-            let _ = zoraya_rt::handle_close(handle);
+            // Kept for `thread_interrupt`; closed by the thread's own exit.
+            let _ = with(|p| {
+                if let Some(r) = p.threads.list.iter_mut().find(|r| r.tp == tls) {
+                    r.handle = Some(handle);
+                }
+            });
             tid as i32
         }
-        Err(_) => -EAGAIN,
+        Err(_) => {
+            let _ = with(|p| p.thread_remove(tls));
+            -EAGAIN
+        }
+    }
+}
+
+/// The thread's table record goes, and its handle with it (ADR-0302 item 4),
+/// before the thread ends: no slot outlives the thread (INV-0300-7).
+fn forget_thread() {
+    let me = thread_pointer();
+    if let Some(Some(r)) = with(|p| p.thread_remove(me)) {
+        if let Some(h) = r.handle {
+            let _ = zoraya_rt::handle_close(h);
+        }
     }
 }
 
@@ -1137,6 +1205,7 @@ extern "C" fn __clone(
 /// reached only by a thread leaving.
 #[unsafe(no_mangle)]
 extern "C" fn zoraya_posix_thread_exit(_code: i64) -> ! {
+    forget_thread();
     zoraya_rt::thread_exit(CLEAR_ON_EXIT.load(Ordering::Relaxed), 0, 0)
 }
 
@@ -1146,6 +1215,7 @@ extern "C" fn zoraya_posix_thread_exit(_code: i64) -> ! {
 /// the stack that goes (ADR-0300 item 3).
 #[unsafe(no_mangle)]
 extern "C" fn __unmapself(base: u64, size: u64) -> ! {
+    forget_thread();
     let handle = locked(&MEM, || {
         mappings()
             .iter_mut()
@@ -1208,7 +1278,14 @@ extern "C" fn zoraya_posix_futex(
                     .min(DEADLINE_INFINITE - 1)
             };
             match zoraya_rt::futex_wait(address as u64, value as u32, deadline) {
-                Ok(_) => 0,
+                Ok(false) => 0,
+                // Interrupted (ADR-0304 item 11): `-EINTR` only if a handler
+                // ran on this thread; otherwise a spurious wake, which
+                // `cancel.c` turns into the cancel if one is pending.
+                Ok(true) => {
+                    let _ = with(|p| p.take_interrupted());
+                    if procs::deliver_ran() { -i64::from(EINTR) } else { 0 }
+                }
                 Err(Status::WouldBlock) => -i64::from(EAGAIN),
                 Err(Status::DeadlineExceeded) => -i64::from(ETIMEDOUT),
                 Err(Status::BadAddress) => -i64::from(EFAULT),
@@ -1268,18 +1345,71 @@ fn wake_up_to(address: u64, count: i64) -> i64 {
 /// thread's start and `pthread_create` find an empty old mask and a set that
 /// changes nothing. `pthread_sigmask` is the Rust one, not musl's.
 #[unsafe(no_mangle)]
-extern "C" fn zoraya_posix_rt_sigprocmask(_how: i64, _set: i64, old: i64, _size: i64) -> i64 {
-    if old != 0 {
-        // SAFETY: C's contract: `old` is a `sigset_t` of `_size` bytes.
-        unsafe { ptr::write_bytes(old as *mut u8, 0, 8) };
+extern "C" fn zoraya_posix_rt_sigprocmask(how: i64, set: i64, old: i64, size: i64) -> i64 {
+    // musl passes `_NSIG / 8` (16): the set is two words, the library keeps
+    // the first (signals 1 to 64; the second is always empty).
+    if size != 8 && size != 16 {
+        return -i64::from(EINVAL);
     }
-    0
+    let new = if set == 0 {
+        None
+    } else {
+        // SAFETY: C's contract: `set` is a `sigset_t` of 8 bytes.
+        Some(unsafe { ptr::read_unaligned(set as *const u64) })
+    };
+    let Some(r) = with(|p| p.signals.mask(how as i32, new)) else {
+        return 0;
+    };
+    match r {
+        Ok(o) => {
+            if old != 0 {
+                // SAFETY: C's contract: `old` is a `sigset_t` of 8 bytes.
+                unsafe {
+                    ptr::write_unaligned(old as *mut u64, o);
+                    if size == 16 {
+                        ptr::write_unaligned((old as *mut u64).add(1), 0);
+                    }
+                };
+            }
+            // Unblocking: what was pending is delivered now (ADR-0304 item 3).
+            if new.is_some() && how != 0 {
+                procs::poll();
+            }
+            0
+        }
+        Err(e) => -i64::from(e),
+    }
 }
 
-/// `SYS_tkill`: thread-directed signals are step 3 (ADR-0304).
+/// `SYS_tkill`: a signal for one thread (ADR-0304 item 2).
 #[unsafe(no_mangle)]
-extern "C" fn zoraya_posix_tkill(_tid: i64, _sig: i64) -> i64 {
-    -i64::from(ENOSYS)
+extern "C" fn zoraya_posix_tkill(tid: i64, sig: i64) -> i64 {
+    let (Ok(tid), Ok(n)) = (u32::try_from(tid), u32::try_from(sig)) else {
+        return -i64::from(EINVAL);
+    };
+    match with(|p| p.tkill(tid, n)) {
+        None => -i64::from(ENOSYS),
+        Some(Err(e)) => -i64::from(e),
+        Some(Ok(crate::threads::Tkill::Sent)) => 0,
+        Some(Ok(crate::threads::Tkill::Myself)) => {
+            procs::raise_own(n);
+            0
+        }
+    }
+}
+
+/// `pthread_cancel`'s wake (`cancel.c`, ADR-0305): interrupts thread `tid`
+/// out of a futex wait, a sleep or a library wait, so that it sees its flag.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_interrupt(tid: i64) -> i64 {
+    let Ok(tid) = u32::try_from(tid) else {
+        return -i64::from(EINVAL);
+    };
+    match with(|p| p.interrupt_tid(tid)) {
+        None => -i64::from(ENOSYS),
+        Some(Err(e)) => -i64::from(e),
+        Some(Ok(())) => 0,
+    }
 }
 
 #[panic_handler]
@@ -2277,16 +2407,37 @@ extern "C" fn getrusage(who: i32, usage: *mut u8) -> i32 {
 
 // ------------------------------------------------------------ threads
 
-/// musl's thread code takes these around signal blocking; masks are per
-/// process until step 3 (ADR-0304), so they change nothing.
-#[unsafe(no_mangle)]
-extern "C" fn __block_all_sigs(_set: *mut u8) {}
+/// musl's thread code blocks signals around its locks and thread creation:
+/// `set` gets the mask in force, which `pthread_create` gives the new thread
+/// (`args->sig_mask`) and `__restore_sigs` puts back. Nothing is blocked: a
+/// handler runs only at a library entry or wait (ADR-0106 item 5), never
+/// inside musl's critical sections, so there is nothing to keep out; the
+/// mask itself is the thread's (ADR-0304 item 1).
+fn save_mask(set: *mut u64) {
+    let mask = with(|p| p.signals.blocked).unwrap_or(0);
+    // SAFETY: C's contract: `set` is a `sigset_t` (128 bytes) the caller owns.
+    unsafe {
+        set.write_unaligned(mask);
+        set.add(1).write_unaligned(0);
+    }
+}
 
 #[unsafe(no_mangle)]
-extern "C" fn __block_app_sigs(_set: *mut u8) {}
+extern "C" fn __block_all_sigs(set: *mut u64) {
+    if !set.is_null() {
+        save_mask(set);
+    }
+}
 
 #[unsafe(no_mangle)]
-extern "C" fn __restore_sigs(_set: *mut u8) {}
+extern "C" fn __block_app_sigs(set: *mut u64) {
+    if !set.is_null() {
+        save_mask(set);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __restore_sigs(_set: *mut u64) {}
 
 /// `siglongjmp` without the signal mask, which is 6d's: a `sigjmp_buf` begins
 /// with a `jmp_buf`.

@@ -155,6 +155,11 @@ impl<S: Sys> Posix<S> {
     ) -> Result<(Option<usize>, Option<u32>), i32> {
         if let Some(r) = self.resume.take() {
             self.stats.waits += 1;
+            if r.result == Ok((usize::MAX, 0)) {
+                // Another thread interrupted this wait (a signal routed to
+                // it, a cancel): the caller looks again (ADR-0304 item 11).
+                return Err(EINTR);
+            }
             return self.finish_wait(&r.sources, r.own_len, r.result);
         }
         let mut sources = Vec::with_capacity(own.len() + 4);
@@ -247,7 +252,8 @@ impl<S: Sys> Posix<S> {
                 Taken::Run(a) => return Next::Run(n, a),
                 Taken::Default(DefaultAction::Terminate) => return Next::Terminate(n),
                 Taken::Default(DefaultAction::Stop) => return Next::Stop(n),
-                Taken::Default(_) | Taken::Drop | Taken::Pending => {}
+                Taken::Pending => self.route(n),
+                Taken::Default(_) | Taken::Drop => {}
             }
         }
     }
@@ -256,7 +262,8 @@ impl<S: Sys> Posix<S> {
     /// with a handler installed (INV-0106-2), or a pending signal the mask
     /// now lets through.
     pub fn should_poll(&self) -> bool {
-        self.signals.handlers_installed() || self.signals.pending & !self.signals.blocked != 0
+        self.signals.handlers_installed()
+            || (self.signals.pending | self.signals.shared) & !self.signals.blocked != 0
     }
 
     // ------------------------------------------------------------ the broker

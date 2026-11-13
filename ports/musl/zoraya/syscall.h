@@ -44,10 +44,18 @@ hidden long __syscall_ret(unsigned long);
 
 #define __syscall(...) __zoraya_sys_call(__VA_ARGS__)
 #define syscall(...) __syscall_ret(__syscall(__VA_ARGS__))
-/* No cancellation points yet: deferred cancellation is step 3 (ADR-0305,
- * ADR-0314 item 4). */
-#define __syscall_cp(...) __syscall(__VA_ARGS__)
-#define syscall_cp(...) __syscall_ret(__syscall(__VA_ARGS__))
+/* Cancellation points (ADR-0305): `cancel.c` checks the thread's flag before
+ * a call that can block and after one that was cut short. The route of the
+ * call itself is the constant name's, as for `__syscall`; only the futex
+ * waits of the retained src/thread use it (the library's own calls are
+ * Rust). */
+long __zoraya_cp_before(void);
+long __zoraya_cp_after(long r);
+#define __syscall_cp(nr, ...) ({                                              \
+	long __cpe = __zoraya_cp_before();                                    \
+	__zoraya_cp_after(__cpe ? __cpe : __syscall(nr, __VA_ARGS__));        \
+})
+#define syscall_cp(...) __syscall_ret(__syscall_cp(__VA_ARGS__))
 
 long zoraya_posix_read(long fd, long buf, long count);
 long zoraya_posix_readv(long fd, long iov, long iovcnt);

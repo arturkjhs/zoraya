@@ -44,6 +44,7 @@ pthread_barrierattr_destroy
 pthread_barrierattr_getpshared
 pthread_barrierattr_init
 pthread_barrierattr_setpshared
+pthread_cancel
 pthread_cond_broadcast
 pthread_cond_destroy
 pthread_cond_init
@@ -105,6 +106,7 @@ pthread_setconcurrency
 pthread_setschedparam
 pthread_setschedprio
 pthread_setspecific
+pthread_sigmask
 pthread_spin_destroy
 pthread_spin_init
 pthread_spin_lock

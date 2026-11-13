@@ -426,6 +426,8 @@ pub struct Fake {
     /// Run when a wait finds nothing yet, before the services: what another
     /// process would do meanwhile (drain a stream, close its reader).
     pub meanwhile: Option<Meanwhile>,
+    /// The threads interrupted, with the port a packet was queued on.
+    pub interrupts: Vec<(H, Option<H>)>,
 }
 
 impl Fake {
@@ -437,6 +439,7 @@ impl Fake {
             craft: None,
             craft_skip: 0,
             meanwhile: None,
+            interrupts: Vec::new(),
         }
     }
 }
@@ -474,6 +477,10 @@ impl Fake {
 
 impl Sys for Fake {
     type H = H;
+
+    fn interrupt(&mut self, h: H, port: Option<H>) {
+        self.interrupts.push((h, port));
+    }
 
     fn close(&mut self, h: H) {
         self.net.borrow_mut().close(h);

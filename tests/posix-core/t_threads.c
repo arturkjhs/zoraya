@@ -16,6 +16,8 @@
  *   t_threads exit      exit() from a non-main thread while a sibling spins (exit 7)
  *   t_threads mainexit  pthread_exit in the main thread; the process ends with the last thread
  *   t_threads waits     read, nanosleep, pselect in threads; the others use the library (INV-0302-2)
+ *   t_threads signals   pthread_kill wakes a thread blocked in read, nanosleep, sem_wait; masks are per thread
+ *   t_threads cancel    pthread_cancel of a thread blocked in each wait; cleanup handlers; PTHREAD_CANCELED
  *   t_threads blockedexit exit() flushes stdio while a sibling is blocked in read (exit 4)
  *   t_threads blocked   _Exit from the main thread while a sibling is blocked in read (exit 3)
  *   t_threads overflow  a thread overruns its stack: the process faults (INV-0302-6)
@@ -32,6 +34,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 
@@ -792,6 +795,197 @@ static void waits(void)
 	printf("t_threads: waits passed\n");
 }
 
+
+/* ------------------------------------------------------------ signals */
+
+static volatile pthread_t usr1_on;
+static volatile int usr1_count;
+static volatile int usr1_in_worker;
+
+static void on_usr1(int sig)
+{
+	(void)sig;
+	usr1_on = pthread_self();
+	usr1_count++;
+}
+
+enum { W_READ, W_SLEEP, W_SEM };
+static int sig_pipe[2];
+static sem_t sig_sem;
+static volatile int sig_ready, sig_result, sig_errno;
+
+static void *sig_worker(void *a)
+{
+	int what = (int)(intptr_t)a;
+	char c;
+	struct timespec ts = {30, 0};
+	sig_ready = 1;
+	switch (what) {
+	case W_READ:
+		sig_result = (int)read(sig_pipe[0], &c, 1);
+		break;
+	case W_SLEEP:
+		sig_result = nanosleep(&ts, NULL);
+		break;
+	case W_SEM:
+		sig_result = sem_wait(&sig_sem);
+		break;
+	}
+	sig_errno = errno;
+	return (void *)pthread_self();
+}
+
+static void wait_ready(void)
+{
+	while (!sig_ready)
+		thrd_yield();
+	for (int i = 0; i < 300; i++)
+		thrd_yield();
+}
+
+static void signals_case(void)
+{
+	struct sigaction sa;
+	pthread_t t;
+	void *self;
+	double t0;
+	/* The mask on entry is the launcher's (ADR-0190 item 18): start from none. */
+	{
+		sigset_t none;
+		sigemptyset(&none);
+		OK(pthread_sigmask(SIG_SETMASK, &none, NULL));
+	}
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = on_usr1;
+	OK(sigaction(SIGUSR1, &sa, NULL));
+	OK(pipe(sig_pipe));
+	OK(sem_init(&sig_sem, 0, 0));
+
+	/* A thread in read: pthread_kill makes its read fail with EINTR, the
+	 * handler runs on that thread, not on this one. */
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, sig_worker, (void *)(intptr_t)W_READ));
+	wait_ready();
+	t0 = now();
+	OK(pthread_kill(t, SIGUSR1));
+	OK(pthread_join(t, &self));
+	printf("t_threads: signals step 1\n");
+	CHECK(now() - t0 < 5);
+	CHECK(sig_result == -1 && sig_errno == EINTR);
+	CHECK(usr1_count == 1 && pthread_equal(usr1_on, (pthread_t)self));
+	CHECK(!pthread_equal(usr1_on, pthread_self()));
+
+	/* nanosleep: EINTR well before its 30 seconds. */
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, sig_worker, (void *)(intptr_t)W_SLEEP));
+	wait_ready();
+	t0 = now();
+	OK(pthread_kill(t, SIGUSR1));
+	OK(pthread_join(t, &self));
+	printf("t_threads: signals step 2\n");
+	CHECK(now() - t0 < 5);
+	CHECK(sig_result == -1 && sig_errno == EINTR && usr1_count == 2);
+
+	/* sem_wait: musl's loop treats the interrupted futex wait as a retry
+	 * (INV-0304-7): the handler ran, the wait goes on until the post. */
+	sig_ready = 0;
+	OK(pthread_create(&t, NULL, sig_worker, (void *)(intptr_t)W_SEM));
+	wait_ready();
+	OK(pthread_kill(t, SIGUSR1));
+	for (int i = 0; i < 300; i++)
+		thrd_yield();
+	CHECK(usr1_count == 3);
+	OK(sem_post(&sig_sem));
+	OK(pthread_join(t, &self));
+	printf("t_threads: signals step 3\n");
+	CHECK(sig_result == 0);
+
+	/* The mask is per thread: this thread blocks SIGUSR1; a signal sent to
+	 * it stays pending here (and a thread of the same process is not
+	 * affected). */
+	{
+		sigset_t set, old;
+		sigemptyset(&set);
+		sigaddset(&set, SIGUSR1);
+		OK(pthread_sigmask(SIG_BLOCK, &set, &old));
+		OK(pthread_kill(pthread_self(), SIGUSR1));
+		CHECK(usr1_count == 3);
+		OK(pthread_sigmask(SIG_SETMASK, &old, NULL));
+		CHECK(usr1_count == 4);
+		CHECK(pthread_equal(usr1_on, pthread_self()));
+	}
+	printf("t_threads: signals passed\n");
+}
+
+/* ------------------------------------------------------------ cancel */
+
+static volatile int cleaned;
+static pthread_mutex_t cm = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cc = PTHREAD_COND_INITIALIZER;
+
+static void cleanup(void *a)
+{
+	(void)a;
+	cleaned++;
+}
+
+static void *cancel_worker(void *a)
+{
+	int what = (int)(intptr_t)a;
+	char c;
+	struct timespec ts = {30, 0};
+	pthread_cleanup_push(cleanup, NULL);
+	sig_ready = 1;
+	switch (what) {
+	case W_READ:
+		read(sig_pipe[0], &c, 1);
+		break;
+	case W_SLEEP:
+		nanosleep(&ts, NULL);
+		break;
+	case W_SEM:
+		sem_wait(&sig_sem);
+		break;
+	case 3:
+		pthread_mutex_lock(&cm);
+		for (;;)
+			pthread_cond_wait(&cc, &cm);
+	case 4:
+		for (;;)
+			pthread_testcancel();
+	}
+	pthread_cleanup_pop(0);
+	return NULL;
+}
+
+static void cancel_case(void)
+{
+	static const char *names[] = {"read", "nanosleep", "sem_wait", "cond_wait", "testcancel"};
+	OK(pipe(sig_pipe));
+	OK(sem_init(&sig_sem, 0, 0));
+	for (int what = 0; what < 5; what++) {
+		pthread_t t;
+		void *res = NULL;
+		double t0;
+		cleaned = 0;
+		sig_ready = 0;
+		OK(pthread_create(&t, NULL, cancel_worker, (void *)(intptr_t)what));
+		wait_ready();
+		t0 = now();
+		OK(pthread_cancel(t));
+		OK(pthread_join(t, &res));
+		printf("t_threads: cancel step %d\n", what);
+		if (res != PTHREAD_CANCELED || cleaned != 1 || now() - t0 > 5) {
+			printf("t_threads: cancel of %s: res %p cleaned %d FAIL\n", names[what],
+			       res, cleaned);
+			exit(1);
+		}
+	}
+	/* A cancel of a thread that has gone is harmless; one that is disabled
+	 * waits for the enable. */
+	printf("t_threads: cancel passed\n");
+}
+
 static void *read_for_exit(void *a)
 {
 	char c;
@@ -859,6 +1053,8 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	CASE("waits", waits)
+	CASE("signals", signals_case)
+	CASE("cancel", cancel_case)
 	if (strcmp(mode, "blockedexit") == 0) {
 		blockedexit();
 		return 0;

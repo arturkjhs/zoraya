@@ -58,6 +58,15 @@
 < t_threads: waits passed
 < posixrun: exit 0
 < \r\n~> 
+# Signals per thread (ADR-0304) and deferred cancellation of a blocked thread (ADR-0305).
+> posixrun /bin/t_threads signals\r
+< t_threads: signals passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cancel\r
+< t_threads: cancel passed
+< posixrun: exit 0
+< \r\n~> 
 # exit() flushes stdio (a write) while a sibling is blocked in read.
 > posixrun /bin/t_threads blockedexit\r
 < t_threads: flushed at exit

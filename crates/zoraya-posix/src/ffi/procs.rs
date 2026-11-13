@@ -146,6 +146,17 @@ fn raise_signal(n: u32) -> Result<(), i32> {
     Ok(())
 }
 
+/// `tkill` of the calling thread: as `raise` (ADR-0304 item 2).
+pub(super) fn raise_own(n: u32) {
+    let _ = raise_signal(n);
+}
+
+/// Delivers what is deliverable to this thread; true if a handler ran
+/// (ADR-0304 item 11).
+pub(super) fn deliver_ran() -> bool {
+    deliver().ran
+}
+
 /// After a write: `EPIPE` is `SIGPIPE` first (ADR-0106 item 8).
 pub(super) fn after_write(r: Result<usize, i32>) -> Result<usize, i32> {
     if r == Err(EPIPE) {

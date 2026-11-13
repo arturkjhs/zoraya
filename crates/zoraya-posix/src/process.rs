@@ -293,6 +293,8 @@ pub struct Posix<S: Sys> {
     /// Long waits are handed to the C boundary instead of made here, because
     /// the process has more than one thread (ADR-0302 item 9).
     pub defer_waits: bool,
+    /// The threads, and whose signal state `signals` holds.
+    pub threads: crate::threads::Threads<S::H>,
     /// The wait a method asked the boundary to make, with the lock released.
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
@@ -358,6 +360,7 @@ impl<S: Sys> Posix<S> {
             fork_group: -1,
             sigchld: false,
             defer_waits: false,
+            threads: Default::default(),
             pending: None,
             resume: None,
             tty_reads: Vec::new(),
