@@ -61,7 +61,16 @@ pause 1500
 chord meta ret
 pause 1500
 chord meta ret
-pause 4000
+# The tenth window is waited for, not a fixed time: under CI's TCG the
+# terminals reach the compositor late ("term: waiting for the compositor"),
+# and after 4 s only five windows were up, so the drag below took the fifth
+# (cascaded 160 to the left) and the rows read at (361, 64) began mid-line
+# with "or help tour." (2026-11-13). Each window is cascaded 32 to the
+# right, the ninth of the panel's (n = 9) to the screen's right edge: its
+# frame alone covers x 1004..1020 (the eighth's ends at 1000), so its body
+# there is the tenth window, at both scales (1024 wide logically).
+region 1004 300 16 100 ffffff
+pause 1000
 shot windows-many
 # The tenth window, on top where the cascade meets the work area's corner,
 # has its shell: it takes keys after a click on its title bar. With 8 slots
