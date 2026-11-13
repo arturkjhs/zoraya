@@ -446,9 +446,10 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
 - `make python`: ok (3 times). `make adr-check` and `make check`: ok after the ADR and the index (before the CI wiring; `make check-ci-jobs` ok after it).
 - Found by running, fixed: a process starts on a 64 KiB stack and CPython's overflow guard keeps 32 KiB, so the first `import` gave `RecursionError` (patch 0004); `os.set_blocking` failed with `ENOTTY` (ioctl `FIONBIO`: configure without `<sys/ioctl.h>`);
   the shell hinted about `/pyvenv.cfg` (patch 0005); `ssl.create_default_context()` refuses the test PKI's certificates (no Authority Key Identifier, `VERIFY_X509_STRICT`): the test client clears that flag alone; `regrtest` needs `--tempdir` below `/tmp` (the program is not given a `stat` of `/`).
-- In the guest, one run of each part (by hand, in a harness with the same disk and script lines; the full `make test-python` run is in the last item): `python3 -V`; `-c`; exit statuses; `smoke.py` (flags `1 True 1`, `sqlite3` 3.54.1, `ssl` OpenSSL 3.5.9, `asyncio`, a thread, `fork`); `grants python3 ...` with and without `+net`;
+- In the guest, one run of each part (by hand, in a harness with the same disk and script lines; the full run is the last item): `python3 -V`; `-c`; exit statuses; `smoke.py` (flags `1 True 1`, `sqlite3` 3.54.1, `ssl` OpenSSL 3.5.9, `asyncio`, a thread, `fork`); `grants python3 ...` with and without `+net`;
   the `asyncio` HTTPS client: `HTTP/1.1 200`, the page; an expired certificate refused ("certificate has expired"), a wrong-name one refused ("Hostname mismatch"), the server's log showing `ended after 0 request bytes` for both; `regr.py`: 17 modules, 3,114 tests, 51 skipped, `Result: SUCCESS`, 31 s.
-- Not run: TCG; CI; a full `make test-python` from a clean tree to the end is item below if present; `make test-changed`; the independent review.
+- `make test-python` end to end: `PASS: 55 steps`, the server's log shows 0 request bytes for both refused certificates, `zoraya-fsck` clean (HVF; ~10 minutes with the build).
+- Not run: TCG; CI (no candidate tag, as told); `make test-changed`; the independent review (opus-review).
 
 ### Limits found (recorded in `docs/design.md`)
 - A program that Python starts has no random connection (ADR-0310, the same as under `dash`): another `python3` fails at start. Seven test cases of the listed modules start interpreters and are left out (`tests/python/regr-ignore.txt`, each with its reason).
