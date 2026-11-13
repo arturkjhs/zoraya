@@ -2060,6 +2060,41 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
+## CPython (stage 9, 9c)
+
+`python3` runs inside Zoraya (proposed ADR-0320): CPython 3.15.2 cross-built static with `zcc`, as a POSIX program from the
+volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
+
+- **The build.** `ports/sources.lock` pins the archive by the SHA-256 python.org publishes (the Sigstore bundle it also
+  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/host`, for
+  `--with-build-python` and for compiling the library's byte code), SQLite for the target (`THREADSAFE=1`, no extension
+  loading, no WAL, FTS5), `libpyshim.a` (`ports/apps/pyshim.c`: `execv`, `madvise`, `msync`, `sched_yield`, `pause`, `dirfd`,
+  `gethostbyname` over `getaddrinfo`, `getprotobyname`, `getservbyname`, `hstrerror`...) and CPython itself, into
+  `build/rootfs-python` (`bin/python3`, 15.5 MB, and the trimmed library, 37 MB, byte code `unchecked-hash`; 52 MB, 1226 files).
+  Built in: `_socket`, `select`, `_ssl` and `_hashlib` (OpenSSL), `_sqlite3`, `zlib`, `_asyncio`, `_thread`. No shared modules
+  (no `dlopen`), `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`.
+- **Patches** (`ports/patches/python/`): `_ssl` uses a file-descriptor BIO (OpenSSL has no sockets); the environment, byte code
+  files and the per-user site directory are off; `asyncio`'s self-pipe is `os.pipe()` (no `socketpair`); `main` runs the interpreter
+  on a thread with an 8 MiB stack, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB; no `pyvenv.cfg`
+  search. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`.
+- **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
+  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. A script names its own `cafile`:
+  `ssl.create_default_context()` alone finds no roots. `PYTHON*` variables decide nothing.
+- **The volume.** `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and `DISK_SIZE` (default 64M, in
+  the disk's key): curl, wget and Python do not fit in 64M, so `make run` with Python is
+  `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`. `make test-python` makes its own 256M disk.
+- **Tests** (`make test-python`, `tests/shell/python.script`): `-V`, `-c`, exit statuses, `tests/python/smoke.py` (flags,
+  `sqlite3`, `ssl`, `asyncio`, a thread, `fork`), `grants` with and without `+net`, an `asyncio` HTTPS client
+  (`tests/python/https_client.py`) against `tools/test-httpd`'s TLS server with the test PKI's root, the refusal of an expired and a
+  wrong-name certificate with 0 request bytes at the server, and `tests/python/regr.py`: CPython's regrtest over the modules of
+  `tests/python/regr-modules.txt`.
+- **Known limits.** A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
+  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 8 MiB of stack as virtual memory (only
+  touched pages cost). The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
+  without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
+  (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
+
 ## The network on the desktop, and when it fails (stage 8, N6)
 
 `--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of
