@@ -22,7 +22,7 @@ tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
 tools/check-tls-roots.sh      check
 tools/test-run-disk.sh        check
-tools/run-disk.sh             check test-hand-run test-apps
+tools/run-disk.sh             check test-hand-run test-apps test-python
 rootfs/system/tls/        check test-files test-hand-run
 tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
@@ -129,14 +129,19 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
 user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix
-user/src/posix_child.rs       test-posix test-net test-apps
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-hand-run
+user/src/posix_child.rs       test-posix test-net test-apps test-python
+ports/patches/python/         test-python
+ports/apps/pyshim.c          test-python
+user/describe/posix/python3.cmd test-python test-files
+tests/python/                test-python
+tests/shell/python.script    test-python
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-hand-run
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
@@ -144,9 +149,9 @@ tests/libc-test/             test-posix-suites test-posix-threadtest3
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run
 user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps
-crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps
+crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps test-python
 crates/zoraya-command/        test-boot test-files test-tour-gui
-crates/zoraya-describe/       test-files test-tour-gui test-apps
+crates/zoraya-describe/       test-files test-tour-gui test-apps test-python
 crates/zoraya-settings/       test-files test-tour-gui test-gui
 user/describe/                test-files test-tour-gui
 docs/tour.md                  test-tour-gui
