@@ -57,6 +57,9 @@
 #   --reboot              a reset restarts the machine instead of ending QEMU
 #                         (without it, -no-reboot; ADR-0159, INV-0155-7)
 #   --print-cmd           print the QEMU command line on stderr first
+#   --print-accel         no kernel needed: print the accelerator the run
+#                         would use (hvf or tcg; `auto` resolved) and exit. The
+#                         test runner's `latency` step reads it
 #   --probe-el2           no kernel needed: exit 0 if the accelerator can start
 #                         a machine at EL2 (virtualization=on). Exit 1, with the
 #                         reason on stdout, only if it is HVF and HVF starts the
@@ -88,6 +91,7 @@ dumpdtb=
 print_cmd=0
 reboot=
 probe_el2=0
+print_accel=0
 probe_net=0
 keys=0
 test_disk=0
@@ -133,6 +137,7 @@ while [ $# -gt 0 ]; do
         --print-cmd) print_cmd=1; shift ;;
         --reboot) reboot=1; shift ;;
         --probe-el2) probe_el2=1; shift ;;
+        --print-accel) print_accel=1; shift ;;
         --probe-net) probe_net=1; shift ;;
         -h|--help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         -*) die "unknown option $1" ;;
@@ -154,6 +159,11 @@ case $accel in
     tcg) cpu=cortex-a72 ;;
     *) die "unknown accelerator $accel (auto, hvf or tcg)" ;;
 esac
+
+if [ "$print_accel" = 1 ]; then
+    echo "$accel"
+    exit 0
+fi
 
 # Each probe is a run of this script with --dumpdtb: QEMU creates the VM, which
 # is where HVF refuses EL2, writes the device tree and exits.

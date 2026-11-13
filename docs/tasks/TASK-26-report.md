@@ -65,6 +65,12 @@ fixes were answered (section "Review of the system call surface after stage 8").
 
 ### Items for the architect
 
+**Decided 2026-11-13** (recorded by an agent at the architect's request, branch `work/arch-decisions-2`): ADR-0295 to ADR-0299 accepted;
+INV-0006-3's check measures 1024 idle subscriptions (ADR-0006 open-question note, `portbench` already does); the toolchain pin
+`nightly-2026-11-12` and rustup 1.29.3 accepted (ADR-0298's decision section, `docs/dependencies.md`); INV-0264-3: +450 ms under TCG in CI
+only, 50 ms over the no-spinner baseline under HVF, measured locally (`latency 30 +50 tcg +450`; 8 passing runs, the difference -1.7 to +0.9 ms;
+`docs/design.md`); INV-0264-3 is `checked: make test-gui`. The items below are the ones as they stood before the decision.
+
 - **Proposed ADRs awaiting a decision:** ADR-0295 (register access by call for shared pages), ADR-0296 (the services channel and the restart
   test), ADR-0297 (the `+net` word in the shell), ADR-0298 (how the gate's tests run), ADR-0299 (subscriptions bounded to 1024; a change of
   ADR-0006's behaviour). ADRs 0287 to 0294 were accepted as recommended on 2026-11-12; the status of the earlier stage-8 proposals (0281, 0285, 0286) is in `docs/adr/index.md`.
