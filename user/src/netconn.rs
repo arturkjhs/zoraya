@@ -20,10 +20,13 @@ use crate::{
     channel_create, channel_read, clock_monotonic, handle_close, port_create, port_subscribe,
     port_wait, stream_create,
 };
+use zoraya_proto_net::{CONNECT_ATTEMPT_US, LOOKUP_US};
 
-/// How long `connect` waits for `Connected`: `netd`'s resolver gives up
-/// after 8 s and its connect after 10 s per address.
-pub const CONNECT_WAIT_NS: u64 = 25_000_000_000;
+/// How long `connect` waits for `Connected`: `netd`'s lookup bound, one
+/// address's attempt and a margin (proposed ADR-0316). A name with several
+/// addresses that all stay silent takes `netd` one attempt each, longer than
+/// this wait: the client then says `TimedOut` while `netd` still tries.
+pub const CONNECT_WAIT_NS: u64 = (LOOKUP_US + CONNECT_ATTEMPT_US) * 1000 + WAIT_NS;
 
 /// A connected TCP stream as the client holds it: read what the peer sends
 /// from `inbound`, write to `outbound`, and look at `control` for `Reset`.
@@ -81,7 +84,8 @@ pub enum ConnectError {
     Unavailable,
     /// The connection did not open: one of `zoraya_proto_net::reason`.
     Failed(u32),
-    /// `netd` said nothing within the wait.
+    /// `netd` said nothing within the wait: it is gone or stuck (it answers
+    /// a lookup that timed out with `Failed(LOOKUP_TIMED_OUT)`).
     TimedOut,
 }
 

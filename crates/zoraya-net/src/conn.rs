@@ -34,8 +34,9 @@ use crate::tcp::{TcpError, TcpId, TcpPhase, TcpRecv, TcpSend};
 pub const LOOKUP_BASE: u32 = 1 << 16;
 /// Connections in any phase at once.
 pub const MAX_CONNS: usize = 16;
-/// How long one address gets to answer the SYN (smoltcp retries inside it).
-pub const CONNECT_US: i64 = 10_000_000;
+/// How long one address gets to answer the SYN (smoltcp retries inside it):
+/// the protocol's `zoraya_proto_net::CONNECT_ATTEMPT_US`, which clients wait by.
+pub const CONNECT_US: i64 = zoraya_proto_net::CONNECT_ATTEMPT_US as i64;
 /// How long a half-closed connection (one side's end of file seen) may go
 /// without a byte moving before `netd` ends it with `Reset { Aborted }`: a
 /// peer or a client that closes one side and then says nothing cannot hold a
@@ -229,6 +230,7 @@ impl<C: Client> Conn<C> {
     ) -> Step {
         match found {
             Err(ResolveFail::Busy) => self.fail(reason::OVER_LIMIT),
+            Err(ResolveFail::TimedOut) => self.fail(reason::LOOKUP_TIMED_OUT),
             Err(_) => self.fail(reason::UNRESOLVABLE),
             Ok(found) => {
                 self.candidates = found.addresses;

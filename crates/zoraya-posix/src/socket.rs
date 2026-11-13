@@ -229,7 +229,7 @@ pub fn failed_reason(why: u32) -> i32 {
         reason::UNRESOLVABLE | reason::LOCAL => EHOSTUNREACH,
         reason::REFUSED => ECONNREFUSED,
         reason::UNREACHABLE => ENETUNREACH,
-        reason::TIMED_OUT => ETIMEDOUT,
+        reason::TIMED_OUT | reason::LOOKUP_TIMED_OUT => ETIMEDOUT,
         reason::OVER_LIMIT | reason::OVER_QUOTA => ENOBUFS,
         _ => crate::errno::EIO,
     }
@@ -285,7 +285,10 @@ pub fn resolve_status(code: u32) -> (i32, i32) {
     match code {
         status::NOT_GRANTED => (EAI_SYSTEM, EACCES),
         status::INVALID | status::UNRESOLVABLE | status::LOCAL => (EAI_NONAME, 0),
-        status::UNAVAILABLE | status::BUSY | status::OVER_QUOTA => (EAI_AGAIN, 0),
+        // A lookup that timed out may succeed later (proposed ADR-0316).
+        status::UNAVAILABLE | status::BUSY | status::OVER_QUOTA | status::TIMED_OUT => {
+            (EAI_AGAIN, 0)
+        }
         _ => (EAI_FAIL, 0),
     }
 }
