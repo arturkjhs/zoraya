@@ -671,11 +671,13 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # cross targets and is a musl one, as wget's; the compiler is zcc, which
 # defines nothing of Linux). IPv4 only (ADR-0225); no readline, curses, bz2,
 # lzma, uuid, ffi, gdbm, ensurepip; mimalloc and the JIT off.
+# No <sys/ioctl.h>: libposix's ioctl serves terminals only, so os.set_blocking and
+# socket.setblocking must take their fcntl(F_SETFL, O_NONBLOCK) path, not FIONBIO.
 # The functions configure finds only by their declaration in musl's headers
 # (a compile test), which libc.a does not define: said absent here, so that the
 # module code that needs them is left out instead of failing to link.
 PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups socketpair timerfd_create
-PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT)))
+PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT)))
 PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \
 	--with-build-python=$(HOSTPY) --disable-shared --disable-ipv6 --without-ensurepip \
 	--with-openssl=$(DEPS) --without-system-ffi --without-readline --without-mimalloc \
