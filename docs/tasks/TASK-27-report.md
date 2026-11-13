@@ -492,7 +492,7 @@ Done, and run on the Mac under HVF (one QEMU at a time):
   Three failures found and fixed: libcurl is built without cookies and proxies, so NetSurf's `CURLOPT_COOKIE`/`PROXY` failed every fetch
   (patch 0003: ignore the unknown-option error; consequence: no cookies, no proxy); libposix maps no file, so NetSurf's file fetcher
   (its own CSS) failed and looped on its error page (patch 0004: read the file); NetSurf's "Proceed" button on the privacy error page
-  turned TLS verification off (patch 0005: never; INV-0228-3). Resources now live in `/usr/share/netsurf` (the toolchain set reads
+  turned TLS verification off (patch 0005: never; INV-0312-1). Resources now live in `/usr/share/netsurf` (the toolchain set reads
   `/usr`; no extra grant).
 - `make test-netsurf` (Makefile, `tests/gui/netsurf.script`, pages `/ns/page`, `/ns/style.css`, `/ns/green.png`, `/ns/result` in
   `tools/test-httpd`, which also logs each `/ns/` request): the page's blue block (CSS), green block (PNG) and the form result (yellow), by

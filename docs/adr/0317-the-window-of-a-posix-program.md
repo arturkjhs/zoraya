@@ -132,6 +132,13 @@ zoraya_window_poll
 - Does `libposix`'s startup already give Rust code a `GlobalAlloc`? *(read `crates/zoraya-posix/src/lib.rs` and the
   `zcc` link line before step 2; the fixed arena of item 5 is the fallback.)*
 - Is `ZPBX` extensible by one more handle, or does it need a new flag bit (`zoraya-abi` `posix.rs` line 136)?
+- *Note (9d review, W2, W3, W6):* verification cannot be disabled by options (INV-0228-3, INV-0312-1): a line for a
+  program with a `window` key that its description does not parse (`netsurf --ca_bundle=FILE`) is refused by `zosh`
+  (`zoraya_shell::netgrant::line_may_run`), not run with default settings; for programs without a window the
+  default-settings rule stays. Item 2's quota is kept by the panel: one open window per shell and program, freed when
+  the compositor reports the client gone (`ClientGone`, a new manager event, ordinal 45), and at most as many windows
+  as leave `RESERVED_CLIENTS` (3) of the compositor's client slots free (the table of 8 is a backlog item). The
+  panel moves the client end to the shell with TRANSFER; the shell moves it to the child without it.
 
 ## Revisit triggers
 - A second POSIX graphical program with different needs (video, GL), or a measured frame cost above 16 ms for a full

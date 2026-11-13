@@ -29,6 +29,12 @@ click 300 87
 pause 500
 type echo closed\r
 screen closed
+# No option replaces the roots or turns a check off (INV-0312-1): the line is
+# refused by the shell, with no window (ADR-0317 item 6).
+type netsurf --ca_bundle=/tmp/x.pem https://test.zoraya:@TLSVALID@/ns/page\r
+screen not ones its description gives
+type netsurf --ca_path=/tmp\r
+screen not ones its description gives
 # HTTPS against the test PKI's root (the same pages, a trusted certificate).
 type netsurf https://test.zoraya:@TLSVALID@/ns/page\r
 pause 20000
@@ -39,13 +45,17 @@ click 122 119
 pause 3000
 click 300 87
 pause 500
+type echo closed2\r
+screen closed2
 # An expired certificate is refused by the roots, as for curl: no page.
 type netsurf https://expired.zoraya:@TLSEXPIRED@/ns/page\r
 pause 15000
 shot netsurf-refused
 region 110 175 40 20 9e9e9e
 # "Proceed" on the privacy error page does not turn verification off: the same
-# refusal comes back (the program has no such option, INV-0228-3).
+# refusal comes back (the program has no such option, INV-0312-1). The test server's log then shows a
+# second refused handshake (the Makefile requires two): a click that missed the
+# button would leave one.
 click 764 471
 pause 5000
 shot netsurf-refused-again
@@ -54,5 +64,7 @@ click 122 119
 pause 3000
 click 300 87
 pause 500
+type echo closed3\r
+screen closed3
 type poweroff\r
 exit

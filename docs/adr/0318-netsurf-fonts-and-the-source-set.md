@@ -82,6 +82,9 @@ Recommended: **Option B**, with the source set below. It is a recommendation, no
 ## Open questions
 - Does NetSurf 3.11's `nsgenbind` build for the host (it is a host tool run during the build)?
 - Is `Makefile.config`'s `PKG_CONFIG` search satisfied by a `pkg-config` built into `build/`?
+- *Note (9d review, W3):* verification cannot be disabled by options (INV-0228-3, INV-0312-1): patch 0006 removes
+  `nsoption_commandline` from NetSurf's `main`, so no option of the command line (`--ca_bundle`, `--ca_path`, the only
+  options that name roots) is read; `-v` stays nslog's. `zosh` also refuses the line (ADR-0317's note).
 
 ## Revisit triggers
 - A page the architect names that shows boxes where text is expected; a measured text-measure cost above 5% of a page load.

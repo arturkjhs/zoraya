@@ -244,16 +244,14 @@ fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result
 }
 
 /// Whether a line for a POSIX program may run (ADR-0317 item 6, INV-0312-1).
-/// A program that may reach the network (its description has `window` or a
-/// `url` operand, or the line has `+net` words, `nets`) runs only a line its
-/// description parses: an option it does not give (`curl -k`,
-/// `netsurf --ca_bundle=FILE`) is the program's own, and a line that does
-/// not parse would fall back to no options and still keep the network of the
-/// `+net` words. `--help` alone is the program's to answer. A program that
-/// cannot reach the network runs any line, as before.
-pub fn line_may_run(d: &Description, args: &[&str], nets: bool) -> bool {
-    let reaches = d.window.is_some() || nets || d.operands.iter().any(|o| o.kind == Kind::Url);
-    if !reaches {
+/// A program with a window (its description has `window`) runs only a line its
+/// description parses: an option it does not give (`netsurf --ca_bundle=FILE`)
+/// is the program's own and could replace the roots, and a line that does not
+/// parse would fall back to no options and still keep the network of the
+/// `+net` words. `--help` alone is the program's to answer. A program without
+/// a window keeps the default-settings rule for a line that does not parse.
+pub fn line_may_run(d: &Description, args: &[&str]) -> bool {
+    if d.window.is_none() {
         return true;
     }
     match zoraya_command::parse(d, args) {

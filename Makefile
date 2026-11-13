@@ -599,6 +599,8 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 NS_ROOT := $(BUILD)/netsurf-root
 NS_DISK := $(BUILD)/netsurf-disk.img
 NS_TEMPLATE := tests/gui/netsurf.script
+# The test server outlives the runner's timeout (review N6).
+NS_LIFETIME := $(shell expr $(QEMU_SLOW_TIMEOUT) + 60)
 NS_SCRIPT := $(BUILD)/netsurf.script
 NS_HTTP_READY := $(BUILD)/netsurf-httpd.port
 NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
@@ -612,7 +614,7 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
 	: > $(NS_HTTP_READY) && : > $(NS_TLS_READY) && \
-	{ $(HTTPD) --port 0 --lifetime 400 --ready-file $(NS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NS_TLS_READY) > target/test-logs/test-httpd-netsurf.log 2>&1 & echo $$! > $(BUILD)/netsurf-httpd.pid; } && \
+	{ $(HTTPD) --port 0 --lifetime $(NS_LIFETIME) --ready-file $(NS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NS_TLS_READY) > target/test-logs/test-httpd-netsurf.log 2>&1 & echo $$! > $(BUILD)/netsurf-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/netsurf-httpd.pid); \
 	for i in $$(seq 1 20); do [ -s $(NS_HTTP_READY) ] && [ -s $(NS_TLS_READY) ] && break; sleep 0.25; done; \
 	set -- $$(cat $(NS_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; \
@@ -624,9 +626,9 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
 		if grep -q '^tls expired: request of' target/test-logs/test-httpd-netsurf.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-netsurf.log \
-		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-netsurf.log \
+		   || [ $$(grep -c '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-netsurf.log) -lt 2 ] \
 		   || grep '^tls expired: ended after' target/test-logs/test-httpd-netsurf.log | grep -qv 'ended after 0 request bytes'; then \
-			echo '[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one)'; cat target/test-logs/test-httpd-netsurf.log; rc=1; \
+			echo '[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one, or fewer than two refused handshakes: the click on Proceed missed)'; cat target/test-logs/test-httpd-netsurf.log; rc=1; \
 		else echo '[netsurf] ok: NetSurf sent no request byte to the expired-certificate server, also after Proceed'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \

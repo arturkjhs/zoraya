@@ -747,6 +747,9 @@ $(NETSURF_STAMP): $(NETSURF_BIN)
 	for f in $(NETSURF_RES); do cp $(NETSURF)/netsurf/frontends/framebuffer/res/$$f $(APPS_ROOT)/usr/share/netsurf/; done
 	cp $(NETSURF)/netsurf/frontends/framebuffer/res/en/Messages $(APPS_ROOT)/usr/share/netsurf/Messages
 	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no NetSurf code was compiled with __linux__ (INV-0318-2)"
+	@for l in netsurf-libs netsurf; do \
+	  if [ -f $(LOGS)/$$l.log ] && grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@touch $@
 $(DEPS)/lib/libnsshim.a: ports/apps/nsshim.c $(SYSROOT_STAMP)
 	@mkdir -p $(DEPS)/lib $(OBJ)/apps

@@ -1504,13 +1504,8 @@ impl Z {
     }
 
     /// Whether a line for a POSIX program the image describes may run: a
-    /// program that can get the network (a `window` key, a `url` operand, or
-    /// `+net` words on the line) runs only a line its description parses
-    /// (ADR-0317 item 6, INV-0312-1). Anything else, an option the
-    /// description does not have among them, is the program's own (`curl -k`,
-    /// `netsurf --ca_bundle=FILE`), and a line that falls back to no
-    /// description at all would still give it the network of the `+net`
-    /// words. `--help` alone is the program's to answer.
+    /// program with a window runs only a line its description parses
+    /// (ADR-0317 item 6, INV-0312-1; see `netgrant::line_may_run`).
     fn posix_line_parses(exec: &Exec<'_>, path: &str) -> Result<(), String> {
         let trusted: Vec<Description> = descriptions::POSIX
             .iter()
@@ -1520,7 +1515,7 @@ impl Z {
             return Ok(());
         };
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        if zoraya_shell::netgrant::line_may_run(d, &texts, !exec.nets.is_empty()) {
+        if zoraya_shell::netgrant::line_may_run(d, &texts) {
             return Ok(());
         }
         Err(zoraya_command::error(
