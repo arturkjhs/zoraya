@@ -1643,7 +1643,7 @@ fn a_deferred_read_and_sleep_get_their_outcomes() {
     assert_eq!(slept, Ok((None, None)));
 }
 
-// ------------------------------------------------------- record locks (ADR-0317)
+// ------------------------------------------------------- record locks (ADR-0319)
 
 mod record_locks {
     use super::*;

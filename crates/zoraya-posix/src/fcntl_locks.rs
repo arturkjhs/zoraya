@@ -1,4 +1,4 @@
-//! `fcntl`'s record-lock commands on a process (ADR-0317): the part of
+//! `fcntl`'s record-lock commands on a process (ADR-0319): the part of
 //! `struct flock` that needs the descriptor table and the file's identity.
 
 #![forbid(unsafe_code)]

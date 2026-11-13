@@ -2125,7 +2125,7 @@ extern "C" fn __dup3(old: i32, new: i32, flags: i32) -> i32 {
     int(state(|p| p.dup3(old, new, flags as u32, true)))
 }
 
-/// `fcntl`'s record-lock commands (ADR-0317): `argument` is a `struct flock`.
+/// `fcntl`'s record-lock commands (ADR-0319): `argument` is a `struct flock`.
 /// A waiting command sleeps a millisecond at a time while the lock is held by
 /// another owner (a sleep that a handler interrupts is `EINTR`).
 fn fcntl_record_lock(fd: i32, command: i32, argument: i64) -> Result<i32, i32> {

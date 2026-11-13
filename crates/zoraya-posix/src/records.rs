@@ -1,4 +1,4 @@
-//! Advisory record locks (ADR-0317): the table of `fcntl`'s `F_SETLK`,
+//! Advisory record locks (ADR-0319): the table of `fcntl`'s `F_SETLK`,
 //! `F_SETLKW`, `F_GETLK` and the open-file-description forms `F_OFD_*`, of
 //! one process.
 //!
@@ -11,7 +11,7 @@
 //! of kind), as POSIX has it.
 //!
 //! The table lives in the process: another process does not see these locks
-//! (ADR-0317 item 2). The pure logic is here and host-tested; `process`
+//! (ADR-0319 item 2). The pure logic is here and host-tested; `process`
 //! decodes `struct flock` and finds the file's identity.
 
 #![forbid(unsafe_code)]

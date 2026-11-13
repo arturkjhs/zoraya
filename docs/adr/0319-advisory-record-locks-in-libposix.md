@@ -1,4 +1,4 @@
-# ADR-0317: Advisory record locks (`fcntl` `F_SETLK`, `F_SETLKW`, `F_GETLK`, `F_OFD_*`) in `libposix`, in the process
+# ADR-0319: Advisory record locks (`fcntl` `F_SETLK`, `F_SETLKW`, `F_GETLK`, `F_OFD_*`) in `libposix`, in the process
 
 - **Status:** proposed
 - **Date:** 2026-11-13
@@ -116,13 +116,13 @@ so. Threads: the table is under the library's one lock, so all threads of a proc
   `F_GETLK` across processes need it too.
 
 ## Invariants
-- **INV-0317-1.** A write lock of one owner on a byte range is refused (`EAGAIN`) to another owner of the same file;
+- **INV-0319-1.** A write lock of one owner on a byte range is refused (`EAGAIN`) to another owner of the same file;
   read locks share; one owner never conflicts with itself. *Check:* `cargo test -p zoraya-posix` (`records` and
   `record_locks`).
-- **INV-0317-2.** `close` of any fd of a file drops the process's POSIX locks on it, and the last close of a description
+- **INV-0319-2.** `close` of any fd of a file drops the process's POSIX locks on it, and the last close of a description
   drops its OFD locks; a new `Posix` (a `fork` child's) has none. *Check:* `cargo test -p zoraya-posix` (`close_releases`,
   `a_new_process_starts_with_no_locks`).
-- **INV-0317-3.** SQLite's `threadtest3` runs its listed scenarios on SQLite's default unix VFS in Zoraya, with
+- **INV-0319-3.** SQLite's `threadtest3` runs its listed scenarios on SQLite's default unix VFS in Zoraya, with
   integrity checks of its own, under HVF and TCG. *Check:* `make test-posix-threadtest3`.
 
 ## Open questions

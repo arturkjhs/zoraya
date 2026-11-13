@@ -309,7 +309,7 @@ pub struct Posix<S: Sys> {
     pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
     /// What a terminal read was given beyond the buffer that asked.
     pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
-    /// The record locks of this process (ADR-0317). A `fork` child starts
+    /// The record locks of this process (ADR-0319). A `fork` child starts
     /// with none, as POSIX has it.
     pub(crate) locks: crate::records::Locks<S::H>,
 }
