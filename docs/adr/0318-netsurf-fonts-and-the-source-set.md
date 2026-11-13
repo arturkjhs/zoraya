@@ -68,7 +68,7 @@ Recommended: **Option B**, with the source set below. It is a recommendation, no
    (`ports/patches/netsurf/0001`) drops a typed `%destructor`. The names `libc.a` hides or lacks (`atol`, `strncasecmp`,
    `modf`, `iconv*`, `dirfd`, `scandir`) come from `ports/apps/nsshim.c` linked into `netsurf` as libzshim.a is into
    curl, so the surface of `libc.a` does not change. libcurl's `Libs:` line is edited to name the static link's
-   libraries. Resources go to `/share/netsurf` (`NETSURF_FB_RESPATH`), so the description needs `+r /share/netsurf`.
+   libraries. Resources go to `/usr/share/netsurf` (`NETSURF_FB_RESPATH`), which the toolchain set (`/usr` to read, ADR-0153 rule 10) already gives, so the description needs no grant for them.
 
 ## Consequences
 - **Positive.** A browser with no font port; the set is small and pinned.

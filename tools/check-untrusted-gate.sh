@@ -123,5 +123,15 @@ if [ "$net_refusal" -gt 0 ] && [ "$net_calls" -lt 2 ]; then
 	bad "a call of the +net refusal is gone from the shell ($net_calls of 2 markers 'untrusted-gate: net-refusal-call'): one path to a connection is open"
 fi
 
+# The refusal of a window of a POSIX program in an untrusted room (ADR-0317,
+# INV-0317-1): one in the shell (the request) and one in the panel (the
+# record). Unlike the gate's, it stays after the gate opens: a window of a
+# POSIX program is for a trusted room until an ADR says otherwise.
+window_shell=$(markers 'untrusted-gate: window-refusal' user/src/bin/zosh.rs)
+window_panel=$(markers 'untrusted-gate: window-refusal' crates/zoraya-panel/src/lib.rs)
+if [ "$window_shell" -lt 1 ] || [ "$window_panel" -lt 1 ]; then
+	bad "a marker of the window refusal is gone ($window_shell of 1 in the shell, $window_panel of 1 in the panel; untrusted-gate: window-refusal, ADR-0317)"
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "check-untrusted-gate: ok"

@@ -10,8 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use zoraya_abi::posix::{
-    self as abi, EXT_NET, EXT_RANDOM, EntryKind, FdKind, NO_HANDLE, SELF_EXT_MESSAGE, SELF_MESSAGE,
-    SELF_NET_MESSAGE, slot,
+    self as abi, EXT_NET, EXT_RANDOM, EXT_WINDOW, EntryKind, FdKind, NO_HANDLE, SELF_EXT_MESSAGE,
+    SELF_MESSAGE, SELF_NET_MESSAGE, slot,
 };
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
@@ -236,6 +236,9 @@ pub struct Launch<'a> {
     /// 3; proposed ADR-0310), moved in the same message; none when the
     /// launcher has no service to share.
     pub random: Option<Handle>,
+    /// The client end of a window channel (ADR-0317), moved in the same
+    /// message after the random connection (`EXT_WINDOW`).
+    pub window: Option<Handle>,
     pub realtime_base: u64,
 }
 
@@ -274,6 +277,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             if let Some(r) = l.random {
                 let _ = handle_close(r);
             }
+            if let Some(w) = l.window {
+                let _ = handle_close(w);
+            }
             return Err(s);
         }
     };
@@ -287,6 +293,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             }
             if let Some(r) = l.random {
                 let _ = handle_close(r);
+            }
+            if let Some(w) = l.window {
+                let _ = handle_close(w);
             }
             return Err(s);
         }
@@ -372,6 +381,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             .into_iter()
             .chain(l.net)
             .chain(l.random)
+            .chain(l.window)
         {
             let _ = handle_close(h);
         }
@@ -386,6 +396,8 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
                 .into_iter()
                 .chain(l.net)
                 .chain(l.random)
+                .chain(l.window)
+                .chain(l.window)
             {
                 let _ = handle_close(h);
             }
@@ -450,6 +462,8 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
                 .into_iter()
                 .chain(l.net)
                 .chain(l.random)
+                .chain(l.window)
+                .chain(l.window)
             {
                 let _ = handle_close(h);
             }
@@ -472,6 +486,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         }
         if let Some(r) = l.random {
             let _ = handle_close(r);
+        }
+        if let Some(w) = l.window {
+            let _ = handle_close(w);
         }
         return Err(gone(s));
     }
@@ -501,6 +518,14 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             });
             flags |= EXT_RANDOM;
         }
+        if let Some(window) = l.window {
+            entry.push(ChannelEntry {
+                handle: window,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            flags |= EXT_WINDOW;
+        }
         let mut message = [0u8; 5];
         let message: &[u8] = match flags {
             0 => SELF_MESSAGE,
@@ -514,12 +539,12 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         // On a failed write the caller keeps what it moved (INV-0050-1).
         if channel_write(boot, message, &entry).is_err() {
             let _ = handle_close(me);
-            for h in l.net.into_iter().chain(l.random) {
+            for h in l.net.into_iter().chain(l.random).chain(l.window) {
                 let _ = handle_close(h);
             }
         }
     } else {
-        for h in l.net.into_iter().chain(l.random) {
+        for h in l.net.into_iter().chain(l.random).chain(l.window) {
             let _ = handle_close(h);
         }
     }

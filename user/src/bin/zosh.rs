@@ -317,6 +317,9 @@ enum Ready {
         /// A connection to `netd` for the program (ADR-0225 item 2), made
         /// with `narrow` from a literal `url` operand.
         net: Option<Handle>,
+        /// The client end of the window's channel to the compositor, for a
+        /// description with `window` (ADR-0317), made by the panel.
+        window: Option<Handle>,
     },
 }
 
@@ -336,11 +339,13 @@ impl Ready {
                 entries,
                 report,
                 net,
+                window,
                 ..
             } => {
                 for h in [image, report.0, report.1]
                     .into_iter()
                     .chain(net)
+                    .chain(window)
                     .chain(entries.iter().filter_map(|e| e.handle))
                 {
                     let _ = handle_close(h);
@@ -632,6 +637,9 @@ struct Z {
     /// The shell's connection to the random service (slot 10, ADR-0227
     /// item 3), from which each native program gets its own.
     random: Option<Handle>,
+    /// The channel to the panel (slot 14, ADR-0317) for the window of a
+    /// POSIX program; none in a session without a desktop.
+    panel: Option<Handle>,
     tmp: Option<File>,
     next_tmp: u32,
     /// The `/tmp` directory of the line being started, once one is made.
@@ -1450,11 +1458,24 @@ impl Z {
                 return Err(e);
             }
         };
+        let window = match self.posix_window(exec, path, &plan) {
+            Ok(w) => w,
+            Err(e) => {
+                for h in core::iter::once(image)
+                    .chain(net)
+                    .chain(entries.iter().filter_map(|e| e.handle))
+                {
+                    let _ = handle_close(h);
+                }
+                return Err(e);
+            }
+        };
         let report = match channel_create() {
             Ok(r) => r,
             Err(s) => {
                 for h in core::iter::once(image)
                     .chain(net)
+                    .chain(window)
                     .chain(entries.iter().filter_map(|e| e.handle))
                 {
                     let _ = handle_close(h);
@@ -1472,9 +1493,72 @@ impl Z {
                 cwd,
                 report,
                 net,
+                window,
             },
             given,
         ))
+    }
+
+    /// The window channel for a POSIX program whose trusted description has
+    /// `window TITLE` (ADR-0317): the panel makes the compositor's client with
+    /// this room's record and the pills of the line's grants, and the client
+    /// end goes to the program. `None` for a description without the key.
+    fn posix_window(
+        &mut self,
+        exec: &Exec<'_>,
+        path: &str,
+        plan: &[grants::Planned],
+    ) -> Result<Option<Handle>, String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let Some(title) =
+            grants::trusted_description(&trusted, path).and_then(|d| d.window.clone())
+        else {
+            return Ok(None);
+        };
+        // untrusted-gate: window-refusal (ADR-0317 INV-0317-1, `make check-untrusted-gate`)
+        if self.room.as_ref().is_some_and(|r| r.untrusted) {
+            return Err(zoraya_command::error(
+                "room",
+                Some(exec.name),
+                "a window of a POSIX program is not given in an untrusted room",
+                &["ADR-0317: only a trusted room's shell may ask the panel for one"],
+            ));
+        }
+        let Some(panel) = self.panel else {
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                "it needs a window, and this session has no desktop to give one",
+                &["start a terminal from the desktop"],
+            ));
+        };
+        let mut pills: Vec<String> = Vec::new();
+        for m in grants::merge(plan) {
+            let word = if m.rights & file_rights::WRITE != 0 {
+                "+w"
+            } else {
+                "+r"
+            };
+            let pill = format!("{word} {}", m.path);
+            if !pills.contains(&pill) {
+                pills.push(pill);
+            }
+        }
+        if let Ok(Some((_, scope))) = self.posix_net_scope(exec, path) {
+            for line in zoraya_shell::netgrant::describe(&scope) {
+                let target = line.trim_start_matches("net: ").split_whitespace().next();
+                if let Some(t) = target {
+                    pills.push(format!("+net {t}"));
+                }
+            }
+        }
+        pills.truncate(16);
+        zoraya_user::windowclient::ask(panel, exec.name, &title, &pills.join("\n"))
+            .map(Some)
+            .map_err(|why| zoraya_command::error("zosh", Some(exec.name), &why, &[]))
     }
 
     /// A POSIX program's plan: by the description of the system image's
@@ -4216,6 +4300,7 @@ impl Host for Z {
                         cwd,
                         report,
                         net,
+                        window,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
@@ -4223,6 +4308,7 @@ impl Host for Z {
                             for h in [image, report.1]
                                 .into_iter()
                                 .chain(net)
+                                .chain(window)
                                 .chain(entries.iter().filter_map(|e| e.handle))
                             {
                                 let _ = handle_close(h);
@@ -4260,6 +4346,7 @@ impl Host for Z {
                             // (ADR-0227 item 3): `getrandom` for C programs
                             // (proposed ADR-0310).
                             random: self.random.and_then(zoraya_user::random::share),
+                            window,
                             realtime_base: self.realtime_base,
                         };
                         let broker = self.broker.as_ref().expect("checked by ready");
@@ -4780,6 +4867,8 @@ fn main() -> i32 {
         net_services: Handle::new(13).filter(|h| handle_type(*h) == Ok("channel")),
         net_down: false,
         random: Handle::new(10).filter(|h| handle_type(*h) == Ok("channel")),
+        panel: Handle::new(zoraya_panel::WINDOW_SLOT as u64)
+            .filter(|h| handle_type(*h) == Ok("channel")),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(|end| File { end }),

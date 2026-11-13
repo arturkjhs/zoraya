@@ -619,7 +619,7 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 # `make netsurf`: libpng, libjpeg and curl's header and library for NetSurf into
 # $(DEPS); NetSurf 3.11's own libraries into $(DEPS); then `netsurf` (the framebuffer
 # front end, its bitmap font, curl with OpenSSL from 9a) into $(APPS_ROOT)/bin, and
-# its resources (default.css, Messages, ...) into $(APPS_ROOT)/share/netsurf.
+# its resources (default.css, Messages, ...) into $(APPS_ROOT)/usr/share/netsurf.
 # Host tools, built into $(HOSTPFX) from the pinned archives so that the build needs no
 # more of the host than a C compiler, perl, gperf, flex and bison: pkg-config (only
 # when the host has none; ADR-0318 item 1) and zlib and libpng, which NetSurf's
@@ -737,15 +737,15 @@ NETSURF_MK := TARGET=framebuffer HOST=zoraya CC=$(ZCC) PREFIX=/ ZORAYA_DEPS=$(DE
 	BUILD_CC=$(HOSTCC) BUILD_CFLAGS="-g -W -Wall -Wno-unused-parameter -I$(HOSTPFX)/include" \
 	BUILD_LDFLAGS="-L$(HOSTPFX)/lib" BUILD_LIBPNG_LDFLAGS="-L$(HOSTPFX)/lib -lpng16 -lz -lm" Q=@ V=1
 # The program and its resources into the volume's tree (`make image EXTRA_ROOT=build/rootfs-apps`):
-# /bin/netsurf and /share/netsurf/ (NETSURF_FB_RESPATH of Makefile.config).
+# /bin/netsurf and /usr/share/netsurf/ (NETSURF_FB_RESPATH of Makefile.config).
 NETSURF_STAMP := $(OBJ)/netsurf.stamp
 NETSURF_RES := adblock.css default.css internal.css quirks.css netsurf.png favicon.png welcome.html credits.html licence.html
 netsurf: $(NETSURF_STAMP)
 $(NETSURF_STAMP): $(NETSURF_BIN)
-	mkdir -p $(APPS_ROOT)/bin $(APPS_ROOT)/share/netsurf
+	mkdir -p $(APPS_ROOT)/bin $(APPS_ROOT)/usr/share/netsurf
 	cp $(NETSURF_BIN) $(APPS_ROOT)/bin/netsurf
-	for f in $(NETSURF_RES); do cp $(NETSURF)/netsurf/frontends/framebuffer/res/$$f $(APPS_ROOT)/share/netsurf/; done
-	cp $(NETSURF)/netsurf/frontends/framebuffer/res/en/Messages $(APPS_ROOT)/share/netsurf/Messages
+	for f in $(NETSURF_RES); do cp $(NETSURF)/netsurf/frontends/framebuffer/res/$$f $(APPS_ROOT)/usr/share/netsurf/; done
+	cp $(NETSURF)/netsurf/frontends/framebuffer/res/en/Messages $(APPS_ROOT)/usr/share/netsurf/Messages
 	$(ELF_CHECK) $(APPS_ROOT)/bin
 	@touch $@
 $(DEPS)/lib/libnsshim.a: ports/apps/nsshim.c $(SYSROOT_STAMP)
