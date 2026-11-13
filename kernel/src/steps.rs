@@ -100,19 +100,16 @@ pub fn pause() {
 /// The test kernel's check that a thread of a user process holds no spinlock
 /// where it gives up the CPU: `pause` has it, and so have `sched::yield_now`
 /// and `sched::block_current`, which a path that never pauses reaches (a
-/// guard held across a block got through that way). Kernel threads are
-/// exempt, as in `pause`: the test threads there hold locks the counter
-/// cannot tell from a leak. Nothing in a release build.
+/// guard held across a block got through that way). Every thread is checked,
+/// kernel threads too. Nothing in a release build.
 #[inline(always)]
 pub fn assert_unlocked(#[allow(unused)] what: &str) {
     #[cfg(feature = "qemu-test")]
-    if sched::current().process().is_some() {
-        assert_eq!(
-            crate::sync::held(),
-            0,
-            "a spinlock is held across {what} (ADR-0270 point 2)"
-        );
-    }
+    assert_eq!(
+        crate::sync::held(),
+        0,
+        "a spinlock is held across {what} (ADR-0270 point 2)"
+    );
 }
 
 /// Whether every [`pause`] asks the scheduler to switch (the test kernel's

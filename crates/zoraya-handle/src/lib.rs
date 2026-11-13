@@ -41,6 +41,9 @@ pub struct Table<T> {
     slots: Vec<Slot<T>>,
     cursor: usize,
     count: usize,
+    /// Rooms kept by [`Table::keep_room`] for a later
+    /// [`Table::insert_kept`]: no other insert may take them.
+    kept: usize,
 }
 
 impl<T> Default for Table<T> {
@@ -55,6 +58,7 @@ impl<T> Table<T> {
             slots: Vec::new(),
             cursor: 0,
             count: 0,
+            kept: 0,
         }
     }
 
@@ -99,23 +103,51 @@ impl<T> Table<T> {
 
     /// Makes room, so that the next [`Table::insert`] cannot fail.
     pub fn reserve(&mut self) -> Result<(), Status> {
+        if self.count + self.kept >= MAX_HANDLES as usize {
+            return Err(Status::LimitReached);
+        }
         match self.free_index() {
             None => Err(Status::LimitReached),
-            Some(index) if index == self.slots.len() => {
-                self.slots.try_reserve(1).map_err(|_| Status::NoMemory)
-            }
+            Some(index) if index == self.slots.len() => self
+                .slots
+                .try_reserve(1 + self.kept)
+                .map_err(|_| Status::NoMemory),
             Some(_) => Ok(()),
         }
+    }
+
+    /// Keeps room for one handle that only [`Table::insert_kept`] can take,
+    /// so that a call that pauses before it adds its result cannot find the
+    /// table full then. Give it back with [`Table::drop_kept`] if the call
+    /// ends without inserting.
+    pub fn keep_room(&mut self) -> Result<(), Status> {
+        // `reserve` leaves the slot room for this one and every kept one.
+        self.reserve()?;
+        self.kept += 1;
+        Ok(())
+    }
+
+    /// Gives back the room [`Table::keep_room`] kept.
+    pub fn drop_kept(&mut self) {
+        self.kept = self.kept.saturating_sub(1);
+    }
+
+    /// [`Table::insert`] into the room [`Table::keep_room`] kept. Cannot
+    /// fail while the room is kept.
+    pub fn insert_kept(&mut self, object: T, rights: Rights, id: u64) -> Result<Handle, Status> {
+        self.drop_kept();
+        self.insert(object, rights, id)
     }
 
     /// Makes room for `count` more, so that that many [`Table::insert`]s
     /// cannot fail.
     pub fn reserve_many(&mut self, count: usize) -> Result<(), Status> {
-        if self.count + count > MAX_HANDLES as usize {
+        if self.count + self.kept + count > MAX_HANDLES as usize {
             return Err(Status::LimitReached);
         }
-        // `insert` appends while the table can grow, even past free slots.
-        let slots = (self.slots.len() + count).min(MAX_HANDLES as usize);
+        // `insert` appends while the table can grow, even past free slots, and
+        // each append asks `reserve` for room for itself and every kept one.
+        let slots = (self.slots.len() + count + self.kept).min(MAX_HANDLES as usize);
         self.slots
             .try_reserve(slots - self.slots.len())
             .map_err(|_| Status::NoMemory)
@@ -260,6 +292,7 @@ impl<T> Table<T> {
             slots: copy,
             cursor: self.cursor,
             count: 0,
+            kept: 0,
         })
     }
 
@@ -318,6 +351,37 @@ mod tests {
         .union(Rights::TRANSFER)
         .union(Rights::WAIT)
         .union(Rights::SIGNAL);
+
+    #[test]
+    fn kept_room_is_for_the_kept_insert_only() {
+        let mut t: Table<u32> = Table::new();
+        for i in 0..MAX_HANDLES - 1 {
+            t.insert(i, Rights::NONE, 0).unwrap();
+        }
+        // One room left: kept, then no one else gets it.
+        t.keep_room().unwrap();
+        assert_eq!(t.reserve(), Err(Status::LimitReached));
+        assert_eq!(t.insert(1, Rights::NONE, 0), Err(Status::LimitReached));
+        assert_eq!(t.reserve_many(1), Err(Status::LimitReached));
+        assert_eq!(t.keep_room(), Err(Status::LimitReached));
+        t.insert_kept(7, Rights::NONE, 0).unwrap();
+        assert_eq!(t.len(), MAX_HANDLES as usize);
+        // Given back, it is free again.
+        let mut u: Table<u32> = Table::new();
+        u.keep_room().unwrap();
+        u.drop_kept();
+        for i in 0..MAX_HANDLES {
+            u.insert(i, Rights::NONE, 0).unwrap();
+        }
+    }
+
+    #[test]
+    fn reserve_many_counts_the_kept_room() {
+        let mut t: Table<u32> = Table::new();
+        t.keep_room().unwrap();
+        t.reserve_many(3).unwrap();
+        assert!(t.slots.capacity() >= t.slots.len() + 3 + t.kept);
+    }
 
     #[test]
     fn a_held_handle_is_seen_by_no_one_and_comes_back_or_goes() {

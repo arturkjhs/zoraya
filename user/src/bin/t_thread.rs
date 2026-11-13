@@ -10,6 +10,8 @@
 //! INV-0307-1 and 0307-4. The sibling that spins while the process ends
 //! (INV-0300-3) runs in children that share a counter page with this process.
 
+extern crate alloc;
+
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::SeqCst};
 
 use zoraya_abi::quota::JobLimits;
@@ -691,7 +693,8 @@ fn spawn_holds_moved_handles() {
             assert_eq!(wait_exit(child).reason, ExitReason::Exited);
             handle_close(child).expect("close");
         } else {
-            handle_close(a).expect("the handle is still here");
+            // The receiver's write moved `a` first (the assert above): it is gone.
+            assert_err!(handle_close(a), Status::BadHandle);
         }
         handle_close(program).expect("image");
         for h in [b, c, d] {
@@ -702,6 +705,92 @@ fn spawn_holds_moved_handles() {
     }
     assert!(spawn_won >= 1, "the sibling never ran inside the spawn");
     println!("t_thread: spawn holds moved handles ok ({spawn_won} of 4 won by spawn)");
+}
+
+// ---- a sibling fills the table while spawn pauses (review: the child's handle).
+
+static FILL_GO: AtomicU32 = AtomicU32::new(0);
+static FILL_MEMORY: AtomicU64 = AtomicU64::new(0);
+static FILL_RESULT: AtomicU64 = AtomicU64::new(0);
+static FILL_RETURNED: AtomicU32 = AtomicU32::new(0);
+static FILL_IN_WINDOW: AtomicU32 = AtomicU32::new(0);
+
+extern "C" fn filler(arg: u64) -> ! {
+    while FILL_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    let memory = Handle::new(FILL_MEMORY.load(SeqCst)).expect("memory");
+    let result = match handle_duplicate(memory, Rights::READ) {
+        Ok(_) => 0,
+        Err(status) => status as u64,
+    };
+    // The CPU is this thread's until it ends its slice or blocks, so a spawn
+    // that has not returned yet is still paused around this call.
+    FILL_IN_WINDOW.store(u32::from(FILL_RETURNED.load(SeqCst) == 0), SeqCst);
+    FILL_RESULT.store(result, SeqCst);
+    FILL_GO.store(2, SeqCst);
+    thread_exit(arg, 0, 0)
+}
+
+/// The table has one free slot and the spawn moves nothing out, so nothing
+/// frees another: a sibling that takes the slot while `process::create`
+/// pauses must not leave the spawn with a child and no room for its handle
+/// (`LimitReached` after the child exists). The spawn keeps the room from
+/// its check on, so it succeeds and the sibling is the one refused.
+fn spawn_keeps_room_for_the_child() {
+    let memory = memory_create(4096, MemoryFlags::NONE).expect("memory");
+    let program = image("exit-with");
+    let mut fillers = alloc::vec::Vec::new();
+    while let Ok(x) = handle_duplicate(memory, Rights::READ) {
+        fillers.push(x);
+    }
+    // Two slots free: one for the sibling's thread handle, one for the child.
+    for _ in 0..2 {
+        handle_close(fillers.pop().expect("one")).expect("close");
+    }
+    FILL_MEMORY.store(memory.raw(), SeqCst);
+    FILL_GO.store(0, SeqCst);
+    FILL_RESULT.store(0, SeqCst);
+    FILL_RETURNED.store(0, SeqCst);
+    FILL_IN_WINDOW.store(0, SeqCst);
+    let (t, flag) = start(filler, OWN_BASE);
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, JOB, program);
+    e.handle(console_entry());
+    e.arg(b"exit-with");
+    e.arg(b"0");
+    let length = e.finish().expect("room");
+    raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+    FILL_GO.store(1, SeqCst);
+    let spawned = spawn(&buffer[..length]);
+    FILL_RETURNED.store(1, SeqCst);
+    raw_syscall(FORCE_SWITCH, [0; 6]);
+    while FILL_GO.load(SeqCst) != 2 {
+        thread_yield();
+    }
+    assert_eq!(
+        FILL_IN_WINDOW.load(SeqCst),
+        1,
+        "the sibling's fill was not made inside the spawn"
+    );
+    let child = spawned.expect("the spawn has its room, whatever the sibling does");
+    assert_eq!(
+        FILL_RESULT.load(SeqCst),
+        Status::LimitReached as u64,
+        "the sibling took the room kept for the child"
+    );
+    // `wait_exit` makes a port: a slot for it.
+    handle_close(fillers.pop().expect("one")).expect("close");
+    assert_eq!(wait_exit(child).reason, ExitReason::Exited);
+    handle_close(child).expect("close");
+    for h in fillers {
+        handle_close(h).expect("close");
+    }
+    handle_close(program).expect("image");
+    handle_close(memory).expect("memory");
+    join(flag);
+    handle_close(t).expect("close");
+    println!("t_thread: spawn keeps room for the child ok");
 }
 
 // ---- INV-0313-3: 70 joiners woken by one `clear` store see the refund.
@@ -1180,7 +1269,7 @@ fn main() -> i32 {
         Some(role @ (b"sweep-exit" | b"sweep-fault" | b"sweep-kill")) => return sweep_child(role),
         _ => {}
     }
-    let steps: [(&str, fn()); 16] = [
+    let steps: [(&str, fn()); 17] = [
         ("create", create_and_exit),
         ("refusals", refusals_change_nothing),
         ("joined", join_and_unmap_rounds),
@@ -1192,6 +1281,7 @@ fn main() -> i32 {
         ("maplock", map_lock_contention),
         ("creating", creating_calls_leave_no_handles),
         ("movehold", spawn_holds_moved_handles),
+        ("keeproom", spawn_keeps_room_for_the_child),
         ("clear", clear_refund_precedes_the_wake),
         ("quota", quota),
         ("ending", ending),

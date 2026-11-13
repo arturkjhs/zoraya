@@ -55,3 +55,34 @@ file = "kernel/src/syscall.rs"
 find = 'let gone = [handles.remove(read), handles.remove(write)];'
 replace = 'let gone: [Option<_>; 2] = [None, None];'
 note = "a failed stream_create takes both handles back. KILLED (t_thread creating_calls_leave_no_handles: PAUSE_IN_PREPARE and FORCE_SWITCH make the sibling unmap the buffer in every round)"
+
+[[mutant]]
+id = "T-snapshot-no-hold"
+file = "kernel/src/syscall.rs"
+find = '''            claim.hold(&mut handles, m.handle, Rights::TRANSFER)?;
+'''
+replace = ''
+note = "ADR-0313 item 7: snapshot_process holds its Move entries through the copy. KILLED by hand (t_snapshot snapshot_holds_moved_handles: a sibling's write moves the handle while the snapshot waits for the map lock)"
+
+[[mutant]]
+id = "T-spawn-no-kept-room"
+file = "kernel/src/syscall.rs"
+find = '''            claim.keep_room(&mut handles)?;
+            for listed'''
+replace = '''            handles.reserve()?;
+            for listed'''
+note = "ADR-0313 item 8: spawn keeps a room for the child's handle across the pause. KILLED by hand (t_thread keeproom)"
+
+[[mutant]]
+id = "T-snapshot-handle-twice"
+file = "crates/zoraya-abi/src/snapshot.rs"
+find = 'if a.slot == b.slot || a.handle == b.handle {'
+replace = 'if a.slot == b.slot {'
+note = "ADR-0313 item 7: a handle named twice in a snapshot's move list is InvalidArgument. KILLED by hand (t_snapshot the_move_list_is_all_or_nothing)"
+
+[[mutant]]
+id = "T-spawn-handle-twice"
+file = "crates/zoraya-abi/src/spawn.rs"
+find = 'if a.slot == b.slot || (moved && a.handle == b.handle) {'
+replace = 'if a.slot == b.slot || (moved && a.handle == b.handle && false) {'
+note = "ADR-0313 item 7: a handle named twice in a spawn list with a Move is InvalidArgument. KILLED by hand (t_spawn a_handle_named_twice_with_a_move_is_refused)"
