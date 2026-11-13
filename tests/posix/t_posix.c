@@ -1513,10 +1513,12 @@ static void tsig(void)
  * and a cancelled sigwait puts its state back before the thread ends. */
 static volatile int dfl_variant;
 static volatile int dfl_got;
+static volatile int dfl_in;
 static void *dfl_waiter(void *arg)
 {
 	(void)arg;
 	int sig = 0;
+	dfl_in = 1;
 	struct timespec far = { 20, 0 };
 	siginfo_t info;
 	switch (dfl_variant) {
@@ -1533,12 +1535,69 @@ static void *dfl_waiter(void *arg)
 	return NULL;
 }
 
+static volatile int cancel_in;
+static volatile int cancel_blocked_in_cleanup = -1;
+static void cancel_cleanup(void *arg)
+{
+	sigset_t cur;
+	(void)arg;
+	pthread_sigmask(SIG_SETMASK, NULL, &cur);
+	/* sigismember is not exported; musl's sigset_t is bit n-1 of word 0. */
+	cancel_blocked_in_cleanup = (int)((((unsigned long *)&cur)[0] >> (SIGUSR2 - 1)) & 1);
+}
+
 static void *cancel_waiter(void *arg)
 {
 	(void)arg;
 	int sig;
+	pthread_cleanup_push(cancel_cleanup, NULL);
+	cancel_in = 1;
 	sigwait(&wait_set, &sig);
+	pthread_cleanup_pop(0);
 	return NULL;
+}
+
+/* The waiter is inside the call: it said so, and had time to enter it. */
+static void await_in(volatile int *flag)
+{
+	for (int i = 0; i < 5000 && !*flag; i++)
+		pause_ms(1);
+	CHECK(*flag);
+	pause_ms(100);
+}
+
+/* A child that waits for SIGUSR2 in a thread with a timeout (a wait that
+ * ends by itself), then sleeps: the signal must kill it as before the wait.
+ * A bound ends it with status 95 if the kernel disposition stayed Deliver. */
+static void *usr2_timed_waiter(void *arg)
+{
+	sigset_t s;
+	struct timespec t = { 0, 100000000 };
+	(void)arg;
+	sigemptyset(&s);
+	sigaddset(&s, SIGUSR2);
+	sigtimedwait(&s, NULL, &t);
+	return NULL;
+}
+
+static pid_t spawn_usr2_child(void)
+{
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		sigset_t none;
+		pthread_t w;
+		sigemptyset(&none);
+		pthread_sigmask(SIG_SETMASK, &none, NULL);
+		if (pthread_create(&w, NULL, usr2_timed_waiter, NULL) != 0 ||
+		    pthread_join(w, NULL) != 0)
+			_exit(97);
+		/* Bounded: a signal that did not end the child leaves 95. */
+		for (int i = 0; i < 2000; i++)
+			pause_ms(10);
+		_exit(95);
+	}
+	return pid;
 }
 
 static void tsigdfl(void)
@@ -1556,11 +1615,12 @@ static void tsigdfl(void)
 		for (int k = 0; k < 2; k++) {
 			pthread_t w;
 			dfl_got = 0;
+			dfl_in = 0;
 			CHECK(pthread_create(&w, NULL, dfl_waiter, NULL) == 0);
+			await_in(&dfl_in);
 			pid_t pid = fork();
 			CHECK(pid >= 0);
 			if (pid == 0) {
-				pause_ms(150);
 				_exit(kill(getppid(), sigs[k]) == 0 ? 0 : 1);
 			}
 			CHECK(pthread_join(w, NULL) == 0);
@@ -1578,23 +1638,80 @@ static void tsigdfl(void)
 	errno = 0;
 	CHECK(sigtimedwait(&set, NULL, &shortt) == -1 && errno == EAGAIN);
 
+	/* A fork while a sibling waits copies the kernel dispositions that wait
+	 * made; the child has no such thread, and SIGTERM must end it. The
+	 * sibling is then woken by a SIGTERM of the process to itself. */
+	{
+		pthread_t w;
+		sigset_t none;
+		sigemptyset(&none);
+		dfl_variant = 1;
+		dfl_got = 0;
+		dfl_in = 0;
+		CHECK(pthread_create(&w, NULL, dfl_waiter, NULL) == 0);
+		await_in(&dfl_in);
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0) {
+			pthread_sigmask(SIG_SETMASK, &none, NULL);
+				for (int i = 0; i < 2000; i++)
+				pause_ms(10);
+			_exit(95);
+		}
+		pause_ms(100);
+		CHECK(kill(pid, SIGTERM) == 0);
+		int status = reap(pid);
+		/* (A child's end is no SIGCHLD for a wait under SIG_DFL.) */
+		CHECK(kill(getpid(), SIGTERM) == 0);
+		CHECK(pthread_join(w, NULL) == 0);
+		if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM)
+			printf("t_posix: tsigdfl: fork child status 0x%x\n", status);
+		CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+		CHECK(dfl_got == SIGTERM);
+	}
+
+	/* The kernel dispositions are back when a wait ends by itself. */
+	{
+		pid_t pid = spawn_usr2_child();
+		pause_ms(500);
+		CHECK(kill(pid, SIGUSR2) == 0);
+		int status = reap(pid);
+		if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGUSR2)
+			printf("t_posix: tsigdfl: usr2 child status 0x%x\n", status);
+		CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGUSR2);
+	}
+
 	/* A thread cancelled in sigwait: the wait is undone, the mask comes back
 	 * (the thread ends last), and a signal of its set goes to this thread. */
 	sigset_t usr2;
 	sigemptyset(&usr2);
 	sigaddset(&usr2, SIGUSR2);
 	wait_set = usr2;
-	CHECK(pthread_sigmask(SIG_BLOCK, &usr2, NULL) == 0);
+	/* The waiter's creator does not block SIGUSR2: the wait blocks it, and
+	 * the cleanup handler (run at the cancel, after the wait) sees it back. */
 	pthread_t c;
+	CHECK(pthread_sigmask(SIG_UNBLOCK, &usr2, NULL) == 0);
+	cancel_in = 0;
 	CHECK(pthread_create(&c, NULL, cancel_waiter, NULL) == 0);
-	pause_ms(150);
+	await_in(&cancel_in);
 	CHECK(pthread_cancel(c) == 0);
 	void *ret = NULL;
 	CHECK(pthread_join(c, &ret) == 0);
 	CHECK(ret == PTHREAD_CANCELED);
+	CHECK(cancel_blocked_in_cleanup == 0);
+	/* The wait is undone: a signal of its set goes to this thread. */
+	CHECK(pthread_sigmask(SIG_BLOCK, &usr2, NULL) == 0);
 	CHECK(kill(getpid(), SIGUSR2) == 0);
 	struct timespec second = { 1, 0 };
 	CHECK(sigtimedwait(&usr2, NULL, &second) == SIGUSR2);
+	/* And SIGUSR2 from outside kills a child that did the same. */
+	{
+		pid_t pid = spawn_usr2_child();
+		pause_ms(500);
+		CHECK(kill(pid, SIGUSR2) == 0);
+		int status = reap(pid);
+		CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGUSR2);
+	}
 	sigset_t none;
 	sigemptyset(&none);
 	pthread_sigmask(SIG_SETMASK, &none, NULL);
