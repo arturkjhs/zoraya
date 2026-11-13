@@ -42,7 +42,8 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # The names libc.a may export: the generated list, and the blocks of the ADRs
 # that add names (posix-surface-check's LIST+ADR form).
 ADDED_ADRS := docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
-	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md
+	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
+	docs/adr/0310-surface-for-tls-curl-and-wget.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -58,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: apps zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -441,6 +442,124 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX
 	cp $(BUSYBOX_BIN) $(ROOTFS)/bin/busybox
 	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
+	@touch $@
+
+# ---------------------------------------------------------------- TLS for C programs, curl, wget (TASK-27 9a)
+
+# zlib, OpenSSL, curl and wget for the volume (ADR-0310), built by zcc into
+# $(APPS_ROOT) (bin/curl, bin/wget). The libraries go into $(DEPS), not into
+# the sysroot: they are for these two programs, not for every program that
+# tcc builds in Zoraya. OpenSSL is static, without threads (until 9b),
+# shared objects, dynamic loading, engines or assembly; its entropy is
+# libposix's getrandom (ports/patches/openssl/0001-*), its roots file is
+# /system/tls/roots (ADR-0228 item 3) and curl's and wget's are the same.
+DEPS := $(PORTS)/deps
+APPS_ROOT := $(ROOT)/build/rootfs-apps
+APPS_STAMP := $(OBJ)/apps.stamp
+CROSS_ROOTS := /system/tls/roots
+# No debug information: curl and wget with OpenSSL are 17 MiB with it, 4 MiB without.
+APPS_CFLAGS := -O2
+
+ZLIB := $(WORK)/zlib-$(call lock_ver,zlib)
+zlib: $(DEPS)/lib/libz.a
+$(ZLIB): $(LOCK) $(wildcard ports/patches/zlib/*.patch)
+	$(call unpack,zlib,ports/patches/zlib)
+	@touch $@
+$(DEPS)/lib/libz.a: $(ZLIB) $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)
+	@cd $(ZLIB) && $(call logged,$(CROSS_ENV) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib CFLAGS="$(APPS_CFLAGS)" ./configure --static --prefix=$(DEPS),zlib-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(ZLIB) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar ARFLAGS=rc libz.a,zlib)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(ZLIB) install,zlib-install)
+	@touch $@
+
+OPENSSL := $(WORK)/openssl-$(call lock_ver,openssl)
+openssl: $(DEPS)/lib/libssl.a
+$(OPENSSL): $(LOCK) $(wildcard ports/patches/openssl/*.patch)
+	$(call unpack,openssl,ports/patches/openssl)
+	@touch $@
+# linux-generic64 is OpenSSL's portable 64-bit target (no assembly, no CPU
+# probing); no-secure-memory leaves out mmap/mlock tricks, no-async the
+# ucontext coroutines.
+OPENSSL_OPTS := no-shared no-dso no-threads no-engine no-asm no-async no-afalgeng no-ui-console no-secure-memory \
+	no-sock no-dgram no-quic no-tests no-docs no-comp no-ssl3 no-ssl3-method no-weak-ssl-ciphers no-legacy no-autoload-config
+$(DEPS)/lib/libssl.a: $(OPENSSL) $(DEPS)/lib/libz.a $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)
+	@cd $(OPENSSL) && $(call logged,$(CROSS_ENV) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib ./Configure linux-generic64 $(OPENSSL_OPTS) \
+	  --prefix=$(DEPS) --openssldir=/system/tls --libdir=lib $(APPS_CFLAGS) -D__STDC_NO_ATOMICS__,openssl-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(OPENSSL) -j3 build_libs,openssl)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(OPENSSL) install_dev,openssl-install)
+	@touch $@
+
+# The names the two programs reference that libc.a does not export
+# (ports/apps/zshim.c): linked from here, after everything else.
+$(DEPS)/lib/libzshim.a: ports/apps/zshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/lib $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/zshim.o ports/apps/zshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/zshim.o
+
+CURL := $(WORK)/curl-$(call lock_ver,curl)
+CURL_BIN := $(CURL)/src/curl
+curl: $(CURL_BIN)
+$(CURL): $(LOCK) $(wildcard ports/patches/curl/*.patch)
+	$(call unpack,curl,ports/patches/curl)
+	@touch $@
+# HTTP and HTTPS only, synchronous name resolution (no threads), no IPv6
+# (ADR-0225 offers IPv4), OpenSSL's roots from the system image, no `-k`
+# surprises left to a configuration file: the description lists the options.
+CURL_OPTS := --disable-shared --enable-static --with-openssl=$(DEPS) --with-zlib=$(DEPS) \
+	--with-ca-bundle=$(CROSS_ROOTS) --without-ca-path --without-ca-fallback \
+	--disable-threaded-resolver --disable-ipv6 --disable-unix-sockets --disable-docs --disable-manual \
+	--disable-ftp --disable-file --disable-ldap --disable-ldaps --disable-rtsp --disable-dict \
+	--disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher \
+	--disable-smb --disable-mqtt --disable-websockets --disable-ntlm --disable-ares --disable-libcurl-option \
+	--disable-netrc --disable-cookies --disable-hsts --disable-alt-svc --disable-proxy --disable-sspi \
+	--without-libpsl --without-brotli --without-zstd --without-nghttp2 --without-nghttp3 --without-ngtcp2 \
+	--without-libidn2 --without-librtmp --without-libssh2 --without-libssh --without-gssapi --without-winidn
+$(CURL_BIN): $(CURL) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
+	@cd $(CURL) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-zoraya \
+	  $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
+	rm -f $(CURL_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL) -j3 V=1,curl)
+	@touch $@
+
+WGET := $(WORK)/wget-$(call lock_ver,wget)
+WGET_BIN := $(WGET)/src/wget
+wget: $(WGET_BIN)
+$(WGET): $(LOCK) $(wildcard ports/patches/wget/*.patch)
+	$(call unpack,wget,ports/patches/wget)
+	@touch $@
+# HTTP and HTTPS over OpenSSL (the one built above), IPv6 code compiled in (it
+# resolves with getaddrinfo, which libposix answers with IPv4 only), no name
+# translation, no PCRE, no libpsl, no digest or NTLM authentication, no
+# metalink or libuuid. The host triple names musl, not Zoraya: wget's gnulib
+# answers its run tests (mbrtowc and the like) by the C library's name when it
+# cannot run them, and Zoraya's libc is musl's; the compiler is still zcc,
+# which defines nothing of Linux (INV-0143-1).
+WGET_OPTS := --with-ssl=openssl --with-libssl-prefix=$(DEPS) --with-zlib --disable-nls --enable-ipv6 \
+	--disable-iri --disable-pcre --disable-pcre2 --disable-opie --disable-digest --disable-ntlm \
+	--disable-debug --disable-threads --disable-rpath --without-libpsl --without-libuuid --without-metalink \
+	--without-cares --without-libidn --without-gpgme --without-included-regex
+$(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
+	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ./configure --host=aarch64-unknown-linux-musl \
+	  $(WGET_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \
+	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim" ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz",wget-configure)
+	rm -f $(WGET_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/lib -j3,wget-lib)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/src -j3 V=1,wget)
+	@touch $@
+
+# build/rootfs-apps: the two programs as they go into the volume's /bin
+# (ADR-0310), and nothing else. `make image EXTRA_ROOT=build/rootfs-apps`
+# (tools/run-disk.sh) is how an image takes them; their descriptions are
+# user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
+apps: $(APPS_STAMP)
+$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
+	rm -rf $(APPS_ROOT) && mkdir -p $(APPS_ROOT)/bin
+	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
+	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
+	$(ELF_CHECK) $(APPS_ROOT)/bin
 	@touch $@
 
 # ---------------------------------------------------------------- the workloads' sources

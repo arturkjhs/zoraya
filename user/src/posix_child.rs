@@ -10,7 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use zoraya_abi::posix::{
-    self as abi, EntryKind, FdKind, NO_HANDLE, SELF_MESSAGE, SELF_NET_MESSAGE, slot,
+    self as abi, EXT_NET, EXT_RANDOM, EntryKind, FdKind, NO_HANDLE, SELF_EXT_MESSAGE, SELF_MESSAGE,
+    SELF_NET_MESSAGE, slot,
 };
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
@@ -231,6 +232,10 @@ pub struct Launch<'a> {
     /// the second bootstrap message beside `SELF` (`SELF_NET_MESSAGE`);
     /// none for a program the line gave no network.
     pub net: Option<Handle>,
+    /// A connection to the random service for `getrandom` (ADR-0227 item
+    /// 3; proposed ADR-0310), moved in the same message; none when the
+    /// launcher has no service to share.
+    pub random: Option<Handle>,
     pub realtime_base: u64,
 }
 
@@ -262,6 +267,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             if let Some(n) = l.net {
                 let _ = handle_close(n);
             }
+            if let Some(r) = l.random {
+                let _ = handle_close(r);
+            }
             return Err(s);
         }
     };
@@ -272,6 +280,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             let _ = handle_close(l.report);
             if let Some(n) = l.net {
                 let _ = handle_close(n);
+            }
+            if let Some(r) = l.random {
+                let _ = handle_close(r);
             }
             return Err(s);
         }
@@ -353,7 +364,11 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     ) else {
         close_entries(&l.entries);
         let _ = handle_close(l.report);
-        for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
+        for h in [p.child_job, p.broker_end]
+            .into_iter()
+            .chain(l.net)
+            .chain(l.random)
+        {
             let _ = handle_close(h);
         }
         return Err(fail(Status::InvalidArgument, &p));
@@ -363,7 +378,11 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
-            for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
+            for h in [p.child_job, p.broker_end]
+                .into_iter()
+                .chain(l.net)
+                .chain(l.random)
+            {
                 let _ = handle_close(h);
             }
             return Err(fail(s, &p));
@@ -426,6 +445,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             for h in [boot, boot_child, p.broker_end, l.report, p.child_job]
                 .into_iter()
                 .chain(l.net)
+                .chain(l.random)
             {
                 let _ = handle_close(h);
             }
@@ -446,6 +466,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         if let Some(n) = l.net {
             let _ = handle_close(n);
         }
+        if let Some(r) = l.random {
+            let _ = handle_close(r);
+        }
         return Err(gone(s));
     }
     if let Ok(me) = handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
@@ -454,26 +477,47 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             rights: Rights::WAIT,
             transfer: Transfer::Move,
         }];
-        let message = match l.net {
-            Some(net) => {
-                entry.push(ChannelEntry {
-                    handle: net,
-                    rights: ChannelObject::RIGHTS,
-                    transfer: Transfer::Move,
-                });
-                SELF_NET_MESSAGE
+        // The plain messages when only the network is given or nothing is;
+        // `ZPBX` with flags when the random service's connection is (the
+        // launcher's rule: handles in the order SELF, net, random).
+        let mut flags = 0u8;
+        if let Some(net) = l.net {
+            entry.push(ChannelEntry {
+                handle: net,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            flags |= EXT_NET;
+        }
+        if let Some(random) = l.random {
+            entry.push(ChannelEntry {
+                handle: random,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            flags |= EXT_RANDOM;
+        }
+        let mut message = [0u8; 5];
+        let message: &[u8] = match flags {
+            0 => SELF_MESSAGE,
+            EXT_NET => SELF_NET_MESSAGE,
+            _ => {
+                message[..4].copy_from_slice(SELF_EXT_MESSAGE);
+                message[4] = flags;
+                &message
             }
-            None => SELF_MESSAGE,
         };
         // On a failed write the caller keeps what it moved (INV-0050-1).
         if channel_write(boot, message, &entry).is_err() {
             let _ = handle_close(me);
-            if let Some(net) = l.net {
-                let _ = handle_close(net);
+            for h in l.net.into_iter().chain(l.random) {
+                let _ = handle_close(h);
             }
         }
-    } else if let Some(net) = l.net {
-        let _ = handle_close(net);
+    } else {
+        for h in l.net.into_iter().chain(l.random) {
+            let _ = handle_close(h);
+        }
     }
     let _ = handle_close(boot);
     if let Err(s) = broker.commit(p.pid, process) {

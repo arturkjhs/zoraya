@@ -73,7 +73,7 @@ impl<S: Sys> Posix<S> {
     /// One request to `netd` and its reply, in `self.input`: the size.
     /// `moved` handles are gone whatever happens. The reply of a request
     /// that an earlier call gave up on is skipped by its transaction.
-    fn net_call<'m, M: zoraya_protocol::Message<'m>>(
+    pub(crate) fn net_call<'m, M: zoraya_protocol::Message<'m>>(
         &mut self,
         net: S::H,
         m: &M,

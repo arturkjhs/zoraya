@@ -1,0 +1,16 @@
+--- a/include/internal/common.h	2026-09-29 16:05:00
++++ b/include/internal/common.h	2026-11-13 04:41:29
+@@ -82,7 +82,13 @@
+ #ifndef OPENSSL_SYS_VMS
+ #define X509_CERT_AREA OPENSSLDIR
+ #define X509_CERT_DIR OPENSSLDIR "/certs"
++#ifdef __zoraya__
++/* The system's roots are one file of PEM certificates, /system/tls/roots
++   (ADR-0228 item 3), not a cert.pem in a certificate directory. */
++#define X509_CERT_FILE OPENSSLDIR "/roots"
++#else
+ #define X509_CERT_FILE OPENSSLDIR "/cert.pem"
++#endif
+ #define X509_PRIVATE_DIR OPENSSLDIR "/private"
+ #define CTLOG_FILE OPENSSLDIR "/ct_log_list.cnf"
+ #else

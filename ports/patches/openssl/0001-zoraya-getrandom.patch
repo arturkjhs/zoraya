@@ -1,0 +1,31 @@
+--- a/providers/implementations/rands/seeding/rand_unix.c	2026-11-13 04:19:06
++++ b/providers/implementations/rands/seeding/rand_unix.c	2026-11-13 04:19:06
+@@ -18,6 +18,9 @@
+ #include "crypto/rand_pool.h"
+ #include "crypto/rand.h"
+ #include "internal/dso.h"
++#if defined(__zoraya__)
++# include <sys/random.h>
++#endif
+ #include "internal/nelem.h"
+ #include "prov/seeding.h"
+ 
+@@ -337,7 +340,18 @@
+      *
+      * which is way below the OSSL_SSIZE_MAX limit. Therefore sign conversion
+      * between size_t and ssize_t is safe even without a range check.
++     */
++
++#if defined(__zoraya__)
++    /*
++     * Zoraya (TASK-27 9a, ADR-0310): libposix's getrandom asks the random
++     * service (ADR-0227) over the connection the shell gave the program.
++     * No weak-symbol or DSO lookup (a static archive would not link the
++     * weak name in), and no fallback: a program without the connection
++     * gets -1 and OpenSSL reports that it cannot seed.
+      */
++    return getrandom(buf, buflen, 0);
++#endif
+ 
+     /*
+      * Do runtime detection to find getentropy().

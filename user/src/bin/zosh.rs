@@ -4149,6 +4149,11 @@ impl Host for Z {
                             streams: *ends,
                             report: report.1,
                             net,
+                            // Every program gets its own connection to the
+                            // random service, with no word of the line's
+                            // (ADR-0227 item 3): `getrandom` for C programs
+                            // (proposed ADR-0310).
+                            random: self.random.and_then(zoraya_user::random::share),
                             realtime_base: self.realtime_base,
                         };
                         let broker = self.broker.as_ref().expect("checked by ready");

@@ -126,6 +126,28 @@ pub const SELF_MESSAGE: &[u8; 4] = b"ZPBS";
 /// without a network would find a directory's channel in it.
 pub const SELF_NET_MESSAGE: &[u8; 4] = b"ZPBN";
 
+/// The second message when the launcher gives the connection to the random
+/// service (ADR-0227 item 3; proposed ADR-0310): the four bytes and one byte
+/// of flags, [`EXT_NET`] and [`EXT_RANDOM`], with the handles in this order:
+/// `SELF`, then the connection to `netd` if the first flag is set, then the
+/// connection to the random service if the second is. Any other flag bit
+/// makes the message unknown: the library takes `SELF` if it can and keeps
+/// the rest closed.
+pub const SELF_EXT_MESSAGE: &[u8; 4] = b"ZPBX";
+/// A connection to `netd` follows `SELF` (as in [`SELF_NET_MESSAGE`]).
+pub const EXT_NET: u8 = 1;
+/// A connection to the random service follows.
+pub const EXT_RANDOM: u8 = 2;
+
+/// The handles after `SELF` that a `ZPBX` message with `flags` carries, or
+/// `None` for a flag this library does not know.
+pub const fn ext_handles(flags: u8) -> Option<usize> {
+    if flags & !(EXT_NET | EXT_RANDOM) != 0 {
+        return None;
+    }
+    Some((flags & EXT_NET != 0) as usize + (flags & EXT_RANDOM != 0) as usize)
+}
+
 /// What a slot below `OPEN_MAX` holds (ADR-0107 item 3).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

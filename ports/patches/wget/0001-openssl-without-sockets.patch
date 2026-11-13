@@ -1,0 +1,23 @@
+--- a/src/openssl.c	2026-11-13 04:29:16
++++ b/src/openssl.c	2026-11-13 04:29:16
+@@ -840,8 +840,20 @@
+ #ifndef FD_TO_SOCKET
+ # define FD_TO_SOCKET(X) (X)
+ #endif
++#ifdef __zoraya__
++  /* OpenSSL is built without sockets (no-sock, TASK-27 9a): the descriptor
++     is read and written as a plain fd, which libposix serves for a socket
++     as well. The descriptor stays wget's to close (BIO_NOCLOSE). */
++  {
++    BIO *bio = BIO_new_fd (FD_TO_SOCKET (fd), BIO_NOCLOSE);
++    if (bio == NULL)
++      goto error;
++    SSL_set_bio (conn, bio, bio);
++  }
++#else
+   if (!SSL_set_fd (conn, FD_TO_SOCKET (fd)))
+     goto error;
++#endif
+   SSL_set_connect_state (conn);
+ 
+   /* Re-seed the PRNG before the SSL handshake */
