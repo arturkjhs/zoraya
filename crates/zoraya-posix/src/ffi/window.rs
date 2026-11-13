@@ -52,6 +52,17 @@ impl Gui {
     }
 }
 
+impl Drop for Gui {
+    /// N1: the channel end is closed (the compositor drops the client) and
+    /// any buffer left is unmapped.
+    fn drop(&mut self) {
+        for m in self.buffers.drain(..).flatten() {
+            let _ = zoraya_rt::memory_unmap(m.address, m.size);
+        }
+        let _ = zoraya_rt::handle_close(self.end);
+    }
+}
+
 impl Platform for Gui {
     type End = Handle;
 
@@ -96,7 +107,13 @@ impl Platform for Gui {
     }
 
     fn buffer(&mut self, pixels: usize) -> Option<(Handle, usize)> {
-        let size = (pixels * 4).next_multiple_of(4096) as u64;
+        // W3: any size a caller or a `Configure` names is checked, not
+        // multiplied (the surface checks too; this is the second line).
+        let bytes = pixels.checked_mul(4)?;
+        if pixels > zoraya_surface::MAX_PIXELS as usize {
+            return None;
+        }
+        let size = bytes.next_multiple_of(4096) as u64;
         let memory = zoraya_rt::memory_create(size, MemoryFlags::NONE).ok()?;
         let Ok(address) = zoraya_rt::memory_map(memory, 0, size, MapFlags::WRITE) else {
             let _ = zoraya_rt::handle_close(memory);
@@ -151,11 +168,30 @@ unsafe impl Sync for Slot {}
 static WINDOW: Lock = Lock::new();
 static SLOT: Slot = Slot(UnsafeCell::new(None));
 
-fn window<R>(f: impl FnOnce(&mut Option<Surface<Gui>>) -> R) -> R {
-    locked(&WINDOW, || {
-        // SAFETY: `WINDOW` is held, so this is the only reference.
-        f(unsafe { &mut *SLOT.0.get() })
-    })
+/// Runs `f` on the window, holding `WINDOW`. A call that finds it held (another
+/// thread inside, or a signal handler that interrupted a call of this
+/// thread, whose wait is a raw port wait the signal cannot end) does not wait:
+/// it gets `busy` (-1 or 0 to C), never a deadlock (N2 of the 9d review).
+fn window<R>(busy: R, f: impl FnOnce(&mut Option<Surface<Gui>>) -> R) -> R {
+    if !WINDOW.try_lock() {
+        return busy;
+    }
+    // SAFETY: `WINDOW` is held, so this is the only reference.
+    let r = f(unsafe { &mut *SLOT.0.get() });
+    WINDOW.unlock(&Futex);
+    r
+}
+
+/// In a `fork` child: the parent's window is not the child's. Its channel
+/// end names a slot that is empty here (a pipe may take it) and its buffer is
+/// the parent's mapping, so the surface is forgotten, neither closed nor
+/// unmapped (W1 of the 9d review), and the lock, held by a thread that is not
+/// in the child, is freed.
+pub(super) fn after_fork_in_child() {
+    WINDOW.reset();
+    // SAFETY: a fork child has one thread, and no reference into `SLOT`
+    // outlives a call.
+    crate::lock::forget_taken(unsafe { &mut *SLOT.0.get() });
 }
 
 /// An event for C: `kind` and four words. Kinds: 1 key (`a` the code, `b` the
@@ -214,7 +250,7 @@ pub unsafe extern "C" fn zoraya_window_open(title: *const c_char, width: u32, he
     let Some(Some(end)) = with(|p| p.window.take()) else {
         return -1;
     };
-    window(|slot| {
+    window(-1, |slot| {
         if slot.is_some() {
             return -1;
         }
@@ -246,7 +282,7 @@ pub unsafe extern "C" fn zoraya_window_buffer(
     width: *mut u32,
     height: *mut u32,
 ) -> i32 {
-    window(|slot| {
+    window(-1, |slot| {
         let Some(s) = slot.as_mut() else { return -1 };
         let (w, h) = s.size();
         let p = s.pixels().as_mut_ptr();
@@ -264,7 +300,7 @@ pub unsafe extern "C" fn zoraya_window_buffer(
 /// integers are safe).
 #[unsafe(no_mangle)]
 pub extern "C" fn zoraya_window_damage(x: i32, y: i32, width: i32, height: i32) {
-    window(|slot| {
+    window((), |slot| {
         if let Some(s) = slot.as_mut() {
             s.damage(x.into(), y.into(), width.into(), height.into());
             s.commit();
@@ -280,7 +316,7 @@ pub extern "C" fn zoraya_window_damage(x: i32, y: i32, width: i32, height: i32) 
 /// `event` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn zoraya_window_poll(event: *mut WindowEvent, block: i32) -> i32 {
-    window(|slot| {
+    window(0, |slot| {
         let Some(s) = slot.as_mut() else { return -1 };
         match s.event(block != 0) {
             Some(e) => {
@@ -296,7 +332,7 @@ pub unsafe extern "C" fn zoraya_window_poll(event: *mut WindowEvent, block: i32)
 /// Closes the window; the buffer is gone.
 #[unsafe(no_mangle)]
 pub extern "C" fn zoraya_window_close() {
-    window(|slot| {
+    window((), |slot| {
         if let Some(s) = slot.take() {
             s.close();
         }

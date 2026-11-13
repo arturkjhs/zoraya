@@ -426,3 +426,79 @@ fn close_sends_close_and_frees_the_buffer() {
     let s = open(1);
     s.close();
 }
+
+/// The open size is fitted to the display's logical size (W2 of the review):
+/// the fake's display is 1024 x 768 logical.
+#[test]
+fn the_open_size_is_fitted_to_the_display() {
+    for scale in [1, 2] {
+        let f = Fake {
+            scale,
+            ..Fake::default()
+        };
+        let s = Surface::open(f, "big", 5000, 4000).unwrap();
+        assert_eq!(s.size(), (1024 * scale, 768 * scale));
+        assert_eq!(
+            s.platform.buffers[0].len() as u32,
+            1024 * 768 * scale * scale
+        );
+    }
+}
+
+/// A `Configure` whose size overflows the physical size is ignored.
+#[test]
+fn a_configure_with_overflowing_sizes_changes_nothing() {
+    let mut s = open(1);
+    for (w, h, k) in [
+        (u32::MAX, 10, 4),
+        (10, u32::MAX, 4),
+        (0x4000_0000, 0x4000_0000, 1),
+        (0, 5, 1),
+    ] {
+        s.platform.push(&gui::Configure {
+            window: 3,
+            width: w,
+            height: h,
+            scale: k,
+            dark: false,
+            motion: true,
+        });
+        assert_eq!(s.event(false), None, "{w} {h} {k}");
+    }
+    assert_eq!(s.size(), (100, 50));
+    assert_eq!(s.platform.buffers.len(), 1);
+}
+
+/// A resize while a frame is in flight: the frame's reply still comes, no
+/// second commit is sent before it, and damage after the resize is clipped
+/// to the new buffer.
+#[test]
+fn a_resize_with_a_frame_in_flight_and_damage_after_it() {
+    let mut s = open(1);
+    s.damage(0, 0, 100, 50);
+    s.commit();
+    assert_eq!(s.platform.commits.len(), 1);
+    s.platform.push(&gui::Configure {
+        window: 3,
+        width: 40,
+        height: 30,
+        scale: 1,
+        dark: false,
+        motion: true,
+    });
+    assert_eq!(
+        s.event(false),
+        Some(Event::Resize {
+            width: 40,
+            height: 30
+        })
+    );
+    // Damage beyond the new buffer, while the old frame is unanswered.
+    s.damage(0, 0, 100, 50);
+    s.commit();
+    assert_eq!(s.platform.commits.len(), 1, "one frame in flight");
+    s.platform.answer();
+    assert_eq!(s.event(false), None);
+    assert_eq!(s.platform.commits.len(), 2);
+    assert_eq!(s.platform.commits[1], (0, 0, 40, 30));
+}

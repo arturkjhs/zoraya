@@ -98,6 +98,23 @@ pub struct Surface<P: Platform> {
     next_transaction: u32,
     buttons: u32,
     pointer: (u32, u32),
+    /// The receive buffer, kept between calls (one allocation, not one
+    /// 64 KiB zeroed buffer for every poll).
+    scratch: Vec<u8>,
+}
+
+/// The largest buffer this client makes: 16384 pixels a side and 64 Mi pixels
+/// (256 MiB), whatever a `Configure` or the caller says.
+pub const MAX_SIDE: u32 = 16384;
+pub const MAX_PIXELS: u64 = 64 << 20;
+
+/// Whether a buffer of `width × height` physical pixels is one this client makes.
+pub fn fits(width: u32, height: u32) -> bool {
+    width != 0
+        && height != 0
+        && width <= MAX_SIDE
+        && height <= MAX_SIDE
+        && u64::from(width) * u64::from(height) <= MAX_PIXELS
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
@@ -127,6 +144,7 @@ impl<P: Platform> Surface<P> {
             next_transaction: 1,
             buttons: 0,
             pointer: (0, 0),
+            scratch: vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE],
         };
         let reply = s.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -134,7 +152,23 @@ impl<P: Platform> Surface<P> {
             return None;
         }
         s.scale = d.scale.clamp(1, 4);
+        // The compositor refuses a buffer larger than the display: fit the
+        // size to the display's logical size (a 1280x800 display at scale 2
+        // is 640x400 logical).
+        let width = if d.width == 0 {
+            width
+        } else {
+            width.min(d.width)
+        };
+        let height = if d.height == 0 {
+            height
+        } else {
+            height.min(d.height)
+        };
         let (pw, ph) = (width.checked_mul(s.scale)?, height.checked_mul(s.scale)?);
+        if !fits(pw, ph) {
+            return None;
+        }
         let (memory, buffer) = s.platform.buffer(pw as usize * ph as usize)?;
         let reply = s.call(&gui::CreateToplevel { width, height }, Some(memory));
         let created = reply
@@ -159,17 +193,23 @@ impl<P: Platform> Surface<P> {
         if !self.platform.send(&message(m, t), handle) {
             return None;
         }
-        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
-        loop {
-            let n = self.platform.receive(&mut bytes)?;
+        let mut bytes = core::mem::take(&mut self.scratch);
+        // Empty when `event` holds it (a `Configure` calls from inside it).
+        bytes.resize(zoraya_protocol::MAX_WIRE_MESSAGE, 0);
+        let found = loop {
+            let Some(n) = self.platform.receive(&mut bytes) else {
+                break None;
+            };
             let got = &bytes[..n];
             match Header::decode(got) {
                 Ok((h, _)) if h.ordinal == M::ORDINAL && h.transaction == t => {
-                    return Some(got.to_vec());
+                    break Some(got.to_vec());
                 }
                 _ => self.queued.push_back(got.to_vec()),
             }
-        }
+        };
+        self.scratch = bytes;
+        found
     }
 
     fn transaction(&mut self) -> u32 {
@@ -261,25 +301,27 @@ impl<P: Platform> Surface<P> {
 
     /// The next event; with `block`, waits for one. `None`: nothing there.
     pub fn event(&mut self, block: bool) -> Option<Event> {
-        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
-        loop {
+        let mut bytes = core::mem::take(&mut self.scratch);
+        let out = loop {
             if let Some(e) = self.events.pop_front() {
-                return Some(e);
+                break Some(e);
             }
             let got = match self.queued.pop_front() {
                 Some(b) => b,
                 None if block => match self.platform.receive(&mut bytes) {
                     Some(n) => bytes[..n].to_vec(),
-                    None => return Some(Event::Gone),
+                    None => break Some(Event::Gone),
                 },
                 None => match self.platform.poll(&mut bytes) {
                     Poll::Message(n) => bytes[..n].to_vec(),
-                    Poll::Empty => return None,
-                    Poll::Gone => return Some(Event::Gone),
+                    Poll::Empty => break None,
+                    Poll::Gone => break Some(Event::Gone),
                 },
             };
             self.handle(&got);
-        }
+        };
+        self.scratch = bytes;
+        out
     }
 
     fn handle(&mut self, got: &[u8]) {
@@ -365,7 +407,7 @@ impl<P: Platform> Surface<P> {
         let (Some(pw), Some(ph)) = (c.width.checked_mul(k), c.height.checked_mul(k)) else {
             return;
         };
-        if (pw, ph) == self.size {
+        if (pw, ph) == self.size || !fits(pw, ph) {
             return;
         }
         let Some((memory, buffer)) = self.platform.buffer(pw as usize * ph as usize) else {
