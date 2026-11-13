@@ -625,7 +625,7 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
-		log=target/test-logs/test-httpd-netsurf.log; mark='^http: GET /mark/before-proceed '; \
+		log=target/test-logs/test-httpd-netsurf.log; mark='^http: GET /ns/mark-before-proceed '; \
 		before=$$(sed -n "1,\#$$mark#p" $$log | grep -c '^tls expired: ended after 0 request bytes'); \
 		after=$$(sed -n "\#$$mark#,\$$p" $$log | grep -c '^tls expired: ended after 0 request bytes'); \
 		if grep -q '^tls expired: request of' $$log || ! grep -q '^tls valid: request of' $$log \
