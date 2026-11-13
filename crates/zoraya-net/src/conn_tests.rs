@@ -1347,3 +1347,156 @@ mod resolve {
         panic!("the lookups did not end");
     }
 }
+
+/// `ping` by name through the service and the resolver (ADR-0330): the answer
+/// of the DNS server, filtered as `resolve` filters it.
+mod ping_by_name {
+    use super::*;
+    use crate::service::{Action, Service};
+    use zoraya_abi::net::{Target as ScopeTarget, rights};
+    use zoraya_proto_net::{Ping, PingReply, status};
+    use zoraya_protocol::{Below, Data, encode};
+
+    const GATEWAY: [u8; 4] = [10, 0, 2, 2];
+
+    fn echo_scope(rules: &[(ScopeTarget<'_>, Protocols)]) -> Vec<u8> {
+        let reach: Vec<ReachRule<'_>> = rules
+            .iter()
+            .map(|(target, protocols)| ReachRule {
+                target: *target,
+                ports: Ports::ANY,
+                protocols: *protocols,
+            })
+            .collect();
+        scope_with(&reach)
+    }
+
+    fn ask(service: &mut Service, w: &mut World, id: usize, name: &str) -> Action {
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &Ping {
+                address: 0,
+                count: Below(1),
+                timeout_ms: Below(1000),
+                name: Data(name.as_bytes()),
+            },
+            9,
+            &mut out,
+        )
+        .unwrap();
+        service.handle(id, &out[..n], 0, &mut w.client, w.now)
+    }
+
+    /// Asks, and gives the reply to the asker: `None` when a run started
+    /// (at once from the cache, or after the lookup).
+    fn outcome(service: &mut Service, w: &mut World, id: usize, name: &str) -> Option<Vec<u8>> {
+        match ask(service, w, id, name) {
+            Action::Reply(bytes) => Some(bytes),
+            Action::Deferred if w.client.ping_running() => None,
+            Action::Deferred => lookup(service, w),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Runs until the lookup is answered: the reply to the asker, or `None`
+    /// when the run started.
+    fn lookup(service: &mut Service, w: &mut World) -> Option<Vec<u8>> {
+        for _ in 0..20_000 {
+            w.turn();
+            for a in w.conns.take_lookups() {
+                return service.resolve_done(&mut w.client, a, w.now).map(|r| r.1);
+            }
+        }
+        panic!("no answer");
+    }
+
+    /// Lets a started run end and gives its end to the service.
+    fn finish(service: &mut Service, w: &mut World) {
+        assert!(w.client.ping_running(), "a run was started");
+        assert!(w.run_until(10_000_000, |w| !w.client.ping_running()));
+        for e in w.client.take_events() {
+            if let Event::PingDone(r) = e {
+                let _ = service.ping_done(r);
+            }
+        }
+    }
+
+    fn code(bytes: &[u8]) -> u32 {
+        decode::<PingReply<'_>>(bytes, 0).unwrap().1.status.0
+    }
+
+    #[test]
+    fn an_answer_on_this_side_of_the_network_is_pinged_only_under_an_echo_rule_for_it() {
+        let mut w = World::new(Script::Sink, &[]);
+        // The name decides the address: the gateway, the DNS server (both of
+        // this side of the network) or a host beyond.
+        w.peer.dns_script = Box::new(|q| {
+            let address = if q.windows(2).any(|w| w == b"gw") {
+                GATEWAY
+            } else if q.windows(3).any(|w| w == b"dns") {
+                DNS
+            } else {
+                WEB
+            };
+            vec![a_record_reply(q, address, 300)]
+        });
+        let mut service = Service::new();
+        let narrow = |rules: &[(ScopeTarget<'_>, Protocols)]| {
+            Connection::new(rights::REACH, &echo_scope(rules)).unwrap()
+        };
+        let zoraya = (ScopeTarget::Wildcard("zoraya"), Protocols::ECHO);
+        let only_names = service.add(narrow(&[zoraya])).unwrap();
+        // The gateway and the DNS server are refused as local.
+        for name in ["gw.zoraya", "dns.zoraya"] {
+            let reply = outcome(&mut service, &mut w, only_names, name).expect("a refusal");
+            assert_eq!(code(&reply), status::LOCAL, "{name}");
+            assert!(!w.client.ping_running());
+        }
+        // A host beyond them is pinged.
+        assert!(
+            outcome(&mut service, &mut w, only_names, "web.zoraya").is_none(),
+            "the run started"
+        );
+        finish(&mut service, &mut w);
+        // An echo rule for the gateway's address allows that answer.
+        let both = service
+            .add(narrow(&[
+                zoraya,
+                (ScopeTarget::Address(GATEWAY), Protocols::ECHO),
+            ]))
+            .unwrap();
+        assert!(
+            outcome(&mut service, &mut w, both, "gw.zoraya").is_none(),
+            "the run started"
+        );
+        finish(&mut service, &mut w);
+        // A TCP rule for that address is no echo rule.
+        let tcp = service
+            .add(narrow(&[
+                zoraya,
+                (ScopeTarget::Address(GATEWAY), Protocols::TCP),
+            ]))
+            .unwrap();
+        let reply = outcome(&mut service, &mut w, tcp, "gw.zoraya").expect("a refusal");
+        assert_eq!(code(&reply), status::LOCAL);
+    }
+
+    #[test]
+    fn a_non_unicast_answer_is_not_pinged() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, [255, 255, 255, 255], 300)]);
+        let mut service = Service::new();
+        let id = service
+            .add(
+                Connection::new(
+                    rights::REACH,
+                    &echo_scope(&[(ScopeTarget::Any, Protocols::ECHO)]),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let reply = outcome(&mut service, &mut w, id, "any.zoraya").expect("a refusal");
+        assert_ne!(code(&reply), status::OK);
+        assert!(!w.client.ping_running());
+    }
+}
