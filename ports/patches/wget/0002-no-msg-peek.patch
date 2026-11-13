@@ -1,0 +1,80 @@
+--- a/src/retr.c	2024-11-10 22:26:57
++++ b/src/retr.c	2026-11-13 04:57:04
+@@ -647,6 +647,11 @@
+    This function should be used as a building block for other
+    functions -- see fd_read_line as a simple example.  */
+ 
++#ifdef __zoraya__
++/* libposix has no MSG_PEEK (ADR-0287 item 9; TASK-27 9a), which the original
++   below uses on a plain socket: this reads one byte at a time, which every
++   fd_read implementation supports, and asks the terminator about the last
++   byte with the earlier ones before it.  Same contract, same limits.  */
+ char *
+ fd_read_hunk (int fd, hunk_terminator_t terminator, long sizehint, long maxsize)
+ {
+@@ -658,6 +663,57 @@
+ 
+   while (1)
+     {
++      int rdlen = fd_read (fd, hunk + tail, 1, 0);
++      if (rdlen < 0)
++        {
++          xfree (hunk);
++          return NULL;
++        }
++      if (rdlen == 0)
++        {
++          if (tail == 0)
++            {
++              /* EOF without anything having been read */
++              xfree (hunk);
++              errno = 0;
++              return NULL;
++            }
++          /* EOF seen: return the data we've read. */
++          hunk[tail] = '\0';
++          return hunk;
++        }
++      tail += rdlen;
++      hunk[tail] = '\0';
++      if (terminator (hunk, hunk + tail - 1, 1))
++        return hunk;
++
++      if (tail == bufsize - 1)
++        {
++          if (maxsize && bufsize >= maxsize)
++            {
++              xfree (hunk);
++              errno = ENOMEM;
++              return NULL;
++            }
++          bufsize <<= 1;
++          if (maxsize && bufsize > maxsize)
++            bufsize = maxsize;
++          hunk = xrealloc (hunk, bufsize);
++        }
++    }
++}
++#else
++char *
++fd_read_hunk (int fd, hunk_terminator_t terminator, long sizehint, long maxsize)
++{
++  long bufsize = sizehint;
++  char *hunk = xmalloc (bufsize);
++  int tail = 0;                 /* tail position in HUNK */
++
++  assert (!maxsize || maxsize >= bufsize);
++
++  while (1)
++    {
+       const char *end;
+       int pklen, rdlen, remain;
+ 
+@@ -743,6 +799,7 @@
+         }
+     }
+ }
++#endif
+ 
+ static const char *
+ line_terminator (const char *start _GL_UNUSED, const char *peeked, int peeklen)

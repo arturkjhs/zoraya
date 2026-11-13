@@ -119,7 +119,7 @@ profile of `rust-toolchain.toml` does not install, so `posix-surface-check` rena
 
 ## Ported programs (third-party C, stage 6b)
 
-Not crates: C sources built by `ports/Makefile` into `build/sysroot` and `build/rootfs-posix`, fetched by
+Not crates: C sources built by `ports/Makefile` into `build/sysroot` and `build/rootfs-posix` (and, since TASK-27 9a, `build/ports/deps` and `build/rootfs-apps`), fetched by
 `make fetch-ports` and never committed. Versions and hashes are in `ports/sources.lock`, licences and patches in
 `ports/README.md`. Why they are not written in-house: ADR-0100 (musl's pure C) and ADR-0005 (the programs are the
 measured T1 workloads).
@@ -136,6 +136,10 @@ measured T1 workloads).
 | Lua | 5.5.1 | MIT | W2's source, in the image only, built inside Zoraya |
 | SQLite | 3540100 | public domain | W3's source, in the image only, built inside Zoraya |
 | GNU hello | 2.12.3 | GPL-3.0-or-later | W4's source, in the image only, built inside Zoraya |
+| OpenSSL | 3.5.9 (LTS) | Apache-2.0 | `libssl.a` and `libcrypto.a` for curl and wget, static, no threads (TASK-27 9a, ADR-0310, ADR-0312). Why not in-house: a TLS 1.3 client and a certificate verifier are not small things to write; the native side's `zoraya-tls` is rustls |
+| zlib | 1.3.1 | zlib | `libz.a` for curl and wget (TASK-27 9a) |
+| curl | 8.23.0 | curl (MIT-like, its `COPYING`) | `/bin/curl` on the volume of `make run` and the apps' tests (TASK-27 9a) |
+| GNU wget | 1.25.0 | GPL-3.0-or-later | `/bin/wget`, same (TASK-27 9a) |
 
 ### Mutation testing
 

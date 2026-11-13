@@ -247,6 +247,36 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             designate(arg.kind, text, reason, &mut out)?;
         }
     }
+    // `names OPTION OPERAND` (proposed ADR-0311): the option makes the program
+    // create a file named by the URL's last segment in the current
+    // directory. The shell works the name out itself and designates that one
+    // file to create; a name it cannot be sure of refuses the line.
+    for n in &d.names {
+        if !p.options.iter().any(|(o, _)| *o == n.option) {
+            continue;
+        }
+        let o = &d.options[n.option];
+        let reason = match o.short {
+            Some(c) => format!("option -{c}"),
+            None => format!("option --{}", o.long),
+        };
+        for (index, text) in &p.operands {
+            if *index != n.operand {
+                continue;
+            }
+            let Some(name) = zoraya_describe::url_file_name(text) else {
+                return Err(Refused {
+                    subject: (*text).into(),
+                    problem: format!(
+                        "{} would save under a name the shell cannot be sure of",
+                        o.label()
+                    ),
+                    hint: Some("to say where it goes, write -o FILE".into()),
+                });
+            };
+            designate(Kind::Create, name, reason.clone(), &mut out)?;
+        }
+    }
     out.extend(grant_entries);
     Ok(out)
 }

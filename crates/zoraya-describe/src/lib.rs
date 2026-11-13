@@ -24,7 +24,7 @@
 //! Keys: `name` or `topic`, `summary`, `usage` (one or more), `operand NAME
 //! KIND TEXT`, `option [SHORT] LONG [ARG KIND] TEXT` (an upper-case word is
 //! the argument only when a kind follows it), `when OPTION OPERAND
-//! KIND`, `cwd read|none`, `question`, `program PATH`, `needs net-status`, `exit
+//! KIND`, `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311), `cwd read|none`, `question`, `program PATH`, `needs net-status`, `exit
 //! CODE TEXT` and `setting NAME TYPE DEFAULT TEXT`.
 //!
 //! An operand's NAME says how many arguments it takes, as the usage line
@@ -214,6 +214,37 @@ pub struct When {
     /// Index into [`Description::operands`].
     pub operand: usize,
     pub kind: Kind,
+}
+
+/// An option that makes the command create a file in the current directory
+/// whose name comes from the last segment of a URL operand, as `curl -O`
+/// does: `names --remote-name URL` (proposed ADR-0311). The shell computes
+/// the name itself ([`url_file_name`]) and designates that one file to
+/// create; a name it cannot be sure of refuses the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Names {
+    /// Index into [`Description::options`].
+    pub option: usize,
+    /// Index into [`Description::operands`]: the URL operand.
+    pub operand: usize,
+}
+
+/// The file name a command that saves "under the remote name" would use for
+/// `url`: the last segment of its path, when it is plain: ASCII letters and
+/// digits and `. _ - + ~ @ , =`, at most 255 bytes, not `.` or `..`. `None`
+/// otherwise (an empty last segment, `%` escapes, any other byte, a query or
+/// fragment is cut off first): the shell then refuses the line rather than
+/// guess what the program will create (INV-0311-1).
+pub fn url_file_name(url: &str) -> Option<&str> {
+    let rest = url.split_once("://")?.1;
+    let path = &rest[rest.find('/')?..];
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let name = path.rsplit('/').next().unwrap_or("");
+    let plain = |c: char| c.is_ascii_alphanumeric() || ".-_+~@,=".contains(c);
+    if name.is_empty() || name.len() > 255 || name == "." || name == ".." {
+        return None;
+    }
+    name.chars().all(plain).then_some(name)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -451,6 +482,8 @@ pub struct Description {
     pub operands: Vec<Operand>,
     pub options: Vec<Opt>,
     pub whens: Vec<When>,
+    /// `names` lines (see [`Names`]).
+    pub names: Vec<Names>,
     pub cwd: Cwd,
     /// Exit 1 means "no" (ADR-0155 rule 6).
     pub question: bool,
@@ -476,6 +509,7 @@ impl Description {
             operands: Vec::new(),
             options: Vec::new(),
             whens: Vec::new(),
+            names: Vec::new(),
             cwd: Cwd::Read,
             question: false,
             program: None,
@@ -898,6 +932,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
     let mut seen_question = false;
     let mut seen_program = false;
     let mut whens_raw: Vec<(usize, String, String, Kind)> = Vec::new();
+    let mut names_raw: Vec<(usize, String, String)> = Vec::new();
     let mut lines = text.split('\n').enumerate().map(|(i, l)| (i + 1, l));
     let mut body_start = None;
     for (number, line) in lines.by_ref() {
@@ -1005,6 +1040,23 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 let raw = (number, option.into(), operand.into(), kind);
                 push(&mut whens_raw, raw, number)?;
             }
+            "names" => {
+                let usage = "names needs OPTION OPERAND";
+                let Some((option, r1)) = next_word(rest) else {
+                    return err(number, usage);
+                };
+                let Some((operand, r2)) = next_word(r1) else {
+                    return err(number, usage);
+                };
+                if !r2.is_empty() {
+                    return err(number, usage);
+                }
+                push(
+                    &mut names_raw,
+                    (number, option.into(), operand.into()),
+                    number,
+                )?;
+            }
             "cwd" => {
                 once(&mut seen_cwd)?;
                 d.cwd = match rest.trim_end() {
@@ -1077,6 +1129,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             || !d.operands.is_empty()
             || !d.options.is_empty()
             || !whens_raw.is_empty()
+            || !names_raw.is_empty()
             || seen_cwd
             || seen_question
             || seen_program
@@ -1107,6 +1160,31 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             option: o,
             operand: p,
             kind,
+        });
+    }
+    for (number, option, operand) in names_raw {
+        let o = match (option.strip_prefix("--"), option.strip_prefix('-')) {
+            (Some(long), _) => d.option_by_long(long),
+            (None, Some(s)) if s.chars().count() == 1 => {
+                d.option_by_short(s.chars().next().unwrap_or(' '))
+            }
+            _ => None,
+        };
+        let Some(o) = o else {
+            return err(number, "names names an option the description lacks");
+        };
+        let Some(p) = d.operand_by_name(&operand) else {
+            return err(number, "names names an operand the description lacks");
+        };
+        if d.operands[p].kind != Kind::Url {
+            return err(number, "names needs a url operand");
+        }
+        if d.options[o].argument.is_some() {
+            return err(number, "names needs an option without an argument");
+        }
+        d.names.push(Names {
+            option: o,
+            operand: p,
         });
     }
     if let Some(start) = body_start {

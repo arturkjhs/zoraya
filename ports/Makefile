@@ -457,7 +457,7 @@ DEPS := $(PORTS)/deps
 APPS_ROOT := $(ROOT)/build/rootfs-apps
 APPS_STAMP := $(OBJ)/apps.stamp
 CROSS_ROOTS := /system/tls/roots
-# No debug information: curl and wget with OpenSSL are 17 MiB with it, 4 MiB without.
+# No debug information: curl and wget with OpenSSL are 17 MiB with it, 6.7 MiB without.
 APPS_CFLAGS := -O2
 
 ZLIB := $(WORK)/zlib-$(call lock_ver,zlib)
@@ -508,6 +508,9 @@ $(CURL): $(LOCK) $(wildcard ports/patches/curl/*.patch)
 # HTTP and HTTPS only, synchronous name resolution (no threads), no IPv6
 # (ADR-0225 offers IPv4), OpenSSL's roots from the system image, no `-k`
 # surprises left to a configuration file: the description lists the options.
+# No passwd lookups (getpwuid): the volume has no /etc/passwd, and curl's search
+# for a .curlrc would only make the shell report a refused read of it. OpenSSL's
+# configuration file is not loaded either (no /system/tls/openssl.cnf).
 CURL_OPTS := --disable-shared --enable-static --with-openssl=$(DEPS) --with-zlib=$(DEPS) \
 	--with-ca-bundle=$(CROSS_ROOTS) --without-ca-path --without-ca-fallback \
 	--disable-threaded-resolver --disable-ipv6 --disable-unix-sockets --disable-docs --disable-manual \
@@ -518,8 +521,8 @@ CURL_OPTS := --disable-shared --enable-static --with-openssl=$(DEPS) --with-zlib
 	--without-libpsl --without-brotli --without-zstd --without-nghttp2 --without-nghttp3 --without-ngtcp2 \
 	--without-libidn2 --without-librtmp --without-libssh2 --without-libssh --without-gssapi --without-winidn
 $(CURL_BIN): $(CURL) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
-	@cd $(CURL) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-zoraya \
-	  $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
+	@cd $(CURL) && $(call logged,$(CROSS_ENV) ac_cv_func_getpwuid=no ac_cv_func_getpwuid_r=no ./configure --host=aarch64-unknown-zoraya \
+	  $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-DCURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
 	rm -f $(CURL_BIN)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL) -j3 V=1,curl)
 	@touch $@
@@ -537,7 +540,7 @@ $(WGET): $(LOCK) $(wildcard ports/patches/wget/*.patch)
 # answers its run tests (mbrtowc and the like) by the C library's name when it
 # cannot run them, and Zoraya's libc is musl's; the compiler is still zcc,
 # which defines nothing of Linux (INV-0143-1).
-WGET_OPTS := --with-ssl=openssl --with-libssl-prefix=$(DEPS) --with-zlib --disable-nls --enable-ipv6 \
+WGET_OPTS := --sysconfdir=/etc --with-ssl=openssl --with-libssl-prefix=$(DEPS) --with-zlib --disable-nls --enable-ipv6 \
 	--disable-iri --disable-pcre --disable-pcre2 --disable-opie --disable-digest --disable-ntlm \
 	--disable-debug --disable-threads --disable-rpath --without-libpsl --without-libuuid --without-metalink \
 	--without-cares --without-libidn --without-gpgme --without-included-regex
@@ -560,6 +563,13 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
 	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
+	@for l in zlib openssl curl wget; do \
+	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
+	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
+	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"
+	@for p in ports/patches/openssl/*.patch; do \
+	  grep -q '^+.*__zoraya__' $$p || { echo "$$p changes OpenSSL for every system"; exit 1; }; done
 	@touch $@
 
 # ---------------------------------------------------------------- the workloads' sources

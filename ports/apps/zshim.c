@@ -73,12 +73,12 @@ int link(const char *old, const char *new)
 
 #include <dirent.h>
 
-/* wget (through gnulib's own getcwd, spawn and timer code) names these. None
- * is reached on the paths a Zoraya wget takes: `setsid` is `-b`
- * (background), `setresuid`/`setresgid` are posix_spawn's RESETIDS flag,
- * `clock_getres` is the timer's choice of clock (wget then reads the time of
- * day), and `rewinddir` is the fallback of gnulib's getcwd when the C
- * library's fails (it does not: libposix keeps the directory itself). */
+/* wget (through gnulib's own getcwd, spawn and timer code) names these.
+ * `setsid` is `-b` (background), `setresuid` and `setresgid` are
+ * posix_spawn's RESETIDS flag, and `rewinddir` is the fallback of gnulib's
+ * getcwd when the C library's fails (it does not: libposix keeps the
+ * directory itself): none is reached on the paths a Zoraya wget takes.
+ * `clock_getres` is reached, by the timer, and answers. */
 int setsid(void)
 {
 	errno = ENOSYS;
@@ -101,9 +101,17 @@ int setresgid(gid_t r, gid_t e, gid_t s)
 
 int clock_getres(clockid_t id, struct timespec *res)
 {
-	(void)id; (void)res;
-	errno = ENOSYS;
-	return -1;
+	/* The clocks are read in nanoseconds from a counter far finer than a
+	 * microsecond; wget only wants a number to report. */
+	if (id != CLOCK_REALTIME && id != CLOCK_MONOTONIC) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (res) {
+		res->tv_sec = 0;
+		res->tv_nsec = 1000;
+	}
+	return 0;
 }
 
 void rewinddir(DIR *d)

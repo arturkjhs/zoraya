@@ -541,3 +541,78 @@ fn merge_folds_only_what_is_covered() {
     let d = m.iter().find(|e| e.path == "/u/d").expect("/u/d");
     assert_eq!(d.rights, Access::Tree.rights(), "{m:?}");
 }
+
+// `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311; INV-0311-1): curl's
+// -O creates the file the URL's last segment names, in the current
+// directory, and nothing else.
+const CURL: &str = "name curl\nsummary fetch\nusage curl [-O] URL...\noperand URL... url the address\noption -o --output FILE create where\noption -O --remote-name save under the name of the address\nnames --remote-name URL\n";
+
+#[test]
+fn curl_o_creates_the_name_of_the_url_in_the_current_directory() {
+    let p = go(
+        CURL,
+        &["-O", "https://x.example/a/b.txt"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&p),
+        vec![
+            ("/u/p".into(), Access::Read, "current directory".into()),
+            (
+                "/u/p".into(),
+                Access::Create("b.txt".into()),
+                "option -O".into()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn curl_o_with_two_urls_creates_two_names_and_without_o_none() {
+    let p = go(
+        CURL,
+        &["-O", "http://h/one", "http://h/dir/two.html?x=1#f"],
+        &[],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap();
+    let creates: Vec<&str> = p.iter().filter_map(|e| e.access.name()).collect();
+    assert_eq!(creates, vec!["one", "two.html"]);
+    let p = go(CURL, &["http://h/one"], &[], &[], true, "/u").unwrap();
+    assert!(p.iter().all(|e| e.access.name().is_none()));
+}
+
+#[test]
+fn curl_o_refuses_a_name_the_shell_cannot_be_sure_of() {
+    for url in [
+        "https://h/",
+        "https://h",
+        "https://h/a/",
+        "https://h/a%2Fb",
+        "https://h/a b",
+        "https://h/..",
+        "https://h/.",
+        "https://h/a\u{e9}",
+        "https://h/a;b",
+    ] {
+        let r = go(CURL, &["-O", url], &[], &[], true, "/u").unwrap_err();
+        assert_eq!(r.subject, url, "{url}");
+        assert!(r.problem.contains("cannot be sure"), "{url}: {}", r.problem);
+        assert_eq!(
+            r.hint.as_deref(),
+            Some("to say where it goes, write -o FILE")
+        );
+    }
+}
+
+#[test]
+fn curl_o_in_a_description_that_is_not_the_images_designates_nothing() {
+    let p = go(CURL, &["-O", "https://h/b.txt"], &[], &[], false, "/u").unwrap();
+    assert!(p.iter().all(|e| e.access == Access::Read));
+}

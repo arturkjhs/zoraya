@@ -42,6 +42,14 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | Lua | 5.5.1 | MIT (`doc/readme.html`) | none; W2's source, built inside Zoraya |
 | SQLite | 3.54.1 (amalgamation 3540100) | public domain (the blessing at the head of `sqlite3.c`) | none; W3's source, built inside Zoraya |
 | GNU hello | 2.12.3 | GPL-3.0-or-later (`COPYING`, `src/hello.c`) | none; W4's source, built inside Zoraya |
+| OpenSSL | 3.5.9 | Apache-2.0 (`LICENSE.txt`) | `patches/openssl/0001-zoraya-getrandom.patch` (the seed source is libposix's `getrandom`), `0002-no-posix_memalign.patch`, `0003-roots-file.patch` (`/system/tls/roots`); TASK-27 9a, ADR-0310 |
+| zlib | 1.3.1 | zlib (the licence at the end of `zlib.h`) | none |
+| curl | 8.23.0 | curl (`COPYING`) | `patches/curl/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
+| GNU wget | 1.25.0 | GPL-3.0-or-later (`COPYING`) | `patches/wget/0001-openssl-without-sockets.patch` (`SSL_set_fd` becomes a plain-fd BIO), `0002-no-msg-peek.patch` (`fd_read_hunk` reads a byte at a time: libposix has no `MSG_PEEK`) |
+
+`make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
+`build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and
+`run-gui`. `ports/apps/zshim.c` is the small archive of names those two programs need and `libc.a` does not export.
 
 Lua, SQLite and hello are not built on the host: `make -f ports/Makefile workloads`
 unpacks them into `build/ports/workloads/`, with tcc's tree (the ports' patches

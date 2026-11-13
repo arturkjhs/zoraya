@@ -236,6 +236,7 @@ jobs:
           - make check-quota-tests
           - make check-ethd-maps
           - make check-tls-roots
+          - make check-run-disk
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4

@@ -702,3 +702,78 @@ fn choices_of_words_and_numbers() {
         assert!(one(&std::format!("setting a.b {bad}")).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn names_ties_a_flag_to_a_url_operand() {
+    let d = parse(
+        b"name c\nsummary s\nusage c\noperand URL... url u\noption -O --remote-name save\nnames --remote-name URL\n---\nb\n",
+    )
+    .unwrap();
+    assert_eq!(d.names.len(), 1);
+    assert_eq!(d.options[d.names[0].option].long, "remote-name");
+    assert_eq!(d.operands[d.names[0].operand].name, "URL");
+    // The short form names the option too.
+    let d = parse(
+        b"name c\nsummary s\nusage c\noperand URL url u\noption -O --remote-name save\nnames -O URL\n---\nb\n",
+    )
+    .unwrap();
+    assert_eq!(d.names.len(), 1);
+}
+
+#[test]
+fn names_is_refused_where_it_means_nothing() {
+    let head = "name c\nsummary s\nusage c\noperand URL url u\noperand F read f\noption -O --remote-name save\noption -o --output FILE create where\n";
+    for (line, problem) in [
+        (
+            "names --nope URL\n",
+            "names names an option the description lacks",
+        ),
+        (
+            "names --remote-name NOPE\n",
+            "names names an operand the description lacks",
+        ),
+        ("names --remote-name F\n", "names needs a url operand"),
+        (
+            "names --output URL\n",
+            "names needs an option without an argument",
+        ),
+        ("names --remote-name\n", "names needs OPTION OPERAND"),
+        (
+            "names --remote-name URL extra\n",
+            "names needs OPTION OPERAND",
+        ),
+    ] {
+        let text = format!("{head}{line}---\nb\n");
+        let e = parse(text.as_bytes()).unwrap_err();
+        assert_eq!(e.problem, problem, "{line}");
+    }
+    // A topic has no operands to name.
+    assert!(parse(b"topic t\nsummary s\nnames --a B\n---\nb\n").is_err());
+}
+
+#[test]
+fn a_url_file_name_is_the_last_plain_segment() {
+    for (url, want) in [
+        ("https://h/a/b.txt", Some("b.txt")),
+        ("http://h:8080/x", Some("x")),
+        ("https://h/a/b.tar.gz?q=1&r=2#top", Some("b.tar.gz")),
+        ("https://h/~u/a_b-c+d@e,f=g", Some("a_b-c+d@e,f=g")),
+        ("https://h/", None),
+        ("https://h", None),
+        ("https://h/a/", None),
+        ("https://h/a/..", None),
+        ("https://h/.", None),
+        ("https://h/a%41", None),
+        ("https://h/a b", None),
+        ("https://h/a\\b", None),
+        ("https://h/a:b", None),
+        ("h/a", None),
+        ("", None),
+    ] {
+        assert_eq!(url_file_name(url), want, "{url}");
+    }
+    let long = format!("https://h/{}", "a".repeat(256));
+    assert_eq!(url_file_name(&long), None);
+    let ok = format!("https://h/{}", "a".repeat(255));
+    assert_eq!(url_file_name(&ok).map(str::len), Some(255));
+}

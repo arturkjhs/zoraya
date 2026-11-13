@@ -239,6 +239,10 @@ pub struct Launch<'a> {
     pub realtime_base: u64,
 }
 
+/// The largest program file `load` takes (the image is a memory object of its
+/// size).
+const LOAD_LIMIT: u64 = 64 << 20;
+
 /// A started POSIX child.
 pub struct Child {
     pub pid: u32,
@@ -532,14 +536,17 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
 }
 
 /// A program file of a volume as an image (ADR-0108), and whether it is a
-/// native program (ADR-0153 rule 9): its bytes are read once for the mark
-/// and once into the image's memory object.
+/// native program (ADR-0153 rule 9): its bytes are read once into the image's
+/// memory object, 1 MiB at a time, and the mark is looked for in that object
+/// mapped read-only for the purpose. (It was a `Vec` of the whole file read
+/// 4 KiB a request: a 6.7 MiB `curl` cost a thousand requests and two copies
+/// in the shell's heap, and a machine of 128 MiB gave out after five runs.)
 pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
     let gone = |_| Status::BadState;
-    let bytes = crate::files::read_all(file).map_err(gone)?;
-    let native = zoraya_elf::is_native(&bytes);
-    let length = bytes.len() as u64;
-    drop(bytes);
+    let length = file.stat().map_err(gone)?.size;
+    if length == 0 || length > LOAD_LIMIT {
+        return Err(Status::BadState);
+    }
     let size = length.next_multiple_of(4096).max(4096);
     let object = crate::memory_create(size, zoraya_abi::MemoryFlags::NONE)?;
     let fill = || -> Result<(), Status> {
@@ -555,7 +562,19 @@ pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
         }
         Ok(())
     };
-    let image = fill().and_then(|()| crate::image_create(object, length));
+    let mut native = false;
+    let image = fill().and_then(|()| {
+        // The mark is in a section header at the end of the file: look at
+        // the object itself, mapped for reading, and let it go.
+        let base = zoraya_rt::memory_map(object, 0, size, zoraya_abi::MapFlags::READ)?;
+        // SAFETY: the object is `size` bytes, mapped readable at `base` for
+        // as long as it is mapped; `length <= size`; nothing writes it (the
+        // file service's copy is done: `read_buffer` returned).
+        let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, length as usize) };
+        native = zoraya_elf::is_native(bytes);
+        let _ = zoraya_rt::memory_unmap(base, size);
+        crate::image_create(object, length)
+    });
     let _ = handle_close(object);
     Ok((image?, native))
 }

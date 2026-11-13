@@ -76,7 +76,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: FORCE apps test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -148,7 +148,10 @@ FORCE:
 # The test boots RUN_GUI_CMD as it is, so with the network.
 NET ?= 1
 RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
-RUN_NET_CMD = $(RUN_QEMU) --net --disk $(1) $(KERNEL)
+# 512 MiB: curl and wget are 6.7 MiB each and the machine gives back about 8.5 MiB
+# less than it takes at each launch of one (TASK-27 9a, the report): on 128 MiB
+# the ninth launch is refused ("over quota"), on 256 MiB the twenty-fourth.
+RUN_NET_CMD = $(RUN_QEMU) --net --mem 512M --disk $(1) $(KERNEL)
 RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
 
 run: $(KERNEL) $(DISK)
@@ -457,6 +460,62 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_POSIX_DISK); rc=$$?; fi; \
 	exit $$rc
 
+# TASK-27 9a (proposed ADR-0310, ADR-0311): curl and wget, C programs on
+# OpenSSL, zlib and libposix's sockets and getrandom. `make apps` builds them
+# into build/rootfs-apps (needs `make fetch-ports` once, as `make ports` does);
+# tools/run-disk.sh puts that directory on the volume of `make run`, `run-net`
+# and `run-gui` when it exists, so `make test-hand-run` boots the same image
+# a person does. `make test-apps` is the full path: the normal kernel with a
+# disk of rootfs/, the apps and the test PKI's root in /system/tls/roots (as
+# test-net-fetch's disk has), against the runner's HTTP and TLS servers
+# (tools/test-httpd): both programs fetch a page, a file and the larger
+# bodies over HTTP and over TLS, and refuse an expired and a wrong-name
+# certificate before sending a request byte.
+APPS_ROOT := $(BUILD)/rootfs-apps
+apps:
+	@$(MAKE) -f ports/Makefile apps
+
+APPS_TEST_ROOT := $(BUILD)/apps-root
+APPS_DISK := $(BUILD)/apps-disk.img
+APPS_TEMPLATE := tests/shell/apps.script
+APPS_SCRIPT := $(BUILD)/apps.script
+APPS_HTTP_READY := $(BUILD)/apps-httpd.port
+APPS_TLS_READY := $(BUILD)/apps-tlsd.ports
+# QEMU options; 512 MiB for the reason RUN_NET_CMD's comment gives.
+APPS_QEMU ?= --mem 512M
+APPS_RUN = $(RUNNER) --timeout $(1) --script $(APPS_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
+
+test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[apps] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	rm -rf $(APPS_TEST_ROOT) && mkdir -p $(APPS_TEST_ROOT) target/test-logs && cp -R rootfs/. $(APPS_TEST_ROOT)/ && \
+	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(APPS_TEST_ROOT)/system/tls/roots && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(APPS_TEST_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 64M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
+	: > $(APPS_HTTP_READY) && : > $(APPS_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 400 --ready-file $(APPS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(APPS_TLS_READY) > target/test-logs/test-httpd-apps.log 2>&1 & echo $$! > $(BUILD)/apps-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/apps-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(APPS_HTTP_READY) ] && [ -s $(APPS_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(APPS_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
+	port=$$(cat $(APPS_HTTP_READY)); \
+	if [ -z "$$port" ] || [ -z "$$tlswrong" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[apps] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-apps.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+		$(APPS_TEMPLATE) > $(APPS_SCRIPT); \
+	$(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,500,apps-tcg,tcg); rc=$$?; fi; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd-apps.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-apps.log \
+		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-apps.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-apps.log \
+		   || grep '^tls \(expired\|wrong\): ended after' target/test-logs/test-httpd-apps.log | grep -qv 'ended after 0 request bytes'; then \
+			echo '[apps] FAIL: INV-0228-1: a C program sent request bytes after a refused handshake (or the server saw no clean end), or no request on the valid one'; cat target/test-logs/test-httpd-apps.log; rc=1; \
+		else echo '[apps] ok: curl and wget sent no request byte to the refused TLS servers'; fi; \
+	fi; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(APPS_DISK); rc=$$?; fi; \
+	exit $$rc
+
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.
 run-net: $(KERNEL) $(DISK)
@@ -481,7 +540,7 @@ HAND_SCRIPT := tests/shell/hand-run.script
 HAND_GUI_SCRIPT := tests/shell/hand-run-gui.script
 HAND_HTTP_READY := $(BUILD)/hand-run-httpd.port
 HAND_TLS_READY := $(BUILD)/hand-run-tlsd.ports
-test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	@rm -f $(HAND_DISK) $(HAND_DISK).key $(HAND_DISK).old $(HAND_DISK).old.* $(BUILD)/hand-run-disk.copy
 	@head -c 1048576 /dev/zero > $(HAND_DISK)
 	@$(MAKE) --no-print-directory DISK=$(HAND_DISK) $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; cat $(BUILD)/hand-run-disk.log; \
@@ -903,7 +962,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -995,6 +1054,10 @@ check-ethd-maps:
 check-tls-roots:
 	tools/check-tls-roots.sh
 
+# INV-0310-2: tools/run-disk.sh and EXTRA_ROOT, on a scratch layout.
+check-run-disk:
+	tools/test-run-disk.sh
+
 check-test-caps:
 	@bad=""; \
 	for f in crates/*/tests/*.rs; do \
@@ -1023,7 +1086,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk test-apps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1032,7 +1095,7 @@ TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net ch
 # configuration, a script under an accelerator, or a W8 build.
 ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
-	$(MAKE) -f ports/Makefile ports workloads
+	$(MAKE) -f ports/Makefile ports workloads apps
 	@$(MAKE) -s posix-image
 	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
 	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint
@@ -1048,7 +1111,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 
