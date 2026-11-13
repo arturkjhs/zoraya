@@ -1,0 +1,52 @@
+--- a/Lib/asyncio/selector_events.py	2026-11-13 15:14:43
++++ b/Lib/asyncio/selector_events.py	2026-11-13 15:14:43
+@@ -48,8 +48,33 @@
+         return False
+     else:
+         return bool(key.events & event)
++
++
++class _PipeEnd:
++    """One end of an os.pipe(), with the socket methods the loop's
++    self-pipe uses."""
++
++    def __init__(self, fd):
++        self._fd = fd
++
++    def fileno(self):
++        return self._fd
++
++    def setblocking(self, flag):
++        os.set_blocking(self._fd, flag)
++
++    def recv(self, n):
++        return os.read(self._fd, n)
++
++    def send(self, data):
++        return os.write(self._fd, data)
+ 
++    def close(self):
++        fd, self._fd = self._fd, -1
++        if fd >= 0:
++            os.close(fd)
+ 
++
+ class BaseSelectorEventLoop(base_events.BaseEventLoop):
+     """Selector event loop.
+ 
+@@ -118,7 +143,14 @@
+ 
+     def _make_self_pipe(self):
+         # A self-socket, really. :-)
+-        self._ssock, self._csock = socket.socketpair()
++        if hasattr(socket._socket, "socketpair"):
++            self._ssock, self._csock = socket.socketpair()
++        else:
++            # No socketpair (Zoraya, TASK-27 9c: libposix has no AF_UNIX and
++            # no bind/listen/accept for the loopback fallback of socket.py):
++            # the two ends of a pipe, with the socket methods used here.
++            r, w = os.pipe()
++            self._ssock, self._csock = _PipeEnd(r), _PipeEnd(w)
+         self._ssock.setblocking(False)
+         self._csock.setblocking(False)
+         self._internal_fds += 1

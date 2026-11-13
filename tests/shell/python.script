@@ -1,0 +1,10 @@
+# CPython (TASK-27 9c, proposed ADR-0320; `make test-python`): a static
+# python3 from the volume's /bin with its standard library in
+# /usr/lib/python3.15, a POSIX program run through the broker.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> python3 -V\r
+< Python 3.15.2
+< \r\n~>

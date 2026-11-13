@@ -43,7 +43,7 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # that add names (posix-surface-check's LIST+ADR form).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
-	docs/adr/0310-surface-for-tls-curl-and-wget.md
+	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0320-cpython-port.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: python hostpython suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -612,6 +612,100 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"
 	@for p in ports/patches/openssl/*.patch; do \
 	  grep -q '^+.*__zoraya__' $$p || { echo "$$p changes OpenSSL for every system"; exit 1; }; done
+	@touch $@
+
+# ---------------------------------------------------------------- CPython (TASK-27 9c)
+
+# CPython (ADR-0320), cross-built with zcc, static: every extension module is
+# linked into the one program (MODULE_BUILDTYPE=static, so no module is a
+# shared object), and the library has no dlopen to load one. The standard
+# library goes to $(PYTHON_ROOT)/usr/lib/python3.X (a directory of its own,
+# not build/rootfs-apps: see docs/design.md); `make python` leaves both there.
+# A build with the host's compiler of the same version is the build python
+# CPython's cross build requires (--with-build-python): it runs the freeze,
+# deepfreeze and compileall steps. Its prefix is under build/ports/host.
+PYVER := $(call lock_ver,python)
+PYMM := $(basename $(PYVER))
+PYTHON_SRC := $(WORK)/Python-$(PYVER)
+PYTHON_ROOT := $(ROOT)/build/rootfs-python
+PYTHON_BUILD := $(WORK)/python-build
+HOSTPY_PREFIX := $(PORTS)/host
+HOSTPY := $(HOSTPY_PREFIX)/bin/python$(PYMM)
+$(PYTHON_SRC): $(LOCK) $(wildcard ports/patches/python/*.patch)
+	$(call unpack,python,ports/patches/python)
+	@touch $@
+# The host build is made from an unpatched tree of its own: the patches are
+# for Zoraya, and the host python only has to be the same version.
+HOSTPY_SRC := $(WORK)/Python-$(PYVER)-host
+$(HOSTPY_SRC): $(LOCK)
+	$(call unpack,python,ports/patches/none)
+	@touch $@
+hostpython: $(HOSTPY)
+$(HOSTPY): $(HOSTPY_SRC)
+	rm -rf $(WORK)/hostpython-build && mkdir -p $(WORK)/hostpython-build
+	@cd $(WORK)/hostpython-build && $(call logged,$(HOSTPY_SRC)/configure --prefix=$(HOSTPY_PREFIX),hostpython-configure)
+	@$(call logged,$(MAKE) -C $(WORK)/hostpython-build -j3,hostpython)
+	@$(call logged,$(MAKE) -C $(WORK)/hostpython-build install,hostpython-install)
+	@touch $@
+
+# SQLite's amalgamation for _sqlite3: threadsafe, no run-time extensions
+# (libc.a has no dlopen, ADR-0210 item 4), no WAL (it needs a shared mapping of
+# the database file, which Zoraya has not: 9b's threadtest3 leaves it out too).
+$(DEPS)/lib/libsqlite3.a: $(PORTS)/workloads/sqlite $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/lib $(DEPS)/include $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -w -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL -DSQLITE_ENABLE_FTS5 \
+	  -c -o $(OBJ)/apps/sqlite3.o $(PORTS)/workloads/sqlite/sqlite3.c
+	cp $(PORTS)/workloads/sqlite/sqlite3.h $(PORTS)/workloads/sqlite/sqlite3ext.h $(DEPS)/include/
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/sqlite3.o
+
+# The names CPython's sources reference that libc.a does not export
+# (ports/apps/pyshim.c), after zshim.
+$(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/lib $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/pyshim.o ports/apps/pyshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/pyshim.o
+
+# The configure answers a cross build cannot run (ac_cv_file__dev_ptmx and the
+# like: Zoraya has no /dev/ptmx), MACHDEP=zoraya so that sys.platform is
+# "zoraya", not "linux" (the host triple only has to pass configure's list of
+# cross targets and is a musl one, as wget's; the compiler is zcc, which
+# defines nothing of Linux). IPv4 only (ADR-0225); no readline, curses, bz2,
+# lzma, uuid, ffi, gdbm, ensurepip; mimalloc and the JIT off.
+# The functions configure finds only by their declaration in musl's headers
+# (a compile test), which libc.a does not define: said absent here, so that the
+# module code that needs them is left out instead of failing to link.
+PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups socketpair timerfd_create
+PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT)))
+PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \
+	--with-build-python=$(HOSTPY) --disable-shared --disable-ipv6 --without-ensurepip \
+	--with-openssl=$(DEPS) --without-system-ffi --without-readline --without-mimalloc \
+	--without-doc-strings --disable-test-modules
+python: $(PYTHON_ROOT)/.stamp
+PYTHON_STAGE := $(PORTS)/python-stage
+# What the volume does not need: the test suite (make test-python takes its
+# own subset from the stage), IDLE, tkinter and turtle, ensurepip, the
+# embedding's configuration and the documentation topics. Sizes: docs/design.md.
+PYTHON_TRIM := test idlelib idle_test tkinter turtledemo turtle.py ensurepip config-$(PYMM)-* pydoc_data __phello__
+$(PYTHON_ROOT)/.stamp: $(PYTHON_SRC) $(HOSTPY) $(DEPS)/lib/libssl.a $(DEPS)/lib/libsqlite3.a $(DEPS)/lib/libpyshim.a $(DEPS)/lib/libzshim.a ports/config.site
+	rm -rf $(PYTHON_BUILD) $(PYTHON_STAGE) $(PYTHON_ROOT) && mkdir -p $(PYTHON_BUILD)
+	@cd $(PYTHON_BUILD) && $(call logged,$(CROSS_ENV) $(PYTHON_CACHE) MACHDEP=zoraya MODULE_BUILDTYPE=static PKG_CONFIG=false OPT="-DNDEBUG -O2" \
+	  $(PYTHON_SRC)/configure $(PYTHON_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \
+	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lpyshim -lzshim" \
+	  ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz" \
+	  LIBSQLITE3_CFLAGS="-I$(DEPS)/include" LIBSQLITE3_LIBS="-L$(DEPS)/lib -lsqlite3",python-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(PYTHON_BUILD) -j3,python)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(PYTHON_BUILD) install DESTDIR=$(PYTHON_STAGE),python-install)
+	@# The byte code is compiled once, by the host's python of the same version, and
+	@# is never checked against the source (unchecked-hash): a volume keeps no
+	@# modification time the check could rely on, and nothing here writes a .pyc.
+	find $(PYTHON_STAGE)/usr/lib/python$(PYMM) -name __pycache__ -type d -prune -exec rm -rf {} +
+	@$(call logged,$(HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python$(PYMM) $(PYTHON_STAGE)/usr/lib/python$(PYMM),python-compileall)
+	mkdir -p $(PYTHON_ROOT)/bin $(PYTHON_ROOT)/usr/lib
+	cp $(PYTHON_STAGE)/usr/bin/python$(PYMM) $(PYTHON_ROOT)/bin/python3
+	cp -R $(PYTHON_STAGE)/usr/lib/python$(PYMM) $(PYTHON_ROOT)/usr/lib/
+	cd $(PYTHON_ROOT)/usr/lib/python$(PYMM) && rm -rf $(PYTHON_TRIM)
+	$(ELF_CHECK) $(PYTHON_ROOT)/bin
+	@echo "python: image part $$(du -sk $(PYTHON_ROOT) | cut -f1) KiB, $$(find $(PYTHON_ROOT) -type f | wc -l | tr -d ' ') files; stage $$(du -sk $(PYTHON_STAGE)/usr/lib/python$(PYMM) | cut -f1) KiB"
 	@touch $@
 
 # ---------------------------------------------------------------- the workloads' sources

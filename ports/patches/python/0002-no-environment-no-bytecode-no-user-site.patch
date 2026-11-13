@@ -1,0 +1,52 @@
+--- a/Python/preconfig.c	2026-11-13 15:14:43
++++ b/Python/preconfig.c	2026-11-13 15:14:43
+@@ -316,7 +316,13 @@
+     config->_config_init = (int)_PyConfig_INIT_PYTHON;
+     config->isolated = 0;
+     config->parse_argv = 1;
++#ifdef __zoraya__
++    /* TASK-27 9c, ADR-0320 item 6: the environment decides nothing unless
++       the command line says so (-E is the default; see ports/patches/python). */
++    config->use_environment = 0;
++#else
+     config->use_environment = 1;
++#endif
+     /* Set to -1 to enable C locale coercion (PEP 538) depending on
+        the LC_CTYPE locale, PYTHONUTF8 and PYTHONCOERCECLOCALE
+        environment variables. */
+--- a/Python/initconfig.c	2026-11-13 15:14:43
++++ b/Python/initconfig.c	2026-11-13 15:14:43
+@@ -1227,17 +1227,33 @@
+     _PyConfig_InitCompatConfig(config);
+ 
+     config->isolated = 0;
++#ifdef __zoraya__
++    /* TASK-27 9c, ADR-0320 item 6: no PYTHON* variable (PYTHONPATH,
++       PYTHONSTARTUP, PYTHONHOME, ...) changes what a program runs; no
++       per-user site directory (there is no home to name it); no bytecode
++       files written behind the program's back. */
++    config->use_environment = 0;
++#else
+     config->use_environment = 1;
++#endif
+     config->site_import = 1;
+     config->bytes_warning = 0;
+     config->inspect = 0;
+     config->interactive = 0;
+     config->optimization_level = 0;
+     config->parser_debug= 0;
++#ifdef __zoraya__
++    config->write_bytecode = 0;
++#else
+     config->write_bytecode = 1;
++#endif
+     config->verbose = 0;
+     config->quiet = 0;
++#ifdef __zoraya__
++    config->user_site_directory = 0;
++#else
+     config->user_site_directory = 1;
++#endif
+     config->buffered_stdio = 1;
+     config->pathconfig_warnings = 1;
+ #ifdef MS_WINDOWS

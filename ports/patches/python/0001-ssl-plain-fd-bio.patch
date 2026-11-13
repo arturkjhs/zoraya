@@ -1,0 +1,27 @@
+--- a/Modules/_ssl.c	2026-11-13 15:08:26
++++ b/Modules/_ssl.c	2026-11-13 15:08:39
+@@ -983,7 +983,24 @@
+ #endif
+     SSL_set_app_data(self->ssl, self);
+     if (sock) {
++#ifdef __zoraya__
++        /* OpenSSL is built without sockets (no-sock, TASK-27 9c, as the wget
++         * port): the descriptor is read and written as a plain fd, which
++         * libposix serves for a socket as well. It stays the socket's to
++         * close (BIO_NOCLOSE). */
++        {
++            BIO *fdbio = BIO_new_fd(Py_SAFE_DOWNCAST(sock->sock_fd, SOCKET_T, int),
++                                    BIO_NOCLOSE);
++            if (fdbio == NULL) {
++                _setSSLError(get_state_ctx(sslctx), NULL, 0, __FILE__, __LINE__);
++                Py_DECREF(self);
++                return NULL;
++            }
++            SSL_set_bio(self->ssl, fdbio, fdbio);
++        }
++#else
+         SSL_set_fd(self->ssl, Py_SAFE_DOWNCAST(sock->sock_fd, SOCKET_T, int));
++#endif
+     } else {
+         /* BIOs are reference counted and SSL_set_bio borrows our reference.
+          * To prevent a double free in memory_bio_dealloc() we need to take an

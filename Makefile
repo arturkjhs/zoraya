@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps test-apps test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps test-apps python test-python test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -586,6 +586,32 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 		else echo '[apps] ok: curl and wget sent no request byte to the refused TLS servers'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(APPS_DISK); rc=$$?; fi; \
+	exit $$rc
+
+# TASK-27 9c (proposed ADR-0320): CPython 3.15, cross-built static with zcc.
+# `make python` builds the host python of the same version (build/ports/host),
+# SQLite for the target and the program with its standard library into
+# build/rootfs-python (needs `make fetch-ports` and the OpenSSL of `make apps`'
+# ports once). `make test-python` boots a volume made of rootfs/, that
+# directory and the test suite's subset (tests/python/), runs the script
+# tests/shell/python.script and, in it, tests/python/ruler.py.
+PYTHON_ROOT := $(BUILD)/rootfs-python
+python:
+	@$(MAKE) -f ports/Makefile python
+PYTHON_TEST_ROOT := $(BUILD)/python-root
+PYTHON_DISK := $(BUILD)/python-disk.img
+PYTHON_TEMPLATE := tests/shell/python.script
+PYTHON_SCRIPT := $(BUILD)/python.script
+PYTHON_QEMU ?= --mem 512M
+PYTHON_RUN = $(RUNNER) --timeout $(1) --script $(PYTHON_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(PYTHON_DISK) $(PYTHON_QEMU) --accel $(3) $(KERNEL)
+test-python: $(KERNEL) $(RUNNER) tools-storage python
+	@rm -rf $(PYTHON_TEST_ROOT) && mkdir -p $(PYTHON_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYTHON_TEST_ROOT)/ && \
+	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && \
+	target/debug/zoraya-elf-check $(PYTHON_TEST_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 192M --from $(PYTHON_TEST_ROOT) $(PYTHON_DISK) && \
+	cp $(PYTHON_TEMPLATE) $(PYTHON_SCRIPT) && \
+	$(call PYTHON_RUN,$(QEMU_SLOW_TIMEOUT),python-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PYTHON_DISK); rc=$$?; fi; \
 	exit $$rc
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
