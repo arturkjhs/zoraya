@@ -72,6 +72,9 @@ fresh logs, the mapping-count measurement of a 128-thread process, `check-cancel
    `work/tls-options` has none. Merge order and a `candidate-full/` run before `stage-9c`/`stage-9d`: to be updated when they merge.
 5. **The `Makefile` comment above `RUN_NET_CMD`** still gives the 8.5 MiB per-launch leak as the reason for 512 MiB; the leak is fixed
    (`a9f0cfe`; `apps-launches` runs 16 launches on 128 MiB). Whether the run machines go back to less memory is open.
+6. **INV-0312-1 for a program that turns verification off** (9c re-review W6): the ADR-0312 note now states only the fact;
+   the proposed reading (the invariant covers connections with this OpenSSL's defaults) is ADR-0320 item 10. Decide it, or ask for a
+   superseding ADR.
 
 ### Manual checks for the architect
 
@@ -525,3 +528,19 @@ probe (its workflow `ci-arm.yml` runs on pushes to that branch and by hand). The
 - E1 the host python is configured `--without-ensurepip` (the CI container has no zlib headers); a clean host build with no zlib module and `compileall` of the stage ran here. E2 the interpreter thread ends the process with `exit(status)`; `smoke.py` checks a fork child's `sys.exit(5)` (5) and an uncaught exception (1): passed. N12 no fallback to 64 KiB (message, status 1).
 - W3 the stack is 2 MiB, measured: fork capacity on 512 MiB 11 (8 MiB), 15 (2 MiB), 16 (1 MiB); 1 and 2 MiB passed the deep-nesting cases (`json`, `ast`, `compile`, `pickle`, `copy`). W4 the `Out of memory` was `os.fork`; `test_threading` runs with no OOM at 2 MiB (not run: `--mem 2G`; not repeated at 8 MiB); 4000 threads leave the mapping table flat; recursion past about 33,000 frames ends in `MemoryError` (one mapping per frame chunk, the table is 256).
 - W5 `-c` and `-m` no longer import from the current directory (patch 0002); a script imports from its own directory, said in `python3.cmd`; `cwd none` considered, not taken. W6 the default context finds the roots: text fixed, test added. W7 `http.client` and `urllib` tests. W8 negative `grants` check. W9 INV-0312-1 note, Python not mediated, patch 0006. W10 markers, `build/python-testlib`, the artifact and cache leave out the Python trees (cold `ci-build` time not measured here). W11 `test-run-disk.sh` extended. N13 `pause`, `sched_yield`. N14 text slips.
+
+
+### 9c re-review round (opus-review E1, W2 to W6, N7 to N10, branch `work/9c`)
+- E1 the python stamp's recipe makes the source and host trees again when a marker outlived them; `make check-python-cache` (in
+  `make check` and CI's checks job) dry-runs a cache hit and was seen failing on a mutant (host tree check removed). Simulated here
+  for real: the trees deleted, the markers kept, `libzshim.a` touched: `make python` printed "unpacking it again" and "building the
+  host python again" and ended with the image part (52,332 KiB, 1226 files). CI: the libc ADRs are in the ports cache key and get the
+  old time, `build/ports/workloads` is cached, the build job's timeout is 45 min (N7; cold time on CI still not measured).
+- W2 patch 0004: the main thread blocks every signal; Ctrl-C to `time.sleep(30)` prints `KeyboardInterrupt` (new script step). N10
+  `abort()` after the join. W3 the negative grants check looks between the report's first line and the prompt; the mutant
+  "roots without +net" (`tools/mutants/python-9c.toml`) failed it ("/system/tls appeared where it must not"). W4 exactly 3
+  zero-byte connections per refused server, none with more. W5 patch 0002: only a script file adds a directory; `python3 <
+  fromstdin.py` does not import the planted module. N8 `-D_PYTHREAD_NAME_MAXLEN=15`; `test_set_name` out of the ignore list.
+- `make test-python` (HVF): `PASS: 107 steps`, regrtest 3,329 tests, 66 skipped, `Result: SUCCESS`, 15 min 59 s; `test_threading`
+  took 15 min 29 s and ended "env changed" (uncaught `OSError` in `do_fork_and_wait` threads, the `fork` out-of-memory of ADR-0320's
+  open question); regrtest counts it as passed. Its time is a risk for the 30-min CI test job under TCG: not measured on CI.
