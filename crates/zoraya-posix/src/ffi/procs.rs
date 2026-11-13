@@ -125,6 +125,13 @@ pub(super) fn restartable<R>(
 /// A signal of the process's own (ADR-0106 item 8): `raise`, `kill` of
 /// oneself, `SIGPIPE` on a write.
 fn raise_signal(n: u32) -> Result<(), i32> {
+    raise_signal_for(n, false)
+}
+
+/// As [`raise_signal`]; `process` is set for a signal directed at the process
+/// (`kill` of oneself): one this thread blocks goes to a thread that does not
+/// (ADR-0304 item 3), instead of staying pending here.
+fn raise_signal_for(n: u32, process: bool) -> Result<(), i32> {
     if n == 0 {
         return Ok(());
     }
@@ -135,7 +142,15 @@ fn raise_signal(n: u32) -> Result<(), i32> {
         stop_self(n);
         return Ok(());
     }
-    match with(|p| p.signals.take(n)).unwrap_or(Taken::Drop) {
+    let taken = with(|p| {
+        let t = p.signals.take(n);
+        if process && t == Taken::Pending {
+            p.route(n);
+        }
+        t
+    })
+    .unwrap_or(Taken::Drop);
+    match taken {
         Taken::Run(a) => run_handler(n, a),
         Taken::Default(crate::signals::DefaultAction::Terminate) => {
             zoraya_rt::process_exit_terminated(n)
@@ -703,7 +718,7 @@ extern "C" fn kill(pid: i32, sig: i32) -> i32 {
     }
     let me = with(|p| p.facts.pid as i32).unwrap_or(0);
     let r = if pid == me && me > 0 {
-        raise_signal(n)
+        raise_signal_for(n, true)
     } else {
         state(|p| p.kill_other(pid, n))
     };
