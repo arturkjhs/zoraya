@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: suites apps tlsthreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -489,8 +489,20 @@ $(OPENSSL): $(LOCK) $(wildcard ports/patches/openssl/*.patch)
 OPENSSL_OPTS := no-shared no-dso threads no-engine no-asm no-async no-afalgeng no-ui-console no-secure-memory \
 	no-sock no-dgram no-quic no-tests no-docs no-comp no-ssl3 no-ssl3-method no-weak-ssl-ciphers no-legacy no-autoload-config \
 	no-tls1 no-tls1_1 no-tls1-method no-tls1_1-method no-dtls no-dtls1-method no-dtls1_2-method --with-rand-seed=getrandom
-$(DEPS)/lib/libssl.a: $(OPENSSL) $(DEPS)/lib/libz.a $(SYSROOT_STAMP)
+# The configuration the library was built with: the options, the compile flags
+# and the hash of the patch set. The stamp file changes only when that text
+# does, so a change of OPENSSL_OPTS rebuilds libssl.a (make reads times, not
+# options). CI's cache key hashes ports/**, which holds this Makefile, so a
+# cache of another configuration is not restored as current either.
+OPENSSL_STAMP := $(WORK)/openssl-config.stamp
+OPENSSL_CONFIG = $(OPENSSL_OPTS) / $(APPS_CFLAGS) / $(shell cat $(sort $(wildcard ports/patches/openssl/*.patch)) | cksum)
+$(OPENSSL_STAMP): FORCE
+	@mkdir -p $(WORK)
+	@printf '%s\n' '$(OPENSSL_CONFIG)' > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+$(DEPS)/lib/libssl.a: $(OPENSSL) $(OPENSSL_STAMP) $(DEPS)/lib/libz.a $(SYSROOT_STAMP)
 	@mkdir -p $(DEPS)
+	@if [ -f $(OPENSSL)/Makefile ]; then $(MAKE) -C $(OPENSSL) clean >/dev/null 2>&1; fi
 	@cd $(OPENSSL) && $(call logged,$(CROSS_ENV) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
 	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib ./Configure linux-generic64 $(OPENSSL_OPTS) \
 	  --prefix=$(DEPS) --openssldir=/system/tls --libdir=lib $(APPS_CFLAGS) -D__STDC_NO_ATOMICS__,openssl-configure)
@@ -514,6 +526,12 @@ tlsthreads: $(TLSTHREADS_BIN)
 $(TLSTHREADS_BIN): tests/apps/tlsthreads.c $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a
 	@mkdir -p $(OBJ)/apps
 	$(ZCC) $(APPS_CFLAGS) -I$(DEPS)/include -o $@ tests/apps/tlsthreads.c -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim
+
+CRYPTOTHREADS_BIN := $(OBJ)/apps/cryptothreads
+cryptothreads: $(CRYPTOTHREADS_BIN)
+$(CRYPTOTHREADS_BIN): tests/apps/cryptothreads.c $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a
+	@mkdir -p $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -I$(DEPS)/include -o $@ tests/apps/cryptothreads.c -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim
 
 CURL := $(WORK)/curl-$(call lock_ver,curl)
 CURL_BIN := $(CURL)/src/curl

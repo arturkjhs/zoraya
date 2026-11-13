@@ -95,11 +95,25 @@
 > status\r
 < \r\nsucceeded (exit status 0)
 < \r\n~>
-> tlsthreads -r https://expired.zoraya:@TLSEXPIRED@/\r
+> tlsthreads -r expired https://expired.zoraya:@TLSEXPIRED@/\r
 < 12 handshakes from 4 threads, all refused
 < \r\n~>
-> tlsthreads -r https://wrong.zoraya:@TLSWRONG@/\r
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> tlsthreads -r name https://wrong.zoraya:@TLSWRONG@/\r
 < 12 handshakes from 4 threads, all refused
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+# The crypto half of ADR-0309 item 4: eight threads of SHA-256, AES-GCM and
+# RAND_bytes against a single-threaded reference; a fork child gets no random bytes.
+> cryptothreads\r
+< 8 threads x 200 rounds of SHA-256, AES-256-GCM and RAND_bytes as the single-threaded; a fork child gets no random bytes
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
 < \r\n~>
 # Refused before any byte of the request is sent; the Makefile checks the
 # server's log for the same. There is no option to turn the check off.

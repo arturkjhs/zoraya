@@ -1,15 +1,16 @@
 /*
  * tlsthreads: OpenSSL with threads (ADR-0309 item 4, TASK-27 9a).
  *
- *   tlsthreads [-r] URL...
+ *   tlsthreads [-r expired|name] URL...
  *
  * Four threads run TLS handshakes at the same time, each of them ROUNDS times
  * for every URL (https://HOST:PORT/), over one shared SSL_CTX that trusts
  * /system/tls/roots and checks the certificate's name: the locks of the
  * context, its store, the error queue and the provider init are all taken from
  * four threads at once. Without -r every handshake must succeed and the
- * server's page must come back; with -r every handshake must be refused
- * (expired, wrong name) before the program sends a byte. Prints one line and
+ * server's page must come back; with -r REASON every handshake must be refused
+ * for that certificate reason (expired: X509_V_ERR_CERT_HAS_EXPIRED; name:
+ * X509_V_ERR_HOSTNAME_MISMATCH) before the program sends a byte. Prints one line and
  * exits 0 only when all the handshakes went as expected.
  */
 #include <errno.h>
@@ -38,6 +39,7 @@ struct target {
 static struct target targets[MAX_URLS];
 static int ntargets;
 static int expect_refusal;
+static long expect_error; /* the X509_V_ERR_* that -r asks for */
 static SSL_CTX *ctx;
 
 static pthread_mutex_t report_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -56,6 +58,9 @@ static void note(int ok, const char *why)
 	pthread_mutex_unlock(&report_lock);
 }
 
+/* A dial that failed only because the shell's connection account is full: try again. */
+static __thread int dial_busy;
+
 static int dial(const struct target *t)
 {
 	struct addrinfo hints, *res;
@@ -64,10 +69,19 @@ static int dial(const struct target *t)
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
-	if (getaddrinfo(t->host, t->port, &hints, &res) != 0)
-		return -1;
+	dial_busy = 0;
+	{
+		int e = getaddrinfo(t->host, t->port, &hints, &res);
+
+		if (e != 0) {
+			dial_busy = e == EAI_AGAIN;
+			return -1;
+		}
+	}
 	fd = socket(res->ai_family, res->ai_socktype, 0);
 	if (fd >= 0 && connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
+		/* ENOBUFS: over the account's quota; EAGAIN: the stack is busy. */
+		dial_busy = errno == ENOBUFS || errno == EAGAIN;
 		close(fd);
 		fd = -1;
 	}
@@ -82,7 +96,7 @@ static void one(const struct target *t)
 	SSL *ssl;
 	/* The shell gives a POSIX program a connection account of POSIX_NET_BUDGET (2)
 	   sockets at a time: a thread that finds none free waits and tries again. */
-	for (int tries = 0; fd < 0 && tries < 600; tries++) {
+	for (int tries = 0; fd < 0 && dial_busy && tries < 300; tries++) {
 		nanosleep(&(struct timespec){0, 50 * 1000 * 1000}, NULL);
 		fd = dial(t);
 	}
@@ -116,10 +130,12 @@ static void one(const struct target *t)
 	SSL_set1_host(ssl, t->host);
 	if (SSL_connect(ssl) != 1) {
 		long v = SSL_get_verify_result(ssl);
-		if (expect_refusal && v != X509_V_OK)
+		if (expect_refusal && v == expect_error)
 			note(1, "");
+		else if (expect_refusal)
+			note(0, "refused for another reason than the one expected");
 		else
-			note(0, expect_refusal ? "refused for no certificate reason" : "handshake failed");
+			note(0, "handshake failed");
 		goto out;
 	}
 	if (expect_refusal) {
@@ -188,12 +204,22 @@ int main(int argc, char **argv)
 	int started = 0;
 
 	for (int i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-r") || !strcmp(argv[i], "--refuse"))
+		if ((!strcmp(argv[i], "-r") || !strcmp(argv[i], "--refuse")) && i + 1 < argc) {
+			const char *w = argv[++i];
+
 			expect_refusal = 1;
-		else if (ntargets < MAX_URLS && parse(argv[i], &targets[ntargets]) == 0)
+			if (!strcmp(w, "expired"))
+				expect_error = X509_V_ERR_CERT_HAS_EXPIRED;
+			else if (!strcmp(w, "name"))
+				expect_error = X509_V_ERR_HOSTNAME_MISMATCH;
+			else {
+				fprintf(stderr, "tlsthreads: -r takes expired or name\n");
+				return 2;
+			}
+		} else if (ntargets < MAX_URLS && parse(argv[i], &targets[ntargets]) == 0)
 			ntargets++;
 		else {
-			fprintf(stderr, "tlsthreads: usage: tlsthreads [-r] https://HOST:PORT/...\n");
+			fprintf(stderr, "tlsthreads: usage: tlsthreads [-r expired|name] https://HOST:PORT/...\n");
 			return 2;
 		}
 	}
