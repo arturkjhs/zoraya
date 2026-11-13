@@ -1126,6 +1126,17 @@ check-ethd-maps:
 check-tls-roots:
 	tools/check-tls-roots.sh
 
+# Every mutant of tools/mutants/*.toml still applies: its `find` occurs in
+# its file as the list says. A missing one is code that moved, or a mutant's
+# `replace` that was committed by mistake (the texec failure of 9b).
+# In make check over every list but four whose 15 stale mutants no longer
+# apply (docs/backlog.md); MUTANT_LISTS= names other lists.
+MUTANT_STALE := compositor-settings fs-limits fs-service kernel-objects
+MUTANT_LISTS ?= $(filter-out tools/mutants/Cargo.toml $(MUTANT_STALE:%=tools/mutants/%.toml),$(wildcard tools/mutants/*.toml))
+check-mutant-lists:
+	@$(CARGO) build -q -p zoraya-mutants
+	@target/debug/zoraya-mutants --check $(MUTANT_LISTS)
+
 check-test-caps:
 	@bad=""; \
 	for f in crates/*/tests/*.rs; do \
@@ -1179,7 +1190,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-mutant-lists
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

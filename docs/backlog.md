@@ -137,3 +137,13 @@ Known limits of the accepted ADR-0314 and ADR-0315, each to be taken up later:
 - In-QEMU cases for `waitpid` and `accept` in a thread: `waitpid` has a case in `t_posix.c` now; `accept` has none, the session has no loopback server (INV-0302-2, ADR-0302).
 - The HVF `t_cpu` flake: 2696 us against 2 ms on a loaded host, the 30-deep job, 64 units (the `cpu_ceiling_from_a_process` test; the off-HVF limit was fixed on `work/cpu-flake`, the HVF rule is unchanged).
 
+
+## Mutation lists that no longer apply (part 9b, branch `work/texec-fix`)
+
+Part 9b's review committed a mutant's `replace` by mistake (b447edd: `exec` ended the old image after `state()`
+returned, so the library lock was released before the end, and a sibling's `write` could follow the new image's
+first; `texec` caught it on CI's TCG leg). `make check-mutant-lists` (`zoraya-mutants --check`, in `make check`)
+now fails when a mutant's `find` is gone, which a committed `replace` causes. It skips four lists
+(`MUTANT_STALE` in the `Makefile`): 15 of their mutants (in `compositor-settings`, `fs-limits`, `fs-service` and
+`kernel-objects`) do not apply, code that moved since the lists were written. Update those lists, then empty
+`MUTANT_STALE`.
