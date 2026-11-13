@@ -9,7 +9,6 @@ test_json
 test_zlib
 test_hashlib
 test_sqlite3
-test_queue
 test_thread
 test_threading_local
 test_asyncio.test_tasks

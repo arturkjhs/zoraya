@@ -101,10 +101,23 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    `DISK_SIZE` (default 64M; curl, wget and the Python part need 192M): the volume of `make run` is made with
    `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`.
 9. **Tests.** `tests/python/smoke.py` (the flags, `sqlite3`, `ssl`, `asyncio`, threads, `fork` and the status of a child that exits or raises, no proxy from the environment), `tests/python/https_client.py` (an `asyncio` HTTPS client
-   against `tools/test-httpd`'s TLS server, with a `cafile` and with the default context, and the refusal of an expired and a wrong-name certificate with 0 request bytes), `tests/python/https_blocking.py` (the same with `http.client` and `urllib`, which go through the file-descriptor BIO of patch 0001), `planted.py`, `usesplanted.py` and `fromstdin.py` (`-c`, `-m` and a program on standard input do not import a module of the current directory; a script imports from its own), Ctrl-C to `time.sleep` (a `KeyboardInterrupt`, patch 0004), and
+   against `tools/test-httpd`'s TLS server, with a `cafile` and with the default context, and the refusal of an expired and a wrong-name certificate with 0 request bytes), `tests/python/https_blocking.py` (the same with `http.client` and `urllib`, which go through the file-descriptor BIO of patch 0001), `planted.py`, `usesplanted.py` and `fromstdin.py` (`-c`, `-m` and a program on standard input do not import a module of the current directory; a script imports from its own), Ctrl-C to `time.sleep` (a `KeyboardInterrupt`, patch 0004): `make test-python` (`tests/shell/python.script`); and
    `tests/python/regr.py`, which runs CPython's `regrtest` over the modules of `tests/python/regr-modules.txt` (the interpreter's core types,
-   `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `threading`, `asyncio`'s tasks, futures and locks). Not run: modules that need `AF_UNIX`, a server socket, `ctypes`,
+   `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `_thread`, `threading.local`, `asyncio`'s tasks, futures and locks): `make test-python-regr`
+   (`tests/shell/python-regr.script`). Not run: modules that need `AF_UNIX`, a server socket, `ctypes`,
    shared modules or a terminal; each is recorded in `docs/design.md` where known.
+   **The CI subset and the long list (proposed, 9c after run 43488132441).** CI's runners have no HVF, so every step there runs
+   under TCG. With the TLS clients and regrtest in one step the job was cancelled at its 30-minute limit: the script's steps before
+   regrtest took 4.5 minutes, the first 11 regrtest modules 1.6 minutes, and `test_queue` had not ended after 22 minutes. Measured
+   with `regrtest --slowest` (`PYTHON_REGR_ARGS`) under the Mac's TCG: the 17 modules took 5 min 39 s, of which `test_queue` 4 min 5 s
+   (9 s under HVF: threads that wait on each other, slow on one emulated CPU; CI's TCG was about 3 times slower than the Mac's on the
+   other modules and far slower on this one), `asyncio`'s tasks 26 s and locks 25 s, every other module under 6 s. So: two steps,
+   each its own CI job of 45 minutes (`test-python`, `test-python-regr`; the runner's limits 900 s and 1500 s stay below it, so a slow
+   run ends with the runner's report and not a cancelled job); `regr-modules.txt` is the CI subset (16 modules: every one of the 17
+   but `test_queue`); `tests/python/regr-long.txt` (`test_queue`, `test_threading`) runs by hand with `make test-python-long`, not in
+   `make test` nor the nightly set (a full run's jobs have the same 45-minute limit, and `test_threading` alone took 15.5 minutes under
+   HVF). What the subset gives up: `queue`'s own tests on CI (its locks and conditions are `threading`'s, which `test_thread`,
+   `smoke.py`'s threads and SQLite's threaded tests of 9b cover).
 10. **The scope of INV-0312-1 for a program that turns verification off** (for the architect; ADR-0312 is accepted and its note records only the fact).
    INV-0312-1 says "a C program built on this OpenSSL verifies ...", and a program can call `SSL_set_verify(..., SSL_VERIFY_NONE, ...)`, as a Python
    program can use `ssl.CERT_NONE`. Proposed reading: the invariant holds for a connection made with this OpenSSL's defaults (the roots at
