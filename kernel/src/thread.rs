@@ -128,6 +128,11 @@ pub fn ensure_multi(process: &Process) -> Result<Arc<Multi>, Status> {
             futex: SpinLock::new(futex),
             map_waiters: SpinLock::new(map_waiters),
         })
+        .inspect_err(|_| {
+            // The list grew but its charge goes back: shrink it too, or it
+            // would stay uncharged.
+            process.members().lock().shrink();
+        })
     })();
     match built {
         Ok(multi) => {
@@ -455,7 +460,10 @@ impl<'a> MapGuard<'a> {
             } else if !process.map_locked().swap(true, Ordering::Acquire) {
                 Some(Ok(()))
             } else {
-                match process.multi().lock().clone() {
+                // Bound first: a guard in the scrutinee would live to the end
+                // of the match, across the block below.
+                let multi = process.multi().lock().clone();
+                match multi {
                     Some(multi) => {
                         let listed = multi.map_waiters.lock().push(0, thread.clone());
                         if listed.is_ok() {

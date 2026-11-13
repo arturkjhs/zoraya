@@ -413,8 +413,9 @@ impl AddressSpace {
     /// The third part: the range is mapped; records it and keeps `holder`.
     pub fn map_commit(&mut self, va: u64, length: u64, attributes: Attributes, holder: Holder) {
         let index = self.mappings.partition_point(|m| m.va < va);
-        // The room was reserved by `map_reserve`, and nothing else maps in
-        // between: the process's one thread is in this call.
+        // `map_reserve` reserved the list's room (it records no mapping), and
+        // nothing else maps in between: the caller holds the process's
+        // mapping lock (ADR-0301 item 6).
         self.mappings.insert(
             index,
             Mapping {

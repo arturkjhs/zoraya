@@ -95,6 +95,25 @@ impl<T> Members<T> {
         self.list.try_reserve_exact(more)
     }
 
+    /// Gives back the room `reserve_all` made, down to the live entries or
+    /// one, whichever is more (a failed first `thread_create` undoes its
+    /// growth). Never allocates.
+    pub fn shrink(&mut self) {
+        self.list.shrink_to(self.list.len().max(1));
+    }
+
+    /// Drops the list's memory: what a zombie keeps is its record, not the
+    /// lists of its threads. For a list with no member left; the flags stay.
+    pub fn release(&mut self) {
+        debug_assert!(self.list.is_empty());
+        self.list = Vec::new();
+    }
+
+    /// The room of the list, in entries (for tests of the charge).
+    pub fn capacity(&self) -> usize {
+        self.list.capacity()
+    }
+
     /// The bytes of list space `new` reserves, for the charge.
     pub fn reserved_bytes() -> usize {
         MAX_THREADS * core::mem::size_of::<(u64, T)>()

@@ -346,7 +346,8 @@ pub fn spawn_user_thread(
     let paid = thread_paid(&process, paid)?;
     let stack = KernelStack::new().map_err(|_| Status::NoMemory)?;
     let frame = stack.push_user_frame(pc, sp);
-    stack.set_first_argument(argument);
+    // SAFETY: the stack was made two lines above and no thread has run on it.
+    unsafe { stack.set_first_argument(argument) };
     let context = Context::new_user_with_tls(frame, stack.limit(), tls);
     let thread = charge::prepaid_arc(Thread::build(
         context,

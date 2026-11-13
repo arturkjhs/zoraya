@@ -1110,6 +1110,9 @@ fn teardown(process: Arc<Process>) -> ! {
     if multi.is_some() {
         let cost = process.multi_cost.swap(0, Ordering::Relaxed);
         process.paid.lock().release_kernel(cost);
+        // The member list grown with the lists was part of that charge: a
+        // zombie keeps none of it (the owner left, so the list is empty).
+        process.members.lock().release();
     }
     drop(multi);
     *process.park_head.lock() = None;
