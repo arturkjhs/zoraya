@@ -274,6 +274,7 @@ wmemcmp
 - **INV-0320-5.** CPython's own tests of the listed modules pass in the guest. *Check:* `make test-python` (`regr.py`).
 
 ## Open questions
+- `test_threading` fails (thread creation: `Out of memory`, with many forks from threads and large stack sizes); which of libposix, the kernel's thread quota (ADR-0307) or the 512 MiB machine is the limit is not known.
 - Whether the roots should be loaded by `ssl.create_default_context()` without a `cafile` (a patch to `_ssl`'s default paths); today a program names the file.
 - Whether the modules of `regr-modules.txt` can grow once `AF_UNIX` and server sockets exist.
 - The Sigstore bundle of the archive: verification by `make fetch-ports` (needs a tool that is not on the host).

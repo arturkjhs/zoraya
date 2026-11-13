@@ -2088,7 +2088,7 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   (`tests/python/https_client.py`) against `tools/test-httpd`'s TLS server with the test PKI's root, the refusal of an expired and a
   wrong-name certificate with 0 request bytes at the server, and `tests/python/regr.py`: CPython's regrtest over the modules of
   `tests/python/regr-modules.txt`.
-- **Known limits.** A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+- **Known limits.** `test_threading` (CPython's own) was run and not kept: its fork-from-threads and thread-stack cases ran 8.5 minutes and failed with `OSError: Out of memory` at thread creation (10 errors, 42 failures); `test_thread`, `test_threading_local` and `test_queue` stand for the threads, and a larger thread stack (`threading.stack_size`) fails with `MemoryError` (`test_json`'s deeply nested case). Found, not fixed. A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
   `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
   `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 8 MiB of stack as virtual memory (only
   touched pages cost). The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them

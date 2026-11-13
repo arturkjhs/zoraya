@@ -617,7 +617,7 @@ PYTHON_RUN = $(RUNNER) --timeout $(1) --script $(PYTHON_SCRIPT) --label $(2) -- 
 test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[python] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(PYTHON_TEST_ROOT) && mkdir -p $(PYTHON_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYTHON_TEST_ROOT)/ && \
-	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && mkdir -p $(PYTHON_TEST_ROOT)/home && cp tests/python/*.py tests/python/regr-modules.txt $(PYTHON_TEST_ROOT)/home/ && \
+	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && mkdir -p $(PYTHON_TEST_ROOT)/home && cp tests/python/*.py tests/python/regr-modules.txt tests/python/regr-ignore.txt $(PYTHON_TEST_ROOT)/home/ && \
 	T=$(PYTHON_TEST_ROOT)/usr/lib/python3.15/test && mkdir -p $$T && \
 	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
 		case $$n in test_*) ;; *) cp -R $$f $$T/ ;; esac; done && \

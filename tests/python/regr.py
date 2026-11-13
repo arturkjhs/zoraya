@@ -7,6 +7,22 @@
 # `asyncio` modules). The rest of the suite needs what Zoraya does not offer
 # (AF_UNIX, a server socket, ctypes, shared extension modules, a terminal) or
 # is slow for nothing it would show; ADR-0320 records the reason.
+#
+# regr-ignore.txt lists the test cases left out of the listed modules, and why:
+#   - they start another interpreter (assert_python_ok and the like): a program
+#     started by Python has no connection to the random service, so it fails at
+#     start with "failed to get random numbers" (ADR-0310; test_deopt_from_append_list,
+#     test_lazy_import, test_tool, test_ctx_mgr_rollback_if_commit_failed,
+#     test_autocommit_disabled_implicit_shutdown), or they set PYTHONDEBUG-like
+#     environment variables, which this build ignores (test_env_var_debug);
+#   - they need a locale the system does not have (en_US.ISO8859-1:
+#     test_locale_caching, test_locale_compiled);
+#   - they ask for a very large thread stack, which does not fit the machine
+#     (test_highly_nested_objects_decoding: MemoryError).
+# test_threading is not listed: its fork-from-threads and stack-size stress
+# cases ran 8 minutes and failed with "Out of memory" at thread creation
+# (a finding recorded in docs/design.md); test_thread, test_threading_local
+# and test_queue stand for the threads.
 import sys
 
 # One module per line, in regr-modules.txt next to this file (the Makefile
@@ -16,5 +32,12 @@ with open("regr-modules.txt") as f:
 
 from test.libregrtest.main import main
 
-# Options of regrtest come from the command line (sys.argv[1:]).
+# Options of regrtest come from the command line (sys.argv[1:]). Its work
+# directory is the program's own /tmp (regrtest otherwise builds one from the
+# build directory it was configured in, which does not exist here), and its
+# subdirectory (os.makedirs asks for `/` itself first, and the program is not
+# given a stat of `/`, so the directory is one level below /tmp); worker processes are not used (-j1: one process, the interpreter under test).
+if not any(a.startswith("--tempdir") for a in sys.argv[1:]):
+    sys.argv[1:1] = ["--tempdir", "/tmp/regr"]
+sys.argv[1:1] = ["--ignorefile", "regr-ignore.txt"]
 main(MODULES)

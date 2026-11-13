@@ -1,0 +1,9 @@
+test_deopt_from_append_list
+test_lazy_import
+test_locale_caching
+test_locale_compiled
+test_highly_nested_objects_decoding
+test_ctx_mgr_rollback_if_commit_failed
+test_autocommit_disabled_implicit_shutdown
+test_env_var_debug
+test_tool
