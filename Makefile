@@ -650,10 +650,10 @@ test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
 	$(call PYTHON_RUN,$(PYTHON_TIMEOUT),python-auto,auto); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
-		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd-python.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-python.log \
-		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-python.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-python.log; then \
-			echo '[python] FAIL: INV-0320-3: a Python program sent request bytes after a refused handshake (or the server saw no clean end), or no request on the valid one'; cat target/test-logs/test-httpd-python.log; rc=1; \
-		else echo '[python] ok: asyncio sent no request byte to the refused TLS servers'; fi; \
+		if grep -q -e '^tls \(expired\|wrong\): request of' -e '^tls \(expired\|wrong\): ended after [1-9]' target/test-logs/test-httpd-python.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-python.log \
+		   || [ "$$(grep -c '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-python.log)" != 3 ] || [ "$$(grep -c '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-python.log)" != 3 ]; then \
+			echo '[python] FAIL: INV-0320-3: a Python program sent request bytes after a refused handshake, or a refused server did not see exactly 3 connections end after 0 request bytes (asyncio, http.client, urllib), or no request on the valid one'; cat target/test-logs/test-httpd-python.log; rc=1; \
+		else echo '[python] ok: asyncio, http.client and urllib sent no request byte to the refused TLS servers (3 connections each, 0 bytes)'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PYTHON_DISK); rc=$$?; fi; \
 	exit $$rc
