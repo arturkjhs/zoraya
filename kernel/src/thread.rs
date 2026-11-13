@@ -455,7 +455,10 @@ impl<'a> MapGuard<'a> {
             } else if !process.map_locked().swap(true, Ordering::Acquire) {
                 Some(Ok(()))
             } else {
-                match process.multi().lock().clone() {
+                // Bound first: a guard in the scrutinee would live to the end
+                // of the match, across the block below.
+                let multi = process.multi().lock().clone();
+                match multi {
                     Some(multi) => {
                         let listed = multi.map_waiters.lock().push(0, thread.clone());
                         if listed.is_ok() {

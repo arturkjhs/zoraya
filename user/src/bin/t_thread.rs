@@ -476,6 +476,65 @@ fn interrupts() {
     println!("t_thread: interrupts ok");
 }
 
+// ---- the mapping lock: a contender sleeps without holding a spinlock.
+
+const FORCE_SWITCH: u64 = 0x701a;
+static MAP_GO: AtomicU32 = AtomicU32::new(0);
+static MAP_DONE: AtomicU32 = AtomicU32::new(0);
+static VICTIM: AtomicU64 = AtomicU64::new(0);
+
+extern "C" fn unmapper(arg: u64) -> ! {
+    while MAP_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    // The first thread is inside a stepped map: this finds the lock taken.
+    memory_unmap(VICTIM.load(SeqCst), SMALL_STACK).expect("unmap of the victim");
+    MAP_DONE.fetch_add(1, SeqCst);
+    thread_exit(arg, 0, 0)
+}
+
+extern "C" fn waker(arg: u64) -> ! {
+    while MAP_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    // Takes the process's thread lists while the map sleeps at a step point,
+    // and the contender sleeps on the lock.
+    let _ = futex_wake(&MAP_GO as *const AtomicU32 as u64, 1);
+    MAP_DONE.fetch_add(1, SeqCst);
+    thread_exit(arg, 0, 0)
+}
+
+/// A map of more pages than one step (stepped, so it pauses) in one thread
+/// while another unmaps and a third wakes: the contender blocks on the lock
+/// with no spinlock held (a `multi` lock kept across the block panicked at
+/// the map's next step point or at its guard's drop). `FORCE_SWITCH` makes
+/// the first step point hand over the CPU, whatever the slice.
+fn map_lock_contention() {
+    let object = memory_create(256 * 4096, MemoryFlags::NONE).expect("object");
+    for _ in 0..8 {
+        MAP_GO.store(0, SeqCst);
+        MAP_DONE.store(0, SeqCst);
+        let victim = new_stack();
+        VICTIM.store(victim, SeqCst);
+        let (t1, b1) = start(unmapper, OWN_BASE);
+        let (t2, b2) = start(waker, OWN_BASE);
+        raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+        MAP_GO.store(1, SeqCst);
+        let base = memory_map(object, 0, 256 * 4096, MapFlags::WRITE).expect("stepped map");
+        raw_syscall(FORCE_SWITCH, [0; 6]);
+        while MAP_DONE.load(SeqCst) < 2 {
+            thread_yield();
+        }
+        join(b1);
+        join(b2);
+        memory_unmap(base, 256 * 4096).expect("unmap the big map");
+        handle_close(t1).expect("close");
+        handle_close(t2).expect("close");
+    }
+    handle_close(object).expect("close");
+    println!("t_thread: map lock contention ok");
+}
+
 // ---- the quota (INV-0307-1), in a child job with threads = 3.
 
 extern "C" fn parked(arg: u64) -> ! {
@@ -758,7 +817,7 @@ fn main() -> i32 {
         Some(b"full") => return full_process_child(),
         _ => {}
     }
-    let steps: [(&str, fn()); 11] = [
+    let steps: [(&str, fn()); 12] = [
         ("create", create_and_exit),
         ("refusals", refusals_change_nothing),
         ("joined", join_and_unmap_rounds),
@@ -767,6 +826,7 @@ fn main() -> i32 {
         ("handoff", handoff),
         ("staggered", staggered_deadlines),
         ("interrupts", interrupts),
+        ("maplock", map_lock_contention),
         ("quota", quota),
         ("ending", ending),
         ("full", full_process),
