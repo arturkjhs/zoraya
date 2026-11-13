@@ -398,6 +398,9 @@ fn answer_reconnect(reconnect: Handle, rooms: Option<&RoomKeeper>, kind: u32) {
 const SHELL_NET_SLOT: u32 = 9;
 /// The shell's connection to the random service (ADR-0227 item 3).
 const SHELL_RANDOM_SLOT: u32 = 10;
+/// The first shell's channel to the panel, for the window of a POSIX program
+/// (ADR-0317; `zoraya_panel::WINDOW_SLOT`).
+const SHELL_WINDOW_SLOT: u32 = zoraya_panel::WINDOW_SLOT;
 
 /// Starts `rngd` with the boot seed (ADR-0227 item 2) and gives the
 /// connection `init` keeps to make the launchers'. `None` without a seed
@@ -475,6 +478,9 @@ fn crash_on_request(services: Handle, network: Option<&Network>) {
 /// terminal at slot 6; with a broker beside it, its client connection at 7
 /// and the temporary service's root at 8. With a terminal the shell gets the console to write
 /// only: its input is the terminal's (INV-0097-3).
+// Each argument is a handle `init` moves into the shell at a slot of its own; a
+// struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn start_shell(
     root: Option<File>,
     terminal: Option<Handle>,
@@ -483,6 +489,7 @@ fn start_shell(
     random: Option<Handle>,
     keeper: Option<(Handle, Handle)>,
     services: Option<Handle>,
+    window: Option<Handle>,
 ) -> Option<(Handle, Handle)> {
     let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
@@ -540,9 +547,15 @@ fn start_shell(
     if let Some(s) = services {
         e.handle(moved(SHELL_SERVICES_SLOT, s));
     }
+    if let Some(w) = window {
+        e.handle(moved(SHELL_WINDOW_SLOT, w));
+    }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
     if process.is_none() {
+        if let Some(w) = window {
+            let _ = handle_close(w);
+        }
         if let Some(s) = services {
             let _ = handle_close(s);
         }
@@ -670,6 +683,9 @@ fn main() -> i32 {
     let mut kept: alloc::vec::Vec<Kept> = alloc::vec::Vec::new();
     // `init`'s end of the panel's way to a new keeper channel.
     let mut panel_reconnect: Option<Handle> = None;
+    // The first shell's end of its channel to the panel (ADR-0317), made
+    // with the panel and moved into the shell when it starts.
+    let mut shell_window: Option<Handle> = None;
     if gui_devices.is_some() {
         println!(
             "init: gui: gpu on its own page, {} input device(s)",
@@ -755,7 +771,18 @@ fn main() -> i32 {
                 let (theirs, ours) = channel_create().ok()?;
                 Some((manage, theirs, ours))
             });
-            panel = g.start_panel(&s.root, registration, keeper.map(|k| (k.0, k.1)));
+            let window = channel_create().ok();
+            panel = g.start_panel(
+                &s.root,
+                registration,
+                keeper.map(|k| (k.0, k.1)),
+                window.map(|w| w.1),
+            );
+            if panel.is_some() {
+                shell_window = window.map(|w| w.0);
+            } else if let Some((theirs, _)) = window {
+                let _ = handle_close(theirs);
+            }
             if panel.is_none() {
                 println!("init: the panel did not start");
                 if let Some((_, _, ours)) = keeper {
@@ -811,6 +838,15 @@ fn main() -> i32 {
                 random,
                 keeper,
                 services,
+                match shell_window.take() {
+                    Some(w) if terminal.is_some() => Some(w),
+                    // No terminal to give it to: not left open (N5).
+                    Some(w) => {
+                        let _ = handle_close(w);
+                        None
+                    }
+                    None => None,
+                },
             )
         };
         let Some(shell) = shell else {

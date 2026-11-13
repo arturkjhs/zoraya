@@ -473,6 +473,96 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
 6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
    runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.
 
+## 9d: NetSurf, step 1 (branch `work/9d`, 2026-11-13, in progress)
+
+Done: proposed ADR-0317 (a POSIX program's window: a `window` line in the description, a client channel from the panel
+through the shell, `zoraya-surface` as a static library speaking `zoraya-proto-gui`, `libnsfb` surface in C over five
+functions) and ADR-0318 (NetSurf 3.11 with its own bitmap font for 9d, `zoraya-text` later; the source set). Pinned in
+`ports/sources.lock`, fetched and verified by `make fetch-ports`: netsurf-all 3.11, libpng 1.6.50, IJG libjpeg 9f,
+pkg-config 0.29.2. `make check` passed.
+
+## 9d: NetSurf, steps 1b and 2 (branch `work/9d`, 2026-11-13)
+
+Done and run on the Mac (`make check` passes; no QEMU step was run):
+- `make netsurf` (`ports/Makefile`, top `Makefile` forwards): libpng 1.6.50, libjpeg 9f, libcurl installed into `build/ports/deps`,
+  NetSurf's libraries (`buildsystem libnslog libwapcaplet libparserutils libcss libhubbub libdom libnsbmp libnsgif libnsutils
+  libutf8proc libnspsl libnsfb`), then `netsurf` (framebuffer front end, internal font, curl + OpenSSL from 9a) linked by `zcc`;
+  `build/rootfs-apps/bin/netsurf` (12.5 MB, `zoraya-elf-check` ok) and `build/rootfs-apps/share/netsurf/` (resources). Host
+  tools built into `build/ports/host` only when needed: pkg-config 0.29.2, bison 3.8.2 (macOS has 2.3; pinned in
+  `ports/sources.lock`), zlib and libpng (for `convert_image`). The CI image (`.github/ci/Dockerfile`) gains gperf, flex,
+  bison. Decisions recorded in ADR-0318 item 5: no JavaScript (so no `nsgenbind`), no SVG (needs expat), `ports/apps/nsshim.c`
+  for names `libc.a` lacks (atol, strncasecmp, modf, iconv*, dirfd, scandir), libnslog patch for old bison.
+- `crates/zoraya-platform` (the `Platform` trait, re-exported by `zoraya-app`), `crates/zoraya-surface` (`Surface<P>`: open,
+  pixels, damage, commit, event, set_title, close; 15 host tests with a fake compositor), `zoraya-posix/src/ffi/window.rs`
+  (five `zoraya_window_*` calls, names added to `libc.a` by a block in ADR-0317; `libc.a` builds and `check-libc` passes),
+  `EXT_WINDOW = 4` in `ZPBX` (`zoraya-abi`, test updated) and `Posix::window`, taken from the bootstrap; `ports/netsurf/zoraya.c`
+  and `zoraya_window.h` (the `libnsfb` surface `zoraya`, key and button maps) added to the unpacked tree by a patch of
+  `libnsfb.h` and its `surface/Makefile`; `netsurf` links with them. ADR-0317 item 7 records the answers to its two open
+  questions (rlib into libposix, one allocator; the `ZPBX` flag).
+
+Not done, in order (nothing below exists yet):
+1. Step 3 of the list: `window TITLE` key in `zoraya-describe`; the panel's request (a client channel in the shell's room,
+   pills of the line's grants, refused in an untrusted room, with a test); `zosh`'s plan passing the channel as the `EXT_WINDOW`
+   handle of `ZPBX` (`user/src/posix_child.rs` line ~500 is where `EXT_RANDOM` is added); `user/describe/posix/netsurf.cmd`
+   (`+net` from the URL, `window`, `+r /share/netsurf`, download directory through the chooser); host tests for each piece.
+2. Run `netsurf` under QEMU: whether `libnsfb`'s constructor registration of the `zoraya` surface runs under musl's start
+   (if not, call `zoraya_register_surface` explicitly); a first window on a test page; a GUI script and `make test-netsurf`
+   (Makefile `TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`, `tools/plan-lib.sh`, workflow timeout); HTTPS, a form,
+   downloads; screens under `docs/`; the real-site commands for the architect.
+3. `make test-libposix`, `test-posix` and `test-apps` were not run after `libc.a` gained five names and `Posix` a field.
+Known limits: no wheel events (the protocol has none), no NetSurf cursor shape, timed waits are a 2 ms poll loop, SVG is not shown,
+Cyrillic text shows placeholders (ADR-0318).
+
+## 9d: NetSurf, window, gate, review fixes and `make test-netsurf` (branch `work/9d`, 2026-11-13)
+
+Done, and run on the Mac under HVF (one QEMU at a time):
+- `window TITLE` in `zoraya-describe` (once, at most 48 characters, command only; 1 test). `user/describe/posix/netsurf.cmd`
+  (`window NetSurf`, optional `URL` operand of kind `url` so `+net` comes from it as for curl, `-v`).
+- The request: `OpenWindow`/`WindowOpened`/`WindowRefused` in `zoraya-proto-chooser` (ordinals 38, 39); `zoraya_panel::window_record`
+  refuses an untrusted room and malformed requests (2 host tests), a trusted shell's terminal gets the channel at slot 14
+  (`WINDOW_SLOT`; slots 9 to 13 are the shell's network, random, keeper and services); `init` gives its first shell one too
+  (via the panel, slot 10 of the panel). The panel adds the client with `AddRoomClient` (room's record, pills from the line),
+  at most 8 windows a shell. `zosh` asks (`posix_window`), refuses in an untrusted room, and `posix_child` moves the
+  client end as `EXT_WINDOW`. `tools/check-untrusted-gate.sh` requires one `untrusted-gate: window-refusal` marker in the shell
+  and one in the panel (it fails if either is gone; verified by removing one). The gate itself stays closed: the shell's
+  refusal is not reachable in QEMU while an untrusted room cannot be entered; the panel's is tested on the host.
+- Review of the window code (opus-review): W1 (fork child forgets the window, no close or unmap; test of `forget_taken`),
+  W2 (open size fitted to the display's logical size; test), W3 (checked buffer sizes, cap 16384 per side and 64 Mi pixels in
+  `Surface` and `Gui::buffer`; test, found a real 2^60-pixel allocation in `Configure`), W4 (one receive buffer), W5 (modifier
+  releases on focus loss, unshifted layout text for main-block keys; C, checked only by the build and the GUI run), W6 (INV-0317-1 to 3
+  rows and check texts), N1 (`Drop` closes the channel), N2 (a re-entrant or concurrent window call gets -1/0, no deadlock; documented),
+  N3 (ADR wording), N4 (nsshim comment, `modf` sign), N6 (tests: overflowing `Configure`, resize with a frame in flight, damage after
+  resize). Not done: none of the list; N5 was not in my message.
+- Running it: the surface constructors of libnsfb **do** run under musl's start (the window opens), the open question is closed.
+  Three failures found and fixed: libcurl is built without cookies and proxies, so NetSurf's `CURLOPT_COOKIE`/`PROXY` failed every fetch
+  (patch 0003: ignore the unknown-option error; consequence: no cookies, no proxy); libposix maps no file, so NetSurf's file fetcher
+  (its own CSS) failed and looped on its error page (patch 0004: read the file); NetSurf's "Proceed" button on the privacy error page
+  turned TLS verification off (patch 0005: never; INV-0312-1). Resources now live in `/usr/share/netsurf` (the toolchain set reads
+  `/usr`; no extra grant).
+- `make test-netsurf` (Makefile, `tests/gui/netsurf.script`, pages `/ns/page`, `/ns/style.css`, `/ns/green.png`, `/ns/result` in
+  `tools/test-httpd`, which also logs each `/ns/` request): the page's blue block (CSS), green block (PNG) and the form result (yellow), by
+  colour regions; the window's pills (`+r /system/tls`, `+net HOST:PORT`) are in the screens; HTTPS to `test.zoraya`; the expired
+  certificate gives NetSurf's privacy error page, and after a click on Proceed the same page and 0 request bytes at the server
+  (log check as in test-apps). Wired into TEST_STEPS, `tools/ci-tests.txt`, `plan-lib.sh`, `tools/test-map.txt`; `ci-build` builds
+  netsurf; the build job's timeout is 45 minutes. Screens: `docs/netsurf/netsurf-{http,result,https,refused,refused-again}.png`.
+- Ran after `libc.a` gained names: `make test-libposix`, `make test-posix` (hello, smoke, invariants; auto), `make test-apps` (all passed);
+  `make check` passes. Not run: TCG variants, `make test-gui`, `make test-hand-run`, the candidate runs, the full `make test`.
+
+Not done / limits (stated, not hidden):
+- Recording the architect's acceptance in ADR-0317/0318 (status and "Architect's decision") and `docs/adr/index.md`: my attempt was refused by the
+  permission check (the instruction reached me through the coordinator, not the architect), so both ADRs are still `proposed` in the files. The wheel
+  contradiction in ADR-0317 item 4 is fixed. The architect or the user should record the two decisions.
+- Downloads through the chooser: not done (needs a second `ZPBX` slot for a chooser channel); NetSurf has no current directory and no download directory.
+- The window channel exists for the home terminal (init's first shell) and shells the panel launches; a shell that `init` restarts gets none until
+  the panel is restarted too. A page's links to other hosts are refused by the network unless the line has `+net HOST` words (limit of the `url` operand).
+- No wheel, cursor shape, clipboard, JavaScript, SVG; cookies and proxy are off (libcurl is built without them, ADR-0310); the title text is Latin only.
+- INV-0317-1's status says `checked` for the panel's side and the describe key; the shell's refusal is checked by the marker script only.
+- CI: not run (`make test-netsurf` on the x86 runner: the pages' coordinates were taken at scale 1 on HVF; TCG timing may need longer pauses).
+
+For the architect's manual check of real sites (a terminal from the desktop, home, which has the network; the QEMU run with `make run-gui`
+or `make run-net` shows the dock): `netsurf https://example.org/`, `netsurf http://example.com/`, `netsurf https://www.wikipedia.org/` (a page that
+links to other hosts will show their images missing: add `+net upload.wikimedia.org` words to the line), and `netsurf` alone for the welcome page.
+
 ## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
 
 Result accepted by the architect: the `ubuntu-24.04-arm` runner has no KVM (`/dev/kvm` missing; `-accel kvm` exits 1 with

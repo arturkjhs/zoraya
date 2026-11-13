@@ -39,24 +39,10 @@ pub struct Record {
     pub tag: u32,
 }
 
-fn is_app_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 16
-        && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
-}
+use gui::{is_app_name, plain_text};
 
 fn text_line(s: &str) -> bool {
     plain_text(s)
-}
-
-/// Text the compositor draws in its trusted material: no control character
-/// and no bidirectional override or isolate, which would reorder what the
-/// person reads (review 7e, 19).
-pub(crate) fn plain_text(s: &str) -> bool {
-    !s.chars().any(|c| {
-        c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-    })
 }
 
 impl Record {
@@ -478,6 +464,38 @@ impl<P: Platform> Compositor<P> {
         let length = reply(&gui::DockPressed { kind, index }, NO_REPLY, &mut self.out);
         // A full queue loses the press; the person presses again.
         let _ = self.platform.write(end, &self.out[..length], &[]);
+    }
+
+    /// The client the panel gave `tag` is gone, or was refused. A full
+    /// queue keeps the tag for the next rounds (`flush_client_gone`), so
+    /// that none is lost while the panel lives (9d re-review, W1).
+    pub(crate) fn tell_client_gone(&mut self, tag: u32) {
+        if self.client_manager.is_none() {
+            return;
+        }
+        if self.gone_pending.len() == crate::MAX_GONE_PENDING {
+            self.gone_pending.remove(0);
+        }
+        self.gone_pending.push(tag);
+        self.flush_client_gone();
+    }
+
+    /// Sends the waiting `ClientGone` tags, oldest first, until the panel's
+    /// queue is full; a closed panel takes none and they are dropped.
+    pub(crate) fn flush_client_gone(&mut self) {
+        let Some(end) = self.client_manager else {
+            self.gone_pending.clear();
+            return;
+        };
+        while let Some(&tag) = self.gone_pending.first() {
+            let length = reply(&gui::ClientGone { tag }, NO_REPLY, &mut self.out);
+            match self.platform.write(end, &self.out[..length], &[]) {
+                crate::Outgoing::Full => return,
+                crate::Outgoing::Sent | crate::Outgoing::Closed => {
+                    self.gone_pending.remove(0);
+                }
+            }
+        }
     }
 
     /// A room's colour, `None` for `home`.

@@ -9,6 +9,7 @@ license.workspace = true
 
 # INV-0165-2: the only messages are zoraya-proto-gui's client requests.
 [dependencies]
+zoraya-platform = { path = "../zoraya-platform" }
 zoraya-protocol = { path = "../zoraya-protocol" }
 zoraya-proto-gui = { path = "../zoraya-proto-gui" }
 zoraya-tokens = { path = "../zoraya-tokens" }

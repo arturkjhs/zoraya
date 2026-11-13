@@ -202,6 +202,10 @@ pub enum Step {
     Window,
     Top(String),
     Shot(String),
+    /// `mark PORT PATH`: a GET of PATH from the host's 127.0.0.1:PORT (the
+    /// test server), so that its log has a line between what the guest did
+    /// before and after (TASK-27 9d re-review, N2).
+    Mark(u16, String),
     Exit,
 }
 
@@ -370,11 +374,42 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 }
                 Step::Shot(rest.to_string())
             }
+            "mark" => {
+                let (port, path) = rest.split_once(' ').ok_or_else(|| bad("mark PORT PATH"))?;
+                let port: u16 = port.parse().map_err(|_| bad("mark PORT PATH"))?;
+                let ok = path.starts_with('/')
+                    && path
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b));
+                if !ok || port == 0 {
+                    return Err(bad(
+                        "mark PORT PATH, a path of letters, digits, /, -, _ and .",
+                    ));
+                }
+                Step::Mark(port, path.to_string())
+            }
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
     }
     Ok(steps)
+}
+
+/// `mark`: one GET of `path` from 127.0.0.1:`port`, the answer read to its
+/// end (at most 64 KiB, 5 s), so that the server has logged it before the
+/// next step.
+fn mark(port: u16, path: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let why = |e: std::io::Error| format!("mark {port} {path}: {e}");
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut c = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(why)?;
+    c.set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(why)?;
+    c.write_all(format!("GET {path} HTTP/1.0\r\nHost: mark\r\n\r\n").as_bytes())
+        .map_err(why)?;
+    let mut answer = Vec::new();
+    c.take(64 * 1024).read_to_end(&mut answer).map_err(why)?;
+    Ok(())
 }
 
 /// A screendump: width, height and `0x00RRGGBB` pixels.
@@ -1115,6 +1150,7 @@ impl Run {
                 self.row = None;
                 Ok(())
             }
+            Step::Mark(port, path) => mark(*port, path),
             Step::Top(text) => loop {
                 if Instant::now() <= self.deadline {
                     self.pump()?;
@@ -1433,6 +1469,14 @@ mod tests {
             [Step::Chord("ctrl".into(), "c".into())]
         );
         assert!(parse("chord ctrl\n").is_err());
+        assert_eq!(
+            parse("mark 8080 /mark/before-proceed\n").unwrap(),
+            [Step::Mark(8080, "/mark/before-proceed".into())]
+        );
+        assert!(parse("mark 0 /m\n").is_err());
+        assert!(parse("mark 8080 m\n").is_err());
+        assert!(parse("mark 8080 /a b\n").is_err());
+        assert!(parse("mark /m\n").is_err());
         assert!(parse("chord hyper c\n").is_err());
         assert_eq!(
             parse("shot term-1\n").unwrap(),

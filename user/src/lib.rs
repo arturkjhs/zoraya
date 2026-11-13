@@ -19,6 +19,7 @@ pub mod posix_child;
 pub mod random;
 pub mod roomsclient;
 pub mod stack;
+pub mod windowclient;
 
 pub use zoraya_rt::*;
 

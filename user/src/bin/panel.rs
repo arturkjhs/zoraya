@@ -304,6 +304,8 @@ struct State {
     /// `OpenTerminal`, `settings` `SettingsChanged`, nothing else (review
     /// 7f, 8).
     launchers: Vec<Option<(Handle, &'static str, Option<Room>)>>,
+    /// The windows of POSIX programs that are open (ADR-0317 item 2).
+    windows: zoraya_panel::OpenWindows,
     /// The room keeper (ADR-0269): the launch job of every launch comes
     /// from it. Without one, a trusted room launches in the panel's own job.
     keeper: Option<zoraya_user::roomsclient::Keeper>,
@@ -454,6 +456,9 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         }
         return;
     }
+    // Counted from the send: the compositor says `ClientGone` when the
+    // client ends or when it refuses the record (9d re-review, W2).
+    st.windows.launched(tag);
     let terminal = if l.app == "term" {
         channel_create().ok()
     } else {
@@ -575,6 +580,7 @@ fn watch_launcher(st: &mut State, end: Handle, app: &'static str, room: Option<R
         }
     };
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+    st.windows.orphan(i);
     if port_subscribe(st.port, end, wanted, KEY_LAUNCHER + i as u64, Mode::Level).is_ok() {
         st.launchers[i] = Some((end, app, room));
     } else {
@@ -605,6 +611,43 @@ fn apply_settings(st: &State) -> bool {
     send(st.manager, &m, None)
 }
 
+/// The window of a POSIX program for the shell of launcher `i` in `room`
+/// (ADR-0317): the compositor learns the client with the room's record and
+/// the line's pills; the client end is returned to move to the shell.
+fn open_window(
+    st: &mut State,
+    i: usize,
+    room: Option<&Room>,
+    app: &str,
+    title: &str,
+    entries: &str,
+) -> Result<Handle, u32> {
+    use zoraya_proto_chooser::window_refusal as why;
+    let record = zoraya_panel::window_record(room, app, title, entries)?;
+    // One window a run, and the desktop's own applications keep their slots
+    // (every client the panel made is counted by its tag, 9d re-review W2).
+    st.windows
+        .admit(i, &record.app, zoraya_compositor::MAX_CLIENTS)?;
+    let (client, compositor_end) = channel_create().map_err(|_| why::FAILED)?;
+    let tag = st.next_tag;
+    st.next_tag = st.next_tag.wrapping_add(1).max(1);
+    let m = gui::AddRoomClient {
+        untrusted: 0,
+        colour: record.colour,
+        tag,
+        room: Data(record.room.as_bytes()),
+        app: Data(record.app.as_bytes()),
+        entries: Data(record.entries.as_bytes()),
+        line: Data(record.line.as_bytes()),
+    };
+    if !send(st.manager, &m, Some(compositor_end)) {
+        let _ = handle_close(client);
+        return Err(why::FAILED);
+    }
+    st.windows.opened(i, &record.app, tag);
+    Ok(client)
+}
+
 /// `OpenWith` from the file manager: the file's application is launched in
 /// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
 /// `SettingsChanged` from the settings window: the file is read and sent
@@ -625,6 +668,7 @@ fn launcher_requests(st: &mut State, i: usize) {
                 let _ = zoraya_user::port_unsubscribe(st.port, KEY_LAUNCHER + i as u64);
                 let _ = handle_close(end);
                 st.launchers[i] = None;
+                st.windows.orphan(i);
                 return;
             }
         };
@@ -685,6 +729,50 @@ fn launcher_requests(st: &mut State, i: usize) {
                 continue;
             }
         }
+        // A shell asks for the window of a POSIX program (ADR-0317). Only
+        // the channel of a `term` launch is read for it.
+        if app == "term"
+            && let Ok((_, m)) = decode::<zoraya_proto_chooser::OpenWindow<'_>>(msg, got.len())
+        {
+            fn text(d: &[u8]) -> &str {
+                core::str::from_utf8(d).unwrap_or("\u{1}")
+            }
+            let given = open_window(
+                st,
+                i,
+                room.as_ref(),
+                text(m.app.0),
+                text(m.title.0),
+                text(m.entries.0),
+            );
+            match given {
+                Ok(client) => {
+                    let mut out = [0u8; 64];
+                    if let Ok(n) = encode(&zoraya_proto_chooser::WindowOpened {}, t, &mut out) {
+                        let entry = ChannelEntry {
+                            handle: client,
+                            rights: ChannelObject::RIGHTS,
+                            transfer: Transfer::Move,
+                        };
+                        if channel_write(end, &out[..n], &[entry]).is_err() {
+                            let _ = handle_close(client);
+                        }
+                    } else {
+                        let _ = handle_close(client);
+                    }
+                }
+                Err(status) => {
+                    let r = zoraya_proto_chooser::WindowRefused {
+                        status: zoraya_protocol::Below(status),
+                    };
+                    let mut out = [0u8; 64];
+                    if let Ok(n) = encode(&r, t, &mut out) {
+                        let _ = channel_write(end, &out[..n], &[]);
+                    }
+                }
+            }
+            continue;
+        }
         // A terminal at a folder, in the file manager's own room (proposed
         // ADR-0248): only where that room's holds reach.
         if app == "files"
@@ -736,7 +824,9 @@ fn launcher_requests(st: &mut State, i: usize) {
                 let words = core::str::from_utf8(words).unwrap_or("");
                 let asked = core::str::from_utf8(asked).unwrap_or("?");
                 match zoraya_panel::opener_for(name, asked) {
-                    Some(app) if !words.chars().any(char::is_control) => {
+                    // The compositor's predicate: a line it would refuse
+                    // is refused here (9d re-review, W1).
+                    Some(app) if gui::plain_text(words) => {
                         // Whatever the sender gave, the application gets
                         // the file to read only (ADR-0153's `+r`).
                         let given = zoraya_user::files::File { end: got[0] };
@@ -812,6 +902,7 @@ fn main() -> i32 {
         next_tag: 1,
         port,
         launchers: Vec::new(),
+        windows: zoraya_panel::OpenWindows::default(),
         keeper: channel(8)
             .and_then(|manage| zoraya_user::roomsclient::Keeper::new(manage, channel(9))),
         tracker: zoraya_rooms::Tracker::new(),
@@ -819,6 +910,11 @@ fn main() -> i32 {
         told_usage: String::new(),
         cost: (0, 0, 0),
     };
+    // The first shell's channel (slot 10, ADR-0317): it may ask for the
+    // window of a POSIX program, as a terminal's shell launched here does.
+    if let Some(first) = channel(10) {
+        watch_launcher(&mut st, first, "term", None);
+    }
     let mut next_reload = clock_monotonic() + RELOAD_NS;
     let mut bytes = alloc::vec![0u8; 512];
     loop {
@@ -835,7 +931,13 @@ fn main() -> i32 {
             for h in &handles[..sizes.handles as usize] {
                 let _ = handle_close(*h);
             }
-            let Ok((_, d)) = decode::<gui::DockPressed>(&bytes[..sizes.bytes as usize], 0) else {
+            let msg = &bytes[..sizes.bytes as usize];
+            // A client the panel made is gone (ADR-0317 item 2).
+            if let Ok((_, g)) = decode::<gui::ClientGone>(msg, 0) {
+                st.windows.gone(g.tag);
+                continue;
+            }
+            let Ok((_, d)) = decode::<gui::DockPressed>(msg, 0) else {
                 continue;
             };
             // The press against the table the compositor drew (review 7d,

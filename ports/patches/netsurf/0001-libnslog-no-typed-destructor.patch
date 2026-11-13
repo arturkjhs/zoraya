@@ -1,0 +1,13 @@
+--- a/libnslog/src/filter-parser.y
++++ b/libnslog/src/filter-parser.y
+@@ -33,10 +33,6 @@
+ 	nslog_filter_t *filter;
+ }
+
+-%destructor {
+-	nslog_filter_unref($$);
+-} <filter>
+-
+ %token <patt> T_PATTERN
+ %token <level> T_LEVEL
+

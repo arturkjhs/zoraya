@@ -53,17 +53,26 @@ crates/zoraya-compositor/     test-gui
 crates/zoraya-term/           test-gui test-tour-gui
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
+crates/zoraya-surface/        check test-netsurf
+crates/zoraya-platform/       check test-netsurf test-gui
+ports/netsurf/                check test-netsurf
+ports/patches/netsurf/        check test-netsurf
+ports/apps/nsshim.c           check test-netsurf test-apps
+user/describe/posix/netsurf.cmd  test-netsurf test-files
+tests/gui/netsurf.script      test-netsurf
+user/src/windowclient.rs      test-netsurf
+user/src/bin/panel.rs         test-gui test-netsurf
 crates/zoraya-text/           test-gui test-qemu
 crates/zoraya-tokens/         test-gui
 crates/zoraya-fonts/          test-gui
 crates/zoraya-paint/          test-gui
 crates/zoraya-keymap/         test-gui
-crates/zoraya-panel/          test-gui
+crates/zoraya-panel/          test-gui test-netsurf
 crates/zoraya-proto-gui/      test-gui
 crates/zoraya-proto-display/  test-gui
 crates/zoraya-virtio-gpu/    test-gui
 crates/zoraya-proto-input/    test-gui
-crates/zoraya-proto-chooser/  test-gui
+crates/zoraya-proto-chooser/  test-gui test-netsurf
 crates/zoraya-chooser/        test-gui
 crates/zoraya-fsclient/       test-gui
 crates/zoraya-files/          test-gui
@@ -91,7 +100,7 @@ user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
 user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
-user/src/gui.rs               test-gui test-qemu test-net
+user/src/gui.rs               test-gui test-qemu test-net test-netsurf
 user/src/mmio.rs              test-gui test-qemu test-net test-files
 user/src/bin/t_devices.rs     test-qemu
 user/src/app.rs               test-gui
@@ -130,24 +139,24 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
 user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix
-user/src/posix_child.rs       test-posix test-net test-apps
+user/src/posix_child.rs       test-posix test-net test-apps test-netsurf
 ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-hand-run
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
 
 # The shell and its crates.
-user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps
+user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps test-netsurf
 crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps
 crates/zoraya-command/        test-boot test-files test-tour-gui
-crates/zoraya-describe/       test-files test-tour-gui test-apps
+crates/zoraya-describe/       test-files test-tour-gui test-apps test-netsurf
 crates/zoraya-settings/       test-files test-tour-gui test-gui
 user/describe/                test-files test-tour-gui
 docs/tour.md                  test-tour-gui
@@ -175,7 +184,7 @@ user/describe/commands/ping.cmd test-net test-files
 user/src/netconn.rs          test-net
 user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
-tools/test-httpd/            test-net
+tools/test-httpd/            test-net test-apps test-netsurf
 tests/shell/net-dns.script   test-net
 # The first lookup of a boot (proposed ADR-0316): the test DNS server with
 # its capture check, and the script.

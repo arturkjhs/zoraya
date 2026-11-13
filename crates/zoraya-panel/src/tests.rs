@@ -86,7 +86,8 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             (STARTUP_SLOT, Give::Startup),
             (6, Give::Terminal),
             (7, Give::Broker),
-            (8, Give::Tmp)
+            (8, Give::Tmp),
+            (WINDOW_SLOT, Give::Launcher)
         ]
     );
     assert!(s[1].2.is_empty());
@@ -623,4 +624,166 @@ fn without_a_keeper_the_line_is_written_and_kept() {
     );
     assert_eq!(r, Ok(()));
     assert_ne!(*file.borrow(), ROOMS);
+}
+
+/// INV-0317-1, the host half: a window is made for a trusted room's shell
+/// only, with the pills the shell wrote; the shell of an untrusted room has
+/// no channel to ask on and is refused if it asks.
+#[test]
+fn a_window_is_for_a_trusted_rooms_shell_only() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let trusted = p.rooms.get("project").cloned();
+    let untrusted = p.rooms.get("agent-1").cloned();
+    assert!(trusted.as_ref().is_some_and(|r| !r.untrusted));
+    assert!(untrusted.as_ref().is_some_and(|r| r.untrusted));
+    let entries = "+net example.org:443\n+r /share/netsurf";
+    let r = window_record(trusted.as_ref(), "netsurf", "NetSurf", entries).unwrap();
+    assert_eq!(
+        (r.untrusted, r.room.as_str(), r.app.as_str()),
+        (false, "project", "netsurf")
+    );
+    assert_eq!(
+        (r.entries.as_str(), r.line.as_str()),
+        (entries, "room project netsurf")
+    );
+    assert_eq!(
+        window_record(None, "netsurf", "NetSurf", entries)
+            .unwrap()
+            .line,
+        "netsurf"
+    );
+    assert_eq!(
+        window_record(untrusted.as_ref(), "netsurf", "NetSurf", entries),
+        Err(why::UNTRUSTED)
+    );
+    // An untrusted room's terminal is built without the channel as well.
+    let l = terminal(untrusted.as_ref());
+    assert!(
+        l.programs
+            .iter()
+            .all(|p| p.handles.iter().all(|s| s.give != Give::Launcher))
+    );
+    let l = terminal(trusted.as_ref());
+    assert!(
+        l.programs[1]
+            .handles
+            .iter()
+            .any(|s| s.give == Give::Launcher && s.slot == WINDOW_SLOT)
+    );
+    assert!(
+        l.programs[0]
+            .handles
+            .iter()
+            .all(|s| s.give != Give::Launcher)
+    );
+}
+
+#[test]
+fn a_window_request_is_checked() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let ok = |a: &str, t: &str, e: &str| window_record(None, a, t, e);
+    assert!(ok("netsurf", "NetSurf", "").is_ok());
+    for (a, t, e) in [
+        ("", "T", ""),
+        ("Net Surf", "T", ""),
+        ("netsurf", "", ""),
+        ("netsurf", "a\nb", ""),
+        ("netsurf", &"x".repeat(49), ""),
+        ("netsurf", "T", "net example.org"),
+        ("netsurf", "T", "+r /a\u{1b}[2J"),
+        ("netsurf", "T", &"+r /a\n".repeat(17)),
+        ("netsurf", "T", &format!("+r /{}", "a".repeat(200))),
+    ] {
+        assert_eq!(ok(a, t, e), Err(why::INVALID), "{a:?} {t:?} {e:?}");
+    }
+    assert!(ok("netsurf", "T", &"+r /a\n".repeat(16)).is_ok());
+}
+
+/// ADR-0317 item 2, review W2: one window a run for a shell and a program,
+/// freed when the compositor says its client is gone, and client slots kept
+/// for the desktop's own applications.
+#[test]
+fn a_shell_has_one_window_a_program_and_the_desktop_keeps_slots() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let max = 8;
+    let mut w = OpenWindows::default();
+    assert_eq!(w.clients(), UNTAGGED_CLIENTS);
+    assert_eq!(w.admit(0, "netsurf", max), Ok(()));
+    w.opened(0, "netsurf", 11);
+    // The same shell, the same program: refused while it is open.
+    assert_eq!(w.admit(0, "netsurf", max), Err(why::BUSY));
+    // Another shell may have one, up to the reserve.
+    assert_eq!(w.admit(1, "netsurf", max), Ok(()));
+    w.opened(1, "netsurf", 12);
+    // 2 untagged + 2 open + this + 3 reserved = 8: still fits; one more not.
+    assert_eq!(w.admit(2, "netsurf", max), Ok(()));
+    w.opened(2, "netsurf", 13);
+    assert_eq!(w.admit(3, "netsurf", max), Err(why::BUSY));
+    // Closed: the shell may ask again, and a slot is back.
+    w.gone(11);
+    assert_eq!((w.count(), w.admit(0, "netsurf", max)), (2, Ok(())));
+    w.gone(99);
+    assert_eq!(w.count(), 2);
+    // A shell that ended is not held to its window by the next one of its slot.
+    w.orphan(1);
+    assert_eq!(w.admit(1, "netsurf", max), Ok(()));
+}
+
+/// 9d re-review, W2: every application the panel launched takes a slot (an
+/// editor, a terminal of an untrusted room, an `OpenWith`), not only the
+/// ones with a launcher channel; its `ClientGone` frees it.
+#[test]
+fn every_launched_application_is_counted() {
+    use zoraya_proto_chooser::window_refusal as why;
+    let max = 8;
+    let mut w = OpenWindows::default();
+    // A home terminal, two editors, an untrusted room's terminal.
+    for tag in [1, 2, 3, 4] {
+        w.launched(tag);
+    }
+    assert_eq!(w.clients(), 6);
+    // 6 + this + 3 reserved = 10 > 8: no window.
+    assert_eq!(w.admit(0, "netsurf", max), Err(why::BUSY));
+    // Both editors close: 4 + 1 + 3 = 8.
+    w.gone(2);
+    w.gone(3);
+    assert_eq!(w.admit(0, "netsurf", max), Ok(()));
+    w.opened(0, "netsurf", 5);
+    assert_eq!(w.admit(1, "netsurf", max), Err(why::BUSY));
+}
+
+/// 9d re-review, W1: a request the compositor would refuse is refused by
+/// the panel too (its predicates are the compositor's), and a refusal the
+/// compositor reports as `ClientGone` frees the shell and the slot.
+#[test]
+fn a_window_the_compositor_refuses_does_not_stay_open() {
+    use zoraya_proto_chooser::window_refusal as why;
+    // Bidirectional marks in the title or a pill; a name past 16 bytes.
+    for (a, t, e) in [
+        ("netsurf", "a\u{202e}b", ""),
+        ("netsurf", "T", "+r ./\u{202e}lmth.html"),
+        ("netsurf", "T", "+r /a\u{2066}"),
+        ("netsurf", "T", "+r /a\u{200f}"),
+        ("abcdefghijklmnopq", "T", ""),
+    ] {
+        assert_eq!(
+            window_record(None, a, t, e),
+            Err(why::INVALID),
+            "{a:?} {t:?} {e:?}"
+        );
+    }
+    assert!(window_record(None, "abcdefghijklmnop", "T", "").is_ok());
+    // The compositor refused it anyway (no slot left): its `ClientGone`
+    // frees both the shell's program and the slot, three times over.
+    let max = 8;
+    let mut w = OpenWindows::default();
+    for tag in [21, 22, 23] {
+        assert_eq!(w.admit(0, "netsurf", max), Ok(()));
+        w.opened(0, "netsurf", tag);
+        w.gone(tag);
+    }
+    assert_eq!((w.count(), w.clients()), (0, UNTAGGED_CLIENTS));
+    assert_eq!(w.admit(0, "netsurf", max), Ok(()));
 }

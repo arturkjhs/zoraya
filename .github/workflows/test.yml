@@ -133,8 +133,9 @@ jobs:
     needs: [plan, image]
     if: ${{ needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
-    # 30: a cold ports cache builds OpenSSL, curl and wget as well (TASK-27 9a).
-    timeout-minutes: 30
+    # 45: a cold ports cache builds OpenSSL, curl and wget (TASK-27 9a) and NetSurf with
+    # its libraries (9d) as well.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
@@ -154,17 +155,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-v1
-      - name: Install clang (zcc, libc.a and the ports) and zstd
+          key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-netsurf-v2
+      - name: Install clang (zcc, libc.a and the ports), zstd and NetSurf's build tools
         if: ${{ needs.image.outputs.ref == '' }}
         run: |
-          # GitHub's Ubuntu images carry both: when they are there the network
+          # GitHub's Ubuntu images carry them: when they are there the network
           # is not needed (the runners' mirrors have been slow or unreachable).
-          if command -v clang >/dev/null && command -v zstd >/dev/null; then
-            echo "clang $(clang --version | head -1) and zstd are installed: no apt"
+          # gperf, flex, bison and pkg-config are NetSurf's libraries' (9d: the
+          # build job of a9 failed on `gperf: No such file`); the same list as
+          # .github/ci/Dockerfile.
+          missing=
+          for t in clang zstd gperf flex bison pkg-config; do
+            command -v "$t" >/dev/null || missing="$missing $t"
+          done
+          if [ -z "$missing" ]; then
+            echo "clang $(clang --version | head -1), zstd, gperf, flex, bison and pkg-config are installed: no apt"
             exit 0
           fi
-          APT_DEB_CACHE="$HOME/apt-debs" tools/ci-apt-install.sh clang zstd
+          echo "missing:$missing"
+          APT_DEB_CACHE="$HOME/apt-debs" tools/ci-apt-install.sh clang zstd gperf flex bison pkg-config
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
