@@ -340,7 +340,8 @@ fuzz_target!(|data: &[u8]| {
             let wild = [ReachRule {
                 target: Target::Wildcard("zoraya"),
                 ports: Ports::ANY,
-                protocols: Protocols::BOTH,
+                // Echo too: the carve reaches `ping` by name and `resolve`.
+                protocols: Protocols::ALL,
             }];
             let mut scope = [0u8; 128];
             if let Some(n) = encode(&wild, &[], &mut scope) {
@@ -384,7 +385,7 @@ fuzz_target!(|data: &[u8]| {
                 } else {
                     Err(zoraya_net::dns::ResolveFail::Failure)
                 };
-                let _ = service.resolve_done(&rig.fixed, Resolved { token, result }, rig.now);
+                let _ = service.resolve_done(&mut rig.fixed, Resolved { token, result }, rig.now);
             }
             for id in ids {
                 service.remove(id);
