@@ -1,0 +1,13 @@
+# zoraya-net: the per-request round trips of a ping run (INV-0330-1). Host tests
+# only. A request without a reply is marked u32::MAX in its place; the mutant
+# marks it 0 (an instant reply) and the tests of lost and partly lost runs
+# must see it.
+tests = ["cargo test -q -p zoraya-net --lib ping"]
+timeout = 600
+
+[[mutant]]
+id = "N-ping-lost-mark"
+file = "crates/zoraya-net/src/stack.rs"
+find = '.map(|i| run.rtt.get(i).copied().flatten().unwrap_or(u32::MAX))'
+replace = '.map(|i| run.rtt.get(i).copied().flatten().unwrap_or(0))'
+note = "review of hand-run W2"

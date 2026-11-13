@@ -22,6 +22,9 @@ use crate::link::{Counters, Link, LinkDevice, MAX_FRAME};
 /// The identifier of our echo requests.
 const PING_IDENT: u16 = 0x5a50;
 /// The payload of an echo request: 32 bytes, as `ping` sends.
+/// The most requests of one run: `zoraya_proto_net::MAX_PINGS`, which the
+/// reply's `rtts` list holds (INV-0330-1).
+const MAX_PING_COUNT: u32 = zoraya_proto_net::MAX_PINGS;
 const PING_DATA: [u8; 32] = *b"zoraya echo request 0123456789ab";
 /// Milliseconds between two echo requests of one run.
 pub const PING_INTERVAL_US: i64 = 200_000;
@@ -377,7 +380,7 @@ impl<L: Link> Stack<L> {
         if own.is_none() {
             return Err(PingError::NoAddress);
         }
-        if !is_unicast(target) || own == Some(target) || count == 0 || count > 64 {
+        if !is_unicast(target) || own == Some(target) || count == 0 || count > MAX_PING_COUNT {
             return Err(PingError::BadTarget);
         }
         self.runs = self.runs.wrapping_add(1);

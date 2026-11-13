@@ -254,6 +254,8 @@ fn main() -> i32 {
         lost.sent, lost.received
     );
     assert_eq!((lost.status, lost.sent, lost.received), (status::OK, 8, 0));
+    // INV-0330-1: every request is marked as without a reply.
+    assert_eq!(lost.rtts, [zoraya_proto_net::NO_REPLY; 8]);
     let again = ping(root, GATEWAY, 4);
     assert_eq!(
         (again.status, again.sent, again.received),

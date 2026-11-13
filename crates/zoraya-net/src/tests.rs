@@ -36,6 +36,9 @@ struct Queues {
     /// Every frame the client sent, for the tests that mutate real ones.
     from_client: Vec<Vec<u8>>,
     from_server: Vec<Vec<u8>>,
+    /// Echo replies (ICMP type 0) with these sequence numbers never reach the
+    /// client: a lossy path.
+    drop_echo_seq: Vec<u16>,
 }
 
 struct End {
@@ -99,7 +102,16 @@ impl Link for End {
             q.to_server.push_back(frame.to_vec());
         } else {
             q.from_server.push(frame.to_vec());
-            q.to_client.push_back(frame.to_vec());
+            // Ethernet 14, IPv4 20 (no options), ICMP: type, code, checksum,
+            // identifier, sequence number.
+            let echo_reply = frame.len() >= 42
+                && frame[12..14] == [0x08, 0x00]
+                && frame[23] == 1
+                && frame[34] == 0;
+            let seq = echo_reply.then(|| u16::from_be_bytes([frame[40], frame[41]]));
+            if !seq.is_some_and(|s| q.drop_echo_seq.contains(&s)) {
+                q.to_client.push_back(frame.to_vec());
+            }
         }
         true
     }
@@ -407,6 +419,32 @@ fn ping_to_nobody_ends_after_its_timeout_with_nothing_received() {
         .unwrap();
     assert_eq!((done.sent, done.received), (2, 0));
     assert_eq!(done.rtt_max_us, 0);
+    // INV-0330-1: a request that got no reply is marked in its place.
+    assert_eq!(done.rtts, vec![u32::MAX; 2]);
+}
+
+#[test]
+fn ping_with_some_replies_lost_marks_exactly_those_requests() {
+    // INV-0330-1: one entry per request in order; the entries that are not
+    // `u32::MAX` number `received`, and the lost ones are in their places.
+    let mut net = Net::new(static_config());
+    net.queues.borrow_mut().drop_echo_seq = vec![1, 3];
+    net.client.ping(SERVER_IP, 5, 1_000_000, net.now).unwrap();
+    assert!(net.run_until(10_000_000, |n| !n.client.ping_running()));
+    let done = net
+        .client
+        .take_events()
+        .into_iter()
+        .find_map(|e| match e {
+            Event::PingDone(r) => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((done.sent, done.received), (5, 3));
+    assert_eq!(done.rtts.len(), 5);
+    let lost: Vec<usize> = (0..5).filter(|i| done.rtts[*i] == u32::MAX).collect();
+    assert_eq!(lost, [1, 3]);
+    assert!(done.rtt_min_us > 0 && done.rtt_min_us <= done.rtt_max_us);
 }
 
 #[test]
