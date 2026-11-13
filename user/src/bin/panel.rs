@@ -456,6 +456,9 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         }
         return;
     }
+    // Counted from the send: the compositor says `ClientGone` when the
+    // client ends or when it refuses the record (9d re-review, W2).
+    st.windows.launched(tag);
     let terminal = if l.app == "term" {
         channel_create().ok()
     } else {
@@ -622,10 +625,9 @@ fn open_window(
     use zoraya_proto_chooser::window_refusal as why;
     let record = zoraya_panel::window_record(room, app, title, entries)?;
     // One window a run, and the desktop's own applications keep their slots
-    // (the chooser, and the launchers' clients, are the others).
-    let others = 1 + st.launchers.iter().flatten().count();
+    // (every client the panel made is counted by its tag, 9d re-review W2).
     st.windows
-        .admit(i, &record.app, others, zoraya_compositor::MAX_CLIENTS)?;
+        .admit(i, &record.app, zoraya_compositor::MAX_CLIENTS)?;
     let (client, compositor_end) = channel_create().map_err(|_| why::FAILED)?;
     let tag = st.next_tag;
     st.next_tag = st.next_tag.wrapping_add(1).max(1);
@@ -822,7 +824,9 @@ fn launcher_requests(st: &mut State, i: usize) {
                 let words = core::str::from_utf8(words).unwrap_or("");
                 let asked = core::str::from_utf8(asked).unwrap_or("?");
                 match zoraya_panel::opener_for(name, asked) {
-                    Some(app) if !words.chars().any(char::is_control) => {
+                    // The compositor's predicate: a line it would refuse
+                    // is refused here (9d re-review, W1).
+                    Some(app) if gui::plain_text(words) => {
                         // Whatever the sender gave, the application gets
                         // the file to read only (ADR-0153's `+r`).
                         let given = zoraya_user::files::File { end: got[0] };

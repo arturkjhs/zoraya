@@ -1207,3 +1207,110 @@ fn the_panel_is_told_a_tagged_client_is_gone() {
     s.c.step();
     assert_eq!(gone(&mut s), vec![5]);
 }
+
+/// 9d re-review, W1: a tagged `AddRoomClient` the compositor refuses (a
+/// record it does not take, no slot left) is told gone at once, since the
+/// panel reads no reply and counts the client from the send.
+#[test]
+fn a_refused_tagged_client_is_told_gone() {
+    let mut s = setup();
+    let panel = s.panel();
+    let add = |s: &mut Setup, tag: u32, app: &str, line: &str| -> u32 {
+        let end = s.f().channel(64);
+        let m = gui::AddRoomClient {
+            untrusted: 0,
+            colour: 0,
+            tag,
+            room: zoraya_protocol::Data(b""),
+            app: zoraya_protocol::Data(app.as_bytes()),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(line.as_bytes()),
+        };
+        s.f().send(panel, message(&m, 7), vec![end]);
+        s.c.step();
+        let out = s.f().take(panel);
+        let (_, d) = out
+            .iter()
+            .find_map(|m| decode::<gui::ManagerDone>(m, 0).ok())
+            .unwrap();
+        let gone: Vec<u32> = out
+            .iter()
+            .filter_map(|m| decode::<gui::ClientGone>(m, 0).ok())
+            .map(|(_, g)| g.tag)
+            .collect();
+        if d.status.0 == status::OK {
+            assert!(gone.is_empty(), "{gone:?}");
+        } else {
+            assert_eq!(gone, vec![tag], "status {}", d.status.0);
+        }
+        d.status.0
+    };
+    // A bidirectional override in the line, a name that is not one.
+    assert_eq!(
+        add(&mut s, 7, "netsurf", "netsurf ./\u{202e}lmth.html"),
+        status::INVALID
+    );
+    assert_eq!(add(&mut s, 8, "NetSurf", "netsurf"), status::INVALID);
+    // Every slot taken: the next is refused for want of one.
+    let mut tag = 10;
+    while add(&mut s, tag, "netsurf", "netsurf") == status::OK {
+        tag += 1;
+        assert!(tag < 10 + MAX_CLIENTS as u32 + 1, "a slot past MAX_CLIENTS");
+    }
+    // An untagged refusal tells nothing.
+    let end = s.f().channel(64);
+    let m = gui::AddRoomClient {
+        untrusted: 0,
+        colour: 0,
+        tag: 0,
+        room: zoraya_protocol::Data(b""),
+        app: zoraya_protocol::Data(b"term"),
+        entries: zoraya_protocol::Data(b""),
+        line: zoraya_protocol::Data(b"term"),
+    };
+    s.f().send(panel, message(&m, 7), vec![end]);
+    s.c.step();
+    let out = s.f().take(panel);
+    assert!(out.iter().all(|m| decode::<gui::ClientGone>(m, 0).is_err()));
+}
+
+/// 9d re-review, W1: a `ClientGone` the panel's full queue does not take is
+/// sent again once there is room, not lost.
+#[test]
+fn a_client_gone_waits_for_room_in_the_panels_queue() {
+    let mut s = setup();
+    let panel = s.panel();
+    let end = s.f().channel(64);
+    let m = gui::AddRoomClient {
+        untrusted: 0,
+        colour: 0,
+        tag: 9,
+        room: zoraya_protocol::Data(b""),
+        app: zoraya_protocol::Data(b"netsurf"),
+        entries: zoraya_protocol::Data(b""),
+        line: zoraya_protocol::Data(b"netsurf"),
+    };
+    s.f().send(panel, message(&m, 7), vec![end]);
+    s.c.step();
+    assert_eq!(done(&mut s, panel), status::OK);
+    // The panel reads nothing: its queue is full.
+    s.f().peers.get_mut(&panel).unwrap().room = 0;
+    s.f().send(end, vec![0; 8192], vec![]);
+    s.c.step();
+    assert!(s.f().take(panel).is_empty());
+    s.c.step();
+    assert!(s.f().take(panel).is_empty());
+    // It reads again: the next round sends the tag, once.
+    s.f().peers.get_mut(&panel).unwrap().room = 64;
+    s.c.step();
+    let gone: Vec<u32> = s
+        .f()
+        .take(panel)
+        .iter()
+        .filter_map(|m| decode::<gui::ClientGone>(m, 0).ok())
+        .map(|(_, g)| g.tag)
+        .collect();
+    assert_eq!(gone, vec![9]);
+    s.c.step();
+    assert!(s.f().take(panel).is_empty());
+}

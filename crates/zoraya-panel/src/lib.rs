@@ -481,48 +481,58 @@ pub struct WindowRecord {
 /// windows never take (ADR-0317 item 2, review W2).
 pub const RESERVED_CLIENTS: usize = 3;
 
-/// The windows of POSIX programs that are open: each is one compositor client
-/// the panel made (ADR-0317 item 2: one window a run, refused while it is
-/// open). A window is open from `WindowOpened` until the compositor says its
-/// client is gone.
+/// The compositor's clients the panel did not make and has no tag for: the
+/// chooser and `init`'s first terminal. Counted as live for the session (the
+/// safe side: a first terminal that ended keeps its slot counted).
+pub const UNTAGGED_CLIENTS: usize = 2;
+
+/// The compositor's clients the panel counts (ADR-0317 item 2): every
+/// client it made is tagged, a launch's as a window's, and is live from the
+/// send of its `AddRoomClient` until the compositor says `ClientGone` for
+/// its tag, which it also says when it refuses the record (9d re-review, W1,
+/// W2). The windows of POSIX programs are one a run, refused while open.
 #[derive(Debug, Default)]
 pub struct OpenWindows {
-    /// `(launcher, app, tag)`; a launcher of `usize::MAX` is a shell that has
-    /// ended, whose window still holds its slot.
+    /// `(launcher, app, tag)` of each POSIX program's window; a launcher of
+    /// `usize::MAX` is a shell that has ended, whose window still holds its
+    /// slot.
     open: Vec<(usize, String, u32)>,
+    /// The tags of the applications the panel launched (`term`, `files`,
+    /// `edit`, an `OpenWith`, in any room).
+    launched: Vec<u32>,
 }
 
 impl OpenWindows {
     /// Whether the shell of `launcher` may have a window for `app`: not while
-    /// it has one open, and not if the clients that exist (`others`: the
-    /// chooser and the applications' launchers, counted by the panel) with
-    /// the open windows and this one would leave fewer than
-    /// [`RESERVED_CLIENTS`] of the compositor's `max_clients`.
-    pub fn admit(
-        &self,
-        launcher: usize,
-        app: &str,
-        others: usize,
-        max_clients: usize,
-    ) -> Result<(), u32> {
+    /// it has one open, and not if the clients that exist ([`Self::clients`])
+    /// with this one would leave fewer than [`RESERVED_CLIENTS`] of the
+    /// compositor's `max_clients`.
+    pub fn admit(&self, launcher: usize, app: &str, max_clients: usize) -> Result<(), u32> {
         use zoraya_proto_chooser::window_refusal as why;
         if self.open.iter().any(|(l, a, _)| *l == launcher && a == app) {
             return Err(why::BUSY);
         }
-        if others + self.open.len() + 1 + RESERVED_CLIENTS > max_clients {
+        if self.clients() + 1 + RESERVED_CLIENTS > max_clients {
             return Err(why::BUSY);
         }
         Ok(())
     }
 
-    /// A window opened.
+    /// A window's `AddRoomClient` was sent.
     pub fn opened(&mut self, launcher: usize, app: &str, tag: u32) {
         self.open.push((launcher, String::from(app), tag));
     }
 
-    /// The compositor's client of `tag` is gone: its window is closed.
+    /// An application's `AddRoomClient` was sent with `tag`.
+    pub fn launched(&mut self, tag: u32) {
+        self.launched.push(tag);
+    }
+
+    /// The compositor's client of `tag` is gone, or was refused: its window
+    /// is closed, its slot free.
     pub fn gone(&mut self, tag: u32) {
         self.open.retain(|(_, _, t)| *t != tag);
+        self.launched.retain(|t| *t != tag);
     }
 
     /// The shell of `launcher` ended: it asks for nothing more, and the next
@@ -533,9 +543,15 @@ impl OpenWindows {
         }
     }
 
-    /// How many are open.
+    /// How many windows are open.
     pub fn count(&self) -> usize {
         self.open.len()
+    }
+
+    /// How many of the compositor's clients are live as the panel counts
+    /// them: the untagged ones, the launched applications, the windows.
+    pub fn clients(&self) -> usize {
+        UNTAGGED_CLIENTS + self.launched.len() + self.open.len()
     }
 }
 
@@ -555,13 +571,14 @@ pub fn window_record(
     if room.is_some_and(|r| r.untrusted) {
         return Err(why::UNTRUSTED);
     }
-    let plain = |t: &str| !t.chars().any(char::is_control);
-    let name_ok = !app.is_empty()
-        && app.len() <= 32
-        && app
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
-    if !name_ok || title.is_empty() || title.chars().count() > 48 || !plain(title) {
+    // The compositor's own predicates, so that a request the panel admits
+    // is one the compositor takes (9d re-review, W1).
+    let plain = zoraya_proto_gui::plain_text;
+    if !zoraya_proto_gui::is_app_name(app)
+        || title.is_empty()
+        || title.chars().count() > 48
+        || !plain(title)
+    {
         return Err(why::INVALID);
     }
     let mut count = 0;

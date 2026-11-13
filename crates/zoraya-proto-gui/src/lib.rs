@@ -73,6 +73,32 @@ pub mod buttons {
 /// The longest window title, in bytes of UTF-8 (ADR-0160).
 pub const MAX_TITLE: usize = 256;
 
+/// The longest application name of a launch record (`AddRoomClient`'s `app`,
+/// `SetDock`'s names), in bytes.
+pub const MAX_APP_NAME: usize = 16;
+
+/// An application name the compositor takes in a launch record: 1 to
+/// [`MAX_APP_NAME`] bytes of `a-z`, `0-9`, `-` and `_`. The panel asks the
+/// same before it sends one (9d re-review, W1).
+pub fn is_app_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_APP_NAME
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// Text the compositor draws in its trusted material (a record's line and
+/// entries, a title): no control character and no bidirectional mark,
+/// embedding, override or isolate, which would reorder what the person reads
+/// (review 7e, 19). The panel asks the same before it sends one (9d
+/// re-review, W1).
+pub fn plain_text(s: &str) -> bool {
+    !s.chars().any(|c| {
+        c.is_control()
+            || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    })
+}
+
 /// Popups a client may have open at once (ADR-0160).
 pub const MAX_POPUPS: usize = 4;
 
@@ -444,7 +470,7 @@ protocol! {
         /// The room's name; empty for `home`.
         room: Data<'a, 24>,
         /// The application, as the dock names it (`term`, `edit`).
-        app: Data<'a, 16>,
+        app: Data<'a, MAX_APP_NAME>,
         /// The record's entries in ADR-0153's words, one a line.
         entries: Data<'a, MAX_ENTRIES>,
         /// The `zosh` line that made the record (`room project term`).

@@ -139,6 +139,17 @@ zoraya_window_poll
   the compositor reports the client gone (`ClientGone`, a new manager event, ordinal 45), and at most as many windows
   as leave `RESERVED_CLIENTS` (3) of the compositor's client slots free (the table of 8 is a backlog item). The
   panel moves the client end to the shell with TRANSFER; the shell moves it to the child without it.
+- *Note (9d re-review, W1, W2, N2):* the panel counts every client it made by its tag, a launched application's (any
+  room, `edit` and `OpenWith` included) as a window's, from the send of `AddRoomClient`, plus the two untagged ones
+  (the chooser, `init`'s first terminal; `zoraya_panel::UNTAGGED_CLIENTS`). The compositor says `ClientGone(tag)`
+  when a tagged client ends and also when it refuses a tagged `AddRoomClient` (a record it does not take, no slot,
+  `NO_MEMORY`); a `ClientGone` the panel's full queue does not take is kept (at most 256) and sent again every 10 ms,
+  so none is lost while the panel lives. No timeout frees a window: a window may stay open for hours, and the panel
+  cannot see the program's end of the client channel (it moved it). The panel checks a request with the compositor's
+  own predicates (`zoraya_proto_gui::plain_text`, `is_app_name`, 16 bytes), so a line with a bidirectional mark is
+  refused before it reaches the compositor. `make test-netsurf` marks the test server's log before the click on
+  Proceed (the runner's `mark` step) and requires exactly one refused handshake before the mark and one or more
+  after it.
 
 ## Revisit triggers
 - A second POSIX graphical program with different needs (video, GL), or a measured frame cost above 16 ms for a full
