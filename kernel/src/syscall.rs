@@ -244,7 +244,7 @@ impl Calls<'_> {
     /// INV-0295-3: the hold of a transport device ends with the last handle
     /// of this process that can write it. Called with the table unlocked
     /// after a handle to `object` left it, by a close or by a `Move` (spawn,
-    /// channel_write, snapshot). A process has one thread, so nothing adds a
+    /// channel_write, snapshot). Nothing here pauses, so no sibling adds a
     /// handle meanwhile; and the kernel is not preempted on its one CPU
     /// (design.md, Scheduler), so the process a moved handle went to runs
     /// only after the hold has ended.
@@ -694,8 +694,7 @@ impl Handlers for Calls<'_> {
         // In steps of `STEP` pages with no lock held between them
         // (ADR-0270): the range is in the table of no mapping until the last
         // step, and a `job_kill` between steps unmaps what was done. The
-        // process's one thread is in this call, so nothing else changes its
-        // space meanwhile.
+        // mapping lock is held, so no other thread maps or unmaps meanwhile.
         let to_status = |e| match e {
             MappingError::Limit => Status::LimitReached,
             MappingError::Quota => Status::OverQuota,
@@ -766,13 +765,23 @@ impl Handlers for Calls<'_> {
         let mut handles = self.process.handles.lock();
         handles.reserve_many(2)?;
         let mut record = [0; 16];
+        let mut made = [None; 2];
         for end in 0..2 {
             let object = Object::Channel(pair.clone(), end);
             let handle = handles.insert(object, ChannelObject::RIGHTS, object::next_id())?;
+            made[end] = Some(handle);
             record[end * 8..end * 8 + 8].copy_from_slice(&handle.raw().to_le_bytes());
         }
-        drop(handles);
-        target.write(&record)?;
+        // `Pair::new` may have paused, and a sibling may have unmapped `ends`
+        // since: if the record cannot be written, the handles come out again.
+        if let Err(e) = target.write(&record) {
+            let gone: [_; 2] = made.map(|h| h.and_then(|h| handles.remove(h)));
+            drop(handles);
+            for entry in gone.into_iter().flatten() {
+                object::close(entry);
+            }
+            return Err(e);
+        }
         Ok(0)
     }
 
@@ -949,7 +958,8 @@ impl Handlers for Calls<'_> {
             at += 8;
         }
         drop(handles);
-        // This range was just written, and a process has one thread.
+        // This range was just written, and no step point lies between (the
+        // kernel is not preempted), so no sibling has unmapped it.
         values.write(&zeros[..at])?;
         Ok(0)
     }
@@ -1050,7 +1060,8 @@ impl Handlers for Calls<'_> {
         let value = value.0 as u32;
         device.check_register(offset.0, width.0)?;
         // The first write makes this process the transport's holder, and a
-        // second holder is refused (INV-0295-3). A process has one thread.
+        // second holder is refused (INV-0295-3). Nothing pauses here, and the
+        // space's lock is held, so two threads cannot both become the holder.
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
         let held = space.hold(&device)?;
@@ -1097,7 +1108,8 @@ impl Handlers for Calls<'_> {
             let mut record = [0; 16];
             record[..8].copy_from_slice(&address.to_le_bytes());
             record[8..].copy_from_slice(&length.to_le_bytes());
-            // This range was just written, and a process has one thread.
+            // This range was just written, and no step point lies between (the
+            // kernel is not preempted), so no sibling has unmapped it.
             target.at(i as u64 * 16)?.write(&record)?;
         }
         Ok(handle.raw())
@@ -1142,21 +1154,28 @@ impl Handlers for Calls<'_> {
         target.write(&[0; 16])?;
         // The table's lock is not held while the stream is built: its
         // memory object prepares the heap, which may pause (ADR-0270
-        // point 2). The room for both ends is kept by the reservation (a
-        // process has one thread).
-        self.process.handles.lock().reserve_many(2)?;
+        // point 2). A sibling thread runs at that pause: it may use up free
+        // slots or unmap `ends`. So the room is made after the last pause,
+        // and the record is written with the table locked, and both handles
+        // are taken out again if it cannot be (the caller is told of none).
         let (reader, writer) = Stream::create(Some(self.process.job()))?;
         let mut handles = self.process.handles.lock();
+        handles.reserve_many(2)?;
         let read = Object::StreamRead(reader);
         let read = handles.insert(read, StreamReadObject::RIGHTS, object::next_id())?;
         let write = Object::StreamWrite(writer);
         let write = handles.insert(write, StreamWriteObject::RIGHTS, object::next_id())?;
-        drop(handles);
         let mut record = [0; 16];
         record[..8].copy_from_slice(&read.raw().to_le_bytes());
         record[8..].copy_from_slice(&write.raw().to_le_bytes());
-        // This range was just written, and a process has one thread.
-        target.write(&record)?;
+        if let Err(e) = target.write(&record) {
+            let gone = [handles.remove(read), handles.remove(write)];
+            drop(handles);
+            for entry in gone.into_iter().flatten() {
+                object::close(entry);
+            }
+            return Err(e);
+        }
         Ok(0)
     }
 
