@@ -13,6 +13,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod errno;
+mod fcntl_locks;
 pub mod fd;
 pub mod jobs;
 pub mod lock;
@@ -20,6 +21,7 @@ pub mod net;
 pub mod path;
 pub mod process;
 pub mod random;
+pub mod records;
 pub mod signals;
 pub mod socket;
 pub mod stat;

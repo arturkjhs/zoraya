@@ -286,6 +286,22 @@ Not done: INV-0306-3 and -5 checks; INV-0308-3 over fresh logs of all workloads;
 
 ---
 
+## 9b step 4, record locks and SQLite's `threadtest3` (branch `work/9b-locks`)
+
+SQLite's default unix VFS takes `fcntl` record locks; without them every scenario of `threadtest3` failed at its first write with
+`SQLITE_IOERR_LOCK` (3850). ADR-0319 (`proposed`; it was numbered 0317 and renumbered because `work/9d` uses 0317 and 0318) decides Option A:
+advisory record locks in `libposix`, in the process (`F_SETLK`, `F_SETLKW`, `F_GETLK`, `F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK`;
+`crates/zoraya-posix/src/records.rs`, `fcntl_locks.rs`, `ffi.rs`), released on `close` and `dup3`. **Documented limit: a second process does
+not see the lock** (the file service has no owner per process). `flock` stays absent. ADR-0005 item 6 says record locks are absent; ADR-0319
+item 8 and an open-question note in ADR-0005 record the tension (architect's to resolve).
+
+What holds now for 9b's "done when" (ADR-0309): (1) musl's libc-test thread subset (`make test-posix-suites`, exclusions in
+`tests/libc-test/threads-excluded.txt`); (2) SQLite `threadtest3`, 7 rollback-journal scenarios (`make test-posix-threadtest3`, a step of
+`make test` and of CI, HVF and TCG; the WAL scenarios are excluded: no shared mapping); (3) the stress program `t_threads.c`
+(`make test-posix-threads`); (4) OpenSSL with threads (9a's section); ADR-0308 supersedes ADR-0100's "no threads".
+
+Ran in this session (M4, `make test-posix-threadtest3`, `FULL=1`): all 7 scenarios (`cgt_pager_1 dynamic_triggers create_drop_index_1 lookaside1 vacuum1 stress1 shared1`) pass under HVF and under TCG, "0 errors out of 7 tests", `zoraya-fsck` clean after each; no scenario needed a fix or an exclusion. Not run: a CI run (the candidate is the orchestrator's).
+
 ## 9a: TLS for C programs, zlib, curl, wget
 
 Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-11-13.

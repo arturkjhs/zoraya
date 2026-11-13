@@ -2138,13 +2138,60 @@ extern "C" fn __dup3(old: i32, new: i32, flags: i32) -> i32 {
     int(state(|p| p.dup3(old, new, flags as u32, true)))
 }
 
+/// `fcntl`'s record-lock commands (ADR-0319): `argument` is a `struct flock`.
+/// A waiting command sleeps a millisecond at a time while the lock is held by
+/// another owner (a sleep that a handler interrupts is `EINTR`).
+fn fcntl_record_lock(fd: i32, command: i32, argument: i64) -> Result<i32, i32> {
+    use crate::records::{self, FLOCK_SIZE};
+    if argument == 0 {
+        return Err(EFAULT);
+    }
+    let at = argument as *mut [u8; FLOCK_SIZE];
+    // SAFETY: the caller (C's `fcntl`) passes, for a record-lock command, a
+    // pointer to a readable `struct flock` of `FLOCK_SIZE` bytes. Only null is
+    // checked: any other bad pointer faults the process, where Linux answers
+    // `EFAULT` (as the other pointer arguments of this file do). The read is
+    // unaligned-safe for `[u8; N]`.
+    let mut flock = unsafe { at.read() };
+    // A waiter must not take the lock on another file if its fd is closed and
+    // the number reused meanwhile: the description is checked between polls.
+    let conn = with(|p| p.lock_description(fd));
+    loop {
+        match state(|p| p.fcntl_lock(fd, command, &mut flock)) {
+            Ok(()) => break,
+            Err(EAGAIN) if records::waits(command) => {
+                let until = zoraya_rt::clock_monotonic().saturating_add(1_000_000);
+                let e = procs::nanosleep_until(until, ptr::null_mut());
+                if e != 0 {
+                    return Err(e);
+                }
+                if with(|p| p.lock_description(fd)) != conn {
+                    return Err(EBADF);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    if matches!(command, records::F_GETLK | records::F_OFD_GETLK) {
+        // SAFETY: as above, the pointer is writable (`F_GETLK` fills the struct).
+        unsafe { at.write(flock) };
+    }
+    Ok(0)
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn fcntl(fd: i32, command: i32, argument: i64) -> i32 {
+    if crate::records::is_lock_command(command) {
+        return int(fcntl_record_lock(fd, command, argument));
+    }
     int(state(|p| p.fcntl(fd, command, argument)))
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn zoraya_posix_fcntl(fd: i64, command: i64, argument: i64) -> i64 {
+    if crate::records::is_lock_command(command as i32) {
+        return raw(fcntl_record_lock(fd as i32, command as i32, argument).map(i64::from));
+    }
     raw(state(|p| p.fcntl(fd as i32, command as i32, argument)).map(i64::from))
 }
 

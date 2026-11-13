@@ -81,7 +81,7 @@ Recommended: **Option C**. It is a recommendation, not a decision. The details a
    `damage`; `commit` is sent when the compositor's frame callback allows (ADR-0093), at most one frame in flight.
 4. **Events** map: key down/up with the compositor's key code and modifiers to `NSFB_KEY_*` (a table in the C surface),
    text input to `NSFB_EVENT_KEY_DOWN` with the code point (NetSurf's framebuffer front end takes text from key events),
-   pointer move/press/release to `NSFB_EVENT_MOVE_ABSOLUTE`/`KEY_DOWN` of `NSFB_KEY_MOUSE_n`, wheel to mouse 4 and 5,
+   pointer move/press/release to `NSFB_EVENT_MOVE_ABSOLUTE`/`KEY_DOWN` of `NSFB_KEY_MOUSE_n` (no wheel: the protocol has no wheel event, see item 7),
    close request to `NSFB_EVENT_CONTROL` quit, resize to a new surface geometry.
 5. **The allocator.** `libzgui.a` uses the C program's `malloc` through the standard Rust `GlobalAlloc` shim that `libposix`
    already has for itself if one exists, otherwise a fixed-capacity arena of 8 MiB in the library (no growth).

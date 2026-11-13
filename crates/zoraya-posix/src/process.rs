@@ -312,6 +312,9 @@ pub struct Posix<S: Sys> {
     pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
     /// What a terminal read was given beyond the buffer that asked.
     pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
+    /// The record locks of this process (ADR-0319). A `fork` child starts
+    /// with none, as POSIX has it: `after_fork_in_child` clears the copy.
+    pub(crate) locks: crate::records::Locks<S::H>,
 }
 
 pub(crate) fn native(s: Status, call: Call) -> i32 {
@@ -375,6 +378,7 @@ impl<S: Sys> Posix<S> {
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),
+            locks: crate::records::Locks::new(),
         }
     }
 
@@ -820,7 +824,7 @@ impl<S: Sys> Posix<S> {
     }
 
     /// The kind and metadata of a connection, by `stat`.
-    fn stat_conn(&mut self, conn: S::H) -> Result<(Kind, Meta), i32> {
+    pub(crate) fn stat_conn(&mut self, conn: S::H) -> Result<(Kind, Meta), i32> {
         let size = self.call(conn, &proto::Stat {}, &[])?;
         match decode::<proto::StatReply>(&self.input[..size], 0) {
             Ok((_, r)) if r.status.0 == status::OK => Ok((
@@ -1085,6 +1089,7 @@ impl<S: Sys> Posix<S> {
     fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
         match desc {
             Desc::Object { conn, written, .. } => {
+                self.locks.release_description(conn);
                 let r = if written {
                     match self.done(conn, &proto::Status {}, &[]) {
                         Ok(_) => Ok(()),
@@ -1121,6 +1126,7 @@ impl<S: Sys> Posix<S> {
     }
 
     pub fn close(&mut self, fd: i32) -> Result<(), i32> {
+        self.release_process_locks(fd);
         match self.fds.close(fd)? {
             Some(desc) => self.release(desc),
             None => Ok(()),
@@ -1930,6 +1936,9 @@ impl<S: Sys> Posix<S> {
         if is_dup3 && (old == new || flags & !o::CLOEXEC != 0) {
             return Err(EINVAL);
         }
+        if old != new && self.fds.get(old).is_some() {
+            self.release_process_locks(new);
+        }
         if let Some(desc) = self.fds.dup2(old, new, flags & o::CLOEXEC != 0)? {
             // dup2 closes silently: an error of the old one is lost.
             let _ = self.release(desc);
@@ -1939,6 +1948,8 @@ impl<S: Sys> Posix<S> {
 
     pub fn fcntl(&mut self, fd: i32, command: i32, argument: i64) -> Result<i32, i32> {
         match command {
+            // The record locks take a pointer: `fcntl_lock`, through `ffi`.
+            c if crate::records::is_lock_command(c) => Err(EINVAL),
             F_DUPFD | F_DUPFD_CLOEXEC => {
                 let min = i32::try_from(argument).map_err(|_| EINVAL)?;
                 self.fds

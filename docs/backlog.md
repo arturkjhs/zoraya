@@ -156,3 +156,11 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 (`MUTANT_STALE` in the `Makefile`): 15 of their mutants (in `compositor-settings`, `fs-limits`, `fs-service` and
 `kernel-objects`) do not apply, code that moved since the lists were written. Update those lists, then empty
 `MUTANT_STALE`.
+
+## Follow-ups from the architect's decisions on part 9 (2026-11-13)
+
+- A program started by `dash` or `make` (for example `curl`) has no `getrandom` connection, so OpenSSL cannot seed (ADR-0310; the shell gives the connection only to programs it launches itself).
+- Record locks shared across processes (ADR-0319 Option B): the lock table lives in `fsd`, keyed by the process's connection. Reason: with the in-process table two processes on one SQLite file do not see each other's locks and can corrupt it. Needs a protocol change and a review.
+- A wheel/scroll event in the compositor protocol (after 9d): add the event to `zoraya-proto-gui`, deliver it to the focused client, and map it in `zoraya-surface` and NetSurf's `libnsfb` surface (ADR-0317; the protocol has no wheel event today, so 9d offers no wheel).
+- The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs.
+

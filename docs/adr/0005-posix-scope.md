@@ -128,10 +128,13 @@ CP-27 says the POSIX layer exists to host a C compiler and its toolchain, that i
 
 ## Open questions
 
+- Superseded in part by ADR-0319 (accepted 2026-11-13): item 6 and the table row for `fcntl` record locks no longer hold; `libposix` has advisory record locks within one process. `flock` stays excluded. The rest of this ADR stands.
+
 - A larger autoconf project (several thousand configure checks, libtool-built libraries) was not measured; it may add rows. Measure one before T2 is accepted.
 - Whether `tcc -ar` and the `ld` wrapper suffice for autoconf projects that call `ld` directly: hello's probes (`W4-configure-noLD`, `W4-make-noAR`) are the only data.
 - toybox `mktemp` prints a `/tmp` path (`emulate`, `task-02/callsite-analysis.md#feature-3-…`): confirm the per-session `/tmp` (ADR-0002) satisfies configure's uses.
 - Which applets of toybox are the accepted set: `applets-by-tier.tsv` lists them; the architect may wish to add common ones (for example `find`, `xargs` beyond what W4 ran) without data.
+- Item 6 and the row for `fcntl` record locks say they are absent. ADR-0319 (proposed, TASK-27 part 9b) admits `fcntl`'s record locks (`F_SETLK`, `F_SETLKW`, `F_GETLK`, `F_OFD_*`) in `libposix`, within one process, because SQLite's default unix VFS needs them (`threadtest3`); a second process does not see the lock. `flock` stays absent. The architect decides whether ADR-0319 supersedes this item.
 
 ## Revisit triggers
 
