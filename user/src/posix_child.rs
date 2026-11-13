@@ -550,8 +550,11 @@ pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
     let size = length.next_multiple_of(4096).max(4096);
     let object = crate::memory_create(size, zoraya_abi::MemoryFlags::NONE)?;
     let fill = || -> Result<(), Status> {
-        let copy = handle_duplicate(object, <zoraya_abi::MemoryObject as ObjectType>::RIGHTS)?;
-        file.attach(copy, size).map_err(gone)?;
+        // `attach` sends a duplicate and leaves `object` here. (A duplicate
+        // made for it was never closed: each program run from the volume
+        // kept its image alive and charged to the shell, 6.7 MiB a `curl`,
+        // until the session's memory gave out; TASK-27 9a.)
+        file.attach(object, size).map_err(gone)?;
         let mut at = 0;
         while at < length {
             let n = (length - at).min(1 << 20) as u32;

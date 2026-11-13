@@ -115,6 +115,7 @@ tests/shell/net.script        test-net
 tests/shell/net-posix.script  test-net
 tests/posix-net/              test-net
 tests/shell/apps.script       test-apps
+tests/shell/apps-launches.script test-apps
 ports/apps/                   test-apps test-hand-run
 ports/patches/openssl/        test-apps test-hand-run
 ports/patches/wget/           test-apps test-hand-run

@@ -484,6 +484,10 @@ APPS_TLS_READY := $(BUILD)/apps-tlsd.ports
 # QEMU options; 512 MiB for the reason RUN_NET_CMD's comment gives.
 APPS_QEMU ?= --mem 512M
 APPS_RUN = $(RUNNER) --timeout $(1) --script $(APPS_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
+# The runs of a program from the volume give their memory back: 16 `curl`s on
+# 128 MiB, where 8 fitted while each run kept its image (TASK-27 9a item 2).
+APPS_LAUNCHES := tests/shell/apps-launches.script
+APPS_LAUNCHES_RUN = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(APPS_LAUNCHES) --label apps-launches -- $(RUN_QEMU) --test --keys --disk $(APPS_DISK) --mem 128M --accel auto $(KERNEL)
 
 test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[apps] skipped: QEMU has no user-mode networking"; exit 0; }; \
@@ -506,6 +510,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	$(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-auto,auto); rc=$$?; \
 	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,500,apps-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then $(APPS_LAUNCHES_RUN); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \
 		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd-apps.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-apps.log \
 		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-apps.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-apps.log \

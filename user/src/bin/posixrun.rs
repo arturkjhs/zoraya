@@ -99,9 +99,8 @@ fn load(root: &File, path: &str) -> (Handle, u64) {
     let length = file.stat().unwrap_or_else(|_| fail("stat")).size;
     let size = length.next_multiple_of(4096).max(4096);
     let object = memory_create(size, MemoryFlags::NONE).unwrap_or_else(|_| fail("memory"));
-    let copy =
-        handle_duplicate(object, zoraya_abi::MemoryObject::RIGHTS).unwrap_or_else(|_| fail("dup"));
-    file.attach(copy, size).unwrap_or_else(|_| fail("attach"));
+    // `attach` sends a duplicate; `object` stays the only handle here.
+    file.attach(object, size).unwrap_or_else(|_| fail("attach"));
     let mut at = 0;
     while at < length {
         let n = (length - at).min(1 << 20) as u32;
