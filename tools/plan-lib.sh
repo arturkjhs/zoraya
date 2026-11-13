@@ -61,6 +61,11 @@ plan_changed() {
 # all-zero or unknown BEFORE (first push), a BEFORE that is not an ancestor of
 # AFTER (force push) and an empty change. A merge commit is the diff against
 # BEFORE, which on main is its first parent.
+# Files under docs/ that tests or builds read count as code: docs/tour.md (the
+# source of the tour and conventions scripts), docs/dependencies.md
+# (zoraya-fonts' test), docs/adr/0211-* (posix-stats' test),
+# docs/research/task-02/ (posix-surface-check, ports/Makefile) and
+# docs/research/desktop/mockups/ (zoraya-tokens, the mockups tool).
 # The document checks a docs-only run keeps (the CI `checks` job's commands
 # that read docs/; the others read code only):
 doc_checks="make adr-check|make check-host-paths|make check-untrusted-gate|make check-quota-tests|make check-tls-roots"
@@ -96,6 +101,12 @@ docs_only() {
         case "$p" in
             docs/adr/posix-surface-*.txt)
                 echo "ci-plan: $p is a build input of libc.a: full set" >&2
+                return 1
+                ;;
+            docs/tour.md | docs/dependencies.md | docs/adr/0211-* | docs/research/task-02/* | docs/research/desktop/mockups/*)
+                # Read by a test or a build (include_str!, a path in a tool):
+                # tour.md is the source of the tour scripts.
+                echo "ci-plan: $p is read by a test or a build: full set" >&2
                 return 1
                 ;;
             docs/adr/*.md)

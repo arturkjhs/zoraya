@@ -89,7 +89,8 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
   full run of its head (`candidate-full/`), and then `main`'s, pass. Run them; do not infer them. A red nightly run
   is the first item of the next session.
 - A push to main runs only the document checks when every changed file is under docs/ and no posix-surface block of
-  an ADR changed; every other push to main, the nightly and candidate-full/ run the full set. A stage tag still needs
+  an ADR changed and none of the docs a test or build reads (`docs/tour.md`, `docs/dependencies.md`,
+  `docs/adr/0211-*`, `docs/research/task-02/`, `docs/research/desktop/mockups/`, the tier lists); every other push to main, the nightly and candidate-full/ run the full set. A stage tag still needs
   a full green run on the tagged commit or on its nearest code ancestor (the latest ancestor commit whose run was the
   full set).
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this

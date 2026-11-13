@@ -14,10 +14,15 @@ git init -q .
 git config user.name ci-plan-test
 git config user.email ci-plan-test@localhost
 git config commit.gpgsign false
-mkdir -p tools docs/adr src
+mkdir -p tools docs/adr docs/research/task-02 docs/research/desktop/mockups src
 for f in ci-plan.sh plan-lib.sh ci-tests.txt test-map.txt; do cp "$here/tools/$f" tools/; done
 printf 'x\n' > docs/design.md
 printf 'x\n' > src/code.rs
+printf 'x\n' > docs/tour.md
+printf 'x\n' > docs/dependencies.md
+printf 'x\n' > docs/adr/0211-acceptance.md
+printf 'x\n' > docs/research/task-02/libc-surface.csv
+printf 'x\n' > docs/research/desktop/mockups/t.txt
 printf 'x\n' > README.md
 printf 'abs\n' > docs/adr/posix-surface-T9.txt
 printf 'prose\n\n```posix-surface-added\nabs\nacos\n```\n\nmore prose\n' > docs/adr/0999-surface.md
@@ -83,6 +88,13 @@ reset_to "$base"
 printf 'y\n' >> docs/design.md; printf 'y\n' >> src/code.rs
 step code
 expect "docs and one code file" 0 "$base"
+
+for f in docs/tour.md docs/dependencies.md docs/adr/0211-acceptance.md docs/research/task-02/libc-surface.csv docs/research/desktop/mockups/t.txt; do
+	reset_to "$base"
+	printf 'y\n' >> "$f"
+	step read-by-tests
+	expect "$f is read by a test" 0 "$base"
+done
 
 reset_to "$base"
 printf 'y\n' >> README.md
