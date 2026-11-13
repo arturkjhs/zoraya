@@ -1,6 +1,6 @@
 # ADR-0309: How the threads are tested: musl's libc-test subset, SQLite's `threadtest3`, a stress program, OpenSSL with threads
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0001, ADR-0110, ADR-0300, ADR-0301, ADR-0302, ADR-0303, ADR-0304, ADR-0305, ADR-0306, ADR-0307, ADR-0308
 - **Evidence:** DM-120, GR-011
@@ -147,4 +147,4 @@ pinned in `ports/sources.lock` is not a dependency of the kernel or of a `no_std
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

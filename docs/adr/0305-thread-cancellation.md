@@ -1,6 +1,6 @@
 # ADR-0305: Thread cancellation: deferred at the library's wait points, woken by `thread_interrupt`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0004, ADR-0100, ADR-0106, ADR-0180, ADR-0300, ADR-0301, ADR-0302, ADR-0304
 - **Evidence:** CP-10, DM-059, DM-017
@@ -139,4 +139,4 @@ a cancel interrupt is resumed or ends the thread, and is never an `EINTR` to the
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

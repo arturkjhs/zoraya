@@ -1,6 +1,6 @@
 # ADR-0306: `fork`, `exec` and process exit in a threaded process
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0003, ADR-0041, ADR-0102, ADR-0103, ADR-0104, ADR-0105, ADR-0270, ADR-0300, ADR-0302, ADR-0304
 - **Evidence:** DM-001, DM-004
@@ -157,4 +157,4 @@ rule. *ADR-0104 item 6* gains the lock.
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

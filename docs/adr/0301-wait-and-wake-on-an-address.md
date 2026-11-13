@@ -1,6 +1,6 @@
 # ADR-0301: Waiting on an address: `futex_wait` and `futex_wake`, without requeue, private to a process
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0006, ADR-0023, ADR-0032, ADR-0051, ADR-0141, ADR-0260, ADR-0261, ADR-0264, ADR-0270, ADR-0300
 - **Evidence:** CP-11, CP-18, DM-120, GR-011, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -190,4 +190,4 @@ in one queue" becomes the derived size of item 5. *ADR-0031:* the mapping lock o
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0308: POSIX threads enter the tier list: what supersedes ADR-0100's "no threads", ADR-0141's `futex` answer and ADR-0180's stubs
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0005, ADR-0006, ADR-0041, ADR-0100, ADR-0102, ADR-0104, ADR-0106, ADR-0141, ADR-0180, ADR-0225, ADR-0260, ADR-0261, ADR-0263, ADR-0285, ADR-0300, ADR-0301, ADR-0302, ADR-0303, ADR-0304, ADR-0305, ADR-0306, ADR-0307
 - **Evidence:** DM-004, task-02/posix-surface.md#jumps-between-tiers, task-02/posix-surface.md#key-observations
@@ -170,4 +170,4 @@ statement.
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

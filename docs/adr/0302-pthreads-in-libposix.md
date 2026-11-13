@@ -1,6 +1,6 @@
 # ADR-0302: `pthread_*` in `libposix`: musl's own thread code over a shim, one library lock, long waits outside it
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0002, ADR-0005, ADR-0006, ADR-0100, ADR-0101, ADR-0102, ADR-0103, ADR-0104, ADR-0106, ADR-0141, ADR-0180, ADR-0300, ADR-0301, ADR-0303, ADR-0304, ADR-0305, ADR-0306, ADR-0307, ADR-0308
 - **Evidence:** CP-18, DM-058, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -206,4 +206,4 @@ does.
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0307: Thread quotas: a `threads` figure of its own, derived from the processes figure
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0046, ADR-0260, ADR-0261, ADR-0262, ADR-0263, ADR-0264, ADR-0266, ADR-0267, ADR-0270, ADR-0285, ADR-0300, ADR-0301
 - **Evidence:** CP-07, CP-14, DM-030, DM-004
@@ -143,4 +143,4 @@ processes, CPU in ADR-0264) gains a field. *ADR-0266 point 1* (five words) stays
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

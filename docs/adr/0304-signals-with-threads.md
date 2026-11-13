@@ -1,6 +1,6 @@
 # ADR-0304: Signals with threads: per-thread masks, thread-directed signals, and which thread takes a process's request
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0004, ADR-0006, ADR-0046, ADR-0104, ADR-0105, ADR-0106, ADR-0300, ADR-0301, ADR-0302
 - **Evidence:** CP-10, DM-004, DM-017
@@ -182,4 +182,4 @@ item 11 is that rule for the futex shim, where musl's own callers (`sem_wait`, `
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.

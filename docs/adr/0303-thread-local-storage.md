@@ -1,6 +1,6 @@
 # ADR-0303: Thread-local storage: musl's variant, the thread pointer set at birth, and who pays
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0100, ADR-0102, ADR-0261, ADR-0300, ADR-0302
 - **Evidence:** CP-03, CP-14, DM-004
@@ -107,4 +107,4 @@ must be per thread, and credentials must not be (Zoraya has none, CP-03).
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
