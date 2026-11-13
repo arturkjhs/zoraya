@@ -2,7 +2,7 @@
 //! and the checker.
 
 use crate::device::BlockDevice;
-use crate::format::{Corrupt, N_PAIRS, ROOT_SLOTS, RootRecord};
+use crate::format::{Corrupt, FORMAT_VERSION, N_PAIRS, ROOT_MAGIC, ROOT_SLOTS, RootRecord};
 
 /// What the root slots hold.
 #[derive(Debug, Clone)]
@@ -17,6 +17,30 @@ pub struct RootSelection {
     pub pairs: [Option<u64>; N_PAIRS as usize],
     /// Valid copies found, out of [`ROOT_SLOTS`].
     pub valid_copies: u32,
+}
+
+/// The format version of a volume made by another version of this system:
+/// the version in a root slot that has the root record's magic and a version
+/// other than [`FORMAT_VERSION`] (the highest, if several). `None` if no slot
+/// does, or a slot cannot be read. For the message of a mount that cannot
+/// succeed ("the disk is format 1, this system needs format 2"); it checks
+/// nothing else of the slot.
+pub fn foreign_format_version<D: BlockDevice + ?Sized>(dev: &mut D) -> Option<u16> {
+    if dev.block_count() <= ROOT_SLOTS {
+        return None;
+    }
+    let mut buf = [0u8; crate::device::BLOCK_SIZE];
+    let mut found: Option<u16> = None;
+    for slot in 0..ROOT_SLOTS {
+        dev.read(slot, &mut buf).ok()?;
+        if buf.get(..8) == Some(&ROOT_MAGIC[..])
+            && let Some(v) = buf.get(8..10).map(|b| u16::from_le_bytes([b[0], b[1]]))
+            && v != FORMAT_VERSION
+        {
+            found = found.max(Some(v));
+        }
+    }
+    found
 }
 
 /// Reads every root slot and selects per ADR-0011 rule 4. Fails if no copy
@@ -42,7 +66,15 @@ pub fn select_root<D: BlockDevice + ?Sized>(dev: &mut D) -> Result<RootSelection
         .flatten()
         .max_by_key(|r| r.generation)
         .copied()
-        .ok_or(Corrupt("no valid root record"))?;
+        .ok_or_else(|| {
+            if foreign_format_version(dev).is_some() {
+                Corrupt(
+                    "no valid root record: the volume is of another format version (rebuild it with zoraya-mkfs)",
+                )
+            } else {
+                Corrupt("no valid root record")
+            }
+        })?;
     // Records of another volume or geometry do not count.
     let mut pairs: [Option<u64>; N_PAIRS as usize] = [None; N_PAIRS as usize];
     let mut valid_copies = 0;

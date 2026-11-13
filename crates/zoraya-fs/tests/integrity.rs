@@ -514,3 +514,35 @@ fn header_checks_stand_without_the_checksum() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// A volume of another format version is told as that, not as damage
+/// (TASK-26, hand-run): the version is found and the message names the cause.
+#[test]
+fn a_volume_of_another_format_version_is_named_as_such() {
+    let mut d = fresh(512);
+    assert_eq!(zoraya_fs::foreign_format_version(&mut d), None);
+    // Make every root slot a format 1 record: the magic stays, the version
+    // changes, and with it the checksum no longer matches.
+    let mut buf = [0u8; BLOCK_SIZE];
+    for slot in 0..zoraya_fs::format::ROOT_SLOTS {
+        d.read(slot, &mut buf).unwrap();
+        if buf[..8] == zoraya_fs::format::ROOT_MAGIC {
+            buf[8..10].copy_from_slice(&1u16.to_le_bytes());
+            d.write(&[(slot, &buf)]).unwrap();
+        }
+    }
+    assert_eq!(zoraya_fs::foreign_format_version(&mut d), Some(1));
+    let e = select_root(&mut d).unwrap_err();
+    assert!(e.0.contains("another format version"), "{}", e.0);
+    // A device that was never a volume is only corrupt.
+    let mut blank = fresh(512);
+    let zeros = [0u8; BLOCK_SIZE];
+    for slot in 0..zoraya_fs::format::ROOT_SLOTS {
+        blank.write(&[(slot, &zeros)]).unwrap();
+    }
+    assert_eq!(zoraya_fs::foreign_format_version(&mut blank), None);
+    assert_eq!(
+        select_root(&mut blank).unwrap_err().0,
+        "no valid root record"
+    );
+}
