@@ -34,6 +34,8 @@ fn every_interleaving_of_end_leave_and_create_ends_with_one_owner() {
     fn go(state: &State, depth: u32, ops: &[Op], finished: &mut u32) {
         for op in ops {
             let mut s = state.clone();
+            // A clone's list has no spare room: the kernel's has (`reserve_all`).
+            s.m.reserve_all().unwrap();
             match *op {
                 Op::Create(id) => {
                     if s.made.contains(&id) {
@@ -119,6 +121,17 @@ fn the_last_thread_of_a_process_that_was_not_ending_ends_it() {
     assert!(l.was_member && l.remaining == 1 && !l.owner && !l.began_end);
     let l = m.leave(2);
     assert!(l.owner && l.began_end && m.is_ending());
+}
+
+#[test]
+fn a_small_list_refuses_a_second_thread_until_it_is_grown() {
+    let mut m = Members::<u32>::new_small().unwrap();
+    m.join(1, 1).unwrap();
+    assert_eq!(m.join(2, 2), Err(JoinError::Full), "no room was made");
+    m.reserve_all().unwrap();
+    m.join(2, 2).unwrap();
+    m.reserve_all().unwrap();
+    assert_eq!(m.len(), 2);
 }
 
 #[test]
