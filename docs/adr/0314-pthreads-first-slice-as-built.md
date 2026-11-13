@@ -61,7 +61,9 @@ code of the first slice.
    to `with()` by the same thread (its thread pointer is the owner) is the old panic "entered twice", not a deadlock. The table of
    private anonymous mappings grows from 64 to 256 entries, one for each of the kernel's mappings of a process (ADR-0300), so
    that 128 stacks fit.
-2. **The waits stay inside `LIB`** (Option A, above). Until the split, `t_threads` and every thread test must not rely on a
+2. **The waits stay inside `LIB`** (Option A, above). The final report of `exit` takes the lock only if it is free (`try_with`), so a
+   sibling blocked in a library call cannot stop `_Exit`, `exit_group` or the end of the process (case `blocked` of `t_threads`); `exit()`'s
+   own stdio flush is a `write` and does wait for it. Until the split, `t_threads` and every thread test must not rely on a
    library call that waits while another thread calls the library. INV-0302-2 stays `not yet applicable` with this reason.
 3. **No thread table yet** (refines ADR-0302 items 3 and 4). `__clone` makes the thread, stores the new id (2, 3, ...; the main
    thread is 1; never reused; `EAGAIN` at 2^30) at `ptid` before the thread starts, and **closes the thread's handle at once**:
