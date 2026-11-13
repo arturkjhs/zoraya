@@ -5,13 +5,21 @@
 //! by a launcher that gives none) gets `ENOSYS`, as ADR-0227 item 1 says of a
 //! machine with no source: stated, never silent, and never a fallback to
 //! anything weaker (INV-0310-1).
+//!
+//! The connection is the program's own, made by the service for the shell
+//! (`Share`, depth 2): a service connection may make at most
+//! `zoraya_rng::MAX_CHILDREN` (64) others at a time, and a program's own may
+//! make none. The 65th live connection a shell holds is refused by the
+//! service: `zosh` then starts that program without the connection, and its
+//! `getrandom` is `ENOSYS`, so OpenSSL reports that it cannot seed (it never
+//! falls back, INV-0310-1). A connection is released when its program ends.
 
 #![forbid(unsafe_code)]
 
 use zoraya_protocol::decode;
 use zoraya_rng::{Bytes, BytesReply};
 
-use crate::errno::{EINVAL, EIO, ENOSYS};
+use crate::errno::{EINTR, EINVAL, EIO, ENOSYS};
 use crate::process::Posix;
 use crate::sys::{Sys, User};
 
@@ -37,9 +45,13 @@ impl<S: Sys> Posix<S> {
         let mut done = 0;
         while done < into.length {
             let part = CHUNK.min(into.length - done);
+            // A signal to deliver ends the wait with `EINTR`, which the C
+            // boundary restarts or reports; the service being gone or
+            // sending nonsense is `EIO`, a request that cannot be built
+            // `EINVAL`.
             let size = self
-                .net_call(conn, &Bytes { count: part as u32 }, &[])
-                .map_err(|_| EIO)?;
+                .net_call_with(conn, &Bytes { count: part as u32 }, &[], true)
+                .map_err(|e| if e == EINTR || e == EINVAL { e } else { EIO })?;
             let bytes = match decode::<BytesReply>(&self.input[..size], 0) {
                 Ok((_, r)) if r.bytes.0.len() == part => r.bytes.0.to_vec(),
                 _ => return Err(EIO),

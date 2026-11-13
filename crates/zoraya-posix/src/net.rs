@@ -18,7 +18,7 @@ use zoraya_protocol::{Below, Data, Header, decode, encode};
 
 use crate::errno::{
     Call, EACCES, EADDRNOTAVAIL, EAGAIN, EALREADY, EBADF, ECONNABORTED, ECONNRESET, EINPROGRESS,
-    EINVAL, EIO, EISCONN, EMFILE, ENETDOWN, ENOTCONN, ENOTSOCK, EOPNOTSUPP, EPIPE,
+    EINTR, EINVAL, EIO, EISCONN, EMFILE, ENETDOWN, ENOTCONN, ENOTSOCK, EOPNOTSUPP, EPIPE,
 };
 use crate::process::{Desc, Posix, native};
 use crate::socket::{self as sock, Hints, Socket, State};
@@ -79,6 +79,20 @@ impl<S: Sys> Posix<S> {
         m: &M,
         moved: &[S::H],
     ) -> Result<usize, i32> {
+        self.net_call_with(net, m, moved, false)
+    }
+
+    /// [`Self::net_call`], and with `interruptible` a signal that is to be
+    /// delivered ends the wait with `EINTR` (the reply that comes later is
+    /// skipped by its transaction, as for any abandoned call). Only for a
+    /// request that is safe to send again: `getrandom`'s.
+    pub(crate) fn net_call_with<'m, M: zoraya_protocol::Message<'m>>(
+        &mut self,
+        net: S::H,
+        m: &M,
+        moved: &[S::H],
+        interruptible: bool,
+    ) -> Result<usize, i32> {
         self.transaction = self.transaction.wrapping_add(1).max(1);
         let t = self.transaction;
         let size = match encode(m, t, &mut self.out) {
@@ -116,10 +130,16 @@ impl<S: Sys> Posix<S> {
                     }
                 }
                 Err(Status::WouldBlock) => {
-                    let s = self
-                        .sys
-                        .wait(net, signals::READABLE | signals::PEER_CLOSED)
-                        .map_err(|_| ENETDOWN)?;
+                    let wanted = signals::READABLE | signals::PEER_CLOSED;
+                    let s = if interruptible {
+                        match self.wait_point(net, wanted) {
+                            Ok(s) => s,
+                            Err(EINTR) => return Err(EINTR),
+                            Err(_) => return Err(ENETDOWN),
+                        }
+                    } else {
+                        self.sys.wait(net, wanted).map_err(|_| ENETDOWN)?
+                    };
                     if s & signals::READABLE == 0 {
                         return Err(ENETDOWN);
                     }
