@@ -41,7 +41,7 @@ ELF_CHECK := $(ROOT)/target/debug/zoraya-elf-check
 TIER_LIST := docs/adr/posix-surface-T1.txt
 # The names libc.a may export: the generated list, and the blocks of the ADRs
 # that add names (posix-surface-check's LIST+ADR form).
-ADDED_ADRS := docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
+ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md
 empty :=
 space := $(empty) $(empty)

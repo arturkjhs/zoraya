@@ -76,7 +76,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: FORCE test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix-threads test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -621,6 +621,24 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
+# Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,
+# from posixrun, on the same image as test-libposix with /bin/t_threads.
+POSIX_THREADS := $(BUILD)/posix-threads
+POSIX_THREADS_SCRIPT := tests/posix-core/threads.script
+test-posix-threads: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc
+	@$(MAKE) -s -f ports/Makefile check-libc
+	rm -rf $(POSIX_THREADS) && mkdir -p $(POSIX_THREADS)/root/bin $(POSIX_THREADS)/root/work
+	cp -R rootfs/. $(POSIX_THREADS)/root/
+	tools/zcc -O2 -o $(POSIX_THREADS)/root/bin/t_threads tests/posix-core/t_threads.c
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_threads
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_THREADS)/root $(POSIX_THREADS)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_THREADS)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_THREADS)/disk.img || exit 1; done
+
 # The POSIX session (TASK-21, ADR-0110): dash on ttyd through the broker, on
 # an image of the ports' root (make ports' build/rootfs-posix), rootfs/ and
 # tests/posix/rootfs (with /etc/zoraya/session and /tests/wN.sh), in
@@ -1022,7 +1040,7 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
 TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

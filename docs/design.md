@@ -305,7 +305,16 @@ The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zor
   included), is charged after the process's slot and before its memory, and is refunded at `thread_exit`. The limits
   record's bytes 16 to 20 hold it (0 = none) and the usage record is 152 bytes. The room keeper derives `3 x procs`; `init`
   gives the session 600.
-- **Not done yet.** The `libposix` and musl side (pthreads, signals, cancellation, `fork`'s locks), `grants` printing the
+- **`libposix` and musl (first slice, ADR-0314).** musl's `src/thread` is compiled over the shim: `__clone` (Rust, in
+  `crates/zoraya-posix/src/ffi.rs`) makes the thread with `thread_create`, `SYS_futex` is `futex_wait`/`futex_wake`
+  (`zoraya_posix_futex`), `SYS_exit` is `thread_exit` and `__unmapself` gives a detached thread's stack and object back. Two
+  futex locks (`crates/zoraya-posix/src/lock.rs`): the library lock around `Posix`, the memory lock around the heap and the
+  mapping table (256 entries). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
+  condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio). Known limits: a
+  library call that waits holds the library lock (the `Pending` split of ADR-0302 item 9 is the next slice); no signal reaches a
+  thread and `pthread_cancel` only sets a flag (ADR-0304, ADR-0305 are next); `fork` with siblings, `exec` and `exit` from a
+  non-main thread are untested.
+- **Not done yet.** Signals, cancellation of a blocked thread and `fork`'s locks in `libposix`, `grants` printing the
   figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the CPU-ceiling and stepped-map variants of the
   ending test (see the notes in ADR-0300, 0301 and 0307, and the report).
 

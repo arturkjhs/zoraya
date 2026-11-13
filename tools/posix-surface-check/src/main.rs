@@ -26,13 +26,18 @@ use std::process::ExitCode;
 use posix_surface_check::{ar, elf, rename, surface};
 
 /// The names an archive may export: `SPEC` is the tier list's file, then
-/// `+`-separated ADR files whose `posix-surface-added` blocks add names. A
+/// `+`-separated ADR files whose `posix-surface-added` blocks add names, or
+/// further list files (a name ending in `.txt`: the T9 list of ADR-0308). A
 /// name from an ADR that is not accepted is admitted with a printed note.
 fn names(spec: &str) -> Result<BTreeSet<String>, String> {
     let mut parts = spec.split('+');
     let list = parts.next().unwrap_or_default();
     let mut names = surface::parse_list(&read_text(list)?);
     for adr in parts {
+        if adr.ends_with(".txt") {
+            names.extend(surface::parse_list(&read_text(adr)?));
+            continue;
+        }
         let (added, accepted) =
             surface::added_names(&read_text(adr)?).map_err(|e| format!("{adr}: {e}"))?;
         if !accepted {

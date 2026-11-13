@@ -15,6 +15,7 @@ extern crate std;
 pub mod errno;
 pub mod fd;
 pub mod jobs;
+pub mod lock;
 pub mod net;
 pub mod path;
 pub mod process;

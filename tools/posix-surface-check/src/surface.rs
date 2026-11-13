@@ -16,16 +16,16 @@ pub const TIERS: [&str; 2] = ["T0", "T1"];
 pub const STRUCK: [&str; 6] = ["setuid", "setgid", "dlopen", "dlsym", "dlclose", "dlerror"];
 /// Rows added to the list.
 pub const ADDED: [&str; 1] = ["writev"];
-/// INV-0005-2's exclusion table: no export may have these names. `socket`
+/// INV-0005-2's exclusion table: no export may have these names. `pthread_create` is
+/// no longer in it: ADR-0308 (part 9b) takes it off, and the threads are the T9 list's. `socket`
 /// and `getaddrinfo` are no longer in it: ADR-0225 item 1 (accepted) takes
 /// them off, and they are exported only if the tier list or an ADR's
 /// `posix-surface-added` block names them (ADR-0287).
-pub const DENIED: [&str; 14] = [
+pub const DENIED: [&str; 13] = [
     "ptrace",
     "msgget",
     "semget",
     "shmget",
-    "pthread_create",
     "dlopen",
     "flock",
     "setuid",

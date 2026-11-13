@@ -14,6 +14,7 @@ make test-qemu-tcg-smp4-gicv3
 make test-boot
 make test-files
 make test-libposix
+make test-posix-threads
 make test-posix-gui
 make test-tour-gui POSIX_ACCELS="auto"
 make test-tour-gui POSIX_ACCELS="tcg"

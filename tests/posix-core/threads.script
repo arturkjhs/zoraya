@@ -1,0 +1,41 @@
+# Part 9b's thread tests through libposix (ADR-0302, ADR-0309 item 3): C
+# programs built by zcc against libc.a with musl's src/thread over the shim,
+# run by posixrun on make test-posix-threads's image (rootfs/ with
+# /bin/t_threads).
+! panicked
+! ZORAYA-PANIC
+! (errno
+< \r\n~> 
+> posixrun /bin/t_threads create\r
+< t_threads: create passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads mutex\r
+< t_threads: mutex passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cond\r
+< t_threads: cond passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads once\r
+< t_threads: once passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads tls\r
+< t_threads: tls passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads cycles\r
+< t_threads: cycles passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads locks\r
+< t_threads: locks passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_threads stdio\r
+< t_threads: stdio passed
+< posixrun: exit 0
+< \r\n~> 
+> poweroff\r
