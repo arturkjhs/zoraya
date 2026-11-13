@@ -55,7 +55,9 @@
 ^ \r\n  unset     remove a variable
 ^ \r\n  uptime    time since boot
 ^ \r\n  wait      wait for background jobs
-^ \r\nDemonstrations: echo-args exit-with fault hello spin stubborn
+< -- space: next page, q: quit --
+> \x20
+< Demonstrations: echo-args exit-with fault hello spin stubborn
 ^ \r\n~>
 > pwd\r
 < \r\n/home

@@ -72,6 +72,7 @@ Commands:
   unset     remove a variable
   uptime    time since boot
   wait      wait for background jobs
+-- space: next page, q: quit --
 Demonstrations: echo-args exit-with fault hello spin stubborn
 ```
 
