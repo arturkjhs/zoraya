@@ -93,6 +93,8 @@ These are not crates, but the build depends on them:
 | GNU make, POSIX `sh` | the host's | macOS Command Line Tools / distribution |
 | `cargo-mutants` (only for `make mutants-host`) | 27.1.0, MIT, <https://github.com/sourcefrog/cargo-mutants> | `cargo install cargo-mutants --version 27.1.0 --locked` |
 | Rust nightly and `cargo-fuzz` (only for `fuzz/`) | nightly 2026-10-29 (`rustc 1.101.0-nightly`), cargo-fuzz 0.13.2 | rustup, `cargo install cargo-fuzz` |
+| Rust nightly for `tools/run-fuzz.sh` (`make test-fuzz`, ADR-0298 item 3; accepted 2026-11-13) | `nightly-2026-11-12` (`rustc 1.102.0-nightly`, 3ef0c22cd); cargo-fuzz is not needed | rustup |
+| rustup | 1.29.3 (accepted 2026-11-13; it was 1.29.2 before installing the nightly) | the host's installer |
 
 `dtc` (Device Tree Compiler) is useful for inspecting the fixtures but is not needed by any build or test.
 

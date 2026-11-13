@@ -1,6 +1,6 @@
 # ADR-0297: N6, the `+net` word in the shell where ADR-0224 is silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0153, ADR-0220, ADR-0222, ADR-0224, ADR-0229
 - **Evidence:** CP-12, DM-034
@@ -66,4 +66,4 @@ leaves open the grammar of the argument, which commands may take the word, and w
 - People type `+net any` routinely (ADR-0224's trigger).
 
 ## Architect's decision
-(Left empty for the human.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
