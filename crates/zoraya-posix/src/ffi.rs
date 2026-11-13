@@ -709,6 +709,15 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
             };
             (self_handle.pop(), net, random)
         }
+        // A flag this library does not know: `SELF` is still the first
+        // handle (abi::SELF_EXT_MESSAGE's contract); the rest is closed below.
+        Some(5)
+            if &second[..4] == SELF_EXT_MESSAGE
+                && ext_handles(second[4]).is_none()
+                && !self_handle.is_empty() =>
+        {
+            (Some(self_handle.remove(0)), None, None)
+        }
         _ => (None, None, None),
     };
     for h in self_handle.drain(..) {
