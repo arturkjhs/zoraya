@@ -648,3 +648,14 @@ probe (its workflow `ci-arm.yml` runs on pushes to that branch and by hand). The
 - `make test-python` (HVF): `PASS: 107 steps`, regrtest 3,329 tests, 66 skipped, `Result: SUCCESS`, 15 min 59 s; `test_threading`
   took 15 min 29 s and ended "env changed" (uncaught `OSError` in `do_fork_and_wait` threads, the `fork` out-of-memory of ADR-0320's
   open question); regrtest counts it as passed. Its time is a risk for the 30-min CI test job under TCG: not measured on CI.
+- Candidate run 43488132441 (`candidate/work-9c-e`): every job passed but `make test-python`, cancelled at the 30-minute job
+  limit under TCG (CI has no HVF): the script's steps before regrtest took 4.5 minutes, regrtest's first 11 modules 1.6 minutes,
+  and `test_queue` had not ended after 22 minutes. The recipe also lacked `exit $rc` (a failed run left make with status 0); fixed.
+  Split (ADR-0320 item 9): `make test-python` (`python.script`, without regrtest), `make test-python-regr` (`python-regr.script`,
+  regr.py over `regr-modules.txt`), each a CI job of 45 minutes, the runner's limits 900 s and 1500 s; `make test-python-long`
+  (by hand, not in `make test` nor nightly) over `tests/python/regr-long.txt`. Measured with `--slowest`: the 17 modules under the
+  Mac's TCG 5 min 39 s, `test_queue` 4 min 5 s of it (9 s under HVF), so **the CI subset is the 16 other modules** (core types,
+  `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `_thread`, `threading.local`, `asyncio` tasks, futures, locks) and **the long list is
+  `test_queue` and `test_threading`** (15.5 min under HVF). Runs on the Mac: `make test-python` HVF `PASS: 104 steps` (106 s with
+  the build), TCG `PASS: 104 steps` (112 s), INV-0320-3 server check ok, fsck clean; `make test-python-regr` HVF `PASS: 9 steps`,
+  16 modules, 2,949 tests, 44 skipped, `Result: SUCCESS`, 21.3 s. `make test-python-long` not run in this round.
