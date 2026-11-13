@@ -206,7 +206,11 @@ impl<S: Sys> Posix<S> {
     pub fn end_run<R>(&mut self, r: &Result<R, i32>) -> Option<PendingWait<S::H>> {
         self.resume = None;
         let pending = self.pending.take();
-        if matches!(r, Err(PENDING)) { pending } else { None }
+        if matches!(r, Err(PENDING)) {
+            pending
+        } else {
+            None
+        }
     }
 
     /// What a finished wait means to the method that asked for it.

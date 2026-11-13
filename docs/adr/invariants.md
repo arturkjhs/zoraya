@@ -774,4 +774,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0309](0309-how-9b-is-tested.md) How the threads are tested: musl's libc-test subset, SQLite's `threadtest3`, a stress program, OpenSSL with threads | 4 |
 | [ADR-0313](0313-thread-kernel-as-built.md) Threads in the kernel as built: the owner is the last to leave, lazy thread lists, parked threads woken by one | 3 |
 | [ADR-0314](0314-pthreads-first-slice-as-built.md) `pthread_*` as built in the first slice of part 9b step 2: what is in, what waits for signals and cancellation | 2 |
-| **Total** | **595** |
+| [ADR-0315](0315-pthreads-waits-signals-cancel-as-built.md) `pthread_*` second slice as built: the `Pending` split, the thread table, signals per thread, deferred cancellation | 4 |
+| **Total** | **599** |

@@ -36,12 +36,20 @@ fn each_thread_has_its_own_mask_and_pending_set() {
     r.p.signals.mask(SIG_BLOCK, Some(bit(USR1))).unwrap();
     r.p.thread_add(400, 4, None);
     r.p.switch_to(400);
-    assert_eq!(r.p.signals.blocked, bit(USR1), "a thread starts with its creator's mask");
+    assert_eq!(
+        r.p.signals.blocked,
+        bit(USR1),
+        "a thread starts with its creator's mask"
+    );
     r.p.switch_to(200);
     r.p.signals.mask(SIG_SETMASK, Some(0)).unwrap();
     assert_eq!(r.p.signals.take(USR1), Taken::Run(HANDLER));
     r.p.switch_to(100);
-    assert_eq!(r.p.signals.blocked, bit(USR1), "the main thread's mask is kept");
+    assert_eq!(
+        r.p.signals.blocked,
+        bit(USR1),
+        "the main thread's mask is kept"
+    );
     assert_eq!(r.p.signals.take(USR1), Taken::Pending);
     r.p.switch_to(300);
     assert_eq!(r.p.signals.pending, 0, "pending is per thread");
@@ -91,7 +99,11 @@ fn a_process_signal_the_taker_blocks_goes_to_one_thread_that_does_not() {
     r.p.switch_to(100);
     assert_eq!(r.p.signals.take(USR1), Taken::Pending);
     r.p.route(USR1);
-    assert_eq!(r.p.sys.interrupts, vec![(1003, Some(77))], "woken through its port");
+    assert_eq!(
+        r.p.sys.interrupts,
+        vec![(1003, Some(77))],
+        "woken through its port"
+    );
     assert_eq!(r.p.signals.pending, 0, "no longer the taker's");
     r.p.switch_to(300);
     assert_eq!(r.p.signals.next_unblocked(), Some(USR1));
@@ -129,7 +141,10 @@ fn a_thread_that_is_interrupted_does_not_wait() {
     r.p.switch_to(200);
     r.p.interrupt_tid(1).unwrap();
     r.p.switch_to(100);
-    assert!(r.p.set_wait_port(Some(5)), "the interrupt came before the wait");
+    assert!(
+        r.p.set_wait_port(Some(5)),
+        "the interrupt came before the wait"
+    );
     assert!(!r.p.set_wait_port(Some(5)), "and is spent");
     assert_eq!(r.p.interrupt_tid(9), Err(ESRCH));
     let gone = r.p.thread_remove(200).unwrap();
@@ -151,5 +166,9 @@ fn the_main_thread_seen_before_its_thread_pointer_was_set_keeps_its_state() {
     r.p.switch_to(200);
     r.p.signals.mask(SIG_SETMASK, Some(0)).unwrap();
     r.p.switch_to(100);
-    assert_eq!(r.p.signals.blocked, bit(USR1), "the other thread's mask does not leak");
+    assert_eq!(
+        r.p.signals.blocked,
+        bit(USR1),
+        "the other thread's mask does not leak"
+    );
 }

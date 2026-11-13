@@ -240,7 +240,6 @@ impl Sys for RtSys {
 /// thread's sake (ADR-0304 item 11); the subscriptions' keys are small.
 const USER_WAKE: u64 = u64::MAX;
 
-
 // ------------------------------------------------------------ the state
 
 /// The kernel's wait on an address behind the lock's trait (ADR-0301).
@@ -1193,10 +1192,10 @@ extern "C" fn __clone(
 /// before the thread ends: no slot outlives the thread (INV-0300-7).
 fn forget_thread() {
     let me = thread_pointer();
-    if let Some(Some(r)) = with(|p| p.thread_remove(me)) {
-        if let Some(h) = r.handle {
-            let _ = zoraya_rt::handle_close(h);
-        }
+    if let Some(Some(r)) = with(|p| p.thread_remove(me))
+        && let Some(h) = r.handle
+    {
+        let _ = zoraya_rt::handle_close(h);
     }
 }
 
@@ -1284,7 +1283,11 @@ extern "C" fn zoraya_posix_futex(
                 // `cancel.c` turns into the cancel if one is pending.
                 Ok(true) => {
                     let _ = with(|p| p.take_interrupted());
-                    if procs::deliver_ran() { -i64::from(EINTR) } else { 0 }
+                    if procs::deliver_ran() {
+                        -i64::from(EINTR)
+                    } else {
+                        0
+                    }
                 }
                 Err(Status::WouldBlock) => -i64::from(EAGAIN),
                 Err(Status::DeadlineExceeded) => -i64::from(ETIMEDOUT),

@@ -15,6 +15,9 @@ that no choice is silent. Measured under HVF on the development host: `make test
 
 ## Decision drivers
 
+Evidence: DM-058 records that a lock held across a wait is legitimate only for short paths (here: not); DM-004 that a library cannot own a process-directed
+signal, so the routing is by rule; CP-18 that lock scopes are documented, which the retry protocol keeps; CP-10 that no thread is interrupted asynchronously.
+
 1. INV-0302-2: a blocked reader must not stop a writer. The method that waits holds `&mut Posix`; the lock must be free during
    the wait and the method must not be resumed with a stale view (ADR-0314 rejected releasing inside `RtSys::wait`).
 2. The 8,800 lines of host-tested logic stay as they are: a one-thread process pays nothing but the lock's compare-and-swap.
