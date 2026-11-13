@@ -244,23 +244,51 @@
 > +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
-# Variables that name roots or a configuration file that is not there would
-# fail the handshake or the start of a program that honoured them.
-> export CURL_CA_BUNDLE /nonexistent/ca.pem\r
+# Variables that name roots or a configuration file that EXISTS and would
+# break the valid transfer if honoured (INV-0310-4; review of 9a, W2). Stock
+# OpenSSL/curl would trust only the other root of the test PKI (which signs
+# nothing) for CURL_CA_BUNDLE and SSL_CERT_FILE, and so refuse the valid
+# server; the configuration file asks for an impossible protocol range, which
+# fails every handshake. SSL_CERT_DIR names an existing hashed directory (the
+# other root's): stock OpenSSL adds it to the trust, which cannot be seen here
+# because every server of the test PKI chains to the one root; it is a control
+# that an existing directory changes nothing.
+> echo "openssl_conf = default_conf" > ossl.cnf\r
 < \r\n~>
-> export SSL_CERT_FILE /nonexistent/ca.pem\r
+> echo "[default_conf]" >> ossl.cnf\r
 < \r\n~>
-> export SSL_CERT_DIR /nonexistent/certs\r
+> echo "ssl_conf = ssl_sect" >> ossl.cnf\r
 < \r\n~>
-> export OPENSSL_CONF /nonexistent/openssl.cnf\r
+> echo "[ssl_sect]" >> ossl.cnf\r
 < \r\n~>
-> curl -s https://test.zoraya:@TLSVALID@/\r
+> echo "system_default = sys" >> ossl.cnf\r
+< \r\n~>
+> echo "[sys]" >> ossl.cnf\r
+< \r\n~>
+> echo "MinProtocol = TLSv1.3" >> ossl.cnf\r
+< \r\n~>
+> echo "MaxProtocol = TLSv1.1" >> ossl.cnf\r
+< \r\n~>
+> export CURL_CA_BUNDLE /etc/test-pki/other-root.pem\r
+< \r\n~>
+> export SSL_CERT_FILE /etc/test-pki/other-root.pem\r
+< \r\n~>
+> export SSL_CERT_DIR /etc/test-pki/hashed\r
+< \r\n~>
+> export OPENSSL_CONF ossl.cnf\r
+< \r\n~>
+> +r . curl -s https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
-> wget -q -O - https://test.zoraya:@TLSVALID@/\r
+> +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
-> curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+> +r . curl -s https://wrong.zoraya:@TLSWRONG@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> +r . curl -s https://expired.zoraya:@TLSEXPIRED@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 60

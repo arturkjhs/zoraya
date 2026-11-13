@@ -495,6 +495,8 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(APPS_TEST_ROOT)/system/tls/roots && \
+	mkdir -p $(APPS_TEST_ROOT)/etc/test-pki/hashed && cp tests/net/tls/other-root.pem $(APPS_TEST_ROOT)/etc/test-pki/ && \
+	cp tests/net/tls/hashed/24824ecf.0 $(APPS_TEST_ROOT)/etc/test-pki/hashed/ && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(APPS_TEST_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
 	: > $(APPS_HTTP_READY) && : > $(APPS_TLS_READY) && \
