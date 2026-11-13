@@ -700,8 +700,15 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # The functions configure finds only by their declaration in musl's headers
 # (a compile test), which libc.a does not define: said absent here, so that the
 # module code that needs them is left out instead of failing to link.
+# No x86 SIMD for HACL*'s BLAKE2 (the SSE and AVX2 variants): configure asks
+# only whether the compiler accepts -msse.../-mavx2, and the answer depends on
+# the host's clang, not on the target. Apple clang refuses them for an aarch64
+# target; Ubuntu's clang 18 (CI) only warns that they are unused, which zcc's
+# -Qunused-arguments silences, so configure said yes there and the x86-only
+# Hacl_Hash_Blake2b_Simd256.c failed to compile (ADR-0320).
 PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups socketpair timerfd_create
-PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT)))
+PYTHON_NO_X86_SIMD := ax_cv_check_cflags__Werror__msse__msse2__msse3__msse4_1__msse4_2=no ax_cv_check_cflags__Werror__mavx2=no
+PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
 PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \
 	--with-build-python=$(HOSTPY) --disable-shared --disable-ipv6 --without-ensurepip \
 	--with-openssl=$(DEPS) --without-system-ffi --without-readline --without-mimalloc \

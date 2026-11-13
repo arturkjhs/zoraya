@@ -52,7 +52,13 @@ Option A. Marked as a recommendation, not a decision. Items, each of which the i
    for it; checking it is optional and is not done by the tools.
 2. **Build.** Static, `MACHDEP=zoraya`, `--host=aarch64-unknown-linux-musl`, `--disable-shared`, `--disable-ipv6` (ADR-0225),
    `--without-ensurepip`, `--without-mimalloc`, `--disable-test-modules`, `-D_PYTHREAD_NAME_MAXLEN=15` (configure knows the limit of `pthread_setname_np` only for the systems it names; libposix's is 15 bytes, as musl's), with the functions the headers declare and `libc.a` lacks
-   said absent (`PYTHON_ABSENT`: `posix_spawn`, `epoll`, `eventfd`, `socketpair`, `fchdir`, `link`, ...). The built-in modules: `_socket`, `select`,
+   said absent (`PYTHON_ABSENT`: `posix_spawn`, `epoll`, `eventfd`, `socketpair`, `fchdir`, `link`, ...), and HACL*'s x86 SIMD
+   BLAKE2 variants said unavailable (`PYTHON_NO_X86_SIMD`: the `-msse...`/`-mavx2` flag probes answered `no`). configure only asks
+   whether the compiler accepts those flags, an answer that depends on the host's clang: Apple clang refuses them for an aarch64
+   target, Ubuntu's clang 18 in CI only warns that they are unused, which `zcc`'s `-Qunused-arguments` silences, so CI's
+   configure said yes and the x86-only `Hacl_Hash_Blake2b_Simd256.c` failed to compile (candidate run of 9c). The remaining
+   configure output CI shows (the last hundred lines) matches the Mac's apart from paths; the other flag probes are answered
+   by cross defaults or are target-neutral. BLAKE2 uses the portable HACL* code. The built-in modules: `_socket`, `select`,
    `_ssl`, `_hashlib` (OpenSSL 3.5, threads), `_sqlite3` (SQLite 3.54, `THREADSAFE=1`, `OMIT_LOAD_EXTENSION`, `OMIT_WAL`, FTS5),
    `zlib`, `_asyncio`, `_thread`. Not built: `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`, `syslog`, `_posixsubprocess`'s `posix_spawn` path.
 3. **Shims.** `libpyshim.a` supplies `execv`, `madvise`, `msync`, `sched_yield`, `pause`, `dirfd` (`ENOTSUP`), `gethostbyname` (through
