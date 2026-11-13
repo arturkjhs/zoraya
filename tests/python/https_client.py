@@ -7,6 +7,11 @@ host, port = sys.argv[1], int(sys.argv[2])
 
 async def get():
     ctx = ssl.create_default_context(cafile="/system/tls/roots")
+    # Python 3.13 and later set VERIFY_X509_STRICT by default, which refuses a
+    # certificate without an Authority Key Identifier: the test PKI's (tests/net/tls,
+    # shared with the other steps) has none. Only that flag is cleared; the chain,
+    # the dates and the name are still checked, and the refusals below show it.
+    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
     try:
         r, w = await asyncio.open_connection(host, port, ssl=ctx, server_hostname=host)
     except ssl.SSLCertVerificationError as e:
