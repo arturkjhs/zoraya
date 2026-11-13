@@ -428,6 +428,8 @@ pub struct Fake {
     pub meanwhile: Option<Meanwhile>,
     /// The threads interrupted, with the port a packet was queued on.
     pub interrupts: Vec<(H, Option<H>)>,
+    /// The process's request queue (`process_take_request`).
+    pub requests: VecDeque<(zoraya_abi::RequestKind, u32)>,
 }
 
 impl Fake {
@@ -440,6 +442,7 @@ impl Fake {
             craft_skip: 0,
             meanwhile: None,
             interrupts: Vec::new(),
+            requests: VecDeque::new(),
         }
     }
 }
@@ -480,6 +483,10 @@ impl Sys for Fake {
 
     fn interrupt(&mut self, h: H, port: Option<H>) {
         self.interrupts.push((h, port));
+    }
+
+    fn take_request(&mut self) -> Option<(zoraya_abi::RequestKind, u32)> {
+        self.requests.pop_front()
     }
 
     fn close(&mut self, h: H) {

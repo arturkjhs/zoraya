@@ -264,6 +264,25 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// Takes every request off the kernel's queue into the signal sets, for
+    /// a `sigwait` that ends (ADR-0315 item 10): a request left queued would
+    /// end the process when the kernel disposition goes back to `Terminate`.
+    /// A signal the thread blocks goes where a blocked one goes; any other is
+    /// left pending for the next delivery.
+    pub fn drain_requests(&mut self) {
+        while let Some((kind, detail)) = self.sys.take_request() {
+            let n = signal::number(kind, detail);
+            if self.signals.blocked & crate::signals::bit(n) != 0 {
+                let was_pending = self.signals.pending & crate::signals::bit(n) != 0;
+                if self.signals.take(n) == Taken::Pending {
+                    self.route(n, was_pending);
+                }
+            } else {
+                self.signals.pending |= crate::signals::bit(n);
+            }
+        }
+    }
+
     /// Whether a library entry polls for requests (ADR-0106 item 5): only
     /// with a handler installed (INV-0106-2), or a pending signal the mask
     /// now lets through.

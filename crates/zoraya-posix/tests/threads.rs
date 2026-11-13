@@ -389,3 +389,28 @@ fn a_sigwait_that_ends_for_any_reason_puts_the_mask_and_the_wait_back() {
     let to: Vec<_> = r.p.sys.interrupts.iter().map(|x| x.0).collect();
     assert!(!to.contains(&1002), "not to thread 2: {to:?}");
 }
+
+#[test]
+fn a_sigwait_that_ends_leaves_no_request_queued_for_the_kernel() {
+    // A request left in the kernel's queue would end the process when the
+    // disposition goes back to `Terminate` (ADR-0315 item 10): the wait's
+    // end takes it into the sets first. The daemon waits for {HUP, TERM}.
+    use zoraya_abi::RequestKind;
+    let mut r = three();
+    let hup = 1;
+    let old = r.p.sigwait_begin(bit(hup) | bit(TERM)).unwrap();
+    r.p.sys.requests.push_back((RequestKind::Terminate, 0));
+    r.p.drain_requests();
+    r.p.sigwait_end(old);
+    assert!(r.p.sys.requests.is_empty(), "nothing left for the kernel");
+    assert_eq!(
+        (r.p.signals.pending | r.p.signals.shared) & bit(TERM),
+        bit(TERM),
+        "the signal is pending, not lost"
+    );
+    // One that the thread does not block stays pending for the next delivery.
+    r.p.sys.requests.push_back((RequestKind::Interrupt, 0));
+    r.p.drain_requests();
+    assert!(r.p.sys.requests.is_empty());
+    assert_eq!(r.p.signals.pending & bit(2), bit(2));
+}

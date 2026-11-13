@@ -474,9 +474,11 @@ fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
         unsafe { __zoraya_cancel_end(cancel) };
         return Err(old.unwrap_err());
     };
+    let mut cancelled = false;
     let result = loop {
         // SAFETY: as above.
         if unsafe { __zoraya_cancel_seen(cancel) } != 0 {
+            cancelled = true;
             break Err(if cancel == 0 { EINTR } else { ECANCELED });
         }
         let d = deliver();
@@ -509,6 +511,9 @@ fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
         }
     };
     let _ = state(|p| {
+        // Requests still queued join the pending sets first: the kernel
+        // would end the process on a queued one when `Terminate` comes back.
+        p.drain_requests();
         p.sigwait_end(old);
         sync_sigwait(p, set);
         Ok(())
@@ -516,8 +521,11 @@ fn wait_signals(set: u64, deadline: Option<u64>) -> Result<u32, i32> {
     // SAFETY: as above.
     unsafe { __zoraya_cancel_end(cancel) };
     poll();
-    // A cancel ends the thread now, with the mask and the wait undone.
-    testcancel();
+    // A cancel the loop saw ends the thread now, with the mask and the wait
+    // undone; a signal taken is returned, not lost to a later cancel.
+    if cancelled {
+        testcancel();
+    }
     result
 }
 
@@ -2147,6 +2155,11 @@ fn fork_locked() -> Result<i32, i32> {
                 // item 5): its own facts, a port of its own.
                 p.sys.port = None;
                 p.after_fork_in_child(prepared.pid, prepared.pgid);
+                // The copied kernel dispositions may carry a sibling's
+                // `sigwait` (ADR-0315 item 10); the thread is gone here.
+                for n in 1..=zoraya_abi::posix::signal::MAX {
+                    sync_disposition(p, n);
+                }
                 super::restart_stats(p);
                 Ok(0)
             }
