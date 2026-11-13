@@ -52,6 +52,10 @@ crates/zoraya-compositor/     test-gui
 crates/zoraya-term/           test-gui test-tour-gui
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
+crates/zoraya-surface/        check
+ports/netsurf/                check
+ports/patches/netsurf/        check
+ports/apps/nsshim.c           check
 crates/zoraya-text/           test-gui test-qemu
 crates/zoraya-tokens/         test-gui
 crates/zoraya-fonts/          test-gui

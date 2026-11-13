@@ -87,6 +87,20 @@ Recommended: **Option C**. It is a recommendation, not a decision. The details a
    already has for itself if one exists, otherwise a fixed-capacity arena of 8 MiB in the library (no growth).
 6. The library lives in `crates/zoraya-surface` and is linked only by programs that name it (`-lzgui`); `libc.a` is unchanged.
 
+7. **As built by step 2 of 9d** (amendment; the recommendation stands, this records what reading the code decided).
+   `crates/zoraya-surface` is an rlib with `Surface<P: Platform>` (open, `pixels`, `damage`, `commit`, `event`,
+   `set_title`, `close`), tested on the host with a fake compositor (15 tests: clipping of every edge case, one frame in
+   flight, pointer states into moves and button changes, resize, refusal). It is **not** a second static library: a
+   second Rust staticlib would carry its own `core`, `compiler_builtins` and `zoraya-rt`'s `svc` (INV-0100-2 allows one
+   member), so the allocator question of item 5 is answered by linking the rlib into `libzoraya_posix.a`, which has
+   `ProcessHeap` as its `#[global_allocator]`; the five C names (`zoraya_window_open`, `_buffer`, `_damage`, `_poll`,
+   `_close`) are then names of `libc.a`, listed in a `posix-surface-added` block by the ADR that lands them. The
+   `Platform` trait moves to a tiny crate (`zoraya-platform`, re-exported by `zoraya-app`) so that libposix does not
+   link `zoraya-ui`. **The second open question:** `ZPBX` takes a new flag bit, `EXT_WINDOW = 4`, with the handle after
+   the random connection's (`ext_handles` and its test change). The protocol has no wheel event, so a wheel is not
+   offered (page keys, arrows and the scrollbar work); a blocking wait with a time limit is a poll with short sleeps
+   in the C surface until the library can wait on the channel with a deadline.
+
 ## Consequences
 - **Positive.** A POSIX program can have a window with a record the person sees; `netsurf` is the first; later ports (a
   PDF viewer, an editor) reuse it.

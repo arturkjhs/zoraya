@@ -1,0 +1,20 @@
+[package]
+name = "zoraya-surface"
+description = "The client side of a raw pixel window (ADR-0317): one toplevel, its buffer, damage, and events, for POSIX programs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# INV-0317-2: the only messages are zoraya-proto-gui's client requests.
+[dependencies]
+zoraya-app = { path = "../zoraya-app" }
+zoraya-protocol = { path = "../zoraya-protocol" }
+zoraya-proto-gui = { path = "../zoraya-proto-gui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

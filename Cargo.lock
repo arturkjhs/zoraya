@@ -934,6 +934,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-surface"
+version = "0.1.0"
+dependencies = [
+ "zoraya-app",
+ "zoraya-proto-gui",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-term"
 version = "0.1.0"
 dependencies = [
