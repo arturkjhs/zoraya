@@ -9,13 +9,13 @@ click 122 119
 pause 3000
 click 300 87
 pause 500
-type search llcache nslog\r
+type head -n 24 nslog\r
 pause 2500
 shot netsurf-log1
-type search schedule nslog\r
+type head -n 32 nslog\r
 pause 2500
 shot netsurf-log2
-type search conver nslog\r
+type head -n 40 nslog\r
 pause 2500
 shot netsurf-log3
 type poweroff\r
