@@ -748,8 +748,10 @@ $(NETSURF_STAMP): $(NETSURF_BIN)
 	cp $(NETSURF)/netsurf/frontends/framebuffer/res/en/Messages $(APPS_ROOT)/usr/share/netsurf/Messages
 	$(ELF_CHECK) $(APPS_ROOT)/bin
 	@echo "== no NetSurf code was compiled with __linux__ (INV-0318-2)"
+	@# A missing (or renamed) build log fails: the check never passes on nothing (9d re-review, N3).
 	@for l in netsurf-libs netsurf; do \
-	  if [ -f $(LOGS)/$$l.log ] && grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
+	  if [ ! -s $(LOGS)/$$l.log ]; then echo "INV-0318-2: $(LOGS)/$$l.log is missing; the check cannot run"; exit 1; fi; \
+	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@touch $@
 $(DEPS)/lib/libnsshim.a: ports/apps/nsshim.c $(SYSROOT_STAMP)
 	@mkdir -p $(DEPS)/lib $(OBJ)/apps

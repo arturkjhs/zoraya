@@ -85,6 +85,11 @@ Recommended: **Option B**, with the source set below. It is a recommendation, no
 - *Note (9d review, W3):* verification cannot be disabled by options (INV-0228-3, INV-0312-1): patch 0006 removes
   `nsoption_commandline` from NetSurf's `main`, so no option of the command line (`--ca_bundle`, `--ca_path`, the only
   options that name roots) is read; `-v` stays nslog's. `zosh` also refuses the line (ADR-0317's note).
+- *Note (9d re-review, N1, N3):* nslog reads `-v` only as the first argument and NetSurf's `getopt` ends the program
+  with its usage on `-v` anywhere else or on `--verbose`; the description gives `-v --verbose` anywhere on the line
+  (its format requires a long form). Patch 0007 takes every `-v` and `--verbose` out of `argv` and puts one `-v`
+  first before `nslog_init`. INV-0318-2's check fails when a build log it reads is missing, instead of passing on
+  nothing.
 
 ## Revisit triggers
 - A page the architect names that shows boxes where text is expected; a measured text-measure cost above 5% of a page load.
