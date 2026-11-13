@@ -16,6 +16,7 @@ make test-files
 make test-libposix
 make test-posix-threads
 make test-posix-suites
+make test-posix-threadtest3
 make test-posix-gui
 make test-tour-gui POSIX_ACCELS="auto"
 make test-tour-gui POSIX_ACCELS="tcg"

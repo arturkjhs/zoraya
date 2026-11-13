@@ -73,7 +73,7 @@ code asynchronously on an existing thread. Instead:
   `snapshot_process` is measured on W4.
 
 The surface is a list of measured CSV rows, and only an ADR can grow it. Out of scope, with written reasons: threads,
-`ptrace`, System V IPC, sockets, general `poll`/`epoll`, fault handlers, record locks, `dlopen`, set-uid, and T3
+`ptrace`, System V IPC, sockets, general `poll`/`epoll`, fault handlers, record locks across processes (`fcntl` record locks exist inside one process, ADR-0319), `dlopen`, set-uid, and T3
 (clang/lld).
 
 **Event and readiness mechanism** ([ADR-0006](adr/0006-event-mechanism.md)). Every kernel object type defines a signal
@@ -314,6 +314,11 @@ The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zor
   library call that waits holds the library lock (the `Pending` split of ADR-0302 item 9 is the next slice); no signal reaches a
   thread and `pthread_cancel` only sets a flag (ADR-0304, ADR-0305 are next); `fork` with siblings, `exec` and `exit` from a
   non-main thread are untested.
+- **Record locks (ADR-0319, proposed).** `libposix` keeps `fcntl` record locks in the process: `F_SETLK`, `F_SETLKW`, `F_GETLK`
+  and the `F_OFD_*` forms (`crates/zoraya-posix/src/records.rs`, `fcntl_locks.rs`), released on `close` and `dup3`. Limit, by
+  design: a second process does not see the lock (the file service has no owner per process, ADR-0103). `flock` is absent.
+  `make test-posix-threadtest3` runs SQLite's `threadtest3` (rollback-journal scenarios; WAL needs a shared mapping, ADR-0100) on SQLite's
+  default unix VFS, under HVF and TCG (INV-0319-3); `make test-posix-suites` runs musl's libc-test thread tests (ADR-0309).
 - **Not done yet.** Signals, cancellation of a blocked thread and `fork`'s locks in `libposix`, `grants` printing the
   figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the CPU-ceiling and stepped-map variants of the
   ending test (see the notes in ADR-0300, 0301 and 0307, and the report).

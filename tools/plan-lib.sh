@@ -8,7 +8,7 @@
 # and prints a line to stderr for each path the map does not know. A path the
 # map does not know runs every step.
 
-all="test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-fuzz test-fuzz-net"
+all="test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-fuzz test-fuzz-net"
 
 plan_changed() {
     steps=
