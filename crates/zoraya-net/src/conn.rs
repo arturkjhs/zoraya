@@ -231,6 +231,9 @@ impl<C: Client> Conn<C> {
         match found {
             Err(ResolveFail::Busy) => self.fail(reason::OVER_LIMIT),
             Err(ResolveFail::TimedOut) => self.fail(reason::LOOKUP_TIMED_OUT),
+            // No server to ask is a network problem, not a name without an
+            // address (ADR-0316).
+            Err(ResolveFail::NoServer) => self.fail(reason::UNREACHABLE),
             Err(_) => self.fail(reason::UNRESOLVABLE),
             Ok(found) => {
                 self.candidates = found.addresses;

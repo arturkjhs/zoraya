@@ -322,9 +322,13 @@ fn scope_with(reach: &[ReachRule<'_>]) -> Vec<u8> {
 
 impl World {
     fn new(script: Script, hosts: &[(&str, [u8; 4])]) -> World {
+        World::with_dns(script, hosts, vec![DNS])
+    }
+
+    fn with_dns(script: Script, hosts: &[(&str, [u8; 4])], dns: Vec<[u8; 4]>) -> World {
         let (a, b, queues) = End::pair();
         let mut config = static_config();
-        config.dns = vec![DNS];
+        config.dns = dns;
         config.hosts = hosts.iter().map(|(n, a)| (n.to_string(), *a)).collect();
         World {
             client: Stack::new(a, CLIENT_MAC, config, 0, 3).unwrap(),
@@ -861,6 +865,17 @@ fn resolve_refuses_bad_names_and_a_full_table_and_a_missing_server() {
         no_server.resolve(0, "a.zoraya", 0),
         Start::Failed(ResolveFail::NoServer)
     );
+}
+
+#[test]
+fn a_connect_by_name_with_no_server_is_unreachable_not_unresolvable() {
+    // A static interface with no `net.dns`: nobody to ask, which is a
+    // network problem and not "the name has no address" (ADR-0316).
+    let mut w = World::with_dns(Script::Sink, &[], Vec::new());
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("a.zoraya".into()), 80);
+    assert!(w.run_until(1_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::UNREACHABLE));
 }
 
 #[test]
