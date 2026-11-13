@@ -9,18 +9,18 @@ use super::*;
 
 const ROOMS: &str = "project --colour 1 +w ~/project\n";
 
-struct Two {
-    s: Setup,
+pub(super) struct Two {
+    pub(super) s: Setup,
     panel: u32,
-    a: u32,
-    b: u32,
-    ida: u32,
-    oa: Rect,
-    ob: Rect,
+    pub(super) a: u32,
+    pub(super) b: u32,
+    pub(super) ida: u32,
+    pub(super) oa: Rect,
+    pub(super) ob: Rect,
 }
 
 /// Two windows, `files` and `t_open`, the second above the first.
-fn two() -> Two {
+pub(super) fn two() -> Two {
     two_on(W, H)
 }
 
@@ -64,7 +64,7 @@ fn serial(s: &mut Setup, end: u32) -> u32 {
         .unwrap_or(0)
 }
 
-fn drag(s: &mut Setup, end: u32, window: u32, entry: u32) -> u32 {
+pub(super) fn drag(s: &mut Setup, end: u32, window: u32, entry: u32) -> u32 {
     let serial = serial(s, end);
     drag_named(s, end, window, entry, serial)
 }

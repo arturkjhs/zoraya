@@ -1,5 +1,7 @@
 //! Proposed ADR-0322: the wheel event, against the fake of `tests.rs`.
 
+use super::drops::{drag, two};
+use super::sheets::{sheet, sheet_at_once, system, tagged};
 use super::windows::axis;
 use super::*;
 
@@ -176,4 +178,96 @@ fn at_scale_two_the_place_is_logical() {
     s.wheel_at(body.x + 21, body.y + 41, &[(0, 30)]);
     let w = wheels(&s.f().take(a));
     assert_eq!((w[0].x, w[0].y, w[0].dy), (10, 20, 30));
+}
+
+/// Where two windows' bodies overlap, only the topmost gets the turn.
+#[test]
+fn where_two_bodies_overlap_only_the_topmost_gets_the_wheel() {
+    let mut s = setup();
+    let a = s.new_toplevel(300, 200);
+    let b = s.new_toplevel(300, 200);
+    let both = s.body(0, 1).intersect(&s.body(1, 1));
+    assert!(both.width > 0 && both.height > 0, "the bodies overlap");
+    s.wheel_at(
+        both.x + both.width / 2,
+        both.y + both.height / 2,
+        &[(0, 120)],
+    );
+    assert_eq!(wheels(&s.f().take(b)).len(), 1, "the topmost");
+    assert!(wheels(&s.f().take(a)).is_empty(), "the one under it");
+}
+
+/// A legacy surface's protocol has no wheel: it gets none.
+#[test]
+fn a_legacy_surface_gets_no_wheel() {
+    let mut s = setup();
+    let (end, _) = s.window(100, 60, 0x0040_4040);
+    assert_eq!(s.commit(end, 0, 0, 100, 60), status::OK);
+    s.f().take(end);
+    let body = s.c.window(Key { client: 0, id: 0 }).unwrap().body_rect();
+    s.wheel_at(body.x + 10, body.y + 10, &[(0, 120)]);
+    assert!(wheels(&s.f().take(end)).is_empty());
+}
+
+/// A window with a sheet over it gets no turn, even where the sheet does
+/// not cover its body; the sheet itself gets one, once past its guard.
+#[test]
+fn a_window_under_a_sheet_gets_no_wheel() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    s.f().take(app);
+    s.f().take(chooser);
+    let owner = s.c.stack().find(|k| k.client == 0).unwrap();
+    let body = s.c.window(owner).unwrap().body_rect();
+    let sheet = s.c.stack().find(|k| k.client == 1).unwrap();
+    let over = s.c.window(sheet).unwrap().body_rect();
+    let (x, y) = (body.x + 20, body.y + body.height / 2);
+    assert!(!over.contains(x, y), "a place of the owner's body only");
+    assert!(matches!(s.c.under(x, y), Some((k, Zone::Body)) if k == owner));
+    s.wheel_at(x, y, &[(0, 120)]);
+    assert!(wheels(&s.f().take(app)).is_empty(), "the owner");
+    s.wheel_at(over.x + 10, over.y + 10, &[(0, 120)]);
+    assert_eq!(wheels(&s.f().take(chooser)).len(), 1, "the sheet");
+}
+
+/// A sheet within its 500 ms guard (ADR-0245) gets no turn; after it, one.
+#[test]
+fn a_sheet_gets_no_wheel_within_its_guard() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    s.f().take(chooser);
+    let sheet = s.c.stack().find(|k| k.client == 1).unwrap();
+    let over = s.c.window(sheet).unwrap().body_rect();
+    s.wheel_at(over.x + 10, over.y + 10, &[(0, 120)]);
+    assert!(wheels(&s.f().take(chooser)).is_empty(), "within the guard");
+    s.f().clock += SHEET_GUARD_NS;
+    s.wheel_at(over.x + 10, over.y + 10, &[(0, 120)]);
+    assert_eq!(wheels(&s.f().take(chooser)).len(), 1, "after it");
+}
+
+/// While an entry is carried (ADR-0170) no window gets a turn; after the
+/// drop, the window under the pointer does.
+#[test]
+fn no_wheel_while_an_entry_is_carried() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    t.s.at(px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    t.s.wheel_at(tx, ty, &[(0, 120)]);
+    assert!(wheels(&t.s.f().take(t.b)).is_empty(), "the target");
+    assert!(wheels(&t.s.f().take(t.a)).is_empty(), "the source");
+    t.s.at(tx, ty, Some(0));
+    t.s.f().take(t.b);
+    t.s.wheel_at(tx, ty, &[(0, 120)]);
+    assert_eq!(wheels(&t.s.f().take(t.b)).len(), 1, "after the drop");
 }
