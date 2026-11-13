@@ -53,6 +53,11 @@
 < t_threads: last thread leaving
 < posixrun: exit 0
 < \r\n~> 
+# A sibling blocked in read holds the library lock (ADR-0314 item 2); _Exit
+# still ends the process.
+> posixrun /bin/t_threads blocked\r
+< posixrun: exit 3
+< \r\n~> 
 # INV-0302-6: a thread that overruns its stack faults the process.
 > posixrun /bin/t_threads overflow\r
 < posixrun: ended Fault

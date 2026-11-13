@@ -15,6 +15,7 @@
  *   t_threads limit     create threads until EAGAIN, release them, create again
  *   t_threads exit      exit() from a non-main thread while a sibling spins (exit 7)
  *   t_threads mainexit  pthread_exit in the main thread; the process ends with the last thread
+ *   t_threads blocked   _Exit from the main thread while a sibling is blocked in read (exit 3)
  *   t_threads overflow  a thread overruns its stack: the process faults (INV-0302-6)
  *   t_threads all       every case but the last three, which end the process
  */
@@ -679,6 +680,29 @@ static void mainexit(void)
 	pthread_exit(NULL);
 }
 
+static int blocked_pipe[2];
+
+static void *read_forever(void *a)
+{
+	char c;
+	(void)a;
+	/* Holds the library lock until the pipe has data (ADR-0314 item 2). */
+	read(blocked_pipe[0], &c, 1);
+	return NULL;
+}
+
+static void blocked(void)
+{
+	pthread_t t;
+	OK(pipe(blocked_pipe));
+	OK(pthread_create(&t, NULL, read_forever, NULL));
+	for (int i = 0; i < 200; i++)
+		thrd_yield();
+	/* No library call that takes the lock can be made now; the exit must
+	 * still end the process. */
+	_Exit(3);
+}
+
 static void *overrun(void *a)
 {
 	volatile char big[1 << 20];
@@ -721,6 +745,10 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(mode, "mainexit") == 0) {
 		mainexit();
+		return 0;
+	}
+	if (strcmp(mode, "blocked") == 0) {
+		blocked();
 		return 0;
 	}
 	if (strcmp(mode, "overflow") == 0) {

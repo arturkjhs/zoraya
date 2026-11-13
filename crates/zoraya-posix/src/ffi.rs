@@ -327,6 +327,22 @@ fn with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
     r
 }
 
+/// As [`with`], if the library lock is free: `None` otherwise (and before
+/// start-up).
+fn try_with<R>(f: impl FnOnce(&mut Posix<RtSys>) -> R) -> Option<R> {
+    let me = thread_pointer();
+    if LIB_OWNER.load(Ordering::Relaxed) == me || !LIB.try_lock() {
+        return None;
+    }
+    LIB_OWNER.store(me, Ordering::Relaxed);
+    // SAFETY: `LIB` is held, so this is the only reference.
+    let state = unsafe { &mut *STATE.state.get() };
+    let r = state.as_mut().map(f);
+    LIB_OWNER.store(NO_OWNER, Ordering::Relaxed);
+    LIB.unlock(&Futex);
+    r
+}
+
 unsafe extern "C" {
     fn __errno_location() -> *mut i32;
     fn fdopen(fd: i32, mode: *const c_char) -> *mut u8;
@@ -884,7 +900,7 @@ fn print_stats() {
     if !wanted {
         return;
     }
-    let _ = with(|p| {
+    let _ = try_with(|p| {
         use core::fmt::Write;
         let s = p.stats;
         let mut line = String::new();
@@ -980,7 +996,10 @@ fn restart_stats(_p: &mut Posix<RtSys>) {}
 /// `exit_group`).
 fn exit(code: i64) -> ! {
     print_stats();
-    let _ = with(report_stats);
+    // A sibling may hold the library lock for ever (it waits in a library
+    // call, ADR-0314 item 2): the report is skipped rather than the exit
+    // lost.
+    let _ = try_with(report_stats);
     zoraya_rt::process_exit((code & 0xff) as i32)
 }
 
