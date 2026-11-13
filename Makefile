@@ -285,11 +285,12 @@ NET_FWD_PORT := 47015
 NET_SCRIPT := tests/shell/net.script
 # INV-0296-1: a string of each of the test image's Crash paths (feature
 # net-test), as PROGRAM:STRING: netd's end on request, init's request on its
-# control connection and its look for the volume's file. The shell's `net
+# control connection and its look for the volume's file, and netd's read of
+# the test DNS port (ADR-0316's test hook). The shell's `net
 # crash` only asks init, which then has no such path. test-net checks that
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
-NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper'
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper' 'netd:net-test-dns-port'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
