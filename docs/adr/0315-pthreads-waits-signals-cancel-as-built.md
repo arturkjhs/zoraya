@@ -60,6 +60,10 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    progress }` which the next `wait_for` of that run returns as if it had made the wait. The resume is cleared after the run, so a method that does
    not reach its wait again (the data came meanwhile) leaves nothing stale. `write_stream` starts at `resume.progress`. A wait is "long" if it
    goes through `wait_for`; the waits for a service's reply (`Sys::wait` in `call`) stay inside the lock as ADR-0302 item 9 allows.
+   Known limitation of that rule: a short `RtSys::wait` inside `call()` still holds the library lock across a service's whole reply, and a few
+   replies are not short: `stop_self` (the broker replies only when the process is continued) and the terminal's `TCSADRAIN`/drain reply.
+   A sibling thread's library calls wait for the lock meanwhile (the process is stopped as a whole in the first case, so it is harmless there;
+   in the second a sibling can wait for the drain). Moving those two to `Pending` waits is follow-up work.
    The audit of waits (ADR-0302 open question): `wait_for` is called from `read_stream`, `write_stream`, `sock` connect/accept/read/write (net.rs),
    `wait_child`, the terminal read, `sigsuspend`/`pause`, `nanosleep` and `pselect`; all of them return through `state()`.
 2. **The thread table** is `Posix::threads` (`threads.rs`): tp (thread pointer, the key), tid, the thread handle, mask, thread-pending set, the port the thread
@@ -68,29 +72,53 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
    `thread_self`). `__clone` adds the record **before** `thread_create` (the new thread may run first), fills in the handle after, and
    the thread's exit path (`zoraya_posix_thread_exit`, `__unmapself`) removes the record and closes the handle before `thread_exit`
    (refines ADR-0314 item 3, which closed it at `__clone`). A new thread starts with its creator's mask (musl then sets its saved one).
-3. **Signals.** `rt_sigprocmask` is the thread's `Signals::mask` (size must be 8; unblocking polls). `tkill` records a thread-directed signal in the
-   target's pending set (not for `SIG_IGN`) and interrupts it; the caller itself takes the `raise` route. A process-directed request that the taker blocks is
-   `route`d (ADR-0304 item 3 (b)): to the thread of lowest tid that has it unblocked and waits (has a port), else the lowest with it unblocked; if none,
-   `Signals.shared` (the process-pending set) which every thread's `next_unblocked` and `should_poll` read. The interrupt of a thread blocked in a library wait
+3. **Signals.** `rt_sigprocmask` is the thread's `Signals::mask` (size 8, or 16 as musl passes it, the second word is always empty; unblocking polls). `tkill` records a thread-directed signal in the
+   target's pending set (not for `SIG_IGN`) and interrupts it; a `tkill` of the caller itself only marks it pending in the caller (see the musl hooks below). A process-directed request that the taker blocks is
+   `route`d (ADR-0304 item 3 (b)): it goes into `Signals.shared` (the process-pending set), which every thread's `next_unblocked` and `should_poll` read, and the
+   thread of lowest tid that has it unblocked and waits (has a port), else the lowest with it unblocked, is interrupted to look; the taker's own thread-pending
+   bits (an earlier `pthread_kill` of it) are not touched. Whichever thread with the signal unblocked takes it first handles it, once; one that blocks it again or
+   ends before looking leaves it for the others. The interrupt of a thread blocked in a library wait
    is a `thread_interrupt` **plus** a packet with key `u64::MAX` queued on the port the thread registered (the kernel's `port_wait` is not woken by
    an interrupt, ADR-0301); the wake is `EINTR` from `wait_for`, which `restartable` turns into a delivery and, if no handler ran, a second run (ADR-0304 item 11).
-   musl's `__block_all_sigs` and `__block_app_sigs` (which were no-ops, leaving `pthread_create`'s `sig_mask` uninitialised) store the mask in force in
-   their argument and block nothing (a handler runs only at a library entry or wait, never inside musl's critical sections); `__restore_sigs` is a no-op. The
+   musl's `__block_all_sigs` and `__block_app_sigs` store the mask in force in their argument (what `pthread_create` gives the new thread as `sig_mask`) **and
+   really block everything but `SIGKILL`/`SIGSTOP`** in the calling thread; `__restore_sigs` puts the mask back and polls. So a handler never runs inside
+   musl's `killlock` or thread-list lock (neither from the `tkill` of oneself, which is only marked pending, nor from a delivery at a futex wait inside
+   `pthread_exit`), and `pthread_kill(pthread_self(), n)` and `raise` run the handler after the lock is released. (The first version of this slice blocked nothing
+   and ran the handler inside the lock: a handler that called `pthread_kill` on itself or `pthread_exit` deadlocked; found in review.) The
    main thread is first seen before `__init_tls` set its thread pointer (zero): the table adopts the only thread under its new pointer.
    A thread registers its port and checks its `interrupted` flag and deliverable signals under the lock before it waits, so an interrupt is never lost between the
    check and the wait.
 4. **The futex shim** (ADR-0304 item 11): `futex_wait` returning interrupted clears the thread's flag, runs delivery, and returns `-EINTR` if a handler ran, else 0
-   (spurious). musl's `sem_wait` and `pthread_cond_wait` loops therefore retry, as INV-0304-7/8 want.
+   (spurious). The flag is one-shot and the futex wait of a non-cancellation point (a mutex, `__tl_lock`) spends it, so the cancel does not depend on it
+   (item 5). musl's `sem_wait` and `pthread_cond_wait` loops therefore retry, as INV-0304-7/8 want.
 5. **Cancellation** (refines ADR-0305). `pthread_cancel` stores the flag and calls `zoraya_posix_interrupt(tid)` (an interrupt with no signal). `__syscall_cp`
    is `__zoraya_cp_before`/`__zoraya_cp_after` around the call (only musl's futex waits use it): before a call, a pending enabled cancel is acted on (masked mode
-   gives `-ECANCELED`); after a call that returned `-EINTR` or 0, likewise. A library wait that is woken by another thread (`EINTR` from the user packet) calls
-   `__testcancel` with the lock free. `read`, `write`, `nanosleep` etc. do **not** test at entry: a thread that has a cancel pending and enters `read` with data
-   available completes the read (POSIX allows this); it is cancelled at its next wait. Asynchronous cancellation is deferred (no signal can stop a running thread, CP-10).
-6. **Not in this slice** (kept as known limits; see the report): `kill(getpid(), n)` from a thread that blocks `n` leaves the signal pending in that thread
-   rather than routing it; `sigwait`/`sigtimedwait`; `pthread_getattr_np` and thread names; the `check-cancel-points` script; the fork freeze, child reduction, `exec`
-   from a thread, `atfork.c`; `waitpid` and `accept` in a thread are covered by the host retry model and not by an in-QEMU case, because `posixrun` has no broker (a
+   gives `-ECANCELED`); after a call that returned `-EINTR` or 0, likewise. The cancel does **not** depend on the interrupt flag, which a non-cancellation-point wait
+   (`pthread_mutex_lock`, `__tl_lock`, `__lock`) or a wait that ended for data may have spent: musl's own `cancel` flag stays set, and the next cancellation point
+   acts on it. The library's cancellation points call `__testcancel` (ADR-0305 item 2) at the **top** of `read`, `write` (and the vector and socket forms),
+   `connect`, `recv*`/`send*`, `waitpid`/`wait4`, `nanosleep`/`clock_nanosleep`, `pselect`/`select`, `sigsuspend`/`pause`, outside the lock and before any buffer is built; and
+   `wait_unlocked` calls it before and after every long wait, **whatever ended the wait**, with no lock held. So a thread cancelled while it waited for a mutex and then
+   calls `read` on an empty pipe is cancelled there. (An earlier text said `read` does not test at entry; with the flag spent that lost the cancel.) Asynchronous
+   cancellation is deferred (no signal can stop a running thread, CP-10).
+   **Deviation from ADR-0305 item 4** ("no Rust frame owns anything across a cancellation point"): the two tests in `wait_unlocked` run below `state()`, which owns the
+   wait's `sources` vector, and below the wrapper's own temporaries (`pselect`'s four fd-set vectors, `connect`'s address copy); with `panic = abort` and no
+   unwinding a cancel in the wait leaks them. Bound: a cancel ends the thread, so this happens once per cancelled thread, and the blocks are at most about 32 KiB
+   (`pselect` with 1024 descriptors: 16 KiB of sources, 4 x 128 bytes of sets), usually under 300 bytes. A cancel that arrives before the call, or between calls, leaks nothing.
+   Restructuring so that the wait returns to the top of the wrapper before the test is possible (a `CANCELLED` marker through `state()`), and is follow-up work if a
+   program cancels threads in a loop.
+6. **Not in this slice** (kept as known limits; see the report): `sigwait`/`sigtimedwait`; `pthread_getattr_np` and thread names; the `check-cancel-points` script;
+   the fork freeze, child reduction, `exec` from a thread, `atfork.c`; `waitpid` and `accept` in a thread are covered by the host retry model and not by an in-QEMU case, because `posixrun` has no broker (a
    `posix_spawn` there hangs): they belong in `tests/posix/t_posix.c`'s full session.
+   **`fork` with more than one thread is refused with `EAGAIN`** until the freeze lands: the child would inherit the thread table, the deferred-wait mode and possibly a
+   lock (`MEM`, the library's) held by a sibling that does not exist in it (`vfork` is `fork`). Case `forkrefused`.
    `pthread_cancel` reads `t->tid` of its target as musl's own `pthread_kill` does under `killlock`; a cancel racing the target's join is the caller's error as in musl.
+7. **The exit path** (`exit`, `_exit`, the statistics line of `ZORAYA_POSIX_STATS`, the ADR-0110 report) waits for the library lock for at most 500 ms (a 1 ms sleep between tries)
+   instead of trying once, so a sibling's short call does not drop the report; after that the report is skipped and the exit goes on. The statistics line is written with the
+   lock free (`restartable`), so a full stderr pipe waits instead of losing the line.
+8. **The tests.** The waits in `t_threads` are ordered by an announcement and a real 150 ms sleep (`settle`), because a program cannot see that a sibling is blocked; the
+   result of a case does not depend on the order (the interrupt and the cancel flag are sticky), the sleep only makes the interesting order the likely one. Bounded
+   loops replace yields where a count is awaited. `overflow` writes a 1 MiB frame's lowest byte below the stack in one jump: it tests the layout (the unmapped gap),
+   not a guard page; musl's guard pages are made with `mprotect`, which is `ENOSYS`, so they stay writable and a smaller overrun is not caught.
 
 ## Consequences
 
@@ -114,7 +142,8 @@ signal, so the routing is by rule; CP-18 that lock scopes are documented, which 
 ## Open questions
 
 - Whether the port per wait should be cached per thread once the thread table carries it (a measurement of a read-heavy threaded program decides).
-- Whether `read` and the other cancellation points should test at entry (ADR-0305 item 4 says the wrapper polls before taking the lock); the check script comes with that.
+- The `check-cancel-points` script (INV-0305-3) is not written; the points are the calls named in item 5.
+- Whether the wait should hand the cancel back to the top of the wrapper (item 5, the bounded leak).
 
 ## Revisit triggers
 

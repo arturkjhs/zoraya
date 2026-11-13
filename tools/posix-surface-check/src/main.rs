@@ -28,7 +28,10 @@ use posix_surface_check::{ar, elf, rename, surface};
 /// The names an archive may export: `SPEC` is the tier list's file, then
 /// `+`-separated ADR files whose `posix-surface-added` blocks add names, or
 /// further list files (a name ending in `.txt`: the T9 list of ADR-0308). A
-/// name from an ADR that is not accepted is admitted with a printed note.
+/// name from an ADR that is not accepted is admitted with a printed note. A
+/// `.txt` part is a list file and is always admitted, with no note and no
+/// status check: the ADR that governs it is not read, so adding a name there
+/// is a change of the list, reviewed as one.
 fn names(spec: &str) -> Result<BTreeSet<String>, String> {
     let mut parts = spec.split('+');
     let list = parts.next().unwrap_or_default();

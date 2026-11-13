@@ -1370,9 +1370,9 @@ fn wake_up_to(address: u64, count: i64) -> i64 {
     woken
 }
 
-/// `SYS_rt_sigprocmask`: per-thread masks are step 3 (ADR-0304); until then a
-/// thread's start and `pthread_create` find an empty old mask and a set that
-/// changes nothing. `pthread_sigmask` is the Rust one, not musl's.
+/// `SYS_rt_sigprocmask`: the calling thread's mask (ADR-0304 item 1), the
+/// call musl's thread start and `abort` make. `pthread_sigmask` is the Rust
+/// one, not musl's.
 #[unsafe(no_mangle)]
 extern "C" fn zoraya_posix_rt_sigprocmask(how: i64, set: i64, old: i64, size: i64) -> i64 {
     // musl passes `_NSIG / 8` (16): the set is two words, the library keeps
