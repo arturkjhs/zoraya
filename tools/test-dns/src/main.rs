@@ -25,7 +25,9 @@
 //! Ethernet frames) and fails unless: the first DNS query of the capture is
 //! for `--first`, and before it the guest asked for the server with exactly
 //! one ARP request, which was answered (the query did not wait for its own
-//! ARP or a retry); every name given was answered; and after the first
+//! ARP or a retry) and was sent at least `PROBE_LEAD_MS` before the query
+//! (the server may be the gateway, whose ARP request the old code also sent
+//! once, right before the query: only the lead tells the probe apart); every name given was answered; and after the first
 //! answer for a `--then-echo` name an echo request to its address, after one
 //! for a `--then-syn` name a TCP SYN to its address, left within
 //! `FOLLOW_MS` (`netd` acted on the answer at once, not on its next wake-up).
@@ -39,6 +41,9 @@ use std::time::{Duration, Instant};
 const MAX_PENDING: usize = 64;
 /// How soon after its answer the echo request or SYN must leave.
 const FOLLOW_MS: u64 = 500;
+/// How long before the first query the server's ARP request must have been
+/// sent (INV-0316-3): the probe goes out when the interface is configured.
+const PROBE_LEAD_MS: u64 = 500;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Rule {
@@ -387,6 +392,22 @@ fn check(frames: &[(u64, Frame)], c: &Check) -> Result<Vec<String>, String> {
             lines.push(format!("{:+10.3} ms  {f:?}", rel(*t)));
         }
     }
+    // The probe is sent when the interface is configured, long before the
+    // first command: a lookup that had to ask for its own server would put
+    // the request right before the query (as the code before ADR-0316 did,
+    // and as it does for a gateway that is also the DNS server, where
+    // `asked == 1` alone proves nothing).
+    let lead_ms = before
+        .iter()
+        .find(|(_, f)| matches!(f, Frame::ArpRequest { target, .. } if *target == c.server))
+        .map(|(t, _)| (t0 - t) / 1000);
+    if asked == 1 && lead_ms.is_some_and(|ms| ms < PROBE_LEAD_MS) {
+        return Err(format!(
+            "the ARP request for {} came {} ms before the first query (at least {PROBE_LEAD_MS} ms wanted: it was not sent ahead of the lookup)",
+            dotted(c.server),
+            lead_ms.unwrap_or(0)
+        ));
+    }
     if asked != 1 || !answered {
         return Err(format!(
             "{asked} ARP request(s) for {} before the first query (one, answered, wanted; answered: {answered})",
@@ -622,6 +643,17 @@ mod tests {
             check(&late, &c("slow"))
                 .unwrap_err()
                 .contains("after the answer")
+        );
+        // The one ARP request came right before the query: the lookup asked
+        // for its own server (the code before ADR-0316, with the gateway as
+        // the server).
+        let mut close = good.clone();
+        close[0].0 = 1_999_900;
+        close[1].0 = 1_999_950;
+        assert!(
+            check(&close, &c("slow"))
+                .unwrap_err()
+                .contains("not sent ahead")
         );
         // Two ARP requests: the query waited for its own.
         let mut twice = good.clone();
