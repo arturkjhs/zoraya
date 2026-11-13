@@ -9,7 +9,7 @@ use alloc::format;
 use zoraya_settings::usage::Reading;
 
 const MIB: u64 = 1 << 20;
-const TABLE: &str = "a1 --untrusted\na2 --untrusted\na3 --untrusted\na4 --untrusted\na5 --untrusted\nproject --colour 1 +w ~/project\n";
+const TABLE: &str = "a1 --untrusted\na2 --untrusted\na3 --untrusted\na4 --untrusted\na5 --untrusted\na6 --untrusted\nproject --colour 1 +w ~/project\n";
 
 impl Setup {
     /// A toplevel request: the status, and the window if it was made.
@@ -700,16 +700,40 @@ fn an_untrusted_rooms_clients_are_counted_in_its_account() {
             assert_eq!(s.try_room_client(panel, room, tag).0, status::OK, "{room}");
         }
     }
-    // a1 at its bound; a5 under its own but past all untrusted rooms'.
-    for room in ["a1", "a5"] {
+    // a1 at its bound; a5 and a6 under their own but past all untrusted
+    // rooms'. A refusal changes no other client: the same clients, and the
+    // other rooms' accounts as they were.
+    let clients = s.c.client_count();
+    let others = |s: &Setup| -> Vec<_> {
+        s.c.accounts()
+            .into_iter()
+            .filter(|a| !["a1", "a5", "a6"].contains(&a.room.as_str()))
+            .collect()
+    };
+    let before = others(&s);
+    for room in ["a1", "a5", "a6"] {
         tag += 1;
         let (st, end, gone) = s.try_room_client(panel, room, tag);
         assert_eq!(st, status::OVER_QUOTA, "{room}");
         assert!(s.f().closed.contains(&end), "the refused end is closed");
         assert_eq!(gone, [tag]);
+        assert_eq!(s.c.client_count(), clients, "{room}: no other client goes");
     }
-    let a1 = s.c.accounts().into_iter().find(|a| a.room == "a1").unwrap();
+    assert_eq!(
+        others(&s),
+        before,
+        "the other rooms' accounts are unchanged"
+    );
+    let accounts = s.c.accounts();
+    let a1 = accounts.iter().find(|a| a.room == "a1").unwrap();
     assert_eq!(a1.refused, 1);
+    // A room with no client keeps its refusal only until the next new
+    // room's: the list stays bounded by the clients there are.
+    assert!(
+        accounts.iter().all(|a| a.room != "a5"),
+        "a5's refusal is forgotten"
+    );
+    assert_eq!(accounts.iter().find(|a| a.room == "a6").unwrap().refused, 1);
     // The session's clients are not refused for the rooms': up to the
     // whole table.
     let untrusted = UNTRUSTED_ACCOUNTS * ROOM_CLIENTS;

@@ -95,10 +95,16 @@ protocol's; `AddRoomClient` of an untrusted room past its account is `OVER_QUOTA
   `SESSION_CLIENTS` free, counting the session's clients only. *Check:* `cargo test -p zoraya-panel`.
 
 ## Open questions
-- The number of untrusted accounts (four, ADR-0262) is counted by the rooms that have surfaces, as before; a fifth
-  room's clients are bounded by `UNTRUSTED_CLIENTS`, its surfaces refused until an account frees. Counting accounts
-  from a room's first client (ADR-0262's "when it first launches into the room") would refuse the fifth room's
-  terminal itself; not changed here.
+- **A deviation from ADR-0262's "four accounts", for the architect.** Client accounts never count rooms: the bound is
+  `ROOM_CLIENTS` a room and `UNTRUSTED_CLIENTS` (12) for all, so up to 12 untrusted rooms of one client each are
+  admitted, while surfaces are held to four accounts (ADR-0262, counted by the rooms that have surfaces, as before).
+  The clients of a fifth to twelfth room hold slots of the untrusted share but get no surface until one of the four
+  accounts frees (`OVER_QUOTA` at `Create`). Counting accounts from a room's first client (ADR-0262's "when it first
+  launches into the room") would refuse the fifth room's terminal itself at `AddRoomClient`; not changed here.
+- The compositor keeps a refusal count per room for the readings. A refusal for a room that has no client (one past
+  `UNTRUSTED_CLIENTS`) is listed until the next refusal of a room not yet listed or the next client goes; the list is
+  never longer than the untrusted clients plus one (as built in part 9e, `count_refusal`). The panel shows such a
+  room's refusal only for that while.
 - Whether a client with no window should hold its slot for ever (a stuck program): the panel cannot see the program's
   end; the person's close button needs a window. A timeout would be a new decision.
 

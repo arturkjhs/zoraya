@@ -112,10 +112,7 @@ impl<P: Platform> Compositor<P> {
             && all_pixels + more_pixels <= UNTRUSTED_AREAS * area
             && (!new_account || rooms.len() < UNTRUSTED_ACCOUNTS);
         if !ok {
-            match self.refusals.iter_mut().find(|(r, _)| *r == room) {
-                Some((_, n)) => *n = n.saturating_add(1),
-                None => self.refusals.push((room, 1)),
-            }
+            self.count_refusal(room);
         }
         ok
     }
@@ -141,16 +138,29 @@ impl<P: Platform> Compositor<P> {
         }
         let ok = room < zoraya_proto_gui::ROOM_CLIENTS && all < zoraya_proto_gui::UNTRUSTED_CLIENTS;
         if !ok {
-            match self.refusals.iter_mut().find(|(r, _)| *r == record.room) {
-                Some((_, n)) => *n = n.saturating_add(1),
-                None => self.refusals.push((record.room.clone(), 1)),
-            }
+            self.count_refusal(record.room.clone());
         }
         ok
     }
 
-    /// Forgets the refusals of rooms that have no client any more, so the
-    /// list is never longer than the clients there are.
+    /// Counts a refusal for `room`. A room not listed yet is listed after
+    /// the refusals of rooms without a client are forgotten: a client
+    /// refused for a room that has none (past `UNTRUSTED_CLIENTS`) is
+    /// listed until the next new room's refusal or the next client goes, so
+    /// the list is never longer than the untrusted clients there are, plus
+    /// one.
+    fn count_refusal(&mut self, room: String) {
+        match self.refusals.iter_mut().find(|(r, _)| *r == room) {
+            Some((_, n)) => *n = n.saturating_add(1),
+            None => {
+                self.prune_refusals();
+                self.refusals.push((room, 1));
+            }
+        }
+    }
+
+    /// Forgets the refusals of rooms that have no untrusted client any
+    /// more (see `count_refusal` for the bound this keeps).
     pub(crate) fn prune_refusals(&mut self) {
         let clients = &self.clients;
         self.refusals.retain(|(room, _)| {
