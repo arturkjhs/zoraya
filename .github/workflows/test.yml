@@ -133,9 +133,10 @@ jobs:
     needs: [plan, image]
     if: ${{ needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
-    # 30: a cold ports cache builds OpenSSL, curl and wget as well (TASK-27 9a);
-    # 45: and the host and the cross CPython (9c, N7: not yet measured cold on CI).
-    timeout-minutes: 45
+    # A cold ports cache builds OpenSSL, curl and wget (TASK-27 9a), NetSurf with
+    # its libraries (9d, 45 minutes alone) and the host and the cross CPython
+    # (9c, N7: the two together not yet measured cold on CI), hence 60.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: read
@@ -155,17 +156,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-v1
-      - name: Install clang (zcc, libc.a and the ports) and zstd
+          key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-netsurf-v2
+      - name: Install clang (zcc, libc.a and the ports), zstd and NetSurf's build tools
         if: ${{ needs.image.outputs.ref == '' }}
         run: |
-          # GitHub's Ubuntu images carry both: when they are there the network
+          # GitHub's Ubuntu images carry them: when they are there the network
           # is not needed (the runners' mirrors have been slow or unreachable).
-          if command -v clang >/dev/null && command -v zstd >/dev/null; then
-            echo "clang $(clang --version | head -1) and zstd are installed: no apt"
+          # gperf, flex, bison and pkg-config are NetSurf's libraries' (9d: the
+          # build job of a9 failed on `gperf: No such file`); the same list as
+          # .github/ci/Dockerfile.
+          missing=
+          for t in clang zstd gperf flex bison pkg-config; do
+            command -v "$t" >/dev/null || missing="$missing $t"
+          done
+          if [ -z "$missing" ]; then
+            echo "clang $(clang --version | head -1), zstd, gperf, flex, bison and pkg-config are installed: no apt"
             exit 0
           fi
-          APT_DEB_CACHE="$HOME/apt-debs" tools/ci-apt-install.sh clang zstd
+          echo "missing:$missing"
+          APT_DEB_CACHE="$HOME/apt-debs" tools/ci-apt-install.sh clang zstd gperf flex bison pkg-config
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
@@ -197,7 +206,7 @@ jobs:
       # builds everything, as before. If a restored build is ever wrong, change
       # the prefix `ports-build-v3`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
-        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0320-*.md' | xargs -0 touch -h -t 200001010000
+        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0317-*.md' 'docs/adr/0320-*.md' | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
         uses: actions/cache@v4
         with:
@@ -217,7 +226,7 @@ jobs:
             !build/ports/work/Python-*
             !build/ports/work/hostpython-build
             !build/ports/work/python-build
-          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0320-*.md') }}
+          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0317-*.md', 'docs/adr/0320-*.md') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -225,7 +234,10 @@ jobs:
         # (about 600 MB): the tests read build/rootfs-python and
         # build/python-testlib, and ports/Makefile's markers
         # (build/ports/obj/python-src.stamp, hostpython.stamp) tell make they are built.
-        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental --exclude='build/ports/work/Python-*' --exclude=build/ports/work/hostpython-build --exclude=build/ports/work/python-build --exclude=build/ports/host --exclude=build/ports/python-stage build target
+        # build/ports/host (NetSurf's host tools, 9d) stays: test-netsurf's make reads
+        # its libpng16.a; the host python has a prefix of its own (build/ports/hostpython).
+        # NetSurf's build/rootfs-apps/bin/netsurf and usr/share/netsurf are in build/.
+        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental --exclude='build/ports/work/Python-*' --exclude=build/ports/work/hostpython-build --exclude=build/ports/work/python-build --exclude=build/ports/hostpython --exclude=build/ports/python-stage build target
       - uses: actions/upload-artifact@v4
         with:
           name: build
@@ -305,7 +317,7 @@ jobs:
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it), and test-hand-run's
     # three boots, one with the desktop; every other job stays within 10.
-    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'test-python') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
+    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'test-apps') || contains(matrix.cmd, 'test-netsurf') || contains(matrix.cmd, 'test-python') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:

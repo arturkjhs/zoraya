@@ -365,6 +365,7 @@ version = "0.1.0"
 name = "zoraya-app"
 version = "0.1.0"
 dependencies = [
+ "zoraya-platform",
  "zoraya-proto-gui",
  "zoraya-protocol",
  "zoraya-test-alloc",
@@ -720,6 +721,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-platform"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-pmm"
 version = "0.1.0"
 dependencies = [
@@ -736,6 +741,7 @@ dependencies = [
  "zoraya-fs-service",
  "zoraya-fs-testkit",
  "zoraya-heap",
+ "zoraya-platform",
  "zoraya-proto-file",
  "zoraya-proto-net",
  "zoraya-proto-posix",
@@ -744,6 +750,7 @@ dependencies = [
  "zoraya-resolve",
  "zoraya-rng",
  "zoraya-rt",
+ "zoraya-surface",
  "zoraya-test-alloc",
 ]
 
@@ -930,6 +937,16 @@ dependencies = [
 name = "zoraya-stream"
 version = "0.1.0"
 dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-surface"
+version = "0.1.0"
+dependencies = [
+ "zoraya-platform",
+ "zoraya-proto-gui",
+ "zoraya-protocol",
  "zoraya-test-alloc",
 ]
 

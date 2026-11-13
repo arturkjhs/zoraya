@@ -441,14 +441,21 @@ impl Gui {
         root: &crate::files::File,
         chooser: Option<Handle>,
         keeper: Option<(Handle, Handle)>,
+        window: Option<Handle>,
     ) -> Option<Running> {
         let (ours, theirs) = channel_create().ok()?;
         if !attached(self.manager, &gui::AttachClientManager {}, theirs) {
+            if let Some(w) = window {
+                let _ = handle_close(w);
+            }
             let _ = handle_close(ours);
             return None;
         }
         let Ok(root) = root.clone_as(crate::files::ALL) else {
             let _ = handle_close(ours);
+            if let Some(w) = window {
+                let _ = handle_close(w);
+            }
             return None;
         };
         // Its own job, to make its launches' jobs under it, and the image
@@ -485,6 +492,11 @@ impl Gui {
                 e.handle(moved(8, manage));
                 e.handle(moved(9, reconnect));
             }
+            // The first shell's channel, for a POSIX program's window
+            // (ADR-0317): the panel serves it as a launcher's.
+            if let Some(w) = window {
+                e.handle(moved(10, w));
+            }
             let process = e
                 .finish()
                 .and_then(|length| zoraya_rt::spawn(&buffer[..length]).ok());
@@ -507,6 +519,9 @@ impl Gui {
                 if let Some((manage, reconnect)) = keeper {
                     let _ = handle_close(manage);
                     let _ = handle_close(reconnect);
+                }
+                if let Some(w) = window {
+                    let _ = handle_close(w);
                 }
                 None
             }

@@ -403,3 +403,46 @@ fn a_host_operand_that_is_not_a_host_makes_no_grant() {
         assert!(r.is_none(), "{bad} made a grant");
     }
 }
+
+const NETSURF: &str = include_str!("../../../user/describe/posix/netsurf.cmd");
+const CURL: &str = include_str!("../../../user/describe/posix/curl.cmd");
+const TCC: &str = include_str!("../../../user/describe/posix/tcc.cmd");
+
+/// INV-0312-1, INV-0317-1: a program with a window runs only a line its
+/// description parses; options that would replace or disable the roots do not
+/// run. A program without a window keeps the default-settings rule.
+#[test]
+fn a_window_program_runs_only_a_line_its_description_parses() {
+    use crate::netgrant::line_may_run;
+    let ns = zoraya_describe::parse(NETSURF.as_bytes()).unwrap();
+    assert!(line_may_run(&ns, &["https://h/"]));
+    assert!(line_may_run(&ns, &[]));
+    assert!(line_may_run(&ns, &["--help"]));
+    for bad in [
+        "--ca_bundle=/x.pem",
+        "--ca_path=/x",
+        "--ssl_verify_certificates=false",
+        "--homepage_url=https://h/",
+        "-k",
+    ] {
+        assert!(!line_may_run(&ns, &[bad]), "{bad}");
+        assert!(!line_may_run(&ns, &[bad, "https://h/"]), "{bad}");
+        assert!(!line_may_run(&ns, &["--help", bad]), "{bad}");
+    }
+    // Without a window the rule stays as it was.
+    let curl = zoraya_describe::parse(CURL.as_bytes()).unwrap();
+    assert!(line_may_run(&curl, &["-k", "https://h/"]));
+    let tcc = zoraya_describe::parse(TCC.as_bytes()).unwrap();
+    assert!(line_may_run(&tcc, &["--anything"]));
+}
+
+/// The pills' `+net` targets, as the window writes them.
+#[test]
+fn net_targets_are_the_scope_hosts() {
+    let ok = go_nets(NET, &[], &["example.org"], true).unwrap();
+    let scope = ok.expect("a scope").1;
+    assert_eq!(
+        crate::netgrant::targets(&scope),
+        vec![String::from("example.org")]
+    );
+}

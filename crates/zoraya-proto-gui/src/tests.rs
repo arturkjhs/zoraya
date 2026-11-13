@@ -319,6 +319,7 @@ fn the_client_managers_messages() {
         kind: dock::ROOM,
         index: 2,
     });
+    total(ClientGone { tag: 7 });
     total(AttachClientManager {});
 }
 
@@ -398,4 +399,35 @@ fn changed_events_have_new_ordinals() {
     )
     .unwrap();
     assert!(decode::<WindowPointer>(&out[..n], 0).is_err());
+}
+
+#[test]
+fn plain_text_refuses_controls_and_every_bidi_mark() {
+    assert!(plain_text("netsurf ./page.html"));
+    assert!(plain_text("caf\u{e9} \u{4e2d}"));
+    for c in [
+        '\u{0}', '\n', '\u{7f}', '\u{85}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202e}',
+        '\u{2066}', '\u{2069}',
+    ] {
+        let mut b = [0u8; 4];
+        assert!(!plain_text(c.encode_utf8(&mut b)), "{c:?}");
+    }
+    // Neighbours of the ranges are plain.
+    for c in ['\u{200d}', '\u{2029}', '\u{202f}', '\u{2065}', '\u{206a}'] {
+        let mut b = [0u8; 4];
+        assert!(plain_text(c.encode_utf8(&mut b)), "{c:?}");
+    }
+}
+
+#[test]
+fn app_names_are_short_lowercase_words() {
+    assert!(is_app_name("netsurf"));
+    assert!(is_app_name("a-b_9"));
+    let long = [b'a'; MAX_APP_NAME + 1];
+    let at_most = core::str::from_utf8(&long[..MAX_APP_NAME]).unwrap();
+    assert!(is_app_name(at_most));
+    assert!(!is_app_name(core::str::from_utf8(&long).unwrap()));
+    for bad in ["", "Net", "a b", "a/b", "\u{e9}"] {
+        assert!(!is_app_name(bad), "{bad:?}");
+    }
 }

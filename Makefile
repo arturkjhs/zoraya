@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps test-apps python python-testlib test-python test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps netsurf test-netsurf test-apps python python-testlib test-python test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -531,6 +531,9 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 APPS_ROOT := $(BUILD)/rootfs-apps
 apps:
 	@$(MAKE) -f ports/Makefile apps
+# NetSurf (TASK-27 9d, ADR-0318) into build/rootfs-apps, as apps does for curl and wget.
+netsurf:
+	@$(MAKE) -f ports/Makefile netsurf
 # The OpenSSL-with-threads test program (tests/apps/tlsthreads.c), for test-apps only.
 TLSTHREADS_BIN := $(BUILD)/ports/obj/apps/tlsthreads
 $(TLSTHREADS_BIN): apps tests/apps/tlsthreads.c
@@ -589,7 +592,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	exit $$rc
 
 # TASK-27 9c (proposed ADR-0320): CPython 3.15, cross-built static with zcc.
-# `make python` builds the host python of the same version (build/ports/host),
+# `make python` builds the host python of the same version (build/ports/hostpython),
 # SQLite for the target and the program with its standard library into
 # build/rootfs-python (needs `make fetch-ports` and the OpenSSL of `make apps`'
 # ports once). `make test-python` boots a volume made of rootfs/, that
@@ -613,7 +616,7 @@ PYTHON_TIMEOUT ?= 1800
 # --disable-test-modules leaves Lib/test out of the stage) and compiled by the
 # host python, as the rest of the library is.
 PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
-PYTHON_HOSTPY := $(BUILD)/ports/host/bin/python3.15
+PYTHON_HOSTPY := $(BUILD)/ports/hostpython/bin/python3.15
 PYTHON_RUN = $(RUNNER) --timeout $(1) --script $(PYTHON_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(PYTHON_DISK) $(PYTHON_QEMU) --accel $(3) $(KERNEL)
 PYTHON_TESTLIB := $(BUILD)/python-testlib
 # Made once, by ci-build, so that the test jobs need neither the source tree nor
@@ -656,6 +659,50 @@ test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
 		else echo '[python] ok: asyncio, http.client and urllib sent no request byte to the refused TLS servers (3 connections each, 0 bytes)'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PYTHON_DISK); rc=$$?; fi; \
+# TASK-27 9d (proposed ADR-0317, ADR-0318): NetSurf in a window of the desktop. The
+# image is test-apps' (rootfs/, build/rootfs-apps with `netsurf`, the test PKI's root,
+# test names), the GUI headless with the network, the runner's HTTP and TLS servers
+# on the host (tools/test-httpd). The script tests/gui/netsurf.script reads the
+# screen by colour regions and takes screendumps (docs/netsurf/ in the report).
+NS_ROOT := $(BUILD)/netsurf-root
+NS_DISK := $(BUILD)/netsurf-disk.img
+NS_TEMPLATE := tests/gui/netsurf.script
+# The test server outlives the runner's timeout (review N6).
+NS_LIFETIME := $(shell expr $(QEMU_SLOW_TIMEOUT) + 60)
+NS_SCRIPT := $(BUILD)/netsurf.script
+NS_HTTP_READY := $(BUILD)/netsurf-httpd.port
+NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
+NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(NS_SCRIPT) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --net --net-open --mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
+test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
+	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
+	: > $(NS_HTTP_READY) && : > $(NS_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime $(NS_LIFETIME) --ready-file $(NS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NS_TLS_READY) > target/test-logs/test-httpd-netsurf.log 2>&1 & echo $$! > $(BUILD)/netsurf-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/netsurf-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(NS_HTTP_READY) ] && [ -s $(NS_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(NS_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; \
+	port=$$(cat $(NS_HTTP_READY)); \
+	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[netsurf] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-netsurf.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
+	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		log=target/test-logs/test-httpd-netsurf.log; mark='^http: GET /ns/mark-before-proceed '; \
+		before=$$(sed -n "1,\#$$mark#p" $$log | grep -c '^tls expired: ended after 0 request bytes'); \
+		after=$$(sed -n "\#$$mark#,\$$p" $$log | grep -c '^tls expired: ended after 0 request bytes'); \
+		if grep -q '^tls expired: request of' $$log || ! grep -q '^tls valid: request of' $$log \
+		   || ! grep -q "$$mark" $$log || [ "$$before" != 1 ] || [ "$$after" -lt 1 ] \
+		   || grep '^tls expired: ended after' $$log | grep -qv 'ended after 0 request bytes'; then \
+			echo "[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one, or not exactly one refused handshake before the Proceed mark ($$before) and one or more after it ($$after): a retry of its own, or a click on Proceed that missed)"; cat $$log; rc=1; \
+		else echo '[netsurf] ok: NetSurf sent no request byte to the expired-certificate server, also after Proceed'; fi; \
+	fi; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
 	exit $$rc
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
@@ -1320,7 +1367,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-python
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1329,7 +1376,7 @@ TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net ch
 # configuration, a script under an accelerator, or a W8 build.
 ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
-	$(MAKE) -f ports/Makefile ports workloads apps python
+	$(MAKE) -f ports/Makefile ports workloads apps netsurf python
 	@$(MAKE) -s python-testlib
 	@$(MAKE) -s posix-image
 	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run

@@ -2078,7 +2078,7 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
 volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
 
 - **The build.** `ports/sources.lock` pins the archive by the SHA-256 python.org publishes (the Sigstore bundle it also
-  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/host`, minimal: `--without-ensurepip`, no zlib needed; for
+  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/hostpython`, minimal: `--without-ensurepip`, no zlib needed; for
   `--with-build-python` and for compiling the library's byte code), SQLite for the target (`THREADSAFE=1`, no extension
   loading, no WAL, FTS5), `libpyshim.a` (`ports/apps/pyshim.c`: `execv`, `madvise`, `msync`, `sched_yield`, `pause`, `dirfd`,
   `gethostbyname` over `getaddrinfo`, `getprotobyname`, `getservbyname`, `hstrerror`...) and CPython itself, into

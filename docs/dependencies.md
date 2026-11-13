@@ -142,6 +142,11 @@ measured T1 workloads).
 | zlib | 1.3.1 | zlib | `libz.a` for curl and wget (TASK-27 9a) |
 | curl | 8.23.0 | curl (MIT-like, its `COPYING`) | `/bin/curl` on the volume of `make run` and the apps' tests (TASK-27 9a) |
 | GNU wget | 1.25.0 | GPL-3.0-or-later | `/bin/wget`, same (TASK-27 9a) |
+| NetSurf (netsurf-all) | 3.11 | GPL-2.0-only with the additional permission to link with OpenSSL (COPYING lines 8-15) (the browser), MIT (its libraries `libnsfb`, `libcss`, `libdom`, `libhubbub`, `libparserutils`, `libwapcaplet`, `libnsbmp`, `libnsgif`, `libnslog`, `libnspsl`, `libnsutils`, `libutf8proc`), as ADR-0109 shipped GPL ports | `/bin/netsurf` (TASK-27 9d, proposed ADR-0317, ADR-0318); built by `make netsurf` (no JavaScript, no SVG) |
+| libpng | 1.6.50 | libpng licence (permissive) | PNG images for NetSurf (9d) |
+| IJG libjpeg | 9f | IJG licence (permissive) | JPEG images for NetSurf (9d) |
+| pkg-config | 0.29.2 | GPL-2.0 | host tool only, built into `build/ports/host` when the host has none; never linked (9d) |
+| GNU bison | 3.8.2 | GPL-3.0-or-later (with the Bison exception) | host tool only, built into `build/ports/host` when the host's is older than 3 (macOS ships 2.3; libnslog's grammar); never linked (9d). The host also needs perl, gperf and flex (CI image: `.github/ci/Dockerfile`) |
 
 ### Mutation testing
 

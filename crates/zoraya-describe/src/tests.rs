@@ -561,6 +561,7 @@ fn a_topic_has_no_command_keys() {
         "cwd read\n",
         "question\n",
         "program /bin/x\n",
+        "window W\n",
         "exit 0 ok\n",
         "setting a.b text x t\n",
     ] {
@@ -781,4 +782,27 @@ fn a_url_file_name_is_the_last_plain_segment() {
     assert_eq!(url_file_name(&long), None);
     let ok = format!("https://h/{}", "a".repeat(255));
     assert_eq!(url_file_name(&ok).map(str::len), Some(255));
+}
+
+/// ADR-0317: `window TITLE`.
+#[test]
+fn window_is_a_title_given_once() {
+    assert_eq!(
+        header("window NetSurf\n---\n").window.as_deref(),
+        Some("NetSurf")
+    );
+    assert_eq!(
+        header("window My web  browser\n---\n").window.as_deref(),
+        Some("My web  browser")
+    );
+    assert_eq!(header("---\n").window, None);
+    assert_eq!(problem("window\n---\n"), "the text is missing");
+    assert_eq!(problem("window A\nwindow B\n---\n"), "window is given once");
+    let long = "x".repeat(49);
+    assert_eq!(
+        problem(&format!("window {long}\n---\n")),
+        "a window title is at most 48 characters"
+    );
+    let ok = "x".repeat(48);
+    assert!(header(&format!("window {ok}\n---\n")).window.is_some());
 }
