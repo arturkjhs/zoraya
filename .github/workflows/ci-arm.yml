@@ -1,6 +1,6 @@
 # EXPERIMENT (docs/research/ci-arm.md): do GitHub's free arm64 runners
 # (ubuntu-24.04-arm) run our QEMU jobs faster than ubuntu-24.04 (x86-64, TCG)?
-# Manual only: never on a push or a tag, and it is not part of `make test`
+# Manual, or a push to work/ci-arm only (never another branch or a tag), and it is not part of `make test`
 # (test.yml is unchanged). Each leg is one job that installs the tools on the
 # bare runner (no CI image: it is x86-64 only), builds once (make ci-build) and
 # runs the four commands as steps of their own, so that `gh run view --json
@@ -8,6 +8,11 @@
 name: ci arm
 
 on:
+  # gh workflow run needs the file on the default branch, which this experiment
+  # must not touch: so a push to this one branch starts it too (the architect's
+  # decision). No other branch and no tag does.
+  push:
+    branches: [work/ci-arm]
   workflow_dispatch:
     inputs:
       accel:
