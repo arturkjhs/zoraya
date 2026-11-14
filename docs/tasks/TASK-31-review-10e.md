@@ -365,3 +365,52 @@ Mergeable once the architect decides finding 3 (ADR-0336 item 2's gate for `tr`,
 fix pass opens a hole: N1-N3 all fail closed. N2 and N3 are small and break lines that worked before the fix pass
 (`ln -sf`, `gzip` in a pipeline), so fix them on the branch before merge; N1 can be fixed there too or recorded in
 ADR-0344 and `sed.cmd` as a limit. The notes can go to the backlog.
+
+## Check of open_or_link
+
+A read of `57bc20c` (`File::open_or_link` in `user/src/files.rs`, `Held::open_followed` in `user/src/bin/zosh.rs`),
+as merged in `08bdde9` (the merge does not touch either function). No build and no run in this check.
+
+Can a link make zosh open a file outside the room's table? No. Every hop of the table walk goes back through
+`covering`: an absolute target is normalised with `zoraya_resolve::join("/", 0, ..)`, a relative one with
+`join(&e.path, 0, ..)` from the entry's absolute path (`open_or_link` has already put the link's directory in
+front), so `..` is removed before the lookup and cannot leave `/`. A path no entry covers goes to `Held::open`,
+which refuses it (`ACCESS_DENIED`); a path under a file entry with a rest is refused there too. Each open is made
+with `wanted & e.rights` of the entry that covers the hop, so a link from a `+w` directory into a `+r` one gets
+read rights only. The walk is bounded (40 hops, then `IS_LINK`, as `File::open_followed` was). The table's own
+callers ask for `READ | CLONE` or `READ` with flags 0 (command lookup, `type`, loading an image), so nothing here
+writes or creates through a link.
+
+Does it widen anything? Compared with before, an absolute or `..`-climbing link in a room may now reach a file under
+*another* entry of the same table, where before it stayed in the link's entry and failed. That entry is one the room
+already grants, at its own rights, and zosh could open the same file by its literal path; so the shell's authority is
+not widened (INV-0172-4 holds: `covers` and `open` decide on the same table). ADR-0153 rule 5 governs paths
+*designated to a program* (`link_target`, unchanged); this function is the shell's own read of an executable, and
+the program gets the image, not a connection. `File::open_followed` (the console's root, the broker) behaves as
+before: the absolute target is trimmed and taken from the connection's root in both versions.
+
+Findings:
+
+C1. note. `user/src/bin/zosh.rs:531-535`: the doc comment of `Held::open_followed` still says a table follows links
+"inside the covering entry only ... and never leads out of the entry". After this commit that is false. Scenario:
+a later reviewer trusts the comment when judging a rule-5 change. Fix: say that a link is followed through the
+table, each hop within the covering entry's rights, and refused where no entry covers it.
+
+C2. warning. No test fails on a hostile link. `room-gui` step 17 (`echo hi | tr h H`) does fail without the fix
+(the absolute `/bin/tr -> /usr/libexec/toybox` was looked for under `/bin`; the commit reports the failure and
+the pass), but it tests only the good case. Nothing checks that a link in a room's `+w` directory to a path the
+room does not grant is refused, or that a link into a `+r` entry does not give write. Scenario: a later change
+falls back to `Held::Root`-style resolution when `covering` returns `None`, and every test still passes. Fix: the
+table walk needs no hardware; move it to `zoraya-resolve` (a function over the entries' paths and a one-step
+opener, as `place` is) with host tests: absolute target outside the table refused, `../..` target outside refused,
+link from `+w` into `+r` gets `+r`'s rights, a loop of two links ends after 40 hops. Or, smaller, add to
+`room-gui` a step that makes `ln -s /zoraya/bin/<native> x` (or any path outside the room) in the room's `+w`
+directory and runs `./x` / names it on `shell.path`, expecting "no such command".
+
+C3. note. `user/src/files.rs`, `open_or_link`: `&path[..path.len() - remaining.len()]` still trusts the server's
+`remaining`; a reply with a longer `remaining` panics the shell. Not new (the old loop had the same line) and the
+room's connections are the volume server's, so it is only a robustness note; `checked_sub` with
+`INVALID_ARGUMENT` would close it.
+
+Recommendation: the fix is sound and fails closed; mergeable. Fix C1 on the branch (one comment); C2 can go to the
+backlog with the host test as the preferred form, but should be done before the table walk changes again.
