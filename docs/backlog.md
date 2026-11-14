@@ -161,7 +161,7 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 
 - A program started by `dash` or `make` (for example `curl`) has no `getrandom` connection, so OpenSSL cannot seed (ADR-0310; the shell gives the connection only to programs it launches itself).
 - Record locks shared across processes (ADR-0319 Option B): the lock table lives in `fsd`, keyed by the process's connection. Reason: with the in-process table two processes on one SQLite file do not see each other's locks and can corrupt it. Needs a protocol change and a review.
-- The wheel in the native applications beyond the terminal (9e, proposed ADR-0322): `zoraya-app` drops `Wheel` (ordinal 46), so the file manager's list, the editor and the settings window do not scroll with it; `zoraya-ui`'s `ScrollView` and the list need a wheel event of their own. NetSurf takes no horizontal turn (libnsfb has no button for it).
+- The wheel beyond 9f-wheel (proposed ADR-0329): settings scrolls by whole children, not pixels (`Logical` is unsigned; a translated canvas and hit test would be Option A); no scroll bar; no horizontal turn in the toolkit (`dx` is dropped); no Page Up or Page Down in the file manager and the editor. NetSurf takes no horizontal turn (libnsfb has no button for it).
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs.
 
 

@@ -1,0 +1,55 @@
+# Part 9f-wheel (proposed ADR-0329): the wheel in the toolkit and the
+# applications. Mutations made by hand while writing the host tests; each is
+# killed by the test named in its note. Host tests only.
+tests = ["cargo test -q -p zoraya-ui -p zoraya-files -p zoraya-editor -p zoraya-app"]
+timeout = 300
+
+[[mutant]]
+id = "W-rest-dropped"
+file = "crates/zoraya-ui/src/lib.rs"
+find = 'self.rest = sum % per_row;'
+replace = 'self.rest = 0;'
+note = "9f-wheel: turns_become_rows_three_a_notch_with_parts_kept"
+
+[[mutant]]
+id = "W-stop-both-ends"
+file = "crates/zoraya-ui/src/widgets.rs"
+find = 'if (dy > 0 && to == last) || (dy < 0 && to == 0) {'
+replace = 'if to == last || to == 0 {'
+note = "9f-wheel: a_part_of_a_notch_at_the_top_is_kept_toward_the_content"
+
+[[mutant]]
+id = "W-no-bubble"
+file = "crates/zoraya-ui/src/lib.rs"
+find = 'if r != Response::None || path.pop().is_none() {'
+replace = 'if true || path.pop().is_none() {'
+note = "9f-wheel: a_turn_goes_to_the_innermost_widget_that_can_go_that_way"
+
+[[mutant]]
+id = "W-no-reveal"
+file = "crates/zoraya-ui/src/lib.rs"
+find = '''
+                w.reveal(path[d]);'''
+replace = ''
+note = "9f-wheel: the_keyboards_focus_scrolls_into_view"
+
+[[mutant]]
+id = "W-app-no-layout"
+file = "crates/zoraya-app/src/lib.rs"
+find = 'if r != Response::None && matches!(e, Event::Wheel { .. } | Event::Key { .. }) {'
+replace = 'if false {'
+note = "9f-wheel: the_wheel_scrolls_the_body_under_the_pointer"
+
+[[mutant]]
+id = "W-files-follows-anyway"
+file = "crates/zoraya-files/src/view.rs"
+find = 'if let Some(c) = m.cursor.filter(|_| !self.free) {'
+replace = 'if let Some(c) = m.cursor {'
+note = "9f-wheel: the_wheel_scrolls_the_list_and_keeps_the_selection"
+
+[[mutant]]
+id = "W-editor-follows-anyway"
+file = "crates/zoraya-editor/src/view.rs"
+find = '        if !self.free {'
+replace = '        if true {'
+note = "9f-wheel: the_wheel_scrolls_three_lines_a_notch_and_leaves_the_cursor"

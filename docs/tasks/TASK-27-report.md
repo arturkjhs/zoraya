@@ -795,3 +795,43 @@ patches `ports/patches/curl/0003-refuse-tls-weakening-options.patch` (curl's `ge
 `tools/mutants/tls-options.toml`. Merged `f90d29f` (head `5b52463`, candidate run 43497477629 green). ADR-0321 is `proposed`. Open
 (ADR-0321's open questions, `docs/backlog.md`): no check diffs the refused lists against a new curl or wget release; wget's
 `https` to `http` redirect rule; `--cert-status` by default.
+
+## 9f-wheel: the wheel in `zoraya-app` (branch `work/9f-wheel`, 2026-11-14)
+
+Decided by the architect 2026-11-14: the file manager, the editor and settings scroll with ADR-0322's `Wheel`, a notch
+consistent with the terminal's three lines, smooth with high-resolution axes, clamped, a list keeping its selection and
+cursor rules; the other native applications too where they share the toolkit. The new decision is ADR-0329 (`proposed`):
+a third widget event and its units. What exists is in `docs/design.md`, "The wheel in the applications (as built)".
+
+Done:
+- **Toolkit.** `zoraya_ui::Event::Wheel { x, y, dx, dy }`; `Window` routes it to the widget under the pointer, then up to
+  the nearest ancestor that can go that way (a widget at its end answers `None`); no focus moves. `WheelSteps` (3 rows a
+  notch, 40/120 a row, the rest kept, forgotten at an end, at most 64 notches); `scrolled_by`, `widgets::wheel_rows`.
+  `Widget::scrolled`/`set_scrolled`/`reveal`; `Window::scrolled(id)`, `Window::replace_keeping_scroll`.
+- **`ScrollView`** rebuilt: it never moved what it showed (its one child was laid out at the frame's top, the height cut).
+  It is now a column of children shown from `first`, children before it laid out empty, `first` clamped so the last child
+  is at the bottom, focus (Tab or a key) on a child out of view scrolls it in. `ScrollView::new` takes the children.
+- **`zoraya-app`**: ordinal 46 to `Event::Wheel` (saturated to `WHEEL_MAX`); after a turn or a key that changed something
+  the window is laid out again at once, so a press before the paint hits what is shown; `App::replace_keeping_scroll`.
+- **Applications.** `ListView` (the chooser's sheet, which now reads where the wheel left its list before it rebuilds, and
+  follows the selection only when it moved), the file manager's list (over the list only, not with the menu or card open)
+  and the editor: the first row or line moves, clamped; the selection and the cursor stay; a key, a press, or a cursor the
+  program moves (find, new folder) brings the view back. Settings: the page is always a `ScrollView` and is rebuilt with
+  `replace_keeping_scroll`; the editor too.
+- **Tests.** Host: `zoraya-ui` `tests_wheel.rs` (10 tests) and the two rewritten `ScrollView` tests, `zoraya-app` (2),
+  `zoraya-files` (4), `zoraya-editor` (4), `zoraya-settings-window` (1), `zoraya-chooser` (1). GUI: `tests/gui/wheel.script`
+  (new; `GUI_RUNS_ALL` and `tools/ci-tests.txt` gain `wheel:auto:1`, `wheel:tcg:1`, `wheel:auto:2`): the file manager's
+  selected row three rows up after a notch and back, a key after a far turn bringing the cursor back; settings (two rooms)
+  with its controls 135 pixels higher after a notch and back, then Apply reached at the end (`settings: No change.`); the
+  editor's empty lines in the rows that showed `x` lines after a notch away from the person, and at the top.
+- `tools/mutants/editor.toml`: three mutants re-anchored (`occurrence = 1`, the follow block's new indentation);
+  `tools/mutants/wheel-9f.toml`: seven mutations made by hand (parts of a notch dropped, the stop at both ends, no
+  routing up, no reveal, no layout after a turn, the file manager and the editor following the cursor anyway).
+
+Ran on the Mac (HVF, this session): `make check`; `cargo test` in `zoraya-ui`, `-app`, `-files`, `-editor`,
+`-settings-window`, `-chooser` (all pass); `make test-gui GUI_RUNS="wheel:auto:1"` and `"wheel:auto:2"` (74 steps
+each, PASS); `make mutants MUTANTS_ARGS=tools/mutants/wheel-9f.toml` (7 caught, 0 survived); `make test-changed`
+(below). Not run locally: `wheel:tcg:1` (CI runs it), `make test`.
+
+Limits (also `docs/backlog.md`): settings scrolls by whole children, not pixels (`Logical` is unsigned; ADR-0329 Option A
+not taken); no scroll bar; `dx` scrolls nothing; no Page Up or Page Down in the file manager and the editor.

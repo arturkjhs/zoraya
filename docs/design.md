@@ -655,7 +655,8 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   view, separator, menu, dialog, progress bar; rows, columns and grids with `gap.controls` and `padding.window`;
   painting through `zoraya-paint` and `zoraya-text` from the tokens, every widget clipped to its rectangle
   (INV-0165-1); Tab and Shift+Tab over the focusable widgets, arrows in lists and radio groups, Enter, Escape closing a
-  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244).
+  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244),
+  and since 9f-wheel a third, the wheel (proposed ADR-0329, "The wheel in the applications" below).
 - **`zoraya-app`**: an application's loop over a `Platform` (the compositor's channel and memory objects): it opens
   toplevels of widget trees, paints and commits one frame at a time, answers `Configure` with a new buffer, and turns
   keys, the pointer, focus and `CloseRequested` into widget events or into what the application acts on. It sends
@@ -896,8 +897,46 @@ Not built in 7h, or known: a trash (`docs/backlog.md`); a copy or delete that fa
 folder, no space, past 4096 entries) leaves what was done and says only "Cannot copy NAME"; a forwarded System chord's
 release carries no `SYSTEM`; `OpenTerminal` is not rate-limited (one request at a time per launcher channel, as
 `OpenWith`); moving or copying several files by a drag to another window (a drop
-carries one file, ADR-0170); a scroll wheel (the list follows the keyboard's cursor); the window's title stays
-"Files".
+carries one file, ADR-0170); the window's title stays "Files". (The scroll wheel came in 9f-wheel, "The wheel in the
+applications" below.)
+
+## The wheel in the applications (as built)
+
+Part 9f-wheel (TASK-27), on the accepted [ADR-0322](adr/0322-a-wheel-event-in-the-compositor-protocol.md) and the
+proposed [ADR-0329](adr/0329-the-wheel-in-the-toolkit.md).
+
+- **The toolkit.** `zoraya-app` turns `Wheel` (ordinal 46, logical pixels of the body, 120ths of a notch) into
+  `zoraya_ui::Event::Wheel`; the window gives it to the widget under the pointer, then to each ancestor until one
+  takes it (a widget at its end that way answers `None`, so a list at its end hands the turn to the page around it).
+  It moves no focus. A notch is `ROWS_PER_NOTCH` (3) rows, lines or children, the terminal's three lines;
+  `WheelSteps` keeps the part of a row a turn leaves (40 of 120 is a row), so a high-resolution wheel scrolls a row
+  at a time, and forgets it at an end. A turn is bounded at 64 notches either way.
+- **Lists.** `ListView` (the chooser's list), the file manager's list and the editor move their first row or line
+  shown, clamped so that the last one is no higher than the bottom, and leave the selection and the cursor; a key,
+  a press, or a cursor the program moves (a find, a new folder, a search) brings the cursor back into view. The file
+  manager takes a turn only over its list, and none while its menu or card is open; a drop's row (ADR-0248) follows
+  the rows shown.
+- **`ScrollView`** is a column of children shown from its `first`: a child before it is laid out empty (it paints
+  nothing and takes no press), `first` never passes the point where the last child is at the bottom, and the
+  keyboard's focus on a child out of view (Tab, or a key to it) scrolls it into view. The settings page is one
+  always; with the Rooms section it is taller than its window and the wheel reaches Apply. Settings scrolls by whole
+  children (a row of controls, a label), not by pixels: `Logical` is unsigned and an `LRect` cannot start above its
+  parent (ADR-0329, Option A not taken).
+- **Rebuilt windows.** `App::replace_keeping_scroll` (settings, the editor) carries each scrolling widget's place
+  (`Scrolled`: the first shown, whether the wheel left it away from the cursor, and the cursor then) across a tree
+  built again, by its path; `App::replace` keeps only the focus, as before. The chooser keeps where the wheel left
+  its list across its sheet's rebuilds.
+- **Tests.** Host tests: `zoraya-ui` (`tests_wheel.rs`: rows from turns, parts of a notch, direction, clamping,
+  routing to the innermost widget that can go that way, focus scrolled into view, rebuilt trees), `zoraya-app` (the
+  wheel scrolls the body under the pointer and the next press lands on what it brought), `zoraya-files`,
+  `zoraya-editor`, `zoraya-settings-window`, `zoraya-chooser`. `tests/gui/wheel.script` (HVF and TCG) turns QEMU's
+  wheel over each application and reads the pixels that only the turn puts there: the file manager's selected row
+  three rows higher and back, a key bringing the cursor back; settings' controls 135 pixels higher (three children)
+  and Apply at the end answering; the editor's empty lines in rows that showed `x` lines.
+
+Not built in 9f-wheel, or known: pixel-smooth scrolling (settings moves by children); a scroll bar; a horizontal
+turn (`dx`) scrolls nothing; Page Up and Page Down in the file manager and the editor; the sidebar of places and the
+editor's find field do not scroll.
 
 ## Cross toolchain and ports (as built)
 
