@@ -1,0 +1,55 @@
+--- a/netsurf/frontends/framebuffer/fbtk/text.c
++++ b/netsurf/frontends/framebuffer/fbtk/text.c
+@@ -62,7 +62,7 @@
+ 	else
+ 		*padding = 0;
+ 
+-#ifdef FB_USE_FREETYPE
++#if defined(FB_USE_FREETYPE) || defined(FB_USE_ZORAYA)
+ 	*padding += widget->height / 6;
+ 	*font_height = widget->height - *padding - *padding;
+ #else
+@@ -136,7 +136,7 @@
+ 		int x = bbox.x0 + padding;
+ 		int y = bbox.y0 + ((fh * 3 + 2) / 4) + padding;
+ 
+-#ifdef FB_USE_FREETYPE
++#if defined(FB_USE_FREETYPE) || defined(FB_USE_ZORAYA)
+ 		/* Freetype renders text higher */
+ 		y += 1;
+ #endif
+--- a/netsurf/frontends/framebuffer/font.h
++++ b/netsurf/frontends/framebuffer/font.h
+@@ -60,6 +60,9 @@
+ 
+ #ifdef FB_USE_FREETYPE
+ #include "framebuffer/font_freetype.h"
++#elif defined(FB_USE_ZORAYA)
++/* Zoraya (ADR-0326): the text of zoraya-text, font_zoraya.c. */
++#include "framebuffer/font_zoraya.h"
+ #else
+ #include "framebuffer/font_internal.h"
+ #endif
+--- a/netsurf/frontends/framebuffer/framebuffer.c
++++ b/netsurf/frontends/framebuffer/framebuffer.c
+@@ -461,6 +461,20 @@
+ 
+ }
+ 
++#elif defined(FB_USE_ZORAYA)
++
++/* Zoraya (ADR-0326): glyphs of zoraya-text, plotted by font_zoraya.c. */
++static nserror
++framebuffer_plot_text(const struct redraw_context *ctx,
++		const struct plot_font_style *fstyle,
++		int x,
++		int y,
++		const char *text,
++		size_t length)
++{
++	return fb_zoraya_plot_text(nsfb, fstyle, x, y, text, length);
++}
++
+ #else
+ 
+ /**

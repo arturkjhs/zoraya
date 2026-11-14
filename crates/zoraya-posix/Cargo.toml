@@ -33,6 +33,7 @@ zoraya-rt = { path = "../zoraya-rt", default-features = false }
 zoraya-heap = { path = "../zoraya-heap" }
 zoraya-platform = { path = "../zoraya-platform" }
 zoraya-surface = { path = "../zoraya-surface" }
+zoraya-fontset = { path = "../zoraya-fontset" }
 
 [dev-dependencies]
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }

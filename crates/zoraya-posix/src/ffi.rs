@@ -13,6 +13,7 @@
 
 mod procs;
 mod sockets;
+mod text;
 mod window;
 
 use alloc::boxed::Box;

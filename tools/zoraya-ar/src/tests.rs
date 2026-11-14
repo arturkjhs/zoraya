@@ -291,3 +291,21 @@ fn a_section_header_offset_near_the_top_of_the_address_space_gives_no_symbols() 
     o[60..62].copy_from_slice(&1u16.to_le_bytes());
     assert_eq!(elf::defined_globals(&o), Vec::<String>::new());
 }
+
+#[test]
+fn a_bss_larger_than_the_file_does_not_hide_the_symbols() {
+    let mut elf = object(&[("__zoraya_calls", GLOBAL, 1, 1)]);
+    // Section 1 becomes SHT_NOBITS with a size far past the file's end, as
+    // an assembler writes a `.bss` of 648 bytes into a 704-byte object.
+    let shoff = u64::from_le_bytes(elf[40..48].try_into().unwrap()) as usize;
+    let h = shoff + 64;
+    elf[h + 4..h + 8].copy_from_slice(&8u32.to_le_bytes());
+    elf[h + 32..h + 40].copy_from_slice(&(1u64 << 20).to_le_bytes());
+    assert_eq!(
+        elf::defined_globals(&elf),
+        vec!["__zoraya_calls".to_string()]
+    );
+    // Any other section past the end still makes the object malformed.
+    elf[h + 4..h + 8].copy_from_slice(&1u32.to_le_bytes());
+    assert!(elf::defined_globals(&elf).is_empty());
+}

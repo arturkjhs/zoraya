@@ -2158,6 +2158,7 @@ fn fork_locked() -> Result<i32, i32> {
                 // item 5): its own facts, a port of its own.
                 p.sys.port = None;
                 super::window::after_fork_in_child();
+                super::text::after_fork_in_child();
                 p.after_fork_in_child(prepared.pid, prepared.pgid);
                 // The copied kernel dispositions may carry a sibling's
                 // `sigwait` (ADR-0315 item 10); the thread is gone here.

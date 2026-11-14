@@ -746,6 +746,7 @@ name = "zoraya-posix"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-fontset",
  "zoraya-fs",
  "zoraya-fs-service",
  "zoraya-fs-testkit",
