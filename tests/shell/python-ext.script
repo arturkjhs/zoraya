@@ -1,0 +1,20 @@
+# The python3 build hook (PYTHON_EXTRA_MODULES, docs/design.md; `make test-python-ext`):
+# a python3 with the built-in module zsample (tests/python-ext/sample), whose
+# function is in a prebuilt static library. No network.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> python3 -c 'import zsample; print(zsample.mul_add(6, 7, 0))'\r
+< 42
+< \r\n~>
+> python3 ext.py\r
+< ok zsample 42
+< ok typeerror
+< ext done
+< \r\n~>
+> python3 -c 'import sys; print("zsample" in sys.builtin_module_names)'\r
+< True
+< \r\n~>
+x power off
+> poweroff\r

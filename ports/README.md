@@ -20,6 +20,7 @@ committed: only the lock, the patches and the build files below.
 | `include/zoraya/posix.h` | Zoraya's additions to the POSIX interface (ADR-0142), installed into the sysroot; the repository's BSD-2-Clause licence |
 | `compare-predefs.sh` | `zcc` and tcc must predefine the same identity (ADR-0143) |
 | `patches/<program>/` | patches to each program, applied in name order |
+| `Makefile`'s `PYTHON_EXTRA_MODULES=DIR` | the python3 build hook: DIR's `Setup`, sources and static libraries become built-in modules of `build/rootfs-python-ext` (`docs/design.md`, CPython; sample `tests/python-ext/sample`) |
 | `tests/hello.c` | the program tcc links in the host check (ADR-0143) |
 | `check-broken-archives.sh` | the export check on broken copies of `libc.a` |
 | `test-fetch.sh` | the fetch step's host test (INV-0109-3, INV-0109-4), a step of `make test` |
