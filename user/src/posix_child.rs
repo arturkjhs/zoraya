@@ -186,6 +186,22 @@ impl Broker {
         })
     }
 
+    /// `HostTerminal` (proposed ADR-0388): the channel on which the broker
+    /// tells this client of the groups its lines make and of the
+    /// `tcsetpgrp`s they ask for.
+    pub fn host_terminal(&self) -> Option<Handle> {
+        let (bytes, handles) = self.call(&bp::HostTerminal {}, &[]).ok()?;
+        match decode::<bp::HostTerminalReply>(&bytes, handles.len()) {
+            Ok((_, r)) if r.status.0 == bp::status::OK && handles.len() == 1 => Some(handles[0]),
+            _ => {
+                for h in handles {
+                    let _ = handle_close(h);
+                }
+                None
+            }
+        }
+    }
+
     /// `kill(-pgid, signal)`: the broker applies each process's
     /// disposition (ADR-0104 item 9).
     pub fn signal_group(&self, pgid: u32, signal: u32) -> Result<(), Status> {

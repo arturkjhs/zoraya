@@ -275,6 +275,29 @@ protocol! {
         status: Code,
     }
 
+    /// A native client that hosts the terminal of the programs it starts
+    /// (`zosh`, ADR-0331 item 6, proposed ADR-0388) asks for a channel on
+    /// which the broker tells it, with no reply, each group made inside one
+    /// of its lines ([`GroupMade`]) and each `tcsetpgrp` a process of its
+    /// asks for ([`ForegroundAsked`]). Once per broker, from a client only.
+    message HostTerminal = 16, handles 0 {}
+    message HostTerminalReply = 16, handles 1 {
+        status: Code,
+    }
+
+    /// Broker to client: a process of group `by` made group `group`.
+    message GroupMade = 17, handles 0 {
+        group: u32,
+        by: u32,
+    }
+
+    /// Broker to client: a process of group `by` asked that `group`, of its
+    /// own line, be the terminal's foreground group.
+    message ForegroundAsked = 18, handles 0 {
+        group: u32,
+        by: u32,
+    }
+
     /// What the broker has counted: the messages by ordinal, and the pids.
     message Statistics = 14, handles 0 {}
     message StatisticsReply = 14, handles 0 {

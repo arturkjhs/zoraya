@@ -86,6 +86,8 @@ const CONSOLE_KEY: u64 = 1;
 /// The panel's window channel (ADR-0317) is readable: outside a request,
 /// only a late answer, closed at once (9e).
 const PANEL_KEY: u64 = 2;
+/// The broker's notices to the host of the terminal (proposed ADR-0388).
+const HOST_KEY: u64 = 3;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
 /// Jobs at once.
@@ -725,6 +727,8 @@ struct Z {
     tty: tty_host::Host<Handle>,
     /// Each terminal connection's server end and the line it is of.
     tty_ends: BTreeMap<usize, (Handle, u32)>,
+    /// The broker's notice channel (`HostTerminal`, proposed ADR-0388).
+    host: Option<Handle>,
     /// A line is being edited: background output goes above it.
     at_prompt: bool,
     /// The line typed to a foreground job so far, and an escape sequence
@@ -2213,6 +2217,49 @@ impl Z {
         }
     }
 
+    /// The broker's notices (proposed ADR-0388): a group made inside a line
+    /// joins that line's groups; a `tcsetpgrp` is the host's to take or not.
+    fn host_notices(&mut self) {
+        let Some(end) = self.host else { return };
+        let mut bytes = [0u8; 64];
+        let mut got = [end; 1];
+        loop {
+            let n = match channel_read(end, &mut bytes, &mut got) {
+                Ok(sizes) => {
+                    for h in &got[..sizes.handles as usize] {
+                        let _ = handle_close(*h);
+                    }
+                    sizes.bytes as usize
+                }
+                Err((Status::WouldBlock, _)) => return,
+                Err(_) => {
+                    let _ = port_unsubscribe(self.port, HOST_KEY);
+                    let _ = handle_close(end);
+                    self.host = None;
+                    return;
+                }
+            };
+            let m = &bytes[..n];
+            match Header::decode(m).map(|(h, _)| h.ordinal) {
+                Ok(o) if o == zoraya_proto_posix::GroupMade::ORDINAL => {
+                    if let Ok((_, g)) = decode::<zoraya_proto_posix::GroupMade>(m, 0)
+                        && let Some(line) = self.tty.line_of_group(g.by)
+                    {
+                        self.tty.group_created(line, g.group);
+                    }
+                }
+                Ok(o) if o == zoraya_proto_posix::ForegroundAsked::ORDINAL => {
+                    if let Ok((_, f)) = decode::<zoraya_proto_posix::ForegroundAsked>(m, 0)
+                        && let Ok(effects) = self.tty.foreground_asked(f.group, f.by)
+                    {
+                        self.carry(effects, None);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Carries out what the host of the discipline decided; `number` is the
     /// line a request came from (a clone is of its line). Says whether a
     /// signal character was typed: an interrupt, or the suspend character,
@@ -2556,6 +2603,10 @@ impl Z {
             }
             return None;
         }
+        if packet.key == HOST_KEY {
+            self.host_notices();
+            return None;
+        }
         if packet.key >= TTY_KEY {
             self.tty_event((packet.key - TTY_KEY) as usize);
             return None;
@@ -2782,6 +2833,15 @@ impl Z {
             .iter()
             .find(|e| JOB_KEY + u64::from(e.number) == key)?
             .number;
+        // A packet of a job that ended and whose number a new job took (the
+        // port can hold one past the unsubscribe): only a job that has ended
+        // is taken.
+        let ended = self.jobs.get(number).is_some_and(|e| {
+            object_get_signals(e.payload.job).is_ok_and(|s| s & job_signals::TERMINATED != 0)
+        });
+        if !ended {
+            return None;
+        }
         self.finish_streams(number);
         let _ = port_unsubscribe(self.port, key);
         let job = &self.jobs.get(number)?.payload;
@@ -5426,6 +5486,7 @@ fn main() -> i32 {
         foreground: None,
         tty: tty_host::Host::new(),
         tty_ends: BTreeMap::new(),
+        host: None,
         at_prompt: false,
         typed: Vec::new(),
         escape: Escape::No,
@@ -5459,6 +5520,16 @@ fn main() -> i32 {
         refused_seen: (0, 0),
         usage_tracker: zoraya_rooms::Tracker::new(),
     };
+    // The broker tells the host of the terminal of its lines' groups
+    // (proposed ADR-0388).
+    if let Some(end) = z.broker.as_ref().and_then(Broker::host_terminal) {
+        let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+        if port_subscribe(z.port, end, wanted, HOST_KEY, Mode::Level).is_ok() {
+            z.host = Some(end);
+        } else {
+            let _ = handle_close(end);
+        }
+    }
     z.realtime_base = z
         .root
         .as_ref()

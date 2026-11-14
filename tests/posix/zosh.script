@@ -116,4 +116,68 @@ w notstp: ready
 > \x03
 < t_posix: interrupted (Ctrl-C)
 < \r\n~> 
+# ADR-0331 (part 10c): a POSIX program gets the terminal from zosh on the
+# fds the line neither redirects nor pipes.
+> echo x | t_posix rawkeys\r
+< rawkeys: tty 0 1 1
+< rawkeys: fd 0 is no terminal
+< \r\n~> 
+# Ctrl-C reaches the line in front only: the background line runs on.
+> /bin/sleep 30 &\r
+< [1] /bin/sleep 30
+< \r\n~> 
+> /bin/sleep 20\r
+~ 1000 zzz
+> \x03
+< /bin/sleep: interrupted (Ctrl-C)
+< \r\n~> 
+> jobs\r
+< [1]  running   /bin/sleep 30
+< \r\n~> 
+> kill --kill %1\r
+< \r\n~> 
+# A background program cannot read what is typed: its read of the terminal
+# is refused and it stops (SIGTTIN, ADR-0105 item 8); the keys are the
+# prompt's.
+! readerr: got=
+> t_posix readerr &\r
+< [1] t_posix readerr
+< \r\n~> 
+~ 1500 zzz
+> hunter2\r
+< \r\n~> 
+> jobs\r
+< [1]  stopped   t_posix readerr
+< \r\n~> 
+> kill --kill %1\r
+< \r\n~> 
+# Raw mode, Ctrl-Z and fg: each key is read as typed; at the prompt the keys
+# are the shell's; at fg the modes it had are back (ADR-0331 item 9).
+> t_posix rawkeys\r
+< rawkeys: tty 1 1 1
+< rawkeys: raw
+> a
+< rawkeys: key 61 canonical 0
+# Echo is off: the discipline shows no ^Z.
+> \x1a
+< [1] stopped: t_posix rawkeys
+< \r\n~> 
+> jobs\r
+< [1]  stopped   t_posix rawkeys
+< \r\n~> 
+> fg\r
+< t_posix rawkeys
+> b
+< rawkeys: key 62 canonical 0
+> q
+< rawkeys: done
+< \r\n~> 
+# `sh` typed at the prompt is interactive: it has the terminal on 0 and 2.
+> sh\r
+< $ 
+> echo in sh\r
+< in sh
+< $ 
+> exit\r
+< \r\n~> 
 > poweroff\r

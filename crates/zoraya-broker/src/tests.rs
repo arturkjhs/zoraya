@@ -1588,3 +1588,144 @@ fn a_suspend_before_the_jobs_tcsetpgrp_is_the_shells() {
     assert_eq!(s.kill(&shell, target::GROUP, job.pid, SIGCONT), status::OK);
     assert_eq!(s.b.kernel.calls, [Call::Resume(g)]);
 }
+
+/// The notices to a client that hosts the terminal, decoded.
+fn notices(actions: &[Action<u32>]) -> Vec<(u32, u32, u32)> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Host { bytes } => {
+                let (h, _) = Header::decode(bytes).unwrap();
+                if let Ok((_, m)) = decode::<proto::GroupMade>(bytes, 0)
+                    && h.ordinal == proto::GroupMade::ORDINAL
+                {
+                    return Some((h.ordinal, m.group, m.by));
+                }
+                let (_, m) = decode::<proto::ForegroundAsked>(bytes, 0).unwrap();
+                Some((h.ordinal, m.group, m.by))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines() {
+    // ADR-0331 item 6, proposed ADR-0388: the broker beside `zosh`.
+    let mut s = session(false);
+    let (client, actions) = s.b.add_client().unwrap();
+    let conn = match actions[..] {
+        [Action::Watch { conn, .. }] => conn,
+        ref a => panic!("{a:?}"),
+    };
+    s.conns.insert(conn, 0);
+    let actions = s.b.request(conn, &message(&proto::HostTerminal {}), vec![]);
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::HostChannel { .. }))
+    );
+    assert!(actions.iter().any(|a| matches!(
+        a,
+        Action::Reply { handles, .. } if handles.len() == 1
+    )));
+    // Once only, and never from a process.
+    assert_eq!(
+        s.status(conn, &message(&proto::HostTerminal {})),
+        status::NOT_PERMITTED
+    );
+    let shell = s.shell;
+    assert_eq!(
+        s.status(shell.conn, &message(&proto::HostTerminal {})),
+        status::NOT_PERMITTED
+    );
+    // Two lines, each a `Group(job)` of the client's.
+    let line = |s: &mut Session| -> (Child, u32) {
+        let own = s.b.kernel.new_object(Obj::Job { parent: None }, JOB_RIGHTS);
+        let (r, h) = s.ask(
+            conn,
+            &message(&proto::SpawnPrepareIn { ignored: 0 }),
+            vec![own],
+        );
+        let (_, m) = decode::<SpawnPreparedIn>(&r, 3).unwrap();
+        let child_conn = s.watched.take().unwrap();
+        s.conns.insert(child_conn, m.pid);
+        let process = s.b.kernel.process_in(h[1]);
+        let p = s.b.kernel.duplicate(process, Rights::WAIT).unwrap();
+        let (r, _) = s.ask(conn, &message(&proto::SpawnCommit { pid: m.pid }), vec![p]);
+        assert_eq!(status_of(&r), status::OK);
+        (
+            Child {
+                pid: m.pid,
+                conn: child_conn,
+                parent_job: h[0],
+                child_job: h[1],
+                process,
+            },
+            s.b.kernel.object(own),
+        )
+    };
+    let (a, a_line) = line(&mut s);
+    let (c, _) = line(&mut s);
+    // A new group made by line a's shell is inside line a's job, and the
+    // client hears of it.
+    let actions = s.b.request(
+        a.conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::NEW),
+            pgid: 0,
+            ignored: 0,
+            fork: Below(0),
+        }),
+        vec![],
+    );
+    let (b_pid, b_job) = actions
+        .iter()
+        .find_map(|x| match x {
+            Action::Reply { bytes, handles, .. } if handles.len() == 3 => {
+                let (_, m) = decode::<SpawnPrepared>(bytes, 3).unwrap();
+                Some((m.pid, handles[1]))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        notices(&actions),
+        [(proto::GroupMade::ORDINAL, b_pid, a.pid)]
+    );
+    assert!(
+        s.b.kernel.within(s.b.kernel.object(b_job), a_line),
+        "in the line's job"
+    );
+    // tcsetpgrp of a group of its own line: passed on; tcgetpgrp follows.
+    let actions =
+        s.b.request(a.conn, &message(&proto::Tcsetpgrp { pgid: b_pid }), vec![]);
+    assert_eq!(
+        notices(&actions),
+        [(proto::ForegroundAsked::ORDINAL, b_pid, a.pid)]
+    );
+    let (r, _) = s.ask(a.conn, &message(&proto::Tcgetpgrp {}), vec![]);
+    let (_, g) = decode::<proto::TcgetpgrpReply>(&r, 0).unwrap();
+    assert_eq!((g.status.0, g.pgid), (status::OK, b_pid));
+    // Another line's: tcgetpgrp is its own group; it may not take line a's
+    // group, nor join it.
+    let (r, _) = s.ask(c.conn, &message(&proto::Tcgetpgrp {}), vec![]);
+    let (_, g) = decode::<proto::TcgetpgrpReply>(&r, 0).unwrap();
+    assert_eq!(g.pgid, c.pid);
+    let actions =
+        s.b.request(c.conn, &message(&proto::Tcsetpgrp { pgid: b_pid }), vec![]);
+    assert!(notices(&actions).is_empty());
+    assert_eq!(
+        s.status(c.conn, &message(&proto::Tcsetpgrp { pgid: a.pid })),
+        status::NOT_PERMITTED
+    );
+    assert_eq!(
+        s.spawn(&c, group::JOIN, a.pid).unwrap_err(),
+        status::NOT_PERMITTED
+    );
+    // A session process's tcsetpgrp is not the client's.
+    let actions =
+        s.b.request(shell.conn, &message(&proto::Tcsetpgrp { pgid: 2 }), vec![]);
+    assert!(notices(&actions).is_empty());
+    s.b.kernel.close(client);
+}

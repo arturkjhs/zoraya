@@ -216,6 +216,25 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         }
     }
 
+    /// The line whose groups hold `group`: the broker names a group by the
+    /// group of the process that made it or asked for it (ADR-0388).
+    pub fn line_of_group(&self, group: u32) -> Option<u32> {
+        self.lines
+            .iter()
+            .find(|l| l.groups.contains(&group))
+            .map(|l| l.id)
+    }
+
+    /// The broker passed on a `tcsetpgrp` of a process of group `by`
+    /// (ADR-0388 item 4): taken only when `by`'s line is in front, for a group
+    /// of that line.
+    pub fn foreground_asked(&mut self, group: u32, by: u32) -> Result<Vec<Effect<H>>, Refused> {
+        if self.front.is_none() || self.line_of_group(by) != self.front {
+            return Err(Refused::NotInFront);
+        }
+        self.tcsetpgrp(group)
+    }
+
     /// Whether the keys go to the discipline: a line with a terminal is in
     /// front. Otherwise they are the shell's.
     pub fn takes_keys(&self) -> bool {
@@ -844,5 +863,21 @@ mod tests {
         let mut out = Vec::new();
         assert!(h.paste(&clean, &mut out));
         assert_eq!(typed(&mut h, a), b"\x1b[200~ls ok\x1b[201~");
+    }
+
+    #[test]
+    fn the_brokers_notices_are_taken_for_the_line_in_front_only() {
+        // ADR-0388 item 4.
+        let (mut h, _, _) = two();
+        // Line 2's shell made group 77 and asks for it while line 1 is in front.
+        h.group_created(h.line_of_group(12).unwrap(), 77);
+        assert_eq!(h.line_of_group(77), Some(2));
+        assert_eq!(h.foreground_asked(77, 12), Err(Refused::NotInFront));
+        // Line 1's shell asks for line 2's group: refused too.
+        assert_eq!(h.foreground_asked(77, 11), Err(Refused::NotInFront));
+        h.group_created(1, 55);
+        assert!(h.foreground_asked(55, 11).is_ok());
+        assert_eq!(h.tty.foreground(), Some(55));
+        assert_eq!(h.line_of_group(99), None);
     }
 }
