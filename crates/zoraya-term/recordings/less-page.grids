@@ -1,0 +1,267 @@
+# less-page: 8725 bytes replayed through zoraya-term 80x24
+# a = fg=- bg=- attrs=0x20
+# b = fg=1 bg=- attrs=0x1
+# c = fg=- bg=- attrs=0x8
+# d = fg=226 bg=21 attrs=0x0
+# e = fg=255.128.0 bg=- attrs=0x0
+# f = fg=- bg=- attrs=0x1
+@ 1344 first page
+cursor 7 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|line 1: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 2: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 3: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 4: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 5: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 6: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 7: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 8: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 9: the quick brown fox jumps over the lazy dog                             |
+|................................................................................|
+|line 10: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 11: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 12: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 13: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 14: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 15: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 16: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 17: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 18: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 19: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 20: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 21: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 22: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 23: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|big.txt                                                                         |
+|aaaaaaa.........................................................................|
+@ 2663 second page
+cursor 1 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|line 24: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 25: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 26: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 27: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 28: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 29: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 30: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 31: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 32: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 33: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 34: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 35: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 36: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 37: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 38: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 39: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 40: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 41: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 42: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 43: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 44: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 45: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 46: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|:                                                                               |
+|................................................................................|
+@ 7236 after a search
+cursor 5 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|line 50: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 51: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 52: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 53: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 54: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 55: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 56: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 57: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 58: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 59: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 60: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 61: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 62: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 63: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 64: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 65: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 66: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 67: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 68: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 69: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 70: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|red bold underlined blue background, yellow text orange                         |
+|bbbbbbbb.cccccccccc.dddddddddddddddddddddddddddd.eeeeee.........................|
+|~                                                                               |
+|f...............................................................................|
+|(END)                                                                           |
+|aaaaa...........................................................................|
+@ 8706 the end
+cursor 5 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|line 49: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 50: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 51: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 52: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 53: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 54: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 55: the quick brown fox jumps over the lazy dog                            |
+|aaaaaaa.........................................................................|
+|line 56: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 57: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 58: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 59: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 60: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 61: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 62: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 63: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 64: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 65: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 66: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 67: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 68: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 69: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|line 70: the quick brown fox jumps over the lazy dog                            |
+|................................................................................|
+|red bold underlined blue background, yellow text orange                         |
+|bbbbbbbb.cccccccccc.dddddddddddddddddddddddddddd.eeeeee.........................|
+|(END)                                                                           |
+|aaaaa...........................................................................|
+@ 8725 after quitting
+cursor 0 0 screen=primary view=0
+modes Modes { app_cursor: false, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: false, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|

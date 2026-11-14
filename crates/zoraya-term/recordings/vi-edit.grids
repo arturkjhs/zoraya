@@ -1,0 +1,317 @@
+# vi-edit: 2590 bytes replayed through zoraya-term 80x24
+# a = fg=12 bg=- attrs=0x0
+# b = fg=- bg=- attrs=0x21
+# c = fg=- bg=- attrs=0x1
+# d = fg=11 bg=- attrs=0x0
+@ 1728 start
+cursor 0 0 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: true, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: true, synchronized: false }
+region (0, 23) shape 0 history 0
+|# Notes                                                                         |
+|................................................................................|
+|The quick brown fox jumps over the lazy dog.                                    |
+|................................................................................|
+|A second line, with a tab:      here.                                           |
+|................................................................................|
+|TODO: write the terminal.                                                       |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|    indented line                                                               |
+|................................................................................|
+|last line                                                                       |
+|................................................................................|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|notes.txt                                                     1,1            All|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|                                                                                |
+|................................................................................|
+@ 1797 at the last line
+cursor 0 6 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: true, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: true, synchronized: false }
+region (0, 23) shape 0 history 0
+|# Notes                                                                         |
+|................................................................................|
+|The quick brown fox jumps over the lazy dog.                                    |
+|................................................................................|
+|A second line, with a tab:      here.                                           |
+|................................................................................|
+|TODO: write the terminal.                                                       |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|    indented line                                                               |
+|................................................................................|
+|last line                                                                       |
+|................................................................................|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|notes.txt                                                     7,1            All|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|                                                                                |
+|................................................................................|
+@ 1963 after typing
+cursor 20 7 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: true, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: true, synchronized: false }
+region (0, 23) shape 0 history 0
+|# Notes                                                                         |
+|................................................................................|
+|The quick brown fox jumps over the lazy dog.                                    |
+|................................................................................|
+|A second line, with a tab:      here.                                           |
+|................................................................................|
+|TODO: write the terminal.                                                       |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|    indented line                                                               |
+|................................................................................|
+|last line                                                                       |
+|................................................................................|
+|hello from the editor                                                           |
+|................................................................................|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|notes.txt [+]                                                 8,22           All|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|-- INSERT --                                                         ^[         |
+|cccccccccccc....................................................................|
+@ 2156 after a search
+cursor 16 1 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: true, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: true, synchronized: false }
+region (0, 23) shape 0 history 0
+|# Notes                                                                         |
+|................................................................................|
+|The quick brown fox jumps over the lazy dog.                                    |
+|................................................................................|
+|A second line, with a tab:      here.                                           |
+|................................................................................|
+|TODO: write the terminal.                                                       |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|    indented line                                                               |
+|................................................................................|
+|last line                                                                       |
+|................................................................................|
+|hello from the editor                                                           |
+|................................................................................|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|notes.txt [+]                                                 2,17           All|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|/fox                                                                            |
+|................................................................................|
+@ 2475 with line numbers
+cursor 20 1 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: true, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: true, synchronized: false }
+region (0, 23) shape 0 history 0
+|  1 # Notes                                                                     |
+|dddd............................................................................|
+|  2 The quick brown fox jumps over the lazy dog.                                |
+|dddd............................................................................|
+|  3 A second line, with a tab:      here.                                       |
+|dddd............................................................................|
+|  4 TODO: write the terminal.                                                   |
+|dddd............................................................................|
+|  5                                                                             |
+|dddd............................................................................|
+|  6     indented line                                                           |
+|dddd............................................................................|
+|  7 last line                                                                   |
+|dddd............................................................................|
+|  8 hello from the editor                                                       |
+|dddd............................................................................|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|~                                                                               |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|notes.txt [+]                                                 2,17           All|
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|:set number                                                                     |
+|................................................................................|
+@ 2590 after quitting
+cursor 0 0 screen=primary view=0
+modes Modes { app_cursor: false, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: false, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|

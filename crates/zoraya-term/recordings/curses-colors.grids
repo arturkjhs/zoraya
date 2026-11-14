@@ -1,0 +1,317 @@
+# curses-colors: 4805 bytes replayed through zoraya-term 80x24
+# 0 = fg=52 bg=0 attrs=0x0
+# 1 = fg=53 bg=0 attrs=0x0
+# 2 = fg=54 bg=0 attrs=0x0
+# 3 = fg=55 bg=0 attrs=0x0
+# 4 = fg=56 bg=0 attrs=0x0
+# 5 = fg=57 bg=0 attrs=0x0
+# 6 = fg=58 bg=0 attrs=0x0
+# 7 = fg=59 bg=0 attrs=0x0
+# 8 = fg=60 bg=0 attrs=0x0
+# 9 = fg=61 bg=0 attrs=0x0
+# ? = fg=100 bg=0 attrs=0x0
+# ? = fg=101 bg=0 attrs=0x0
+# ? = fg=102 bg=0 attrs=0x0
+# ? = fg=103 bg=0 attrs=0x0
+# ? = fg=104 bg=0 attrs=0x0
+# ? = fg=105 bg=0 attrs=0x0
+# ? = fg=106 bg=0 attrs=0x0
+# ? = fg=107 bg=0 attrs=0x0
+# ? = fg=108 bg=0 attrs=0x0
+# ? = fg=109 bg=0 attrs=0x0
+# ? = fg=110 bg=0 attrs=0x0
+# ? = fg=111 bg=0 attrs=0x0
+# ? = fg=112 bg=0 attrs=0x0
+# ? = fg=113 bg=0 attrs=0x0
+# ? = fg=114 bg=0 attrs=0x0
+# ? = fg=115 bg=0 attrs=0x0
+# ? = fg=116 bg=0 attrs=0x0
+# ? = fg=117 bg=0 attrs=0x0
+# ? = fg=118 bg=0 attrs=0x0
+# ? = fg=119 bg=0 attrs=0x0
+# ? = fg=120 bg=0 attrs=0x0
+# ? = fg=121 bg=0 attrs=0x0
+# ? = fg=122 bg=0 attrs=0x0
+# ? = fg=123 bg=0 attrs=0x0
+# ? = fg=124 bg=0 attrs=0x0
+# ? = fg=125 bg=0 attrs=0x0
+# ? = fg=126 bg=0 attrs=0x0
+# ? = fg=127 bg=0 attrs=0x0
+# ? = fg=128 bg=0 attrs=0x0
+# ? = fg=129 bg=0 attrs=0x0
+# ? = fg=130 bg=0 attrs=0x0
+# ? = fg=131 bg=0 attrs=0x0
+# ? = fg=132 bg=0 attrs=0x0
+# ? = fg=133 bg=0 attrs=0x0
+# ? = fg=134 bg=0 attrs=0x0
+# ? = fg=135 bg=0 attrs=0x0
+# ? = fg=136 bg=0 attrs=0x0
+# ? = fg=137 bg=0 attrs=0x0
+# ? = fg=138 bg=0 attrs=0x0
+# ? = fg=139 bg=0 attrs=0x0
+# ? = fg=140 bg=0 attrs=0x0
+# ? = fg=141 bg=0 attrs=0x0
+# ? = fg=142 bg=0 attrs=0x0
+# ? = fg=143 bg=0 attrs=0x0
+# ? = fg=144 bg=0 attrs=0x0
+# ? = fg=145 bg=0 attrs=0x0
+# ? = fg=146 bg=0 attrs=0x0
+# ? = fg=147 bg=0 attrs=0x0
+# ? = fg=148 bg=0 attrs=0x0
+# ? = fg=149 bg=0 attrs=0x0
+# ? = fg=150 bg=0 attrs=0x0
+# ? = fg=151 bg=0 attrs=0x0
+# ? = fg=152 bg=0 attrs=0x0
+# ? = fg=153 bg=0 attrs=0x0
+# ? = fg=154 bg=0 attrs=0x0
+# ? = fg=155 bg=0 attrs=0x0
+# ? = fg=156 bg=0 attrs=0x0
+# ? = fg=157 bg=0 attrs=0x0
+# ? = fg=158 bg=0 attrs=0x0
+# ? = fg=159 bg=0 attrs=0x0
+# ? = fg=62 bg=0 attrs=0x0
+# ? = fg=63 bg=0 attrs=0x0
+# ? = fg=64 bg=0 attrs=0x0
+# ? = fg=65 bg=0 attrs=0x0
+# ? = fg=66 bg=0 attrs=0x0
+# ? = fg=67 bg=0 attrs=0x0
+# ? = fg=68 bg=0 attrs=0x0
+# ? = fg=69 bg=0 attrs=0x0
+# ? = fg=70 bg=0 attrs=0x0
+# ? = fg=71 bg=0 attrs=0x0
+# ? = fg=72 bg=0 attrs=0x0
+# ? = fg=73 bg=0 attrs=0x0
+# ? = fg=74 bg=0 attrs=0x0
+# ? = fg=75 bg=0 attrs=0x0
+# ? = fg=76 bg=0 attrs=0x0
+# ? = fg=77 bg=0 attrs=0x0
+# ? = fg=78 bg=0 attrs=0x0
+# ? = fg=79 bg=0 attrs=0x0
+# ? = fg=80 bg=0 attrs=0x0
+# ? = fg=81 bg=0 attrs=0x0
+# ? = fg=82 bg=0 attrs=0x0
+# ? = fg=83 bg=0 attrs=0x0
+# ? = fg=84 bg=0 attrs=0x0
+# ? = fg=85 bg=0 attrs=0x0
+# ? = fg=86 bg=0 attrs=0x0
+# ? = fg=87 bg=0 attrs=0x0
+# ? = fg=88 bg=0 attrs=0x0
+# ? = fg=89 bg=0 attrs=0x0
+# ? = fg=90 bg=0 attrs=0x0
+# ? = fg=91 bg=0 attrs=0x0
+# ? = fg=92 bg=0 attrs=0x0
+# ? = fg=93 bg=0 attrs=0x0
+# ? = fg=94 bg=0 attrs=0x0
+# ? = fg=95 bg=0 attrs=0x0
+# ? = fg=96 bg=0 attrs=0x0
+# ? = fg=97 bg=0 attrs=0x0
+# ? = fg=98 bg=0 attrs=0x0
+# ? = fg=99 bg=0 attrs=0x0
+# A = fg=26 bg=0 attrs=0x0
+# B = fg=27 bg=0 attrs=0x0
+# C = fg=28 bg=0 attrs=0x0
+# D = fg=29 bg=0 attrs=0x0
+# E = fg=30 bg=0 attrs=0x0
+# F = fg=31 bg=0 attrs=0x0
+# G = fg=32 bg=0 attrs=0x0
+# H = fg=33 bg=0 attrs=0x0
+# I = fg=34 bg=0 attrs=0x0
+# J = fg=35 bg=0 attrs=0x0
+# K = fg=36 bg=0 attrs=0x0
+# L = fg=37 bg=0 attrs=0x0
+# M = fg=38 bg=0 attrs=0x0
+# N = fg=39 bg=0 attrs=0x0
+# O = fg=40 bg=0 attrs=0x0
+# P = fg=41 bg=0 attrs=0x0
+# Q = fg=42 bg=0 attrs=0x0
+# R = fg=43 bg=0 attrs=0x0
+# S = fg=44 bg=0 attrs=0x0
+# T = fg=45 bg=0 attrs=0x0
+# U = fg=46 bg=0 attrs=0x0
+# V = fg=47 bg=0 attrs=0x0
+# W = fg=48 bg=0 attrs=0x0
+# X = fg=49 bg=0 attrs=0x0
+# Y = fg=50 bg=0 attrs=0x0
+# Z = fg=51 bg=0 attrs=0x0
+# a = fg=7 bg=0 attrs=0x0
+# b = fg=- bg=0 attrs=0x0
+# c = fg=1 bg=0 attrs=0x0
+# d = fg=2 bg=0 attrs=0x0
+# e = fg=3 bg=0 attrs=0x0
+# f = fg=4 bg=0 attrs=0x0
+# g = fg=5 bg=0 attrs=0x0
+# h = fg=6 bg=0 attrs=0x0
+# i = fg=8 bg=0 attrs=0x0
+# j = fg=9 bg=0 attrs=0x0
+# k = fg=10 bg=0 attrs=0x0
+# l = fg=11 bg=0 attrs=0x0
+# m = fg=12 bg=0 attrs=0x0
+# n = fg=13 bg=0 attrs=0x0
+# o = fg=14 bg=0 attrs=0x0
+# p = fg=15 bg=0 attrs=0x0
+# q = fg=16 bg=0 attrs=0x0
+# r = fg=17 bg=0 attrs=0x0
+# s = fg=18 bg=0 attrs=0x0
+# t = fg=19 bg=0 attrs=0x0
+# u = fg=20 bg=0 attrs=0x0
+# v = fg=21 bg=0 attrs=0x0
+# w = fg=22 bg=0 attrs=0x0
+# x = fg=23 bg=0 attrs=0x0
+# y = fg=24 bg=0 attrs=0x0
+# z = fg=25 bg=0 attrs=0x0
+@ 730 menu
+cursor 2 19 screen=primary view=0
+modes Modes { app_cursor: false, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: false, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|Welcome to ncurses 6.6.20251230.  Press ? for help.                             |
+|................................................................................|
+|This is the ncurses main menu (uppercase for wide-characters)                   |
+|................................................................................|
+| A,a    = keyboard and mouse input test                                         |
+|................................................................................|
+| B,b    = character attribute test                                              |
+|................................................................................|
+| C,c    = color test pattern                                                    |
+|................................................................................|
+| d      = edit RGB color values                                                 |
+|................................................................................|
+| E,e    = exercise soft keys                                                    |
+|................................................................................|
+| F,f    = display ACS characters                                                |
+|................................................................................|
+| g      = display windows and scrolling                                         |
+|................................................................................|
+| i      = test flushinp()                                                       |
+|................................................................................|
+| k      = display character attributes                                          |
+|................................................................................|
+| m      = exercise menu library                                                 |
+|................................................................................|
+| O,o    = exercise panel library                                                |
+|................................................................................|
+| p      = exercise pad features                                                 |
+|................................................................................|
+| q      = quit                                                                  |
+|................................................................................|
+| r      = exercise form library                                                 |
+|................................................................................|
+| S,s    = overlapping-refresh test                                              |
+|................................................................................|
+| v      = show terminal name and settings                                       |
+|................................................................................|
+| ?      = repeat this command summary                                           |
+|................................................................................|
+|>                                                                               |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+@ 4804 screen
+cursor 72 22 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|There are 256 color pairs and 256 colors                                        |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|32x8 matrix of foreground/background colors, bold *off*                         |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbb|
+|        black   red     green   yellow  blue    magenta cyan    white           |
+|bbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbb|
+|black   Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|aaaaaaaaaaaaaaaaccccccccddddddddeeeeeeeeffffffffgggggggghhhhhhhhaaaaabbbbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbiiiiiiiijjjjjjjjkkkkkkkkllllllllmmmmmmmmnnnnnnnnooooooooppppppppbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbqqqqqqqqrrrrrrrrssssssssttttttttuuuuuuuuvvvvvvvvwwwwwwwwxxxxxxxxbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbyyyyyyyyzzzzzzzzAAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEEFFFFFFFFbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbGGGGGGGGHHHHHHHHIIIIIIIIJJJJJJJJKKKKKKKKLLLLLLLLMMMMMMMMNNNNNNNNbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbOOOOOOOOPPPPPPPPQQQQQQQQRRRRRRRRSSSSSSSSTTTTTTTTUUUUUUUUVVVVVVVVbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbWWWWWWWWXXXXXXXXYYYYYYYYZZZZZZZZ00000000111111112222222233333333bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb444444445555555566666666777777778888888899999999????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|                                                                                |
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+@ 4805 next page
+cursor 72 22 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|There are 256 color pairs and 256 colors                                        |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|32x8 matrix of foreground/background colors, bold *off*                         |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbb|
+|        black   red     green   yellow  blue    magenta cyan    white           |
+|bbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbb|
+|black   Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|aaaaaaaaaaaaaaaaccccccccddddddddeeeeeeeeffffffffgggggggghhhhhhhhaaaaabbbbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbiiiiiiiijjjjjjjjkkkkkkkkllllllllmmmmmmmmnnnnnnnnooooooooppppppppbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbqqqqqqqqrrrrrrrrssssssssttttttttuuuuuuuuvvvvvvvvwwwwwwwwxxxxxxxxbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbyyyyyyyyzzzzzzzzAAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEEFFFFFFFFbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbGGGGGGGGHHHHHHHHIIIIIIIIJJJJJJJJKKKKKKKKLLLLLLLLMMMMMMMMNNNNNNNNbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbOOOOOOOOPPPPPPPPQQQQQQQQRRRRRRRRSSSSSSSSTTTTTTTTUUUUUUUUVVVVVVVVbbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbbWWWWWWWWXXXXXXXXYYYYYYYYZZZZZZZZ00000000111111112222222233333333bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb444444445555555566666666777777778888888899999999????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|        Hello   Hello   Hello   Hello   Hello   Hello   Hello   Hello           |
+|bbbbbbbb????????????????????????????????????????????????????????????????bbbbbbbb|
+|                                                                                |
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|

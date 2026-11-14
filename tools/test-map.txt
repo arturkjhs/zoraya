@@ -69,6 +69,7 @@ crates/zoraya-width/          test-gui test-tour-gui
 tools/term-width/             check
 tools/term-terminfo/          check
 tools/term-conformance/       check
+tools/term-record/            check
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
 crates/zoraya-surface/        check test-netsurf

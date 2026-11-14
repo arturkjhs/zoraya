@@ -1,0 +1,108 @@
+# curses-acs: 4190 bytes replayed through zoraya-term 80x24
+# a = fg=- bg=0 attrs=0x0
+# b = fg=7 bg=0 attrs=0x1
+# c = fg=7 bg=0 attrs=0x0
+@ 730 menu
+cursor 2 19 screen=primary view=0
+modes Modes { app_cursor: false, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: false, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|Welcome to ncurses 6.6.20251230.  Press ? for help.                             |
+|................................................................................|
+|This is the ncurses main menu (uppercase for wide-characters)                   |
+|................................................................................|
+| A,a    = keyboard and mouse input test                                         |
+|................................................................................|
+| B,b    = character attribute test                                              |
+|................................................................................|
+| C,c    = color test pattern                                                    |
+|................................................................................|
+| d      = edit RGB color values                                                 |
+|................................................................................|
+| E,e    = exercise soft keys                                                    |
+|................................................................................|
+| F,f    = display ACS characters                                                |
+|................................................................................|
+| g      = display windows and scrolling                                         |
+|................................................................................|
+| i      = test flushinp()                                                       |
+|................................................................................|
+| k      = display character attributes                                          |
+|................................................................................|
+| m      = exercise menu library                                                 |
+|................................................................................|
+| O,o    = exercise panel library                                                |
+|................................................................................|
+| p      = exercise pad features                                                 |
+|................................................................................|
+| q      = quit                                                                  |
+|................................................................................|
+| r      = exercise form library                                                 |
+|................................................................................|
+| S,s    = overlapping-refresh test                                              |
+|................................................................................|
+| v      = show terminal name and settings                                       |
+|................................................................................|
+| ?      = repeat this command summary                                           |
+|................................................................................|
+|>                                                                               |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+@ 4190 screen
+cursor 70 22 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|                    Display of the ACS Character Set                            |
+|aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|                                                                                |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|        ACS_ULCORNER : ┌                         ACS_LANTERN : ␋                |
+|aaaaaaaaccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaacccccccccccccccaaaaaaaaaaaaaaaa|
+|        ACS_URCORNER : ┐                          ACS_BULLET : ·                |
+|aaaaaaaaccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaa|
+|        ACS_LLCORNER : └                         ACS_CKBOARD : ▒                |
+|aaaaaaaaccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaacccccccccccccccaaaaaaaaaaaaaaaa|
+|        ACS_LRCORNER : ┘                          ACS_DEGREE : °                |
+|aaaaaaaaccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaa|
+|            ACS_LTEE : ├                         ACS_DIAMOND : ◆                |
+|aaaaaaaaaaaaccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaacccccccccccccccaaaaaaaaaaaaaaaa|
+|            ACS_RTEE : ┤                         ACS_PLMINUS : ±                |
+|aaaaaaaaaaaaccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaacccccccccccccccaaaaaaaaaaaaaaaa|
+|            ACS_TTEE : ┬                            ACS_PLUS : ┼                |
+|aaaaaaaaaaaaccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccaaaaaaaaaaaaaaaa|
+|            ACS_BTEE : ┴                          ACS_GEQUAL : ≥                |
+|aaaaaaaaaaaaccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaa|
+|           ACS_HLINE : ─                          ACS_NEQUAL : ≠                |
+|aaaaaaaaaaacccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaa|
+|           ACS_VLINE : │                          ACS_LEQUAL : ≤                |
+|aaaaaaaaaaacccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaa|
+|          ACS_LARROW : ←                        ACS_STERLING : £                |
+|aaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaccccccccccccccccaaaaaaaaaaaaaaaa|
+|          ACS_RARROW : →                              ACS_PI : π                |
+|aaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccaaaaaaaaaaaaaaaa|
+|          ACS_UARROW : ↑                              ACS_S1 : ⎺                |
+|aaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccaaaaaaaaaaaaaaaa|
+|          ACS_DARROW : ↓                              ACS_S3 : ⎻                |
+|aaaaaaaaaaccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccaaaaaaaaaaaaaaaa|
+|           ACS_BLOCK : ▮                              ACS_S7 : ⎼                |
+|aaaaaaaaaaacccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccaaaaaaaaaaaaaaaa|
+|           ACS_BOARD : ▒                              ACS_S9 : ⎽                |
+|aaaaaaaaaaacccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaccccccccccaaaaaaaaaaaaaaaa|
+|                                                                                |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|                                                                                |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|Note: ANSI terminals may not display C1 characters.                             |
+|cccccccccccccccccccccccccccccccccccccccccccccccccccaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|Select: a=ACS, w=all x=box, 0=C1, 1-3,+/- non-ASCII, </> repeat, ESC=quit       |
+|cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccaaaaaaa|
+|v/V, f/F, b/B cycle through video attributes (STANDOUT) and color 0/0.          |
+|ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccaaaaaaaaaa|
+|                                                                                |
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|

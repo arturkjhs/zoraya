@@ -1,0 +1,8 @@
+# ncurses' own test program (test/ncurses.c of the pinned release), the ACS characters: the line-drawing set (smacs and acsc) and its look-alikes.
+size 80 24
+env TERMINFO=@terminfo@
+run @curses@/ncurses
+mark menu
+send f\r
+wait 2
+mark screen

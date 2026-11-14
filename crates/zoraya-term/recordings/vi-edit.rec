@@ -1,0 +1,14 @@
+[?1049h[>4;2m[?1h=[?2004h[?1004h[1;24r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[24;1H"notes.txt" 7L, 141B[27m[23m[29m[m[H[2J[1;1H# Notes
+The quick brown fox jumps over the lazy dog.
+A second line, with a tab:      here.
+TODO: write the terminal.[6;5Hindented line
+last line
+[94m~                                                                               [9;1H~                                                                               [10;1H~                                                                               [11;1H~                                                                               [12;1H~                                                                               [13;1H~                                                                               [14;1H~                                                                               [15;1H~                                                                               [16;1H~                                                                               [17;1H~                                                                               [18;1H~                                                                               [19;1H~                                                                               [20;1H~                                                                               [21;1H~                                                                               [22;1H~                                                                               [m[23;1H[1m[7mnotes.txt                                                     1,1            All[1;1H[?25h[?4m[?25l[m[24;70HG[1;1H[24;70H [7;1H[23;63H[1m[7m7,[7;1H[?25h[?25l[m[24;1H[1m-- INSERT --[m[24;1H[K[8;21Hhello from the editor[8;22H[K[23;11H[1m[7m[+][49C8,22[m
+[1m-- INSERT --[8;22H[m[24;70H^[[8;21H[?25h[?25l[24;70H  [8;22H[24;1H[K[23;66H[1m[7m1 [8;21H[?25h[?25l[m[24;70Hgg[8;21H[24;70H  [1;1H[23;63H[1m[7m1,1  [1;1H[?25h[?25l[24;1H[m/fox[23;63H[1m[7m2,17[2;17H[?25h[?25l[m[24;1H[K[24;1H:set number[1;1H[93m  1 [m# Notes
+[93m  2 [mThe quick brown fox jumps over the lazy dog.
+[93m  3 [mA second line, with a tab:      here.
+[93m  4 [mTODO: write the terminal.
+[93m  5 
+  6 [m    indented line
+[93m  7 [mlast line
+[93m  8 [mhello from the editor[2;21H[?25h[?25l[24;1H[K[24;1H:q![?2004l[>4;m[23;2t[23;1t[24;1H[K[24;1H[?1004l[?2004l[?1l>[?1049l[?25h[>4;m
