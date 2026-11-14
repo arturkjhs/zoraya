@@ -1,6 +1,6 @@
 # ADR-0330: The `ping` command, the `host` operand and a per-request round trip in the diagnostic echo
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0220, ADR-0222, ADR-0224, ADR-0281, ADR-0297
 - **Evidence:** CP-12, DM-034
@@ -94,3 +94,7 @@ grant names the host and the name is resolved inside the network service), so `n
 honouring the grant; (2) ping's grant is narrowed to ICMP echo only, an echo-only rule kind in the network ABI, with no TCP
 and no UDP, enforced by `netd`; the earlier TCP rule is dropped. Recorded by an agent at the architect's request; the status
 stays `proposed`.
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.

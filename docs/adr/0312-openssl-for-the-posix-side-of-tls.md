@@ -46,6 +46,7 @@ choice of library only; item 3 (the roots) and every other item of ADR-0228 stan
 ## Open questions
 - Whether native programs' rustls and C programs' OpenSSL should one day share a verifier (rustls-ffi); not now.
 - Note (ADR-0001 rule 6, 9a): the `no-threads` of the task's option list was lifted as planned; OpenSSL is rebuilt with `threads` over the 9b pthreads. The rebuild is recorded in ADR-0310's Follow-up, not here.
+- Note (ADR-0001 rule 6, 9c): a fact, not a reading of INV-0312-1: a program of its own can call `SSL_set_verify(..., SSL_VERIFY_NONE, ...)` (or, from Python, use `ssl.CERT_NONE` or `ssl._create_unverified_context()`), which nothing in this OpenSSL stops; `make test-apps` checks the ports' curl and wget, which set `SSL_VERIFY_PEER` (curl refuses `-k`, wget has no switch). How INV-0312-1 is to be read for such a program is proposed in ADR-0320 item 10, for the architect.
 
 ## Revisit triggers
 - OpenSSL 3.5's end of support; a program that needs a TLS API OpenSSL lacks.

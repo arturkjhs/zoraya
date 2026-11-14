@@ -3,57 +3,162 @@
 Running report, updated after each part. Part 9b's design was written by a Sonnet session on branch `work/9b-design`
 (reading, ADRs and plan only: nothing was built, no test was run; `make adr-check` and `make check` are the only commands run).
 
-## Status for the architect (2026-11-12, `origin/main` at `6390dc6`)
+## Status for the architect (2026-11-13, stage 9 complete, `origin/main` at `7adf938`)
 
-| Part | State | Tag |
-|---|---|---|
-| **9a TLS for C, zlib, curl, wget** | implemented on `work/9a` (merged with `origin/main` at `a0cfc1f`, so it has 9b's kernel and libposix threads); ADR-0312 accepted 2026-11-13; ADR-0310 and ADR-0311 `proposed` (they only add decisions); OpenSSL rebuilt with threads; not merged; tests in the section "9a: OpenSSL with threads" below | |
-| **9b POSIX threads** | **design accepted 2026-11-13** (ADR-0300 to ADR-0309 accepted by the architect as recommended; ADR-0308 supersedes ADR-0100's "no threads" and the other places it lists); kernel step implemented on `work/9b`; ADR-0313 (the kernel as built) accepted 2026-11-13; libposix step on `work/9b-libc` (ADR-0314, ADR-0315 proposed). Next: 9a, then 9b implementation and 9d in parallel, then 9c. Thread calls stay 56 to 61 (the highest call on main is 55, `device_write`) | |
-| 9c CPython | not started | |
-| 9d NetSurf | not started | |
-| image addition (`EXTRA_ROOT`) | done inside 9a (`tools/run-disk.sh`, `make check-run-disk`), without descriptions for unknown programs; already on `work/9a` | |
+Sources: `git log --first-parent origin/main`, `git ls-remote --tags origin`, `docs/adr/index.md` on `main` at `7adf938`, the part
+sections of this report, the commits' `Co-Authored-By` lines and the CI runs named (`gh run view`). Nothing was re-run for this block.
 
-### The ADRs of part 9b (all accepted 2026-11-13; they were `proposed`; one line each is a recommendation, not a decision)
+**Stage 9 is done.** Tags: `stage-9a` = `da73e69`, `stage-9b` = `936db09`, `stage-9c` = `stage-9d` = `stage-9` = `7adf938`. CI on
+`main` at `7adf938` (run 43511821485, a push to `main`, so the full set: 69 jobs) is green on its second attempt; the first attempt's
+`build` job failed in `make fetch-ports`, which timed out five times on `https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz` and then on
+its `ftpmirror.gnu.org` fallback (curl exit 28, connect timeout; a network flake, not the change; `docs/backlog.md`, "CI downloads").
+The runs of the three tags (43517591619, 43517596370, 43517601368, 23 jobs each) are green. No `candidate-full/` tag was pushed for
+stage 9: the full set ran as `main`'s push run of the same commit.
 
-| ADR | Title | Recommendation in one line |
-|---|---|---|
-| [0300](../adr/0300-threads-in-a-process.md) | Threads in a process | Thread objects named by handles inside the process: `thread_create(entry, stack, argument, tls)`, `thread_exit(clear, unmap)`, `thread_self`, `thread_interrupt` (calls 56 to 59); at most 128 per process; the end of a process is two-phase (the asker wakes one thread per process, which wakes its siblings in steps); a thread that exits frees its stack and charge and closes its own handles; **no new `Status`** (an interrupt is an early `Ok` of `futex_wait` and `sleep_until`, ADR-0006 rule 5 stands). |
-| [0301](../adr/0301-wait-and-wake-on-an-address.md) | Waiting on an address | Two typed calls `futex_wait(address, expected, deadline)` and `futex_wake(address, count)`, private to a process; no requeue, no priority inheritance (musl's requeue becomes a wake); calls 60 and 61; the deadline queue is sized `MAX_THREADS_SYSTEM` + kernel timers + reserved (1024 if it fits) and becomes a heap; a per-process mapping lock, also held by `fork`'s copy. |
-| [0302](../adr/0302-pthreads-in-libposix.md) | `pthread_*` in `libposix` | Keep musl's own `src/thread` over a shim; a library lock plus a memory lock; waits that can last are made outside the lock (`Pending` and retry); one port per thread; `PROCESS_SHARED` and priority inheritance refused with `ENOTSUP`. |
-| [0303](../adr/0303-thread-local-storage.md) | Thread-local storage | The thread pointer is an argument of `thread_create` (no set-tls call); musl lays TLS out inside the stack mapping, which the creating job pays for. |
-| [0304](../adr/0304-signals-with-threads.md) | Signals with threads | Per-thread masks and pending sets, per-process pending set; `pthread_kill` thread-directed; a process's request is taken by any waiting thread and routed to the lowest-tid thread that has it unblocked; no handler under a library lock. |
-| [0305](../adr/0305-thread-cancellation.md) | Cancellation | Deferred only: a flag plus `thread_interrupt`, tested in the wrappers outside the lock; asynchronous mode acts as deferred; one patch to musl's `pthread_cancel.c`. |
-| [0306](../adr/0306-fork-exec-and-exit-with-threads.md) | `fork`, `exec`, exit | `fork` takes the locks and freezes the other threads for the copy, the child has one thread and unmaps the others' stacks; `exec` holds the library lock until the old image ends; `exit` is the two-phase end. |
-| [0307](../adr/0307-thread-quotas.md) | Thread quotas | A `threads` figure of its own (answers ADR-0260's open question), counting every live thread, derived as 3 x `procs` (room 96, untrusted rooms 288, session 600); old records stay valid; `EAGAIN`. |
-| [0308](../adr/0308-posix-threads-enter-the-tier-list.md) | Threads enter the tier list | **The superseding ADR**: lists every accepted sentence the nine ADRs change (ADR-0100 items 2 and 5, ADR-0141, ADR-0180 item 9, ADR-0041, ADR-0102 item 5, ADR-0104 item 6, ADR-0106 items 2 and 5, ADR-0260, ADR-0261, ADR-0263, ADR-0285, INV-0006-2's lint, `pthread_create` on INV-0005-2's deny list); tier T9 with a list file; ADR-0100 itself stays `accepted`. |
-| [0309](../adr/0309-how-9b-is-tested.md) | How 9b is tested | musl's libc-test thread tests as the conformance subset (Open POSIX Test Suite rejected), SQLite `threadtest3`, our `t_threads.c` stress program, OpenSSL rebuilt with threads. |
+### Parts merged
+
+| Part | Merge on `main` | Branch head (green candidate run) | Tag | What |
+|---|---|---|---|---|
+| 9b design | `e4ff190` | | | ADR-0300 to ADR-0309 (threads: kernel object, futex, pthreads, TLS, signals, cancel, fork/exec, quotas, tier list, tests). |
+| 9b kernel | `02d32e5` | | | Calls 56 to 61, futex, the thread object, the `threads` quota; ADR-0313. |
+| 9b `libposix` threads | `a0cfc1f` | | | musl's pthreads over the shim, long waits outside the lock, per-thread signals, deferred cancellation, `fork`/`exec` with siblings, `make test-posix-suites`, `check-mutant-lists`; ADR-0314, ADR-0315. |
+| 9a TLS for C, zlib, curl, wget | `da73e69` | `0867b1a` | `stage-9a` | OpenSSL 3.5.9 (threads), zlib 1.3.1, curl 8.23.0, wget 1.25.0 by `zcc` (`make apps`), `getrandom`, the `names` key, `/system/tls` with the network, `EXTRA_ROOT`; ADR-0310 to ADR-0312. |
+| 9b record locks, `threadtest3` | `936db09` | `495b14f` | `stage-9b` | `fcntl` record locks in the process (ADR-0319), SQLite `threadtest3` (7 scenarios) in CI. |
+| 9d NetSurf | `65b1522` | `616fe29` (43465681384) | `stage-9d` (= `7adf938`) | NetSurf 3.11 in a window of its own: the `window` line, a client channel from the panel, `zoraya-surface`, the `libnsfb` surface, `ClientGone`; `make test-netsurf`; ADR-0317, ADR-0318. |
+| `work/tls-options` | `f90d29f` | `5b52463` (43497477629) | | curl and wget refuse every option that disables, replaces or weakens TLS verification or the roots (patches `curl/0003`, `wget/0004`, `tests/shell/apps-refusals.script`); ADR-0321. |
+| 9e wheel and clients | `dd575e3` | `ea11ae6` (43498404799) | | A `Wheel` event in the compositor protocol (NetSurf and the terminal scroll), 32 compositor clients counted against the room's account, late window answers closed; ADR-0322, ADR-0323. |
+| 9c CPython | `7adf938` (`main` fast-forwarded to `work/9c`'s merge of `main`) | `7adf938` (43505870979) | `stage-9c`, `stage-9` | CPython 3.15.2 static by `zcc`, six patches, `make test-python` and `make test-python-regr` in CI, `make test-python-long` by hand; ADR-0320. |
+
+Stage-8 follow-ups and CI changes merged during stage 9: `work/hand-run` `65b2837` (`make run-net` on a stale disk, `make
+test-hand-run`, `ping HOST` with names and an echo-only grant, ADR-0330; the real roots check; `make run-gui` with the network);
+`work/first-lookup` `ca2c6b4` (the first lookup after boot no longer waits for a missed wake-up, lookup timeouts answered, ARP probes
+for the gateway and DNS; ADR-0316); `work/tcg-time` `c1e1b34` (`QEMU_SLOW_TIMEOUT` 420 s); `work/cpu-flake` `62f4ad0` (`t_cpu`'s
+masked-time limit off HVF); `5a506a1` (the Makefile's `.PHONY` line); `work/ci-docs` `c4d9f4c` (a push to `main` with only `docs/`
+changes runs the document checks only). Documents: `972bbf0` (TASK-27), `2c10246` (the architect's decisions), `a89755b` and
+`7f28bb1` (this report). `work/ci-arm` is not merged (section "CI experiment").
+
+### ADRs of stage 9 (and the proposed follow-ups of stage 8), status from `docs/adr/index.md` at `7adf938`
+
+| ADR | Title (short) | Status | Recommendation (for the proposed ones; not a decision) |
+|---|---|---|---|
+| 0300 to 0309 | Threads: kernel object, futex, pthreads, TLS, signals, cancellation, fork/exec, quotas, tier list, tests | accepted | |
+| [0310](../adr/0310-surface-for-tls-curl-and-wget.md) | TLS, curl and wget as ports | accepted | |
+| [0311](../adr/0311-url-file-names-and-the-roots-directory-for-posix-programs.md) | The `names` key and the roots directory | accepted | |
+| [0312](../adr/0312-openssl-for-the-posix-side-of-tls.md) | OpenSSL 3 for the POSIX side of TLS | accepted | |
+| [0313](../adr/0313-thread-kernel-as-built.md) | Threads in the kernel as built | accepted | |
+| [0314](../adr/0314-pthreads-first-slice-as-built.md), [0315](../adr/0315-pthreads-waits-signals-cancel-as-built.md) | `pthread_*` as built, two slices | accepted | |
+| [0316](../adr/0316-netd-answers-every-lookup.md) | `netd` answers every lookup | **proposed** | Accept Option B: it records what `ca2c6b4` merged and `make test-net-lookup` tests. |
+| [0317](../adr/0317-the-window-of-a-posix-program.md) | The window of a POSIX program | accepted | |
+| [0318](../adr/0318-netsurf-fonts-and-the-source-set.md) | NetSurf: its libraries, its own fonts, the source set | accepted | |
+| [0319](../adr/0319-advisory-record-locks-in-libposix.md) | Advisory record locks in `libposix`, in the process | accepted | |
+| [0320](../adr/0320-cpython-port.md) | CPython 3.15 as a port | **proposed** | Accept Option A as merged (green candidate and full run); decide item 10 (below) with it. The index row still says "five patches"; there are six. |
+| [0321](../adr/0321-curl-and-wget-refuse-tls-weakening-options.md) | curl and wget refuse the options that weaken TLS | **proposed** | Accept Option C: it makes ADR-0228 item 3 and INV-0312-1 hold in the programs, so no line passes `-k`. |
+| [0322](../adr/0322-a-wheel-event-in-the-compositor-protocol.md) | A wheel event in the compositor protocol | **proposed** | Accept Option C as built in 9e (120ths of a notch, to the body under the pointer, no focus change). |
+| [0323](../adr/0323-the-compositors-clients-counted-against-the-rooms.md) | 32 compositor clients, an untrusted room's counted in its account | **proposed** | Accept Option C, and rule on its open question: client accounts do not count rooms, a deviation from ADR-0262's four accounts. |
+| [0330](../adr/0330-ping-command-and-host-operand.md) | The `ping` command and the `host` operand | **proposed** | Accept Option A: it records what `65b2837` merged, which follows the architect's decision already written in it. |
+| 0280, 0281, 0285, 0286 | Stage-8 ADRs (frame slots, netd ping/DHCP, CPU ceiling details, N3 fetch) | proposed | Outside stage 9; still waiting (TASK-26). |
+
+### Decided by the architect (2026-11-13)
+
+- ADR-0300 to ADR-0309 accepted as recommended (`e4ff190`); ADR-0308 supersedes ADR-0100's "no threads" and the other sentences it lists.
+- ADR-0312, ADR-0313 (items 1 to 5), ADR-0314 and ADR-0315 accepted.
+- `2c10246`: ADR-0310 (Option A), ADR-0311 (Option A, `cwd none`) and ADR-0319 (Option A) accepted; ADR-0313 items 6 to 8 confirmed;
+  **ADR-0005 superseded in part by ADR-0319** (`flock` stays excluded). Follow-ups in `docs/backlog.md`.
+- ADR-0317 (Option C) and ADR-0318 (Option B) accepted; on `main` with 9d.
+- The arm64 runner experiment: result accepted, nothing moves.
+- ADR-0321's rule (the refusal belongs in the programs, not only in the descriptions): decided; the ADR itself is `proposed`.
 
 ### Items for the architect
 
-1. **Accept ADR-0300 to ADR-0308 or change them.** TASK-27's rule is that a part merges only if none of its proposed ADRs
-   changes an accepted decision. Each of ADR-0300 to ADR-0308 does (ADR-0308 item 1 lists every sentence: ADR-0100 items 2
-   and 5, ADR-0141, ADR-0180 item 9, ADR-0005's deny-list row, ADR-0041, ADR-0105 item 8, ADR-0102 items 2 and 5,
-   ADR-0104 item 6, ADR-0106 items 2 and 5, ADR-0260's table rows, ADR-0261 point 1, ADR-0263 point 4, ADR-0285 point 4,
-   INV-0006-2's lint). So the 9b implementation can be written on its branch, but **it does not merge until all of
-   ADR-0300 to ADR-0308 are accepted** (ADR-0309 changes no accepted text). The task's done criterion ("ADR-0100's 'no
-   threads' is superseded by an accepted ADR") is met by your accepting ADR-0308; agents did not and will not set any
-   status. ADR-0100 is not edited. Not superseded: ADR-0006 rule 5 and INV-0006-6 (no `Interrupted` status was added).
-2. **Choices made without you that are cheap to reverse now and dear later:** the thread is a kernel object with a
-   handle (not a `clone`-style call); futex without requeue and PI; musl's pthread code kept (a patch to
-   `pthread_cancel.c` and one for `pshared`); the `threads` quota counts the first thread of a process too and has no
-   typed word yet (`--threads` deferred); `fork` freezes the other threads for the copy; `PTHREAD_PROCESS_SHARED` is refused;
-   `MAX_THREADS` 128 per process.
-3. **The plan needs part 9a for one item only** (OpenSSL rebuilt with threads, step 4.2); steps 1 to 3 and the rest of step 4
-   do not. 9a has not started (curl was deferred from stage 8 on 2026-11-12), so step 4.2 is **outside 9b's done
-   criterion until 9a is merged**; 9b merges without it and the step is recorded as pending.
-4. **Confirm ADR-0313 items 6 to 8.** They (`Members::shrink` with `try_reserve_exact`, the hold on a `Move`d handle,
-   the room kept for the spawn's child) were added by the step-1 reviews after you accepted items 1 to 5; they refine the
-   implementation and change no accepted guarantee. Recorded in the ADR's open questions; its text and status are untouched.
-5. Merge conflict note for the orchestrator: this file is new on `work/9b-design`; `work/9-docs` may create the same
-   path. Keep the Status block of whichever is newer and this file's "9b" section below.
+1. **Six ADRs are `proposed`:** ADR-0316, ADR-0320, ADR-0321, ADR-0322, ADR-0323, ADR-0330 (table above).
+2. **INV-0312-1 for a program that turns verification off** (9c re-review W6): the ADR-0312 note states only the fact (Python is not
+   mediated; a script can pass `ssl.CERT_NONE`); the proposed reading (the invariant covers connections made with this OpenSSL's
+   defaults) is ADR-0320 item 10. Decide it with ADR-0320, or ask for a superseding ADR of ADR-0312.
+3. **wget is GPL-3.0-or-later** (section "Status for the architect (9a)", item 2): a separate program in the image, as GNU make
+   (ADR-0109). No decision recorded; confirm.
+4. **SQLite's source is public domain** (the rule of `docs/dependencies.md` names MIT, Apache-2.0, BSD, ISC and Zlib): listed there as
+   W3's source and as a test input (`threadtest3`, item 3 of the 9a status). CPython's `_sqlite3` also links SQLite into
+   `bin/python3` (`make python`), which the list does not say. Confirm public domain as a test input and as a part of a program in the image.
+5. **The `libc-test` fetch is pinned by git commit** (`ports/sources.lock`, `libctest 63e36e9...`, with the SHA-256 of the archive
+   first fetched), not by a release: upstream has none. No decision recorded.
+6. **Record locks across processes** (ADR-0319 Option B, a lock table in `fsd`): in `docs/backlog.md`; two processes on one SQLite
+   file do not see each other's locks. Schedule it or leave it.
+7. **The wheel in the native applications** (proposed ADR-0322): `zoraya-app` drops `Wheel`, so the file manager, editor and
+   settings do not scroll with it; in `docs/backlog.md`.
+8. **The `Makefile` comment above `RUN_NET_CMD`** still gives the 8.5 MiB per-launch leak as the reason for 512 MiB; the leak is fixed
+   (`a9f0cfe`). Whether the run machines go back to less memory is open.
+9. **CI downloads:** `make fetch-ports` reaches the Internet on a cache miss; `main`'s CI went red once on `ftp.gnu.org`
+   (`docs/backlog.md`, "CI downloads"). A cache of the pinned archives keyed by SHA-256 is the proposed fix.
 
-Manual checks the architect must do for 9b: none. Measurements: none yet (design only). Time and model: one Sonnet session
-for the design.
+### Manual checks for the architect
+
+Build the programs once, then start on a fresh disk (the default disk keeps a person's files; `tools/run-disk.sh` makes a new one,
+keeping the old as `build/disk.img.old`, only when its key changes):
+
+```
+make apps netsurf python
+rm -f build/disk.img build/disk.img.key          # a fresh disk: this deletes the files of the old one
+make run-gui                                      # or make run-net (the serial console with the Internet)
+```
+
+With Python the volume needs more room: `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M make run-gui`.
+In a terminal from the desktop (room `home`, which has the network), or at the `run-net` prompt:
+
+- `ping google.com` (by name; four replies, then the summary).
+- `netsurf https://example.org/`, `netsurf http://example.com/`, `netsurf https://www.wikipedia.org/` (images from other hosts stay
+  missing unless the line has `+net upload.wikimedia.org`), `netsurf` alone for the welcome page; scroll with the wheel.
+- `python3 -V`; `python3 -c 'import sqlite3, ssl; print(sqlite3.sqlite_version, ssl.OPENSSL_VERSION)'`;
+  `+net www.python.org:443 python3 -c 'import urllib.request; print(urllib.request.urlopen("https://www.python.org/").status)'`.
+- `+net example.org:443 curl -O https://example.org/index.html` and `curl -k https://example.org/` (refused as a usage mistake).
+
+### Measurements known
+
+- **CI on `main` at `7adf938`** (run 43511821485, attempt 2): 69 jobs green; from the re-run `build` job's start to the last job 32 min
+  (`build` 10 min 56 s on a cache hit; the longest test jobs `make test-apps` 13 min, `make test-qemu-tcg-smp4-gicv3` 6 min 46 s,
+  `make test-python` 5 min 48 s, `make test-netsurf` 5 min, `make test-python-regr` 3 min 29 s). The full set on `c4d9f4c` was 65
+  jobs in 27.5 min. The first docs-only push (`a89755b`, run 43458056319): 20 jobs green and 2 skipped, about one minute.
+- **Whole-suite TCG runs** (128 tests): 168 s to 267 s in green runs; `QEMU_SLOW_TIMEOUT` is 420 s (section "CI timing").
+- **arm64 runners** (run 43447464141): no KVM; arm TCG 1.4 to 1.7 times slower than x86 TCG (whole job 45:44 against 30:54).
+- **Test counts.** `make test-posix-suites` 13 libc-test thread tests; `make test-posix-threadtest3` 7 scenarios; `make test-apps`
+  235 steps (after the 9a review); `t_threads` 17 cases; `make test-netsurf` 72 steps; `make test-python` 104 steps and
+  `make test-python-regr` 16 modules, 2,949 tests (HVF, the 9c re-review round). `docs/adr/invariants.md` Total: 634.
+
+### Time and model per part
+
+Not measured as session time. From the commits' author dates (local time, 2026-11-13 unless said) and `Co-Authored-By` lines:
+
+| Part | Commits | From, to | Model |
+|---|---|---|---|
+| 9b design | 8 | 11-12 14:22 to 11-13 04:05 | Sonnet 5.5 (8 more without a trailer) |
+| `work/hand-run` | 17 | 01:41 to 03:39 | Sonnet 5.5 16, Opus 5.5 1 |
+| 9a | 23 | 04:41 to 13:17 | Sonnet 5.5 22, Opus 5.5 1 |
+| 9b kernel | 31 | 06:02 to 08:17 | Sonnet 5.5 |
+| 9b `libposix` | 34 | 06:44 to 12:06 | Sonnet 5.5 32, Opus 5.5 2 |
+| `work/first-lookup` | 9 | 08:40 to 08:58 | Sonnet 5.5 5, Opus 5.5 4 |
+| `work/tcg-time`, `work/cpu-flake` | 1, 1 | 09:07; 10:25 | Sonnet 5.5; Opus 5.5 |
+| 9b record locks | 7 | 14:06 to 14:25 | Sonnet 5.5 |
+| `work/ci-docs` | 2 | 15:55 to 15:57 | Sonnet 5.5 |
+| 9d | 30 | 14:03 to 17:43 | Sonnet 5.5 12, Opus 5.5 4, 14 without a trailer (model not recorded) |
+| `work/tls-options` | 9 | 17:04 to 20:56 | Opus 5.5 5, Sonnet 5.5 4 |
+| 9e | 16 | 18:30 to 21:02 | Opus 5.5 |
+| 9c | 38 | 15:28 to 21:07 | Sonnet 5.5 27, Opus 5.5 11 |
+
+### Known limitations (each in its section, `docs/design.md` or `docs/backlog.md`)
+
+- **Threads (9b):** no checks yet for INV-0306-3 and INV-0306-5, INV-0308-3 over fresh logs, `check-cancel-points` (INV-0305-3);
+  the mapping-count measurement of a 128-thread process; `accept` in a thread untested; service-reply waits (`stop_self`, `TCSADRAIN`)
+  inside the library lock; a cancelled long wait leaks up to about 32 KiB; record locks are per process.
+- **TLS programs (9a, tls-options):** a program `dash` or `make` starts (or Python starts) has no `getrandom` connection, so OpenSSL
+  cannot seed; no `tls.roots` setting for C programs; the SHA-256 / AES-GCM / `RAND_bytes` half of ADR-0309 item 4 is not written;
+  ADR-0321's option lists are not diffed against a new curl or wget release.
+- **NetSurf (9d):** no downloads (no chooser channel), no JavaScript, SVG, cookies, proxy, clipboard, cursor shape or horizontal
+  wheel; Latin titles and placeholders for Cyrillic; a shell `init` restarts gets no window channel until the panel restarts; links
+  to other hosts need `+net HOST` words; timed waits are a 2 ms poll.
+- **CPython (9c):** no `socketpair`, `AF_UNIX`, server sockets, `posix_spawn`, shared modules or `ctypes`; a `fork` copies the whole
+  writable space (`test_threading` runs out of memory in `os.fork` and is only in `make test-python-long`, by hand); recursion ends
+  in `MemoryError` near 33,000 frames; the archive's Sigstore bundle is not checked.
+- **Compositor (9e):** the session's 20 clients are not carved per room; a client with no window keeps its slot; no scale-2 TCG run.
+- **CI:** `make fetch-ports` depends on upstream servers on a cache miss.
 
 ## 9b: POSIX threads
 
@@ -302,6 +407,10 @@ What holds now for 9b's "done when" (ADR-0309): (1) musl's libc-test thread subs
 
 Ran in this session (M4, `make test-posix-threadtest3`, `FULL=1`): all 7 scenarios (`cgt_pager_1 dynamic_triggers create_drop_index_1 lookaside1 vacuum1 stress1 shared1`) pass under HVF and under TCG, "0 errors out of 7 tests", `zoraya-fsck` clean after each; no scenario needed a fix or an exclusion. Not run: a CI run (the candidate is the orchestrator's).
 
+**9b closed (2026-11-13).** Merged in four parts: design `e4ff190`, kernel `02d32e5`, `libposix` `a0cfc1f`, record locks `936db09`;
+tag `stage-9b` = `936db09`. ADR-0300 to ADR-0309, ADR-0313 to ADR-0315 and ADR-0319 accepted. What is left is in the status block's
+"Known limitations" and `docs/backlog.md` ("Follow-ups from the 9b libposix review", "Stage 9 parts: what the reports left").
+
 ## 9a: TLS for C programs, zlib, curl, wget
 
 Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-11-13.
@@ -428,6 +537,207 @@ Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-
 6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
    runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.
 
+**9a closed (2026-11-13).** Merged `da73e69` (head `0867b1a`), tag `stage-9a` = `da73e69`; ADR-0310 to ADR-0312 accepted. Items 2,
+3 and 5 above are still open (the status block's "Items for the architect"); the option refusals came later with `work/tls-options`.
+
+## 9c: CPython (branch `work/9c`, 2026-11-13)
+
+### What exists
+- `ports/sources.lock` pins Python-3.15.2.tar.xz by the SHA-256 python.org publishes (`8b5536d2...797de`); python.org also publishes a
+  Sigstore bundle, and checking it is optional and not done (an earlier note here and in the session said python.org published no SHA-256: wrong, corrected on the architect's word).
+- `make python` (`ports/Makefile`): host Python 3.15.2 (`build/ports/hostpython`; `build/ports/host` until the merge of `main` with 9d, whose host tools are there), SQLite for the target, `libpyshim.a` (`ports/apps/pyshim.c`), the static
+  cross build with `zcc`, the install, byte code compiled by the host Python (`unchecked-hash`), and `build/rootfs-python`: `bin/python3` 15.5 MB and
+  `usr/lib/python3.15` 37 MB, 1226 files, 52 MB in all (`du` 52,364 KiB). The recipe ran end to end three times in this session (each patch change rebuilds it from the unpacked source).
+- Six patches in `ports/patches/python/` (the sixth, `urllib` without proxies from the environment, is from the review round) (`_ssl` fd BIO; environment, byte code and user site off; `asyncio` self-pipe on `os.pipe`; `main` on a 2 MiB thread stack (8 MiB at first; see the review round); no `pyvenv.cfg` search in `getpath.py` and `site.py`), `ac_cv_header_sys_ioctl_h=no`
+  (so `set_blocking` uses `fcntl`: libposix's `ioctl` serves terminals only).
+- `user/describe/posix/python3.cmd`; `tools/run-disk.sh` with several colon-separated `EXTRA_ROOT`s and `DISK_SIZE`; `tests/python/` (`smoke.py`, `https_client.py`, `regr.py`, `regr-modules.txt`, `regr-ignore.txt`), `tests/shell/python.script`, `make test-python`;
+  CI wiring (`TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`, `tools/plan-lib.sh`, the workflow's cache paths and 30-minute timeout, `ci-build` builds `python`).
+- ADR-0320 (`proposed`, INV-0320-1 to -5), `docs/design.md` section "CPython (stage 9, 9c)".
+
+### What was run (HVF, M4, this session)
+- `make python`: ok (3 times). `make adr-check` and `make check`: ok after the ADR and the index (before the CI wiring; `make check-ci-jobs` ok after it).
+- Found by running, fixed: a process starts on a 64 KiB stack and CPython's overflow guard keeps 32 KiB, so the first `import` gave `RecursionError` (patch 0004); `os.set_blocking` failed with `ENOTTY` (ioctl `FIONBIO`: configure without `<sys/ioctl.h>`);
+  the shell hinted about `/pyvenv.cfg` (patch 0005); `ssl.create_default_context()` refuses the test PKI's certificates (no Authority Key Identifier, `VERIFY_X509_STRICT`): the test client clears that flag alone; `regrtest` needs `--tempdir` below `/tmp` (the program is not given a `stat` of `/`).
+- In the guest, one run of each part (by hand, in a harness with the same disk and script lines; the full run is the last item): `python3 -V`; `-c`; exit statuses; `smoke.py` (flags `1 True 1`, `sqlite3` 3.54.1, `ssl` OpenSSL 3.5.9, `asyncio`, a thread, `fork`); `grants python3 ...` with and without `+net`;
+  the `asyncio` HTTPS client: `HTTP/1.1 200`, the page; an expired certificate refused ("certificate has expired"), a wrong-name one refused ("Hostname mismatch"), the server's log showing `ended after 0 request bytes` for both; `regr.py`: 17 modules, 3,114 tests, 51 skipped, `Result: SUCCESS`, 31 s.
+- `make test-python` end to end: `PASS: 55 steps`, the server's log shows 0 request bytes for both refused certificates, `zoraya-fsck` clean (HVF; ~10 minutes with the build).
+- Not run: TCG; CI (no candidate tag, as told); `make test-changed`; the independent review (opus-review).
+
+### Limits found (recorded in `docs/design.md`)
+- A program that Python starts has no random connection (ADR-0310, the same as under `dash`): another `python3` fails at start. Nine test cases of the listed modules start interpreters and are left out (`tests/python/regr-ignore.txt`, each with its reason).
+- `test_threading` (CPython's) first failed with `Out of memory`; that was `os.fork`, not thread creation (see the review round: it is in the subset now); `test_thread`, `test_threading_local` and `test_queue` pass. A very large thread stack gives `MemoryError`.
+- No `socketpair`, `AF_UNIX`, server sockets, `posix_spawn`, shared modules, `ctypes`.
+- The shell prints hints for `/dev/urandom` and `/system/tls/roots` after a script that touches them without the grants.
+
+### Decisions (taken without asking, as told)
+Patch 0004 (the thread) over a larger initial stack in the kernel (an ABI constant for every process); no weakening of Python's hash randomization for a child with no random connection (the test cases are left out instead);
+no `-E`-style environment variable honoured; the client test clears `VERIFY_X509_STRICT` and not the test PKI's certificates (shared with other steps).
+
+### For the independent review (opus-review)
+Patch 0001 (`_ssl` BIO) and 0004 (the thread and the exit path: `exit()` from a non-main thread); the shims in `pyshim.c` (`dirfd`, `gethostbyname`, `execv`); the surface block of ADR-0320 (170 names added to `libc.a`);
+the environment policy (patch 0002) as a security boundary; `tools/run-disk.sh`'s colon-separated roots and the key; the `test_threading` out-of-memory finding.
+## 9d: NetSurf, step 1 (branch `work/9d`, 2026-11-13, in progress)
+
+Done: proposed ADR-0317 (a POSIX program's window: a `window` line in the description, a client channel from the panel
+through the shell, `zoraya-surface` as a static library speaking `zoraya-proto-gui`, `libnsfb` surface in C over five
+functions) and ADR-0318 (NetSurf 3.11 with its own bitmap font for 9d, `zoraya-text` later; the source set). Pinned in
+`ports/sources.lock`, fetched and verified by `make fetch-ports`: netsurf-all 3.11, libpng 1.6.50, IJG libjpeg 9f,
+pkg-config 0.29.2. `make check` passed.
+
+## 9d: NetSurf, steps 1b and 2 (branch `work/9d`, 2026-11-13)
+
+Done and run on the Mac (`make check` passes; no QEMU step was run):
+- `make netsurf` (`ports/Makefile`, top `Makefile` forwards): libpng 1.6.50, libjpeg 9f, libcurl installed into `build/ports/deps`,
+  NetSurf's libraries (`buildsystem libnslog libwapcaplet libparserutils libcss libhubbub libdom libnsbmp libnsgif libnsutils
+  libutf8proc libnspsl libnsfb`), then `netsurf` (framebuffer front end, internal font, curl + OpenSSL from 9a) linked by `zcc`;
+  `build/rootfs-apps/bin/netsurf` (12.5 MB, `zoraya-elf-check` ok) and `build/rootfs-apps/share/netsurf/` (resources). Host
+  tools built into `build/ports/host` only when needed: pkg-config 0.29.2, bison 3.8.2 (macOS has 2.3; pinned in
+  `ports/sources.lock`), zlib and libpng (for `convert_image`). The CI image (`.github/ci/Dockerfile`) gains gperf, flex,
+  bison. Decisions recorded in ADR-0318 item 5: no JavaScript (so no `nsgenbind`), no SVG (needs expat), `ports/apps/nsshim.c`
+  for names `libc.a` lacks (atol, strncasecmp, modf, iconv*, dirfd, scandir), libnslog patch for old bison.
+- `crates/zoraya-platform` (the `Platform` trait, re-exported by `zoraya-app`), `crates/zoraya-surface` (`Surface<P>`: open,
+  pixels, damage, commit, event, set_title, close; 15 host tests with a fake compositor), `zoraya-posix/src/ffi/window.rs`
+  (five `zoraya_window_*` calls, names added to `libc.a` by a block in ADR-0317; `libc.a` builds and `check-libc` passes),
+  `EXT_WINDOW = 4` in `ZPBX` (`zoraya-abi`, test updated) and `Posix::window`, taken from the bootstrap; `ports/netsurf/zoraya.c`
+  and `zoraya_window.h` (the `libnsfb` surface `zoraya`, key and button maps) added to the unpacked tree by a patch of
+  `libnsfb.h` and its `surface/Makefile`; `netsurf` links with them. ADR-0317 item 7 records the answers to its two open
+  questions (rlib into libposix, one allocator; the `ZPBX` flag).
+
+Not done, in order (nothing below exists yet):
+1. Step 3 of the list: `window TITLE` key in `zoraya-describe`; the panel's request (a client channel in the shell's room,
+   pills of the line's grants, refused in an untrusted room, with a test); `zosh`'s plan passing the channel as the `EXT_WINDOW`
+   handle of `ZPBX` (`user/src/posix_child.rs` line ~500 is where `EXT_RANDOM` is added); `user/describe/posix/netsurf.cmd`
+   (`+net` from the URL, `window`, `+r /share/netsurf`, download directory through the chooser); host tests for each piece.
+2. Run `netsurf` under QEMU: whether `libnsfb`'s constructor registration of the `zoraya` surface runs under musl's start
+   (if not, call `zoraya_register_surface` explicitly); a first window on a test page; a GUI script and `make test-netsurf`
+   (Makefile `TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`, `tools/plan-lib.sh`, workflow timeout); HTTPS, a form,
+   downloads; screens under `docs/`; the real-site commands for the architect.
+3. `make test-libposix`, `test-posix` and `test-apps` were not run after `libc.a` gained five names and `Posix` a field.
+Known limits: no wheel events (the protocol has none), no NetSurf cursor shape, timed waits are a 2 ms poll loop, SVG is not shown,
+Cyrillic text shows placeholders (ADR-0318).
+
+## 9d: NetSurf, window, gate, review fixes and `make test-netsurf` (branch `work/9d`, 2026-11-13)
+
+Done, and run on the Mac under HVF (one QEMU at a time):
+- `window TITLE` in `zoraya-describe` (once, at most 48 characters, command only; 1 test). `user/describe/posix/netsurf.cmd`
+  (`window NetSurf`, optional `URL` operand of kind `url` so `+net` comes from it as for curl, `-v`).
+- The request: `OpenWindow`/`WindowOpened`/`WindowRefused` in `zoraya-proto-chooser` (ordinals 38, 39); `zoraya_panel::window_record`
+  refuses an untrusted room and malformed requests (2 host tests), a trusted shell's terminal gets the channel at slot 14
+  (`WINDOW_SLOT`; slots 9 to 13 are the shell's network, random, keeper and services); `init` gives its first shell one too
+  (via the panel, slot 10 of the panel). The panel adds the client with `AddRoomClient` (room's record, pills from the line),
+  at most 8 windows a shell. `zosh` asks (`posix_window`), refuses in an untrusted room, and `posix_child` moves the
+  client end as `EXT_WINDOW`. `tools/check-untrusted-gate.sh` requires one `untrusted-gate: window-refusal` marker in the shell
+  and one in the panel (it fails if either is gone; verified by removing one). The gate itself stays closed: the shell's
+  refusal is not reachable in QEMU while an untrusted room cannot be entered; the panel's is tested on the host.
+- Review of the window code (opus-review): W1 (fork child forgets the window, no close or unmap; test of `forget_taken`),
+  W2 (open size fitted to the display's logical size; test), W3 (checked buffer sizes, cap 16384 per side and 64 Mi pixels in
+  `Surface` and `Gui::buffer`; test, found a real 2^60-pixel allocation in `Configure`), W4 (one receive buffer), W5 (modifier
+  releases on focus loss, unshifted layout text for main-block keys; C, checked only by the build and the GUI run), W6 (INV-0317-1 to 3
+  rows and check texts), N1 (`Drop` closes the channel), N2 (a re-entrant or concurrent window call gets -1/0, no deadlock; documented),
+  N3 (ADR wording), N4 (nsshim comment, `modf` sign), N6 (tests: overflowing `Configure`, resize with a frame in flight, damage after
+  resize). Not done: none of the list; N5 was not in my message.
+- Running it: the surface constructors of libnsfb **do** run under musl's start (the window opens), the open question is closed.
+  Three failures found and fixed: libcurl is built without cookies and proxies, so NetSurf's `CURLOPT_COOKIE`/`PROXY` failed every fetch
+  (patch 0003: ignore the unknown-option error; consequence: no cookies, no proxy); libposix maps no file, so NetSurf's file fetcher
+  (its own CSS) failed and looped on its error page (patch 0004: read the file); NetSurf's "Proceed" button on the privacy error page
+  turned TLS verification off (patch 0005: never; INV-0312-1). Resources now live in `/usr/share/netsurf` (the toolchain set reads
+  `/usr`; no extra grant).
+- `make test-netsurf` (Makefile, `tests/gui/netsurf.script`, pages `/ns/page`, `/ns/style.css`, `/ns/green.png`, `/ns/result` in
+  `tools/test-httpd`, which also logs each `/ns/` request): the page's blue block (CSS), green block (PNG) and the form result (yellow), by
+  colour regions; the window's pills (`+r /system/tls`, `+net HOST:PORT`) are in the screens; HTTPS to `test.zoraya`; the expired
+  certificate gives NetSurf's privacy error page, and after a click on Proceed the same page and 0 request bytes at the server
+  (log check as in test-apps). Wired into TEST_STEPS, `tools/ci-tests.txt`, `plan-lib.sh`, `tools/test-map.txt`; `ci-build` builds
+  netsurf; the build job's timeout is 45 minutes. Screens: `docs/netsurf/netsurf-{http,result,https,refused,refused-again}.png`.
+- Ran after `libc.a` gained names: `make test-libposix`, `make test-posix` (hello, smoke, invariants; auto), `make test-apps` (all passed);
+  `make check` passes. Not run: TCG variants, `make test-gui`, `make test-hand-run`, the candidate runs, the full `make test`.
+
+Not done / limits (stated, not hidden):
+- Recording the architect's acceptance in ADR-0317/0318 (status and "Architect's decision") and `docs/adr/index.md`: my attempt was refused by the
+  permission check (the instruction reached me through the coordinator, not the architect), so both ADRs are still `proposed` in the files. The wheel
+  contradiction in ADR-0317 item 4 is fixed. The architect or the user should record the two decisions.
+- Downloads through the chooser: not done (needs a second `ZPBX` slot for a chooser channel); NetSurf has no current directory and no download directory.
+- The window channel exists for the home terminal (init's first shell) and shells the panel launches; a shell that `init` restarts gets none until
+  the panel is restarted too. A page's links to other hosts are refused by the network unless the line has `+net HOST` words (limit of the `url` operand).
+- No wheel, cursor shape, clipboard, JavaScript, SVG; cookies and proxy are off (libcurl is built without them, ADR-0310); the title text is Latin only.
+- INV-0317-1's status says `checked` for the panel's side and the describe key; the shell's refusal is checked by the marker script only.
+- CI: not run (`make test-netsurf` on the x86 runner: the pages' coordinates were taken at scale 1 on HVF; TCG timing may need longer pauses).
+
+For the architect's manual check of real sites (a terminal from the desktop, home, which has the network; the QEMU run with `make run-gui`
+or `make run-net` shows the dock): `netsurf https://example.org/`, `netsurf http://example.com/`, `netsurf https://www.wikipedia.org/` (a page that
+links to other hosts will show their images missing: add `+net upload.wikimedia.org` words to the line), and `netsurf` alone for the welcome page.
+
+**9d closed (2026-11-13).** Merged `65b1522` (head `616fe29`, candidate run 43465681384 green); ADR-0317 and ADR-0318 accepted and
+on `main` with it; tag `stage-9d` = `7adf938` (with 9c). The wheel came with 9e. Downloads, the window channel of a restarted shell
+and the other limits above are in `docs/backlog.md` ("Stage 9 parts: what the reports left").
+
+## 9e: the wheel, 32 compositor clients, late window answers (branch `work/9e`, 2026-11-13)
+
+Done (ADRs proposed: ADR-0322, ADR-0323; notes in ADR-0262 and ADR-0317's open questions):
+- **Wheel (ADR-0322).** `zoraya-protocol` takes `i32`; `zoraya-proto-gui` `Wheel` (ordinal 46, a client event: window, logical place,
+  `dx`/`dy` in 120ths of a notch, `dy` > 0 toward the person, at most 64 notches, modifiers to the focused client only);
+  `zoraya-proto-input` record kind `WHEEL` (`Below<3>`); `zoraya-virtio-input` takes `REL_WHEEL`/`REL_HWHEEL` (times 120, the
+  vertical sign turned) or their `HI_RES` axes when declared (the notches then skipped); it dropped every `EV_REL` before. The
+  compositor sums a frame's turns and sends one `Wheel` to the body under the pointer (rules of `WindowPointerMods`: no focus
+  change; nothing during a move, drag or the switcher, under a sheet, to a guarded sheet or a legacy surface). `zoraya-surface`
+  `Event::Wheel` (a `Move` first), `zoraya_window_poll` kind 8 (`ZW_WHEEL`), NetSurf's libnsfb surface presses mouse 5/4 per
+  whole notch (NetSurf scrolls 100 px; no horizontal button in libnsfb); the terminal scrolls three lines a notch
+  (`zoraya_term::WheelLines`). `zoraya-app` ignores it (backlog). The runner's GUI step `wheel X Y up|down [N]` (QMP
+  `wheel-up`/`wheel-down`). Measured: QEMU 11.1.2's virtio tablet delivers them as `REL_WHEEL` (the NetSurf step passes).
+- **Clients (ADR-0323).** `MAX_CLIENTS` 8 -> 32 (= `MAX_WINDOWS`; a client's record is about 1.5 KiB, the windows' copies
+  stay the memory bound); in `zoraya-proto-gui`: `ROOM_CLIENTS` 3, `UNTRUSTED_CLIENTS` 12, `SESSION_CLIENTS` 20. An untrusted
+  room's `AddRoomClient` past its account is `OVER_QUOTA`, counted as the room's refusal, `ClientGone` for its tag. The
+  panel's `OpenWindows` counts the session's clients apart from untrusted rooms' launches and keeps `RESERVED_CLIENTS` (3)
+  out of `SESSION_CLIENTS`. An untrusted client's toplevels were already held to its account's 3 surfaces (`OVER_QUOTA`
+  before `MAX_TOPLEVELS`); unchanged.
+- **Late answers.** `zosh` subscribes the panel's window channel at its prompt and closes any answer that arrives after
+  `windowclient::ask` gave up (`drain_stale`), so its client end no longer holds the compositor's client and the panel's
+  count until the next request.
+- Tests: host tests in `zoraya-proto-gui`, `-proto-input`, `-virtio-input`, `-compositor` (`tests_wheel.rs`, client
+  accounts in `tests_usage.rs`), `-surface`, `-term`, `-panel`, `zoraya-test-runner`; `tests/gui/terminal.script` (wheel
+  through the scrollback), `tests/gui/windows.script` (nine more terminals, eleven clients, the tenth takes keys),
+  `tests/gui/netsurf.script` (`/ns/tall` scrolled 15 notches down and back).
+
+Ran on the Mac (HVF, one QEMU at a time): `make check`; host tests of the ten touched crates (533 passed); `cd fuzz && cargo
++nightly-2026-11-12 check --bins`; `make test-gui GUI_RUNS="terminal:auto:1 windows:auto:1"` (79 and 61 steps; the first
+windows run failed at `poweroff` typed into a panel terminal, which has no power: the script now returns to init's
+terminal); `make netsurf` and `make test-netsurf` (72 steps, also after steps 3 and 4); `make test-hand-run` (all three
+runs). Not run: TCG and scale-2 GUI runs, the fuzzers themselves, `make test`, any candidate run (none tagged).
+Limits: the wheel reaches no `zoraya-app` program (file manager, editor, settings); NetSurf takes no horizontal turn; the
+session's 20 clients are not carved (a session of 32 clients leaves untrusted rooms none, as for windows, ADR-0262).
+
+Review fixes (opus-review of 9e): E1 `t_gui`'s flood opened 4 clients in one untrusted room, past the new `ROOM_CLIENTS`
+(3), and the fourth create panicked; it now opens 3, checks that a fourth is refused (its end closed), and asks one client
+for 4 toplevels (3 admitted, 1 `OVER_QUOTA`); another client of the room is refused too. E2 `tools/test-map.txt`: the
+compositor's, the GUI, input and display protocols' and the virtio GPU and input crates also run `test-qemu`. W3
+`tests_wheel.rs`: a test for each early return of `send_wheel` (a sheet over the window, a sheet in its guard, a legacy
+surface, a carried entry; each fails with its return deleted, checked by hand once) and for overlapping bodies. W4 a
+refusal for a room not yet listed forgets the refusals of rooms without a client (the list is at most the untrusted
+clients plus one); the test checks the other clients and accounts are unchanged. N5 ADR-0323's open question names the
+deviation from ADR-0262's four accounts. N6 `terminal.script` checks the view back at the prompt after the wheel turns
+down; `windows.script` drags the tenth window against the bar before reading it, since its cascade place differs at
+scale 2 (the scale-2 run failed there before). Ran: `make check`; `cargo test -p zoraya-compositor -p zoraya-proto-gui
+-p zoraya-panel` (235 passed); the fuzz crate's `check --bins`; `make test-qemu-auto-default` (`t_gui: all passed`;
+`make test-qemu-one` has no GPU and skips `t_gui`); `make test-gui` for `terminal:auto:1` (82 steps), `windows:auto:1`
+and `windows:auto:2` (62 steps each).
+
+**9e closed (2026-11-13).** Merged `dd575e3` (head `ea11ae6`, candidate run 43498404799 green); ADR-0322 and ADR-0323 are `proposed`.
+The wheel in `zoraya-app` programs and the carving of the session's clients are in `docs/backlog.md`.
+
+## 9c: the merge of `main` with 9d (branch `work/9c`, 2026-11-13)
+
+`origin/main` (65b1522, 9d merged) merged into `work/9c`; every conflict keeps both sides (the netsurf and python targets,
+`TEST_STEPS`, `ci-build` builds `netsurf` and `python`, `tools/ci-tests.txt`, `plan-lib.sh`, one map line per prefix with the
+union of both steps). The host Python's prefix is now `build/ports/hostpython`: `build/ports/host` holds NetSurf's host tools,
+which CI's artifact must keep for `test-netsurf` (it left `build/ports/host` out for Python before). The workflow's build job
+has 60 minutes (a cold cache builds NetSurf and CPython; not measured), ADR-0317 is in the ports cache's key, and the long-job
+timeout names `test-apps` and `test-netsurf` as well. Invariants Total 628. No ADR number collides (0320 here; 0321
+`work/tls-options`, 0322 and 0323 `work/9e`).
+
+Run on the Mac (HVF): `make check` ok; `make netsurf` ok (`bin/netsurf` 12.5 MB); `make test-python` (rebuilt with the new
+prefix) `PASS: 107 steps`, 0 request bytes to the refused servers; `make apps`; a 192M volume of `rootfs-apps` (curl, wget,
+NetSurf) and `rootfs-python` (77.9 MB of files, 20,195 of 49,152 blocks) made by `tools/run-disk.sh`, `zoraya-fsck` clean;
+`make test-hand-run` ok (three runs PASS). Not run: `make test-netsurf`, CI.
+
 ## CI experiment: GitHub's free arm64 runners (2026-11-13, branch `work/ci-arm`, not merged)
 
 Result accepted by the architect: the `ubuntu-24.04-arm` runner has no KVM (`/dev/kvm` missing; `-accel kvm` exits 1 with
@@ -438,3 +748,136 @@ caches, run 43447464141). Decision: move nothing; `work/ci-arm` is not merged an
 probe (its workflow `ci-arm.yml` runs on pushes to that branch and by hand). The details are in
 `docs/research/ci-arm.md` on that branch.
 
+
+### 9c review round (opus-review E1 to N14, branch `work/9c`)
+- E1 the host python is configured `--without-ensurepip` (the CI container has no zlib headers); a clean host build with no zlib module and `compileall` of the stage ran here. E2 the interpreter thread ends the process with `exit(status)`; `smoke.py` checks a fork child's `sys.exit(5)` (5) and an uncaught exception (1): passed. N12 no fallback to 64 KiB (message, status 1).
+- W3 the stack is 2 MiB, measured: fork capacity on 512 MiB 11 (8 MiB), 15 (2 MiB), 16 (1 MiB); 1 and 2 MiB passed the deep-nesting cases (`json`, `ast`, `compile`, `pickle`, `copy`). W4 the `Out of memory` was `os.fork`; `test_threading` runs with no OOM at 2 MiB (not run: `--mem 2G`; not repeated at 8 MiB); 4000 threads leave the mapping table flat; recursion past about 33,000 frames ends in `MemoryError` (one mapping per frame chunk, the table is 256).
+- W5 `-c` and `-m` no longer import from the current directory (patch 0002); a script imports from its own directory, said in `python3.cmd`; `cwd none` considered, not taken. W6 the default context finds the roots: text fixed, test added. W7 `http.client` and `urllib` tests. W8 negative `grants` check. W9 INV-0312-1 note, Python not mediated, patch 0006. W10 markers, `build/python-testlib`, the artifact and cache leave out the Python trees (cold `ci-build` time not measured here). W11 `test-run-disk.sh` extended. N13 `pause`, `sched_yield`. N14 text slips.
+
+
+### 9c re-review round (opus-review E1, W2 to W6, N7 to N10, branch `work/9c`)
+- E1 the python stamp's recipe makes the source and host trees again when a marker outlived them; `make check-python-cache` (in
+  `make check` and CI's checks job) dry-runs a cache hit and was seen failing on a mutant (host tree check removed). Simulated here
+  for real: the trees deleted, the markers kept, `libzshim.a` touched: `make python` printed "unpacking it again" and "building the
+  host python again" and ended with the image part (52,332 KiB, 1226 files). CI: the libc ADRs are in the ports cache key and get the
+  old time, `build/ports/workloads` is cached, the build job's timeout is 45 min (N7; cold time on CI still not measured).
+- W2 patch 0004: the main thread blocks every signal; Ctrl-C to `time.sleep(30)` prints `KeyboardInterrupt` (new script step). N10
+  `abort()` after the join. W3 the negative grants check looks between the report's first line and the prompt; the mutant
+  "roots without +net" (`tools/mutants/python-9c.toml`) failed it ("/system/tls appeared where it must not"). W4 exactly 3
+  zero-byte connections per refused server, none with more. W5 patch 0002: only a script file adds a directory; `python3 <
+  fromstdin.py` does not import the planted module. N8 `-D_PYTHREAD_NAME_MAXLEN=15`; `test_set_name` out of the ignore list.
+- `make test-python` (HVF): `PASS: 107 steps`, regrtest 3,329 tests, 66 skipped, `Result: SUCCESS`, 15 min 59 s; `test_threading`
+  took 15 min 29 s and ended "env changed" (uncaught `OSError` in `do_fork_and_wait` threads, the `fork` out-of-memory of ADR-0320's
+  open question); regrtest counts it as passed. Its time is a risk for the 30-min CI test job under TCG: not measured on CI.
+- Candidate run 43488132441 (`candidate/work-9c-e`): every job passed but `make test-python`, cancelled at the 30-minute job
+  limit under TCG (CI has no HVF): the script's steps before regrtest took 4.5 minutes, regrtest's first 11 modules 1.6 minutes,
+  and `test_queue` had not ended after 22 minutes. The recipe also lacked `exit $rc` (a failed run left make with status 0); fixed.
+  Split (ADR-0320 item 9): `make test-python` (`python.script`, without regrtest), `make test-python-regr` (`python-regr.script`,
+  regr.py over `regr-modules.txt`), each a CI job of 45 minutes, the runner's limits 900 s and 1500 s; `make test-python-long`
+  (by hand, not in `make test` nor nightly) over `tests/python/regr-long.txt`. Measured with `--slowest`: the 17 modules under the
+  Mac's TCG 5 min 39 s, `test_queue` 4 min 5 s of it (9 s under HVF), so **the CI subset is the 16 other modules** (core types,
+  `re`, `json`, `zlib`, `hashlib`, `sqlite3`, `_thread`, `threading.local`, `asyncio` tasks, futures, locks) and **the long list is
+  `test_queue` and `test_threading`** (15.5 min under HVF). Runs on the Mac: `make test-python` HVF `PASS: 104 steps` (106 s with
+  the build), TCG `PASS: 104 steps` (112 s), INV-0320-3 server check ok, fsck clean; `make test-python-regr` HVF `PASS: 9 steps`,
+  16 modules, 2,949 tests, 44 skipped, `Result: SUCCESS`, 21.3 s. `make test-python-long` not run in this round.
+
+**9c closed (2026-11-13).** `work/9c` merged `main` (with 9d, `work/tls-options` and 9e) in `7adf938`, and `main` was moved to it;
+candidate run 43505870979 (`candidate/work-9c-g`) green; `main`'s full run 43511821485 green on its second attempt (the first lost a
+download, the status block). Tags `stage-9c` = `stage-9d` = `stage-9` = `7adf938`. ADR-0320 is `proposed`, with item 10 (INV-0312-1's
+reading) for the architect. Left: `make test-python-long` (by hand), the limits of the status block, `docs/backlog.md`.
+
+## `work/tls-options`: curl and wget refuse the options that weaken TLS (closing note)
+
+This branch wrote no section of its own; what it built is in ADR-0321 and `docs/design.md` ("TLS for C programs, curl and wget"):
+patches `ports/patches/curl/0003-refuse-tls-weakening-options.patch` (curl's `getparameter`, by option code) and
+`ports/patches/wget/0004-refuse-tls-weakening-options.patch` (wget's `setval_internal`, by setting), `tests/shell/apps-refusals.script`
+(every refused option with `+net` to the test servers, no request byte at the expired and wrong-name servers) and the mutants of
+`tools/mutants/tls-options.toml`. Merged `f90d29f` (head `5b52463`, candidate run 43497477629 green). ADR-0321 is `proposed`. Open
+(ADR-0321's open questions, `docs/backlog.md`): no check diffs the refused lists against a new curl or wget release; wget's
+`https` to `http` redirect rule; `--cert-status` by default.
+
+## 9f-text: NetSurf's text through `zoraya-text` (branch `work/9f-text`, 2026-11-14)
+
+The architect's decision of 2026-11-14 is recorded as ADR-0326 (accepted, "Decided by the architect; recorded by an agent at the
+architect's request"); it supersedes ADR-0318's fonts item only (ADR-0318's note and index row say so). Model: Opus 5.5, one
+session, 01:15 to about 02:30.
+
+Done:
+- `crates/zoraya-fontset` (`no_std`, no `unsafe`): four faces of the system's fonts with fallback lists, width, position and split as
+  NetSurf documents them, glyphs from `zoraya-text`'s cache; the fonts are asked for only as `/system/fonts/NAME` (14 host tests:
+  the paths read, missing and broken fonts, every Russian and Ukrainian letter a non-blank glyph that is not the box at 16 and 32
+  pixels (12.8 pt at scale 1 and 2), widths, position, split, invalid UTF-8, zero-width characters, random bytes).
+- `libc.a`: `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` (`crates/zoraya-posix/src/ffi/text.rs`) and
+  `zoraya_window_scale` (`ffi/window.rs`), ADR-0326's `posix-surface-added` block, added to `ADDED_ADRS`.
+- NetSurf: `ports/netsurf/font_zoraya.c` (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`), patch `0008` (font.h, the text
+  plotter, the toolkit's text fields; their pixel-to-point conversion uses the page's dpi, else the URL field's text was twice its
+  field at scale 2); dpi 90 times the window's scale.
+- The grant: `/system/fonts` read only with a `window` line (`zoraya_shell::grants::with_window`, `zosh` run and `grants`); the
+  window shows a third pill. `tools/run-disk.sh` copies `fonts/` into the disk's `/system/fonts` (in the key; `tools/test-run-disk.sh`
+  extended); `make test-netsurf`'s root too.
+- Tests: the runner's `ink X Y W H RGB N` step; `/ns/cyrillic` in `tools/test-httpd`; `tests/gui/netsurf.script` checks it at scale 1
+  and the new pill gap; `tests/gui/netsurf-text.script` at scale 2 in a second boot of `make test-netsurf`. Screens:
+  `docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`.
+- Found on the way: `zoraya-ar` dropped every symbol of an object whose `.bss` is larger than the file; with seven more names the
+  call log's `zoraya-calls.o` (a 648-byte `.bss` in a 704-byte object) lost `__zoraya_calls*` from `libc.a`'s index and
+  `make check-ports` failed. Fixed (`SHT_NOBITS` takes no file bytes) with a test.
+- Proposed ADR-0327: OFL-1.1 for unmodified font files as data in `CLAUDE.md`'s licence rule (Option A recommended). Until the
+  architect rules, no font was added: NetSurf reads the files ADR-0162 already ships, at run time.
+
+Run on the Mac (HVF): `make check`; `cargo test -p zoraya-fontset -p zoraya-ar`, the new `zoraya-shell` and runner tests;
+`tools/test-run-disk.sh`; `make netsurf`; `make -f ports/Makefile check-ports` up to its rootfs part (libc.a against the lists
+passed; the `rootfs-posix` check needs `make ports`, not built here); `make test-netsurf` (`netsurf-auto` PASS 86 steps,
+`netsurf-text-2` PASS 19 steps, the INV-0228-1 log check, fsck clean). One earlier exploratory run lost QMP (broken pipe at a
+screendump) once; the rerun and the real run did not.
+Also run after `libc.a` changed: `make test-libposix` (PASS 53 steps), `make test-posix` (every script PASS), `make test-apps`
+(`apps-auto` and `apps-refusals-auto` PASS 302 steps each, `apps-launches` 12); the host tests of `zoraya-ar`, `zoraya-fontset`,
+`zoraya-posix`, `zoraya-shell`, `zoraya-test-httpd` and `zoraya-test-runner` (18 test binaries, all ok). Not run: `make test-changed`
+(the change touches `Makefile`, `Cargo.toml` and the runner, so it maps to every step, which an agent session does not run), TCG,
+`test-python`, `test-gui`; the candidate CI runs them.
+
+Open for the architect: ADR-0327 (the licence rule); CI's `ports-build` cache key (`.github/workflows/test.yml`) does not name
+`docs/adr/0326-*.md` (left to 9f-ci: the task kept CI caching out of this part; `libc.a` is rebuilt on every build anyway, since
+`zoraya-posix` is `FORCE`); a person's disk from before 9f-text is replaced once (kept as `.old`), since the fonts are in its key.
+Limits: no italic, toolbar not scaled, text cost per page not measured, native GUI programs still embed their fonts.
+## 9f-wheel: the wheel in `zoraya-app` (branch `work/9f-wheel`, 2026-11-14)
+
+Decided by the architect 2026-11-14: the file manager, the editor and settings scroll with ADR-0322's `Wheel`, a notch
+consistent with the terminal's three lines, smooth with high-resolution axes, clamped, a list keeping its selection and
+cursor rules; the other native applications too where they share the toolkit. The new decision is ADR-0329 (`proposed`):
+a third widget event and its units. What exists is in `docs/design.md`, "The wheel in the applications (as built)".
+
+Done:
+- **Toolkit.** `zoraya_ui::Event::Wheel { x, y, dx, dy }`; `Window` routes it to the widget under the pointer, then up to
+  the nearest ancestor that can go that way (a widget at its end answers `None`); no focus moves. `WheelSteps` (3 rows a
+  notch, 40/120 a row, the rest kept, forgotten at an end, at most 64 notches); `scrolled_by`, `widgets::wheel_rows`.
+  `Widget::scrolled`/`set_scrolled`/`reveal`; `Window::scrolled(id)`, `Window::replace_keeping_scroll`.
+- **`ScrollView`** rebuilt: it never moved what it showed (its one child was laid out at the frame's top, the height cut).
+  It is now a column of children shown from `first`, children before it laid out empty, `first` clamped so the last child
+  is at the bottom, focus (Tab or a key) on a child out of view scrolls it in. `ScrollView::new` takes the children.
+- **`zoraya-app`**: ordinal 46 to `Event::Wheel` (saturated to `WHEEL_MAX`); after a turn or a key that changed something
+  the window is laid out again at once, so a press before the paint hits what is shown; `App::replace_keeping_scroll`.
+- **Applications.** `ListView` (the chooser's sheet, which now reads where the wheel left its list before it rebuilds, and
+  follows the selection only when it moved), the file manager's list (over the list only, not with the menu or card open)
+  and the editor: the first row or line moves, clamped; the selection and the cursor stay; a key, a press, or a cursor the
+  program moves (find, new folder) brings the view back. Settings: the page is always a `ScrollView` and is rebuilt with
+  `replace_keeping_scroll`; the editor too.
+- **Tests.** Host: `zoraya-ui` `tests_wheel.rs` (10 tests) and the two rewritten `ScrollView` tests, `zoraya-app` (2),
+  `zoraya-files` (4), `zoraya-editor` (4), `zoraya-settings-window` (1), `zoraya-chooser` (1). GUI: `tests/gui/wheel.script`
+  (new; `GUI_RUNS_ALL` and `tools/ci-tests.txt` gain `wheel:auto:1`, `wheel:tcg:1`, `wheel:auto:2`): the file manager's
+  selected row three rows up after a notch and back, a key after a far turn bringing the cursor back; settings (two rooms)
+  with its controls 135 pixels higher after a notch and back, then Apply reached at the end (`settings: No change.`); the
+  editor's empty lines in the rows that showed `x` lines after a notch away from the person, and at the top.
+- `tools/mutants/editor.toml`: three mutants re-anchored (`occurrence = 1`, the follow block's new indentation);
+  `tools/mutants/wheel-9f.toml`: seven mutations made by hand (parts of a notch dropped, the stop at both ends, no
+  routing up, no reveal, no layout after a turn, the file manager and the editor following the cursor anyway).
+
+Ran on the Mac (HVF, this session): `make check`; `cargo test` in `zoraya-ui`, `-app`, `-files`, `-editor`,
+`-settings-window`, `-chooser` (all pass); `make test-gui GUI_RUNS="wheel:auto:1"` and `"wheel:auto:2"` (74 steps
+each, PASS); `make mutants MUTANTS_ARGS=tools/mutants/wheel-9f.toml` (7 caught, 0 survived). `make test-changed`:
+the checks and the host tests of the 13 affected test binaries passed; since the `Makefile` changed it chose every step,
+and its build stopped at the ports (`build/ports/src/dash-0.5.13.5.tar.gz is missing`: this fresh worktree never ran
+`make fetch-ports`), so no QEMU step of it ran. Not run locally: `wheel:tcg:1`, the other GUI scripts, `make test`; the
+candidate run on CI covers them.
+
+Limits (also `docs/backlog.md`): settings scrolls by whole children, not pixels (`Logical` is unsigned; ADR-0329 Option A
+not taken); no scroll bar; `dx` scrolls nothing; no Page Up or Page Down in the file manager and the editor.

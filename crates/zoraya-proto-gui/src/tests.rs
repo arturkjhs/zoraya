@@ -162,6 +162,15 @@ fn every_message_round_trips_and_decodes_totally() {
         modifiers: Flags(modifiers::ALT),
     });
     total(Commands { on: true });
+    total(Wheel {
+        dropped: 1,
+        window: 2,
+        x: 3,
+        y: 4,
+        dx: -WHEEL_STEP,
+        dy: WHEEL_MAX,
+        modifiers: Flags(modifiers::CTRL),
+    });
     total(AddClient {});
     total(ManagerDone { status: ok });
     total(AttachDisplay {});
@@ -319,6 +328,7 @@ fn the_client_managers_messages() {
         kind: dock::ROOM,
         index: 2,
     });
+    total(ClientGone { tag: 7 });
     total(AttachClientManager {});
 }
 
@@ -398,4 +408,82 @@ fn changed_events_have_new_ordinals() {
     )
     .unwrap();
     assert!(decode::<WindowPointer>(&out[..n], 0).is_err());
+}
+
+#[test]
+fn plain_text_refuses_controls_and_every_bidi_mark() {
+    assert!(plain_text("netsurf ./page.html"));
+    assert!(plain_text("caf\u{e9} \u{4e2d}"));
+    for c in [
+        '\u{0}', '\n', '\u{7f}', '\u{85}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202e}',
+        '\u{2066}', '\u{2069}',
+    ] {
+        let mut b = [0u8; 4];
+        assert!(!plain_text(c.encode_utf8(&mut b)), "{c:?}");
+    }
+    // Neighbours of the ranges are plain.
+    for c in ['\u{200d}', '\u{2029}', '\u{202f}', '\u{2065}', '\u{206a}'] {
+        let mut b = [0u8; 4];
+        assert!(plain_text(c.encode_utf8(&mut b)), "{c:?}");
+    }
+}
+
+#[test]
+fn app_names_are_short_lowercase_words() {
+    assert!(is_app_name("netsurf"));
+    assert!(is_app_name("a-b_9"));
+    let long = [b'a'; MAX_APP_NAME + 1];
+    let at_most = core::str::from_utf8(&long[..MAX_APP_NAME]).unwrap();
+    assert!(is_app_name(at_most));
+    assert!(!is_app_name(core::str::from_utf8(&long).unwrap()));
+    for bad in ["", "Net", "a b", "a/b", "\u{e9}"] {
+        assert!(!is_app_name(bad), "{bad:?}");
+    }
+}
+
+/// Proposed ADR-0322: the wheel event is a client event of a new ordinal,
+/// of fixed size with no handle, whose deltas keep their sign on the wire,
+/// and every byte string decodes to it or to an error (the extremes of
+/// `i32` included: a receiver saturates, the decoder takes any).
+#[test]
+fn the_wheel_event_is_a_fixed_client_event_with_signed_deltas() {
+    assert_eq!(Wheel::ORDINAL, 46);
+    assert_eq!(<Wheel as Message>::HANDLES, 0);
+    assert!(CLIENT_EVENTS.contains(&46));
+    assert!(!CLIENT_REQUESTS.contains(&46) && !MANAGER_EVENTS.contains(&46));
+    assert!(!MANAGER_REQUESTS.contains(&46) && !CLIENT_MANAGER_REQUESTS.contains(&46));
+    let mut out = [0u8; 64];
+    for (dx, dy) in [(i32::MIN, i32::MAX), (0, -1), (-WHEEL_MAX, WHEEL_MAX)] {
+        let m = Wheel {
+            dropped: 0,
+            window: 1,
+            x: 0,
+            y: 0,
+            dx,
+            dy,
+            modifiers: Flags(0),
+        };
+        let n = encode(&m, 0, &mut out).unwrap();
+        assert!(n <= 16 + 32);
+        assert_eq!(decode::<Wheel>(&out[..n], 0).unwrap().1, m);
+        exercise(&out[..n], |bytes| {
+            if let Ok((_, w)) = decode::<Wheel>(bytes, 0) {
+                assert_eq!(w.modifiers.0 & !modifiers::ALL, 0);
+            }
+        });
+    }
+    // A modifier bit past the system key's is refused.
+    let m = Wheel {
+        dropped: 0,
+        window: 1,
+        x: 0,
+        y: 0,
+        dx: 0,
+        dy: 120,
+        modifiers: Flags(0),
+    };
+    let n = encode(&m, 0, &mut out).unwrap();
+    out[n - 4] = 0x20;
+    assert!(decode::<Wheel>(&out[..n], 0).is_err());
+    assert_eq!(WHEEL_MAX % WHEEL_STEP, 0);
 }

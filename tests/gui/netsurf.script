@@ -1,0 +1,123 @@
+# TASK-27 9d (ADR-0317, ADR-0318): NetSurf in a window of the desktop, on the
+# runner's HTTP and TLS servers (tools/test-httpd, pages under /ns/). The page is
+# a blue block from a style sheet (200 x 60), a green image (100 x 60, a PNG)
+# and a form; the result page is yellow. Coordinates are logical pixels: the
+# window's frame is at (105, 103), its page from (105, 168).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+# The window shows the grants of its line as pills (ADR-0317): the roots to read
+# and the one host and port it may reach.
+type netsurf http://10.0.2.2:@PORT@/ns/page\r
+pause 15000
+region 110 175 150 40 0000ff
+region 110 235 80 40 00ff00
+region 400 300 100 40 ffffff
+shot netsurf-http
+# The pills on the window's title bar (INV-0317-1): three pills, the network's
+# first (left), +r /system/fonts, which comes with the window (ADR-0326), and
+# +r /system/tls (right, ending at the frame's edge), with the title bar's own
+# colour between them; the right one's last padding column is the pill fill.
+region 893 117 1 6 fcfcfc
+region 788 116 4 8 f1f1f3
+region 663 116 4 8 f1f1f3
+# The fonts pill itself (T5 of the 9f-text review): its first padding columns
+# are the pill fill, and so are the net pill's (its text, monospace with a
+# five-digit port, is 137 pixels wide). Without the fonts pill the net pill
+# moves right by 124 pixels onto 649..785, so 528 is the title bar and 663 is
+# inside the net pill: both lines fail.
+region 671 116 3 8 fcfcfc
+region 528 116 3 8 fcfcfc
+# The form: type into the field, submit with Return; the result page is yellow.
+click 160 302
+type zoraya\r
+pause 6000
+shot netsurf-result
+region 400 300 100 40 ffff00
+region 110 400 150 40 ffff00
+# Closed by its cross: the program ends and the terminal has the keys again.
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed\r
+screen closed
+# The wheel scrolls the page under the pointer, 100 pixels a notch (proposed
+# ADR-0322): /ns/tall is blue for 1200 pixels, then magenta. Fifteen notches
+# toward the person put magenta at the top of the page; fifteen away, blue.
+type netsurf http://10.0.2.2:@PORT@/ns/tall\r
+pause 15000
+region 110 175 150 40 0000ff
+wheel 400 400 down 15
+pause 3000
+shot netsurf-wheel
+region 110 175 150 40 ff00ff
+wheel 400 400 up 15
+pause 3000
+region 110 175 150 40 0000ff
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-wheel\r
+screen closed-wheel
+# Russian and Ukrainian in the system's fonts (ADR-0326, INV-0326-2): the
+# page /ns/cyrillic at scale 1 (tests/gui/netsurf-text.script has scale 2).
+# Line 1, ten і: ink where they are, and nothing where ten ж reach on line 2
+# (boxes, or the old 8-pixel cells, would make the two lines as wide).
+type netsurf http://10.0.2.2:@PORT@/ns/cyrillic\r
+pause 15000
+shot netsurf-cyrillic
+ink 106 172 70 23 ffffff 300
+region 190 172 140 23 ffffff
+ink 190 214 140 17 ffffff 500
+# Line 3: Ґґ Єє Іі Її.
+ink 106 239 125 29 ffffff 400
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-cyrillic\r
+screen closed-cyrillic
+# No option replaces the roots or turns a check off (INV-0312-1): the line is
+# refused by the shell, with no window (ADR-0317 item 6).
+type netsurf --ca_bundle=/tmp/x.pem https://test.zoraya:@TLSVALID@/ns/page\r
+screen zosh: netsurf: the arguments are not ones its description gives
+type netsurf --ca_path=/tmp\r
+screen zosh: netsurf: the arguments are not ones its description gives
+# HTTPS against the test PKI's root (the same pages, a trusted certificate).
+type netsurf https://test.zoraya:@TLSVALID@/ns/page\r
+pause 20000
+region 110 175 150 40 0000ff
+region 110 235 80 40 00ff00
+shot netsurf-https
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed2\r
+screen closed2
+# An expired certificate is refused by the roots, as for curl: no page.
+type netsurf https://expired.zoraya:@TLSEXPIRED@/ns/page\r
+pause 15000
+shot netsurf-refused
+region 110 175 40 20 9e9e9e
+# "Proceed" on the privacy error page does not turn verification off: the same
+# refusal comes back (the program has no such option, INV-0312-1). The test
+# server's log then shows exactly one refused handshake before the mark and at
+# least one after it (the Makefile checks both): a click that missed the button
+# leaves none after it, and a retry of NetSurf's own shows as two before it.
+mark @PORT@ /ns/mark-before-proceed
+click 764 471
+pause 5000
+shot netsurf-refused-again
+region 110 175 40 20 9e9e9e
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed3\r
+screen closed3
+type poweroff\r
+exit

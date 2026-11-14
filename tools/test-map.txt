@@ -23,7 +23,7 @@ tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
 tools/check-tls-roots.sh      check
 tools/test-run-disk.sh        check
-tools/run-disk.sh             check test-hand-run test-apps
+tools/run-disk.sh             check test-hand-run test-apps test-python test-python-regr
 rootfs/system/tls/        check test-files test-hand-run
 tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
@@ -48,22 +48,35 @@ crates/zoraya-stream/         test-qemu
 crates/zoraya-ramdisk/        test-qemu test-boot
 crates/zoraya-elf/            test-qemu test-boot
 
-# The desktop.
-crates/zoraya-compositor/     test-gui
+# The desktop. t_gui (test-qemu) runs compd, gpud and inputd (and plays an input
+# driver): their crates map to test-qemu too.
+crates/zoraya-compositor/     test-gui test-qemu
 crates/zoraya-term/           test-gui test-tour-gui
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
+crates/zoraya-surface/        check test-netsurf
+crates/zoraya-fontset/        check test-netsurf
+crates/zoraya-platform/       check test-netsurf test-gui
+ports/netsurf/                check test-netsurf
+ports/patches/netsurf/        check test-netsurf
+ports/apps/nsshim.c           check test-netsurf test-apps
+user/describe/posix/netsurf.cmd  test-netsurf test-files
+tests/gui/netsurf.script      test-netsurf
+tests/gui/netsurf-text.script test-netsurf
+user/src/windowclient.rs      test-netsurf
+user/src/bin/panel.rs         test-gui test-netsurf
 crates/zoraya-text/           test-gui test-qemu
 crates/zoraya-tokens/         test-gui
 crates/zoraya-fonts/          test-gui
 crates/zoraya-paint/          test-gui
 crates/zoraya-keymap/         test-gui
-crates/zoraya-panel/          test-gui
-crates/zoraya-proto-gui/      test-gui
-crates/zoraya-proto-display/  test-gui
-crates/zoraya-virtio-gpu/    test-gui
-crates/zoraya-proto-input/    test-gui
-crates/zoraya-proto-chooser/  test-gui
+crates/zoraya-panel/          test-gui test-netsurf
+crates/zoraya-proto-gui/      test-gui test-qemu
+crates/zoraya-proto-display/  test-gui test-qemu
+crates/zoraya-virtio-gpu/    test-gui test-qemu
+crates/zoraya-virtio-input/  test-gui test-qemu
+crates/zoraya-proto-input/    test-gui test-qemu
+crates/zoraya-proto-chooser/  test-gui test-netsurf
 crates/zoraya-chooser/        test-gui
 crates/zoraya-fsclient/       test-gui
 crates/zoraya-files/          test-gui
@@ -91,7 +104,7 @@ user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
 user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
-user/src/gui.rs               test-gui test-qemu test-net
+user/src/gui.rs               test-gui test-qemu test-net test-netsurf
 user/src/mmio.rs              test-gui test-qemu test-net test-files
 user/src/bin/t_devices.rs     test-qemu
 user/src/app.rs               test-gui
@@ -121,6 +134,7 @@ tests/posix-net/              test-net
 tests/apps/                  test-apps
 tests/shell/apps.script       test-apps
 tests/shell/apps-launches.script test-apps
+tests/shell/apps-refusals.script test-apps
 ports/apps/                   test-apps test-hand-run
 ports/patches/openssl/        test-apps test-hand-run
 ports/patches/wget/           test-apps test-hand-run
@@ -130,24 +144,30 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-regr
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
 user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix
-user/src/posix_child.rs       test-posix test-net test-apps
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-hand-run
+user/src/posix_child.rs       test-posix test-net test-apps test-netsurf test-python test-python-regr
+ports/patches/python/         test-python test-python-regr
+ports/apps/pyshim.c          test-python test-python-regr
+user/describe/posix/python3.cmd test-python test-files
+tests/python/                test-python test-python-regr
+tests/shell/python.script    test-python
+tests/shell/python-regr.script test-python-regr
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
 
 # The shell and its crates.
-user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps
-crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps
+user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps test-netsurf
+crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps test-python test-python-regr
 crates/zoraya-command/        test-boot test-files test-tour-gui
-crates/zoraya-describe/       test-files test-tour-gui test-apps
+crates/zoraya-describe/       test-files test-tour-gui test-apps test-netsurf test-python test-python-regr
 crates/zoraya-settings/       test-files test-tour-gui test-gui
 user/describe/                test-files test-tour-gui
 docs/tour.md                  test-tour-gui
@@ -157,6 +177,7 @@ tests/shell/                  test-boot test-files
 crates/zoraya-fs/             test-files test-crash test-qemu test-posix test-hand-run
 crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix
 tools/zoraya-mkfs/            test-files test-posix test-hand-run
+tools/zoraya-ar/              check test-libposix test-posix test-apps test-netsurf test-python
 crates/zoraya-proto-file/     test-files test-crash test-gui test-posix
 user/src/bin/fsd.rs           test-files test-crash test-hand-run
 user/src/bin/blkd.rs          test-files test-crash
@@ -175,7 +196,7 @@ user/describe/commands/ping.cmd test-net test-files
 user/src/netconn.rs          test-net
 user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
-tools/test-httpd/            test-net
+tools/test-httpd/            test-net test-apps test-netsurf test-python test-python-regr
 tests/shell/net-dns.script   test-net
 # The first lookup of a boot (proposed ADR-0316): the test DNS server with
 # its capture check, and the script.

@@ -43,6 +43,10 @@
 //! rclick X Y        a right click at (X, Y)
 //! mclick MOD X Y    a left click with MOD (shift, ctrl, alt, meta) held
 //! mdrag MOD X Y X2 Y2 [HOLD]  a drag with MOD held at its release
+//! wheel X Y up|down [N]  move the pointer to (X, Y) and turn the wheel N
+//!                   notches (1 if not given, at most 64): QMP's `wheel-up`
+//!                   and `wheel-down` buttons, which QEMU's virtio tablet
+//!                   reports as `REL_WHEEL` (proposed ADR-0322)
 //!
 //! Coordinates are logical pixels: the runner multiplies them by the
 //! display's scale (ADR-0164), which it takes from the screendump's width
@@ -181,11 +185,18 @@ pub enum Step {
     Key(String),
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
+    /// `ink X Y W H RGB N`: at least N pixels of the rectangle (N times the
+    /// scale's square on a scaled screen) are not RGB: something is drawn
+    /// there, text for instance (ADR-0326).
+    Ink(i64, i64, i64, i64, u32, usize),
     /// The count, and the bound on the median over one idle screendump read.
     Latency(usize, Option<Bound>, Option<Bound>),
     Click(i64, i64),
     DoubleClick(i64, i64),
     RightClick(i64, i64),
+    /// The pointer to a place, then the wheel turned that many notches:
+    /// toward the person (`down`, true) or away.
+    Wheel(i64, i64, bool, u32),
     /// A click with a modifier's QEMU key held.
     ModClick(String, i64, i64),
     /// A drag with a modifier held from before the release.
@@ -202,6 +213,10 @@ pub enum Step {
     Window,
     Top(String),
     Shot(String),
+    /// `mark PORT PATH`: a GET of PATH from the host's 127.0.0.1:PORT (the
+    /// test server), so that its log has a line between what the guest did
+    /// before and after (TASK-27 9d re-review, N2).
+    Mark(u16, String),
     Exit,
 }
 
@@ -251,6 +266,19 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
                 Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
             }
+            "ink" => {
+                let v: Vec<&str> = rest.split_whitespace().collect();
+                if v.len() != 6 {
+                    return Err(bad("ink X Y W H RGB N"));
+                }
+                let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+                let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
+                let n = v[5].parse::<usize>().map_err(|_| bad("not a count"))?;
+                if n == 0 {
+                    return Err(bad("an ink count of 0 checks nothing"));
+                }
+                Step::Ink(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour, n)
+            }
             "layout" => Step::Layout(
                 zoraya_keymap::by_name(rest).ok_or_else(|| bad("layout us, ua, ru or cz"))?,
             ),
@@ -277,6 +305,29 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 } else {
                     Step::RightClick(x, y)
                 }
+            }
+            "wheel" => {
+                let v: Vec<&str> = rest.split_whitespace().collect();
+                let place = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+                let (x, y, way, n) = match v[..] {
+                    [x, y, way] => (place(x)?, place(y)?, way, 1),
+                    [x, y, way, n] => (
+                        place(x)?,
+                        place(y)?,
+                        way,
+                        n.parse::<u32>().map_err(|_| bad("not a count"))?,
+                    ),
+                    _ => return Err(bad("wheel X Y up|down [N]")),
+                };
+                let down = match way {
+                    "down" => true,
+                    "up" => false,
+                    _ => return Err(bad("wheel X Y up|down [N]")),
+                };
+                if !(1..=64).contains(&n) {
+                    return Err(bad("a wheel turns 1 to 64 notches"));
+                }
+                Step::Wheel(x, y, down, n)
             }
             "mclick" | "mdrag" => {
                 let (m, rest) = rest.split_once(' ').ok_or_else(|| bad("MOD and a place"))?;
@@ -370,11 +421,42 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 }
                 Step::Shot(rest.to_string())
             }
+            "mark" => {
+                let (port, path) = rest.split_once(' ').ok_or_else(|| bad("mark PORT PATH"))?;
+                let port: u16 = port.parse().map_err(|_| bad("mark PORT PATH"))?;
+                let ok = path.starts_with('/')
+                    && path
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b));
+                if !ok || port == 0 {
+                    return Err(bad(
+                        "mark PORT PATH, a path of letters, digits, /, -, _ and .",
+                    ));
+                }
+                Step::Mark(port, path.to_string())
+            }
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
     }
     Ok(steps)
+}
+
+/// `mark`: one GET of `path` from 127.0.0.1:`port`, the answer read to its
+/// end (at most 64 KiB, 5 s), so that the server has logged it before the
+/// next step.
+fn mark(port: u16, path: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let why = |e: std::io::Error| format!("mark {port} {path}: {e}");
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut c = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(why)?;
+    c.set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(why)?;
+    c.write_all(format!("GET {path} HTTP/1.0\r\nHost: mark\r\n\r\n").as_bytes())
+        .map_err(why)?;
+    let mut answer = Vec::new();
+    c.take(64 * 1024).read_to_end(&mut answer).map_err(why)?;
+    Ok(())
 }
 
 /// A screendump: width, height and `0x00RRGGBB` pixels.
@@ -906,6 +988,7 @@ impl Run {
                 | Step::Click(..)
                 | Step::DoubleClick(..)
                 | Step::RightClick(..)
+                | Step::Wheel(..)
                 | Step::ModClick(..)
                 | Step::ModDrag(..)
                 | Step::Drag(..)
@@ -1026,6 +1109,26 @@ impl Run {
                 }
                 std::thread::sleep(SCREEN_POLL);
             },
+            Step::Ink(x, y, w, h, colour, n) => loop {
+                if Instant::now() <= self.deadline {
+                    self.pump()?;
+                }
+                let screen = self.qmp.screen()?;
+                let k = i64::from(screen.scale().factor());
+                let want = n.saturating_mul((k * k) as usize);
+                let got = count_ink((x * k, y * k, w * k, h * k), *colour, |px, py| {
+                    screen.at(px as usize, py as usize)
+                });
+                if got >= want {
+                    return Ok(());
+                }
+                if Instant::now() > self.deadline {
+                    return Err(format!(
+                        "{got} pixels of {x},{y} {w}x{h} are not {colour:06x}, fewer than {want}"
+                    ));
+                }
+                std::thread::sleep(SCREEN_POLL);
+            },
             Step::Latency(n, bound, tcg) => {
                 // The bound of this accelerator, and how often the screen
                 // is read: under TCG every SCREEN_POLL (back to back dumps
@@ -1115,6 +1218,7 @@ impl Run {
                 self.row = None;
                 Ok(())
             }
+            Step::Mark(port, path) => mark(*port, path),
             Step::Top(text) => loop {
                 if Instant::now() <= self.deadline {
                     self.pump()?;
@@ -1201,6 +1305,20 @@ impl Run {
                 self.qmp.pointer(at, size, None)?;
                 self.qmp.pointer_with(at, size, Some(("right", true)))?;
                 self.qmp.pointer_with(at, size, Some(("right", false)))?;
+                std::thread::sleep(AFTER_CLICK);
+                Ok(())
+            }
+            Step::Wheel(x, y, down, n) => {
+                let (size, k) = self.display()?;
+                let at = (x * k, y * k);
+                let button = if *down { "wheel-down" } else { "wheel-up" };
+                self.qmp.pointer(at, size, None)?;
+                for _ in 0..*n {
+                    self.qmp
+                        .pointer_batch(at, size, &[(button, true), (button, false)])?;
+                    // One notch a frame of the tablet, as a hand turns it.
+                    std::thread::sleep(Duration::from_millis(30));
+                }
                 std::thread::sleep(AFTER_CLICK);
                 Ok(())
             }
@@ -1389,9 +1507,50 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     }
 }
 
+/// How many pixels of the rectangle (`x`, `y`, `w`, `h`, physical) are not
+/// `colour`, as `at` reads them.
+fn count_ink(
+    (x, y, w, h): (i64, i64, i64, i64),
+    colour: u32,
+    at: impl Fn(i64, i64) -> u32,
+) -> usize {
+    let mut n = 0;
+    for py in y..y + h {
+        for px in x..x + w {
+            if at(px, py) != colour {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ink_parses_and_counts_what_is_not_the_colour() {
+        assert_eq!(
+            parse("ink 10 20 30 40 ffffff 25\n").unwrap(),
+            [Step::Ink(10, 20, 30, 40, 0xff_ffff, 25)]
+        );
+        assert!(parse("ink 10 20 30 40 ffffff\n").is_err());
+        assert!(parse("ink 10 20 30 40 ffffff 0\n").is_err());
+        assert!(parse("ink 10 20 30 40 white 3\n").is_err());
+        // A 4x4 white square with a black 2x2 in it.
+        let at = |x: i64, y: i64| {
+            if (1..3).contains(&x) && (1..3).contains(&y) {
+                0
+            } else {
+                0xff_ffff
+            }
+        };
+        assert_eq!(count_ink((0, 0, 4, 4), 0xff_ffff, at), 4);
+        assert_eq!(count_ink((0, 0, 1, 4), 0xff_ffff, at), 0);
+        assert_eq!(count_ink((2, 2, 2, 2), 0xff_ffff, at), 1);
+        assert_eq!(count_ink((0, 0, 4, 4), 0, at), 12);
+    }
 
     #[test]
     fn a_script_parses() {
@@ -1433,6 +1592,14 @@ mod tests {
             [Step::Chord("ctrl".into(), "c".into())]
         );
         assert!(parse("chord ctrl\n").is_err());
+        assert_eq!(
+            parse("mark 8080 /mark/before-proceed\n").unwrap(),
+            [Step::Mark(8080, "/mark/before-proceed".into())]
+        );
+        assert!(parse("mark 0 /m\n").is_err());
+        assert!(parse("mark 8080 m\n").is_err());
+        assert!(parse("mark 8080 /a b\n").is_err());
+        assert!(parse("mark /m\n").is_err());
         assert!(parse("chord hyper c\n").is_err());
         assert_eq!(
             parse("shot term-1\n").unwrap(),
@@ -1447,6 +1614,14 @@ mod tests {
         );
         assert_eq!(parse("dclick 3 4\n").unwrap(), [Step::DoubleClick(3, 4)]);
         assert_eq!(parse("rclick 3 4\n").unwrap(), [Step::RightClick(3, 4)]);
+        assert_eq!(
+            parse("wheel 3 4 down\nwheel 5 6 up 3\n").unwrap(),
+            [Step::Wheel(3, 4, true, 1), Step::Wheel(5, 6, false, 3)]
+        );
+        assert!(parse("wheel 3 4 left\n").is_err());
+        assert!(parse("wheel 3 4 down 0\n").is_err());
+        assert!(parse("wheel 3 4 down 65\n").is_err());
+        assert!(parse("wheel 3 down\n").is_err());
         assert_eq!(
             parse("mclick meta 3 4\n").unwrap(),
             [Step::ModClick(String::from("meta"), 3, 4)]

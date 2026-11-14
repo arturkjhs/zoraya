@@ -72,9 +72,11 @@ code asynchronously on an existing thread. Instead:
 - **T2:** adds autoconf `configure` (W4), for 291 symbols and 59 syscalls. T2 is accepted only after the cost of
   `snapshot_process` is measured on W4.
 
-The surface is a list of measured CSV rows, and only an ADR can grow it. Out of scope, with written reasons: threads,
-`ptrace`, System V IPC, sockets, general `poll`/`epoll`, fault handlers, record locks across processes (`fcntl` record locks exist inside one process, ADR-0319), `dlopen`, set-uid, and T3
-(clang/lld).
+The surface is a list of measured CSV rows, and only an ADR can grow it. Out of scope, with written reasons: `ptrace`,
+System V IPC, general `poll`/`epoll`, fault handlers, record locks across processes (`fcntl` record locks exist inside one
+process, ADR-0319, which supersedes ADR-0005 item 6), `flock`, `dlopen`, set-uid, and T3 (clang/lld). ADR-0005 also excluded
+threads and sockets; later ADRs added them: POSIX threads as tier T9 (ADR-0308, stage 9b, "Threads in a process" below) and
+the stream client of the network tier (ADR-0225, ADR-0287, stage 8, "POSIX sockets" below).
 
 **Event and readiness mechanism** ([ADR-0006](adr/0006-event-mechanism.md)). Every kernel object type defines a signal
 set or is explicitly not waitable.
@@ -281,7 +283,7 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
 - **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb` and `sttrb`, which check permissions as EL0
   does.
 
-### Threads in a process (stage 9b, step 1: the kernel; ADR-0300, 0301, 0307, 0313)
+### Threads in a process (stage 9b: the kernel, ADR-0300, 0301, 0307, 0313; `libposix`, ADR-0302 to 0306, 0314, 0315)
 
 The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zoraya-thread`, and `t_thread` at the raw ABI.
 
@@ -310,18 +312,27 @@ The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zor
   (`zoraya_posix_futex`), `SYS_exit` is `thread_exit` and `__unmapself` gives a detached thread's stack and object back. Two
   futex locks (`crates/zoraya-posix/src/lock.rs`): the library lock around `Posix`, the memory lock around the heap and the
   mapping table (256 entries). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
-  condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio). Known limits: a
-  library call that waits holds the library lock (the `Pending` split of ADR-0302 item 9 is the next slice); no signal reaches a
-  thread and `pthread_cancel` only sets a flag (ADR-0304, ADR-0305 are next); `fork` with siblings, `exec` and `exit` from a
-  non-main thread are untested.
-- **Record locks (ADR-0319, proposed).** `libposix` keeps `fcntl` record locks in the process: `F_SETLK`, `F_SETLKW`, `F_GETLK`
+  condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio).
+- **`libposix`, waits, signals, cancellation, `fork` (ADR-0315).** A call that waits long returns `PENDING` inside the library
+  and waits on a port of its own with the library lock free, then runs again with the outcome. A thread table
+  (`crates/zoraya-posix/src/threads.rs`) holds each thread's signal mask and pending set; `pthread_kill` and `raise` are
+  thread-directed (`tkill`, `thread_interrupt`) and a process's signal goes to the lowest-numbered thread that has it unblocked;
+  `sigwait`, `sigtimedwait` and `sigwaitinfo` exist. Cancellation is deferred (`ports/musl/zoraya/cancel.c`: a flag plus
+  `thread_interrupt`, tested at the library's wait points). `fork` with running siblings takes the locks
+  (`ports/musl/zoraya/atfork.c`) and freezes the others for the copy; the child has one thread. `exec` holds the library lock
+  until the old image ends. Tests: `make test-posix-threads` (`t_threads`, with 1000-round cases), `tests/posix/threads.script`
+  in `make test-posix`, and `make test-posix-suites` (musl's libc-test thread tests, exclusions with reasons in
+  `tests/libc-test/threads-excluded.txt`). Known limits: `PTHREAD_PROCESS_SHARED` and priority inheritance are refused
+  (`ENOTSUP`), robust mutexes are `ENOSYS`, asynchronous cancellation acts as deferred.
+- **Record locks (ADR-0319, which supersedes ADR-0005 item 6).** `libposix` keeps `fcntl` record locks in the process: `F_SETLK`, `F_SETLKW`, `F_GETLK`
   and the `F_OFD_*` forms (`crates/zoraya-posix/src/records.rs`, `fcntl_locks.rs`), released on `close` and `dup3`. Limit, by
   design: a second process does not see the lock (the file service has no owner per process, ADR-0103). `flock` is absent.
   `make test-posix-threadtest3` runs SQLite's `threadtest3` (rollback-journal scenarios; WAL needs a shared mapping, ADR-0100) on SQLite's
   default unix VFS, under HVF and TCG (INV-0319-3); `make test-posix-suites` runs musl's libc-test thread tests (ADR-0309).
-- **Not done yet.** Signals, cancellation of a blocked thread and `fork`'s locks in `libposix`, `grants` printing the
-  figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the CPU-ceiling and stepped-map variants of the
-  ending test (see the notes in ADR-0300, 0301 and 0307, and the report).
+- **Not done yet.** `grants` printing the figure, `t_bound`'s cases for 128 waiters and 4 x 128 threads, and the
+  CPU-ceiling and stepped-map variants of the ending test (see the notes in ADR-0300, 0301 and 0307, and the report); the
+  checks of INV-0306-3, INV-0306-5 and INV-0308-3, `check-cancel-points` (INV-0305-3) and the mapping count of a 128-thread
+  process (ADR-0315's open questions); record locks that a second process sees (`docs/backlog.md`).
 
 ## Filesystem engine (as built)
 
@@ -443,7 +454,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   the old one is unreferenced and its pin released.
 - **`inputd`** (`zoraya-virtio-input`, ADR-0092). One process per device; it reads the configuration to learn whether
   it drives a keyboard or an absolute pointer, keeps 64 event buffers offered, checks every event, and sends one
-  `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535. A frame that does not fit is dropped and
+  `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535 and a pointer's wheels (`REL_WHEEL`,
+  `REL_HWHEEL`, or their `HI_RES` axes when the device has them) as `WHEEL` records in 120ths of a notch, positive
+  toward the person and to the right (proposed ADR-0322). A frame that does not fit is dropped and
   counted, and the count goes with the next one.
 - **`compd`** (`zoraya-compositor`, ADR-0093, ADR-0094). The loop runs over a `Platform` trait, so it is tested on
   the host. Slot 5 is the manager channel from `init`, 6 the display driver, 7 to 10 input drivers. A client
@@ -454,12 +467,15 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   Decision): one is in flight, what is composed meanwhile goes out as one rectangle when the driver answers, and a
   driver that misses 2 s is dropped and reported to `init` (`DisplayHung`), which restarts it. Windows are
   placed by the compositor (16, 16, then cascaded by 32). Keys go to the focused surface, translated by the US layout of
-  `zoraya-keymap`; pointer events to the surface under the pointer. A button press focuses and raises; F12 moves focus
+  `zoraya-keymap`; pointer events to the surface under the pointer, and a frame's wheel turns, summed, as one `Wheel`
+  (ordinal 46) to the toplevel or popup body under it, never during a move, a drag or the switcher, and with the
+  modifiers only to the focused client (proposed ADR-0322). A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
-  At most 8 clients. With no display driver it goes on; a new one gets the same framebuffer and one full flush.
+  At most 32 clients (`zoraya_proto_gui::MAX_CLIENTS`); an untrusted room's are counted in its account, 3 a room and
+  12 for all, refused `OVER_QUOTA`, so the session keeps 20 (proposed ADR-0323). With no display driver it goes on; a new one gets the same framebuffer and one full flush.
 - **`term`** (`zoraya-term`, `zoraya-text`, ADR-0096, ADR-0162). A compositor client with an 80 × 24 grid of 8 × 18
   cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14), 668 × 460 pixels, and
-  500 lines of scrollback (Shift with Page Up or Page Down). It parses the VT subset of ADR-0096 with ADR-0154's faint
+  500 lines of scrollback (Shift with Page Up or Page Down, or the wheel, three lines a notch). It parses the VT subset of ADR-0096 with ADR-0154's faint
   (SGR 2, ended by 22: half way to the background), draws bold (SGR 1) with JetBrains Mono Bold, takes its colours
   from the `term.*` tokens of the light set, answers no query, and sends the shell the bytes keys make
   (`zoraya-proto-term`): it holds up to 4 KiB of keys the shell has not read yet and sends them as soon as the shell's
@@ -512,6 +528,8 @@ Stage 7a (TASK-24), on the accepted [ADR-0161](adr/0161-design-system.md) and
 - **Fonts** (`fonts/`, `zoraya-fonts`): Inter 4.1 Regular and Medium, JetBrains Mono 2.304 Regular and Bold, unmodified,
   with their licences, in a fonts table of `docs/dependencies.md` checked by hash (INV-0162-5). Until the launcher of
   7d hands out `/system/fonts`, the programs that draw text embed them (ADR-0240): `term` grows by about 0.96 MB.
+  Since 9f-text the disk of `make run`/`run-gui` (`tools/run-disk.sh`) and NetSurf's test root carry the same files in
+  `/system/fonts`, which a POSIX program with a `window` line reads (ADR-0326, "NetSurf's text" below).
 - **Reading screens back.** `zoraya_term::read` draws every character a cell may hold (printable ASCII, Latin-1,
   Latin Extended-A, Cyrillic with Ґ ґ) with the terminal's fonts, size and colours, and a cell reads as the character
   whose pixels are identical. Twenty Cyrillic and Latin letters are drawn alike by any font (А and A, і and i, ...):
@@ -639,7 +657,8 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   view, separator, menu, dialog, progress bar; rows, columns and grids with `gap.controls` and `padding.window`;
   painting through `zoraya-paint` and `zoraya-text` from the tokens, every widget clipped to its rectangle
   (INV-0165-1); Tab and Shift+Tab over the focusable widgets, arrows in lists and radio groups, Enter, Escape closing a
-  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244).
+  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244),
+  and since 9f-wheel a third, the wheel (proposed ADR-0329, "The wheel in the applications" below).
 - **`zoraya-app`**: an application's loop over a `Platform` (the compositor's channel and memory objects): it opens
   toplevels of widget trees, paints and commits one frame at a time, answers `Configure` with a new buffer, and turns
   keys, the pointer, focus and `CloseRequested` into widget events or into what the application acts on. It sends
@@ -880,8 +899,46 @@ Not built in 7h, or known: a trash (`docs/backlog.md`); a copy or delete that fa
 folder, no space, past 4096 entries) leaves what was done and says only "Cannot copy NAME"; a forwarded System chord's
 release carries no `SYSTEM`; `OpenTerminal` is not rate-limited (one request at a time per launcher channel, as
 `OpenWith`); moving or copying several files by a drag to another window (a drop
-carries one file, ADR-0170); a scroll wheel (the list follows the keyboard's cursor); the window's title stays
-"Files".
+carries one file, ADR-0170); the window's title stays "Files". (The scroll wheel came in 9f-wheel, "The wheel in the
+applications" below.)
+
+## The wheel in the applications (as built)
+
+Part 9f-wheel (TASK-27), on the accepted [ADR-0322](adr/0322-a-wheel-event-in-the-compositor-protocol.md) and the
+proposed [ADR-0329](adr/0329-the-wheel-in-the-toolkit.md).
+
+- **The toolkit.** `zoraya-app` turns `Wheel` (ordinal 46, logical pixels of the body, 120ths of a notch) into
+  `zoraya_ui::Event::Wheel`; the window gives it to the widget under the pointer, then to each ancestor until one
+  takes it (a widget at its end that way answers `None`, so a list at its end hands the turn to the page around it).
+  It moves no focus. A notch is `ROWS_PER_NOTCH` (3) rows, lines or children, the terminal's three lines;
+  `WheelSteps` keeps the part of a row a turn leaves (40 of 120 is a row), so a high-resolution wheel scrolls a row
+  at a time, and forgets it at an end. A turn is bounded at 64 notches either way.
+- **Lists.** `ListView` (the chooser's list), the file manager's list and the editor move their first row or line
+  shown, clamped so that the last one is no higher than the bottom, and leave the selection and the cursor; a key,
+  a press, or a cursor the program moves (a find, a new folder, a search) brings the cursor back into view. The file
+  manager takes a turn only over its list, and none while its menu or card is open; a drop's row (ADR-0248) follows
+  the rows shown.
+- **`ScrollView`** is a column of children shown from its `first`: a child before it is laid out empty (it paints
+  nothing and takes no press), `first` never passes the point where the last child is at the bottom, and the
+  keyboard's focus on a child out of view (Tab, or a key to it) scrolls it into view. The settings page is one
+  always; with the Rooms section it is taller than its window and the wheel reaches Apply. Settings scrolls by whole
+  children (a row of controls, a label), not by pixels: `Logical` is unsigned and an `LRect` cannot start above its
+  parent (ADR-0329, Option A not taken).
+- **Rebuilt windows.** `App::replace_keeping_scroll` (settings, the editor) carries each scrolling widget's place
+  (`Scrolled`: the first shown, whether the wheel left it away from the cursor, and the cursor then) across a tree
+  built again, by its path; `App::replace` keeps only the focus, as before. The chooser keeps where the wheel left
+  its list across its sheet's rebuilds.
+- **Tests.** Host tests: `zoraya-ui` (`tests_wheel.rs`: rows from turns, parts of a notch, direction, clamping,
+  routing to the innermost widget that can go that way, focus scrolled into view, rebuilt trees), `zoraya-app` (the
+  wheel scrolls the body under the pointer and the next press lands on what it brought), `zoraya-files`,
+  `zoraya-editor`, `zoraya-settings-window`, `zoraya-chooser`. `tests/gui/wheel.script` (HVF and TCG) turns QEMU's
+  wheel over each application and reads the pixels that only the turn puts there: the file manager's selected row
+  three rows higher and back, a key bringing the cursor back; settings' controls 135 pixels higher (three children)
+  and Apply at the end answering; the editor's empty lines in rows that showed `x` lines.
+
+Not built in 9f-wheel, or known: pixel-smooth scrolling (settings moves by children); a scroll bar; a horizontal
+turn (`dx`) scrolls nothing; Page Up and Page Down in the file manager and the editor; the sidebar of places and the
+editor's find field do not scroll.
 
 ## Cross toolchain and ports (as built)
 
@@ -911,7 +968,9 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   workloads' own programs and pdpmake link against). Each exported function is reached through a call-log wrapper
   (`zw-NAME.o`, ADR-0211), and `usr/lib/zoraya-calls.txt` gives the bitmap's order; `POSIX_STATS=0` builds without
   it. `<zoraya/posix.h>` (`ports/include/`) declares Zoraya's
-  additions (ADR-0142). The sysroot also has
+  additions (ADR-0142). The figures above are stage 6's: the export list has since taken the socket names of ADR-0287, the
+  thread surface of tier T9 (ADR-0308, `docs/adr/posix-surface-T9.txt`; musl's `src/thread` is now compiled over the shim,
+  "Threads in a process") and ADR-0310's 22 names (9a). The sysroot also has
   `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
 - **The ports.** All build with `zcc`, and none with `__linux__`: dash (TASK-02's M4 patch and ADR-0142's two
@@ -1725,7 +1784,7 @@ the driver is described under "Network service" below.
   more things the survey did not know: ring's feature `less-safe-getrandom-custom-or-rdrand` (else `SystemRandom` has
   no implementation), and `getrandom 0.2` with its `custom` feature and `register_custom_getrandom!`. `cargo build
   --release` produces ring's C objects and the libraries. Nothing was run on the target: whether ring's aarch64 code
-  works without an operating system, and the source of its randomness, are N5's. BearSSL stays the POSIX answer.
+  works without an operating system, and the source of its randomness, are N5's. The POSIX side's library is OpenSSL 3.5 (ADR-0312, 9a), not BearSSL.
 - **Measured** (`t_net`, 20 ARP rounds, QEMU 11.1.2, test kernel, 128 MiB, 1 CPU, 2026-11-11): HVF: ARP round trip
   (guest transmit to the reply in `t_net`, through the driver and SLIRP) median 42 us, min 40 us, max 258 us;
   interrupt to the frame message read in `t_net` (the driver's wake, the channel write, `t_net`'s wake and read) median
@@ -1972,8 +2031,8 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   and an absorbing `mix` (a construction of ours; ADR-0288 item 5 asks the reviewer to decide on it). A connection speaks
   `Bytes(n)` (exactly `n` bytes, `n` up to 4,096, at once) and `Share(server end)`. The shell holds one and shares a fresh one
   with every native program it starts (the `random` slot of `ZNS1`); `random [COUNT]` prints bytes; `zoraya_user::random::random`
-  is the program's call. **Not built:** the virtio-rng reseed, `libposix`'s `getrandom` and `/dev/urandom`, the connection of the
-  panel's and the broker's programs and of a `fork` child, a restart of `rngd`.
+  is the program's call; `libposix`'s `getrandom` (9a, below) reads a connection the shell gives a POSIX program. **Not built:** the virtio-rng reseed, `/dev/urandom`, the connection of the
+  panel's and the broker's programs, of a program `dash` or `make` starts and of a `fork` child, a restart of `rngd`.
 - **TLS** (ADR-0228). `zoraya-tls` is a blocking client over rustls 0.23.46's unbuffered API with ring 0.17.14 as the provider,
   `no_std`: `Config::new(roots, now)`, `Connection::connect(config, name, transport, seed)` (32 fresh bytes from the random service are mixed into the generator first; `seed_random` refuses fewer than 32; the handshake and nothing else, so no
   application byte goes out before it succeeds), `read`, `write_all`, `close`. The date is the function the program gives (the
@@ -1999,12 +2058,12 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
 - **Measured** (QEMU 11.1.2, HVF, 1 CPU, one run, 2026-11-12): `fetch --sum https://test.zoraya:PORT/pattern/1000000`: handshake
   51.1 ms (ECDSA P-256 certificate, 108 roots parsed, `user` profile at opt-level 1), then 1,000,000 bytes in 25.1 ms against
   38.8 ms for the same page over HTTP in the same boot.
-- **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption,
+- **Not built:** `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption (curl and wget came in 9a, below, over OpenSSL; no BearSSL port),
   the HTTPS lines under TCG, the GUI shells' roots entry (they have no network connection yet).
 
 ## TLS for C programs, curl and wget (stage 9, 9a)
 
-`curl` and `wget` run inside Zoraya and fetch over HTTP and HTTPS (proposed ADR-0310 on `libc.a`'s names, `getrandom` and the
+`curl` and `wget` run inside Zoraya and fetch over HTTP and HTTPS (ADR-0310 on `libc.a`'s names, `getrandom` and the
 volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place of ADR-0228 item 2's BearSSL; TASK-27 9a).
 
 - **The ports.** `ports/sources.lock` pins OpenSSL 3.5.9 (the LTS line), zlib 1.3.1, curl 8.23.0 and wget 1.25.0. `make apps`
@@ -2050,15 +2109,122 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   files by `-o` and `-O`, bodies of 70,000 to 1,000,000 bytes by size, 404 and a refused port with their exit
   statuses, an expired and a wrong-name certificate refused by both with the server's log showing no request byte, a plain
   server on an HTTPS address, by number, `-k` and `--no-check-certificate` as usage mistakes, `grants` for both, a refused
-  `-O` name, a value as URL with and without `+net`, and wget without `-O` creating nothing), `make test-hand-run` (the
+  `-O` name, a value as URL with and without `+net`, and wget without `-O` creating nothing; and in a QEMU run of its own,
+  `tests/shell/apps-refusals.script`, every option of ADR-0321 refused with `+net` to the test servers, the expired
+  and wrong-name ones' log showing no request byte), `make test-hand-run` (the
   production image: plain HTTP with both programs, HTTPS to the certificate and refused there, `grants curl -O`).
-- **Known limits.** *Memory:* each launch of `curl` or `wget` leaves about 8.5 MiB that the machine does not get back (measured by
-  launching `curl --version`: 8 launches on 128 MiB, 23 on 256 MiB, 40 or more on 512 MiB; it does not depend on the network or
-  on `getrandom`, and `grants curl`, which loads the same image, does not leak); the launch is refused with "over quota" when
-  it runs out. `make run-net` and the apps' tests therefore run on 512 MiB. Not found in 9a; the report records what was
-  ruled out. *Other launchers:* a program started by `dash` or `make` has no random connection, so OpenSSL cannot seed.
+- **Known limits.** *Memory:* the leak found in 9a (each launch of `curl` or `wget` kept about 8.5 MiB: `posix_child::load`
+  kept a duplicate of the image's memory object) is fixed (`work/9a-leak`); `tests/shell/apps-launches.script` (in `make test-apps`)
+  runs `curl --version` 16 times on 128 MiB. `make run-net`, `run-gui` and the apps' tests still run on 512 MiB (the Makefile's
+  comment gives the leak as the reason). *Other launchers:* a program started by `dash` or `make` has no random connection, so OpenSSL cannot seed.
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
+
+## CPython (stage 9, 9c)
+
+`python3` runs inside Zoraya (proposed ADR-0320): CPython 3.15.2 cross-built static with `zcc`, as a POSIX program from the
+volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
+
+- **The build.** `ports/sources.lock` pins the archive by the SHA-256 python.org publishes (the Sigstore bundle it also
+  publishes is not checked). `make python` builds the host Python of the same version (`build/ports/hostpython`, minimal: `--without-ensurepip`, no zlib needed; for
+  `--with-build-python` and for compiling the library's byte code), SQLite for the target (`THREADSAFE=1`, no extension
+  loading, no WAL, FTS5), `libpyshim.a` (`ports/apps/pyshim.c`: `execv`, `madvise`, `msync`, `sched_yield`, `pause`, `dirfd`,
+  `gethostbyname` over `getaddrinfo`, `getprotobyname`, `getservbyname`, `hstrerror`...) and CPython itself, into
+  `build/rootfs-python` (`bin/python3`, 15.5 MB, and the trimmed library, 37 MB, byte code `unchecked-hash`; 52 MB, 1226 files).
+  Built in: `_socket`, `select`, `_ssl` and `_hashlib` (OpenSSL), `_sqlite3`, `zlib`, `_asyncio`, `_thread`. No shared modules
+  (no `dlopen`), `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`.
+- **Patches** (`ports/patches/python/`): `_ssl` uses a file-descriptor BIO (OpenSSL has no sockets); the environment, byte code
+  files and the per-user site directory are off; `asyncio`'s self-pipe is `os.pipe()` (no `socketpair`); `main` runs the interpreter
+  on a thread with a 2 MiB stack (committed in full, copied by every `fork` child; measured 8, 2 and 1 MiB, ADR-0320 item 5) and ends the process with `exit(status)` from it, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB (the main thread blocks every signal, so Ctrl-C reaches the interpreter's thread); no `pyvenv.cfg`
+  search; `-c`, `-m` and a program read from standard input put no directory on `sys.path`; `urllib` takes no proxy from the environment. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`, and `_PYTHREAD_NAME_MAXLEN` is 15 (configure does not know the platform), so a long thread name is truncated, not refused.
+- **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
+  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. INV-0312-1 covers connections made with OpenSSL's defaults; a script that passes `ssl.CERT_NONE` (or `_create_unverified_context()`) chose that itself, and the description says so (ADR-0320 item 10, accepted option A). `ssl.create_default_context()` finds the roots with no `cafile` (OpenSSL's `OPENSSLDIR` is `/system/tls`). `PYTHON*` variables decide nothing. A script imports from the standard library and its own directory (the current directory is readable), not from the current directory under `-c`, `-m` or a program read from standard input. Python is not mediated: a script can turn verification off (`ssl.CERT_NONE`), unlike curl's refused `-k`.
+- **The volume.** `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and `DISK_SIZE` (default 64M, in
+  the disk's key): curl, wget and Python do not fit in 64M, so `make run` with Python is
+  `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`, which also holds NetSurf (9d: `bin/netsurf` 12.5 MB and
+  `usr/share/netsurf` in `build/rootfs-apps`, about 12 MiB in all, beside Python's 52 MB). `make test-python` makes its own 256M disk.
+- **Tests** (`make test-python`, `tests/shell/python.script`): `-V`, `-c`, exit statuses, `tests/python/smoke.py` (flags,
+  `sqlite3`, `ssl`, `asyncio`, a thread, `fork`), `grants` with and without `+net`, an `asyncio` HTTPS client
+  (`tests/python/https_client.py`) against `tools/test-httpd`'s TLS server with the test PKI's root, the refusal of an expired and a
+  wrong-name certificate with 0 request bytes at the server. `make test-python-regr` (`tests/shell/python-regr.script`):
+  `tests/python/regr.py`, CPython's regrtest over the CI subset `tests/python/regr-modules.txt`; `make test-python-long` (by hand,
+  not in `make test`): the modules too slow for a CI job under TCG, `tests/python/regr-long.txt` (`test_queue`, `test_threading`;
+  ADR-0320 item 9). Each step makes its own volume.
+- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
+  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
+  without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
+  (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
+
+## The window of a POSIX program and NetSurf (stage 9, 9d)
+
+A POSIX program can have one window (ADR-0317), and NetSurf 3.11 is the first (ADR-0318).
+
+- **The request.** The program's description has a `window TITLE` line (once, at most 48 characters, command only;
+  `user/describe/posix/netsurf.cmd` says `window NetSurf`). `zosh` then asks the panel (`OpenWindow` in `zoraya-proto-chooser`;
+  the shell holds the channel at slot 14, `WINDOW_SLOT`, and `init` gives its first shell one too). The panel
+  (`zoraya_panel::window_record`) refuses an untrusted room and a malformed request (`WindowRefused`), and otherwise adds
+  the client with `AddRoomClient`, with the room's record and the pills of the line's grants, at most 8 windows a shell
+  (`WindowOpened`). `posix_child` moves the client end into the program as `EXT_WINDOW` of the `ZPBX` bootstrap
+  (ADR-0310). The compositor draws, from its records only, the title and the grants the program holds (INV-0172-1); the program asks for no
+  position, focus or stacking (INV-0165-2). `tools/check-untrusted-gate.sh` requires the `untrusted-gate: window-refusal`
+  marker in the shell and in the panel.
+- **The client.** `crates/zoraya-surface` is a static library that sends only the client requests of `zoraya-proto-gui`
+  and bounds every buffer (16384 per side, 64 Mi pixels). `ports/netsurf/zoraya.c` registers a `libnsfb` surface over it
+  and maps the compositor's key, text, pointer, resize and (since 9e, ADR-0322) wheel events. A closed channel
+  (`ClientGone`) ends the program; a fork child forgets the window.
+- **NetSurf.** `make netsurf` builds libpng, IJG libjpeg, libcurl and NetSurf's own libraries, then `netsurf` with its
+  internal bitmap font (`zoraya-text` later), curl and the OpenSSL of 9a; `bin/netsurf` is 12.5 MB, its resources are in
+  `/usr/share/netsurf` (read with the toolchain set, no extra grant). Patches: no cookies or proxy (libcurl is built without
+  them); a file fetcher that reads the file (libposix maps none); the privacy error page's "Proceed" never turns
+  verification off (INV-0312-1). The `+net` words come from the `url` operand as for curl; a page's links to other hosts
+  need `+net HOST` words on the line.
+- **Tests.** `make test-netsurf` (`tests/gui/netsurf.script`): a page's CSS and PNG by colour regions, a form result,
+  HTTPS to `test.zoraya`, and the expired certificate giving the privacy error page with 0 request bytes at the server even
+  after a click on Proceed.
+- **Known limits.** No downloads (a chooser channel needs a second `ZPBX` slot), no JavaScript, SVG, cookies, proxy,
+  clipboard or cursor shape, titles Latin only, timed waits are a 2 ms poll loop; a shell that `init` restarts gets no
+  window channel until the panel restarts; the shell-side refusal of an untrusted room is unreachable in QEMU while such a
+  room cannot be entered (the panel's is tested on the host).
+
+## NetSurf's text (stage 9, 9f-text)
+
+[ADR-0326](adr/0326-netsurf-text-through-zoraya-text.md) (accepted; it supersedes ADR-0318's fonts item) replaces NetSurf's
+internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readable, in the desktop's fonts, at the window's scale.
+
+- **The library.** `crates/zoraya-fontset` (`no_std`, no `unsafe`): four faces, each a fallback list of the system's fonts (sans:
+  Inter Regular then JetBrains Mono; sans bold: Inter Medium, Inter Regular, JetBrains Mono Bold; monospace and monospace bold
+  from JetBrains Mono, then Inter); NetSurf's serif, cursive and fantasy take sans, weight 600 and up the bold face, italic is
+  upright. Width, position and split keep NetSurf's meaning; U+200B to U+200F draw nothing; bytes that are not UTF-8 count one
+  U+FFFD each. It reads the fonts only as `/system/fonts/NAME` for its four names (INV-0326-1).
+- **Bounds a page cannot raise** (T3, T4 of the 9f-text review). A page chooses the size, up to `zoraya-text`'s 512 pixels,
+  where one glyph holds about 100 KB of coverage. Glyphs above `CACHE_MAX_PX` (128 pixels) are not kept: each face has
+  `LARGE_SLOTS` (2) slots for them. Below that, a face's cache that passes `CACHE_BYTES` (4 MiB of coverage) is emptied and
+  starts again. The four faces' caches therefore stay under about 4 × (4 MiB + one 128-pixel glyph) plus 8 large glyphs, about
+  17 MiB, whatever a page draws (`the_glyph_caches_stay_bounded_whatever_the_size`). Width shapes the text once, with no
+  memory per character. Position and split shape only up to the first boundary past `x` (split also up to the next space), so
+  NetSurf's layout, which calls `split` on the rest of a box for every line, is linear in the text: 20,000 Cyrillic words
+  break into lines with about twice their characters shaped (`breaking_a_long_paragraph_into_lines_is_linear`), where shaping
+  the whole rest on every call was quadratic (1.1 s for 300 lines on the host).
+- **The C side.** `libc.a` exports `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` and
+  `zoraya_window_scale` (`crates/zoraya-posix/src/ffi/text.rs`, ADR-0326's block; `ports/netsurf/zoraya_text.h`).
+  `ports/netsurf/font_zoraya.c` is NetSurf's font library (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`, patch
+  `0008`); glyphs are plotted with `nsfb_plot_glyph8`, which clips. At start it sets NetSurf's dpi to 90 times the window's
+  scale, so a page in points or CSS pixels is twice the pixels at scale 2 and the same in logical pixels; the toolbar keeps its
+  pixel size (its field's text converts at the same dpi).
+- **The grant and the image.** A POSIX program whose description has `window` gets `/system/fonts` read only, "with the
+  window" (`zoraya_shell::grants::with_window`), shown by `grants` and as a pill; a line's own `+r /system/fonts` and a room
+  grant also give it, as they give any path (INV-0326-1's check covers only the implicit grant); `tools/run-disk.sh` copies `fonts/` into the
+  disk's `/system/fonts` (in the disk's key: a person's disk from before 9f-text is kept as `.old` and a new one made).
+- **Tests.** `cargo test -p zoraya-fontset` (the paths read, every Russian and Ukrainian letter a non-blank glyph that is not
+  the box at the sizes of scale 1 and 2, widths, position, split, any bytes); `cargo test -p zoraya-shell` (the grant);
+  `make test-netsurf`: the page `/ns/cyrillic` of `tools/test-httpd` at scale 1 (`tests/gui/netsurf.script`) and in a second
+  boot at scale 2 (`tests/gui/netsurf-text.script`), with the runner's `ink` step (at least N pixels not the background) and a
+  line of ten і that ends where a line of ten ж goes on (`docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`).
+- **Limits.** No italic face; no kerning (Inter's is in GPOS, ADR-0162); the toolbar is not scaled; at scale 3 the dpi is
+  clamped to NetSurf's 250, so the page is 2.78 times, not 3 (the review's T8); the time text measuring
+  takes per page is not measured (ADR-0318's 5% trigger); the native GUI programs still embed their fonts (ADR-0240).
+  Whether `CLAUDE.md`'s licence rule names OFL-1.1 for unmodified font files is proposed ADR-0327.
 
 ## The network on the desktop, and when it fails (stage 8, N6)
 
@@ -2164,7 +2330,7 @@ ADR-0221 items 5, 6 and 8).
   again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
-  a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until
+  a copy of every surface (up to 32 clients since 9e, ADR-0323, each up to the display's size), bounded only by those limits until
   ADR-0056. Attaching a new display driver still waits for it, up to 2 s per call; `init` blocks up to 6 s while it
   restarts a driver (backlog: to fix before stage 6). NUL cannot be typed in the window. A QMP socket's path must be under 104 bytes
   on macOS, so the tests keep it in `build/`. The runner's key latency figure under HVF is bounded by the cost of one
@@ -2182,8 +2348,9 @@ ADR-0221 items 5, 6 and 8).
 - **Memory.** Page tables left empty by an unmap are not freed; later maps go below them, so a block cannot be used
   where an empty table remains. The heap never shrinks, and memory in a size class
   stays there. Frames are not zeroed by the allocator, except for table frames. No double-free detection in the heap.
-- **Threads.** No priorities, and kernel paths are not preempted. One thread per process. `sleep_until(Infinite)`
-  never returns, and nothing can kill a process yet. Sleepers share a deadline queue of 32, with one slot kept for the slice, so a full
+- **Threads.** No priorities, and kernel paths are not preempted. A process has up to 128 threads and the system 1,000 user
+  threads (stage 9b, "Threads in a process"). `sleep_until(Infinite)`
+  never returns. Sleepers share a deadline queue of 1,024 entries (stage 9b), so a full
   queue fails `sleep_until` with `NoMemory`. Thread and process objects use `Arc::new`, which panics when memory runs
   out, so stage 3's `spawn` needs a fallible form first (ADR-0022).
 - **User memory.** Copies are a byte at a time. At most 255 live processes. A process's memory is all mapped up front.
@@ -2240,6 +2407,12 @@ ADR-0221 items 5, 6 and 8).
   step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there;
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
+  What a run contains is `tools/ci-plan.sh`'s plan: a merge candidate (tag `candidate/NAME`, a pull request) runs the steps its
+  change touches (`tools/test-map.txt`) plus a smoke set; a push to `main` whose changes are all under `docs/` (except the docs a
+  test or build reads, listed in `tools/plan-lib.sh`'s `docs_only`, and the `libc.a` surface lists and blocks) runs only the
+  document checks (`doc_checks`: `adr-check`, `check-host-paths`, `check-untrusted-gate`, `check-quota-tests`,
+  `check-tls-roots`), no build and no machine; every other push to `main`, the nightly run and `candidate-full/` run the full
+  set (`tools/ci-tests.txt`). `make check-ci-plan` tests the plan. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
   The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
   that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
   (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".
@@ -2368,6 +2541,7 @@ crates/                   no_std, host-tested
   zoraya-tokens/          the design tokens from tokens.txt, read at compile time (ADR-0161)
   zoraya-text/            TrueType reader, fixed-point rasteriser, glyph cache, simple shaper (ADR-0162)
   zoraya-fonts/           the system fonts of fonts/ as bytes (ADR-0162, ADR-0240)
+  zoraya-fontset/         the system's fonts for NetSurf: faces from /system/fonts, width, position, split, glyphs (ADR-0326)
   zoraya-paint/           the compositor's drawing in integers: corners, shadows, blur, wallpaper, the material
   zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering and the exact
                           reader of its cells (ADR-0096, ADR-0162)

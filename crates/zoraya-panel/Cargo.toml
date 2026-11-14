@@ -8,13 +8,13 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+zoraya-proto-chooser = { path = "../zoraya-proto-chooser" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }
+zoraya-proto-gui = { path = "../zoraya-proto-gui" }
 zoraya-settings = { path = "../zoraya-settings" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-zoraya-proto-chooser = { path = "../zoraya-proto-chooser" }
-zoraya-proto-gui = { path = "../zoraya-proto-gui" }
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }

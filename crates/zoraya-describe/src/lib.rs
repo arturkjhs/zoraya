@@ -496,6 +496,10 @@ pub struct Description {
     /// service for its state and nothing else. The shell honours it for
     /// base-system commands only.
     pub needs_net_status: bool,
+    /// `window TITLE` (ADR-0317): a POSIX program that opens one window; the
+    /// title is what the compositor shows until the program sets its own. The
+    /// shell honours it for a trusted room only.
+    pub window: Option<String>,
     pub exits: Vec<Exit>,
     pub settings: Vec<Setting>,
     pub sections: Vec<Section>,
@@ -518,6 +522,7 @@ impl Description {
             question: false,
             program: None,
             needs_net_status: false,
+            window: None,
             exits: Vec::new(),
             settings: Vec::new(),
             sections: Vec::new(),
@@ -1086,6 +1091,16 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 }
                 d.program = Some(path.into());
             }
+            "window" => {
+                if d.window.is_some() {
+                    return err(number, "window is given once");
+                }
+                let t = text_of(rest, number)?;
+                if t.chars().count() > 48 {
+                    return err(number, "a window title is at most 48 characters");
+                }
+                d.window = Some(t);
+            }
             "needs" => {
                 if d.needs_net_status {
                     return err(number, "needs net-status is given once");
@@ -1138,6 +1153,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             || seen_question
             || seen_program
             || d.needs_net_status
+            || d.window.is_some()
             || !d.exits.is_empty()
             || !d.settings.is_empty();
         if command_only {

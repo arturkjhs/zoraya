@@ -91,6 +91,88 @@ pub enum Event {
     },
     /// The widget gained or lost the window's keyboard focus.
     Focus(bool),
+    /// The wheel turned with the pointer at a logical point (proposed
+    /// ADR-0329, over ADR-0322's `Wheel`): `dx` and `dy` in 120ths of a
+    /// notch ([`WHEEL_NOTCH`]), `dy` above 0 toward the person (the view
+    /// moves down the content), `dx` above 0 to the right. The window
+    /// gives it to the widget under the pointer and then to each of its
+    /// ancestors until one takes it; it moves no focus.
+    Wheel {
+        x: Logical,
+        y: Logical,
+        dx: i32,
+        dy: i32,
+    },
+}
+
+/// One notch of a wheel in [`Event::Wheel`]'s units (ADR-0322's
+/// `WHEEL_STEP`, the 120 of Linux's high-resolution axes).
+pub const WHEEL_NOTCH: i32 = 120;
+/// The rows, lines or children a notch scrolls: the terminal's three
+/// lines (`zoraya_term::WHEEL_LINES`), proposed ADR-0329.
+pub const ROWS_PER_NOTCH: i32 = 3;
+/// The most one turn counts either way: ADR-0322's `WHEEL_MAX`, 64
+/// notches.
+const WHEEL_MAX: i32 = 64 * WHEEL_NOTCH;
+
+/// A wheel's turns made into whole rows (proposed ADR-0329): a turn of
+/// less than a row (a high-resolution wheel's part of a notch) is kept
+/// until the next turns make a row, so a fine wheel scrolls as far as one
+/// with notches, and smoothly, a row at a time.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WheelSteps {
+    rest: i32,
+}
+
+impl WheelSteps {
+    /// The rows `d` (above 0: toward the person, down the content) moves
+    /// the view, with what was kept from earlier turns; at most 64 notches'
+    /// worth either way.
+    pub fn turn(&mut self, d: i32) -> i32 {
+        let per_row = WHEEL_NOTCH / ROWS_PER_NOTCH;
+        // A turn the other way drops the part kept from the first way.
+        if (d < 0 && self.rest > 0) || (d > 0 && self.rest < 0) {
+            self.rest = 0;
+        }
+        let sum = self.rest.saturating_add(d.clamp(-WHEEL_MAX, WHEEL_MAX));
+        let sum = sum.clamp(-WHEEL_MAX, WHEEL_MAX);
+        self.rest = sum % per_row;
+        sum / per_row
+    }
+
+    /// Forgets the part of a row kept: the view met its end, so a turn
+    /// toward that end does not count later.
+    pub fn stop(&mut self) {
+        self.rest = 0;
+    }
+
+    /// The part of a row kept, in 120ths of a notch.
+    pub fn rest(&self) -> i32 {
+        self.rest
+    }
+}
+
+/// Where a scrolling widget is (proposed ADR-0329): its first row, line or
+/// child shown, and whether the person moved it away from its cursor with
+/// the wheel (then it does not follow the cursor until a key moves it or
+/// the cursor leaves `cursor`, where it was then).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Scrolled {
+    /// What scrolls: a restore only goes to a widget of the same kind.
+    pub kind: &'static str,
+    pub at: usize,
+    pub free: bool,
+    pub cursor: usize,
+}
+
+/// `at` moved by `rows` within `0..=last`.
+pub fn scrolled_by(at: usize, rows: i32, last: usize) -> usize {
+    let to = if rows < 0 {
+        at.saturating_sub(rows.unsigned_abs() as usize)
+    } else {
+        at.saturating_add(rows as usize)
+    };
+    to.min(last)
 }
 
 /// What handling an event did.
@@ -234,6 +316,18 @@ pub trait Widget {
     fn value(&self) -> Value<'_> {
         Value::None
     }
+    /// Where it is scrolled, if it scrolls (proposed ADR-0329).
+    fn scrolled(&self) -> Option<Scrolled> {
+        None
+    }
+    /// Puts it where `s` says (clamped at its next layout), if it scrolls.
+    fn set_scrolled(&mut self, _s: Scrolled) {}
+    /// Scrolls so that its child `child` is in view, if it scrolls its
+    /// children: the keyboard's focus is never on a widget out of view.
+    /// Returns whether it moved.
+    fn reveal(&mut self, _child: usize) -> bool {
+        false
+    }
 }
 
 /// A widget's value, by [`Widget::value`].
@@ -373,6 +467,7 @@ impl Window {
         if let Some(w) = at_path(self.root.as_mut(), &paths[next]) {
             w.event(&Event::Focus(true));
         }
+        self.reveal_focus();
     }
 
     /// Hands an event to the tree.
@@ -391,7 +486,17 @@ impl Window {
             } if self.root.closes_on_escape() => Response::Closed,
             Event::Key { .. } => match self.focused() {
                 Some(path) => {
-                    at_path(self.root.as_mut(), &path).map_or(Response::None, |w| w.event(&e))
+                    // A key goes to a widget the person sees.
+                    let moved = self.reveal_focus();
+                    let r =
+                        at_path(self.root.as_mut(), &path).map_or(Response::None, |w| w.event(&e));
+                    // A view that scrolled to show the widget is painted
+                    // again whatever the widget made of the key.
+                    if moved && r == Response::None {
+                        Response::Repaint
+                    } else {
+                        r
+                    }
                 }
                 None => Response::None,
             },
@@ -411,8 +516,64 @@ impl Window {
                 }
                 at_path(self.root.as_mut(), &path).map_or(Response::None, |w| w.event(&e))
             }
+            Event::Wheel { x, y, .. } => {
+                let mut path = Vec::new();
+                if !hit(self.root.as_mut(), x, y, &mut path) {
+                    return Response::None;
+                }
+                // The deepest widget first, then its ancestors: the
+                // nearest one that scrolls that way takes the turn.
+                loop {
+                    let r =
+                        at_path(self.root.as_mut(), &path).map_or(Response::None, |w| w.event(&e));
+                    if r != Response::None || path.pop().is_none() {
+                        return r;
+                    }
+                }
+            }
             Event::Focus(_) => Response::None,
         }
+    }
+
+    /// Scrolls every ancestor of the focused widget so that it is in view.
+    /// Returns whether any of them moved.
+    fn reveal_focus(&mut self) -> bool {
+        let Some(path) = self.focused() else {
+            return false;
+        };
+        let mut moved = false;
+        for d in 0..path.len() {
+            if let Some(w) = at_path(self.root.as_mut(), &path[..d]) {
+                moved |= w.reveal(path[d]);
+            }
+        }
+        moved
+    }
+
+    /// Where the widget with `id` is scrolled, if it scrolls.
+    pub fn scrolled(&mut self, id: u32) -> Option<Scrolled> {
+        let mut path = Vec::new();
+        if !find(self.root.as_mut(), id, &mut path) {
+            return None;
+        }
+        at_path(self.root.as_mut(), &path).and_then(|w| w.scrolled())
+    }
+
+    /// Puts `root` in place of the tree, keeping the focus and where each
+    /// scrolling widget was (by its place in the tree, when a widget that
+    /// scrolls is there again), and lays it out.
+    pub fn replace_keeping_scroll(&mut self, root: Box<dyn Widget>, p: &mut Painter) {
+        let mut kept = Vec::new();
+        scroll_positions(self.root.as_mut(), &mut Vec::new(), &mut kept);
+        self.root = root;
+        for (path, s) in kept {
+            if let Some(w) = at_path(self.root.as_mut(), &path)
+                && w.scrolled().is_some_and(|now| now.kind == s.kind)
+            {
+                w.set_scrolled(s);
+            }
+        }
+        self.layout(p);
     }
 
     /// Paints the whole tree into `pixels` (rows of `stride` physical
@@ -428,6 +589,23 @@ impl Window {
             &mut Vec::new(),
             focused.as_deref(),
         );
+    }
+}
+
+/// The paths of the widgets that scroll, with where each is.
+fn scroll_positions(
+    w: &mut dyn Widget,
+    path: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, Scrolled)>,
+) {
+    if let Some(s) = w.scrolled() {
+        out.push((path.clone(), s));
+    }
+    let n = w.children().len();
+    for i in 0..n {
+        path.push(i);
+        scroll_positions(w.children()[i].as_mut(), path, out);
+        path.pop();
     }
 }
 
@@ -468,6 +646,9 @@ extern crate std;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_wheel;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

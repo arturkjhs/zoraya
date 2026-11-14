@@ -1,0 +1,15 @@
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -2215,7 +2215,11 @@
+ 	options = filepath_find(respaths, "Choices");
+ 	nsoption_read(options, nsoptions);
+ 	free(options);
+-	nsoption_commandline(&argc, argv, nsoptions);
++	/* Zoraya (ADR-0318, INV-0312-1): no option is read from the command line.
++	 * `--ca_bundle=FILE` and `--ca_path=DIR` would replace the system's roots
++	 * (/system/tls/roots) with a file of the line, and the description says
++	 * there is no option to turn certificate checks off. `-v` is nslog's, read
++	 * above; the one operand is the URL. */
+ 
+ 	/* message init */
+ 	messages = filepath_find(respaths, "Messages");

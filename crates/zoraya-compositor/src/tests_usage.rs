@@ -9,7 +9,7 @@ use alloc::format;
 use zoraya_settings::usage::Reading;
 
 const MIB: u64 = 1 << 20;
-const TABLE: &str = "a1 --untrusted\na2 --untrusted\na3 --untrusted\na4 --untrusted\na5 --untrusted\nproject --colour 1 +w ~/project\n";
+const TABLE: &str = "a1 --untrusted\na2 --untrusted\na3 --untrusted\na4 --untrusted\na5 --untrusted\na6 --untrusted\nproject --colour 1 +w ~/project\n";
 
 impl Setup {
     /// A toplevel request: the status, and the window if it was made.
@@ -645,4 +645,104 @@ fn the_card_stays_on_the_screen_at_the_left_limit() {
     let (card, _) = s.c.card_geometry(Key { client: 0, id: 1 }).unwrap();
     assert!(card.x >= 0 && card.right() <= i64::from(dw), "{card:?}");
     assert_eq!(stale_pixels(&mut s), 0);
+}
+
+impl Setup {
+    /// `AddRoomClient` for `room` with `tag`: the status, the client's end
+    /// and the tags of the `ClientGone`s the panel got.
+    fn try_room_client(&mut self, panel: u32, room: &str, tag: u32) -> (u32, u32, Vec<u32>) {
+        let r = self.c.rooms().get(room).cloned();
+        let (untrusted, colour) =
+            r.map_or((0, 0), |r| (u32::from(r.untrusted), u32::from(r.colour)));
+        let end = self.f().channel(64);
+        let m = gui::AddRoomClient {
+            untrusted,
+            colour,
+            tag,
+            room: zoraya_protocol::Data(room.as_bytes()),
+            app: zoraya_protocol::Data(b"term"),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(b"term"),
+        };
+        self.f().send(panel, message(&m, 7), vec![end]);
+        self.c.step();
+        let out = self.f().take(panel);
+        let gone = out
+            .iter()
+            .filter_map(|m| decode::<gui::ClientGone>(m, 0).ok())
+            .map(|(_, g)| g.tag)
+            .collect();
+        let status = out
+            .iter()
+            .find_map(|m| decode::<gui::ManagerDone>(m, 0).ok())
+            .expect("a reply")
+            .1
+            .status
+            .0;
+        (status, end, gone)
+    }
+}
+
+/// INV-0323-1: an untrusted room's clients are held to `ROOM_CLIENTS`, all
+/// of them to `UNTRUSTED_CLIENTS`, refused `OVER_QUOTA` with `ClientGone`
+/// for the tag; home and a trusted room still add theirs, up to
+/// `MAX_CLIENTS` together.
+#[test]
+fn an_untrusted_rooms_clients_are_counted_in_its_account() {
+    use zoraya_proto_gui::ROOM_CLIENTS;
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let mut tag = 100;
+    for room in ["a1", "a2", "a3", "a4"] {
+        for _ in 0..ROOM_CLIENTS {
+            tag += 1;
+            assert_eq!(s.try_room_client(panel, room, tag).0, status::OK, "{room}");
+        }
+    }
+    // a1 at its bound; a5 and a6 under their own but past all untrusted
+    // rooms'. A refusal changes no other client: the same clients, and the
+    // other rooms' accounts as they were.
+    let clients = s.c.client_count();
+    let others = |s: &Setup| -> Vec<_> {
+        s.c.accounts()
+            .into_iter()
+            .filter(|a| !["a1", "a5", "a6"].contains(&a.room.as_str()))
+            .collect()
+    };
+    let before = others(&s);
+    for room in ["a1", "a5", "a6"] {
+        tag += 1;
+        let (st, end, gone) = s.try_room_client(panel, room, tag);
+        assert_eq!(st, status::OVER_QUOTA, "{room}");
+        assert!(s.f().closed.contains(&end), "the refused end is closed");
+        assert_eq!(gone, [tag]);
+        assert_eq!(s.c.client_count(), clients, "{room}: no other client goes");
+    }
+    assert_eq!(
+        others(&s),
+        before,
+        "the other rooms' accounts are unchanged"
+    );
+    let accounts = s.c.accounts();
+    let a1 = accounts.iter().find(|a| a.room == "a1").unwrap();
+    assert_eq!(a1.refused, 1);
+    // A room with no client keeps its refusal only until the next new
+    // room's: the list stays bounded by the clients there are.
+    assert!(
+        accounts.iter().all(|a| a.room != "a5"),
+        "a5's refusal is forgotten"
+    );
+    assert_eq!(accounts.iter().find(|a| a.room == "a6").unwrap().refused, 1);
+    // The session's clients are not refused for the rooms': up to the
+    // whole table.
+    let untrusted = UNTRUSTED_ACCOUNTS * ROOM_CLIENTS;
+    let before = s.c.client_count();
+    assert_eq!(before, untrusted);
+    for i in 0..MAX_CLIENTS - untrusted {
+        let room = if i % 2 == 0 { "" } else { "project" };
+        assert_eq!(s.try_room_client(panel, room, 0).0, status::OK, "{i}");
+    }
+    assert_eq!(s.c.client_count(), MAX_CLIENTS);
+    assert_eq!(s.try_room_client(panel, "", 0).0, status::NO_MEMORY);
 }

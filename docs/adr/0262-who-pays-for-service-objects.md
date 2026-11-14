@@ -201,6 +201,10 @@ quota would attach.
   not yet take one request per account per pass. A flooding account's requests are bounded by its connections (32), not
   by a pass. Not changed; measure when Q7 floods the service.
 
+- *Note (9e, proposed ADR-0323):* the compositor's clients are 32 (`MAX_CLIENTS` = `MAX_WINDOWS`), and an untrusted
+  room's clients are counted in its account: 3 a room, 12 for all, so the session keeps 20; the windows and pixels of
+  the table are unchanged.
+
 ## Revisit triggers
 - A service's static size measured to keep memory from rooms that need it: consider Option B.
 - A client measured to make a service spend more CPU for it than its room's ceiling: consider lending.

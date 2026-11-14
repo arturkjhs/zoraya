@@ -73,8 +73,49 @@ pub mod buttons {
 /// The longest window title, in bytes of UTF-8 (ADR-0160).
 pub const MAX_TITLE: usize = 256;
 
+/// The longest application name of a launch record (`AddRoomClient`'s `app`,
+/// `SetDock`'s names), in bytes.
+pub const MAX_APP_NAME: usize = 16;
+
+/// An application name the compositor takes in a launch record: 1 to
+/// [`MAX_APP_NAME`] bytes of `a-z`, `0-9`, `-` and `_`. The panel asks the
+/// same before it sends one (9d re-review, W1).
+pub fn is_app_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_APP_NAME
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// Text the compositor draws in its trusted material (a record's line and
+/// entries, a title): no control character and no bidirectional mark,
+/// embedding, override or isolate, which would reorder what the person reads
+/// (review 7e, 19). The panel asks the same before it sends one (9d
+/// re-review, W1).
+pub fn plain_text(s: &str) -> bool {
+    !s.chars().any(|c| {
+        c.is_control()
+            || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    })
+}
+
 /// Popups a client may have open at once (ADR-0160).
 pub const MAX_POPUPS: usize = 4;
+
+/// The compositor's client connections at once (proposed ADR-0323): as many
+/// as its windows (`MAX_WINDOWS`, 32), since a client is there for a
+/// window and its record costs about 1.5 KiB.
+pub const MAX_CLIENTS: usize = 32;
+/// Clients one untrusted room may have (proposed ADR-0323): as many as its
+/// account's surfaces (ADR-0262 point 2).
+pub const ROOM_CLIENTS: usize = 3;
+/// Clients all untrusted rooms together may have: four accounts of
+/// [`ROOM_CLIENTS`].
+pub const UNTRUSTED_CLIENTS: usize = 4 * ROOM_CLIENTS;
+/// The session's share (home, the trusted rooms, the system clients): what
+/// the untrusted rooms cannot take. The panel keeps its reserve for the
+/// desktop's own applications out of it.
+pub const SESSION_CLIENTS: usize = MAX_CLIENTS - UNTRUSTED_CLIENTS;
 
 /// One past the last Unicode scalar value: `text` is below it, and 0 is no
 /// text. A receiver still converts it with `char::from_u32`.
@@ -444,7 +485,7 @@ protocol! {
         /// The room's name; empty for `home`.
         room: Data<'a, 24>,
         /// The application, as the dock names it (`term`, `edit`).
-        app: Data<'a, 16>,
+        app: Data<'a, MAX_APP_NAME>,
         /// The record's entries in ADR-0153's words, one a line.
         entries: Data<'a, MAX_ENTRIES>,
         /// The `zosh` line that made the record (`room project term`).
@@ -492,15 +533,49 @@ protocol! {
         kind: u32,
         index: u32,
     }
+
+    /// Compositor to the client manager, unasked: the client the panel gave
+    /// `tag` (`AddRoomClient`) has gone, its channel closed, so that the
+    /// panel may give the window of a POSIX program again and counts the
+    /// clients that are left (ADR-0317 item 2). A new ordinal (ADR-0052).
+    message ClientGone = 45, handles 0 {
+        tag: u32,
+    }
+
+    /// The wheel turned (or a touchpad scrolled) over a window's body
+    /// (proposed ADR-0322), to the client of the window under the pointer,
+    /// as `WindowPointerMods` goes: `(x, y)` is the pointer in logical
+    /// pixels of that body. `dx` and `dy` are in [`WHEEL_STEP`]ths of one
+    /// notch of a wheel (a high-resolution device sends parts of a notch):
+    /// `dy` above 0 is the wheel turned toward the person, the view moving
+    /// down the content; `dx` above 0 is to the right. Each is at most
+    /// [`WHEEL_MAX`] either way; a receiver still saturates. `modifiers` as
+    /// in `WindowPointerMods`: only to the focused client.
+    message Wheel = 46, handles 0 {
+        dropped: u32,
+        window: u32,
+        x: u32,
+        y: u32,
+        dx: i32,
+        dy: i32,
+        modifiers: Flags<{ modifiers::ALL }>,
+    }
 }
+
+/// One notch of a wheel in `Wheel`'s units (the 120 of Linux's
+/// `REL_WHEEL_HI_RES` and of Windows' `WHEEL_DELTA`, proposed ADR-0322).
+pub const WHEEL_STEP: i32 = 120;
+/// The most `Wheel` carries either way: 64 notches, what the compositor
+/// gathers in one round at most.
+pub const WHEEL_MAX: i32 = 64 * WHEEL_STEP;
 
 /// The ordinals a client may send.
 pub const CLIENT_REQUESTS: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 /// The client requests only a system client may send (proposed ADR-0245).
 pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 16] = [
-    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+pub const CLIENT_EVENTS: [u32; 17] = [
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 46,
 ];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
@@ -509,7 +584,7 @@ pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// manager only (ADR-0168).
 pub const CLIENT_MANAGER_REQUESTS: [u32; 5] = [37, 39, 40, 43, 44];
 /// What the compositor sends the manager unasked.
-pub const MANAGER_EVENTS: [u32; 2] = [36, 41];
+pub const MANAGER_EVENTS: [u32; 3] = [36, 41, 45];
 
 /// `DockPressed`'s kinds.
 pub mod dock {

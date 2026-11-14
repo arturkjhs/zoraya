@@ -58,6 +58,11 @@ downloads and checks (Inter 4.1, SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa4
 JetBrains Mono 2.304, `6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf`), from which the files below
 were extracted on 2026-11-08 (TASK-24, 7a).
 
+Since TASK-27 9f-text (ADR-0326) the same files, unmodified and with their licence texts, are also copied into the
+volume's `/system/fonts` by `tools/run-disk.sh` and by `make test-netsurf`, and NetSurf (GPL-2.0) reads them there at run
+time; nothing of a font is compiled or linked into `netsurf` or `libc.a`. No font was added. Whether the licence rule of
+`CLAUDE.md` names OFL-1.1 for such unmodified data files is proposed ADR-0327.
+
 | File | Release | Licence | Used by | Purpose | SHA-256 |
 |---|---|---|---|---|---|
 | `fonts/Inter-Regular.ttf` | Inter 4.1, `extras/ttf/` | OFL-1.1 | `zoraya-fonts` | the UI font (`font.ui`) | `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82` |
@@ -142,6 +147,11 @@ measured T1 workloads).
 | zlib | 1.3.1 | zlib | `libz.a` for curl and wget (TASK-27 9a) |
 | curl | 8.23.0 | curl (MIT-like, its `COPYING`) | `/bin/curl` on the volume of `make run` and the apps' tests (TASK-27 9a) |
 | GNU wget | 1.25.0 | GPL-3.0-or-later | `/bin/wget`, same (TASK-27 9a) |
+| NetSurf (netsurf-all) | 3.11 | GPL-2.0-only with the additional permission to link with OpenSSL (COPYING lines 8-15) (the browser), MIT (its libraries `libnsfb`, `libcss`, `libdom`, `libhubbub`, `libparserutils`, `libwapcaplet`, `libnsbmp`, `libnsgif`, `libnslog`, `libnspsl`, `libnsutils`, `libutf8proc`), as ADR-0109 shipped GPL ports | `/bin/netsurf` (TASK-27 9d, proposed ADR-0317, ADR-0318); built by `make netsurf` (no JavaScript, no SVG) |
+| libpng | 1.6.50 | libpng licence (permissive) | PNG images for NetSurf (9d) |
+| IJG libjpeg | 9f | IJG licence (permissive) | JPEG images for NetSurf (9d) |
+| pkg-config | 0.29.2 | GPL-2.0 | host tool only, built into `build/ports/host` when the host has none; never linked (9d) |
+| GNU bison | 3.8.2 | GPL-3.0-or-later (with the Bison exception) | host tool only, built into `build/ports/host` when the host's is older than 3 (macOS ships 2.3; libnslog's grammar); never linked (9d). The host also needs perl, gperf and flex (CI image: `.github/ci/Dockerfile`) |
 
 ### Mutation testing
 

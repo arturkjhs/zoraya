@@ -365,6 +365,7 @@ version = "0.1.0"
 name = "zoraya-app"
 version = "0.1.0"
 dependencies = [
+ "zoraya-platform",
  "zoraya-proto-gui",
  "zoraya-protocol",
  "zoraya-test-alloc",
@@ -546,6 +547,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-fontset"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fonts",
+ "zoraya-test-alloc",
+ "zoraya-text",
+]
+
+[[package]]
 name = "zoraya-footprint"
 version = "0.1.0"
 
@@ -720,6 +730,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-platform"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-pmm"
 version = "0.1.0"
 dependencies = [
@@ -732,10 +746,12 @@ name = "zoraya-posix"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-fontset",
  "zoraya-fs",
  "zoraya-fs-service",
  "zoraya-fs-testkit",
  "zoraya-heap",
+ "zoraya-platform",
  "zoraya-proto-file",
  "zoraya-proto-net",
  "zoraya-proto-posix",
@@ -744,6 +760,7 @@ dependencies = [
  "zoraya-resolve",
  "zoraya-rng",
  "zoraya-rt",
+ "zoraya-surface",
  "zoraya-test-alloc",
 ]
 
@@ -934,6 +951,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-surface"
+version = "0.1.0"
+dependencies = [
+ "zoraya-platform",
+ "zoraya-proto-gui",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-term"
 version = "0.1.0"
 dependencies = [
@@ -1113,6 +1140,8 @@ dependencies = [
 name = "zoraya-virtio-input"
 version = "0.1.0"
 dependencies = [
+ "zoraya-proto-input",
+ "zoraya-protocol",
  "zoraya-test-alloc",
  "zoraya-virtio",
 ]

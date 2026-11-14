@@ -1,0 +1,14 @@
+# CPython's own tests (TASK-27 9c, proposed ADR-0320 item 9; `make
+# test-python-regr` and `make test-python-long`, which turn @REGRLIST@ into
+# tests/python/regr-modules.txt or regr-long.txt and @REGRARGS@ into regrtest's
+# options): regr.py runs CPython's regrtest over the list's modules, in the
+# volume's home. The choice of the lists and the reason are in regr.py.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> python3 regr.py @REGRLIST@ @REGRARGS@\r
+< Result: SUCCESS
+< \r\n~>
+x power off
+> poweroff\r

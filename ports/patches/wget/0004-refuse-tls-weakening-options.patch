@@ -1,0 +1,90 @@
+diff -ruN a/src/ftp.c b/src/ftp.c
+--- a/src/ftp.c	2024-03-11 23:59:02
++++ b/src/ftp.c	2026-11-13 17:22:13
+@@ -295,6 +295,9 @@
+     {
+       /* The server does not support 'AUTH TLS'.
+        * Check if --ftps-fallback-to-ftp was passed. */
++#ifdef __zoraya__
++      opt.ftps_fallback_to_ftp = false; /* refused in init.c (ADR-0321) */
++#endif
+       if (opt.ftps_fallback_to_ftp)
+         {
+           logputs (LOG_NOTQUIET, "Server does not support AUTH TLS. Falling back to FTP.\n");
+@@ -337,7 +340,12 @@
+   bool try_again;
+   bool list_a_used = false;
+ #ifdef HAVE_SSL
++#ifdef __zoraya__
++  /* The data connection is never left in the clear (ADR-0321).  */
++  enum prot_level prot = PROT_PRIVATE;
++#else
+   enum prot_level prot = (opt.ftps_clear_data_connection ? PROT_CLEAR : PROT_PRIVATE);
++#endif
+   /* these variables tell whether the target server
+    * accepts the security extensions (RFC 2228) or not,
+    * and whether we're actually using any of them
+diff -ruN a/src/init.c b/src/init.c
+--- a/src/init.c	2026-11-13 17:20:59
++++ b/src/init.c	2026-11-13 17:22:13
+@@ -944,6 +944,36 @@
+   if ((unsigned) comind >= countof (commands))
+     return NULL;
+ 
++#ifdef __zoraya__
++  /* TLS verification and the roots at /system/tls/roots cannot be turned
++     off, replaced or weakened (ADR-0228 item 3, INV-0312-1, ADR-0321).  Every
++     setting, from the command line, passes here, so the refusal does not
++     depend on which option or which spelling set it.  */
++  {
++    const char *name = commands[comind].name;
++    bool refuse = false;
++
++    if (!strcmp (name, "checkcertificate")
++        || !strcmp (name, "cacertificate")
++        || !strcmp (name, "cadirectory")
++        || !strcmp (name, "ciphers")
++        || !strcmp (name, "ftpsfallbacktoftp")
++        || !strcmp (name, "ftpscleardataconnection"))
++      refuse = true;
++    else if (!strcmp (name, "secureprotocol"))
++      refuse = !(c_strcasecmp (val, "auto") == 0
++                 || c_strcasecmp (val, "TLSv1_2") == 0
++                 || c_strcasecmp (val, "TLSv1_3") == 0);
++    if (refuse)
++      {
++        fprintf (stderr, _("%s is refused: TLS verification and the roots "
++                           "cannot be turned off, replaced or weakened\n"),
++                 com);
++        exit (WGET_EXIT_PARSE_ERROR);
++      }
++  }
++#endif
++
+   DEBUGP (("Setting %s (%s) to %s\n", com, commands[comind].name, val));
+   return commands[comind].action (com, val, commands[comind].place);
+ }
+diff -ruN a/src/openssl.c b/src/openssl.c
+--- a/src/openssl.c	2026-11-13 17:20:59
++++ b/src/openssl.c	2026-11-13 17:22:13
+@@ -201,6 +201,20 @@
+     /* The SSL has already been initialized. */
+     return true;
+ 
++#ifdef __zoraya__
++  /* Second line behind setval_internal (ADR-0321): whatever set them, the
++     roots are the built-in ones, the certificate is checked, the cipher list
++     is the default one and the protocol floor is not below TLS 1.2.  This
++     runs before the protocol and the ciphers are chosen below.  */
++  opt.ca_cert = NULL;
++  opt.ca_directory = NULL;
++  opt.check_cert = CHECK_CERT_ON;
++  opt.tls_ciphers_string = NULL;
++  if (opt.secure_protocol != secure_protocol_tlsv1_2
++      && opt.secure_protocol != secure_protocol_tlsv1_3)
++    opt.secure_protocol = secure_protocol_auto;
++#endif
++
+   /* Init the PRNG.  If that fails, bail out.  */
+   init_prng ();
+   if (RAND_status () != 1)

@@ -257,6 +257,15 @@ impl GlyphCache {
         }
     }
 
+    /// The bytes of coverage the cached glyphs hold.
+    pub fn bytes(&self) -> usize {
+        self.slots
+            .iter()
+            .flatten()
+            .map(|(_, b)| b.coverage.len())
+            .sum()
+    }
+
     /// The key's first slot (Fibonacci hashing); its second is the
     /// neighbour, `slot ^ 1`: two ways, the newer glyph in the first.
     fn slot(&self, key: &Key) -> usize {

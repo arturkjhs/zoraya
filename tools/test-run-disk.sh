@@ -7,15 +7,20 @@
 #  2. nothing is made twice for the same inputs, and a changed extra file
 #     makes a new disk and keeps the old one as .old;
 #  3. EXTRA_ROOT= takes no extra root, and a named root that is missing, or
-#     that holds /system, is refused.
+#     that holds /system, is refused;
+#  4. several roots separated by colons all end up on the disk, a missing
+#     second one is refused, the order of the roots is in the key, and so is
+#     DISK_SIZE.
 # No QEMU and no real mkfs: the scratch mkfs copies the tree it is given.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 dir=$(mktemp -d "${TMPDIR:-/tmp}/zoraya-run-disk.XXXXXX")
 trap 'rm -rf "$dir"' EXIT
 cd "$dir"
-mkdir -p rootfs/system/tls rootfs/bin crates/zoraya-fs/src target/debug build/rootfs-apps/bin
+mkdir -p rootfs/system/tls rootfs/bin crates/zoraya-fs/src target/debug build/rootfs-apps/bin fonts
 echo roots > rootfs/system/tls/roots
+echo font-v1 > fonts/Inter-Regular.ttf
+echo licence > fonts/Inter-LICENSE.txt
 echo sh > rootfs/bin/sh
 echo 'pub const FORMAT_VERSION: u16 = 7;' > crates/zoraya-fs/src/format.rs
 cat > target/debug/zoraya-mkfs <<'MK'
@@ -36,6 +41,10 @@ fail() { echo "test-run-disk: FAIL: $*" >&2; exit 1; }
 run disk.img
 grep -q './bin/curl' disk.img || fail "the default build/rootfs-apps is not on the disk"
 grep -q './bin/sh' disk.img || fail "rootfs/ is not on the disk"
+# The system's fonts are in /system/fonts, from fonts/ (ADR-0326 item 5).
+grep -qx './system/fonts/Inter-Regular.ttf' disk.img || fail "the fonts are not in /system/fonts"
+grep -qx './system/fonts/Inter-LICENSE.txt' disk.img || fail "the fonts' licence is not in /system/fonts"
+grep -q 'fonts ' disk.img.key || fail "the fonts are not in the key: $(cat disk.img.key)"
 cp disk.img first.copy
 run disk.img
 [ ! -s err ] || fail "a current disk was replaced: $(cat err)"
@@ -46,6 +55,18 @@ echo curl-v2 > build/rootfs-apps/bin/curl
 run disk.img
 [ -f disk.img.old ] || fail "a new curl did not make a new disk and keep the old"
 grep -q 'another format or another /system' err || fail "the replacement was not said"
+# A changed font is a new disk too.
+cp disk.img.key before-font.key
+echo font-v2 > fonts/Inter-Regular.ttf
+run disk.img
+cmp -s disk.img.key before-font.key && fail "a changed font did not change the key"
+[ -f disk.img.old.1 ] || fail "a changed font did not make a new disk and keep the old"
+grep -qx './system/fonts/Inter-Regular.ttf' disk.img || fail "the new disk has no fonts"
+# Without fonts/ no disk is made.
+mv fonts fonts.away
+if run nofonts.img; then fail "a disk was made without fonts/"; fi
+grep -q 'fonts/ is missing' err || fail "the refusal does not say why: $(cat err)"
+mv fonts.away fonts
 
 # No extra root.
 runx '' none.img
@@ -62,4 +83,29 @@ echo mine > evil/system/tls/roots
 if runx evil evil.img; then fail "an EXTRA_ROOT with /system was accepted"; fi
 grep -q 'holds /system' err || fail "the refusal does not say why: $(cat err)"
 [ ! -e evil.img ] || fail "a disk was made from an EXTRA_ROOT with /system"
+# Several roots (TASK-27 9c).
+mkdir -p build/rootfs-apps/bin build/rootfs-python/bin
+echo curl-v3 > build/rootfs-apps/bin/curl
+echo py-v1 > build/rootfs-python/bin/python3
+runx build/rootfs-apps:build/rootfs-python two.img
+grep -q './bin/curl' two.img || fail "the first of two roots is not on the disk"
+grep -q './bin/python3' two.img || fail "the second of two roots is not on the disk"
+grep -q './bin/sh' two.img || fail "rootfs/ is not on a disk of two roots"
+# A second root that is not there is refused, and no disk is made.
+if runx build/rootfs-apps:build/nowhere miss.img; then fail "a missing second root was accepted"; fi
+[ ! -e miss.img ] || fail "a disk was made with a missing second root"
+# The same roots again: nothing is made.
+runx build/rootfs-apps:build/rootfs-python two.img
+[ ! -s err ] || fail "a current two-root disk was replaced: $(cat err)"
+[ ! -e two.img.old ] || fail "a current two-root disk was kept as .old"
+# Another order is another key (the roots are listed in that order).
+runx build/rootfs-python:build/rootfs-apps two.img
+[ -f two.img.old ] || fail "a change of the order of the roots did not make a new disk"
+grep -q 'another format or another /system' err || fail "the new order was not said"
+# A new size is another key.
+cp two.img.key size.key
+( DISK_SIZE=128M; export DISK_SIZE; EXTRA_ROOT=build/rootfs-python:build/rootfs-apps; export EXTRA_ROOT; run two.img )
+grep -q 'size 128M' two.img.key || fail "DISK_SIZE is not in the key: $(cat two.img.key)"
+cmp -s two.img.key size.key && fail "a new DISK_SIZE did not change the key"
+[ -f two.img.old.1 ] || fail "a new DISK_SIZE did not make a new disk"
 echo "test-run-disk: ok"

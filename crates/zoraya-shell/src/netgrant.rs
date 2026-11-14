@@ -17,7 +17,8 @@ use alloc::string::String;
 use zoraya_abi::net::{
     MAX_RULES, Ports, Protocols, ReachRule, Scope, Target, encode, rights, valid_name,
 };
-use zoraya_describe::Kind;
+use zoraya_command::Outcome;
+use zoraya_describe::{Description, Kind};
 
 use crate::grants::{Line, Refused, value_of};
 
@@ -240,6 +241,34 @@ fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result
     }
     words.push(word);
     Ok(())
+}
+
+/// Whether a line for a POSIX program may run (ADR-0317 item 6, INV-0312-1).
+/// A program with a window (its description has `window`) runs only a line its
+/// description parses: an option it does not give (`netsurf --ca_bundle=FILE`)
+/// is the program's own and could replace the roots, and a line that does not
+/// parse would fall back to no options and still keep the network of the
+/// `+net` words. `--help` alone is the program's to answer. A program without
+/// a window keeps the default-settings rule for a line that does not parse.
+pub fn line_may_run(d: &Description, args: &[&str]) -> bool {
+    if d.window.is_none() {
+        return true;
+    }
+    match zoraya_command::parse(d, args) {
+        Ok(Outcome::Run(_)) => true,
+        Ok(Outcome::Help) => args.len() == 1,
+        Err(_) => false,
+    }
+}
+
+/// The targets a scope reaches, as the window's `+net` pills name them: the
+/// first word of each `describe` line after `net: `.
+pub fn targets(scope: &[u8]) -> Vec<String> {
+    describe(scope)
+        .iter()
+        .filter_map(|l| l.trim_start_matches("net: ").split_whitespace().next())
+        .map(String::from)
+        .collect()
 }
 
 /// The lines `grants` prints for the scope `net_for` made (ADR-0224 item 3),

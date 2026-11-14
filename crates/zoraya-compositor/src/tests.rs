@@ -1644,3 +1644,5 @@ mod settings;
 mod sheets;
 #[path = "tests_usage.rs"]
 mod usage;
+#[path = "tests_wheel.rs"]
+mod wheel;

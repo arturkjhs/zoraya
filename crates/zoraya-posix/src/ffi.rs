@@ -13,6 +13,8 @@
 
 mod procs;
 mod sockets;
+mod text;
+mod window;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -25,8 +27,8 @@ use core::ptr;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use zoraya_abi::posix::{
-    self as abi, Bootstrap, EXT_NET, EXT_RANDOM, SELF_EXT_MESSAGE, SELF_MESSAGE, SELF_NET_MESSAGE,
-    ext_handles, slot,
+    self as abi, Bootstrap, EXT_NET, EXT_RANDOM, EXT_WINDOW, SELF_EXT_MESSAGE, SELF_MESSAGE,
+    SELF_NET_MESSAGE, ext_handles, slot,
 };
 use zoraya_abi::{
     Buffer, Bytes, ChannelEntry, DEADLINE_INFINITE, Handle, Invoke, MapFlags, MemoryFlags,
@@ -917,21 +919,26 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     // The second message: SELF, which a fork child gets otherwise.
     let mut second = [0u8; 16];
     let mut self_handle = Vec::new();
-    let (kept, net, random) = match read(sys, &mut second, &mut self_handle) {
+    let (kept, net, random, window) = match read(sys, &mut second, &mut self_handle) {
         Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => {
-            (self_handle.pop(), None, None)
+            (self_handle.pop(), None, None, None)
         }
         // `SELF` and the connection to `netd` (ADR-0287): only a channel
         // is taken for the network.
         Some(4) if &second[..4] == SELF_NET_MESSAGE && self_handle.len() == 2 => {
             let net = self_handle.pop();
-            (self_handle.pop(), net, None)
+            (self_handle.pop(), net, None, None)
         }
         // `SELF`, then the connections the flags name (proposed ADR-0310).
         Some(5)
             if &second[..4] == SELF_EXT_MESSAGE
                 && ext_handles(second[4]).is_some_and(|n| self_handle.len() == 1 + n) =>
         {
+            let window = if second[4] & EXT_WINDOW != 0 {
+                self_handle.pop()
+            } else {
+                None
+            };
             let random = if second[4] & EXT_RANDOM != 0 {
                 self_handle.pop()
             } else {
@@ -942,7 +949,7 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
             } else {
                 None
             };
-            (self_handle.pop(), net, random)
+            (self_handle.pop(), net, random, window)
         }
         // A flag this library does not know: `SELF` is still the first
         // handle (abi::SELF_EXT_MESSAGE's contract); the rest is closed below.
@@ -951,9 +958,9 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
                 && ext_handles(second[4]).is_none()
                 && !self_handle.is_empty() =>
         {
-            (Some(self_handle.remove(0)), None, None)
+            (Some(self_handle.remove(0)), None, None, None)
         }
-        _ => (None, None, None),
+        _ => (None, None, None, None),
     };
     for h in self_handle.drain(..) {
         let _ = zoraya_rt::handle_close(h);
@@ -977,10 +984,17 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
             };
             p.net = net.filter(|h| channel(*h));
             p.random = random.filter(|h| channel(*h));
+            p.window = window.filter(|h| channel(*h));
             p
         }
         None => {
-            for h in handles.into_iter().chain(kept).chain(net).chain(random) {
+            for h in handles
+                .into_iter()
+                .chain(kept)
+                .chain(net)
+                .chain(random)
+                .chain(window)
+            {
                 let _ = zoraya_rt::handle_close(h);
             }
             Posix::new(sys, facts)

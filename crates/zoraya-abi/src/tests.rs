@@ -1686,12 +1686,14 @@ fn a_base_says_whether_the_real_time_clock_gave_the_date() {
 // not know makes the message unknown.
 #[test]
 fn zpbx_flags_count_the_handles_after_self() {
-    use crate::posix::{EXT_NET, EXT_RANDOM, ext_handles};
+    use crate::posix::{EXT_NET, EXT_RANDOM, EXT_WINDOW, ext_handles};
     assert_eq!(ext_handles(0), Some(0));
     assert_eq!(ext_handles(EXT_NET), Some(1));
     assert_eq!(ext_handles(EXT_RANDOM), Some(1));
     assert_eq!(ext_handles(EXT_NET | EXT_RANDOM), Some(2));
-    for flags in 4..=255u8 {
+    assert_eq!(ext_handles(EXT_WINDOW), Some(1));
+    assert_eq!(ext_handles(EXT_NET | EXT_RANDOM | EXT_WINDOW), Some(3));
+    for flags in 8..=255u8 {
         assert_eq!(ext_handles(flags), None, "{flags:#x}");
     }
 }

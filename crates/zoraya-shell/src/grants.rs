@@ -368,6 +368,54 @@ pub fn merge(plan: &[Planned]) -> Vec<Merged> {
     covered(by_path(plan))
 }
 
+/// The directory of the system's fonts (ADR-0162, ADR-0326 item 4).
+pub const SYSTEM_FONTS: &str = "/system/fonts";
+
+/// What a POSIX program of the image is given with its window (ADR-0326
+/// item 4, INV-0326-1): `/system/fonts` read only, "with the window", when
+/// its description has `window`; nothing for one without. This is the only
+/// place that gives a POSIX program that directory.
+pub fn with_window(description: &Description) -> Option<Planned> {
+    description.window.as_ref().map(|_| Planned {
+        path: String::from(SYSTEM_FONTS),
+        access: Access::Read,
+        reason: String::from("with the window"),
+    })
+}
+
+/// The most pills a window shows (`zoraya_panel::window_record` accepts as
+/// many lines).
+pub const MAX_WINDOW_PILLS: usize = 16;
+
+/// The pills of a POSIX program's window (ADR-0317 item 3, INV-0317-1): the
+/// network's first, `+net TARGET` for each of `net_targets`, then `+r PATH`
+/// or `+w PATH` for each merged entry of the plan. The window must show every
+/// grant, so a line with more than [`MAX_WINDOW_PILLS`] pills is refused
+/// (`Err` with how many it would have), never cut short.
+pub fn window_pills(plan: &[Planned], net_targets: &[String]) -> Result<Vec<String>, usize> {
+    let mut pills: Vec<String> = Vec::new();
+    let mut add = |pill: String| {
+        if !pills.contains(&pill) {
+            pills.push(pill);
+        }
+    };
+    for t in net_targets {
+        add(alloc::format!("+net {t}"));
+    }
+    for m in merge(plan) {
+        let word = if m.rights & rights::WRITE != 0 {
+            "+w"
+        } else {
+            "+r"
+        };
+        add(alloc::format!("{word} {}", m.path));
+    }
+    if pills.len() > MAX_WINDOW_PILLS {
+        return Err(pills.len());
+    }
+    Ok(pills)
+}
+
 /// The entries of a plan merged by exact path, in the order each first
 /// appears.
 fn by_path(plan: &[Planned]) -> Vec<Merged> {

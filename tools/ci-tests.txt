@@ -22,8 +22,8 @@ make test-tour-gui POSIX_ACCELS="auto"
 make test-tour-gui POSIX_ACCELS="tcg"
 make test-crash
 make test-net
-make test-gui GUI_RUNS="terminal:auto:2 terminal:tcg:2 windows:auto:2"
-make test-gui GUI_RUNS="terminal:auto:1920x1200 files-manage:auto:2 terminal:auto:1600x1000"
+make test-gui GUI_RUNS="terminal:auto:2 terminal:tcg:2 windows:auto:2 wheel:auto:1 wheel:tcg:1"
+make test-gui GUI_RUNS="terminal:auto:1920x1200 files-manage:auto:2 terminal:auto:1600x1000 wheel:auto:2"
 make test-gui GUI_RUNS="rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 spinners:auto:1 spinners:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1"
 make test-gui GUI_RUNS="terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 settings:auto:1 settings:tcg:1 net:auto:1 net:tcg:1"
 make test-posix POSIX_SCRIPTS="tests/posix/hello.script tests/posix/w5.script" POSIX_ACCELS="auto tcg"
@@ -45,5 +45,8 @@ make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="tcg"
 make test-keeper
 make test-hand-run
 make test-apps
+make test-netsurf
+make test-python
+make test-python-regr
 make test-fuzz FUZZ_SECONDS=600 FUZZ_JOBS=5
 make test-fuzz-net FUZZ_SECONDS=600 FUZZ_JOBS=3

@@ -1,0 +1,130 @@
+# Part 9f-wheel (proposed ADR-0329, over ADR-0322's Wheel): the file
+# manager, settings and the editor scroll with the wheel under the pointer,
+# three rows (lines, children) a notch, and leave the selection and the
+# cursor where they are. Each part checks pixels that only the turn puts
+# there. Coordinates are logical at scale 1 (1024 x 768): each application
+# is the second window, its body at (105, 138); the dock's tiles at y 722,
+# files 427 with no room chips, edit 424 and settings 474 with two. Colours:
+# bg.selection dfe4ec, accent 3b4f6b, bg.view ffffff.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+type for f in 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 { echo x > f$f.txt }\r
+screen ~> _
+#
+# The file manager: 30 files, rows at y = 232 + 28 n, the list from x 289.
+click 427 723
+then files: holds +r / +w ~
+then files: ~ lists f00.txt f01.txt f02.txt
+pause 1500
+click 545 119
+pause 500
+# f05 selected: its row (5) in bg.selection between the name and the size.
+click 409 372
+then files: status 30 items · f05.txt selected (2 B)
+region 500 368 150 8 dfe4ec
+# A notch toward the person over the list: three rows up, the selection
+# with them, now in row 2; row 5 is f08's, not selected.
+wheel 600 400 down 1
+region 500 284 150 8 dfe4ec
+region 500 368 150 8 ffffff
+shot wheel-files
+# Back a notch: row 5 again.
+wheel 600 400 up 1
+region 500 368 150 8 dfe4ec
+region 500 284 150 8 ffffff
+# Far down and a key: the cursor's row comes back into view. f14, the last
+# row shown, selected; ten notches take the list to its end (first row
+# f15), and only there is f14 in no row: its bg.selection is in row 14,
+# 11, 8, 5 or 2 on the way. The keyboard and the tablet are two devices
+# that a slow guest reads in no fixed order (TCG on CI), so the key waits
+# for the last notch: else a notch after it scrolls the cursor away again.
+click 409 624
+then files: status 30 items · f14.txt selected (2 B)
+region 500 620 150 8 dfe4ec
+wheel 600 400 down 10
+# Rows 2 to 14, left of the pointer's arrow at (600, 400).
+region 420 284 60 345 ffffff
+# Up selects f13, which the list brings back as its first row shown.
+key up
+then files: status 30 items · f13.txt selected (2 B)
+region 500 228 150 8 dfe4ec
+# Closed by its frame's close button.
+click 121 119
+pause 1000
+#
+# Settings, with two rooms, so that its page is taller than its window:
+# the rooms' chips move the dock's tiles left, settings to 474.
+# The first terminal focused, its title bar's focused ground drawn (as
+# windows.script waits), before any key: the click and the keys come from
+# two devices that a slow guest reads in no fixed order, and a key that
+# comes first reaches no window ("oom new r1" under TCG at scale 2).
+click 400 80
+region 130 76 100 4 f7f7f8
+pause 500
+type room new r1 +r /texts\r
+screen r1 --colour 1 +r /texts
+type room new r2 +r /texts\r
+screen r2 --colour 2 +r /texts
+screen ~> _
+pause 1500
+click 474 722
+pause 1500
+click 400 119
+pause 500
+# The motion switch's track (on: accent) and Scale's chosen box.
+region 180 268 10 6 3b4f6b
+region 172 303 8 8 3b4f6b
+# A notch: three children (Appearance, Theme, Motion) go up; Scale's
+# chosen box is now at the top of the page, 135 higher.
+wheel 400 400 down 1
+region 172 168 8 8 3b4f6b
+shot wheel-settings
+# Back a notch.
+wheel 400 400 up 1
+region 180 268 10 6 3b4f6b
+region 172 303 8 8 3b4f6b
+# To the end, then Apply, the page's last control, at the bottom.
+wheel 400 400 down 20
+shot wheel-settings-end
+click 400 603
+then settings: No change.
+click 121 119
+pause 1000
+#
+# The editor: 30 empty lines, then 10 of x; everything selected (an empty
+# line shows one cell of bg.selection at the text's left, x 133). The view
+# from x 125, y 194, ten lines of 19 from y 202; it ends at the cursor, on
+# the last line, so every row shows an x.
+click 424 722
+pause 1500
+click 400 119
+pause 500
+click 400 300
+type \r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r
+type x\rx\rx\rx\rx\rx\rx\rx\rx\rx
+chord ctrl a
+# Every key drawn before the wheel turns (a slow guest reads the keyboard
+# and the tablet in no fixed order, and a key after the turn brings the
+# view back to the cursor): the first row shows a line of x, its line end
+# in bg.selection, only with the view at the end and everything selected.
+region 142 204 6 14 dfe4ec
+shot wheel-edit-before
+# A notch away from the person: three lines down, the three empty lines
+# before the x's now in the first three rows.
+wheel 400 300 up 1
+region 134 204 5 52 dfe4ec
+shot wheel-edit
+# Up to the top: every row an empty line.
+wheel 400 300 up 9
+region 134 204 5 186 dfe4ec
+# The first terminal turns the machine off.
+# Focused first, as above: else poweroff can reach the editor, still
+# focused with everything selected, and the machine never ends (CI, at
+# scale 2 after the merge of 9f-text, 2026-11-14).
+click 400 80
+region 130 76 100 4 f7f7f8
+pause 500
+origin 73 106
+type poweroff\r
+exit

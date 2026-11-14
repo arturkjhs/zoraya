@@ -53,6 +53,14 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 `build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and
 `run-gui`. `ports/apps/zshim.c` is the small archive of names those two programs need and `libc.a` does not export.
 
+`make netsurf` (TASK-27 9d, ADR-0318) builds libpng, libjpeg, libcurl's install and NetSurf 3.11's libraries
+(`libnsfb` and the others, no libsvgtiny, no JavaScript) into `build/ports/deps`, then `netsurf` (framebuffer front
+end, its text over `zoraya-text` since 9f-text: `ports/netsurf/font_zoraya.c` and patch `0008`, ADR-0326) into `build/rootfs-apps/bin` with its resources in `build/rootfs-apps/usr/share/netsurf`.
+Host tools it builds into `build/ports/host` when needed: pkg-config 0.29.2 (the host has none), bison 3.8.2 (the host's
+is older than 3), zlib and libpng (for NetSurf's `convert_image`). `patches/netsurf/0001` removes a typed `%destructor`
+from libnslog's grammar so that an old bison reads it. `ports/apps/nsshim.c` is the names NetSurf needs and `libc.a`
+does not export.
+
 Lua, SQLite and hello are not built on the host: `make -f ports/Makefile workloads`
 unpacks them into `build/ports/workloads/`, with tcc's tree (the ports' patches
 applied, for W1), and `make posix-image` copies them into the image (ADR-0110 item

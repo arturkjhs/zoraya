@@ -1,0 +1,15 @@
+--- a/Lib/urllib/request.py	2026-11-13 17:06:42
++++ b/Lib/urllib/request.py	2026-11-13 17:06:42
+@@ -1891,6 +1891,12 @@
+     Scan the environment for variables named <scheme>_proxy;
+     this seems to be the standard convention.
+     """
++    if sys.platform == 'zoraya' and sys.flags.ignore_environment:
++        # TASK-27 9c, ADR-0320 item 6: the environment decides nothing here
++        # (the interpreter always runs as with -E), and urllib did not look at
++        # the flag: http_proxy would send a request where the line did not
++        # say it goes.
++        return {}
+     # in order to prefer lowercase variables, process environment in
+     # two passes: first matches any, second pass matches lowercase only
+ 

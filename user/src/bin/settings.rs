@@ -190,7 +190,7 @@ fn main() -> i32 {
                     drafts.retain(|(d, _)| *d != id);
                     drafts.push((id, String::from(t)));
                 }
-                app.replace(window, page_with_rooms(&s, &rows, &drafts, ""));
+                app.replace_keeping_scroll(window, page_with_rooms(&s, &rows, &drafts, ""));
                 continue;
             }
             // Apply: each changed word through the panel, which writes the
@@ -226,7 +226,7 @@ fn main() -> i32 {
                     said.join(" | ")
                 };
                 println!("settings: {status}");
-                app.replace(window, page_with_rooms(&s, &rows, &drafts, &status));
+                app.replace_keeping_scroll(window, page_with_rooms(&s, &rows, &drafts, &status));
                 continue;
             }
             Happened::Ui {
@@ -291,6 +291,6 @@ fn main() -> i32 {
         if !status.is_empty() {
             println!("settings: {status}");
         }
-        app.replace(window, page_with_rooms(&s, &rows, &drafts, &status));
+        app.replace_keeping_scroll(window, page_with_rooms(&s, &rows, &drafts, &status));
     }
 }

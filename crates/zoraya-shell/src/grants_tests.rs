@@ -723,3 +723,68 @@ fn curl_o_below_the_directory_and_data_from_a_file_needs_a_grant() {
             .all(|e| e.access != Access::Read && e.path != "/u/p")
     );
 }
+
+fn read_of(path: &str) -> Planned {
+    Planned {
+        path: path.into(),
+        access: Access::Read,
+        reason: String::from("test"),
+    }
+}
+
+/// INV-0317-1, the host half: the window's pills say every grant, the
+/// network's first.
+#[test]
+fn window_pills_list_the_network_first_then_the_files() {
+    let plan = vec![read_of("/a"), read_of("/b")];
+    let net = vec![String::from("example.org:443")];
+    assert_eq!(
+        crate::grants::window_pills(&plan, &net).unwrap(),
+        vec!["+net example.org:443", "+r /a", "+r /b"]
+    );
+    // The same path twice is one pill.
+    let twice = vec![read_of("/a"), read_of("/a")];
+    assert_eq!(
+        crate::grants::window_pills(&twice, &[]).unwrap(),
+        vec!["+r /a"]
+    );
+}
+
+/// INV-0317-1: more pills than the window shows is a refusal, never a window
+/// that understates its grants (the net pills do not fall off the end).
+#[test]
+fn window_pills_refuse_more_than_sixteen() {
+    let max = crate::grants::MAX_WINDOW_PILLS;
+    let files: Vec<Planned> = (0..max).map(|i| read_of(&format!("/d{i}"))).collect();
+    assert_eq!(crate::grants::window_pills(&files, &[]).unwrap().len(), max);
+    let net = vec![String::from("h")];
+    assert_eq!(crate::grants::window_pills(&files, &net), Err(max + 1));
+    let fewer: Vec<Planned> = files[..max - 1].to_vec();
+    let pills = crate::grants::window_pills(&fewer, &net).unwrap();
+    assert_eq!((pills.len(), pills[0].as_str()), (max, "+net h"));
+}
+
+/// INV-0326-1, the shell's half: a description with `window` gives
+/// `/system/fonts` read only, and nothing else does.
+#[test]
+fn the_fonts_come_with_a_window_read_only_and_only_with_it() {
+    let netsurf = d(include_str!("../../../user/describe/posix/netsurf.cmd"));
+    let fonts = crate::grants::with_window(&netsurf).expect("netsurf has a window");
+    assert_eq!(fonts.path, "/system/fonts");
+    assert_eq!(fonts.access, Access::Read);
+    assert_eq!(fonts.reason, "with the window");
+    // The pill says read, never write.
+    assert_eq!(
+        crate::grants::window_pills(&[fonts], &[]).unwrap(),
+        vec!["+r /system/fonts"]
+    );
+    for text in [
+        include_str!("../../../user/describe/posix/curl.cmd"),
+        include_str!("../../../user/describe/posix/tcc.cmd"),
+        include_str!("../../../user/describe/posix/python3.cmd"),
+    ] {
+        let plain = d(text);
+        assert!(plain.window.is_none());
+        assert_eq!(crate::grants::with_window(&plain), None, "{}", plain.name);
+    }
+}

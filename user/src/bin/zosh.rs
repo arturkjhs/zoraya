@@ -79,6 +79,9 @@ const TLS_ROOTS: &str = "/system/tls/roots";
 const TLS_ROOTS_DIR: &str = "/system/tls";
 
 const CONSOLE_KEY: u64 = 1;
+/// The panel's window channel (ADR-0317) is readable: outside a request,
+/// only a late answer, closed at once (9e).
+const PANEL_KEY: u64 = 2;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
 /// Jobs at once.
@@ -317,6 +320,9 @@ enum Ready {
         /// A connection to `netd` for the program (ADR-0225 item 2), made
         /// with `narrow` from a literal `url` operand.
         net: Option<Handle>,
+        /// The client end of the window's channel to the compositor, for a
+        /// description with `window` (ADR-0317), made by the panel.
+        window: Option<Handle>,
     },
 }
 
@@ -336,11 +342,13 @@ impl Ready {
                 entries,
                 report,
                 net,
+                window,
                 ..
             } => {
                 for h in [image, report.0, report.1]
                     .into_iter()
                     .chain(net)
+                    .chain(window)
                     .chain(entries.iter().filter_map(|e| e.handle))
                 {
                     let _ = handle_close(h);
@@ -632,6 +640,9 @@ struct Z {
     /// The shell's connection to the random service (slot 10, ADR-0227
     /// item 3), from which each native program gets its own.
     random: Option<Handle>,
+    /// The channel to the panel (slot 14, ADR-0317) for the window of a
+    /// POSIX program; none in a session without a desktop.
+    panel: Option<Handle>,
     tmp: Option<File>,
     next_tmp: u32,
     /// The `/tmp` directory of the line being started, once one is made.
@@ -1412,6 +1423,10 @@ impl Z {
                 &["the broker runs beside zosh on a volume with /bin (ADR-0153 rule 10)"],
             ));
         }
+        if let Err(e) = Self::posix_line_parses(exec, path) {
+            let _ = handle_close(image);
+            return Err(e);
+        }
         // A literal `url` operand of a POSIX program the image describes
         // designates, as for a native one (ADR-0224 item 2): the program
         // gets a connection to `netd` that reaches that host and port.
@@ -1428,9 +1443,12 @@ impl Z {
         // roots file and nothing else (`make check-tls-roots`); `grants`
         // says "with the network" as for a native program.
         let with_roots = net.is_some() && self.posix_reaches(exec, path);
+        // The system's fonts come with a window, read only (ADR-0326 item 4).
+        let fonts = Self::posix_fonts(path);
         let planned = self
             .posix_plan(exec, path)
             .map(|mut plan| {
+                plan.extend(fonts);
                 if with_roots {
                     plan.push(grants::Planned {
                         path: String::from(TLS_ROOTS_DIR),
@@ -1450,11 +1468,24 @@ impl Z {
                 return Err(e);
             }
         };
+        let window = match self.posix_window(exec, path, &plan) {
+            Ok(w) => w,
+            Err(e) => {
+                for h in core::iter::once(image)
+                    .chain(net)
+                    .chain(entries.iter().filter_map(|e| e.handle))
+                {
+                    let _ = handle_close(h);
+                }
+                return Err(e);
+            }
+        };
         let report = match channel_create() {
             Ok(r) => r,
             Err(s) => {
                 for h in core::iter::once(image)
                     .chain(net)
+                    .chain(window)
                     .chain(entries.iter().filter_map(|e| e.handle))
                 {
                     let _ = handle_close(h);
@@ -1472,9 +1503,103 @@ impl Z {
                 cwd,
                 report,
                 net,
+                window,
             },
             given,
         ))
+    }
+
+    /// Whether a line for a POSIX program the image describes may run: a
+    /// program with a window runs only a line its description parses
+    /// (ADR-0317 item 6, INV-0312-1; see `netgrant::line_may_run`).
+    fn posix_line_parses(exec: &Exec<'_>, path: &str) -> Result<(), String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let Some(d) = grants::trusted_description(&trusted, path) else {
+            return Ok(());
+        };
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        if zoraya_shell::netgrant::line_may_run(d, &texts) {
+            return Ok(());
+        }
+        Err(zoraya_command::error(
+            "zosh",
+            Some(exec.name),
+            "the arguments are not ones its description gives",
+            &["a program with a window runs only a line its description parses (see `help`)"],
+        ))
+    }
+
+    /// `/system/fonts` read only for a POSIX program whose trusted
+    /// description has `window` (ADR-0326 item 4, INV-0326-1); none else.
+    fn posix_fonts(path: &str) -> Option<grants::Planned> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        grants::trusted_description(&trusted, path).and_then(grants::with_window)
+    }
+
+    /// The window channel for a POSIX program whose trusted description has
+    /// `window TITLE` (ADR-0317): the panel makes the compositor's client with
+    /// this room's record and the pills of the line's grants, and the client
+    /// end goes to the program. `None` for a description without the key.
+    fn posix_window(
+        &mut self,
+        exec: &Exec<'_>,
+        path: &str,
+        plan: &[grants::Planned],
+    ) -> Result<Option<Handle>, String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        // The name is the description's, not the word the line used: `netsurf`
+        // for `/bin/netsurf` and `./netsurf` as well.
+        let Some((app, title)) = grants::trusted_description(&trusted, path)
+            .and_then(|d| d.window.clone().map(|t| (d.name.clone(), t)))
+        else {
+            return Ok(None);
+        };
+        // untrusted-gate: window-refusal (ADR-0317 INV-0317-1, `make check-untrusted-gate`)
+        if self.room.as_ref().is_some_and(|r| r.untrusted) {
+            return Err(zoraya_command::error(
+                "room",
+                Some(exec.name),
+                "a window of a POSIX program is not given in an untrusted room",
+                &["ADR-0317: only a trusted room's shell may ask the panel for one"],
+            ));
+        }
+        let Some(panel) = self.panel else {
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                "it needs a window, and this session has no desktop to give one",
+                &["start a terminal from the desktop"],
+            ));
+        };
+        let targets = match self.posix_net_scope(exec, path) {
+            Ok(Some((_, scope))) => zoraya_shell::netgrant::targets(&scope),
+            _ => Vec::new(),
+        };
+        // The window must show every grant: more pills than it takes is a
+        // refusal, never a cut (INV-0317-1).
+        let pills = grants::window_pills(plan, &targets).map_err(|n| {
+            zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                &format!(
+                    "the line gives {n} grants and a window shows {} at most",
+                    grants::MAX_WINDOW_PILLS
+                ),
+                &["ADR-0317: narrow the line's grants; a window never shows fewer than it has"],
+            )
+        })?;
+        zoraya_user::windowclient::ask(panel, &app, &title, &pills.join("\n"))
+            .map(Some)
+            .map_err(|why| zoraya_command::error("zosh", Some(exec.name), &why, &[]))
     }
 
     /// A POSIX program's plan: by the description of the system image's
@@ -2078,6 +2203,17 @@ impl Z {
     /// One port packet: a stream's, or a job's end, which is reported as
     /// `at` says (ADR-0158 rule 6). Gives the job in front when it ended.
     fn event(&mut self, packet: &Packet, at: At) -> Option<(jobs::Entry<Job>, Vec<ExitRecord>)> {
+        if packet.key == PANEL_KEY {
+            // `windowclient::ask` reads its own answer before it returns, so
+            // what waits here answers a request whose wait ended: its client
+            // end is closed, and the panel hears `ClientGone` (9e).
+            if let Some(panel) = self.panel
+                && zoraya_user::windowclient::drain_stale(panel).is_none()
+            {
+                let _ = port_unsubscribe(self.port, PANEL_KEY);
+            }
+            return None;
+        }
         if packet.key >= STREAM_KEY {
             if let Some(at) = self.relays.iter().position(|r| r.key == packet.key) {
                 self.pump_relay(at, false);
@@ -3677,8 +3813,12 @@ impl Z {
                     1
                 }
                 Ok(mut plan) => {
-                    // As a run adds it: the roots come with a network the
-                    // line gives a POSIX program (proposed ADR-0311 item 4).
+                    // As a run adds them: the fonts come with a window
+                    // (ADR-0326 item 4), the roots with a network the line
+                    // gives a POSIX program (ADR-0311 item 4).
+                    if !native {
+                        plan.extend(Self::posix_fonts(&path));
+                    }
                     if !native && self.posix_reaches(exec, &path) {
                         plan.push(grants::Planned {
                             path: String::from(TLS_ROOTS_DIR),
@@ -4216,6 +4356,7 @@ impl Host for Z {
                         cwd,
                         report,
                         net,
+                        window,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
@@ -4223,6 +4364,7 @@ impl Host for Z {
                             for h in [image, report.1]
                                 .into_iter()
                                 .chain(net)
+                                .chain(window)
                                 .chain(entries.iter().filter_map(|e| e.handle))
                             {
                                 let _ = handle_close(h);
@@ -4260,6 +4402,7 @@ impl Host for Z {
                             // (ADR-0227 item 3): `getrandom` for C programs
                             // (proposed ADR-0310).
                             random: self.random.and_then(zoraya_user::random::share),
+                            window,
                             realtime_base: self.realtime_base,
                         };
                         let broker = self.broker.as_ref().expect("checked by ready");
@@ -4780,6 +4923,8 @@ fn main() -> i32 {
         net_services: Handle::new(13).filter(|h| handle_type(*h) == Ok("channel")),
         net_down: false,
         random: Handle::new(10).filter(|h| handle_type(*h) == Ok("channel")),
+        panel: Handle::new(zoraya_panel::WINDOW_SLOT as u64)
+            .filter(|h| handle_type(*h) == Ok("channel")),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(|end| File { end }),
@@ -4844,6 +4989,17 @@ fn main() -> i32 {
         show(&e);
     }
     z.send_title();
+    // A late answer of the panel is closed when it comes, not at the next
+    // request (9e).
+    if let Some(panel) = z.panel {
+        let _ = port_subscribe(
+            z.port,
+            panel,
+            channel_signals::READABLE,
+            PANEL_KEY,
+            Mode::Level,
+        );
+    }
     let mut shell = Shell::new(z);
     if shell.host.root.is_some()
         && let Ok(text) = shell.host.read_text(START)

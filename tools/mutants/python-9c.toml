@@ -1,0 +1,12 @@
+# CPython, part 9c (proposed ADR-0320): mutants found by hand in the review
+# rounds. Each one is a QEMU run of python.script (test-python, without
+# regrtest since it became test-python-regr: a few minutes under HVF).
+tests = ["make -s test-python"]
+timeout = 900
+
+[[mutant]]
+id = "P-roots-without-net"
+file = "user/src/bin/zosh.rs"
+find = 'if !native && self.posix_reaches(exec, &path) {'
+replace = 'if !native {'
+note = "INV-0320-4: grants shows /system/tls only with a +net word; the x steps of python.script after the second `grants python3 smoke.py` must see the row (re-review W3: before, they looked only after `/bin /usr /etc`, below the plan rows)"

@@ -443,10 +443,176 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             },
         ],
     };
+    // A channel back to the panel, to ask for the window of a POSIX program
+    // (ADR-0317). Never in an untrusted room (INV-0317-1).
+    if !room.is_some_and(|r| r.untrusted)
+        && let Some(shell) = launch.programs.get_mut(1)
+    {
+        shell.handles.push(Slot {
+            slot: WINDOW_SLOT,
+            give: Give::Launcher,
+        });
+    }
     if let (Some(slot), Some(shell)) = (keeper, launch.programs.get_mut(1)) {
         shell.handles.push(slot);
     }
     launch
+}
+
+/// The slot of a shell's channel to the panel for a POSIX program's window
+/// (ADR-0317): 14, as `init` gives the first shell its own. Slots 9 to 13 are
+/// the shell's network, random service, keeper and services channel.
+pub const WINDOW_SLOT: u32 = 14;
+
+/// What the compositor is told of a POSIX program's window
+/// (`AddRoomClient`'s fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRecord {
+    pub untrusted: bool,
+    pub colour: u32,
+    pub room: String,
+    pub app: String,
+    pub entries: String,
+    pub line: String,
+}
+
+/// Compositor client slots kept for the desktop's own applications (the
+/// terminal, the file manager, the settings window), which a POSIX program's
+/// windows never take (ADR-0317 item 2, review W2), out of the session's
+/// share (`zoraya_proto_gui::SESSION_CLIENTS`, proposed ADR-0323).
+pub const RESERVED_CLIENTS: usize = 3;
+
+/// The compositor's clients the panel did not make and has no tag for: the
+/// chooser and `init`'s first terminal. Counted as live for the session (the
+/// safe side: a first terminal that ended keeps its slot counted).
+pub const UNTAGGED_CLIENTS: usize = 2;
+
+/// The compositor's clients the panel counts (ADR-0317 item 2): every
+/// client it made is tagged, a launch's as a window's, and is live from the
+/// send of its `AddRoomClient` until the compositor says `ClientGone` for
+/// its tag, which it also says when it refuses the record (9d re-review, W1,
+/// W2). The windows of POSIX programs are one a run, refused while open.
+#[derive(Debug, Default)]
+pub struct OpenWindows {
+    /// `(launcher, app, tag)` of each POSIX program's window; a launcher of
+    /// `usize::MAX` is a shell that has ended, whose window still holds its
+    /// slot.
+    open: Vec<(usize, String, u32)>,
+    /// The tags of the applications the panel launched (`term`, `files`,
+    /// `edit`, an `OpenWith`) outside untrusted rooms: the session's share.
+    launched: Vec<u32>,
+    /// The tags of the applications launched in untrusted rooms, counted in
+    /// their rooms' accounts by the compositor, not in the session's share
+    /// (proposed ADR-0323).
+    untrusted: Vec<u32>,
+}
+
+impl OpenWindows {
+    /// Whether the shell of `launcher` may have a window for `app`: not while
+    /// it has one open, and not if the clients that exist ([`Self::clients`])
+    /// with this one would leave fewer than [`RESERVED_CLIENTS`] of the
+    /// session's share of the compositor's clients, `session_clients`
+    /// (`zoraya_proto_gui::SESSION_CLIENTS`, proposed ADR-0323).
+    pub fn admit(&self, launcher: usize, app: &str, session_clients: usize) -> Result<(), u32> {
+        use zoraya_proto_chooser::window_refusal as why;
+        if self.open.iter().any(|(l, a, _)| *l == launcher && a == app) {
+            return Err(why::BUSY);
+        }
+        if self.clients() + 1 + RESERVED_CLIENTS > session_clients {
+            return Err(why::BUSY);
+        }
+        Ok(())
+    }
+
+    /// A window's `AddRoomClient` was sent.
+    pub fn opened(&mut self, launcher: usize, app: &str, tag: u32) {
+        self.open.push((launcher, String::from(app), tag));
+    }
+
+    /// An application's `AddRoomClient` was sent with `tag`, in an
+    /// untrusted room or not.
+    pub fn launched(&mut self, tag: u32, untrusted: bool) {
+        if untrusted {
+            self.untrusted.push(tag);
+        } else {
+            self.launched.push(tag);
+        }
+    }
+
+    /// The compositor's client of `tag` is gone, or was refused: its window
+    /// is closed, its slot free.
+    pub fn gone(&mut self, tag: u32) {
+        self.open.retain(|(_, _, t)| *t != tag);
+        self.launched.retain(|t| *t != tag);
+        self.untrusted.retain(|t| *t != tag);
+    }
+
+    /// The shell of `launcher` ended: it asks for nothing more, and the next
+    /// shell of the slot is not held to its windows.
+    pub fn orphan(&mut self, launcher: usize) {
+        for w in self.open.iter_mut().filter(|w| w.0 == launcher) {
+            w.0 = usize::MAX;
+        }
+    }
+
+    /// How many windows are open.
+    pub fn count(&self) -> usize {
+        self.open.len()
+    }
+
+    /// How many of the session's clients are live as the panel counts them:
+    /// the untagged ones, the applications launched outside untrusted rooms,
+    /// the windows (only a trusted room's shell has one, INV-0317-1).
+    pub fn clients(&self) -> usize {
+        UNTAGGED_CLIENTS + self.launched.len() + self.open.len()
+    }
+}
+
+/// The shell of `room` asks for a window for `app` (ADR-0317, proposed): the
+/// record to give the compositor, or the reason in
+/// `zoraya_proto_chooser::window_refusal`. The pills are the line's grants
+/// as the shell wrote them, checked here to be only ADR-0153 words.
+pub fn window_record(
+    room: Option<&Room>,
+    app: &str,
+    title: &str,
+    entries: &str,
+) -> Result<WindowRecord, u32> {
+    use zoraya_proto_chooser::window_refusal as why;
+    // untrusted-gate: window-refusal (ADR-0317 INV-0317-1, `make check-untrusted-gate`)
+    // A window of a POSIX program only in a trusted room.
+    if room.is_some_and(|r| r.untrusted) {
+        return Err(why::UNTRUSTED);
+    }
+    // The compositor's own predicates, so that a request the panel admits
+    // is one the compositor takes (9d re-review, W1).
+    let plain = zoraya_proto_gui::plain_text;
+    if !zoraya_proto_gui::is_app_name(app)
+        || title.is_empty()
+        || title.chars().count() > 48
+        || !plain(title)
+    {
+        return Err(why::INVALID);
+    }
+    let mut count = 0;
+    for l in entries.split('\n').filter(|l| !l.is_empty()) {
+        count += 1;
+        let word = ["+r ", "+w ", "+net "].iter().any(|p| l.starts_with(p));
+        if count > 16 || !word || l.len() > 200 || !plain(l) {
+            return Err(why::INVALID);
+        }
+    }
+    Ok(WindowRecord {
+        untrusted: false,
+        colour: room.map_or(0, |r| u32::from(r.colour)),
+        room: room.map_or(String::new(), |r| r.name.clone()),
+        app: String::from(app),
+        entries: String::from(entries),
+        line: match room {
+            Some(r) => format!("room {} {app}", r.name),
+            None => String::from(app),
+        },
+    })
 }
 
 /// A terminal launched in `room` (`None` is `home`) to start at `path`, an

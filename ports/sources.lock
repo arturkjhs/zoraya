@@ -13,6 +13,9 @@
 # demand with gzip bytes that differ by machine, and puts a bot check in front of
 # them); tools/fetch-ports.sh.
 #
+# python (TASK-27 9c, ADR-0320): the SHA-256 is the one python.org publishes for Python-3.15.2.tar.xz
+# (checked against it); the Sigstore bundle python.org also publishes is not verified here (optional).
+#
 # name    version                                    sha256                                                            file                                                   url
 musl      1.2.5                                      a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  musl-1.2.5.tar.gz                                      https://musl.libc.org/releases/musl-1.2.5.tar.gz https://sources.buildroot.net/musl/musl-1.2.5.tar.gz
 dash      0.5.13.5                                   40090101a2a491f13e901d3d48e90414f26634628b9bfff35ff540363c227a7d  dash-0.5.13.5.tar.gz                                   http://gondor.apana.org.au/~herbert/dash/files/dash-0.5.13.5.tar.gz https://sources.buildroot.net/dash/dash-0.5.13.5.tar.gz
@@ -30,3 +33,9 @@ curl      8.23.0                                     e3de77cfa6367083c776a26647f
 wget      1.25.0                                     766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784  wget-1.25.0.tar.gz                                     https://ftp.gnu.org/gnu/wget/wget-1.25.0.tar.gz https://ftpmirror.gnu.org/wget/wget-1.25.0.tar.gz
 libctest  63e36e934e8f2bedf645303a90b64098e2af6c8f   tar:698c911c90d49d2c4654f31ab78405fd07b3344bcf2ea3465e4915e4a8fb0672  libc-test-63e36e934e8f2bedf645303a90b64098e2af6c8f.tar.gz git+https://repo.or.cz/libc-test.git@63e36e934e8f2bedf645303a90b64098e2af6c8f
 sqlitesrc 3540100                                    387e7f6cad4797b17848c07d453dc6606917bb356a6cfe5a3abafd38c240c71b  sqlite-src-3540100.zip                                 https://www.sqlite.org/2026/sqlite-src-3540100.zip
+python    3.15.2                                     8b5536d280142ecf6cdfe15d12a21ba1c65e300bbf7b28a8d0cdb849575797de  Python-3.15.2.tar.xz                                   https://www.python.org/ftp/python/3.15.2/Python-3.15.2.tar.xz
+netsurf   3.11                                       4dea880ff3c2f698bfd62c982b259340f9abcd7f67e6c8eb2b32c61f71644b7b netsurf-all-3.11.tar.gz                                https://download.netsurf-browser.org/netsurf/releases/source-full/netsurf-all-3.11.tar.gz
+libpng    1.6.50                                     4df396518620a7aa3651443e87d1b2862e4e88cad135a8b93423e01706232307 libpng-1.6.50.tar.xz                                   https://download.sourceforge.net/libpng/libpng-1.6.50.tar.xz
+libjpeg   9f                                         04705c110cb2469caa79fb71fba3d7bf834914706e9641a4589485c1f832565b jpegsrc.v9f.tar.gz                                     https://www.ijg.org/files/jpegsrc.v9f.tar.gz
+pkgconfig 0.29.2                                     6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591 pkg-config-0.29.2.tar.gz                               https://pkgconfig.freedesktop.org/releases/pkg-config-0.29.2.tar.gz
+bison     3.8.2                                      9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2 bison-3.8.2.tar.xz                                    https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz https://ftpmirror.gnu.org/bison/bison-3.8.2.tar.xz

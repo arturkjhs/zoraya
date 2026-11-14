@@ -47,8 +47,9 @@ pub use rooms::{Cell, DockApp, DockGeometry, Record};
 use window::Buffer;
 pub use window::{Frame, Window, WindowKind, Zone};
 
-/// Client connections at once `[assumption, ADR-0093]`.
-pub const MAX_CLIENTS: usize = 8;
+/// Client connections at once (proposed ADR-0323; 8 before, an assumption of
+/// ADR-0093).
+pub const MAX_CLIENTS: usize = gui::MAX_CLIENTS;
 /// Input drivers at once.
 pub const MAX_INPUTS: usize = 4;
 /// Windows of all clients at once, popups included.
@@ -122,6 +123,9 @@ struct SheetGuard {
 }
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
+/// `ClientGone` tags kept while the panel's queue is full; past it the
+/// oldest is lost (a panel that reads nothing for this many client ends).
+pub const MAX_GONE_PENDING: usize = 256;
 
 /// The scale `auto` gives a display `width` physical pixels wide whose
 /// width is `width_mm` millimetres (0: unknown): 2 from `SCALE_TWO_FROM`
@@ -338,6 +342,10 @@ pub struct Compositor<P: Platform> {
     manager: P::End,
     /// The panel's channel (ADR-0168): launch records, rooms, the dock.
     client_manager: Option<P::End>,
+    /// `ClientGone` tags the panel's full queue did not take: sent again
+    /// every round until they fit, so that the panel never counts a gone
+    /// client as live (9d re-review, W1). At most [`MAX_GONE_PENDING`].
+    gone_pending: Vec<u32>,
     /// The room table and the current room, from the panel (ADR-0172).
     rooms: zoraya_settings::rooms::Rooms,
     current_room: String,
@@ -404,6 +412,10 @@ pub struct Compositor<P: Platform> {
     gesture: Option<(usize, u64)>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
+    /// The wheels' turn this frame, in `gui::WHEEL_STEP`ths (horizontal,
+    /// vertical), sent at its end to the window under the pointer
+    /// (proposed ADR-0322).
+    wheel: (i32, i32),
     switcher: Option<Switcher>,
     /// The screen as last composed with the switcher open: a pointer that
     /// only moves over it is drawn on this, not on a new blur.
@@ -473,6 +485,7 @@ impl<P: Platform> Compositor<P> {
             platform,
             manager,
             client_manager: None,
+            gone_pending: Vec::new(),
             rooms: zoraya_settings::rooms::Rooms::default(),
             current_room: String::new(),
             dock_apps: Vec::new(),
@@ -510,6 +523,7 @@ impl<P: Platform> Compositor<P> {
             gesture: None,
             carried: None,
             pending_pointer: false,
+            wheel: (0, 0),
             switcher: None,
             switcher_frame: Vec::new(),
             scene: false,
@@ -688,6 +702,14 @@ impl<P: Platform> Compositor<P> {
             (None, Some(_)) => Some(self.platform.now() + RETRY_NS),
             (None, None) => None,
         };
+        // A `ClientGone` waiting for room in the panel's queue is tried
+        // again every 10 ms too.
+        let deadline = if self.gone_pending.is_empty() {
+            deadline
+        } else {
+            let retry = self.platform.now() + RETRY_NS;
+            Some(deadline.map_or(retry, |d| d.min(retry)))
+        };
         self.platform.wait(&mut ready, deadline);
         for key in ready {
             match key {
@@ -703,6 +725,7 @@ impl<P: Platform> Compositor<P> {
                 _ => {}
             }
         }
+        self.flush_client_gone();
         let waiting = self.in_flight.or(self.stuck_since);
         if let Some(since) = waiting
             && self.platform.now() >= since + FLUSH_DEADLINE_NS
@@ -921,6 +944,7 @@ impl<P: Platform> Compositor<P> {
                         }
                     }
                     self.pointer_moved_or_pressed();
+                    self.send_wheel();
                 }
             }
             Incoming::Empty => {}
@@ -957,6 +981,16 @@ impl<P: Platform> Compositor<P> {
                     y = v * span(self.height) / i64::from(input::AXIS_MAX);
                 }
                 self.move_pointer(x, y);
+            }
+            input::kind::WHEEL => {
+                // Gathered for the frame, at most `WHEEL_MAX` either way.
+                let v = e.value as i32;
+                let bound = |a: i32| a.saturating_add(v).clamp(-gui::WHEEL_MAX, gui::WHEEL_MAX);
+                if e.code == 0 {
+                    self.wheel.1 = bound(self.wheel.1);
+                } else {
+                    self.wheel.0 = bound(self.wheel.0);
+                }
             }
             _ => self.key_event(e.code, e.value),
         }
@@ -1341,7 +1375,7 @@ impl<P: Platform> Compositor<P> {
         // control or bidirectional character; and a connection.
         let name = core::str::from_utf8(d.name.0)
             .ok()
-            .filter(|t| !t.is_empty() && !t.contains('/') && rooms::plain_text(t))
+            .filter(|t| !t.is_empty() && !t.contains('/') && gui::plain_text(t))
             .map(String::from);
         let channel = self.platform.kind(entry) == Kind::Channel;
         // That press, still held, named within `DRAG_NAMES_WITHIN_NS` of it.
@@ -1762,6 +1796,58 @@ impl<P: Platform> Compositor<P> {
             };
             self.send_event(key.client, m);
         }
+    }
+
+    /// After a frame: the wheels' turn to the window under the pointer, as
+    /// the pointer goes (proposed ADR-0322): to a body only, never during a
+    /// drag of a window or an entry, nor with the switcher open, nor to a
+    /// window under a sheet or a sheet still guarded (ADR-0245), nor to a
+    /// legacy surface, whose protocol has no wheel. Focus does not move;
+    /// the modifiers go only to the focused client.
+    fn send_wheel(&mut self) {
+        let (dx, dy) = core::mem::take(&mut self.wheel);
+        if (dx, dy) == (0, 0) {
+            return;
+        }
+        let Some((x, y)) = self.pointer else { return };
+        if self.drag.is_some() || self.carried.is_some() || self.switcher.is_some() {
+            return;
+        }
+        let Some((key, Zone::Body)) = self.under(x, y) else {
+            return;
+        };
+        if self.sheet_of(key).is_some() {
+            return;
+        }
+        let now = self.platform.now();
+        if self
+            .sheet_guards
+            .iter()
+            .any(|g| g.sheet == key && now < g.until)
+        {
+            return;
+        }
+        let Some(i) = self.index(key) else { return };
+        let w = &self.windows[i];
+        let body = w.body_rect();
+        if w.kind == WindowKind::Legacy || !body.contains(x, y) {
+            return;
+        }
+        let s = self.scale.factor();
+        let m = gui::Wheel {
+            dropped: 0,
+            window: key.id,
+            x: (x - body.x) as u32 / s,
+            y: (y - body.y) as u32 / s,
+            dx,
+            dy,
+            modifiers: Flags(if self.focus.is_some_and(|f| f.client == key.client) {
+                self.modifiers_now()
+            } else {
+                0
+            }),
+        };
+        self.send_event(key.client, m);
     }
 
     // ---- windows ----------------------------------------------------------
@@ -2376,10 +2462,19 @@ impl<P: Platform> Compositor<P> {
             // From either launcher: init's first terminal is `home`'s
             // (proposed ADR-0242).
             37 if one => match decode::<gui::AddRoomClient<'_>>(bytes, 1) {
-                Ok((_, m)) => match Record::of(&m) {
-                    Some(r) => (self.add_client(handles[0], r), true),
-                    None => (status::INVALID, false),
-                },
+                Ok((_, m)) => {
+                    let (s, used) = match Record::of(&m) {
+                        Some(r) => (self.add_client(handles[0], r), true),
+                        None => (status::INVALID, false),
+                    };
+                    // A tagged client the panel counts but that never came
+                    // to be is gone at once, whatever the refusal (9d
+                    // re-review, W1): the panel reads no reply.
+                    if s != status::OK && clients && m.tag != 0 {
+                        self.tell_client_gone(m.tag);
+                    }
+                    (s, used)
+                }
                 Err(_) => (status::INVALID, false),
             },
             39 if clients && none => match decode::<gui::SetRooms<'_>>(bytes, 0) {
@@ -2695,7 +2790,7 @@ impl<P: Platform> Compositor<P> {
         let Ok(words) = core::str::from_utf8(words) else {
             return status::BAD_RANGE;
         };
-        if tag == 0 || words.is_empty() || !rooms::plain_text(words) {
+        if tag == 0 || words.is_empty() || !gui::plain_text(words) {
             return status::BAD_RANGE;
         }
         let Some(slot) = self
@@ -2743,6 +2838,10 @@ impl<P: Platform> Compositor<P> {
         if self.platform.kind(end) != Kind::Channel {
             self.platform.close(end);
             return status::UNSUPPORTED;
+        }
+        if !self.within_client_account(&record) {
+            self.platform.close(end);
+            return status::OVER_QUOTA;
         }
         let Some(slot) = self.clients.iter().position(Option::is_none) else {
             self.platform.close(end);
@@ -2894,6 +2993,10 @@ impl<P: Platform> Compositor<P> {
         }
         if let Some(c) = self.clients[slot].take() {
             self.platform.close(c.end);
+            // The panel counts the clients it made (ADR-0317 item 2).
+            if c.record.tag != 0 {
+                self.tell_client_gone(c.record.tag);
+            }
         }
         self.prune_refusals();
         self.rehover();
@@ -3701,7 +3804,8 @@ with_dropped!(
     gui::Pointer,
     gui::Focus,
     gui::WindowFocus,
-    gui::WindowPointerMods
+    gui::WindowPointerMods,
+    gui::Wheel
 );
 
 #[cfg(test)]

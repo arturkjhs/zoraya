@@ -20,47 +20,7 @@ use zoraya_protocol::{Data, Header, Message, decode, encode};
 use zoraya_tokens::{Appearance, Logical, Scale};
 use zoraya_ui::{Event, Painter, Response, Widget, Window};
 
-/// What the application runs on: the compositor's channel and memory
-/// objects. The program's is a thin layer over the kernel; the tests' is a
-/// fake compositor.
-pub trait Platform {
-    /// A handle to give with a message.
-    type End: Copy;
-    /// Sends one message, with a memory object's handle or none.
-    fn send(&mut self, bytes: &[u8], handle: Option<Self::End>) -> bool;
-    /// The next message from the compositor, waiting for it; `None` when
-    /// the compositor is gone.
-    fn receive(&mut self, bytes: &mut [u8]) -> Option<usize>;
-    /// A memory object of `pixels` pixels, mapped: its handle to give and
-    /// its number for [`Platform::pixels`].
-    fn buffer(&mut self, pixels: usize) -> Option<(Self::End, usize)>;
-    fn pixels(&mut self, buffer: usize) -> &mut [u32];
-    fn free(&mut self, buffer: usize);
-    /// The handle the message last received carried, taken (a drop's
-    /// entry, ADR-0170); the platform closes one nobody took before it
-    /// receives the next. By default messages carry none.
-    fn handle(&mut self) -> Option<Self::End> {
-        None
-    }
-    /// The next message if one is there, without waiting, for a program
-    /// that waits on other channels too (the chooser). By default it waits.
-    fn poll(&mut self, bytes: &mut [u8]) -> Poll {
-        match self.receive(bytes) {
-            Some(n) => Poll::Message(n),
-            None => Poll::Gone,
-        }
-    }
-}
-
-/// What [`Platform::poll`] found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Poll {
-    Message(usize),
-    /// Nothing yet.
-    Empty,
-    /// The compositor is gone.
-    Gone,
-}
+pub use zoraya_platform::{Platform, Poll};
 
 /// What happened, for the application to act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +387,19 @@ impl<P: Platform> App<P> {
         self.repaint(id);
     }
 
+    /// Puts `root` in `window` in place of its tree as [`App::replace`]
+    /// does, also keeping where each of its scrolling widgets was (by its
+    /// place in the tree, proposed ADR-0329): for a program that builds its
+    /// window again after each change (settings, the editor).
+    pub fn replace_keeping_scroll(&mut self, id: u32, root: Box<dyn Widget>) {
+        let Some(i) = self.index(id) else { return };
+        let App {
+            painter, windows, ..
+        } = self;
+        windows[i].ui.replace_keeping_scroll(root, painter);
+        self.repaint(id);
+    }
+
     /// Paints `window` and commits it, unless a commit is in flight: then
     /// it is painted when that one's reply comes.
     pub fn repaint(&mut self, id: u32) {
@@ -552,7 +525,17 @@ impl<P: Platform> App<P> {
 
     fn ui_event(&mut self, id: u32, e: Event) -> Option<Happened> {
         let i = self.index(id)?;
-        match self.windows[i].ui.event(e) {
+        let r = self.windows[i].ui.event(e);
+        // A turn or a key may have scrolled a view (proposed ADR-0329): its
+        // children are placed again at once, so the next press hits what
+        // the person sees even before the paint.
+        if r != Response::None && matches!(e, Event::Wheel { .. } | Event::Key { .. }) {
+            let App {
+                painter, windows, ..
+            } = self;
+            windows[i].ui.layout(painter);
+        }
+        match r {
             Response::None => None,
             Response::Repaint => {
                 self.repaint(id);
@@ -667,6 +650,18 @@ impl<P: Platform> App<P> {
                     modifiers: p.modifiers.0,
                 };
                 self.ui_event(p.window, e)
+            }
+            46 => {
+                // The wheel over a body (ADR-0322), in logical pixels as
+                // `WindowPointerMods`; no focus moves and no button is held.
+                let (_, w) = decode::<gui::Wheel>(got, 0).ok()?;
+                let e = Event::Wheel {
+                    x: self.scale_logical(w.x),
+                    y: self.scale_logical(w.y),
+                    dx: w.dx.clamp(-gui::WHEEL_MAX, gui::WHEEL_MAX),
+                    dy: w.dy.clamp(-gui::WHEEL_MAX, gui::WHEEL_MAX),
+                };
+                self.ui_event(w.window, e)
             }
             _ => None,
         }
