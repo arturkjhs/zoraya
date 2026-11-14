@@ -57,6 +57,22 @@ fn main() {
         }
         writeln!(out, "];").unwrap();
     }
+    // The userland's commands (ADR-0336 items 1 to 3): toybox's list and
+    // one-true-awk. Their descriptions let through only the options they
+    // list (item 5), so zosh refuses a line with another (review of 10e,
+    // finding 4).
+    let applets = Path::new(&dir).join("../ports/toybox-applets.txt");
+    println!("cargo:rerun-if-changed={}", applets.display());
+    let list = std::fs::read_to_string(&applets).unwrap();
+    writeln!(out, "pub const USERLAND: &[&str] = &[\"awk\",").unwrap();
+    for name in list
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+    {
+        writeln!(out, "    {name:?},").unwrap();
+    }
+    writeln!(out, "];").unwrap();
     if !failed.is_empty() {
         for f in &failed {
             println!("cargo:warning=refused description {f}");

@@ -48,11 +48,17 @@ x secret
 > cat notes.txt\r
 x secret
 < \r\n~>
-# tar -c -z -f, and listing it again.
-> tar -c -z -f out.tgz notes.txt t.c\r
+# tar -c to standard output (the redirection designates the archive), and
+# listing it again: -f ARCHIVE is read, not a name to create (review of 10e,
+# finding 5).
+> tar -c -z notes.txt t.c > out.tgz\r
 < \r\n~>
 > tar -t -z -f out.tgz\r
 < \r\nnotes.txt\r\nt.c
+< \r\n~>
+> grants tar -t -z -f out.tgz\r
+< ~/out.tgz            read (option -f)
+x create or replace
 < \r\n~>
 # awk (one-true-awk), over a file the line names.
 > awk 'BEGIN { print 1 + 2 }'\r
@@ -70,6 +76,8 @@ x secret
 < ls is a POSIX program, /bin/ls
 < \r\n~>
 # INV-0336-4: the name is two commands, one for the person, one for scripts.
+# (For echo, test, printf and true a script gets dash's builtin, not toybox's;
+# ls is the check because it is no builtin.)
 > ls --help\r
 < usage: ls [PATH]
 < \r\n~>
@@ -78,15 +86,97 @@ x secret
 > dash h.sh\r
 < ls: Unknown option 'help'
 < \r\n~>
-# INV-0336-5: a command that find runs holds find's entries and no more.
-> /bin/find . -name t.c -exec /bin/cat /tests/w9-check.sh {} +\r
+# ADR-0336 item 5: a userland command's description lets through only the
+# options it lists; another refuses the line before it runs (review of 10e,
+# finding 4).
+> /bin/find . -name t.c\r
+< zosh: /bin/find: -name: not an option its description lets through
+< hint: help find lists what its description lets through
+< \r\n~>
+# INV-0336-5: a command that find runs holds find's entries and no more
+# (toybox's find by its own path: undescribed, the current directory and the
+# line's grants).
+> /usr/libexec/toybox find . -name t.c -exec /bin/cat /tests/w9-check.sh {} +\r
 < cat: /tests/w9-check.sh: No such file or directory
 x #!/bin/sh
 < \r\n~>
-> +r /tests /bin/find . -name t.c -exec /bin/cat /tests/w9-check.sh {} +\r
+> +r /tests /usr/libexec/toybox find . -name t.c -exec /bin/cat /tests/w9-check.sh {} +\r
 < #!/bin/sh
 < \r\n~>
-# INV-0342-5: getpwuid, and link and mknod refused (a C program from tcc).
+# cp -r reads its source and no more (review of 10e, finding 2); the copy
+# in the current directory works, one elsewhere needs +w there (finding 9).
+> mkdir src\r
+< \r\n~>
+> echo one > src/a.txt\r
+< \r\n~>
+> grants /bin/cp -r src backup\r
+< ~/src                read (operand FROM)
+x anything in (operand FROM)
+< \r\n~>
+> /bin/cp -r src backup\r
+< \r\n~>
+> cat backup/a.txt\r
+< \r\none
+< \r\n~>
+> mkdir e\r
+< \r\n~>
+> /bin/cp -r src e/bk\r
+< cp: e/bk/a.txt: Permission denied
+< \r\n~>
+> +w e /bin/cp -r src e/bk2\r
+< \r\n~>
+> cat e/bk2/a.txt\r
+< \r\none
+< \r\n~>
+# gzip without -c makes a sibling, which needs +w on the directory; -c
+# with a redirection does not (finding 9).
+> echo data > big.log\r
+< \r\n~>
+> /bin/gzip big.log\r
+< gzip: big.log.gz: Permission denied
+< \r\n~>
+> +w . /bin/gzip big.log\r
+< \r\n~>
+> /bin/gunzip -c big.log.gz\r
+< \r\ndata
+< \r\n~>
+# mkdir -p: the missing parents need +w (finding 9).
+> /bin/mkdir -p a/b/c\r
+< mkdir: 'a': Permission denied
+< \r\n~>
+> +w . /bin/mkdir -p a/b/c\r
+< \r\n~>
+> /bin/ls -d a/b/c\r
+< \r\na/b/c
+< \r\n~>
+# INV-0336-6 outside the current directory: sed -i on ../d/n.txt from ~/e,
+# written literally, changes the file and no name of d; the listings of d
+# before and after are the same (review of 10e, finding 8).
+> mkdir d\r
+< \r\n~>
+> echo colour > d/n.txt\r
+< \r\n~>
+> echo keep > d/k.txt\r
+< \r\n~>
+> /bin/ls -a d > before.lst\r
+< \r\n~>
+> cd e\r
+< \r\n~/e>
+> /bin/sed -i s/colour/color/ ../d/n.txt\r
+< \r\n~/e>
+> cd ..\r
+< \r\n~>
+> cat d/n.txt\r
+< \r\ncolor
+< \r\n~>
+> /bin/ls -a d > after.lst\r
+< \r\n~>
+> /bin/cmp before.lst after.lst && echo SAME-LISTING\r
+< \r\nSAME-LISTING
+< \r\n~>
+# INV-0342-5: getpwuid, and link and mknod refused (a C program from tcc);
+# lchown to the own identity and to another, settimeofday, readv over two
+# buffers with a short read (review of 10e, finding 16).
 > echo '#include <pwd.h>' > pw.c\r
 < \r\n~>
 > echo '#include <unistd.h>' >> pw.c\r
@@ -101,6 +191,12 @@ x #!/bin/sh
 < \r\n~>
 > echo '#include <sys/stat.h>' >> pw.c\r
 < \r\n~>
+> echo '#include <sys/uio.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <sys/time.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <fcntl.h>' >> pw.c\r
+< \r\n~>
 > echo 'int main(void) {' >> pw.c\r
 < \r\n~>
 > echo 'struct passwd *p = getpwuid(getuid());' >> pw.c\r
@@ -114,6 +210,14 @@ x #!/bin/sh
 > echo 'errno = 0; l = link("t.c", "u.c"); printf("link %d %d ", l, errno == EPERM);' >> pw.c\r
 < \r\n~>
 > echo 'errno = 0; m = mknod("n", S_IFCHR | 0600, 0); printf("mknod %d %d ", m, errno == EPERM);' >> pw.c\r
+< \r\n~>
+> echo 'errno = 0; l = lchown("t.c", getuid(), getgid()); m = lchown("t.c", 0, 0); printf("lchown %d %d %d ", l, m, errno == EPERM);' >> pw.c\r
+< \r\n~>
+> echo 'struct timeval tv = { 0, 0 }; errno = 0; l = settimeofday(&tv, 0); printf("stod %d %d ", l, errno == EPERM);' >> pw.c\r
+< \r\n~>
+> echo 'char b1[3], b2[64]; struct iovec v[2] = { { b1, 3 }, { b2, 64 } };' >> pw.c\r
+< \r\n~>
+> echo 'l = open("t.c", O_RDONLY); printf("readv %d %.3s|%.2s ", (int)readv(l, v, 2), b1, b2);' >> pw.c\r
 < \r\n~>
 > echo 'setlocale(LC_ALL, "");' >> pw.c\r
 < \r\n~>
@@ -130,7 +234,7 @@ x #!/bin/sh
 > tcc pw.c -o pw\r
 < \r\n~>
 > ./pw\r
-< link -1 1 mknod -1 1 pw 1 utf8 4 3 20ac
+< link -1 1 mknod -1 1 lchown 0 -1 1 stod -1 1 readv 32 int| a pw 1 utf8 4 3 20ac
 < \r\n~>
 x power off
 > poweroff\r

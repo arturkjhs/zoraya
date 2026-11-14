@@ -816,12 +816,146 @@ fn a_file_of_a_cwd_none_program_is_given_as_one_narrowed_name() {
 
 #[test]
 fn two_files_of_one_directory_fall_back_to_the_directory_in_words() {
+    use zoraya_proto_file::rights;
     let p = go(SED, &["-i", "x", "a", "b"], &[], &[], true, "/w").unwrap();
     let m = merge(&p);
+    assert_eq!(m.len(), 1);
     assert_eq!(m[0].name, None);
+    assert_eq!(m[0].lines.len(), 2, "{m:?}");
     assert!(
         m[0].lines
             .iter()
-            .all(|(w, _)| w == "read and change files in")
+            .all(|(w, _)| w == "read and change anything in")
+    );
+    // The fallback is the union of the parts' rights: no more.
+    assert_eq!(
+        m[0].rights,
+        Access::ChangeName("a".into()).rights(),
+        "{m:?}"
+    );
+    assert_eq!(
+        m[0].rights & (rights::CREATE | rights::REMOVE | rights::RENAME),
+        0
+    );
+}
+
+// INV-0336-6's other half: a file outside the current directory is its own
+// directory narrowed to the name, and the current directory is not given.
+#[test]
+fn a_file_outside_the_current_directory_is_its_directory_narrowed() {
+    let p = go(SED, &["-i", "x", "/x/notes.txt"], &[], &[], true, "/w").unwrap();
+    let m = merge(&p);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].path, "/x");
+    assert_eq!(m[0].name.as_deref(), Some("notes.txt"));
+    assert!(p.iter().all(|e| e.path != "/w"), "{p:?}");
+    let p = go(SED, &["x", "../y/a.txt"], &[], &[], true, "/w/sub").unwrap();
+    assert_eq!(
+        rows(&p),
+        [(
+            "/w/y".into(),
+            Access::ReadName("a.txt".into()),
+            "operand FILE".into()
+        )]
+    );
+}
+
+// Review of 10e, finding 6 (S16's rule for `cwd none` files): a value naming
+// the current directory itself would give its parent narrowed to its name,
+// so it is refused; a value naming a file in it is allowed.
+#[test]
+fn a_cwd_none_value_naming_the_current_directory_is_refused() {
+    let r = go(SED, &["-i", "x", "."], &["."], &[], true, "/u/proj").unwrap_err();
+    assert_eq!(r.problem, "from a value, outside the current directory");
+    let r = go(SED, &["x", "/u/proj"], &["/u/proj"], &[], true, "/u/proj").unwrap_err();
+    assert_eq!(r.subject, "/u/proj");
+    let p = go(SED, &["-i", "x", "f.txt"], &["f.txt"], &[], true, "/u/proj").unwrap();
+    assert_eq!(
+        rows(&p),
+        [(
+            "/u/proj".into(),
+            Access::ChangeName("f.txt".into()),
+            "operand FILE".into()
+        )]
+    );
+    // Written literally, `.` is what the person asked for: the parent
+    // narrowed to the directory's name, which the service opens read-only.
+    let p = go(SED, &["x", "."], &[], &[], true, "/u/proj").unwrap();
+    assert_eq!(p[0].path, "/u");
+}
+
+// Review of 10e, finding 7 (ADR-0153 rule 5): a narrowed name that is itself
+// a link is followed to its target, which must lie strictly below the
+// current directory or a grant; a link outside is refused with the hint; a
+// dangling one inside is the target's name; `remove` keeps the link.
+#[test]
+fn a_narrowed_name_that_is_a_link_is_followed() {
+    let links = |p: &str| -> Option<String> {
+        match p {
+            "/w/notes.txt" => Some("/w/drafts/notes.txt".into()),
+            "/w/out.txt" => Some("/secret/out.txt".into()),
+            "/w/gone.txt" => Some("/w/new/gone.txt".into()),
+            "/w/self" => Some("/w".into()),
+            _ => None,
+        }
+    };
+    let p = go(SED, &["-i", "x", "notes.txt"], &[], &[], true, "/w").unwrap();
+    let p = through_links(p, "/w", "/u", links).unwrap();
+    assert_eq!(
+        rows(&p),
+        [(
+            "/w/drafts".into(),
+            Access::ChangeName("notes.txt".into()),
+            "operand FILE, through a link at /w/notes.txt".into()
+        )]
+    );
+    let p = go(SED, &["x", "out.txt"], &[], &[], true, "/w").unwrap();
+    let r = through_links(p, "/w", "/u", links).unwrap_err();
+    assert_eq!(r.subject, "/w/out.txt");
+    assert_eq!(
+        r.hint.as_deref(),
+        Some("to give it, put +r /secret/out.txt before the command")
+    );
+    let p = go(SED, &["-i", "x", "out.txt"], &[], &[], true, "/w").unwrap();
+    let r = through_links(p, "/w", "/u", links).unwrap_err();
+    assert_eq!(
+        r.hint.as_deref(),
+        Some("to give it, put +w /secret/out.txt before the command")
+    );
+    // Allowed when a grant covers the target.
+    let p = go(
+        SED,
+        &["x", "out.txt"],
+        &[],
+        &[(false, "/secret")],
+        true,
+        "/w",
+    )
+    .unwrap();
+    let p = through_links(p, "/w", "/u", links).unwrap();
+    assert!(
+        p.iter()
+            .any(|e| e.path == "/secret" && e.access == Access::ReadName("out.txt".into())),
+        "{p:?}"
+    );
+    // A dangling link inside: the name it would create.
+    let p = go(CP, &["a", "gone.txt"], &[], &[], true, "/w").unwrap();
+    let p = through_links(p, "/w", "/u", links).unwrap();
+    assert!(
+        p.iter()
+            .any(|e| e.path == "/w/new" && e.access == Access::Create("gone.txt".into())),
+        "{p:?}"
+    );
+    // A link to the current directory itself is not a name below it.
+    let p = go(SED, &["x", "self"], &[], &[], true, "/w").unwrap();
+    assert!(through_links(p, "/w", "/u", links).is_err());
+    // `rm` removes the link, not its target.
+    let rm = "name rm\nsummary r\nusage rm PATH...\noperand PATH... remove x\n";
+    let p = go(rm, &["notes.txt"], &[], &[], true, "/w").unwrap();
+    let p = through_links(p, "/w", "/u", links).unwrap();
+    assert!(
+        p.iter()
+            .any(|e| e.path == "/w" && e.access == Access::Remove("notes.txt".into())),
+        "{p:?}"
     );
 }

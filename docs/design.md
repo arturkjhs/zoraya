@@ -975,7 +975,7 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
 - **The ports.** All build with `zcc`, and none with `__linux__`: dash (TASK-02's M4 patch and ADR-0142's two
   job-control patches: the fork group hint, and `vforkexec` through `posix_spawn` with `SETPGROUP` and
-  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), pdpmake (unpatched, stage 6e), one-true-awk (second edition, unpatched, its grammar made by the host's bison; stage 10e), toybox (the commands of `ports/toybox-applets.txt`, stage 10e, ADR-0336; one patch gives `lib/portability.[ch]` a Zoraya branch at the seven
+  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), pdpmake (unpatched, stage 6e), one-true-awk (second edition, unpatched, its grammar made by the pinned bison 3.8.2 of `ports/sources.lock`; stage 10e), toybox (the commands of `ports/toybox-applets.txt`, stage 10e, ADR-0336; one patch gives `lib/portability.[ch]` a Zoraya branch at the seven
   places that stop an unknown OS with `#error`, and the link needs ADR-0144's `atoll` and `getdelim`) and tcc (a
   `Zoraya` target and a fix for `SHF_EXCLUDE` sections). toybox's scripts need GNU sed. `build/rootfs-posix` has the
   programs in `/bin` with a symbolic link per applet and the sysroot as `/usr`. A clean `make -j4 ports` takes about
@@ -2769,10 +2769,21 @@ What exists: toybox 0.8.15's commands from `ports/toybox-applets.txt` (52 names:
 cmp dd od diff tr expr` and the rest of ADR-0336's list), built by `make -f ports/Makefile toybox` and installed as
 `/usr/libexec/toybox` with an absolute link `/bin/NAME` for each; one-true-awk as `/bin/awk`; no busybox. Every name in
 `/bin` has a trusted description in `user/describe/posix/` naming its path (`make check`, INV-0336-2), so the shell
-designates each command's file operands and lets through only the options the description lists; the last line of each
-page is `Lets through: ...`, and `help NAME` and `help /bin/NAME` show it (a name that is also native shows the native
-page, which says so). `sed` has `cwd none`: its file operand arrives as its directory narrowed to that one name
+designates each command's file operands and lets through only the options the description lists: `zosh` refuses a line
+of one of these commands that its description does not parse, naming the word and `/usr/libexec/toybox NAME` (the
+binary by its own path, undescribed: the current directory and the line's grants only). The last line of each page is
+`Lets through: ...`, and `help NAME` and `help /bin/NAME` show it (a name that is also native shows the native page,
+which says so). dash is built with `--disable-tee`: with libposix's `tee` (`ENOSYS`, ADR-0100 item 6) its reads from
+a pipe or a here-document ended at once. `sed` has `cwd none`: its file operand arrives as its directory narrowed to that one name
 (`ReadName`, `ChangeName`; ADR-0344), and `sed -i` writes its result to the line's `/tmp` and copies it back into the
-file, not atomically. Known limits: two or more file operands of a `cwd none` command in one directory are given as the
-directory whole (the names list of ADR-0336 item 6 is not built); `find -execdir`, `stat -f` and `date -s` do not work
-(ADR-0343); `tar -x` and `-t` are granted a name to create for `-f`; the image cache of ADR-0212 is not built.
+file, not atomically (a failed copy back leaves the edited text in `/tmp` and says where); `sed -i` on a link writes
+through it, where GNU's replaces the link with a file. Known limits: two or more file operands of a `cwd none`
+command in one directory are given as the directory whole, to read and change everything below it (the names list
+of ADR-0336 item 6 is not built); every described POSIX program other than `sed` (no `cwd none`) refuses a file
+operand outside the current directory and the line's grants (`grep x ../f.c`: "a POSIX program is given directories
+only", ADR-0153 rule 10); the parser takes every word starting with `-` for an option, so `find`'s expressions,
+`test`'s primaries and `env`'s or `xargs`'s command options are refused from `zosh` (scripts run by `sh` are not
+affected; ADR-0344 open question); `tar -f ARCHIVE` is read in every mode (make an archive through standard output)
+and `-x` needs `+w` where it extracts; `cp -r`, `mkdir -p` and `gzip` without `-c` need `+w` on the directory they
+write in, except in the current directory for `cp -r`, whose entry merges with the current directory's; `find
+-execdir`, `stat -f` and `date -s` do not work (ADR-0343); the image cache of ADR-0212 is not built.

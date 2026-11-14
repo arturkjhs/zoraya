@@ -89,7 +89,7 @@ fn a_path_taking_option_or_operand_has_a_path_kind() {
         for o in &d.options {
             if let Some(a) = &o.argument
                 && a.kind == Kind::Text
-                && (a.name == "FILE" || a.name == "DIR" || a.name == "ARCHIVE" || a.name == "PATH")
+                && names_a_path(&a.name)
             {
                 problems.push(format!(
                     "{name}: option {} takes {} as text",
@@ -99,10 +99,59 @@ fn a_path_taking_option_or_operand_has_a_path_kind() {
             }
         }
         for op in &d.operands {
-            if op.kind == Kind::Text
-                && matches!(op.name.as_str(), "FILE" | "DIR" | "ARCHIVE" | "PATH")
-            {
+            if op.kind == Kind::Text && names_a_path(&op.name) {
                 problems.push(format!("{name}: operand {} is text", op.name));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// Whether an argument's name says it is a file name: `FILE`, `DIR`,
+/// `ARCHIVE`, `PATH`, or a name ending in one (`PROGFILE`, `REFFILE`,
+/// `PATCHFILE`; review of 10e, finding 18).
+fn names_a_path(name: &str) -> bool {
+    let name = name.trim_end_matches("...");
+    ["FILE", "DIR", "ARCHIVE", "PATH"]
+        .iter()
+        .any(|p| name == *p || name.ends_with(p))
+}
+
+#[test]
+fn the_path_rule_knows_the_longer_names() {
+    for n in ["FILE", "PROGFILE", "REFFILE", "PATCHFILE", "DIR", "PATH..."] {
+        assert!(names_a_path(n), "{n}");
+    }
+    for n in ["PATTERN", "N", "MODE", "FS"] {
+        assert!(!names_a_path(n), "{n}");
+    }
+}
+
+/// ADR-0336 item 5 and CP-05: a command that copies or reads its sources is
+/// not given them to change. No option widens a `read` operand to a kind
+/// that writes, except where the command changes that operand itself
+/// (`chmod -R`: the modes throughout the tree; `sed -i`: the file). Review of 10e, finding 2:
+/// `cp -r` had made its source a tree to change.
+#[test]
+fn no_option_widens_a_read_operand_to_write_unless_it_changes_it() {
+    const CHANGES_ITS_OPERAND: &[&str] = &["chmod", "sed"];
+    let dir = root().join("user/describe/posix");
+    let mut problems = Vec::new();
+    for name in names_in_bin() {
+        let Ok(bytes) = fs::read(dir.join(format!("{name}.cmd"))) else {
+            continue;
+        };
+        let Ok(d) = parse(&bytes) else { continue };
+        for w in &d.whens {
+            let op = &d.operands[w.operand];
+            let writes = !matches!(w.kind, Kind::Read | Kind::Text | Kind::Url | Kind::Host);
+            if op.kind == Kind::Read && writes && !CHANGES_ITS_OPERAND.contains(&name.as_str()) {
+                problems.push(format!(
+                    "{name}: {} makes {} {:?}",
+                    d.options[w.option].label(),
+                    op.name,
+                    w.kind
+                ));
             }
         }
     }

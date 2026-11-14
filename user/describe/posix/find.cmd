@@ -10,8 +10,10 @@ exit     1  an error
 ---
 find is a native command in zosh; /bin/find is toybox's, for scripts (type /bin/find to run it).
 Find files: toybox 0.8.15 (0BSD) as a POSIX program with the toolchain set (ADR-0336).
-One PATH only, and the expression is one text operand, so -name, -type, -exec and -delete pass as text (the shell is
-to hand words starting with - after PATH to find as operands). PATH is read: with -delete or -exec that changes
+One PATH only. The shell lets through only the options listed here (ADR-0336 item 5), and it takes a word starting
+with - for an option wherever it stands, so an expression of tests (-name, -type, -exec, -delete) is refused before
+find runs: run /usr/libexec/toybox find for one, which has no description and gets the current directory and the
+line's grants only. PATH is read: with -delete or -exec that changes
 files the paths need +w. A command run by -exec holds exactly the entries find holds (ADR-0107, ADR-0336 item 5):
 find . -name '*.o' -exec rm {} + needs +w .
 Write the short options: the long names belong to the description.

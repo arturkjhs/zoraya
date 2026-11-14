@@ -1627,6 +1627,7 @@ impl Z {
         match grants::trusted_description(&trusted, path) {
             Some(d) => {
                 let d = d.clone();
+                Self::userland_options(exec, &d)?;
                 self.plan_with(exec, &d, true)
             }
             None => {
@@ -1635,6 +1636,53 @@ impl Z {
                 self.plan_with(exec, &undescribed, false)
             }
         }
+    }
+
+    /// ADR-0336 item 5: the options a userland command's description lists
+    /// are the options the shell lets through. A line its description does
+    /// not parse (an option it does not list, a missing operand) is refused
+    /// here, before anything runs, rather than run with no designations
+    /// (review of 10e, finding 4). `--help` is let through: the program
+    /// prints its own help.
+    fn userland_options(exec: &Exec<'_>, d: &Description) -> Result<(), String> {
+        if !descriptions::USERLAND.contains(&d.name.as_str()) {
+            return Ok(());
+        }
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let Err(why) = zoraya_command::parse(d, &texts) else {
+            return Ok(());
+        };
+        // `-name` fails as `-n`: name the word the person wrote.
+        let unknown = |t: &str| {
+            t.starts_with('-')
+                && t.len() > 1
+                && matches!(zoraya_command::parse(d, &[t]), Err(e) if e.0.ends_with("no such option"))
+        };
+        let word = texts
+            .iter()
+            .copied()
+            .take_while(|t| *t != "--")
+            .find(|t| unknown(t));
+        let problem = match word {
+            Some(w) => format!("{w}: not an option its description lets through"),
+            None => format!("{}, which its description does not let through", why.0),
+        };
+        let help = format!("help {} lists what its description lets through", d.name);
+        let toybox = format!(
+            "to run it undescribed (the current directory and the line's grants only): \
+             /usr/libexec/toybox {} ...",
+            d.name
+        );
+        let mut hints = alloc::vec![help.as_str()];
+        if d.name != "awk" {
+            hints.push(toybox.as_str());
+        }
+        Err(zoraya_command::error(
+            "zosh",
+            Some(exec.name),
+            &problem,
+            &hints,
+        ))
     }
 
     /// The table of a POSIX program's bootstrap record (ADR-0153 rule 10):
@@ -1751,7 +1799,14 @@ impl Z {
         let covered = entries
             .iter()
             .any(|e| e.kind == P::Directory && zoraya_resolve::covers(&e.prefix, &self.cwd));
-        if below && !covered {
+        // So also for a file the line designates outside it (`sed -i x
+        // ../d/f`, a `cwd none` program): without the placeholder the
+        // program would start in `/bin` and resolve `../d/f` from there
+        // (review of 10e, finding 8).
+        let designated = plan
+            .iter()
+            .any(|e| e.reason.starts_with("operand") || e.reason.starts_with("option"));
+        if (below || designated) && !covered {
             // The record wants a directory connection at the current
             // directory's entry (`Bootstrap::decode`), so the placeholder is
             // a connection whose other end is closed: every request on it

@@ -13,10 +13,12 @@ exit     1  failed
 ---
 Run a command with arguments from input: toybox 0.8.15 (0BSD) as a POSIX program with the toolchain set (ADR-0336).
 -I is not in toybox 0.8.15. The command it runs holds exactly the entries xargs holds (ADR-0107), no more.
+The shell lets through only the options listed (ADR-0336 item 5) and takes any word starting with - for one, the
+command's own too: a line with another is refused.
 Write the short options: the long names belong to the description.
 
 EXAMPLES
-  find . -name '*.c' | xargs grep -n main
+  ls *.c | xargs grep main
   ls | xargs -n 1 echo
 
 SEE ALSO
