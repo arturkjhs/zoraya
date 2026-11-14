@@ -266,3 +266,15 @@ states, to be taken up later:
   parallel load on the Mac (work/test-fixes, 2026-11-14): a timing-sensitive CPU-ceiling check when three QEMU guests and host jobs
   share the machine. Not a regression of that part. Decide whether the check needs a deterministic form like `t_cpu`'s `MAX_UNITS`
   fix (ADR-0270), or a lane of its own that does not share the machine.
+
+## Three requests from outside work (2026-11-14, from the architect)
+
+For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.
+
+1. **A python3 build hook for built-in modules.** A way to add built-in C/C++ modules to `python3` from a directory given
+   at build time (`Setup` lines and static libraries), with a test that uses a small sample module. Small; first.
+2. **`poll` and `ppoll` in `libposix`** over the deferred-wait protocol (ADR-0315), with tests. The browser-engine design
+   will also ask for it.
+3. **Programs installed on the volume, not in the image.** Where their descriptions live, how their saved grants are
+   kept (network, a writable directory, their own directory per ADR-0341), and how a person sees and revokes them.
+   Design first, as proposed ADRs (numbers from 0380 to 0399 if TASK-31's parts leave them, otherwise ask the architect).
