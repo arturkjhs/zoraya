@@ -488,12 +488,14 @@ extern "C" fn inet_ntoa(a: u32) -> *const u8 {
 /// `n` or `-1` with `errno` (`ENOSYS` without the connection). Unlike
 /// Linux's, a request for more than 256 bytes is not cut short, and the
 /// flags that matter there (`GRND_NONBLOCK`, `GRND_RANDOM`) change nothing:
-/// the generator never blocks.
+/// the generator never blocks. The lock is taken once per request
+/// (`random::in_spans`, INV-0302-2): with threads the wait for the reply is
+/// made inside it.
 #[unsafe(no_mangle)]
 extern "C" fn getrandom(buf: *mut u8, n: usize, flags: u32) -> isize {
     let r = user(buf, n).and_then(|u| {
         poll();
-        restartable(|p| p.getrandom(u, flags))
+        crate::random::in_spans(u, |part| restartable(|p| p.getrandom(part, flags)))
     });
     size(r)
 }

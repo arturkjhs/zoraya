@@ -2088,7 +2088,11 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   of the buffer or an error; without the connection `ENOSYS`, never a weaker source; a `fork` child has none. The second
   bootstrap message has a form `ZPBX` plus a flag byte (net, random) with the handles in the order SELF, net, random
   (`zoraya_abi::posix`); `zosh` makes one `Share` of its own random connection per POSIX program (`posix_child::Launch::random`).
-  A program a POSIX parent starts has none yet.
+  A program a POSIX parent starts has none yet. Without threads a signal to deliver ends the wait for the reply (`EINTR`, or the
+  count written so far); in a process with threads the wait is made inside the library lock, as for any service's reply
+  (ADR-0302 item 9), and the C boundary takes the lock once per request (`random::in_spans`, INV-0302-2), so a signal waits
+  for one round trip. It is not a cancellation point (musl's and glibc's are). A `fork` child's Python seeds `random` from the
+  time and pid (CPython's own fallback when `os.urandom` fails); `secrets`, `os.urandom`, `ssl` and the hash seed fail loudly.
 - **The grants.** `user/describe/posix/curl.cmd` and `wget.cmd` are the image's own descriptions: a literal `url` operand
   gives a connection that reaches that host and port (as for `zfetch`), and with it `/system/tls` read-only (a POSIX program is
   given directories only, and the directory holds the roots file alone: `make check-tls-roots`). `grants curl -O

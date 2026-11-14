@@ -3,7 +3,7 @@
 # certificate ends before any request byte (INV-0320-3). argv: HOST PORT [default]:
 # with `default` the context is create_default_context() with no cafile, whose
 # roots are OpenSSL's default file (/system/tls/roots, patch 0003 of OpenSSL).
-import asyncio, faulthandler, ssl, sys
+import asyncio, faulthandler, os, ssl, sys
 
 # A hang is a failure with a traceback of every thread, not a wait for the runner's timeout.
 faulthandler.dump_traceback_later(40, exit=True)
@@ -11,8 +11,25 @@ faulthandler.dump_traceback_later(40, exit=True)
 host, port = sys.argv[1], int(sys.argv[2])
 default = len(sys.argv) > 3 and sys.argv[3] == "default"
 
+def context():
+    try:
+        return ssl.create_default_context() if default else ssl.create_default_context(cafile="/system/tls/roots")
+    except ssl.SSLError as e:
+        # Python shows one entry of OpenSSL's error queue, packed (lib << 23 | reason):
+        # 0xa080024 is ERR_LIB_SSL with ERR_R_RAND_LIB, SSL_CTX_new unable to seed,
+        # which is getrandom failing (run 43565853069). Say what the entry holds and
+        # whether getrandom answers now, then fail as before.
+        try:
+            os.urandom(16)
+            now = "answers"
+        except OSError as o:
+            now = "fails with errno %d" % o.errno
+        print("context refused: library", e.library, "reason", e.reason, "args", e.args,
+              "; getrandom now", now, flush=True)
+        raise
+
 async def get():
-    ctx = ssl.create_default_context() if default else ssl.create_default_context(cafile="/system/tls/roots")
+    ctx = context()
     # Python 3.13 and later set VERIFY_X509_STRICT by default, which refuses a
     # certificate without an Authority Key Identifier: the test PKI's (tests/net/tls,
     # shared with the other steps) has none. Only that flag is cleared; the chain,
