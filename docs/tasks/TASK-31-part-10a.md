@@ -197,3 +197,16 @@ reads the full-screen text while the command runs, and then the shell's own scre
 gone). Run at the final commit: `GUI_RUNS="terminal:auto:1 terminal:auto:2 windows:auto:1" make test-gui` PASS (99, 99, 63
 steps) and `make test-qemu` PASS (119 passed, 9 expected failures). Also: `cargo test -p zoraya-term` 128 + 2, `-p zoraya-shell`
 157, `make check`, `make adr-check` (0 errors). Not re-run: the mutation passes (the new code has the tests above).
+
+## Candidate failure fix (candidate/work-10a-a)
+
+- **Terminal script at 1920 x 1200 and 1600 x 1000:** the window there has fewer than 24 rows (22 at 1920 x 1200), so the
+  recording's first rows scroll off and `line 49` was never on the screen (found by a screenshot of the failing size). The script
+  now reads only what every size shows (`line 60`, `line 70`, the colour row, `(END)`), and waits for Ctrl-C instead of a timer
+  (`sleep 300`; a timer ended before a slow read in CI). `terminal:auto:1920x1200`, `1600x1000`, `1` and `2` PASS (97 steps each).
+- **`gui::tests::the_terminal_reads_back_as_text`:** the test fed the terminal `\n`, which now keeps the column; it writes `\r\n`
+  like the shell does (the reader was not at fault, and the test is as strict as before).
+- **`fuzz/Cargo.lock`** gained `zoraya-width` (the shell now depends on it); `tools/run-fuzz.sh 30 2 editor_keys shell_parse`
+  (nightly-2026-11-12, `--locked`) built and ran 30 s each, no finding.
+- `origin/main` (914cf12) merged: one conflict in `docs/backlog.md`, both sides kept; `make adr-check` passes the new
+  `checked:` rule (0 errors).

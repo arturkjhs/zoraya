@@ -113,8 +113,8 @@ screen ~> _
 # prompt is clean.
 type cat /recordings/less-end.rec; sleep 300\r
 window
-screen line 49: the quick brown fox jumps over the lazy dog
-screen line 50: the quick brown fox jumps over the lazy dog
+# The recording is of 24 rows; a window of a large display has fewer (22 at 1920 x 1200), and the
+# first rows scroll off: only what every size shows is read.
 screen line 60: the quick brown fox jumps over the lazy dog
 screen line 70: the quick brown fox jumps over the lazy dog
 screen red bold blue_background,_yellow_text orange
