@@ -55,7 +55,12 @@ pause 1000
 #
 # Settings, with two rooms, so that its page is taller than its window:
 # the rooms' chips move the dock's tiles left, settings to 474.
+# The first terminal focused, its title bar's focused ground drawn (as
+# windows.script waits), before any key: the click and the keys come from
+# two devices that a slow guest reads in no fixed order, and a key that
+# comes first reaches no window ("oom new r1" under TCG at scale 2).
 click 400 80
+region 130 76 100 4 f7f7f8
 pause 500
 type room new r1 +r /texts\r
 screen r1 --colour 1 +r /texts
@@ -114,7 +119,11 @@ shot wheel-edit
 wheel 400 300 up 9
 region 134 204 5 186 dfe4ec
 # The first terminal turns the machine off.
+# Focused first, as above: else poweroff can reach the editor, still
+# focused with everything selected, and the machine never ends (CI, at
+# scale 2 after the merge of 9f-text, 2026-11-14).
 click 400 80
+region 130 76 100 4 f7f7f8
 pause 500
 origin 73 106
 type poweroff\r
