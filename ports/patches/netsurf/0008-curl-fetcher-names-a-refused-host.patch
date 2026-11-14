@@ -58,7 +58,7 @@
 +static bool zoraya_send_refusal(struct curl_fetch_info *f)
 +{
 +	static const char type[] = "Content-Type: text/html; charset=utf-8\r\n";
-+	static char page[8192];
++	static char page[ZORAYA_REFUSAL_PAGE_MAX];
 +	lwc_string *host, *port, *scheme;
 +	unsigned number;
 +	size_t n;

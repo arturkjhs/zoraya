@@ -91,3 +91,37 @@ file = "crates/zoraya-abi/src/net.rs"
 find = 'if target == Target::Public && protocols != Protocols::TCP {'
 replace = 'if false {'
 note = "a web rule over UDP or echo decodes, so netd takes one (INV-0324-1, 9f-net review finding 6)"
+
+# The refusal page (ADR-0325, 9f-net review findings 1 and 4): host test of
+# the page's text. Checked by hand once each when written (all killed).
+[[mutant]]
+id = "W-page-any-host"
+file = "ports/netsurf/zoraya_refusal.c"
+find = 'if (strcmp(h, "any") == 0 || strcmp(h, "web") == 0)'
+replace = 'if (0)'
+note = "the page offers +net any:PORT, every host on that port, for a host named any"
+tests = ["make -s check-netsurf-refusal"]
+
+[[mutant]]
+id = "W-page-numeric-name"
+file = "ports/netsurf/zoraya_refusal.c"
+find = '		return dotted(h);'
+replace = '		return 1;'
+note = "a line the shell refuses (a name ending in a number that is no dotted address)"
+tests = ["make -s check-netsurf-refusal"]
+
+[[mutant]]
+id = "W-page-long-url-line"
+file = "ports/netsurf/zoraya_refusal.c"
+find = 'int too_long = url_len > ZORAYA_REFUSAL_URL_MAX;'
+replace = 'int too_long = 0;'
+note = "a long URL gets no line and the false sentence, or no page (INV-0325-1)"
+tests = ["make -s check-netsurf-refusal"]
+
+[[mutant]]
+id = "W-page-long-url-shown"
+file = "ports/netsurf/zoraya_refusal.c"
+find = 'put_html_cut(&o, url, ZORAYA_REFUSAL_URL_MAX,'
+replace = 'put_html_cut(&o, url, 100000,'
+note = "the whole long URL on the page: it no longer fits, NetSurf's bare error page (INV-0325-1)"
+tests = ["make -s check-netsurf-refusal"]
