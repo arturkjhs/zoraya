@@ -19,8 +19,8 @@ QEMU, so no test was broken to show a finding. Part 2 shows each vacuous test fa
 |---|---|---|
 | Wall time now | median 44 min, worst 57 min (12 green runs since 2026-11-13 18:00 UTC) | the same: 75 of the 91 candidates since 2026-11-12 ran 35 jobs or more (T4) |
 | Runner time now | median 284 min summed, 318 min as billed (each job rounded up) | the same for those 75; 7 to 12 jobs and about 60 min for the 14 the plan narrowed |
-| After dropping the duplicated legs (D1 to D3) | about 226 min (estimate: minus 58 min, from the legs of run 43553496171) | the same |
-| After the shorter fuzz run on candidates (T3) | unchanged (the full set keeps 600 s) | minus 18 min more (estimate), and the two longest jobs go from 11.5 min to about 2.5 |
+| After dropping the duplicated legs (D1 to D3) | about 230 min (estimate: minus 54 min, from the legs of run 43553496171) | the same |
+| After the shorter fuzz run on candidates (T3) | unchanged (the full set keeps 600 s) | minus 18 min more (estimate), and the two longest jobs go from 11.5 min to about 2.5; a candidate whose change the map sends to a fuzz step keeps 600 s (review R7) |
 | Wall time after | not estimated: it depends on the queue, which other runs share; the candidate run of part 2 measures it | |
 
 - **Flakes.** Twelve classes in two weeks (section 3). Eight are already fixed on `main` by TASK-26 and TASK-27.
@@ -146,8 +146,10 @@ Not duplicates: `test-qemu-auto-smp4-2g` (4 CPUs, 2 GiB, GICv2) has no twin: `tc
 `tcg-smp4-gicv3` GICv3. `boot-auto-smp4-2g`, `boot-tcg-smp4-gicv2` and `boot-tcg-smp4-gicv3` differ the same way. The
 GUI runs at scale 2 and at the two sizes have only an `auto` leg, except `terminal:2`.
 
-Total: about 58 runner-minutes of a full run's 284 (24 min of whole jobs, 34 min of legs), 5 jobs fewer, and the four
-longest QEMU jobs fall from about 10 min to about 5 to 6.
+Total: about 54 runner-minutes of a full run's 284 (24 min of whole jobs, 30 min of legs), 5 jobs fewer, and three of
+the four longest QEMU jobs fall from about 10 min to about 5 to 6. The review of part 2 (R4) found that one leg of
+D3 is not a duplicate: `test-net`'s `net-tcg` (237 s) boots on the disk `net-settings-auto` left, with a gateway and
+a DNS server set, so it stays, and `test-net` keeps its length. The first count here was 58 minutes with it.
 
 **What a second sample is worth.** It is not nothing: an intermittent failure shows twice as often. Of the classes in
 section 3, F1 and F2 failed in one leg and passed in the other inside the same job. But a duplicate is an expensive
@@ -319,8 +321,8 @@ run 43553496171; the candidate run of part 2 gives the measured figure):
 | Change | Full run on `main` | Candidate that runs everything |
 |---|---|---|
 | Today | 284 | 284 |
-| D1 to D3 (one leg where `auto` is TCG) | about 226 | about 226 |
-| T3 (60 s of fuzz on candidates) | about 226 | about 208 |
+| D1 to D3 (one leg where `auto` is TCG) | about 230 | about 230 |
+| T3 (60 s of fuzz on candidates) | about 230 | about 212 |
 | T2 (cargo cache) | to be measured | to be measured |
 | T1 (proposal) | minus about 5 to 7 min of wall time before the first test | the same |
 | T4 (proposal) | unchanged | most candidates: the 60 to 170 min of a narrowed plan |
