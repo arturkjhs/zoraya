@@ -1009,8 +1009,10 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	rm -rf $(POSIX_CORE) && mkdir -p $(POSIX_CORE)/root/bin $(POSIX_CORE)/root/work
 	cp -R rootfs/. $(POSIX_CORE)/root/
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_poll tests/posix-core/t_poll.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_poll
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
@@ -1027,8 +1029,10 @@ test-posix-threads: $(KERNEL) $(RUNNER) tools-storage
 	rm -rf $(POSIX_THREADS) && mkdir -p $(POSIX_THREADS)/root/bin $(POSIX_THREADS)/root/work
 	cp -R rootfs/. $(POSIX_THREADS)/root/
 	tools/zcc -O2 -o $(POSIX_THREADS)/root/bin/t_threads tests/posix-core/t_threads.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_THREADS)/root/bin/t_poll tests/posix-core/t_poll.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_threads
+	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_poll
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_THREADS)/root $(POSIX_THREADS)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \

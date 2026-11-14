@@ -2088,10 +2088,17 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   16 MiB 1,305 ms (1,299 to 1,354) against 1,380 ms (1,338 to 1,397); one byte 23.1 ms (6.6 to 32.3) against 20.5 ms (1.9 to
   29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
   and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
-- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `poll`, `sendmsg`/`recvmsg`,
+- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `sendmsg`/`recvmsg`,
   `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
   curl and wget (W11, W13) were built in stage 9 (see "TLS for C programs, curl and wget"), which needed `select` and TLS.
+- **`poll` and `ppoll`** (ADR-0398, proposed; ADR-0342 item 5, ADR-0414 item 1): `Posix::poll_once` (`crates/zoraya-posix/src/poll.rs`) reports
+  readiness per descriptor from the handle signals over the same `wait_for` as `pselect`, so a threaded process defers the wait (ADR-0315);
+  `ffi/procs.rs` owns the timeout, the mask (`ppoll`) and `EINTR`. `POLLIN` with `POLLHUP` at end of file, `POLLERR` on a write end with no
+  reader, `POLLNVAL` for a closed fd, `nfds` above `OPEN_MAX` is `EINVAL`. Limits: a terminal and a file are ready at once (as `select`;
+  the terminal's true readiness is stage 10 part 10c), `select` is still `ports/apps/zshim.c`'s, there is no `eventfd`, no Unix socket and no
+  listener to poll yet (plan parts F1 and F2). Tests: `crates/zoraya-posix/tests/poll.rs` and `net.rs`, `tests/posix-core/t_poll.c` (in
+  `make test-libposix` and `make test-posix-threads`).
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 
