@@ -67,8 +67,8 @@ code asynchronously on an existing thread. Instead:
 `libposix` delivers POSIX handlers at wait points, and maps "killed by signal N" through the exit record.
 
 **Scope of POSIX compatibility** ([ADR-0005](adr/0005-posix-scope.md)). Compatibility comes in two acceptance tiers:
-- **T1:** dash, GNU make (serial and `-j`, both jobserver styles), TinyCC, and the toybox/busybox applets measured in
-  TASK-02. This is 248 libc symbols (minus the set-uid rows, plus `writev`) and 49 syscalls.
+- **T1:** dash, GNU make (serial and `-j`, both jobserver styles), TinyCC, and the toybox applets measured in
+  TASK-02 (busybox left the image in stage 10e, ADR-0336). This is 248 libc symbols (minus the set-uid rows, plus `writev`) and 49 syscalls.
 - **T2:** adds autoconf `configure` (W4), for 291 symbols and 59 syscalls. T2 is accepted only after the cost of
   `snapshot_process` is measured on W4.
 
@@ -975,8 +975,7 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
 - **The ports.** All build with `zcc`, and none with `__linux__`: dash (TASK-02's M4 patch and ADR-0142's two
   job-control patches: the fork group hint, and `vforkexec` through `posix_spawn` with `SETPGROUP` and
-  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), pdpmake (unpatched, stage 6e), busybox (`tr`, `diff`, unpatched), toybox (`cat head
-  ls mv rm sleep touch true uname sort wc yes`; one patch gives `lib/portability.[ch]` a Zoraya branch at the seven
+  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), pdpmake (unpatched, stage 6e), one-true-awk (second edition, unpatched, its grammar made by the host's bison; stage 10e), toybox (the commands of `ports/toybox-applets.txt`, stage 10e, ADR-0336; one patch gives `lib/portability.[ch]` a Zoraya branch at the seven
   places that stop an unknown OS with `#error`, and the link needs ADR-0144's `atoll` and `getdelim`) and tcc (a
   `Zoraya` target and a fix for `SHF_EXCLUDE` sections). toybox's scripts need GNU sed. `build/rootfs-posix` has the
   programs in `/bin` with a symbolic link per applet and the sysroot as `/usr`. A clean `make -j4 ports` takes about
@@ -1319,8 +1318,7 @@ its interruption and W10's background jobs run as TASK-02 and TASK-02b ran them 
 checks.
 
 **What a POSIX session has.** The image `make posix-image` builds (`build/posix-disk.img`, from `build/posix/root`):
-the ports in `/bin` (dash as `sh`, GNU make, pdpmake, tcc as `cc`, toybox's `cat head ls mv rm sleep touch true
-uname sort wc yes`, busybox's `tr diff`), the sysroot in `/usr` (tcc's headers and `libc.a`), `/etc/passwd` and
+the ports in `/bin` (dash as `sh`, GNU make, pdpmake, tcc as `cc`, toybox's commands (ADR-0336: the multi-call binary is `/usr/libexec/toybox` and each command of `ports/toybox-applets.txt` is a link in `/bin`), one-true-awk as `awk`), the sysroot in `/usr` (tcc's headers and `libc.a`), `/etc/passwd` and
 `/etc/group` with the session's one identity, the workloads' sources as `ports/sources.lock` pins them in `/src`
 (`tcc`, `lua`, `sqlite`, `hello`, `w8`, `w10`, `w3`), a fresh tree per build in `/work` (copied by
 `tests/posix/trees.sh` on the host: T1 has no `cp`), the scripts in `/tests`, and `/sets/t1p`, where `make` is
@@ -2764,3 +2762,17 @@ build/                    kernel ELFs, disk images, logs/ and mutants/; ports/, 
 ```
 
 `libposix`'s file, descriptor, pipe and memory half exists (stage 6c); its process half and the broker arrive in 6d.
+
+## The userland (stage 10e, TASK-31)
+
+What exists: toybox 0.8.15's commands from `ports/toybox-applets.txt` (52 names: `grep sed find xargs tar gzip patch
+cmp dd od diff tr expr` and the rest of ADR-0336's list), built by `make -f ports/Makefile toybox` and installed as
+`/usr/libexec/toybox` with an absolute link `/bin/NAME` for each; one-true-awk as `/bin/awk`; no busybox. Every name in
+`/bin` has a trusted description in `user/describe/posix/` naming its path (`make check`, INV-0336-2), so the shell
+designates each command's file operands and lets through only the options the description lists; the last line of each
+page is `Lets through: ...`, and `help NAME` and `help /bin/NAME` show it (a name that is also native shows the native
+page, which says so). `sed` has `cwd none`: its file operand arrives as its directory narrowed to that one name
+(`ReadName`, `ChangeName`; ADR-0344), and `sed -i` writes its result to the line's `/tmp` and copies it back into the
+file, not atomically. Known limits: two or more file operands of a `cwd none` command in one directory are given as the
+directory whole (the names list of ADR-0336 item 6 is not built); `find -execdir`, `stat -f` and `date -s` do not work
+(ADR-0343); `tar -x` and `-t` are granted a name to create for `-f`; the image cache of ADR-0212 is not built.

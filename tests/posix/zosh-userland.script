@@ -61,6 +61,14 @@ x secret
 > awk '{ print NR":"$0 }' t.c\r
 < \r\n1:int a;\r\n2:/* TODO: check */\r\n3:int b;
 < \r\n~>
+# help for a POSIX program, and for the toybox one of a native name.
+> help sed | cat\r
+< sed is a POSIX program, /bin/sed
+< Lets through: -n -i -E -r
+< \r\n~>
+> help /bin/ls | cat\r
+< ls is a POSIX program, /bin/ls
+< \r\n~>
 # INV-0336-4: the name is two commands, one for the person, one for scripts.
 > ls --help\r
 < usage: ls [PATH]

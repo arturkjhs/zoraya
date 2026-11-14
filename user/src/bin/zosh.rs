@@ -2720,6 +2720,20 @@ impl Z {
         i32::from(code)
     }
 
+    /// The trusted description of the POSIX program `name` (`sed`, or
+    /// `/bin/ls`), for `help`.
+    fn posix_page(name: &str) -> Option<Description> {
+        let path = if name.starts_with('/') {
+            name.to_string()
+        } else {
+            format!("/bin/{name}")
+        };
+        descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .find(|d| d.program.as_deref() == Some(path.as_str()))
+    }
+
     fn help(&mut self, state: &State, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
         if let Some(word) = p.value(d, "search") {
             let mut found = Vec::new();
@@ -2789,6 +2803,16 @@ impl Z {
                 What::Command => format!("{name} is a program, /zoraya/bin/{name}"),
             };
             (d, first)
+        } else if let Some(d) = Self::posix_page(name) {
+            // A POSIX program of the image (ADR-0336 item 5): its page is the
+            // description's body; `/bin/NAME` names the toybox one where a
+            // native command has the same name.
+            let first = format!(
+                "{} is a POSIX program, {}",
+                d.name,
+                d.program.clone().unwrap_or_default()
+            );
+            (Rc::new(d), first)
         } else {
             let mut hints = Vec::new();
             let mut names: Vec<String> = self.commands(state).into_iter().map(|(n, _)| n).collect();
