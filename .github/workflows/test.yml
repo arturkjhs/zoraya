@@ -178,9 +178,12 @@ jobs:
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
-      # target/: the dependencies and the workspace's crates (the key is
-      # Cargo.lock, the toolchain and the job).
-      - uses: Swatinem/rust-cache@v2.7.5
+      # target/: the dependencies (the key is Cargo.lock, the toolchain and
+      # the job; the action leaves the workspace's own crates out). v2.7.5
+      # spoke the cache service GitHub retired: every restore answered 400
+      # and no save succeeded (TASK-29, T2), so the version is one that
+      # speaks the current service.
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           shared-key: build
           key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
@@ -304,6 +307,7 @@ jobs:
           - make check-netsurf-refusal
           - make check-run-disk
           - make check-ci-plan
+          - make check-mutant-lists
     name: ${{ matrix.cmd }}
     env:
       RUN_IT: ${{ needs.plan.outputs.docs_only != '1' || contains(needs.plan.outputs.doc_checks, matrix.cmd) }}
@@ -312,7 +316,7 @@ jobs:
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         if: ${{ needs.image.outputs.ref == '' && env.RUN_IT == 'true' }}
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2.7.5
+      - uses: Swatinem/rust-cache@v2.9.3
         if: ${{ env.RUN_IT == 'true' }}
         with:
           shared-key: checks
