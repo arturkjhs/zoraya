@@ -394,6 +394,68 @@ void tls() {
     check(plain == 5, "the main thread's value is its own");
 }
 
+// ---------------------------------------------------------------- the order of a thread's exit
+
+// [thread.condition] notify_all_at_thread_exit: the lock is released and the
+// condition variable notified only after every object of thread storage
+// duration of the thread has been destroyed. The waiter cannot get the mutex
+// before the notification, so it must always find the thread_local's
+// destructor done, whatever the timing (TASK-30: libc++'s notification and libc++abi's thread_local
+// destructors are both pthread key destructors, run in key order).
+std::atomic<bool> exit_mark_destroyed{false};
+
+struct ExitMark {
+    int touched = 0;
+    // The sleep gives the CPU away inside the destructor: if the mutex were
+    // already unlocked and the waiter notified, the waiter would run now and
+    // see the flag still false, on one CPU as on several.
+    ~ExitMark() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        exit_mark_destroyed.store(true);
+    }
+};
+thread_local ExitMark exit_mark;
+
+void exit_order() {
+    int early = 0;
+    for (int i = 0; i < 200; ++i) {
+        exit_mark_destroyed.store(false);
+        std::mutex m;
+        std::condition_variable cv;
+        bool ready = false;
+        std::thread t([&] {
+            exit_mark.touched = 1; // constructs this thread's exit_mark
+            std::unique_lock<std::mutex> lk(m);
+            ready = true;
+            std::notify_all_at_thread_exit(cv, std::move(lk));
+        });
+        {
+            std::unique_lock<std::mutex> lk(m);
+            cv.wait(lk, [&] { return ready; });
+            if (!exit_mark_destroyed.load())
+                ++early;
+        }
+        t.join();
+    }
+    check(early == 0, "notified before the thread_local destructor ran, " + std::to_string(early) + " of 200");
+    // promise::set_value_at_thread_exit: the same rule for the shared state.
+    early = 0;
+    for (int i = 0; i < 200; ++i) {
+        exit_mark_destroyed.store(false);
+        std::promise<int> p;
+        std::future<int> f = p.get_future();
+        std::thread t([&] {
+            exit_mark.touched = 1;
+            p.set_value_at_thread_exit(i);
+        });
+        check(f.get() == i, "set_value_at_thread_exit's value");
+        if (!exit_mark_destroyed.load())
+            ++early;
+        t.join();
+    }
+    check(early == 0, "a value made ready before the thread_local destructor ran, " + std::to_string(early) + " of 200");
+}
+
 // ---------------------------------------------------------------- iostream
 
 void iostreams(const char* dir) {
@@ -587,6 +649,8 @@ int main(int argc, char** argv) {
         tls();
     else if (mode == "alloc")
         alloc();
+    else if (mode == "exit-order")
+        exit_order();
     else if (mode == "iostream" && argc == 3)
         iostreams(argv[2]);
     else if (mode == "fsops" && argc == 3)

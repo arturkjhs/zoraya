@@ -1,0 +1,59 @@
+diff -ru a/src/exit/exit.c b/src/exit/exit.c
+--- a/src/exit/exit.c
++++ b/src/exit/exit.c
+@@ -6,6 +6,8 @@
+ {
+ }
+ 
++void __zoraya_thread_dtors(void);
++
+ /* atexit.c and __stdio_exit.c override these. the latter is linked
+  * as a consequence of linking either __toread.c or __towrite.c. */
+ weak_alias(dummy, __funcs_on_exit);
+@@ -24,8 +26,13 @@
+ 
+ weak_alias(libc_exit_fini, __libc_exit_fini);
+ 
++/* Zoraya (TASK-30): the calling thread's thread_local destructors first, as
++ * glibc runs them (ports/musl/zoraya/thread_atexit.c). */
++weak_alias(dummy, __zoraya_thread_dtors);
++
+ _Noreturn void exit(int code)
+ {
++	__zoraya_thread_dtors();
+ 	__funcs_on_exit();
+ 	__libc_exit_fini();
+ 	__stdio_exit();
+diff -ru a/src/thread/pthread_create.c b/src/thread/pthread_create.c
+--- a/src/thread/pthread_create.c
++++ b/src/thread/pthread_create.c
+@@ -1,5 +1,7 @@
+ #define _GNU_SOURCE
+ #include "pthread_impl.h"
++
++void __zoraya_thread_dtors(void);
+ #include "stdio_impl.h"
+ #include "libc.h"
+ #include "lock.h"
+@@ -51,6 +53,11 @@
+ 	if (tl_lock_waiters) __wake(&__thread_list_lock, 1, 0);
+ }
+ 
++static void dummy_thread_dtors(void)
++{
++}
++weak_alias(dummy_thread_dtors, __zoraya_thread_dtors);
++
+ _Noreturn void __pthread_exit(void *result)
+ {
+ 	pthread_t self = __pthread_self();
+@@ -67,6 +74,9 @@
+ 		f(x);
+ 	}
+ 
++	/* Zoraya (TASK-30): thread_local destructors before the key destructors
++	 * (ports/musl/zoraya/thread_atexit.c). */
++	__zoraya_thread_dtors();
+ 	__pthread_tsd_run_dtors();
+ 
+ 	__block_app_sigs(&set);

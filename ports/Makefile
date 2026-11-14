@@ -463,7 +463,11 @@ ZCXX := $(ROOT)/tools/zc++
 # Four directories of the archive, not its 1.6 GB: the three runtimes and
 # LLVM libc, whose shared/ headers libc++'s from_chars includes.
 LLVM_DIRS := libcxx libcxxabi libunwind libc
-$(LLVM_SRC): $(LOCK) ports/patches/llvm $(wildcard ports/patches/llvm/*.patch)
+# Not the patch directory itself: CI's jobs give the tracked files an old
+# time and the directory keeps its checkout time, which would unpack the tree
+# again in every test job (whose artifact has no LLVM archive). A patch that
+# is removed needs `rm -rf build/ports/work/llvm-*` by hand.
+$(LLVM_SRC): $(LOCK) $(wildcard ports/patches/llvm/*.patch)
 	@f=$(CACHE)/$(call lock_file,llvm); \
 	if [ ! -f "$$f" ]; then \
 	  echo "ports: $$f is missing: run 'make fetch-ports' first (it is the only step that downloads)"; \

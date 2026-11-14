@@ -14,7 +14,9 @@
 # random device, and without the time zone database, the experimental library
 # or new/delete in libc++ (libc++abi defines them). The flags are those
 # LLVM's CMake passes for that build, with -O2 and no debug information
-# (ADR-0360: sizes in docs/design.md).
+# (ADR-0360: sizes in docs/design.md). libc++abi takes libc.a's
+# __cxa_thread_atexit_impl (ports/musl/zoraya/thread_atexit.c), so that
+# thread_local destructors run before libc++'s at-thread-exit work.
 
 LIBCXX := $(SRC)/libcxx
 LIBCXXABI := $(SRC)/libcxxabi
@@ -41,7 +43,8 @@ ABI_SRCS := cxa_aux_runtime.cpp cxa_default_handlers.cpp cxa_demangle.cpp cxa_ex
 ABI_FLAGS := $(COMMON) -std=c++23 -nostdinc++ -isystem $(CXXINC) -I$(LIBCXXABI)/include -I$(LIBCXX)/src \
 	-I$(LIBUNWIND)/include -D_LIBCXXABI_BUILDING_LIBRARY -D_LIBCPP_BUILDING_LIBRARY \
 	-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS= \
-	-DLIBCXXABI_USE_LLVM_UNWINDER -D_XOPEN_SOURCE=700 -fstrict-aliasing
+	-DLIBCXXABI_USE_LLVM_UNWINDER -D_XOPEN_SOURCE=700 -fstrict-aliasing \
+	-DHAVE___CXA_THREAD_ATEXIT_IMPL
 ABI_OBJS := $(addprefix $(OBJ)/abi/,$(ABI_SRCS:.cpp=.o))
 
 CXX_SRCS := algorithm.cpp any.cpp bind.cpp call_once.cpp charconv.cpp chrono.cpp error_category.cpp \

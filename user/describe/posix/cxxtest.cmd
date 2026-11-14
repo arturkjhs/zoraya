@@ -2,7 +2,7 @@ name     cxxtest
 summary  the test program of the C++ runtime (a POSIX program built by zc++)
 usage    cxxtest MODE [ARG...]
 program  /bin/cxxtest
-operand  MODE  text  the group to run: exceptions, rtti, statics, alloc, threads, tls, iostream DIR, fsops DIR, fs DIR..., uncaught, noexcept, terminate, hardening
+operand  MODE  text  the group to run: exceptions, rtti, statics, alloc, threads, tls, exit-order, iostream DIR, fsops DIR, fs DIR..., uncaught, noexcept, terminate, hardening
 operand  [ARG...]  text  the mode's arguments; a directory a mode reads or writes needs a +r or +w of the line, or the program's own /tmp
 exit     0  the group passed
 exit     1  the group failed, or a directory could not be listed

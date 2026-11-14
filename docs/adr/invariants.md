@@ -581,6 +581,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0366-1 | [ADR-0366](0366-surface-for-cxx.md) | A program linked with the whole of `libc++.a`, `libc++abi.a` and `libunwind.a` has no undefined name. | `make -f ports/Makefile cxx` (the `--whole-archive` link of `ports/cxx/cxx.mk`). | checked: make -f ports/Makefile cxx |
 | INV-0366-2 | [ADR-0366](0366-surface-for-cxx.md) | The shim's names are weak and are only `sched_yield`, `truncate`, `pathconf`, `link`, `statvfs`. | `make -f ports/Makefile cxx` (`nm` of the shim's member). | checked: make -f ports/Makefile cxx |
 | INV-0366-3 | [ADR-0366](0366-surface-for-cxx.md) | `aligned_alloc` and `posix_memalign` give blocks of the alignment asked that `free` takes back. | `make test-cxx` (`cxxtest alloc`) and `make test-cxx-libcxx` (`support.dynamic`'s aligned `new` and `delete`, through `count_new.h`'s `aligned_alloc`). | checked: make test-cxx |
+| INV-0366-4 | [ADR-0366](0366-surface-for-cxx.md) | A thread's `thread_local` destructors run before its at-thread-exit notifications and ready states. | `make test-cxx` (`cxxtest exit-order`, 200 rounds of each). | checked: make test-cxx |
 | INV-0367-1 | [ADR-0367](0367-cmake-toolchain-file.md) | A CMake project builds with the toolchain file and its programs run inside Zoraya. | `make test-cxx-gtest` (GoogleTest built by `make -f ports/Makefile gtest` with the file). | checked: make test-cxx-gtest |
 | INV-0326-1 | [ADR-0326](0326-netsurf-text-through-zoraya-text.md) | The font library reads no path but `/system/fonts/NAME` for its own file names, and nothing gives a POSIX program `/system/fonts` but a `window` line, read only. | `cargo test -p zoraya-fontset` (a recording source) and `cargo test -p zoraya-shell` (the grant with the window and without it). | checked: cargo test -p zoraya-fontset -p zoraya-shell |
 | INV-0326-2 | [ADR-0326](0326-netsurf-text-through-zoraya-text.md) | Every Russian and Ukrainian letter (U+0410 to U+044F, Ё ё, Ґ ґ, Є є, І і, Ї ї) maps to a glyph of the sans faces that is not the box, and draws a non-blank glyph at the sizes of scale 1 and scale 2. | `cargo test -p zoraya-fontset`, and `make test-netsurf` (a Cyrillic page at scale 1 and at scale 2: ink where its words are, and a line of і narrower than a line of as many ж). | checked: cargo test -p zoraya-fontset; `make test-netsurf` (`tests/gui/netsurf.script` at scale 1, `tests/gui/netsurf-text.script` at scale 2) |
@@ -830,7 +831,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0363](0363-cxx-locale-support.md) Locale support for C++: the C locale only; musl's names accepted with the C rules | 1 |
 | [ADR-0364](0364-cxx-default-standard.md) The default C++ standard of `zc++`: `-std=c++23`, with `_GNU_SOURCE` for every standard | 1 |
 | [ADR-0365](0365-cxx-runtime-and-headers-in-the-image.md) Where the C++ runtime and headers live: the sysroot now, `/usr/include/c++/v1` and `/usr/lib` when Zoraya builds C++ | 1 |
-| [ADR-0366](0366-surface-for-cxx.md) The names `libc.a` adds for C++, and the gaps libc++ fills in its own archive | 3 |
+| [ADR-0366](0366-surface-for-cxx.md) The names `libc.a` adds for C++, and the gaps libc++ fills in its own archive | 4 |
 | [ADR-0367](0367-cmake-toolchain-file.md) A CMake toolchain file for Zoraya: `CMAKE_SYSTEM_NAME Zoraya` with a platform module of its own | 1 |
 | [ADR-0326](0326-netsurf-text-through-zoraya-text.md) NetSurf's text through `zoraya-text`: the system's fonts from `/system/fonts`, at the window's scale | 2 |
 | [ADR-0327](0327-font-files-under-the-ofl-as-data.md) Font files under the SIL OFL 1.1 as data next to the system's code and its GPL ports | 1 |
@@ -848,4 +849,4 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0313](0313-thread-kernel-as-built.md) Threads in the kernel as built: the owner is the last to leave, lazy thread lists, parked threads woken by one | 3 |
 | [ADR-0314](0314-pthreads-first-slice-as-built.md) `pthread_*` as built in the first slice of part 9b step 2: what is in, what waits for signals and cancellation | 2 |
 | [ADR-0315](0315-pthreads-waits-signals-cancel-as-built.md) `pthread_*` second slice as built: the `Pending` split, the thread table, signals per thread, deferred cancellation | 8 |
-| **Total** | **650** |
+| **Total** | **651** |

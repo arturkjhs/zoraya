@@ -44,6 +44,12 @@
 > cxxtest tls\r
 < cxxtest: tls passed
 < \r\n~> 
+# notify_all_at_thread_exit and set_value_at_thread_exit only after the
+# thread's thread_local destructors (__cxa_thread_atexit_impl, musl patch
+# 0003): 200 rounds each, a destructor that gives the CPU away.
+> cxxtest exit-order\r
+< cxxtest: exit-order passed
+< \r\n~> 
 # cout and cerr, string streams, a file of the program's own /tmp, the C
 # locale (musl takes a name and keeps the C rules under it: ADR-0363), regex,
 # random_device.

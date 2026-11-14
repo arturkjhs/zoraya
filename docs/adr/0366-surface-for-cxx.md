@@ -20,7 +20,12 @@ here: `link` (hard links are never created, ADR-0013), `statvfs` and `pathconf` 
 `execve` with `environ`, for its death tests), and libc++'s own tests' support code calls `aligned_alloc` and `posix_memalign`
 directly (`count_new.h`, 22 tests).
 
-Running libc++'s tests found one more gap that is not a name: musl's `pthread_join` of the calling thread waits for ever (POSIX
+Running libc++'s tests found two more gaps that are not names. First, the order of a thread's exit:
+libc++abi's fallback `__cxa_thread_atexit` keeps a thread's `thread_local` destructors in a pthread key of its own, and libc++'s
+`notify_all_at_thread_exit` and `set_value_at_thread_exit` are a key destructor too; musl runs key destructors in key order, and
+libc++'s key is made first, so the notification came before the destructors (C++ requires it after them,
+[thread.condition.nonmember]): `cxxtest exit-order` measured it 200 times in 200 under HVF. glibc runs `thread_local` destructors
+(`__cxa_thread_atexit_impl`, `__call_tls_dtors`) before key destructors. Second: musl's `pthread_join` of the calling thread waits for ever (POSIX
 leaves it undefined, and allows `EDEADLK`), while C++ requires `std::thread::join` to throw `resource_deadlock_would_occur`
 (`thread.jthread/join.deadlock.pass.cpp` hung).
 
@@ -42,7 +47,10 @@ leaves it undefined, and allows `EDEADLK`), while C++ requires `std::thread::joi
   `statvfs` (`ENOTSUP`), each weak, so that a strong definition already in the link wins without a clash (a linker does not
   pull an archive member to replace a weak one, so a name libposix comes to export is removed from the shim). Patch `llvm/0002` makes `copy_file` take
   libc++'s `fstream` copy instead of `sendfile`; patch `llvm/0003` makes `std::thread::join` of the calling thread throw
-  `resource_deadlock_would_occur` before it calls `pthread_join`.
+  `resource_deadlock_would_occur` before it calls `pthread_join`. `libc.a` gains `__cxa_thread_atexit_impl`
+  (`ports/musl/zoraya/thread_atexit.c`: a list per thread, run in reverse order) and musl patch `0003` runs that list at the
+  start of `__pthread_exit` and of `exit`, before the key destructors and the `atexit` handlers; libc++abi is built with
+  `HAVE___CXA_THREAD_ATEXIT_IMPL`.
 - **Evidence for:** drivers 1 to 4; every name has a user (libc++'s locale, `iostream`, `filesystem`, `random_device`, libunwind,
   aligned `new`, GoogleTest); C programs gain aligned allocation too.
 - **Evidence against:** two places a name can live; `std::filesystem::create_hard_link` and `space` always fail; `malloc`'s header
@@ -70,6 +78,7 @@ port's. musl's self-join is left as it is for C programs (POSIX allows either); 
 
 ### Names `libc.a` adds
 ```posix-surface-added
+__cxa_thread_atexit_impl
 aligned_alloc
 btowc
 dl_iterate_phdr
@@ -134,6 +143,8 @@ wctob
   *Check:* `make -f ports/Makefile cxx` (the `--whole-archive` link of `ports/cxx/cxx.mk`).
 - **INV-0366-2.** The shim's names are weak and are only `sched_yield`, `truncate`, `pathconf`, `link`, `statvfs`.
   *Check:* `make -f ports/Makefile cxx` (`nm` of the shim's member).
+- **INV-0366-4.** A thread's `thread_local` destructors run before its at-thread-exit notifications and ready states.
+  *Check:* `make test-cxx` (`cxxtest exit-order`, 200 rounds of each).
 - **INV-0366-3.** `aligned_alloc` and `posix_memalign` give blocks of the alignment asked that `free` takes back.
   *Check:* `make test-cxx` (`cxxtest alloc`) and `make test-cxx-libcxx` (`support.dynamic`'s aligned `new` and `delete`,
   through `count_new.h`'s `aligned_alloc`).
