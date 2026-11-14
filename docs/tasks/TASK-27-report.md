@@ -839,7 +839,14 @@ the web rule cannot be written as a `+net` or room word (a word `web` on a line 
   accepts private answers, so its name could rebind to 192.168.1.1:80 on later fetches. ADR-0324 item 2 says so; the
   options (keep; public-only like the web rule, recommended; no rule) are in ADR-0328 for the architect.
 - **3, fixed.** SLIRP relays `two.web.test:8080` to the test server, so a leak through the port check is logged and fails
-  the recipe; mutant `W-web-name-any-port-gui` (tests: `make test-netsurf`).
+  the recipe; mutant `W-web-name-any-port-gui` (tests: `make test-netsurf`), run once by hand: the server's log held
+  `GET /ns/must-not-reach` and the recipe failed (the page-colour step 122 first, rc 2).
+- **Ran** after the fixes and the merge of `main`: `make check`; `make check-netsurf-refusal` and the host tests of
+  `zoraya-abi`, `zoraya-net`, `zoraya-shell`; the hand mutants of the fixes, all killed; `make netsurf`; `make
+  test-netsurf` (145 steps passed, both server-log checks ok). `make test-changed` failed in `test-libposix`,
+  `test-posix`, `test-net` (`test-net-posix`) and `test-tour-gui` (`tcc hello.c` gives no `./hello`): the local
+  `libc.a` index lacks `__zoraya_calls`, `__zoraya_calls_count` and `__zoraya_calls_list`, the `zoraya-ar` problem of
+  the review's last section, also on `main`, fixed by `548e8f2` on `work/9f-text`; nothing of this branch.
 - **4, fixed.** The shown URL is cut at 1024 bytes with a mark, the host at 253; a URL too long to repeat gets the line
   of the host's first page (`+net HOST:PORT netsurf SCHEME://HOST/`); the page always fits 16 KiB (tested at the worst
   bytes). That line is not the refused URL: ADR-0325 item 3 does not foresee it, for the architect to note.
