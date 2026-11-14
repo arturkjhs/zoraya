@@ -13,24 +13,58 @@
  /**
   * maximum number of progress notifications per second
   */
-@@ -1550,9 +1554,88 @@
- 
- 	return false;
+@@ -1552,7 +1556,116 @@
  }
+ 
+ 
++/*
++ * Zoraya (ADR-0325): the last name lookup and how it ended. Every
++ * getaddrinfo of the program comes here (the link's --wrap=getaddrinfo,
++ * ports/netsurf/Makefile.config), so that a refused fetch reads curl's own
++ * lookup instead of asking a second time: curl resolves on NetSurf's only
++ * thread (no threaded resolver), and a lookup that times out would freeze
++ * the window twice as long (9f-net review, finding 5).
++ */
++static struct {
++	char name[256];
++	int rc;
++	int err;
++} zoraya_lookup;
++
++int __real_getaddrinfo(const char *node, const char *service,
++		       const struct addrinfo *hints, struct addrinfo **res);
++int __wrap_getaddrinfo(const char *node, const char *service,
++		       const struct addrinfo *hints, struct addrinfo **res);
++
++int __wrap_getaddrinfo(const char *node, const char *service,
++		       const struct addrinfo *hints, struct addrinfo **res)
++{
++	int rc = __real_getaddrinfo(node, service, hints, res);
++	int err = errno;
++
++	zoraya_lookup.name[0] = '\0';
++	if (node != NULL && strlen(node) < sizeof zoraya_lookup.name) {
++		strcpy(zoraya_lookup.name, node);
++		zoraya_lookup.rc = rc;
++		zoraya_lookup.err = err;
++	}
++	errno = err;
++	return rc;
++}
 +
 +
-+/**
+ /**
 + * Zoraya (ADR-0325): whether the network service refused this fetch because
 + * the window's grant does not cover its host and port: a connect that failed
-+ * with EACCES, or a lookup that a second getaddrinfo shows refused
-+ * (EAI_SYSTEM with EACCES). Other failures are the network's own.
++ * with EACCES, or a lookup of its host that failed with EAI_SYSTEM and
++ * EACCES (curl's own, the last one of the program; never asked again).
++ * Other failures are the network's own.
 + */
 +static bool zoraya_refused(struct curl_fetch_info *f, CURLcode result, long oserr)
 +{
 +	lwc_string *host;
-+	struct addrinfo hints, *res = NULL;
-+	int rc, err;
- 
++	bool refused;
++
 +	if (result == CURLE_COULDNT_CONNECT)
 +		return oserr == EACCES;
 +	if (result != CURLE_COULDNT_RESOLVE_HOST)
@@ -38,19 +72,13 @@
 +	host = nsurl_get_component(f->url, NSURL_HOST);
 +	if (host == NULL)
 +		return false;
-+	memset(&hints, 0, sizeof hints);
-+	hints.ai_family = AF_INET;
-+	hints.ai_socktype = SOCK_STREAM;
-+	errno = 0;
-+	rc = getaddrinfo(lwc_string_data(host), NULL, &hints, &res);
-+	err = errno;
-+	if (rc == 0 && res != NULL)
-+		freeaddrinfo(res);
++	refused = strcasecmp(zoraya_lookup.name, lwc_string_data(host)) == 0 &&
++		  zoraya_lookup.rc == EAI_SYSTEM && zoraya_lookup.err == EACCES;
 +	lwc_string_unref(host);
-+	return rc == EAI_SYSTEM && err == EACCES;
++	return refused;
 +}
- 
- /**
++
++/**
 + * Zoraya (ADR-0325): answers a refused fetch with a page of its own (status
 + * 403) that names the host and port and the line that would allow it.
 + * Returns false if the page could not be made (NetSurf's error page then).
@@ -102,7 +130,7 @@
   * Handle a completed fetch (CURLMSG_DONE from curl_multi_info_read()).
   *
   * \param curl_handle curl easy handle of fetch
-@@ -1567,6 +1650,10 @@
+@@ -1567,6 +1680,10 @@
  	struct curl_fetch_info *f;
  	char **_hideous_hack = (char **) (void *) &f;
  	CURLcode code;
@@ -113,7 +141,7 @@
  
  	/* find the structure associated with this fetch */
  	/* For some reason, cURL thinks CURLINFO_PRIVATE should be a string?! */
-@@ -1638,6 +1725,8 @@
+@@ -1638,6 +1755,8 @@
  		fetch_msg msg;
  		msg.type = FETCH_CERT_ERR;
  		fetch_send_callback(&msg, f->fetch_handle);
