@@ -214,3 +214,17 @@ From the "Not done" and limits lists of `docs/tasks/TASK-27-report.md` that no r
   `build` job with NetSurf and CPython is not measured (the job has 60 minutes).
 - **Compositor (9e).** The session's 20 clients are not carved per room; a client with no window keeps its slot (ADR-0323's open
   questions). The scale-2 and TCG GUI runs of 9e's scripts ran only in CI.
+
+## Follow-ups from the architect's decisions on stage 10's design (2026-11-14)
+
+ADR-0331 to ADR-0342 are accepted (TASK-28; the plan is `docs/research/stage-10/plan.md`). Each item below is a limit an accepted ADR
+states, to be taken up later:
+
+- Atomic save for `vi`: nvi2 saves a file in place, so a failure in the middle of a write can leave it cut short (ADR-0335: `vi FILE`
+  holds one name of the file's directory and cannot write a second file and rename it). Needs a way to save by rename under a
+  one-name grant.
+- A stored git token in git's own directory: git stores no credential, so a person types the token at every push (ADR-0339; the
+  directory is ADR-0341's, which git's children hold to read only). Decide where the token lives and how hooks and other children
+  are kept from reading it.
+- Pseudo-terminals when `tmux` or an ssh server is wanted: stage 10 has none (ADR-0338: when one is needed it is a pair of handles
+  from the broker, with no name; the pty functions stay on ADR-0342's guarded list until then).
