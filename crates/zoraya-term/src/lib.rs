@@ -424,6 +424,10 @@ mod entry;
 mod tests;
 #[cfg(test)]
 mod tests_caps;
+#[cfg(test)]
+mod tests_parser;
+#[cfg(test)]
+mod tests_total;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

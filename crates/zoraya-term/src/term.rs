@@ -344,6 +344,7 @@ impl Term {
             let mut row = vec![Cell::BLANK; columns];
             let n = columns.min(line.len());
             row[..n].copy_from_slice(&line[..n]);
+            crate::screen::fix_cells(&mut row);
             history.extend_from_slice(&row);
         }
         self.history = history;
