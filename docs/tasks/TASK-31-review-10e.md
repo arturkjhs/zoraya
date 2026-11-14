@@ -259,3 +259,109 @@ Do not merge yet. Findings 1-3 block: a test the branch broke and did not run, a
 source of every recursive copy, and an accepted ADR's gate for the three `pending` commands that is not met. Findings
 4-9 should be fixed in this part, because they are what the descriptions claim as security statements. Findings 10-12
 are small, and the notes can go to the backlog.
+
+## Check of the fix pass
+
+A check of the changed lines (TASK-31: one check after a review that found an error), by `opus-review`, of
+`git diff fe3c81c f46b2c6` on `work/10e` (six commits, `2b81987`..`f46b2c6`), read with `grants::plan`,
+`through_links`, `merge`, zosh's `plan_with`, the new `userland_options` and the placeholder block
+(`zosh.rs:1790-1830`), `zoraya_command::parse` and `is_option_word`, the file service's `open` (`IS_LINK`, the
+narrowed read-only rule, `fs-service/src/lib.rs:1894-1925`), toybox's `sendfile_len` and the patched `copy_tempfile`
+and `zoraya` copy-back in the unpacked tree, and dash's `config.h` and `input.c`. Nothing was built or run here (the
+other lanes had the machine); the fix pass's own runs are listed in the part report and not repeated. Every claim
+below is by reading.
+
+### Each finding of the review
+
+| Finding | Fixed by the diff? |
+|---|---|
+| 1 (must-fix) | Yes. The step runs `/usr/libexec/toybox cat` (undescribed), so INV-0153-7 is checked again; the hint text follows. |
+| 2 (must-fix) | Yes. The three `when ... FROM tree` lines are gone; the new lint `no_option_widens_a_read_operand_to_write_unless_it_changes_it` would fail on the old `cp.cmd` (a `read` operand, `-r` makes it `Tree`, `cp` not in the exception list); the QEMU step checks `read` and no `anything in`. |
+| 3 (must-fix) | No, and the report says so: toybox's tests ran on a host build, the independent read of `toys/pending/{tr,expr,diff}.c` is not done. The header comment no longer claims a review. The gate is the architect's. |
+| 4 | Yes as ADR-0336 item 5 says, with a regression (N3). |
+| 5 | Yes, the narrower form; the `grants` step checks `read (option -f)` and no `create or replace`. |
+| 6 | Yes. `narrows` includes a `cwd none` `Read`/`Write` operand; the test fails without it (a value `.` and the cwd's own path are refused, a value file is allowed). |
+| 7 | Partly: a link to outside is now refused with the hint, but the inside case still does not run for `sed` (N1), and following `create` names broke `ln -sf` and `mv` onto a link (N2). |
+| 8 | Yes, and the placeholder bug it found is fixed; the QEMU step would fail without the placeholder (`../d/n.txt` resolved from `/bin`). The fallback test now asserts a non-empty list and no `CREATE`/`REMOVE`/`RENAME`. |
+| 9 | Yes: run in QEMU and the pages say what each line needs. |
+| 10, 11, 12 | Yes. `sh -xc` puts awk's `zcc` lines in `awk.log`, `awk` is in the loop; the pinned bison is a prerequisite and its version is logged; the ADRs say what was built. |
+| 13, 14 | Recorded in `docs/backlog.md`, as the review allowed. |
+| 15 | Yes, with the cause found: `USE_TEE 0` in the built `config.h`. No other port calls `tee` or `splice` (searched: awk, make, pdpmake, tcc, toybox `lib/` and `toys/`), so nothing else depended on dash's tee path. |
+| 16, 17, 18, 19 | Yes, or recorded as the report says (18 partly; INV-0342-4's text is the architect's). |
+
+### New findings
+
+N1. **warning (should-fix).** `crates/zoraya-shell/src/grants.rs:386-410` with `zosh.rs:1799-1830`. **What.**
+    For a `ReadName`/`ChangeName` entry (only `cwd none` programs get these: `sed`, `curl`, `wget`) whose name is a
+    link inside the current directory, the entry is *replaced* by the target's directory narrowed to the target's
+    name. The program still opens the name it was given (`notes.txt`), which resolves in its table to the current
+    directory, and for a `cwd none` program that is now the dead placeholder (no entry covers the cwd, and the line
+    designates something, so `designated` adds it). Libposix learns a link's target only from the service's
+    `IS_LINK` answer (`fs-service/src/lib.rs:1894`) on a connection that reaches the link, and none does. So
+    `sed -i s/a/b/ notes.txt` with `notes.txt -> drafts/notes.txt` still fails, now with an error from a closed
+    channel and no hint; ADR-0344 item 2 and the report say the link "is followed". The host test checks the plan
+    only; no QEMU step runs a link. **Fix.** Keep the link's own entry as well (its directory narrowed to the link's
+    name, `READ | CLONE` only, so the open meets the link and the client follows it to the second entry), or say
+    in ADR-0344 and `sed.cmd` that a link operand of a `cwd none` program does not work yet; add a QEMU step with a
+    link inside the current directory either way.
+
+N2. **warning (should-fix).** `grants.rs:392-395` (`Access::Create(_)` in `opens`). **What.** A `create` name is
+    now followed at the name itself. That is right for a program that opens through the name (`cp`, `touch`,
+    `wget -O`), and wrong for one that replaces the link object: `ln -s[f] T L` and `mv A L` act on `L`, not on what
+    it points to. Two regressions, both closed, one with a hint that asks for a wider grant than the line needs:
+    `ln -sf new L` where `L -> /old/place` (re-pointing a link, the main use of `-f`) is now refused "leads through a
+    link to /old/place ... put +w /old/place before the command"; with `L -> drafts/x` inside, the `Create` entry
+    moves to `drafts`, the current directory stays read-only, and `ln` cannot replace `L` (before, the narrowed `/w`
+    entry merged with the cwd's and the line worked). `mv` onto a link outside is refused the same way. **Fix.**
+    Follow only `ReadName`/`ChangeName` at the name (what finding 7 asked), keep `Create` at its directory as
+    before, or make it a description key (a `create` that does not follow); host tests for `ln -sf` over a link
+    inside and outside, and for `cp` through a dangling link (kept).
+
+N3. **warning (should-fix).** `user/src/bin/zosh.rs:1641-1686` with `gzip.cmd:5`, `gunzip.cmd:5` (and `xargs.cmd:5`,
+    `find.cmd`). **What.** The refusal covers every parse error, "missing operand" included, so a description whose
+    operand is required although the program reads standard input without one now refuses a correct line that ran
+    before: `tar -c src | gzip > src.tgz`, `gzip -c < big.log > big.log.gz` (the form `gzip.cmd` itself recommends
+    for the least rights) and `gunzip < x.gz` are refused from `zosh` with "missing operand FILE, which its
+    description does not let through". `xargs` without a command (it runs `echo`) and `find` without a path (it
+    searches `.`) likewise. None of these is a hole; they are lines the fix pass did not try. **Fix.** Make the
+    operand optional where the program reads standard input or has a default (`[FILE...]` for `gzip` and `gunzip`;
+    `[PATH]` for `find`; `[COMMAND]` for `xargs`), check the 56 descriptions for the same, and add a QEMU step with
+    `gzip` in a pipeline.
+
+N4. **note.** `zosh.rs:1650` with `zoraya_command::parse`'s `--help` rule (`zoraya-command/src/lib.rs:141`). A
+    `--help` anywhere before `--` makes the parse `Help`, so `/bin/find . --help -delete` passes the refusal and runs
+    with `Parsed::default()`. No designations follow (the current directory only, or nothing for `cwd none`), so it
+    is no widening, but the line runs words the description does not let through. Either treat `--help` as help only
+    as the first word, or say so in `userland_options`'s comment.
+
+N5. **note.** Toybox patch 0002's copy-back, `sendfile_len` (`lib/portability.c:749-779`). A failed `read` of the
+    `/tmp` copy ends the loop with the bytes copied so far, which is not `< 0`, so the patch takes it as success,
+    closes and unlinks the only whole copy. Only a write failure is caught (the case the test forces). A read error
+    on the line's `/tmp` is unlikely; compare the result with the copy's size (`fstat(fdout)`) to close it. An
+    `xclose(out)` failure exits without the "kept in" message (the copy is kept, since `tempfile2zap` is already 1).
+
+N6. **note.** The root cause of finding 15 is that libposix's `tee` fails with `ENOSYS` where Linux gives `EINVAL`
+    for a descriptor that is not a pipe, which is what dash (and any other program with a `tee` fallback) tests for.
+    `--disable-tee` fixes dash; a backlog line for `tee`'s errno would keep the next port from meeting it.
+
+N7. **note.** `through_links` treats a `+r` grant as a root for any access (pre-existing, ADR-0153 rule 5 says "an
+    explicit grant" without its kind); the new name-following extends that to the last component, so `+r ~/s sed -i x
+    notes.txt` with `notes.txt -> ~/s/plan.txt` plans `~/s` narrowed to `plan.txt` with `WRITE`, under a grant the
+    person wrote as read. The new test asserts only the `ReadName` case. A note for the ADR's owner: whether rule 5's
+    root should be a write grant for a writing access.
+
+Checked and sound: the `narrows` rule for `..`, `.` and a grant's own path as values (refused, the literal `.`
+still allowed as written); the strictly-below rule for followed names (a link to the cwd itself is refused); the
+placeholder (a dead connection, added only when no directory entry covers the cwd, so it shadows no real entry);
+`USERLAND` (one name per line of the applet list plus `awk`, matched against trusted descriptions found by program
+path only, so a native command of the same name is not affected); the new lint's widening rule and `names_a_path`
+(each has a test that fails on the old form); `tar.cmd`'s rights (`read` for `-f` and `-C`, `-x` needs `+w`); patch
+0002's order (`tempfile2zap = 1` before the truncating open, so the exit handler keeps the copy); `dash` with
+`USE_TEE 0`.
+
+### Recommendation after the fix pass
+
+Mergeable once the architect decides finding 3 (ADR-0336 item 2's gate for `tr`, `expr`, `diff`); nothing in the
+fix pass opens a hole: N1-N3 all fail closed. N2 and N3 are small and break lines that worked before the fix pass
+(`ln -sf`, `gzip` in a pipeline), so fix them on the branch before merge; N1 can be fixed there too or recorded in
+ADR-0344 and `sed.cmd` as a limit. The notes can go to the backlog.
