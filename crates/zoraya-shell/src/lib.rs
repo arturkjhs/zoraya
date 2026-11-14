@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+pub mod crlf;
 pub mod editor;
 pub mod eval;
 pub mod glob;
@@ -16,6 +17,7 @@ pub mod grants;
 pub mod jobs;
 pub mod netgrant;
 pub mod record;
+pub mod reset;
 pub mod syntax;
 
 #[cfg(test)]

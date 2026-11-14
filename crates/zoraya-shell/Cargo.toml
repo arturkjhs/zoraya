@@ -14,9 +14,11 @@ zoraya-command = { path = "../zoraya-command" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }
 zoraya-resolve = { path = "../zoraya-resolve" }
 zoraya-http = { path = "../zoraya-http" }
+zoraya-width = { path = "../zoraya-width" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+zoraya-term = { path = "../zoraya-term" }
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }

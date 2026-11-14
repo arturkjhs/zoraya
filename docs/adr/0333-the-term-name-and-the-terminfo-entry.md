@@ -214,6 +214,11 @@ the one they know. Networking: the choice is made for ssh (driver 1). Threads: n
   remove those lookups or point `TERMINFO` at the directory, which item 4 would then have to allow for it.
 - Whether `console.term` should default to `vt100` once the serial console carries bytes exactly (ADR-0331's open
   question).
+- *Note, 2026-11-14 (ADR-0001 rule 6; TASK-31 part 10a, by an agent):* INV-0333-1 is checked (`make check-terminfo`,
+  part of `make check-ports`, against `ports/terminfo.manifest`): on the case-insensitive host it was written on and,
+  by CI, on a case-sensitive one (to be confirmed by CI's `check-ports` run, which has not happened yet). `tic` writes the alias `vt100-am` beside `vt100`; the build leaves it out, so that
+  the files are exactly the four of the invariant. INV-0333-2 and INV-0333-3 cannot be checked yet: the shell sets
+  `TERM` for a program that has the terminal in part 10c.
 
 ## Revisit triggers
 

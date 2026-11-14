@@ -1,0 +1,14 @@
+[package]
+name = "zoraya-width"
+description = "How many columns a code point takes: musl's own wcwidth as a table, for the terminal's grid and the shell's editor (ADR-0332 item 9)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

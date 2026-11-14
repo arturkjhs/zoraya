@@ -1,0 +1,174 @@
+# curses-attr: 7885 bytes replayed through zoraya-term 80x24
+# a = fg=7 bg=0 attrs=0x0
+# b = fg=- bg=0 attrs=0x0
+# c = fg=7 bg=0 attrs=0x20
+# d = fg=7 bg=0 attrs=0x1
+# e = fg=7 bg=0 attrs=0x8
+# f = fg=7 bg=0 attrs=0x2
+# g = fg=7 bg=0 attrs=0x10
+# h = fg=7 bg=0 attrs=0x40
+# i = fg=7 bg=0 attrs=0x4
+# j = fg=1 bg=0 attrs=0x0
+# k = fg=1 bg=0 attrs=0x20
+# l = fg=1 bg=0 attrs=0x1
+# m = fg=1 bg=0 attrs=0x8
+# n = fg=1 bg=0 attrs=0x2
+# o = fg=1 bg=0 attrs=0x10
+# p = fg=1 bg=0 attrs=0x40
+# q = fg=1 bg=0 attrs=0x4
+@ 730 menu
+cursor 2 19 screen=primary view=0
+modes Modes { app_cursor: false, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: false, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|Welcome to ncurses 6.6.20251230.  Press ? for help.                             |
+|................................................................................|
+|This is the ncurses main menu (uppercase for wide-characters)                   |
+|................................................................................|
+| A,a    = keyboard and mouse input test                                         |
+|................................................................................|
+| B,b    = character attribute test                                              |
+|................................................................................|
+| C,c    = color test pattern                                                    |
+|................................................................................|
+| d      = edit RGB color values                                                 |
+|................................................................................|
+| E,e    = exercise soft keys                                                    |
+|................................................................................|
+| F,f    = display ACS characters                                                |
+|................................................................................|
+| g      = display windows and scrolling                                         |
+|................................................................................|
+| i      = test flushinp()                                                       |
+|................................................................................|
+| k      = display character attributes                                          |
+|................................................................................|
+| m      = exercise menu library                                                 |
+|................................................................................|
+| O,o    = exercise panel library                                                |
+|................................................................................|
+| p      = exercise pad features                                                 |
+|................................................................................|
+| q      = quit                                                                  |
+|................................................................................|
+| r      = exercise form library                                                 |
+|................................................................................|
+| S,s    = overlapping-refresh test                                              |
+|................................................................................|
+| v      = show terminal name and settings                                       |
+|................................................................................|
+| ?      = repeat this command summary                                           |
+|................................................................................|
+|>                                                                               |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+@ 4496 screen
+cursor 55 21 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|┌───────────────────Character attribute test display───────────────────────────┐|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    STANDOUT mode:  |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    REVERSE mode:   |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    BOLD mode:      |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaabbbbbbadddddddddddddddddddddddddddddddddddddddddddabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    UNDERLINE mode: |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    DIM mode:       |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaabbbbbbbafffffffffffffffffffffffffffffffffffffffffffabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    BLINK mode:     |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaagggggggggggggggggggggggggggggggggggggggggggabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    INVISIBLE mode: |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    ITALIC mode:    |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│ -->NORMAL mode:    |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbba|
+|│                                                                              │|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|│    This terminal does not have the magic-cookie glitch                       │|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbba|
+|│    Enter '?' for help.  Colors (fg 0, bg 0),  ACS (0)                        │|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbba|
+|└──────────────────────────────────────────────────────────────────────────────┘|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|                                                                                |
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+@ 7885 colour changed
+cursor 55 21 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|┌───────────────────Character attribute test display───────────────────────────┐|
+|jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    STANDOUT mode:  |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    REVERSE mode:   |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    BOLD mode:      |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjllllllllllllllllllllllllllllllllllllllllllljjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    UNDERLINE mode: |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    DIM mode:       |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    BLINK mode:     |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjooooooooooooooooooooooooooooooooooooooooooojjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    INVISIBLE mode: |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjpppppppppppppppppppppppppppppppppppppppppppjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    ITALIC mode:    |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│ -->NORMAL mode:    |[\]^_ `abcd efghi jklmn opqrs tuvwx yz{|} ~|             │|
+|jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj|
+|│                                                                              │|
+|jbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    This terminal does not have the magic-cookie glitch                       │|
+|jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjbbbbbbbbbbbbbbbbbbbbbbbj|
+|│    Enter '?' for help.  Colors (fg 1, bg 0),  ACS (0)                        │|
+|jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjbbbbbbbbbbbbbbbbbbbbbbbbj|
+|└──────────────────────────────────────────────────────────────────────────────┘|
+|jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj|
+|                                                                                |
+|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|

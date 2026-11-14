@@ -1,0 +1,28 @@
+# vim (the host's vi) editing a small file: the alternate screen, the status line,
+# insert mode, a scroll, a search, and the shell's screen coming back. Recorded with the
+# pinned terminfo entry (TERM as ADR-0333 says) and with Vim's own queries (version and
+# cursor position) left in, so that the replayed stream holds queries nothing answers.
+# NOTE: `env TERMINFO` is set, but Vim uses its own built-in table for an xterm name (its output has no
+# `ESC [ 22 ; 0 ; 0 t`): this recording is of Vim's xterm, not of the pinned entry.
+size 80 24
+env TERMINFO=@terminfo@
+run vi -u NONE -N -n -i NONE --cmd "set nocp ruler showcmd laststatus=2" -c "syntax on" -c "set background=dark" notes.txt
+file notes.txt # Notes\nThe quick brown fox jumps over the lazy dog.\nA second line, with a tab:\there.\nTODO: write the terminal.\n\n    indented line\nlast line\n
+mark start
+send G
+wait 1
+mark at the last line
+send ohello from the editor\e
+wait 1
+mark after typing
+send gg
+wait 1
+send /fox\r
+wait 1
+mark after a search
+send :set number\r
+wait 1
+mark with line numbers
+send :q!\r
+wait 1
+mark after quitting

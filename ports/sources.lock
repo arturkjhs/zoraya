@@ -22,6 +22,9 @@
 # the Clang 18 that CI's Ubuntu 24.04 gives zcc (libc++ 21 and later warn "only supports Clang 19 and
 # later"); the SHA-256 is the digest GitHub's release lists for the asset (checked against it).
 # googletest (TASK-30): v1.18.0's release asset, the same check.
+# ncurses (TASK-31 10a, ADR-0333, ADR-0334): 6.6's release tarball; the SHA-256 is the same from ftp.gnu.org and
+# invisible-mirror.net (the .sig the GNU mirror carries is not verified here). 10a builds `tic` and `infocmp` from it
+# for the host (tools/term-terminfo/terminfo.sh); the port for the target is 10d's.
 #
 # name    version                                    sha256                                                            file                                                   url
 musl      1.2.5                                      a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  musl-1.2.5.tar.gz                                      https://musl.libc.org/releases/musl-1.2.5.tar.gz https://sources.buildroot.net/musl/musl-1.2.5.tar.gz
@@ -48,3 +51,4 @@ bison     3.8.2                                      9bba0214ccf7f1079c5d5921004
 llvm      20.1.8                                     6898f963c8e938981e6c4a302e83ec5beb4630147c7311183cf61069af16333d llvm-project-20.1.8.src.tar.xz                         https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/llvm-project-20.1.8.src.tar.xz
 googletest 1.18.0                                    6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5 googletest-1.18.0.tar.gz                               https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
 awk       72e9b56caddb4a6f8d1405315a5183c26b8650a4   b59f2ec3f40e7446d2ca3793c829800834faf95d929eafb623c5331238eb8c9e  awk-72e9b56caddb4a6f8d1405315a5183c26b8650a4.tar.gz   https://github.com/onetrueawk/awk/archive/72e9b56caddb4a6f8d1405315a5183c26b8650a4.tar.gz
+ncurses   6.6                                        355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11  ncurses-6.6.tar.gz                                     https://ftp.gnu.org/gnu/ncurses/ncurses-6.6.tar.gz https://invisible-mirror.net/archives/ncurses/ncurses-6.6.tar.gz

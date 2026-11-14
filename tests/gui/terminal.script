@@ -102,6 +102,34 @@ type echo wheel-back\r
 window
 screen wheel-back
 screen ~> _
+# A recorded full-screen program (ADR-0332 item 10, TASK-31 10a): the bytes
+# `less` wrote to a terminal on the host (crates/zoraya-term/recordings,
+# cut by tools/term-record/gui-files.sh), played by cat, and held on the
+# screen by a `sleep` that Ctrl-C ends (the shell resets the terminal before the next prompt,
+# as it must until part 10c's Restore: the program's screen is read while the
+# command still runs). The screen is the alternate one, the text is 256-colour
+# and direct-colour (the last text row), and the program leaves the cursor on
+# its last row. When the command ends the shell's own screen is back, and the
+# prompt is clean.
+type cat /recordings/less-end.rec; sleep 300\r
+window
+# The recording is of 24 rows; a window of a large display has fewer (22 at 1920 x 1200), and the
+# first rows scroll off: only what every size shows is read.
+screen line 60: the quick brown fox jumps over the lazy dog
+screen line 70: the quick brown fox jumps over the lazy dog
+screen red bold blue_background,_yellow_text orange
+screen (END)_
+shot terminal-fullscreen
+# Ctrl-C ends the sleep (and so the wait: a large display or TCG reads slowly).
+chord ctrl c
+window
+screen ~> _
+type echo clean\r
+# The screen was full and scrolled: look again from the top.
+window
+screen ~> echo clean
+screen clean
+screen ~> _
 # exit closes the window, and init opens a new one with a new shell, since it
 # was the last (ADR-0155's Decision, INV-0155-5).
 type exit\r

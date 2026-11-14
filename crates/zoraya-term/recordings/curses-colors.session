@@ -1,0 +1,11 @@
+# ncurses' own test program (test/ncurses.c of the pinned release), the colour test pattern: the 8, 16 and 256 colour pairs the terminal has.
+size 80 24
+env TERMINFO=@terminfo@
+run @curses@/ncurses
+mark menu
+send c\r
+wait 2
+mark screen
+send \x20
+wait 1
+mark next page

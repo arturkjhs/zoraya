@@ -1,0 +1,21 @@
+[?1049h[22;0;0t[1;24r(B[m[4l[?7h[?1h=[39;49m[39;49m[24;1H[K[24;1H[?1049l[23;0;0t[?1l>Welcome to ncurses 6.6.20251230.  Press ? for help.
+This is the ncurses main menu (uppercase for wide-characters)
+ A,a	= keyboard and mouse input test
+ B,b	= character attribute test
+ C,c	= color test pattern
+ d	= edit RGB color values
+ E,e	= exercise soft keys
+ F,f	= display ACS characters
+ g	= display windows and scrolling
+ i	= test flushinp()
+ k	= display character attributes
+ m	= exercise menu library
+ O,o	= exercise panel library
+ p	= exercise pad features
+ q	= quit
+ r	= exercise form library
+ S,s	= overlapping-refresh test
+ v	= show terminal name and settings
+ ?	= repeat this command summary
+> f
+[?1049h[22;0;0t[1;24r[39;49m]104(B[m[4l[?7h[39;49m[37m[40m[H[2J[1;21H(B[0;1m[39;49m[37m[40mDisplay of the ACS Character Set(B[m[39;49m[37m[40m[3;9HACS_ULCORNER : (0[0m[39;49m[37m[40ml(B[39;49m[37m[40m[3;50H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_LANTERN : (0[0m[39;49m[37m[40mi(B[39;49m[37m[40m[4;9H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_URCORNER : (0[0m[39;49m[37m[40mk(B[39;49m[37m[40m[4;51H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_BULLET : (0[0m[39;49m[37m[40m~(B[39;49m[37m[40m[5;9H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_LLCORNER : (0[0m[39;49m[37m[40mm(B[39;49m[37m[40m[5;50H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_CKBOARD : (0[0m[39;49m[37m[40ma(B[39;49m[37m[40m[6;9H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_LRCORNER : (0[0m[39;49m[37m[40mj(B[39;49m[37m[40m[6;51H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_DEGREE : (0[0m[39;49m[37m[40mf(B[39;49m[37m[40m[7;13H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_LTEE : (0[0m[39;49m[37m[40mt(B[39;49m[37m[40m[7;50H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_DIAMOND : (0[0m[39;49m[37m[40m`(B[39;49m[37m[40m[8;13H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_RTEE : (0[0m[39;49m[37m[40mu(B[39;49m[37m[40m[8;50H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_PLMINUS : (0[0m[39;49m[37m[40mg(B[39;49m[37m[40m[9;13H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_TTEE : (0[0m[39;49m[37m[40mw(B[39;49m[37m[40m[9;53H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_PLUS : (0[0m[39;49m[37m[40mn(B[39;49m[37m[40m[10;13H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_BTEE : (0[0m[39;49m[37m[40mv(B[39;49m[37m[40m[10;51H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_GEQUAL : (0[0m[39;49m[37m[40mz(B[39;49m[37m[40m[11;12H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_HLINE : (0[0m[39;49m[37m[40mq(B[39;49m[37m[40m[11;51H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_NEQUAL : (0[0m[39;49m[37m[40m|(B[39;49m[37m[40m[12;12H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_VLINE : (0[0m[39;49m[37m[40mx(B[39;49m[37m[40m[12;51H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_LEQUAL : (0[0m[39;49m[37m[40my(B[39;49m[37m[40m[13;11H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_LARROW : ←[13;49HACS_STERLING : (0[0m[39;49m[37m[40m}(B[39;49m[37m[40m[14;11H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_RARROW : →[14;55HACS_PI : (0[0m[39;49m[37m[40m{(B[39;49m[37m[40m[15;11H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_UARROW : ↑[15;55HACS_S1 : (0[0m[39;49m[37m[40mo(B[39;49m[37m[40m[16;11H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_DARROW : ↓[16;55HACS_S3 : (0[0m[39;49m[37m[40mp(B[39;49m[37m[40m[17;12H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_BLOCK : ▮[17;55HACS_S7 : (0[0m[39;49m[37m[40mr(B[39;49m[37m[40m[18;12H(0[0m[39;49m[37m[40m(B[39;49m[37m[40mACS_BOARD : ▒[18;55HACS_S9 : (0[0m[39;49m[37m[40ms(B[39;49m[37m[40m[21d(0[0m[39;49m[37m[40m(B[39;49m[37m[40mNote: ANSI terminals may not display C1 characters.[22dSelect: a=ACS, w=all x=box, 0=C1, 1-3,+/- non-ASCII, </> repeat, ESC=quit[23dv/V, f/F, b/B cycle through video attributes (STANDOUT) and color 0/0.[?1h=

@@ -1,0 +1,27 @@
+# ncurses' hanoi (the pinned release): three discs solved in the seven moves, drawn with
+# cursor addressing, reverse video and the bottom line's prompts.
+size 80 24
+env TERMINFO=@terminfo@
+run @curses@/hanoi -n 3
+mark start
+send 13
+wait 6
+mark move 1
+send 12
+wait 6
+mark move 2
+send 32
+wait 6
+mark move 3
+send 13
+wait 6
+mark move 4
+send 21
+wait 6
+mark move 5
+send 23
+wait 6
+mark move 6
+send 13
+wait 6
+mark move 7

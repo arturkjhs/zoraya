@@ -29,7 +29,7 @@ fn screen(t: &Term) -> Vec<String> {
 
 #[test]
 fn text_newlines_and_the_shell_s_erase() {
-    let t = term(b"zosh$ lx\x08 \x08s\nREADME\n");
+    let t = term(b"zosh$ lx\x08 \x08s\r\nREADME\r\n");
     assert_eq!(screen(&t), ["zosh$ ls", "README", "", "", ""]);
     assert_eq!(t.cursor(), (0, 2));
 }
@@ -49,7 +49,7 @@ fn long_lines_wrap_and_the_bottom_scrolls() {
     assert_eq!(t.line(0), "x".repeat(20));
     assert_eq!(t.line(1), "x".repeat(5));
     for i in 0..10 {
-        t.write(format!("line {i}\n").as_bytes());
+        t.write(format!("line {i}\r\n").as_bytes());
     }
     assert_eq!(t.line(3), "line 9");
     assert_eq!(t.cursor(), (0, 4));
@@ -61,7 +61,7 @@ fn a_full_last_column_wraps_only_when_more_comes() {
     let mut t = term(b"");
     t.write(&[b'a'; 20]);
     assert_eq!(t.cursor(), (19, 0));
-    t.write(b"\n");
+    t.write(b"\r\n");
     assert_eq!(t.cursor(), (0, 1), "no blank line from the pending wrap");
 }
 
@@ -83,36 +83,33 @@ fn cursor_movement_and_erasing() {
     assert_eq!(t.cursor(), (0, 0));
 }
 
-/// ADR-0154's addition to the subset: SGR 2 is faint, 22 ends bold and faint.
+/// ADR-0154's addition to the subset: SGR 2 is faint, 22 ends bold and
+/// faint; ADR-0332: bold is a weight and does not brighten.
 #[test]
 fn faint_and_normal_intensity() {
     let t = term(b"a\x1b[2mb\x1b[22mc\x1b[1;2md\x1b[22me\x1b[31;2mf\x1b[0mg");
-    let fg = |x| t.cell(x, 0).fg;
-    assert_eq!(fg(0), DEFAULT_FG);
-    assert_eq!(fg(1), FAINT_DEFAULT);
-    assert_eq!(fg(2), DEFAULT_FG);
-    assert_eq!(fg(3), FAINT_DEFAULT, "faint wins over bold");
-    assert!(!t.cell(3, 0).bold);
-    assert_eq!(fg(4), DEFAULT_FG);
-    assert_eq!(fg(5), FAINT + 1);
-    assert_eq!(fg(6), DEFAULT_FG);
-    let p = palette(Appearance::Light);
+    let has = |x, flag| t.cell(x, 0).has(flag);
+    assert!(!has(0, cell::FAINT));
+    assert!(has(1, cell::FAINT));
+    assert!(!has(2, cell::FAINT));
+    assert!(has(3, cell::FAINT) && has(3, cell::BOLD));
+    assert!(!has(4, cell::FAINT) && !has(4, cell::BOLD));
+    assert!(has(5, cell::FAINT));
+    assert_eq!(t.cell(5, 0).fg(), Colour::Index(1));
+    assert_eq!(t.cell(6, 0).attrs(), 0);
+    let look = look();
     let tokens = Appearance::Light.palette();
+    let (fg, bg) = t.colours_of(&look, &t.cell(1, 0));
+    assert_eq!(fg, tokens.term_fg.blend(tokens.term_bg, 128));
+    assert_eq!(bg, tokens.term_bg);
+    let (fg, _) = t.colours_of(&look, &t.cell(5, 0));
+    assert_eq!(fg, tokens.term_red.blend(tokens.term_bg, 128));
+    let p = palette(Appearance::Light);
+    assert_eq!(p[1], tokens.term_red);
+    assert_eq!(p[9], tokens.term_red.blend(tokens.term_fg, 64));
+    assert_eq!(look.bg, tokens.term_bg);
     assert_eq!(
-        p[usize::from(FAINT_DEFAULT)],
-        tokens.term_fg.blend(tokens.term_bg, 128)
-    );
-    assert_eq!(
-        p[usize::from(FAINT + 1)],
-        tokens.term_red.blend(tokens.term_bg, 128)
-    );
-    assert_eq!(
-        p[usize::from(BRIGHT + 1)],
-        tokens.term_red.blend(tokens.term_fg, 64)
-    );
-    assert_eq!(p[usize::from(DEFAULT_BG)], tokens.term_bg);
-    assert_eq!(
-        palette(Appearance::Dark)[usize::from(DEFAULT_FG)],
+        Look::new(Scale::ONE, Appearance::Dark).fg,
         Appearance::Dark.palette().term_fg
     );
 }
@@ -120,42 +117,26 @@ fn faint_and_normal_intensity() {
 #[test]
 fn colours_and_reverse() {
     let t = term(b"\x1b[31;44mA\x1b[1mB\x1b[0;7mC\x1b[mD");
+    let a = t.cell(0, 0);
     assert_eq!(
-        t.cell(0, 0),
-        Cell {
-            ch: 'A',
-            fg: 1,
-            bg: 4,
-            bold: false
-        }
+        (a.ch, a.fg(), a.bg(), a.attrs()),
+        ('A', Colour::Index(1), Colour::Index(4), 0)
     );
+    let b = t.cell(1, 0);
     assert_eq!(
-        t.cell(1, 0),
-        Cell {
-            ch: 'B',
-            fg: 9,
-            bg: 4,
-            bold: true
-        }
+        (b.fg(), b.bg(), b.attrs()),
+        (Colour::Index(1), Colour::Index(4), cell::BOLD),
+        "bold is a weight: the colour is not brightened"
     );
+    let c = t.cell(2, 0);
     assert_eq!(
-        t.cell(2, 0),
-        Cell {
-            ch: 'C',
-            fg: DEFAULT_BG,
-            bg: DEFAULT_FG,
-            bold: false
-        }
+        (c.fg(), c.bg(), c.attrs()),
+        (Colour::Default, Colour::Default, cell::REVERSE)
     );
-    assert_eq!(
-        t.cell(3, 0),
-        Cell {
-            ch: 'D',
-            fg: DEFAULT_FG,
-            bg: DEFAULT_BG,
-            bold: false
-        }
-    );
+    let look = look();
+    let (fg, bg) = t.colours_of(&look, &c);
+    assert_eq!((fg, bg), (look.bg, look.fg), "reverse swaps what is drawn");
+    assert_eq!(t.cell(3, 0), Cell::new('D'));
 }
 
 #[test]
@@ -196,9 +177,9 @@ fn queries_get_no_answer() {
 #[test]
 fn memory_is_bounded() {
     let mut t = Term::new(80, 24);
-    let before = t.memory();
+    let bound = t.memory_bound();
     for i in 0..5000 {
-        t.write(format!("line {i}\n").as_bytes());
+        t.write(format!("line {i}\r\n").as_bytes());
     }
     assert_eq!(t.history_len(), SCROLLBACK);
     let mut osc = vec![b'x'; 64 * 1024];
@@ -208,10 +189,16 @@ fn memory_is_bounded() {
     t.write(b"after");
     let shown: String = (0..24).map(|y| t.line(y)).collect();
     assert!(
-        shown.ends_with("xxxafter"),
-        "the string was cut and the rest printed"
+        !shown.contains("xxx") && !shown.contains("after"),
+        "a string past its bound is swallowed whole, and nothing is printed"
     );
-    assert_eq!(t.memory(), before);
+    t.write(b"\x18after");
+    let shown: String = (0..24).map(|y| t.line(y)).collect();
+    assert!(
+        shown.ends_with("after") && !shown.contains("xxx"),
+        "CAN ends it"
+    );
+    assert!(t.memory() <= bound, "{} > {bound}", t.memory());
     // An escape inside a string still counts (review R2), and so does a
     // control sequence that never ends.
     for opening in [&b"\x1b]"[..], b"\x1b["] {
@@ -286,7 +273,7 @@ fn the_parser_is_total() {
 fn the_view_scrolls_back_and_output_returns_it() {
     let mut t = Term::new(10, 3);
     for i in 0..6 {
-        t.write(format!("{i}\n").as_bytes());
+        t.write(format!("{i}\r\n").as_bytes());
     }
     assert_eq!(t.history_len(), 4);
     t.scroll_view(2);
@@ -317,7 +304,7 @@ fn rendering_draws_changed_rows_and_the_cursor() {
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 0)));
     // The cursor, after "hi", is a reversed blank: all text colour.
     assert_eq!(read_rows(&pixels, w, h, 10, 1), ["hi_"]);
-    let fg = look.colors[usize::from(DEFAULT_FG)].pixel();
+    let fg = look.fg.pixel();
     let (cx, cy) = look.cell_origin(2, 0);
     assert!(
         (0..look.cell_height())
@@ -337,7 +324,7 @@ fn ukrainian_czech_colours_and_bold_read_back() {
     let (w, h) = look.surface_size(30, 3);
     let mut pixels = vec![0u32; w * h];
     look.clear(&mut pixels);
-    t.write("звіт-2026.txt příklad.txt\n\x1b[31mґанок\x1b[m \x1b[1mЖ\x1b[22m \x1b[2mfaint\x1b[m\n\x1b[7mrev".as_bytes());
+    t.write("звіт-2026.txt příklad.txt\r\n\x1b[31mґанок\x1b[m \x1b[1mЖ\x1b[22m \x1b[2mfaint\x1b[m\r\n\x1b[7mrev".as_bytes());
     t.render(&mut look, &mut pixels, w, false);
     let mut reader = Reader::new(Look::new(Scale::ONE, Appearance::Light));
     let rows = reader.rows(30, 3, (0, 0), (w, h), |x, y| pixels[y * w + x]);
@@ -407,16 +394,21 @@ fn sizes_are_pinned_to_the_padding() {
 
 #[test]
 fn cells_are_addressed_by_row() {
-    let t = term(b"a\nb");
+    let t = term(b"a\r\nb");
     assert_eq!(t.cell(0, 1).ch, 'b');
 }
 
 #[test]
 fn memory_is_what_the_terminal_holds() {
     let t = Term::new(80, 24);
-    let expected =
-        (t.screen.capacity() + t.history.capacity()) * size_of::<Cell>() + t.dirty.capacity();
+    let expected = (t.screen.capacity() + t.other.capacity() + t.history.capacity())
+        * size_of::<Cell>()
+        + t.dirty.capacity()
+        + t.tabs.capacity()
+        + t.osc.capacity();
     assert_eq!(t.memory(), expected);
+    assert!(t.memory() <= t.memory_bound());
+    assert_eq!(size_of::<Cell>(), 16, "ADR-0332 item 6");
 }
 
 #[test]
@@ -425,18 +417,18 @@ fn scrolling_and_cursor_moves_redraw_their_rows() {
     let mut look = look();
     let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0u32; w * h];
-    t.write(b"a\nb\nc");
+    t.write(b"a\r\nb\r\nc");
     t.render(&mut look, &mut pixels, w, true);
-    t.write(b"\n");
+    t.write(b"\r\n");
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     t.write(b"\x1b[2;1H");
-    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((1, 2)));
     assert_eq!(t.render(&mut look, &mut pixels, w, true), None);
     t.redraw();
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     // A row below the first is drawn from its own row.
     let mut t = Term::new(10, 3);
-    t.write(b"h\nZ");
+    t.write(b"h\r\nZ");
     look.clear(&mut pixels);
     t.render(&mut look, &mut pixels, w, false);
     assert_eq!(read_rows(&pixels, w, h, 10, 2), ["h", "Z"]);
@@ -470,7 +462,7 @@ fn samples() {
     ] {
         let mut look = Look::new(Scale::ONE, appearance);
         let mut t = Term::new(80, 24);
-        t.write(session.as_bytes());
+        t.write(session.replace('\n', "\r\n").as_bytes());
         let (w, h) = look.surface_size(80, 24);
         let mut pixels = vec![0u32; w * h];
         look.clear(&mut pixels);
@@ -486,7 +478,7 @@ fn samples() {
 #[test]
 fn a_resize_keeps_what_fits_and_the_cursor_on_screen() {
     let mut t = Term::new(10, 4);
-    t.write(b"abcdefghij\n12\nxyz\nlast");
+    t.write(b"abcdefghij\r\n12\r\nxyz\r\nlast");
     assert_eq!(t.cursor(), (4, 3));
     t.resize(5, 2);
     assert_eq!(t.size(), (5, 2));
@@ -496,7 +488,7 @@ fn a_resize_keeps_what_fits_and_the_cursor_on_screen() {
     assert_eq!(t.history_len(), 2);
     t.resize(12, 3);
     assert_eq!(screen(&t), ["xyz", "last", ""]);
-    t.write(b"!\nmore");
+    t.write(b"!\r\nmore");
     assert_eq!(screen(&t), ["xyz", "last!", "more"]);
     t.resize(0, 0);
     assert_eq!(t.size(), (1, 1));
@@ -516,7 +508,7 @@ fn clear_fills_the_whole_surface_with_the_background() {
     let look = look();
     let mut pixels = vec![0x00ab_cdefu32; 50 * 40];
     look.clear(&mut pixels);
-    let bg = look.colors[usize::from(DEFAULT_BG)].pixel();
+    let bg = look.bg.pixel();
     assert!(pixels.iter().all(|p| *p == bg));
 }
 
@@ -525,7 +517,7 @@ fn cells_at_the_pictures_edge_read_only_when_whole() {
     // Mutation testing (7a): the reader's bound on the picture's edge.
     let mut look = look();
     let mut t = Term::new(10, 3);
-    t.write(b"xxxxxxxxxx\nxxxxxxxxxx\nxxxxxxxxxx");
+    t.write(b"xxxxxxxxxx\r\nxxxxxxxxxx\r\nxxxxxxxxxx");
     let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0u32; w * h];
     look.clear(&mut pixels);
@@ -616,15 +608,341 @@ fn wheel_turns_become_lines() {
     assert_eq!(w.turn(-40), 1);
     assert_eq!(w.turn(0), 0);
     let mut w = WheelLines::default();
-    assert_eq!(w.turn(i32::MIN), SCROLLBACK as isize);
-    assert_eq!(w.turn(i32::MAX), -(SCROLLBACK as isize));
+    assert_eq!(w.turn(i32::MIN), MAX_SCROLLBACK as isize);
+    assert_eq!(w.turn(i32::MAX), -(MAX_SCROLLBACK as isize));
     let mut t = Term::new(10, 4);
     for _ in 0..20 {
-        t.write(b"x\n");
+        t.write(b"x\r\n");
     }
     let mut w = WheelLines::default();
     t.scroll_view(w.turn(-120));
     assert_eq!(t.view(), 3);
     t.scroll_view(w.turn(i32::MAX));
     assert_eq!(t.view(), 0);
+}
+
+/// The reader takes any foreground and background, not only the palette's
+/// (TASK-31 10a: a full-screen program's 256-colour and direct-colour text
+/// is read by glyph in the GUI scripts), at both scales and in both sets,
+/// including a low contrast and a bold face.
+#[test]
+fn text_in_any_colour_reads_back() {
+    for (scale, appearance) in [
+        (Scale::ONE, Appearance::Light),
+        (Scale::ONE, Appearance::Dark),
+        (Scale::TWO, Appearance::Light),
+    ] {
+        let mut look = Look::new(scale, appearance);
+        let mut t = Term::new(40, 6);
+        t.write(
+            "\x1b[38;2;17;200;99m\x1b[48;2;120;3;200mgreen on purple\x1b[m\r\n\
+             \x1b[38;5;226m\x1b[48;5;21mQuick brown fox\x1b[m\r\n\
+             \x1b[1;38;2;255;128;0mbold orange\x1b[m \x1b[38;2;100;100;100m\x1b[48;2;110;110;110mfaint grey\x1b[m\r\n\
+             \x1b[2;38;5;196mdim red\x1b[m \x1b[7mreverse\x1b[m \x1b[38;5;232;48;5;255mgrey ramp\x1b[m\r\n\
+             \x1b[38;2;1;2;3mx\x1b[48;2;254;253;252my"
+                .as_bytes(),
+        );
+        let (w, h) = look.surface_size(40, 6);
+        let mut pixels = vec![0u32; w * h];
+        look.clear(&mut pixels);
+        t.render(&mut look, &mut pixels, w, false);
+        let mut reader = Reader::new(Look::new(scale, appearance));
+        let rows = reader.rows(40, 6, (0, 0), (w, h), |x, y| pixels[y * w + x]);
+        // A blank on a background of its own reads `_`, one on the default ` `.
+        assert_eq!(rows[0], reader.canonical("green_on_purple"));
+        assert_eq!(rows[1], reader.canonical("Quick_brown_fox"));
+        assert_eq!(rows[2], reader.canonical("bold orange faint_grey"));
+        assert_eq!(rows[3], reader.canonical("dim red reverse grey_ramp"));
+        assert_eq!(rows[4], reader.canonical("xy"));
+    }
+}
+
+/// The hold of a synchronized update (ADR-0332 item 3): held, shown after at
+/// most 150 ms, shown at once when it ends, and no deadline to wake for while
+/// a commit waits (review of 10a: `term` once spun on a deadline in the past).
+#[test]
+fn a_synchronized_update_is_held_for_at_most_150_ms() {
+    const MS: u64 = 1_000_000;
+    let t0 = 1_000 * MS;
+    // Not synchronized: draw.
+    let h = sync_hold(t0, None, false, false);
+    assert_eq!((h.draw, h.since, h.deadline), (true, None, None));
+    // The first look at a set mode starts the hold.
+    let h = sync_hold(t0, None, true, false);
+    assert_eq!(
+        (h.draw, h.since, h.deadline),
+        (false, Some(t0), Some(t0 + 150 * MS))
+    );
+    // Still held at 149 ms, shown at 150 and the hold is over.
+    let h = sync_hold(t0 + 149 * MS, Some(t0), true, false);
+    assert_eq!(
+        (h.draw, h.since, h.deadline),
+        (false, Some(t0), Some(t0 + 150 * MS))
+    );
+    let h = sync_hold(t0 + 150 * MS, Some(t0), true, false);
+    assert_eq!((h.draw, h.since, h.deadline), (true, None, None));
+    // The end of the update shows it at once, whatever the time.
+    let h = sync_hold(t0 + MS, Some(t0), false, false);
+    assert_eq!((h.draw, h.since, h.deadline), (true, None, None));
+    // A commit outstanding: nothing is drawn and nothing is waited for by time,
+    // after the deadline as before it; the hold keeps its start.
+    for now in [t0 + MS, t0 + 150 * MS, t0 + 10_000 * MS] {
+        let h = sync_hold(now, Some(t0), true, true);
+        assert_eq!(
+            (h.draw, h.since, h.deadline),
+            (false, Some(t0), None),
+            "{now}"
+        );
+    }
+    let h = sync_hold(t0, None, false, true);
+    assert_eq!((h.draw, h.since, h.deadline), (false, None, None));
+    // The deadline is never in the past when it is given.
+    for now in (0..400).map(|i| t0 + i * MS) {
+        let h = sync_hold(now, Some(t0), true, false);
+        if let Some(d) = h.deadline {
+            assert!(d > now && !h.draw);
+        }
+    }
+}
+
+// Tests for what the mutation run over lib.rs, read.rs, cell.rs and colour.rs
+// found missing (TASK-31 10a).
+
+fn surface(look: &Look, columns: usize, rows: usize) -> (Vec<u32>, usize) {
+    let (w, h) = look.surface_size(columns, rows);
+    let mut pixels = vec![0u32; w * h];
+    look.clear(&mut pixels);
+    (pixels, w)
+}
+
+#[test]
+fn the_palette_is_xterms_cube_and_greys() {
+    let p = palette(Appearance::Light);
+    assert_eq!(p[16].pixel(), 0x000000);
+    assert_eq!(p[21].pixel(), 0x0000ff);
+    assert_eq!(p[46].pixel(), 0x00ff00);
+    assert_eq!(p[196].pixel(), 0xff0000);
+    assert_eq!(p[231].pixel(), 0xffffff);
+    assert_eq!(p[67].pixel(), (95 << 16) | (135 << 8) | 175);
+    assert_eq!(p[232].pixel(), 0x080808);
+    assert_eq!(p[255].pixel(), 0xeeeeee);
+}
+
+#[test]
+fn the_reader_tries_the_defaults_the_palette_and_the_faint_forms() {
+    let look = look();
+    let colours = look.reader_colours();
+    assert_eq!(colours.len(), 2 + 16 + 8 + 1);
+    assert_eq!(colours[0], look.fg);
+    assert_eq!(colours[1], look.bg);
+    assert_eq!(&colours[2..18], &look.palette[..16]);
+    assert_eq!(colours[18], look.palette[0].blend(look.bg, 128));
+    assert_eq!(colours[26], look.fg.blend(look.bg, 128));
+}
+
+#[test]
+fn draw_cell_draws_in_the_palettes_colours() {
+    let mut look = look();
+    let (mut pixels, w) = surface(&look, 2, 1);
+    look.draw_cell(&mut pixels, w, 0, 0, Cell::new('l'));
+    let (px, py) = look.cell_origin(0, 0);
+    let cell: Vec<u32> = (0..look.cell_height())
+        .flat_map(|dy| (0..look.cell_width()).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| pixels[(py + dy) * w + px + dx])
+        .collect();
+    assert_eq!(cell[0], look.bg.pixel(), "the default background");
+    assert!(cell.contains(&look.fg.pixel()), "the default foreground");
+    // Palette entries and direct colours.
+    let (mut pixels, w) = surface(&look, 2, 1);
+    let c = Cell::new(' ').with_bg(Colour::Index(21));
+    look.draw_cell(&mut pixels, w, 0, 0, c);
+    assert_eq!(pixels[py * w + px], 0x0000_00ff);
+    let c = Cell::new(' ').with_bg(Colour::Rgb(1, 2, 3));
+    look.draw_cell(&mut pixels, w, 1, 0, c);
+    let (qx, qy) = look.cell_origin(1, 0);
+    assert_eq!(pixels[qy * w + qx], (1 << 16) | (2 << 8) | 3);
+    let c = Cell::new('x')
+        .with_fg(Colour::Rgb(10, 20, 30))
+        .with_bg(Colour::Index(21));
+    look.draw_cell(&mut pixels, w, 0, 0, c);
+    // The glyph is blended from the direct colour (10, 20, 30) over the blue: some of its
+    // pixels are far darker in blue than the background.
+    let darkest = (0..look.cell_height())
+        .flat_map(|dy| (0..look.cell_width()).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| pixels[(py + dy) * w + px + dx] & 0xff)
+        .min()
+        .unwrap();
+    assert!(darkest < 0xe0, "{darkest:x}");
+}
+
+/// The rows of a cell, `true` where a pixel is the foreground's colour alone.
+fn ink_rows(look: &mut Look, cell: Cell) -> Vec<Vec<bool>> {
+    let (mut pixels, w) = surface(look, 1, 1);
+    look.draw_cell(&mut pixels, w, 0, 0, cell);
+    let (px, py) = look.cell_origin(0, 0);
+    (0..look.cell_height())
+        .map(|dy| {
+            (0..look.cell_width())
+                .map(|dx| pixels[(py + dy) * w + px + dx] == look.fg.pixel())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn underline_and_strike_are_lines_at_their_rows() {
+    for scale in [Scale::ONE, Scale::TWO] {
+        let mut look = Look::new(scale, Appearance::Light);
+        let thick = (look.px / 14).max(1) as usize;
+        let baseline = look.cell.baseline as usize;
+        let h = look.cell_height();
+        let full = |rows: &[Vec<bool>]| {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, r)| r.iter().all(|p| *p))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
+        let under = full(&ink_rows(
+            &mut look,
+            Cell::new(' ').with_attrs(cell::UNDERLINE),
+        ));
+        let top = (baseline + thick).min(h - 1);
+        let want: Vec<usize> = (top..(top + thick).min(h)).collect();
+        assert_eq!(under, want, "underline at scale {}", scale.factor());
+        let strike = full(&ink_rows(
+            &mut look,
+            Cell::new(' ').with_attrs(cell::STRIKE),
+        ));
+        let at = baseline * 6 / 10;
+        let want: Vec<usize> = (at..(at + thick).min(h)).collect();
+        assert_eq!(strike, want, "strike at scale {}", scale.factor());
+    }
+}
+
+#[test]
+fn italic_leans_the_top_right_and_the_bottom_left() {
+    let mut look = look();
+    let h = look.cell_height();
+    let ink_x = |rows: &[Vec<bool>], row: usize| rows[row].iter().position(|p| *p);
+    // A vertical bar; its ink on the top and bottom rows, plain and slanted.
+    let plain = ink_rows(&mut look, Cell::new('l'));
+    let slanted = ink_rows(&mut look, Cell::new('l').with_attrs(cell::ITALIC));
+    let row = |rows: &[Vec<bool>]| {
+        (0..h)
+            .filter(|r| rows[*r].iter().any(|p| *p))
+            .collect::<Vec<_>>()
+    };
+    let (first, last) = (row(&plain)[0], *row(&plain).last().unwrap());
+    let lean = |r: usize| (h as i32 / 2 - r as i32) / 4;
+    for r in [first, (first + last) / 2, last] {
+        // The leftmost inked pixel moves by the lean of its row.
+        let a = ink_x(&plain, r);
+        let b = ink_x(&slanted, r);
+        if let (Some(a), Some(b)) = (a, b) {
+            assert_eq!(b as i32 - a as i32, lean(r), "row {r}");
+        } else {
+            panic!("no ink on row {r}");
+        }
+    }
+    assert!(lean(first) > 0 && lean(last) < 0);
+}
+
+#[test]
+fn the_underline_and_the_bar_cursors_are_two_pixels_at_scale_one() {
+    let mut look = look();
+    let mut t = Term::new(3, 1);
+    for (shape, bottom_rows, left_cols) in [(4u8, 2usize, 0usize), (6, 0, 2)] {
+        t.write(std::format!("\x1b[{shape} q").as_bytes());
+        let (mut pixels, w) = surface(&look, 3, 1);
+        t.redraw();
+        t.render(&mut look, &mut pixels, w, true);
+        let (px, py) = look.cell_origin(0, 0);
+        let (cw, ch) = (look.cell_width(), look.cell_height());
+        let fg = look.fg.pixel();
+        let rows_full = (0..ch)
+            .filter(|dy| (0..cw).all(|dx| pixels[(py + dy) * w + px + dx] == fg))
+            .count();
+        let cols_full = (0..cw)
+            .filter(|dx| (0..ch).all(|dy| pixels[(py + dy) * w + px + dx] == fg))
+            .count();
+        if bottom_rows > 0 {
+            assert_eq!(rows_full, bottom_rows, "underline");
+            assert_eq!(pixels[(py + ch - 1) * w + px], fg);
+            assert_ne!(
+                pixels[(py + ch - 3) * w + px + cw - 1],
+                fg,
+                "only the bottom two rows"
+            );
+        } else {
+            assert_eq!(cols_full, left_cols, "bar");
+            assert_eq!(pixels[py * w + px], fg);
+            assert_ne!(pixels[py * w + px + 2], fg, "only the left two columns");
+        }
+    }
+}
+
+#[test]
+fn a_cell_with_one_pixel_wrong_does_not_read() {
+    let look = look();
+    let mut reader = Reader::new(Look::new(Scale::ONE, Appearance::Light));
+    let (w, h) = (look.cell_width(), look.cell_height());
+    let mut pixels = vec![0u32; w * h];
+    let mut l = Look::new(Scale::ONE, Appearance::Light);
+    let (mut surf, sw) = surface(&l, 1, 1);
+    l.draw_cell(&mut surf, sw, 0, 0, Cell::new('A'));
+    let (px, py) = l.cell_origin(0, 0);
+    for dy in 0..h {
+        for dx in 0..w {
+            pixels[dy * w + dx] = surf[(py + dy) * sw + px + dx];
+        }
+    }
+    assert_eq!(reader.read(|x, y| pixels[y * w + x]), 'A');
+    // One pixel of the glyph off by a little: proportional enough, but not the glyph.
+    let at = pixels.iter().position(|p| *p != l.bg.pixel()).unwrap();
+    pixels[at] = pixels[at].wrapping_add(3);
+    assert_eq!(reader.read(|x, y| pixels[y * w + x]), crate::read::NO_MATCH);
+}
+
+#[test]
+fn colour_specifications_round_and_are_bounded() {
+    use crate::colour::parse_spec;
+    // Three digits: 0x009 of 0xfff is 9 * 255 / 4095 = 0.56, which rounds to 1.
+    assert_eq!(parse_spec(b"rgb:009/000/fff"), Some((1, 0, 255)));
+    assert_eq!(
+        parse_spec(b"#ffff00000000"),
+        Some((255, 0, 0)),
+        "twelve digits are four a channel"
+    );
+    assert_eq!(
+        parse_spec(b"#fffff0000000000"),
+        None,
+        "fifteen are too many"
+    );
+    assert_eq!(parse_spec(b"#"), None);
+    assert_eq!(parse_spec(b"#12"), None);
+    assert_eq!(parse_spec(b"#1234"), None, "not a multiple of three");
+    assert_eq!(parse_spec(b"#000000000"), Some((0, 0, 0)));
+}
+
+#[test]
+fn cell_accessors_and_colour_kinds() {
+    use crate::cell::{BOLD, ITALIC};
+    assert!(Cell::new('x').with_attrs(BOLD).bold());
+    assert!(!Cell::new('x').with_attrs(ITALIC).bold());
+    assert!(!Cell::new('x').bold());
+    // Each colour kind replaces the one before it.
+    let mut c = Cell::new('x');
+    for kind in [
+        Colour::Rgb(9, 8, 7),
+        Colour::Index(5),
+        Colour::Default,
+        Colour::Rgb(1, 2, 3),
+    ] {
+        c = c.with_bg(kind);
+        assert_eq!(c.bg(), kind);
+        c = c.with_fg(kind);
+        assert_eq!(c.fg(), kind);
+        assert_eq!(c.bg(), kind);
+    }
 }

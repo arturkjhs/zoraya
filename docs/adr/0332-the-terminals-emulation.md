@@ -300,6 +300,13 @@ list is also what a remote `vi` gets; a remote program that queries gets no answ
 - Whether Ambiguous width should be a setting for East Asian use; it would have to change musl's answer too.
 - Whether the first grids should also be compared by a tool against a second emulator on the host, not only by eye.
 - Whether the window's title should show the program in front, set by the shell from the line (not by output).
+- *Note, 2026-11-14 (ADR-0001 rule 6; TASK-31 part 10a, by an agent):* INV-0332-1, -2, -3, -4 and -6 are checked (see
+  `invariants.md`). INV-0332-1 is checked for the entry's output capabilities, its flags and numbers; the key and mouse
+  capabilities (every `k*`, `kmous`, `xm`, `PS`, `PE`) are in the exceptions file with the reason "part 10b", and
+  the conformance tool fails on an exception whose capability a test covers, so part 10b removes each line as it
+  adds the test. INV-0332-2 is checked for the parser and the grid, which have no output path; the emission points of
+  `term` itself (keys, the pointer, a paste, a size) are part 10b's. INV-0332-5 and INV-0332-7 cannot be checked yet:
+  paste and selection are part 10b. The first-comparison recordings of item 10 lack `vttest`'s cursor and screen menus: it is not pinned in `ports/sources.lock` and needs the architect's pin (`docs/backlog.md`); `vi`, `less` and five ncurses sessions stand in.
 
 ## Revisit triggers
 

@@ -465,6 +465,7 @@ dependencies = [
  "zoraya-http",
  "zoraya-proto-file",
  "zoraya-resolve",
+ "zoraya-width",
 ]
 
 [[package]]
@@ -499,3 +500,7 @@ dependencies = [
  "zoraya-protocol",
  "zoraya-virtio",
 ]
+
+[[package]]
+name = "zoraya-width"
+version = "0.1.0"

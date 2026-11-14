@@ -1449,6 +1449,19 @@ mutants-host:
 fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 
+# INV-0333-1: the four terminfo files are the pinned tic's output on the pinned terminfo.src, and the
+# conformance dump is the pinned entry (INV-0332-1). Builds tic and infocmp from the ports' cache (part of check-ports).
+.PHONY: check-terminfo
+check-terminfo:
+	tools/term-terminfo/terminfo.sh check
+	tools/term-conformance/check.sh pin
+
+# INV-0332-4: the terminal's width table is musl's wcwidth for every code point
+# (needs the pinned archive in the ports' cache; part of check-ports).
+.PHONY: check-term-width
+check-term-width:
+	tools/term-width/gen.sh check
+
 # INV-0109-3 and INV-0109-4: the fetch step and the cache, offline.
 check-fetch-ports:
 	ports/test-fetch.sh
@@ -1578,6 +1591,11 @@ check-test-caps:
 	  if grep -rqs -e '#\[test\]' "$$d/src"; then \
 	    grep -rqs -e 'cap_memory!' -e 'Capped::new' "$$d/src" || bad="$$bad $$d/src"; fi; done; \
 	if [ -n "$$bad" ]; then echo "no heap cap in:$$bad"; exit 1; fi
+	@# INV-0332-1: every capability of the pinned entry has a host test of zoraya-term or a reason (offline).
+	@tools/term-conformance/check.sh selftest
+	@tools/term-conformance/check.sh
+	@# The recorded full-screen session the terminal GUI script plays is cut from the committed recording.
+	@tools/term-record/gui-files.sh check
 
 # INV-0161-1: no colour or duration literal in a GUI crate; they come from
 # zoraya-tokens. The crates ADR-0161 names that exist (the compositor, the

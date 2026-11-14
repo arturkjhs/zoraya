@@ -1,0 +1,46 @@
+# Part 10a (TASK-31), the review's hand mutations of the terminal's parser; each is
+# killed by the test named in its note. Host tests only.
+tests = ["cargo test -q -p zoraya-term --lib"]
+timeout = 300
+
+[[mutant]]
+id = "T-csi-y-known"
+file = "crates/zoraya-term/src/parse.rs"
+find = "                | b'm'\n                | b'r'\n"
+replace = "                | b'm'\n                | b'r'\n                | b'y'\n"
+note = "10a: the_parsers_lists_are_the_adr_s (a final the ADR does not list must not be known)"
+
+[[mutant]]
+id = "T-rep-unbounded"
+file = "crates/zoraya-term/src/parse.rs"
+find = "full + (n - full) % period"
+replace = "full"
+note = "10a: rep_equals_plain_prints_at_every_count and rep_is_bounded_by_the_screen_and_gives_the_full_result"
+
+[[mutant]]
+id = "T-set-scrollback-doubles"
+file = "crates/zoraya-term/src/term.rs"
+find = "            .reserve_exact(old.len().min(lines) * self.columns);"
+replace = "            .reserve_exact(0);"
+note = "10a: set_scrollback_keeps_memory_within_the_bound"
+
+[[mutant]]
+id = "T-string-cut"
+file = "crates/zoraya-term/src/parse.rs"
+find = "                    } else {\n                        self.osc_over = true;\n                    }"
+replace = "                    } else {\n                        self.state = State::Ground;\n                    }"
+note = "10a: a_long_string_of_any_kind_is_swallowed_whole"
+
+[[mutant]]
+id = "T-hold-deadline-with-commit"
+file = "crates/zoraya-term/src/lib.rs"
+find = "        return Hold {\n            draw: false,\n            since: begun,\n            deadline: None,\n        };"
+replace = "        return Hold {\n            draw: false,\n            since: begun,\n            deadline: Some(0),\n        };"
+note = "10a: a_synchronized_update_is_held_for_at_most_150_ms"
+
+[[mutant]]
+id = "T-mark-last-column"
+file = "crates/zoraya-term/src/screen.rs"
+find = "self.wrap || (!self.modes.autowrap && self.x == self.columns - 1)"
+replace = "self.wrap"
+note = "10a: a_mark_after_a_character_in_the_last_column_without_autowrap"

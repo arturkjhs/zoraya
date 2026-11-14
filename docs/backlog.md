@@ -280,6 +280,20 @@ states, to be taken up later:
 | - | `zoraya-fs-service` `set_attributes` (review of 10e, finding 13) | A connection with `WRITE` narrowed to one name (`Create`, `ChangeName`) acts on its own object, the parent directory, for `SetAttributes` and `set_limit`: refuse both on a connection with `only` set, with a host test. Not reachable today (libposix's `chmod` opens by name; the programs given such entries are the image's), but 10e gives `WRITE` narrowed entries to every `cwd none` file operand. |
 | - | `tools/zoraya-elf-check` (review of 10e, finding 14) | Resolving an absolute link walks `path.ancestors()` up to the host's own `/`, so a link to a path that exists on the build host passes as found in the image. Take the image root as an argument. Also: `zosh`'s lookup did not follow the relative link `/bin/NAME -> ../usr/libexec/toybox` (why the links are absolute); find and fix that lookup. |
 
+
+- Part 10a (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10a.md`):
+  - **`vttest`'s cursor and screen menus** (ADR-0332 item 10) are not recorded: `vttest` needs a pin (version, URL and SHA-256) in
+    `ports/sources.lock`, the architect's; then `tools/term-record/record.py` records it like the other sessions.
+  - **Stop-gap to remove in 10c:** `zoraya_shell::reset::BEFORE_PROMPT`, written before a prompt that follows a command, until the
+    shell sends `Restore` (ADR-0331 item 9). Also in `docs/design.md`.
+  - **`term.scrollback`** and `console.term` (ADR-0157 settings) are declared by `zosh` and read by `term` in part 10c.
+  - **Deferred to 10b:** 165 capabilities of `crates/zoraya-term/entry/exceptions.txt` whose reason begins `deferred (10b):` (the keys,
+    the mouse strings, the paste marks, `km`, `xm`); part 10b is not done while any is left. Nothing fails if one is, yet: make 10b's plan
+    row check `tools/term-conformance/check.sh`'s count of them.
+  - **A program that sets 2026 and never ends it** has each later update held 150 ms until the next prompt, whose stop-gap reset ends it.
+  - **The stop-gap's edges** (`zoraya_shell::reset`): it fires before every prompt after the first, clears a pending wrap, resets the palette and
+    the cursor shape, and `fg` of a stopped full-screen job is not restored (modes are lost): 10c's `Restore` and `reinstate`.
+  - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
 ## Three requests from outside work (2026-11-14, from the architect)
 
 For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.

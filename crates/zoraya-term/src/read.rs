@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use zoraya_text::{Rect, Target};
 use zoraya_tokens::Color;
 
-use crate::{COLORS, DEFAULT_BG, DEFAULT_FG, Look};
+use crate::Look;
 
 /// The characters a cell is matched against, in the order that decides a
 /// class of look-alikes: printable ASCII, Latin-1, Latin Extended-A, and
@@ -40,40 +40,38 @@ pub fn candidates() -> impl Iterator<Item = char> {
 /// that it is never taken for a real `?` (review finding 10).
 pub const NO_MATCH: char = '\u{FFFD}';
 
+/// One channel of a colour.
+type Channel = fn(Color) -> u8;
+
 /// A cell's pixels, row by row.
 type Pixels = Vec<u32>;
 
+/// One candidate's coverage, pixel by pixel, as the rasteriser gives it
+/// (white on black reads back as the coverage itself).
+type Coverage = Vec<u8>;
+
 pub struct Reader {
     look: Look,
-    /// For each (foreground, background, bold), every candidate by the
-    /// hash of its pixels: keeping the pixels themselves took gigabytes at
-    /// scale 2 (6.5 GB for one script, 2026-11-09). A hit is checked
-    /// pixel for pixel, so a reading is still exact.
-    maps: BTreeMap<(u32, u32, bool), BTreeMap<u64, char>>,
-    /// Hits already checked pixel for pixel: each is drawn and compared
-    /// once, not at every cell read.
-    checked: BTreeMap<(u32, u32, bool, u64), bool>,
+    /// For regular and bold: the candidates in their order, each with its
+    /// coverage. A cell is read by finding the candidate whose coverage its
+    /// pixels are in proportion to and a foreground that reproduces every
+    /// pixel exactly, so any foreground is read, not only the palette's.
+    /// Keeping a cell's pixels for every colour took gigabytes at scale 2
+    /// (6.5 GB for one script, 2026-11-09); this keeps 600 small vectors a
+    /// face.
+    shapes: Option<[Vec<(char, Coverage)>; 2]>,
 }
 
-/// FNV-1a over a cell's pixels.
-fn hash(pixels: &[u32]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for p in pixels {
-        for b in p.to_le_bytes() {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    h
+/// How far a pixel is from the background: the sum of its channels' differences.
+fn distance(pixel: u32, bg: Color) -> i32 {
+    let c = Color::of_pixel(pixel);
+    let d = |a: u8, b: u8| i32::from(a.abs_diff(b));
+    d(c.r(), bg.r()) + d(c.g(), bg.g()) + d(c.b(), bg.b())
 }
 
 impl Reader {
     pub fn new(look: Look) -> Reader {
-        Reader {
-            look,
-            maps: BTreeMap::new(),
-            checked: BTreeMap::new(),
-        }
+        Reader { look, shapes: None }
     }
 
     pub fn look(&self) -> &Look {
@@ -98,43 +96,68 @@ impl Reader {
         pixels
     }
 
-    fn map(&mut self, fg: Color, bg: Color, bold: bool) -> &BTreeMap<u64, char> {
-        let key = (fg.pixel(), bg.pixel(), bold);
-        if !self.maps.contains_key(&key) {
-            let mut map = BTreeMap::new();
-            for c in candidates() {
-                let pixels = self.draw(c, fg, bg, bold);
-                map.entry(hash(&pixels)).or_insert(c);
+    fn shapes(&mut self) -> &[Vec<(char, Coverage)>; 2] {
+        if self.shapes.is_none() {
+            let (white, black) = (Color::of_pixel(u32::MAX), Color::of_pixel(0));
+            let mut both = [Vec::new(), Vec::new()];
+            for (i, bold) in [false, true].into_iter().enumerate() {
+                for c in candidates() {
+                    let pixels = self.draw(c, white, black, bold);
+                    let coverage: Coverage = pixels.iter().map(|p| (*p & 0xff) as u8).collect();
+                    both[i].push((c, coverage));
+                }
             }
-            self.maps.insert(key, map);
+            self.shapes = Some(both);
         }
-        &self.maps[&key]
+        match &self.shapes {
+            Some(shapes) => shapes,
+            None => unreachable!("the shapes were just made"),
+        }
     }
 
-    /// The candidate drawn exactly as `pixels`, if any.
-    fn lookup(
-        &mut self,
-        pixels: &Pixels,
-        h: u64,
-        fg: Color,
-        bg: Color,
-        bold: bool,
-    ) -> Option<char> {
-        let c = *self.map(fg, bg, bold).get(&h)?;
-        let key = (fg.pixel(), bg.pixel(), bold, h);
-        if let Some(same) = self.checked.get(&key) {
-            return same.then_some(c);
+    /// The foreground that draws `coverage` on `bg` as exactly `pixels`, if
+    /// there is one. Each pixel bounds each channel of the foreground:
+    /// `mix(bg, fg, a) = (bg * (255 - a) + fg * a + 127) / 255` has to give
+    /// the pixel's value, which leaves `fg` in an interval; the intervals of
+    /// every pixel are intersected, and what is left is checked pixel for
+    /// pixel with the rasteriser's own blend.
+    fn fit(pixels: &[u32], bg: Color, coverage: &[u8]) -> Option<Color> {
+        let channels: [(Channel, u32); 3] = [(Color::r, 16), (Color::g, 8), (Color::b, 0)];
+        let mut fg = 0u32;
+        for (channel, shift) in channels {
+            let (mut lo, mut hi) = (0i64, 255i64);
+            let s = i64::from(channel(bg));
+            for (pixel, a) in pixels.iter().zip(coverage) {
+                let (p, a) = (i64::from(channel(Color::of_pixel(*pixel))), i64::from(*a));
+                if a == 0 {
+                    if p != s {
+                        return None;
+                    }
+                    continue;
+                }
+                let base = s * (255 - a);
+                // o * a >= p * 255 - base - 127 and o * a <= (p + 1) * 255 - base - 128.
+                lo = lo.max(-((base + 127 - p * 255).div_euclid(a)));
+                hi = hi.min(((p + 1) * 255 - base - 128).div_euclid(a));
+            }
+            if lo > hi {
+                return None;
+            }
+            fg |= (lo as u32) << shift;
         }
-        let same = self.draw(c, fg, bg, bold) == *pixels;
-        self.checked.insert(key, same);
-        same.then_some(c)
+        let fg = Color::of_pixel(fg);
+        pixels
+            .iter()
+            .zip(coverage)
+            .all(|(p, a)| bg.blend(fg, *a).pixel() == *p)
+            .then_some(fg)
     }
 
     /// The character of a cell whose pixels `pixel(x, y)` gives: `' '` for
     /// a blank cell in the default background, `'_'` for a cell of one
     /// other colour (the block cursor, or a blank cell with an SGR
     /// background: the two read alike), and [`NO_MATCH`] for anything else
-    /// that matches no character in any of the terminal's colours.
+    /// that matches no character in any colour.
     pub fn read(&mut self, pixel: impl Fn(usize, usize) -> u32) -> char {
         let cell = self.look.cell;
         let (w, h) = (cell.width as usize, cell.height as usize);
@@ -144,9 +167,13 @@ impl Reader {
                 pixels.push(pixel(x, y));
             }
         }
+        self.read_pixels(&pixels)
+    }
+
+    fn read_pixels(&mut self, pixels: &[u32]) -> char {
         // The background is the most common colour of the cell.
         let mut counts: BTreeMap<u32, usize> = BTreeMap::new();
-        for p in &pixels {
+        for p in pixels {
             *counts.entry(*p).or_default() += 1;
         }
         let bg = counts
@@ -155,21 +182,33 @@ impl Reader {
             .map(|(p, _)| *p)
             .unwrap_or(0);
         if counts.len() == 1 {
-            let default_bg = self.look.colors[DEFAULT_BG as usize].pixel();
+            let default_bg = self.look.bg.pixel();
             return if bg == default_bg { ' ' } else { '_' };
         }
         let bg = Color::of_pixel(bg);
-        let mut fgs: Vec<Color> = Vec::with_capacity(COLORS);
-        for c in self.look.colors {
-            if c != bg && !fgs.contains(&c) {
-                fgs.push(c);
-            }
-        }
-        let h = hash(&pixels);
-        for bold in [false, true] {
-            for fg in &fgs {
-                if let Some(c) = self.lookup(&pixels, h, *fg, bg, bold) {
-                    return c;
+        // How far each pixel is from the background is, for the right
+        // candidate, in proportion to its coverage (to within rounding).
+        let far: Vec<i32> = pixels.iter().map(|p| distance(*p, bg)).collect();
+        let (top, top_far) = far
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, d)| **d)
+            .map(|(i, d)| (i, *d))
+            .unwrap_or((0, 0));
+        for bold in 0..2 {
+            for (c, coverage) in &self.shapes()[bold] {
+                let a_top = i32::from(coverage[top]);
+                // The pixel farthest from the background is among the most
+                // covered of the candidate.
+                if a_top == 0 {
+                    continue;
+                }
+                let proportional = far.iter().zip(coverage).all(|(d, a)| {
+                    // d is about top_far * a / a_top.
+                    (d * a_top - top_far * i32::from(*a)).abs() <= 6 * a_top
+                });
+                if proportional && Self::fit(pixels, bg, coverage).is_some() {
+                    return *c;
                 }
             }
         }
@@ -179,16 +218,17 @@ impl Reader {
     /// `text` as the reader would read it back from the terminal's default
     /// colours: each look-alike replaced by the first of its class.
     pub fn canonical(&mut self, text: &str) -> String {
-        let p = &self.look.colors;
-        let (fg, bg) = (p[DEFAULT_FG as usize], p[DEFAULT_BG as usize]);
+        let (fg, bg) = (self.look.fg, self.look.bg);
         text.chars()
             .map(|c| {
                 if c == ' ' || c == '_' {
                     return c;
                 }
                 let pixels = self.draw(c, fg, bg, false);
-                let h = hash(&pixels);
-                self.lookup(&pixels, h, fg, bg, false).unwrap_or(c)
+                match self.read_pixels(&pixels) {
+                    NO_MATCH | ' ' | '_' => c,
+                    read => read,
+                }
             })
             .collect()
     }

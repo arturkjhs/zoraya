@@ -1,0 +1,21 @@
+# less on a file of numbered lines with colour in it: the alternate screen, paging,
+# a search with its highlight, the end of the file, and the shell's screen back.
+# NOTE: `env TERMINFO` is set, but the host's `less` links the system ncurses 5.4, which did not take the pinned
+# entry (its output has no `ESC [ 22 ; 0 ; 0 t`): this recording is of the host's own xterm-256color. Only the ncurses
+# sessions (built from the pinned archive) read the pinned file.
+size 80 24
+env TERMINFO=@terminfo@
+run sh -c "i=1; while [ $i -le 70 ]; do echo \"line $i: the quick brown fox jumps over the lazy dog\"; i=$((i+1)); done > big.txt; printf '\\033[1;31mred bold\\033[0m \\033[48;5;21m\\033[38;5;226mblue background, yellow text\\033[0m \\033[38;2;255;128;0morange\\033[0m\\n' >> big.txt; exec less -R big.txt"
+mark first page
+send \x20
+wait 1
+mark second page
+send /line 4[0-5]\r
+wait 1
+mark after a search
+send G
+wait 1
+mark the end
+send q
+wait 1
+mark after quitting
