@@ -1,48 +1,93 @@
 # TASK-29: audit of the tests and of the CI
 
-Written 2026-11-14 on the tree of `main` at `5e9bbabf`. Part 1 (this report) changes nothing. Part 2 (the fixes, on
-`work/test-audit`) is not done yet: see "Status for the architect" and `status.md`.
+Written 2026-11-14 on the tree of `main` at `5e9bbabf`. Part 1 (sections 1 to 6) changed nothing. Part 2 (the fixes, on
+`work/test-audit`) is done: see "Status for the architect" and "What part 2 did".
 
 How to read the evidence. A run or job number is a GitHub Actions id of the workflow `make test`. The run history
 (693 runs created since 2026-10-31, 716 attempts, every job with its steps) and the logs of the 245 failed jobs were
 fetched with `scripts/fetch1.sh` and `scripts/fetchlog.sh` and summarised with `scripts/analyze.py`,
 `scripts/failing.py` and `scripts/why.py`; the tables are in `data/`. The raw files are not committed (61 MB of logs).
 "Read, not run" means a finding comes from reading the test and the code that prints the text: this machine runs no
-QEMU, so no test was broken to show a finding. Part 2 shows each vacuous test failing before it fixes it.
+QEMU, so no test was broken to show a finding. Part 2 says, fix by fix, what was shown failing and what could not be.
 
 ## Status for the architect
 
-**Part 1 is complete; part 2 has not started.** Nothing is pushed. Numbers below are measured unless marked
-"estimate".
+**The branch `work/test-audit` is ready to merge**, at `5486ff7d` plus this report's commit (documents only). Its
+candidate run 43579834963 (`candidate/work-test-audit-b`, on `5486ff7d`) is green: 66 jobs, all passed. Part 2 was
+reviewed by an `opus-review` reader that did not write it (`review-notes.md`: 7 warnings, 6 notes, no error; 11
+fixed, R5 in part, R12 left). It has not been merged: the TASK-27 dispatcher merges it like a part. `origin/main`
+was merged in at `ce12282e`; `main` had not moved when the candidate was pushed.
 
-| | full run (47 test jobs) | merge candidate |
+**Time, measured.** "Before" is the median of 12 green runs of the 47-job list since 2026-11-13 18:00 UTC (worst in
+brackets). "After" is the one green candidate run, which ran every job because the branch changes `Makefile`.
+
+| | Before | After (run 43579834963) |
 |---|---|---|
-| Wall time now | median 44 min, worst 57 min (12 green runs since 2026-11-13 18:00 UTC) | the same: 75 of the 91 candidates since 2026-11-12 ran 35 jobs or more (T4) |
-| Runner time now | median 284 min summed, 318 min as billed (each job rounded up) | the same for those 75; 7 to 12 jobs and about 60 min for the 14 the plan narrowed |
-| After dropping the duplicated legs (D1 to D3) | about 230 min (estimate: minus 54 min, from the legs of run 43553496171) | the same |
-| After the shorter fuzz run on candidates (T3) | unchanged (the full set keeps 600 s) | minus 18 min more (estimate), and the two longest jobs go from 11.5 min to about 2.5; a candidate whose change the map sends to a fuzz step keeps 600 s (review R7) |
-| Wall time after | not estimated: it depends on the queue, which other runs share; the candidate run of part 2 measures it | |
+| Test jobs | 47 | 42 |
+| Runner time, summed | 284 min (296) | 209 min |
+| Runner time as billed (each job rounded up) | 318 min | 243 min |
+| Wall time, first job's start to the last job's end | 44 min (57) | 31 min |
+| Build job | 14 min (16) | 11.4 min |
+| Longest test job | 11.5 min (the two fuzz jobs) | 12.0 min (`test-net`; then 8.9, 8.7, 7.0) |
+| The two fuzz jobs | 11.5 min each | 2.5 and 2.6 min (60 s a target on a candidate) |
 
-- **Flakes.** Twelve classes in two weeks (section 3). Eight are already fixed on `main` by TASK-26 and TASK-27.
-  Open, with a proven cause and a test-only fix for part 2: the flood check of `console.script` (F5, an order race in
-  the script, not slow echo as the backlog says). Open, cause is the HVF-tuned timeout of the `auto` legs under TCG
-  (F8): goes away with D1. Open and not a test problem: N6's intermittent `NoMemory` (backlog), not seen on CI in
-  these two weeks.
-- **Vacuous tests.** 42 findings confirmed by reading, many with several sites (section 4, V1 to V45): a runner bug
-  that makes three checks dead (V1), expected texts that the echo of the typed command satisfies (V6 to V9), expected
-  texts that the failure path also prints (V14 to V19), forbidden texts that cannot occur or are looked for in the
-  wrong window (V20 to V24), skips that are green on CI (V34 to V36), and others. None is fixed yet.
-- **Proposals that need the architect or code outside tests** (details in sections 5 and 6):
-  1. ADR-0350 (to be written in part 2, proposed): on a host where `auto` is TCG, CI runs each script once.
-     INV-0213-3 says "under every accelerator", so this is a deviation from an accepted ADR.
-  2. The build job: `libc.a` is relinked in every build, so every port is relinked and Python rebuilt (T1). A fix is in
-     `ports/Makefile`, which this machine cannot build; it is a proposal.
-  3. `Makefile` is not in `tools/test-map.txt`, and nearly every part edits it, so nearly every candidate runs
-     everything (T4).
-  4. `docs/adr/invariants.md`: 55 rows say `not yet applicable` for code that exists, and `adr-check` accepts any text
-     after `checked:` (C1, V40).
-  5. INV-0172-4 (a room holds only what its creator held) and INV-0230-1 (tests reach no outside network) have no
-     check at all (C2, C3).
+A full run on `main` keeps the 600 s of fuzzing, so it will cost about 18 runner-minutes more than this candidate
+(estimate) and its longest jobs stay the fuzz jobs. One run is one sample: the wall time depends on the queue (the
+first candidate, 43575482537, spent 46 minutes queued and took 51). The cargo cache action (T2) restored nothing in
+this run ("No cache found") and saved without the old error; whether later runs restore it has not been seen.
+
+**Flakes.** Twelve classes in two weeks (section 3); eight were already fixed on `main`.
+- Fixed here: F5, the `test-boot` flood step (`tests/shell/console.script`): an order race in the script, not slow
+  echo. The new step passed on all seven machines of both candidate runs. The review notes that nothing forces the
+  burst to overflow while the job is in front (R5); if it ever times out there, that is the premise to look at.
+- Removed with the duplicated legs: the `auto` runs that kept the 180 s limit under TCG where their twin had more
+  (part of F8).
+- Left: F8's other GUI timeouts (no single cause found); F2 (`harness_resumes_after_panic` counting 10 for 9, not
+  seen since 2026-11-09, cause not established); N6's `NoMemory` (backlog, a defect or a wrong premise, not seen on
+  CI in these two weeks).
+
+**A defect found by a corrected test** (in `docs/backlog.md`, not fixed, outside the tests): in the POSIX session,
+Ctrl-C does not end a job that was stopped, continued with `fg` and has gone on to a later child: `sleep 30` ran its
+30 s and the status was 0, not 130 (run 43575482537, `posix-scenarios-tcg`; one run, under TCG, cause not looked
+into). Ctrl-C half a second after `fg` does end it, and that is what `scenarios.script` had always sent, because its
+waits for `first` and `second` matched the line `fg` echoes. The step is that early Ctrl-C again and says so; no
+test covers the late case.
+
+**Vacuous tests fixed** (each commit says what was shown failing; the script edits could not be run here and were
+first run by the candidates):
+- V1: the runner's `~` and `!` steps did not unescape their text; three checks could never fire. Unit test failed
+  before, passes after; the three steps passed in both candidates.
+- V6 (in part, see the defect above), V7, V8, V14, V20, V21, V22: expected texts that the echo of the typed command
+  or the failure also gave, and forbidden texts nothing prints, in nine scripts. V14's correction showed that
+  `keeper.script` expected the killed job's line in the wrong place (first candidate, `test-keeper`); corrected.
+- V29: the filesystem crash tests assert floors for the images they check (shown failing with a floor above the
+  count).
+- V34: on CI a failed networking probe fails the step instead of skipping it (shown with a failing QEMU).
+- V41: `make check-mutant-lists` runs in CI.
+- From the review: `console.script` forbids a prompt before the child's first line; `zosh.script` counts
+  `tstp: continued` once.
+
+**Also in the branch:** D1 to D3 (one run where `auto` is TCG) with proposed **ADR-0350**, INV-0350-1 and
+INV-0350-2 checked by `make check-ci-jobs`; T3 (60 s of fuzz on a candidate unless the map sends its change to a
+fuzz step); T2 (the cargo cache action).
+
+**For the architect to decide or commission** (details in sections 4 to 6):
+1. ADR-0350 is proposed: INV-0213-3 says "under every accelerator". Until it is accepted the branch deviates from
+   an accepted ADR, openly.
+2. The defect above (Ctrl-C and a continued job).
+3. The build job relinks `libc.a` in every build, so every port is relinked and Python rebuilt (T1); the fix is in
+   `ports/Makefile`, which this machine cannot build.
+4. `Makefile` is not in `tools/test-map.txt` and nearly every part edits it, so nearly every candidate runs
+   everything (T4).
+5. `docs/adr/invariants.md`: 55 rows say `not yet applicable` for code that exists, and `adr-check` accepts any
+   text after `checked:` (C1, V40).
+6. INV-0172-4 (a room holds only what its creator held) and INV-0230-1 (tests reach no outside network) have no
+   check at all (C2, C3).
+7. Not fixed, listed in section 4: V2, V3, V4, V9 to V13, V15 to V19, V23 to V28, V30 to V33, V35, V36, V42 to V45,
+   and the `t_quota` handshake of section 3.
+
+The task file `docs/tasks/TASK-29-test-and-ci-audit.md` is not in the repository: it was an untracked file of the
+audit's clone and is left for the architect to commit.
 
 ## 1. What CI runs
 
@@ -346,20 +391,17 @@ From `notes/coverage-holes.md` (about 40 security invariants read against their 
 Well covered, for proportion: kernel rights and transfer, `grants.script`, `system-ro.script`, the TLS refusals, the
 network scope in `t_netd`, the keeper's channels and quotas.
 
-## Plan for part 2
+## What part 2 did
 
-In this order, each its own commit with the finding's number, on `work/test-audit` from the latest `origin/main`:
+The commits of `work/test-audit` after part 1, each with its findings' numbers and what was shown in its message:
+D1 to D3 with ADR-0350; T3, T2, V41; V1; F5 and V22; V6, V7, V8, V14, V20, V21; V34; V29; the review's fixes (R1 to
+R13, `review-notes.md`); the two corrections the first candidate called for (`keeper.script`, `scenarios.script`).
+Sections 2 to 5 above are part 1's text and keep its estimates; the measured figures are in the status block. Two
+things part 1 planned were not done: V4 (`test-crash` with no durable file: a floor needs the time to a round's
+first sync, or two local rounds can fail it) and the `t_quota` handshake.
 
-1. ADR-0350 (proposed) and D1 to D3: one leg where `auto` is TCG; `check-ci-jobs` accepts the `tcg` leg.
-2. T3 (fuzz 60 s on candidates), T2 (cargo cache action), V41 (`check-mutant-lists` in CI's checks).
-3. F5 (console.script's flood step), the `t_quota` handshake.
-4. V1 (the runner's unescape) with the three scripts it wakes up; V20 to V24 (forbids); V6 to V9, V14 to V16 (echo
-   and prefix matches); V4; V34 (a skip is a failure on CI); V29 (host tests). Each shown to fail on the broken
-   behaviour where that can be done on this machine (the runner's and the crates' host tests); for the scripts, which
-   need QEMU, the break is shown by the runner's unit tests on a recorded output or stated as not shown.
-5. One candidate run, the `opus-review` review, `review-notes.md`, the status block with measured figures.
-
-Left as proposals: V2, V3, T1, T4, T5, C1 to C9, V40, V42, V44, V45.
+Candidate runs: 43575482537 (`-a`, red: `test-keeper` and `scenarios.script`, both explained in the status block)
+and 43579834963 (`-b`, green).
 
 ## Limitations of this audit
 
