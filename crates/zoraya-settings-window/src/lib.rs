@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use zoraya_compositor::settings::{self, GuiSettings, words};
 use zoraya_settings::rooms::{LIMIT_WORDS, Limits, format_size};
 use zoraya_settings::usage::RoomRow;
-use zoraya_ui::layout::{Column, Row};
+use zoraya_ui::layout::Row;
 use zoraya_ui::widgets::{Button, CheckBox, Label, RadioGroup, ScrollView, Switch, TextField};
 use zoraya_ui::{Value, Widget};
 
@@ -239,11 +239,12 @@ pub fn page_with_rooms(
         Box::new(RadioGroup::new(ACTIVE, &enabled, active)),
     ));
     column.push(note(status));
-    if rows.is_empty() {
-        return Box::new(Column::new(column));
+    if !rows.is_empty() {
+        column.extend(rooms_section(rows, drafts));
     }
-    column.extend(rooms_section(rows, drafts));
-    Box::new(ScrollView::new(Box::new(Column::new(column))))
+    // The page scrolls with the wheel, three rows a notch (proposed
+    // ADR-0329), when it is taller than the window.
+    Box::new(ScrollView::new(column))
 }
 
 /// `s` after control `id` took `value`; `Err` with the reason when the

@@ -135,6 +135,7 @@ note = "7f view.rs:50:34: each_line_is_painted_in_its_row_from_the_padding"
 id = "V-rows-one"
 file = "crates/zoraya-editor/src/view.rs"
 find = '(h / lh.max(1)).max(1) as usize'
+occurrence = 1
 replace = '1'
 note = "7f view.rs:57:9: a_scrolled_view_keeps_the_cursor_row_last"
 
@@ -149,6 +150,7 @@ note = "7f view.rs:59:47: a_scrolled_view_keeps_the_cursor_row_last"
 id = "V-rows-div"
 file = "crates/zoraya-editor/src/view.rs"
 find = '(h / lh.max(1)).max(1) as usize'
+occurrence = 1
 replace = '(h * lh.max(1)).max(1) as usize'
 note = "7f view.rs:60:12: a_scrolled_view_keeps_the_cursor_row_last"
 
@@ -156,11 +158,11 @@ note = "7f view.rs:60:12: a_scrolled_view_keeps_the_cursor_row_last"
 id = "V-follow"
 file = "crates/zoraya-editor/src/view.rs"
 find = '''
-        if line < self.top {
-            self.top = line;
-        } else if line >= self.top + rows {
-            self.top = line + 1 - rows;
-        }'''
+            if line < self.top {
+                self.top = line;
+            } else if line >= self.top + rows {
+                self.top = line + 1 - rows;
+            }'''
 replace = ''
 note = "7f view.rs:65:9: a_scrolled_view_keeps_the_cursor_row_last"
 

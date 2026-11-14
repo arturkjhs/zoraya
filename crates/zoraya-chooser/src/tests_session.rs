@@ -634,3 +634,55 @@ fn show_commands_mode_shows_the_shells_line() {
         .event(&mut r.app, &mut r.fs, 1, Happened::Commands(false));
     assert_eq!(r.sheet.shown_line(), "create or replace ~/new.txt");
 }
+
+/// Proposed ADR-0329: the wheel scrolls the sheet's list, and the sheet
+/// built again as the name is typed keeps where the wheel left it; a
+/// selection that moves is still brought into view.
+#[test]
+fn the_wheel_scrolls_the_list_and_the_sheet_keeps_it() {
+    let files: Vec<String> = (0..12)
+        .map(|i| alloc::format!("/home/f{i:02}.txt"))
+        .collect();
+    let names: Vec<&str> = files.iter().map(String::as_str).collect();
+    let mut r = rig_with(
+        Ask::Save {
+            suggested: String::from("new.txt"),
+            filters: Vec::new(),
+        },
+        &names,
+    );
+    assert_eq!(run(&mut r), None);
+    // Over the list: under the Up row (20 + 28 + 8).
+    let turn = gui::Wheel {
+        dropped: 0,
+        window: r.sheet.window,
+        x: crate::session::WIDTH / 2,
+        y: 100,
+        dx: 0,
+        dy: 120,
+        modifiers: Flags(0),
+    };
+    r.app.platform.inbox.push_back(message(&turn, 0));
+    assert_eq!(run(&mut r), None);
+    let w = r.sheet.window;
+    assert_eq!(r.app.window(w).unwrap().scrolled(2).unwrap().at, 3);
+    // Tab to the name and type: the sheet is built again, still at 3.
+    key(&mut r, keys::TAB, None);
+    key(&mut r, 30, Some('m'));
+    assert_eq!(run(&mut r), None);
+    assert_eq!(r.sheet.top(), 3);
+    assert_eq!(r.app.window(w).unwrap().scrolled(2).unwrap().at, 3);
+    // Back to the list (Shift+Tab), Home: the first row selected, shown.
+    let m = gui::Key {
+        dropped: 0,
+        code: keys::TAB,
+        pressed: true,
+        modifiers: Flags(1),
+        text: Below(0),
+    };
+    r.app.platform.inbox.push_back(message(&m, 0));
+    key(&mut r, keys::HOME, None);
+    assert_eq!(run(&mut r), None);
+    assert_eq!(r.sheet.browser.selected, Some(0));
+    assert_eq!(r.sheet.top(), 0);
+}

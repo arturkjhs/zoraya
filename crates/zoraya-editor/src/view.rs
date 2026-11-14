@@ -2,7 +2,9 @@
 //! the lines in the monospace face, the selection, the cursor, a vertical
 //! scroll that keeps the cursor in view; keys move and type, Ctrl+A
 //! selects all, Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo; a press puts
-//! the cursor in the cell under it.
+//! the cursor in the cell under it. The wheel scrolls three lines a notch
+//! (proposed ADR-0329) and leaves the cursor where it is; the next key
+//! brings the view back to it.
 
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -11,7 +13,9 @@ use core::cell::RefCell;
 use zoraya_paint::Canvas;
 use zoraya_text::{Rect as TRect, Target};
 use zoraya_tokens::{Logical, space, text};
-use zoraya_ui::{Event, LRect, Painter, Response, Value, Widget, keys};
+use zoraya_ui::{
+    Event, LRect, Painter, Response, Scrolled, Value, WheelSteps, Widget, keys, widgets::wheel_rows,
+};
 
 use crate::{Buffer, Move};
 
@@ -28,6 +32,12 @@ pub struct EditorView {
     rect: LRect,
     /// The first line shown.
     top: usize,
+    /// The wheel moved the view away from the cursor: it does not follow
+    /// the cursor until a key or a press, or the cursor moves (a find).
+    free: bool,
+    /// The cursor at the last `follow`, to see that it moved.
+    seen: usize,
+    wheel: WheelSteps,
     /// From the last paint: the scale's factor, the line height, a cell's
     /// width and the padding, physical; what a press maps through.
     cell: (u32, i32, i32, i32),
@@ -40,6 +50,10 @@ impl EditorView {
             buffer,
             rect: LRect::default(),
             top: 0,
+            free: false,
+            // Unknown: the first paint follows the cursor.
+            seen: usize::MAX,
+            wheel: WheelSteps::default(),
             cell: (1, 1, 1, 0),
         }
     }
@@ -60,15 +74,36 @@ impl EditorView {
         (h / lh.max(1)).max(1) as usize
     }
 
-    /// Keeps the cursor's line in view.
+    /// Keeps the cursor's line in view, unless the wheel moved the view
+    /// away from it; the last line no higher than the bottom either way.
     fn follow(&mut self, rows: usize) {
         let b = self.buffer.borrow();
-        let (line, _) = b.line_col(b.cursor());
-        if line < self.top {
-            self.top = line;
-        } else if line >= self.top + rows {
-            self.top = line + 1 - rows;
+        if b.cursor() != self.seen {
+            self.seen = b.cursor();
+            self.free = false;
         }
+        if !self.free {
+            let (line, _) = b.line_col(b.cursor());
+            if line < self.top {
+                self.top = line;
+            } else if line >= self.top + rows {
+                self.top = line + 1 - rows;
+            }
+        }
+        self.top = self.top.min(b.lines().len().saturating_sub(rows));
+    }
+
+    /// The lines that fit, by the last paint's metrics.
+    fn rows_painted(&self) -> usize {
+        let (k, lh, _, pad) = self.cell;
+        let scale = zoraya_tokens::Scale::new(k).unwrap_or(zoraya_tokens::Scale::ONE);
+        let h = self.rect.physical(scale).h - 2 * pad;
+        (h / lh.max(1)).max(1) as usize
+    }
+
+    /// The first line shown.
+    pub fn top(&self) -> usize {
+        self.top
     }
 }
 
@@ -164,6 +199,7 @@ impl Widget for EditorView {
                 text,
                 modifiers,
             } => {
+                self.free = false;
                 let shift = modifiers & keys::SHIFT != 0;
                 let ctrl = modifiers & CTRL != 0;
                 let mut b = self.buffer.borrow_mut();
@@ -230,9 +266,36 @@ impl Widget for EditorView {
                 let mut b = self.buffer.borrow_mut();
                 let at = b.at(line, col as usize);
                 b.select(at, at);
+                self.free = false;
                 Response::Repaint
+            }
+            Event::Wheel { dy, .. } => {
+                let last = self
+                    .buffer
+                    .borrow()
+                    .lines()
+                    .len()
+                    .saturating_sub(self.rows_painted());
+                let r = wheel_rows(&mut self.wheel, &mut self.top, dy, last);
+                if r != Response::None {
+                    self.free = true;
+                    self.seen = self.buffer.borrow().cursor();
+                }
+                r
             }
             _ => Response::None,
         }
+    }
+    fn scrolled(&self) -> Option<Scrolled> {
+        Some(Scrolled {
+            at: self.top,
+            free: self.free,
+            cursor: self.seen,
+        })
+    }
+    fn set_scrolled(&mut self, s: Scrolled) {
+        self.top = s.at;
+        self.free = s.free;
+        self.seen = s.cursor;
     }
 }

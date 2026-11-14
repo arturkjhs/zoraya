@@ -188,7 +188,20 @@ fn widgets_paint_only_inside_their_rectangle() {
                 vec![Button::new(1, "Save"), Button::new(2, "Discard")],
             ))
         }),
-        Box::new(|| Box::new(ScrollView::new(Box::new(ListView::new(1, &["z"; 80]))))),
+        Box::new(|| {
+            Box::new(ScrollView::new(vec![Box::new(ListView::new(
+                1, &["z"; 80],
+            ))]))
+        }),
+        Box::new(|| {
+            let mut s = ScrollView::new(
+                (0..40)
+                    .map(|i| Box::new(Label::new(&"row ".repeat(i))) as Box<dyn Widget>)
+                    .collect(),
+            );
+            s.first = 1000;
+            Box::new(s)
+        }),
     ];
     for (i, f) in make.iter().enumerate() {
         for (w, h) in [(0u32, 0u32), (1, 1), (37, 9), (90, 140)] {
@@ -228,26 +241,31 @@ fn widgets_paint_only_inside_their_rectangle() {
     }
     // A scroll past the end stays at the end.
     let mut p = painter();
-    let mut s = ScrollView::new(Box::new(ListView::new(1, &["z"; 8])));
+    let mut s = ScrollView::new(
+        (0..8)
+            .map(|_| Box::new(Label::new("z")) as Box<dyn Widget>)
+            .collect(),
+    );
     s.layout(
         LRect::new(
             Logical::ZERO,
             Logical::ZERO,
             space::CONTROL_HEIGHT.times(4),
-            space::CONTROL_HEIGHT.times(2),
+            space::CONTROL_HEIGHT.times(4),
         ),
         &mut p,
     );
     for _ in 0..30 {
-        s.scroll(true, &mut p);
+        s.scroll_by(1, &mut p);
     }
-    let end = s.offset;
-    s.scroll(true, &mut p);
-    assert_eq!(s.offset, end);
+    let end = s.first;
+    assert!(end > 0);
+    s.scroll_by(1, &mut p);
+    assert_eq!(s.first, end);
     for _ in 0..40 {
-        s.scroll(false, &mut p);
+        s.scroll_by(-1, &mut p);
     }
-    assert_eq!(s.offset, Logical::ZERO);
+    assert_eq!(s.first, 0);
 }
 
 /// INV-0165-4: Tab reaches every focusable widget and comes round;
@@ -666,27 +684,37 @@ fn a_list_moves_its_selection_by_key_and_by_press_from_its_top_row() {
 #[test]
 fn a_scroll_view_stays_within_its_content_also_when_it_grows() {
     let mut p = painter();
-    let rows = ["a", "b", "c", "d", "e", "f", "g", "h"];
-    let mut v = ScrollView::new(Box::new(ListView::new(1, &rows)));
-    assert_eq!(v.measure(&mut p), (l(168), l(112)));
-    v.layout(rect(0, 0, 200, 56), &mut p);
-    assert_eq!(v.rect(), rect(0, 0, 200, 56));
-    assert_eq!(v.child[0].rect(), rect(0, 0, 200, 56));
-    v.scroll(true, &mut p);
-    assert_eq!(v.offset, l(28));
+    // Eight labels of 28 with gaps of 8 inside a padding of 20.
+    let labels = || -> Vec<Box<dyn Widget>> {
+        (0..8)
+            .map(|_| Box::new(Label::new("a")) as Box<dyn Widget>)
+            .collect()
+    };
+    let mut v = ScrollView::new(labels());
+    assert_eq!(v.measure(&mut p), (l(40) + p.text_width("a"), l(112)));
+    // Room for three: 20 + 3 × 28 + 2 × 8 + 20.
+    v.layout(rect(0, 0, 200, 140), &mut p);
+    assert_eq!(v.rect(), rect(0, 0, 200, 140));
+    assert_eq!(v.children[0].rect(), rect(20, 20, 160, 28));
+    assert_eq!(v.last_first(), 5);
+    v.scroll_by(1, &mut p);
+    assert_eq!(v.first, 1);
+    assert_eq!(v.children[0].rect().w, l(0));
+    assert_eq!(v.children[1].rect(), rect(20, 20, 160, 28));
+    assert_eq!(v.children[2].rect(), rect(20, 56, 160, 28));
     for _ in 0..30 {
-        v.scroll(true, &mut p);
+        v.scroll_by(1, &mut p);
     }
-    assert_eq!(v.offset, l(168));
-    v.scroll(false, &mut p);
-    assert_eq!(v.offset, l(140));
-    v.scroll(true, &mut p);
-    // A taller frame: the offset comes back so the frame is full.
-    v.layout(rect(0, 0, 200, 112), &mut p);
-    assert_eq!(v.offset, l(112));
-    assert_eq!(v.child[0].rect().h, l(112));
+    assert_eq!(v.first, 5);
+    v.scroll_by(-1, &mut p);
+    assert_eq!(v.first, 4);
+    v.scroll_by(1, &mut p);
+    // A taller frame: the first comes back so the frame is full.
+    v.layout(rect(0, 0, 200, 248), &mut p);
+    assert_eq!(v.first, 2);
+    assert_eq!(v.children[7].rect(), rect(20, 200, 160, 28));
     let (mut w, mut px) = window(
-        Box::new(ScrollView::new(Box::new(ListView::new(1, &rows)))),
+        Box::new(ScrollView::new(vec![Box::new(ListView::new(1, &["a"; 8]))])),
         200,
         56,
         &mut p,
