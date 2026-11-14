@@ -95,6 +95,66 @@ list deferred).
   posix_names -- --nocapture`).
 - Wall time of the session: about 3.5 hours.
 
+## Fix pass after the review (`docs/tasks/TASK-31-review-10e.md`, branch `docs/review-10e`)
+
+Done by `opus-review` in this worktree, on the review's findings and the architect's instruction on `config.sub`.
+Each fix has a test; where a commit says "shown by hand", the test was run with the fix undone and failed. Sections
+above this one describe the part as first delivered; where they differ, this section is the current state.
+
+| Finding | Result |
+|---|---|
+| 15, `config.sub sun4` (architect) | **Fixed.** Cause found in QEMU: dash 0.5.13 reads a non-terminal, non-seekable standard input through `tee(2)` when its configure finds it; libposix's `tee` fails with `ENOSYS` (ADR-0100 item 6), and dash falls back to byte reads only on `EINVAL`, so every builtin `read` from a here-document or a pipe saw end of file (`IFS=- read a b <<EOF` gave `HEREDOC[/]`, `echo x-y \| (read ...)` gave `PIPE[/]`); `config.sub`'s `IFS=- read field1 ... <<EOF` read nothing, so `sun4` missed its alias. dash is now configured with its own `--disable-tee` (`ports/Makefile`); no libposix change. Test: `tests/posix/invariants.script` (a here-document, a pipe, a script piped into `sh`, `config.sub sun4` = `sparc-sun-sunos4.1.1`); it failed with the old dash and passes with the new. W4's `configure` now gets past `config.sub` and stops at `configure: error: cannot guess build type; you must specify one` (`config.guess` does not know Zoraya's `uname`; 128 `checking` lines; `docs/backlog.md`). |
+| 1 (must-fix) | **Fixed.** The INV-0153-7 step runs `/usr/libexec/toybox cat` (undescribed). `tests/posix/zosh.script` passes to the end, the Ctrl-Z steps included. |
+| 2 (must-fix) | **Fixed.** `cp.cmd`'s three `when ... FROM tree` lines are gone; a lint test in `posix_names.rs` refuses a `when` that widens a `read` operand to a writing kind (except `chmod -R` and `sed -i`, which change the operand). QEMU: `grants /bin/cp -r src backup` shows `~/src read (operand FROM)`. |
+| 5 | **Fixed, the narrower form.** `tar -f ARCHIVE` and `-C DIR` are `read` in every mode; an archive is made through standard output; `-x` needs `+w` where it extracts. Per-mode option kinds are ADR-0344's open question (a change of the description format). |
+| 6 | **Fixed.** A `cwd none` read or write operand is in `narrows`; host test with a value naming the current directory (refused) and one naming a file in it (allowed). |
+| 7 | **Fixed.** `through_links` follows a narrowed name that opens (read, change, create) at the name itself, to a target strictly below the current directory or a grant, else refuses with the hint; `remove` and `rename` keep the link. Host test: a link inside, outside (refused, `+r` or `+w` hint), under a grant, dangling, to the current directory itself, and `rm` of a link. |
+| 4 | **Fixed as ADR-0336 item 5 says.** `zosh` refuses a line of a userland command (the names of `ports/toybox-applets.txt` and `awk`, a list `user/build.rs` generates) that its description does not parse, naming the word and `/usr/libexec/toybox NAME`. Other POSIX descriptions (`curl`, `tcc`, `python3`, ...) are unchanged. Consequence: `/bin/find`, `/bin/test`, `/bin/env` and `/bin/xargs` with `-` words are refused from `zosh` (their pages say so); a rule for them is ADR-0344's open question. No new ADR: item 5 of the accepted ADR-0336 is the decision. The appendix is now true: an option not listed is refused. |
+| 8 | **Fixed, and a bug found.** Host tests for a file outside the current directory and a non-trivial fallback. In QEMU `sed -i ... ../d/n.txt` from `~/e` failed (`sed tried to read /d/n.txt`): with nothing designated in or below the current directory the program started in `/bin`. `zosh` now gives the current directory's placeholder also when the line designates a file outside it. The script compares `ls -a d` before and after. |
+| 9 | **Run and described.** `cp -r src backup` works in the current directory (its entry merges with the current directory's), `cp -r src e/bk` fails (`Permission denied`) and works with `+w e`; `gzip FILE` and `gunzip FILE` fail without `+w .` and work with it; `-c` works; `mkdir -p a/b/c` fails (`'a': Permission denied`) and works with `+w .`. The pages say so; the script runs each. |
+| 3 | **Partly; the gate stays open.** toybox's own tests ran on a host build of the pristine 0.8.15 source (macOS, `make macos_defconfig`, `make test_tr`, `test_expr`, `test_diff`; the Zoraya patches do not touch the three files): `tr` 6 of 6, `expr` 44 of 44, `diff` 19 of 19 passed (the host's libc, not the image's). `expr` gets a test in `invariants.script`; it showed that toybox's `expr` has no `length`, `substr`, `index` or `match`, which `expr.cmd` claimed (corrected). **The review of `toys/pending/{tr,expr,diff}.c` by a reader who did not port them is not done**: this pass reviewed and ported nothing of them. ADR-0336 item 2's gate is the architect's to waive or satisfy; the header of `ports/toybox-applets.txt` says so. |
+| 10 | **Fixed.** awk's recipes run under `sh -xc`, so `awk.log` holds its compile commands (11 lines with `zcc`), and `awk` is in the `__linux__` check's list. The incremental-tree failure (other ports' logs overwritten by a no-op make) is pre-existing: `docs/backlog.md`. |
+| 11 | **Fixed.** awk's grammar is made by the pinned bison 3.8.2 of `ports/sources.lock`, built into `build/ports/host` (always, not only when the host's is older than 3); its version is the first line of `awk-grammar.log`. |
+| 12 | **Fixed.** ADR-0343's recommendation says what was built (Option A for `readv`, `settimeofday`, `sigsetjmp`; Option B for `fchdir`, `statfs`, `pathconf`) and item 4 says `ENOSYS`; ADR-0344 items 1, 2, 4 and 7, its consequences and open questions are corrected. |
+| 17 | **Fixed.** Patch 0002's copy-back keeps the `/tmp` copy once the original is truncated and says where it is on a failed copy (`sed: /limited/big: the edited text is kept in /tmp/toybox-XXXXXX: Quota exceeded`). Test in `invariants.script` (the 64K limit of `/limited`). `sed.cmd` says `-i` writes through a link. |
+| 16 | **Done.** The C test of `zosh-userland.script` covers `lchown` (own identity `0`, another `-1` with `EPERM`), `settimeofday` (`-1`, `EPERM`) and `readv` over two buffers with a short read (32 bytes). New coverage of existing code: nothing to break. |
+| 13, 14 | **Recorded** in `docs/backlog.md`. |
+| 18 | **Partly.** The path rule of the INV-0336-2 lint also matches names ending in `FILE`, `DIR`, `ARCHIVE`, `PATH` (`PROGFILE`, `REFFILE`, `PATCHFILE`), with a test; the userland script says why `ls` is INV-0336-4's check (dash builtins); the applet list's header names `egrep`, `fgrep`, `[`. Not done: INV-0342-4's check text (ADR-0342 is accepted: the architect's), INV-0336-5 for `xargs` and `env`. |
+| 19 | **Recorded.** `docs/design.md` names the limits (the fallback gives the subtree to read and change; described POSIX programs other than `sed` refuse a file operand outside the current directory). The image cache stays for the architect (first item below). |
+
+### What the fix pass ran (this worktree)
+
+- A scratch probe through `make test-posix POSIX_SCRIPTS=<probe> POSIX_ACCELS=auto` (not committed): `R1[/]` (here-document),
+  `R2[]`, `R3[x/y]` (a file on standard input), `R4[/]` (a pipe), `cat <<EOF` worked, and `sh -x config.sub sun4` showed
+  `basic_machine=sun4` after the `read`.
+- `make test-posix POSIX_SCRIPTS=tests/posix/invariants.script POSIX_ACCELS=auto`: with the old dash `FAIL: timed out
+  waiting for "HEREDOC[x/y]"`; after `--disable-tee` `PASS: 76 steps`; with the `expr` and `sed -i` steps
+  `PASS: 86 steps`. With the old patch 0002 the `sed -i` step failed (`sed: short write: Quota exceeded`, then `cat: /tmp/toybox-*: No such file or directory`: the only whole copy was deleted).
+- `make measure-w4 W4_ACCELS=hvf`: `configure` stops at `cannot guess build type`; wall 41.59 s, 1321 images, 87 % of
+  the wall time loading programs (`build/w4-report.md`).
+- `make test-posix POSIX_SCRIPTS="tests/posix/invariants.script tests/posix/zosh-userland.script
+  tests/posix/zosh.script" POSIX_ACCELS=auto`: `PASS: 86`, `PASS: 209`, `PASS: 94` steps (HVF), the last run after every change; the runs are
+  listed at the end of this section.
+- `make test-posix POSIX_SCRIPTS="tests/posix/hello.script tests/posix/w5.script tests/posix/w10.script" POSIX_ACCELS=auto`
+  (after the dash change): `PASS: 14`, `PASS: 45`, `PASS: 17` steps.
+- `cargo test -q -p zoraya-shell`: 154 passed (with the fixes for 6 and 7 disabled: 152 passed, 2 failed).
+- `cargo test -q -p zoraya-describe --test posix_names`: 5 passed (with the old `cp.cmd`, the new lint fails naming
+  `-r`, `-R`, `-a`).
+- toybox's tests on the host, as above.
+- `make check`: all checks passed, before each commit.
+
+Not run: TCG, `make check-ports` from a clean tree, the GUI and tour scripts, `make test-changed` as a whole.
+
+### For the architect (fix pass)
+
+- ADR-0336 item 2's independent review of `tr`, `expr` and `diff` is still open (finding 3): waive it or have it done.
+- The image cache of ADR-0212 (item 10(a), ordered first on 2026-11-04) is not built; deferring it needs your word.
+- Refusing undescribed options (finding 4) makes `/bin/find`, `/bin/test`, `/bin/env` and `/bin/xargs` with `-` words
+  unusable from `zosh` until a rule exists (ADR-0344 open question); the native `find` and scripts run by `sh` are
+  unaffected.
+- `tar` follows the narrower form (finding 5); ADR-0336 item 5's examples (`tar -c -f` creating, `-x -C DIR` as a
+  tree) need per-mode option kinds (ADR-0344 open question).
+
 ## Appendix: options each description lets through
 
 ```
