@@ -311,6 +311,13 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 # the point; the pcap stays in target/test-logs/. A host whose QEMU has no
 # user-mode networking skips the step, listed by `make test`'s summary (INV-0230-3);
 # on CI (CI set) a skip, and any other failure of the probe, fails it.
+# The start of a recipe that needs QEMU's user-mode networking: label $(1),
+# $(2) the word for the skip. A host without it skips the step, as test-net
+# does; on CI (CI set) there is no skip: a probe that fails, for whatever
+# reason, fails the step (it was a green job: TASK-29, V34).
+NET_OR_SKIP = $(RUN_QEMU) --probe-net >/dev/null 2>&1 || { \
+	if [ -n "$$CI" ]; then echo "[$(1)] FAIL: the networking probe failed on a CI runner"; exit 1; fi; \
+	echo "[$(1)] $(2): QEMU has no user-mode networking"; exit 0; };
 NET_DISK := $(BUILD)/net-disk.img
 NET_PCAP := target/test-logs/test-net.pcap
 # Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
@@ -388,7 +395,7 @@ $(HTTPD): tools/test-httpd/src/main.rs
 test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		grep -a -q "$$s" $(NET_TEST_USER_DIR)/$$f || { echo "[net-fetch] FAIL: INV-0296-1's check is blind: $$f holds no '$$s'"; exit 1; }; done
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,net-fetch,skipped) \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
@@ -449,7 +456,7 @@ $(TEST_DNS): tools/test-dns/src/main.rs
 	$(CARGO) build -q -p zoraya-test-dns
 
 test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-lookup] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,net-lookup,skipped) \
 	mkdir -p $(NET_LOOKUP_ROOT) target/test-logs && cp -R rootfs/. $(NET_LOOKUP_ROOT)/ && \
 	rm -f $(NET_LOOKUP_PCAP) && : > $(NET_LOOKUP_DNS_READY) && : > $(NET_LOOKUP_HTTP_READY) && \
 	{ $(TEST_DNS) --port 0 --lifetime 300 --ready-file $(NET_LOOKUP_DNS_READY) \
@@ -483,7 +490,7 @@ test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
 # asserted but that every fetch ends. The numbers go to docs/design.md by hand.
 NET_BENCH_SCRIPT := $(BUILD)/net-bench.script
 bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[bench-net] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,bench-net,skipped) \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
@@ -518,7 +525,7 @@ NET_POSIX_SCRIPT := $(BUILD)/net-posix.script
 NET_POSIX_RUN = $(RUNNER) --timeout $(1) --script $(NET_POSIX_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_POSIX_DISK) --accel $(3) $(KERNEL)
 
 test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-posix] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,net-posix,skipped) \
 	$(MAKE) -s -f ports/Makefile libc && $(MAKE) -s -f ports/Makefile check-libc && \
 	mkdir -p $(NET_POSIX_ROOT) target/test-logs && cp -R rootfs/. $(NET_POSIX_ROOT)/ && mkdir -p $(NET_POSIX_ROOT)/bin && \
 	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
@@ -592,7 +599,7 @@ APPS_LAUNCHES := tests/shell/apps-launches.script
 APPS_LAUNCHES_RUN = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(APPS_LAUNCHES) --label apps-launches -- $(RUN_QEMU) --test --keys --disk $(APPS_DISK) --mem 128M --accel auto $(KERNEL)
 
 test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(CRYPTOTHREADS_BIN)
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[apps] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,apps,skipped) \
 	rm -rf $(APPS_TEST_ROOT) && mkdir -p $(APPS_TEST_ROOT) target/test-logs && cp -R rootfs/. $(APPS_TEST_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && cp $(TLSTHREADS_BIN) $(APPS_TEST_ROOT)/bin/tlsthreads && cp $(CRYPTOTHREADS_BIN) $(APPS_TEST_ROOT)/bin/cryptothreads && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
@@ -698,7 +705,7 @@ python-testlib: $(PYTHON_TESTLIB)
 # The TLS check (INV-0320-3) reads the server's log of test-python only: the
 # regrtest scripts make no connection to it.
 test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[$@] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,$@,skipped) \
 	rm -rf $(PY_ROOT) && mkdir -p $(PY_ROOT) target/test-logs && cp -R rootfs/. $(PY_ROOT)/ && \
 	cp -R $(PYTHON_ROOT)/. $(PY_ROOT)/ && mkdir -p $(PY_ROOT)/home && cp tests/python/*.py tests/python/regr-*.txt $(PY_ROOT)/home/ && \
 	mkdir -p $(PY_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PY_ROOT)/usr/lib/python3.15/test/ && \
@@ -760,7 +767,7 @@ NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).
 	--net-guestfwd "$(NS_NET).11:8080=$(NS_RELAY)" \
 	--mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
 test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,netsurf,skipped) \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
 	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
@@ -840,7 +847,7 @@ test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	if [ ! -f $(HAND_DISK).old.1 ] || ! cmp -s $(HAND_DISK).old $(BUILD)/hand-run-disk.copy; then \
 		echo "[hand-run] FAIL: tools/run-disk.sh overwrote an earlier .old disk"; cat $(BUILD)/hand-run-disk.log; exit 1; fi; \
 	echo "[hand-run] ok: a stale disk is replaced and never overwrites an earlier .old, a current one kept"
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[hand-run] skipped run-net: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,hand-run,skipped run-net) \
 	mkdir -p target/test-logs && : > $(HAND_HTTP_READY) && : > $(HAND_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(HAND_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(HAND_TLS_READY) > target/test-logs/test-httpd-hand-run.log 2>&1 & echo $$! > $(BUILD)/hand-run-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/hand-run-httpd.pid); \
