@@ -31,6 +31,34 @@ pub const GRND_RANDOM: u32 = 2;
 /// Bytes asked in one request, so that the reply fits a wire message.
 const CHUNK: usize = 2048;
 
+/// Bytes filled under one hold of the library lock: one request. In a
+/// process with threads the wait for `rngd`'s reply is made inside the lock
+/// (`net_call_with`), so a span of one request keeps every hold to one round
+/// trip (INV-0302-2), whatever the size the program asks for.
+pub const SPAN: usize = CHUNK;
+
+/// `getrandom` at the C boundary: `into` in spans of at most [`SPAN`] bytes,
+/// each one a separate call of `one` (the boundary takes the library lock
+/// for each). The result is [`Posix::getrandom`]'s: all of `into`; or the
+/// first span's error with nothing written; or, once a span has been
+/// written, the number of bytes written so far (a short count, never an
+/// error beside written bytes, INV-0310-1).
+pub fn in_spans(into: User, mut one: impl FnMut(User) -> Result<usize, i32>) -> Result<usize, i32> {
+    let mut done = 0;
+    loop {
+        let part = into.part(done, SPAN);
+        match one(part) {
+            Ok(n) => {
+                done += n;
+                if n < part.length || done >= into.length {
+                    return Ok(done);
+                }
+            }
+            Err(e) => return if done > 0 { Ok(done) } else { Err(e) },
+        }
+    }
+}
+
 impl<S: Sys> Posix<S> {
     /// Fills `into` from the random service: all of it, or an error and
     /// nothing written; once a chunk has been written, a failure returns the
@@ -51,9 +79,8 @@ impl<S: Sys> Posix<S> {
             // boundary restarts or reports (without threads; in a process
             // with threads the wait for the reply stays inside the library
             // lock, ADR-0302 item 9, see `net_call_with`); the service being
-            // gone or
-            // sending nonsense is `EIO`, a request that cannot be built
-            // `EINVAL`.
+            // gone or sending nonsense is `EIO`, a request that cannot be
+            // built `EINVAL`.
             // After a first chunk has been copied out, a failure is not an
             // error: the call returns what it wrote, as Linux's does
             // (`getrandom(2)`: interrupted after some bytes, it returns

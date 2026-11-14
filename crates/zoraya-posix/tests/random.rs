@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use kernel::*;
 use zoraya_posix::errno::*;
-use zoraya_posix::random::{GRND_NONBLOCK, GRND_RANDOM};
+use zoraya_posix::random::{GRND_NONBLOCK, GRND_RANDOM, SPAN, in_spans};
 use zoraya_posix::sys::Sys;
 use zoraya_protocol::{Data, Header, decode, encode};
 use zoraya_rng::{Bytes, BytesReply};
@@ -213,4 +213,60 @@ fn a_process_with_threads_gets_the_bytes_when_the_reply_comes_late() {
     r.p.defer_waits = true;
     let u = r.arena.user(0, 16);
     assert_eq!(deferred(&mut r, |r| r.p.getrandom(u, 0)), (Err(EIO), 1));
+}
+
+/// A span that fills its part for the first `k` calls, then fails with `e`.
+fn fails_after(k: usize, e: i32) -> impl FnMut(zoraya_posix::sys::User) -> Result<usize, i32> {
+    let mut n = 0;
+    move |part| {
+        n += 1;
+        if n > k { Err(e) } else { Ok(part.length) }
+    }
+}
+
+/// Since that wait is inside the library lock, the C boundary takes the lock
+/// once per request (`in_spans`, INV-0302-2): a large `getrandom` in a process
+/// with threads holds it for one round trip to `rngd` at a time, not for one per
+/// 2 KiB of the whole buffer. The bytes and the errors are `getrandom`'s.
+#[test]
+fn the_c_boundary_holds_the_lock_for_one_request_at_a_time() {
+    let (mut r, asked) = rigged(Mode::Honest);
+    r.p.defer_waits = true;
+    let u = r.arena.user(0, 5000);
+    let mut spans = Vec::new();
+    let got = in_spans(u, |part| {
+        let before = asked.borrow().len();
+        let n = r.p.getrandom(part, 0);
+        // One run under the lock asks once.
+        assert_eq!(asked.borrow().len(), before + 1);
+        spans.push(part.length);
+        n
+    });
+    assert_eq!(got, Ok(5000));
+    assert_eq!(spans, vec![2048, 2048, 904]);
+    assert_eq!(*asked.borrow(), vec![2048, 2048, 904]);
+    let want: Vec<u8> = (1..=5000u32).map(|i| (i % 256) as u8).collect();
+    assert_eq!(r.peek(0, 5000), want);
+
+    // Zero bytes, a flag it does not know, no connection: one call, its answer.
+    let mut calls = 0;
+    let z = r.arena.user(0, 0);
+    let mut once = |part, flags| {
+        calls += 1;
+        r.p.getrandom(part, flags)
+    };
+    assert_eq!(in_spans(z, |part| once(part, 0)), Ok(0));
+    assert_eq!(in_spans(u, |part| once(part, 4)), Err(EINVAL));
+    assert_eq!(calls, 2);
+    r.p.random = None;
+    assert_eq!(in_spans(u, |part| r.p.getrandom(part, 0)), Err(ENOSYS));
+
+    // A failure in the first span is the error; in a later one, the count so
+    // far (EINTR of a handler without SA_RESTART, the service gone).
+    assert_eq!(in_spans(u, fails_after(0, EINTR)), Err(EINTR));
+    assert_eq!(in_spans(u, fails_after(1, EIO)), Ok(SPAN));
+    assert_eq!(in_spans(u, fails_after(2, EINTR)), Ok(2 * SPAN));
+    assert_eq!(in_spans(u, fails_after(3, EIO)), Ok(5000));
+    // A short span ends the call with what was written.
+    assert_eq!(in_spans(u, |part| Ok(part.length / 2)), Ok(SPAN / 2));
 }
