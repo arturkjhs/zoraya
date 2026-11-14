@@ -680,13 +680,17 @@ $(WGET): $(LOCK) $(wildcard ports/patches/wget/*.patch)
 # metalink or libuuid. The host triple names musl, not Zoraya: wget's gnulib
 # answers its run tests (mbrtowc and the like) by the C library's name when it
 # cannot run them, and Zoraya's libc is musl's; the compiler is still zcc,
-# which defines nothing of Linux (INV-0143-1).
+# which defines nothing of Linux (INV-0143-1). ac_cv_func_sigsetjmp=no:
+# libc.a has sigsetjmp since 10e (toybox's gzip, ADR-0343), and with it wget's
+# run_with_timeout takes its signal path, which needs setitimer, a name
+# libc.a does not export (alarm is on the exclusion table, ADR-0005); wget
+# keeps the plain call it had before (its timeouts are the sockets' own).
 WGET_OPTS := --sysconfdir=/etc --with-ssl=openssl --with-libssl-prefix=$(DEPS) --with-zlib --disable-nls --enable-ipv6 \
 	--disable-iri --disable-pcre --disable-pcre2 --disable-opie --disable-digest --disable-ntlm \
 	--disable-debug --disable-threads --disable-rpath --without-libpsl --without-libuuid --without-metalink \
 	--without-cares --without-libidn --without-gpgme --without-included-regex
 $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
-	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ./configure --host=aarch64-unknown-linux-musl \
+	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ac_cv_func_sigsetjmp=no ./configure --host=aarch64-unknown-linux-musl \
 	  $(WGET_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include -D_PYTHREAD_NAME_MAXLEN=15" \
 	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim" ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz",wget-configure)
 	rm -f $(WGET_BIN)

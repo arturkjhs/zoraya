@@ -50,8 +50,11 @@ nothing the accepted ADRs decide.
    with the union of the rights, in the words `read anything in` and `read and change anything in`, so `grants`
    says what is given (the existing rule of ADR-0153 for `create`). The names list of ADR-0336 item 6 is **not
    built** in 10e; `sed` with two files of one directory therefore gets that directory whole, to read and change
-   every file below it, subdirectories included, until it is. A narrowed name that is a link is followed to its
-   target, which must lie strictly below the current directory or a grant (ADR-0153 rule 5), and a value naming
+   every file below it, subdirectories included, until it is. A narrowed read or change name that is a link is
+   followed to its target, which must lie strictly below the current directory or a grant (ADR-0153 rule 5); the
+   link's own name stays given with the same rights (no `CREATE`, `REMOVE` or `RENAME`), so that the program's open
+   meets the link and libposix follows it; a `create`, `remove` or `rename` name is not followed at the name, since
+   `ln -sf` and `mv` act on the link object itself; and a value naming
    the current directory itself is refused (review S16's rule). A file outside the current directory is its own
    directory narrowed; the program then starts in a placeholder at the current directory, so a relative name
    (`../d/f`) resolves as written.

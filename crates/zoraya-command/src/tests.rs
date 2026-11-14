@@ -377,3 +377,20 @@ fn the_fixed_status_wordings_are_exact() {
         assert_eq!(status_problem(status), words);
     }
 }
+
+// What zosh refuses for a userland command (ADR-0336 item 5): an option the
+// description lacks, not a missing operand (check of the 10e fix pass, N3).
+#[test]
+fn only_an_option_mistake_is_an_option_error() {
+    let d = zoraya_describe::parse(
+        b"name gz\nsummary s\nusage gz [-c] [-n N] FILE...\noperand FILE... write f\noption -c --stdout c\noption -n --num N text n\n",
+    )
+    .unwrap();
+    let e = |args: &[&str]| parse(&d, args).unwrap_err();
+    assert!(e(&["-x", "f"]).is_option_error());
+    assert!(e(&["--nope", "f"]).is_option_error());
+    assert!(e(&["--stdout=1", "f"]).is_option_error());
+    assert!(e(&["f", "-n"]).is_option_error());
+    assert!(!e(&["-c"]).is_option_error(), "missing operand");
+    assert!(!e(&[]).is_option_error());
+}

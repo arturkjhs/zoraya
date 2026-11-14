@@ -375,6 +375,7 @@ pub fn through_links(
     let is_grant = |e: &Planned| e.reason == "+r" || e.reason == "+w";
     let mut roots: Vec<String> = alloc::vec![cwd.into()];
     let mut out = plan;
+    let mut links: Vec<Planned> = Vec::new();
     for e in out.iter_mut().filter(|e| is_grant(e)) {
         if let Some(t) = target(&e.path) {
             e.path = t;
@@ -385,17 +386,20 @@ pub fn through_links(
         if is_grant(e) || e.reason == "current directory" {
             continue;
         }
-        // A narrowed entry that opens its name (read, change, create) is
+        // A narrowed read or change name (a `cwd none` file operand) is
         // followed at that name, not only at its directory: the name itself
         // may be the link, and the program's open follows it (review of
         // 10e, finding 7). Its target must lie strictly below a root, since
         // the entry becomes the target's parent narrowed to the target's
-        // name. `remove` and `rename` act on the link itself, so only their
-        // directory is followed (below).
-        let opens = matches!(
-            e.access,
-            Access::ReadName(_) | Access::ChangeName(_) | Access::Create(_)
-        );
+        // name. The link's own name stays given with the same rights, so
+        // that the program's open (for writing too: the service checks the
+        // rights before it answers that the name is a link) meets the link
+        // and libposix follows it to the target's entry (check of the fix
+        // pass, N1). Without CREATE, REMOVE or RENAME the link itself cannot
+        // be replaced through it. `create`, `remove` and
+        // `rename` act on the link object itself (`ln -sf`, `mv` onto a
+        // link), so only their directory is followed (below; N2).
+        let opens = matches!(e.access, Access::ReadName(_) | Access::ChangeName(_));
         let named = e.access.name().filter(|_| opens).map(String::from);
         if let Some(name) = named
             && let full = join(&e.path, 0, &name)
@@ -405,6 +409,11 @@ pub fn through_links(
             if roots.iter().any(below)
                 && let Some((parent, tname)) = parent_and_name(&t)
             {
+                links.push(Planned {
+                    path: e.path.clone(),
+                    access: e.access.clone(),
+                    reason: format!("{}, the link itself", e.reason),
+                });
                 e.reason = format!("{}, through a link at {}", e.reason, shown(&full, home));
                 e.path = parent;
                 e.access = e.access.renamed(tname);
@@ -428,6 +437,7 @@ pub fn through_links(
         let marker = if e.access == Access::Read { "+r" } else { "+w" };
         return Err(link_refused(&e.path, &t, marker, home));
     }
+    out.extend(links);
     Ok(out)
 }
 

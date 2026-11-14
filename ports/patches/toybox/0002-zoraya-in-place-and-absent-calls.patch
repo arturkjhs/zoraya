@@ -32,16 +32,18 @@ diff -ru a/lib/lib.c b/lib/lib.c
  
    // Record tempfile for exit cleanup if interrupted
    if (!tempfile2zap) sigatexit(tempfile_handler);
-@@ -808,6 +826,32 @@
+@@ -807,7 +825,36 @@
+   free(*tempname);
    *tempname = NULL;
  }
- 
++
 +#ifdef __zoraya__
 +// Copy the rest of the data, then the whole copy back into the original.
 +void replace_tempfile(int fdin, int fdout, char **tempname)
 +{
++  struct stat st;
 +  int out;
-+
+ 
 +  if (fdin != -1) {
 +    xsendfile(fdin, fdout);
 +    xclose(fdin);
@@ -50,10 +52,12 @@ diff -ru a/lib/lib.c b/lib/lib.c
 +  // From the truncation on, the copy in /tmp is the only whole one: the exit
 +  // handler must not remove it, and a failed copy back says where it is.
 +  tempfile2zap = (char *)1;
++  // sendfile_len stops at a failed read with the bytes so far, so the copy
++  // back is whole only if it moved the copy's size.
 +  out = open(zoraya_original, O_WRONLY|O_TRUNC);
-+  if (out == -1 || sendfile_len(fdout, out, -1, 0) < 0)
++  if (out == -1 || fstat(fdout, &st) || sendfile_len(fdout, out, -1, 0) != st.st_size
++      || close(out))
 +    perror_exit("%s: the edited text is kept in %s", zoraya_original, *tempname);
-+  xclose(out);
 +  xclose(fdout);
 +  unlink(*tempname);
 +  free(*tempname);
@@ -65,7 +69,7 @@ diff -ru a/lib/lib.c b/lib/lib.c
  // Copy the rest of the data and replace the original with the copy.
  void replace_tempfile(int fdin, int fdout, char **tempname)
  {
-@@ -825,6 +869,7 @@
+@@ -825,6 +872,7 @@
    free(temp);
    *tempname = NULL;
  }

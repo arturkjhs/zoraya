@@ -1639,11 +1639,16 @@ impl Z {
     }
 
     /// ADR-0336 item 5: the options a userland command's description lists
-    /// are the options the shell lets through. A line its description does
-    /// not parse (an option it does not list, a missing operand) is refused
-    /// here, before anything runs, rather than run with no designations
-    /// (review of 10e, finding 4). `--help` is let through: the program
-    /// prints its own help.
+    /// are the options the shell lets through. A line with an option its
+    /// description does not list (or a value an option does not take) is
+    /// refused here, before anything runs, rather than run with no
+    /// designations (review of 10e, finding 4). A mistake about operands is
+    /// not refused: `gzip -c < f`, `xargs` without a command and `find`
+    /// without a path read standard input or have a default, and run as
+    /// before, the program saying what it lacks (check of the fix pass, N3).
+    /// `--help` anywhere before `--` makes the parse `Help` and is let
+    /// through: the line runs with no designations, so it is no widening,
+    /// though its other words are not checked (N4).
     fn userland_options(exec: &Exec<'_>, d: &Description) -> Result<(), String> {
         if !descriptions::USERLAND.contains(&d.name.as_str()) {
             return Ok(());
@@ -1652,6 +1657,9 @@ impl Z {
         let Err(why) = zoraya_command::parse(d, &texts) else {
             return Ok(());
         };
+        if !why.is_option_error() {
+            return Ok(());
+        }
         // `-name` fails as `-n`: name the word the person wrote.
         let unknown = |t: &str| {
             t.starts_with('-')

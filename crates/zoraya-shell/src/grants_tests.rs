@@ -903,11 +903,20 @@ fn a_narrowed_name_that_is_a_link_is_followed() {
     let p = through_links(p, "/w", "/u", links).unwrap();
     assert_eq!(
         rows(&p),
-        [(
-            "/w/drafts".into(),
-            Access::ChangeName("notes.txt".into()),
-            "operand FILE, through a link at /w/notes.txt".into()
-        )]
+        [
+            (
+                "/w/drafts".into(),
+                Access::ChangeName("notes.txt".into()),
+                "operand FILE, through a link at /w/notes.txt".into()
+            ),
+            // The link's own name, so the open meets the link (check of the
+            // fix pass, N1).
+            (
+                "/w".into(),
+                Access::ChangeName("notes.txt".into()),
+                "operand FILE, the link itself".into()
+            ),
+        ]
     );
     let p = go(SED, &["x", "out.txt"], &[], &[], true, "/w").unwrap();
     let r = through_links(p, "/w", "/u", links).unwrap_err();
@@ -938,12 +947,26 @@ fn a_narrowed_name_that_is_a_link_is_followed() {
             .any(|e| e.path == "/secret" && e.access == Access::ReadName("out.txt".into())),
         "{p:?}"
     );
-    // A dangling link inside: the name it would create.
+    // A `create` name acts on the link object (`ln -sf`, `mv` onto a
+    // link): it is not followed, inside or outside, and a dangling one is
+    // kept as written (check of the fix pass, N2).
+    let ln = "name ln\nsummary l\nusage ln [-sf] TARGET LINK\noperand TARGET text t\noperand LINK create l\noption -s --symbolic s\noption -f --force f\n";
+    for link in ["notes.txt", "out.txt", "gone.txt"] {
+        let p = go(ln, &["-sf", "new", link], &[], &[], true, "/w").unwrap();
+        let p = through_links(p, "/w", "/u", links).unwrap();
+        assert!(
+            p.iter()
+                .any(|e| e.path == "/w" && e.access == Access::Create(link.into())),
+            "{p:?}"
+        );
+    }
+    let p = go(MV, &["a", "out.txt"], &[], &[], true, "/w").unwrap();
+    assert!(through_links(p, "/w", "/u", links).is_ok());
     let p = go(CP, &["a", "gone.txt"], &[], &[], true, "/w").unwrap();
     let p = through_links(p, "/w", "/u", links).unwrap();
     assert!(
         p.iter()
-            .any(|e| e.path == "/w/new" && e.access == Access::Create("gone.txt".into())),
+            .any(|e| e.path == "/w" && e.access == Access::Create("gone.txt".into())),
         "{p:?}"
     );
     // A link to the current directory itself is not a name below it.

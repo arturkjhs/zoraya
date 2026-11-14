@@ -140,6 +140,21 @@ x anything in (operand FROM)
 > /bin/gunzip -c big.log.gz\r
 < \r\ndata
 < \r\n~>
+# A userland command that reads standard input with its operand left out
+# runs; only an option its description lacks is refused (check of the fix
+# pass, N3).
+> echo data > in.txt\r
+< \r\n~>
+> /bin/gzip -c < in.txt > in.gz\r
+< \r\n~>
+> tar -c notes.txt | /bin/gzip > n.tgz\r
+< \r\n~>
+> /bin/gunzip < in.gz\r
+< \r\ndata
+< \r\n~>
+> echo zz | /bin/xargs\r
+< \r\nzz
+< \r\n~>
 # mkdir -p: the missing parents need +w (finding 9).
 > /bin/mkdir -p a/b/c\r
 < mkdir: 'a': Permission denied
@@ -173,6 +188,16 @@ x anything in (operand FROM)
 < \r\n~>
 > /bin/cmp before.lst after.lst && echo SAME-LISTING\r
 < \r\nSAME-LISTING
+< \r\n~>
+# sed -i through a link inside the current directory changes the target:
+# the link's own name is given to read, its target's to change (check of
+# the fix pass, N1).
+> /bin/ln -s d/n.txt nl.txt\r
+< \r\n~>
+> /bin/sed -i s/color/colour/ nl.txt\r
+< \r\n~>
+> cat d/n.txt\r
+< \r\ncolour
 < \r\n~>
 # INV-0342-5: getpwuid, and link and mknod refused (a C program from tcc);
 # lchown to the own identity and to another, settimeofday, readv over two

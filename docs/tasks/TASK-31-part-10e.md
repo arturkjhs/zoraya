@@ -145,6 +145,25 @@ above this one describe the part as first delivered; where they differ, this sec
 
 Not run: TCG, `make check-ports` from a clean tree, the GUI and tour scripts, `make test-changed` as a whole.
 
+### Second round: the check of the fix pass (N1 to N7) and the candidate run's wget link
+
+| Item | Result |
+|---|---|
+| N2 | **Fixed.** Only `ReadName`/`ChangeName` are followed at the name; a `create` name is followed at its directory as before, so `ln -sf new L` and `mv A L` over a link (inside or outside) plan `L` in its own directory again. Host test (`ln -sf` over a link inside, outside and dangling, `mv` onto a link outside, `cp` through a dangling link); with `Create` back in the rule the test fails. |
+| N3 | **Fixed.** `zosh` refuses only an option mistake (`UsageError::is_option_error` in `zoraya-command`: no such option, a value given or missing); a missing or extra operand runs as before. Host test `only_an_option_mistake_is_an_option_error`; QEMU steps `gzip -c < in.txt > in.gz`, `tar -c notes.txt \| gzip > n.tgz`, `gunzip < in.gz`, `echo zz \| xargs`. Before the fix the first of them failed (`missing operand FILE, which its description does not let through`). |
+| N1 | **Fixed.** A followed read/change name keeps the link's own name with the same rights (no `CREATE`, `REMOVE`, `RENAME`), so the program's open meets the link and libposix follows it. QEMU step: `sed -i` through `nl.txt -> d/n.txt` changes `d/n.txt`. Without the link's entry (the first fix pass) it fails; with the link's name read-only it fails too (`Permission denied` on the copy back: the service checks the rights before it answers that the name is a link), hence the same rights. Host test asserts the entry. |
+| N5 | **Fixed.** The copy-back compares the bytes copied with the `/tmp` copy's size (`fstat`) and checks `close`, so a failed read keeps the copy and says where. No test forces a read failure of the line's `/tmp`; the quota test (write failure) still passes. |
+| N4, N6, N7 | `docs/backlog.md`. |
+| wget (candidate run 43609007070) | **Cause:** 10e put musl's `sigsetjmp` in `libc.a` (ADR-0343, toybox's `gzip`). wget's configure then finds it, `HAVE_SIGSETJMP` turns on `USE_SIGNAL_TIMEOUT`, and `run_with_timeout` calls `setitimer`, which `libc.a` does not export: `undefined symbol: setitimer`. **Fix:** `ac_cv_func_sigsetjmp=no` for wget's configure (`ports/Makefile`), its behaviour on `main`. curl needs `HAVE_ALARM` as well for its alarm path (`alarm` is excluded), Python has no `sigsetjmp`. The `Broken pipe` panic in that log is `zoraya-ar t ... \| grep -q` in `ports/check-broken-archives.sh` (pre-existing noise, not a failure; backlog). |
+
+Run in the second round: `cargo test -q -p zoraya-shell` 154 passed, `cargo test -q -p zoraya-command` 17 passed;
+`make -f ports/Makefile wget curl` from a ports tree with no OpenSSL, curl or wget built: both link (`HAVE_SIGSETJMP`
+undefined in wget's `config.h`); `make test-posix POSIX_SCRIPTS="tests/posix/invariants.script
+tests/posix/zosh-userland.script tests/posix/zosh.script" POSIX_ACCELS=auto`: `PASS: 86`, `PASS: 228`, `PASS: 94`
+steps (HVF); `make check` passed. Not run: `make check-ports` (its `__linux__` step fails on an incremental tree,
+backlog), `make test-apps`, NetSurf and Python builds (neither detects `sigsetjmp`: Python's source has none,
+NetSurf's is Duktape's compile-time option).
+
 ### For the architect (fix pass)
 
 - ADR-0336 item 2's independent review of `tr`, `expr` and `diff` is still open (finding 3): waive it or have it done.
