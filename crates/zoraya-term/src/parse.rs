@@ -193,7 +193,7 @@ impl Term {
             self.osc.clear();
         }
         match b {
-            0x1b => self.state = State::Escape,
+            // A second `ESC` is a control that does nothing: the state stays.
             0x00..=0x1f => self.control(b),
             b'[' => self.start_sequence(State::Csi),
             b']' => {
@@ -407,22 +407,13 @@ impl Term {
         }
     }
 
-    /// The string ended properly: an `OSC` runs, the others were skipped.
-    /// Called with the state still `Osc` or `Skip`, or just left for
-    /// `Escape` by the `ESC` of `ST`.
+    /// The string ended properly: an `OSC` runs; a `DCS`, `SOS`, `PM` or
+    /// `APC` collected nothing and so runs nothing.
     fn finish_string(&mut self) {
         let osc = core::mem::take(&mut self.osc);
-        if self.was_osc(&osc) {
-            self.run_osc(&osc);
-        }
+        self.run_osc(&osc);
         self.osc = osc;
         self.osc.clear();
-    }
-
-    /// An `OSC` string is the only one collected, so a non-empty buffer
-    /// is one. (A `DCS` leaves it empty; an empty `OSC` does nothing.)
-    fn was_osc(&self, osc: &[u8]) -> bool {
-        !osc.is_empty()
     }
 
     /// `OSC 4` and `OSC 104`: the palette (ADR-0332 item 3). Every other
@@ -461,10 +452,11 @@ impl Term {
         }
     }
 
-    /// Parameter `i`, with 0 and absent meaning `default`.
+    /// Parameter `i`, with 0 and absent meaning `default` (the registers are
+    /// zero when a sequence starts, so an absent one reads 0).
     fn param(&self, i: usize, default: usize) -> usize {
         match self.params.get(i) {
-            Some(&p) if i < self.nparams && p != 0 => usize::from(p),
+            Some(&p) if p != 0 => usize::from(p),
             _ => default,
         }
     }
@@ -681,10 +673,11 @@ impl Term {
             let colon = end > i + 1;
             match p {
                 38 | 48 | 58 => {
-                    let (colour, used) = if colon {
-                        (self.colon_colour(i + 1, end), end - i)
+                    let (colour, next) = if colon {
+                        (self.colon_colour(i + 1, end), end)
                     } else {
-                        self.semicolon_colour(i + 1)
+                        let (colour, used) = self.semicolon_colour(i + 1);
+                        (colour, i + 1 + used)
                     };
                     // 58 is the underline's colour: consumed, not drawn.
                     if let Some(c) = colour {
@@ -694,7 +687,7 @@ impl Term {
                             _ => {}
                         }
                     }
-                    i = if colon { end } else { i + 1 + used };
+                    i = next;
                     continue;
                 }
                 4 if colon => {

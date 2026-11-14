@@ -19,3 +19,31 @@ the independent review is `opus-review`'s, afterwards. Nothing here is merged, t
 | Recorded sessions (`vi` and `less` of the host, four ncurses test programs of the pinned release), their frozen grids and the replay | `tools/term-record/`, `crates/zoraya-term/recordings/`, `crates/zoraya-term/tests/replay.rs` |
 | The GUI script plays a recorded full-screen session | `tests/gui/terminal.script`, `tests/gui/terminal.root/recordings/` |
 | Three proposed ADRs | `docs/adr/0343-*.md`, `0344-*.md`, `0345-*.md` |
+
+## What was run, and what it gave
+
+All on the Mac mini (M4, 16 GB), `CARGO_BUILD_JOBS=3`, under HVF, in the worktree of the branch. Nothing was run that
+the task forbids (`make test`, `make test-par`, the candidate CI).
+
+| Command | Result |
+|---|---|
+| `cargo test -p zoraya-term` | 97 unit tests and 2 replay tests pass (the capability tests, the parser tests, the fuzz of totality, the unknown-sequence sweep over about 12,000 sequences, the replay of five recordings) |
+| `cargo test -p zoraya-width` | 5 pass (the width of every code point against the runs, the ASCII shortcut against the table) |
+| `cargo test -p zoraya-shell` | 154 pass (`crlf`: the three cases of INV-0331-7 and chunk boundaries; the editor's wide characters) |
+| `make check` | all 22 steps pass (fmt, clippy `-D warnings`, adr-check with 0 errors, `check-test-caps` now also running the conformance tool and the check of the GUI recordings, `check-test-lanes`, ...) |
+| `make check-term-width` | the table is musl's `wcwidth` for every code point (regenerated from the pinned archive and compared) |
+| `make check-terminfo` | the four entries recompiled by the pinned `tic` equal `ports/terminfo.manifest`; the dump equals the pinned entry |
+| `tools/term-conformance/check.sh` | 287 capabilities: 99 covered by tests, 188 excepted with a reason (the keys, the mouse and paste marks are part 10b's) |
+| `python3 -I tools/term-record/compare-tmux.py` | 30 of 31 marks agree with tmux in text; the one that differs shows tmux's own display of the ACS set |
+| `GUI_RUNS=terminal:auto:1 make test-gui` | PASS, 100 steps (HVF, scale 1), after two scripts' faults found by running it: a highlight left on the screen by `less`'s search, and a scroll that moved the rows the script looked below |
+| `GUI_RUNS="terminal:auto:2 windows:auto:1 wheel:auto:1" make test-gui` | PASS: 100, 63 and 79 steps |
+| `make test-qemu` | PASS: 119 passed, 9 expected failures (`t_text`, `t_gui` and the rest of the kernel and user tests build and run with the new `zoraya-term` and `zosh`) |
+
+**Not run, and why.** `make test-changed` as a whole: the change touches `ports/` (the lock, the Makefile), which
+the map sends to every port step (`test-apps`, `test-cxx*`, `test-netsurf`, `test-python*`), and those need `make
+fetch-ports` and builds of LLVM, curl, CPython and NetSurf that do not fit this machine and this session; the steps
+that cover the changed code were run by name (the rows above). `make check-ports` for the same reason (it needs the
+whole sysroot); its three new checks (`check-term-width`, `check-terminfo`, `tools/term-conformance/check.sh pin`)
+were run on their own. The TCG runs of the GUI scripts and the 1600 x 1000 and 1920 x 1200 sizes were not run
+(CLAUDE.md: CI does them). The terminfo manifest was written and checked on a case-insensitive host only; the
+case-sensitive half of INV-0333-1 is CI's `check-ports` on Linux.

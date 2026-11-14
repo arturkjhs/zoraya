@@ -883,3 +883,651 @@ fn rendering_draws_attributes_wide_characters_marks_and_the_cursor_shapes() {
     let (cx, cy) = look.cell_origin(0, 1);
     assert_eq!(pixels[cy * w + cx], look.bg.pixel());
 }
+
+/// DEL is ignored wherever it comes, and the sequence it came inside goes on
+/// (mutation testing, 10a).
+#[test]
+fn delete_is_ignored_in_every_state() {
+    let t = run(10, 1, b"a\x7fb");
+    assert_eq!(t.line(0), "ab");
+    // After ESC: the escape goes on, so `[1m` is still a sequence.
+    let t = run(10, 1, b"\x1b\x7f[1mx");
+    assert_eq!(t.line(0), "x");
+    assert!(t.cell(0, 0).has(cell::BOLD));
+    // After ESC and an intermediate.
+    let t = run(10, 1, b"\x1b(\x7f0q");
+    assert_eq!(t.line(0), "─", "ESC ( DEL 0 selects the line set");
+    // Inside a CSI, and inside one that is ignored.
+    let t = run(10, 1, b"\x1b[1\x7f;4mx");
+    assert!(t.cell(0, 0).has(cell::BOLD) && t.cell(0, 0).has(cell::UNDERLINE));
+    let t = run(10, 1, b"\x1b[ 1\x7f;2qx");
+    assert_eq!(t.cursor_shape(), 0);
+    assert_eq!(t.line(0), "x");
+}
+
+/// A control character inside `ESC` or `ESC` and an intermediate acts and
+/// leaves the sequence going; a second `ESC` starts it again.
+#[test]
+fn controls_and_escapes_inside_an_escape_sequence() {
+    let t = run(10, 3, b"ab\x1b\r[1mx");
+    assert_eq!(t.line(0), "xb", "CR acted, then [1m was a sequence");
+    assert!(t.cell(0, 0).has(cell::BOLD));
+    let t = run(10, 3, b"\x1b\n[1mx");
+    assert_eq!(t.cursor(), (1, 1));
+    assert!(t.cell(0, 1).has(cell::BOLD));
+    let t = run(10, 3, b"\x1b(\n0q");
+    assert_eq!(t.cell(0, 1).ch, '─', "LF inside ESC ( then the final 0");
+    let t = run(10, 3, b"\x1b\x1b[1mx");
+    assert!(t.cell(0, 0).has(cell::BOLD));
+    // ESC inside ESC ( starts a new sequence: `[` is no final of the old one.
+    let t = run(10, 3, b"\x1b(\x1b[1mx");
+    assert!(t.cell(0, 0).has(cell::BOLD), "{:?}", t.line(0));
+    assert_eq!(t.line(0), "x");
+    // Another intermediate makes the sequence one this terminal does not know.
+    let t = run(10, 3, b"\x1b((0q");
+    assert_eq!(t.line(0), "q");
+}
+
+/// What follows an intermediate byte of a `CSI` may be intermediates and the
+/// final byte: a parameter, a separator or a private marker there makes the
+/// sequence invalid, and it changes nothing.
+#[test]
+fn a_csi_with_a_parameter_after_an_intermediate_is_ignored() {
+    for bad in [
+        &b"\x1b[ 1q"[..],
+        b"\x1b[ ;1q",
+        b"\x1b[ :1q",
+        b"\x1b[ ?1q",
+        b"\x1b[1 ?q",
+        b"\x1b[ \"1q",
+        b"\x1b[!1p",
+    ] {
+        let mut t = run(10, 2, b"ab\x1b[5 q");
+        assert_eq!(t.cursor_shape(), 5);
+        t.write(b"\x1b[?25l");
+        let before = t.clone();
+        t.write(bad);
+        assert!(t.same_state(&before), "{bad:?}");
+        t.write(b"x");
+        assert_eq!(t.line(0), "abx", "{bad:?}: the text after it is text");
+    }
+}
+
+/// A private marker is valid only first.
+#[test]
+fn a_private_marker_after_a_parameter_ignores_the_sequence() {
+    for bad in [
+        &b"\x1b[1?h"[..],
+        b"\x1b[;?h",
+        b"\x1b[??h",
+        b"\x1b[1:?h",
+        b"\x1b[>?h",
+        b"\x1b[1;>2004h",
+    ] {
+        let mut t = term(10, 2);
+        t.write(bad);
+        assert_eq!(*t.modes(), crate::Modes::DEFAULT, "{bad:?}");
+    }
+    let mut t = term(10, 2);
+    t.write(b"\x1b[?2004h");
+    assert!(t.modes().bracketed_paste);
+    // `?` first is the marker; after `;` it is not.
+    let mut t = term(10, 2);
+    t.write(b"\x1b[?25;2004h");
+    assert!(t.modes().bracketed_paste);
+}
+
+/// An ignored `CSI` takes its parameters and intermediates and ends at its
+/// final byte; an `ESC` or a control inside it acts; it is cut at the bound.
+#[test]
+fn an_ignored_csi_ends_where_a_csi_ends() {
+    let t = run(10, 1, b"\x1b[ 1;23:4?p x");
+    assert_eq!(
+        t.line(0),
+        " x",
+        "the digits, `;`, `:` and `?` were all part of it"
+    );
+    let t = run(10, 3, b"\x1b[ 1\nmx");
+    assert_eq!(
+        t.cursor(),
+        (1, 1),
+        "a control inside it acts, and m ends it"
+    );
+    assert_eq!(t.cell(0, 1).ch, 'x');
+    let t = run(10, 1, b"\x1b[ 1\x1b[1mx");
+    assert!(
+        t.cell(0, 0).has(cell::BOLD),
+        "ESC inside it starts a new sequence"
+    );
+    // A long one is cut at the bound, and the rest is text.
+    let mut long = std::vec![0x1b, b'[', b' ', b'1'];
+    long.extend(std::iter::repeat_n(b'9', 5000));
+    long.extend_from_slice(b"mA");
+    let mut t = term(80, 24);
+    t.write(&long);
+    let shown: String = (0..24).map(|y| t.line(y)).collect();
+    let nines = shown.chars().filter(|c| *c == '9').count();
+    assert!(
+        shown.ends_with("mA"),
+        "{}",
+        &shown[shown.len().saturating_sub(10)..]
+    );
+    assert!((500..1500).contains(&nines), "{nines} digits were text");
+}
+
+#[test]
+fn control_characters_inside_an_osc_are_not_part_of_it() {
+    let mut t = term(10, 1);
+    t.write(b"\x1b]4;1;rgb:12/\x0134/\x7f56\x07");
+    assert_eq!(t.palette_override(1), Some((0x12, 0x34, 0x56)));
+    // An empty one runs nothing; a number with no entry in it is not run.
+    t.write(b"\x1b]\x07\x1b]4\x07\x1b]4;\x07\x1b]104;\x07");
+    assert_eq!(t.palette_override(1), Some((0x12, 0x34, 0x56)));
+}
+
+#[test]
+fn palette_indices_are_numbers_of_at_most_four_digits_below_256() {
+    let mut t = term(10, 1);
+    t.write(b"\x1b]4;0001;#010203\x07");
+    assert_eq!(t.palette_override(1), Some((1, 2, 3)));
+    t.write(b"\x1b]4;00001;#040506\x07\x1b]4;;#070809\x07\x1b]4;1x;#0a0b0c\x07");
+    assert_eq!(
+        t.palette_override(1),
+        Some((1, 2, 3)),
+        "none of them is an entry"
+    );
+    for i in [0u8, 2, 255] {
+        assert_eq!(t.palette_override(i), None);
+    }
+    t.write(b"\x1b]4;255;#0d0e0f\x07\x1b]4;256;#101112\x07");
+    assert_eq!(t.palette_override(255), Some((13, 14, 15)));
+    // 104 takes the same numbers, and one past 255 is no entry to reset.
+    t.write(b"\x1b]104;256\x07\x1b]104;00255;\x07\x1b]104;x\x07");
+    assert_eq!(t.palette_override(255), Some((13, 14, 15)));
+    t.write(b"\x1b]104;0255\x07");
+    assert_eq!(t.palette_override(255), None);
+    assert_eq!(t.palette_override(1), Some((1, 2, 3)));
+}
+
+#[test]
+fn next_line_and_previous_line_go_to_column_zero() {
+    let t = run(10, 5, b"abc\x1b[2E");
+    assert_eq!(t.cursor(), (0, 2));
+    let t = run(10, 5, b"\x1b[4;5H\x1b[2F");
+    assert_eq!(t.cursor(), (0, 1));
+    let t = run(10, 5, b"\x1b[4;5H\x1b[E\x1b[F\x1b[F");
+    assert_eq!(t.cursor(), (0, 2));
+}
+
+#[test]
+fn csi_t_with_more_than_one_parameter_is_not_a_scroll() {
+    let mut t = run(10, 3, b"a\r\nb\r\nc");
+    t.write(b"\x1b[1;2;3;4;5T");
+    assert_eq!(rows(&t), ["a", "b", "c"]);
+    t.write(b"\x1b[T");
+    assert_eq!(rows(&t), ["", "a", "b"]);
+    t.write(b"\x1b[S");
+    assert_eq!(rows(&t), ["a", "b", ""]);
+}
+
+#[test]
+fn only_mode_4_of_the_ansi_modes_acts_and_only_as_a_parameter_of_its_own() {
+    let mut t = term(10, 1);
+    t.write(b"\x1b[20h\x1b[2h\x1b[12h");
+    assert!(!t.modes().insert);
+    t.write(b"\x1b[1:4h");
+    assert!(!t.modes().insert, "a sub-parameter is not a mode");
+    t.write(b"\x1b[20;4h");
+    assert!(t.modes().insert);
+    t.write(b"\x1b[2;4l");
+    assert!(!t.modes().insert);
+    // A marked SM is not the ANSI mode.
+    t.write(b"\x1b[?4h");
+    assert!(!t.modes().insert);
+}
+
+#[test]
+fn dec_modes_take_parameters_not_sub_parameters_and_each_acts() {
+    let mut t = term(10, 2);
+    t.write(b"\x1b[?2004:1h");
+    assert!(t.modes().bracketed_paste && !t.modes().app_cursor);
+    t.write(b"\x1b[?2026h");
+    assert!(t.modes().synchronized);
+    t.write(b"\x1b[?2026l");
+    assert!(!t.modes().synchronized);
+    t.write(b"\x1b[?1004h\x1b[?1006h\x1b[?1000h\x1b[?1002h\x1b[?5h\x1b[?6h");
+    let m = *t.modes();
+    assert!(
+        m.focus_events
+            && m.mouse_sgr
+            && m.mouse_press
+            && m.mouse_drag
+            && m.reverse_screen
+            && m.origin
+    );
+    t.write(b"\x1b[?1004l\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?5l\x1b[?6l\x1b[?2004l");
+    assert_eq!(*t.modes(), crate::Modes::DEFAULT);
+    // Turning autowrap on ends a wrap that was pending; off leaves it harmless.
+    let t = run(5, 2, b"abcde\x1b[?7h");
+    assert!(t.modes().autowrap);
+    let mut t = run(5, 2, b"abcde\x1b[?7lf");
+    assert_eq!(rows(&t), ["abcdf", ""]);
+    t.write(b"\x1b[?7hg");
+    assert_eq!(
+        rows(&t),
+        ["abcdg", ""],
+        "after turning wrap on, the last cell is not pending"
+    );
+    let t = run(5, 2, b"abcde\x1b[?7hx");
+    assert_eq!(
+        rows(&t),
+        ["abcde", "x"],
+        "a pending wrap survives a mode that was already on"
+    );
+}
+
+#[test]
+fn a_wide_character_fits_exactly_and_two_cells_hold_one() {
+    let t = run(4, 2, "ab中".as_bytes());
+    assert_eq!(rows(&t), ["ab中", ""]);
+    assert!(t.cell(2, 0).has(cell::WIDE) && t.cell(3, 0).has(cell::TAIL));
+    let t = run(2, 2, "中".as_bytes());
+    assert!(t.cell(0, 0).has(cell::WIDE) && t.cell(1, 0).has(cell::TAIL));
+    let t = run(2, 2, "a中".as_bytes());
+    assert_eq!(rows(&t), ["a", "中"], "it did not fit after a, and wrapped");
+}
+
+#[test]
+fn erasing_and_editing_elsewhere_leaves_a_wide_character_whole() {
+    for edit in [
+        "\x1b[5G\x1b[K",
+        "\x1b[5G\x1b[2X",
+        "\x1b[5G\x1b[P",
+        "\x1b[5G\x1b[@",
+        "\x1b[2J",
+    ] {
+        let t = run(8, 1, std::format!("a中b cd{edit}").as_bytes());
+        if edit == "\x1b[2J" {
+            assert_eq!(t.line(0), "");
+            continue;
+        }
+        assert!(
+            t.cell(1, 0).has(cell::WIDE) && t.cell(2, 0).has(cell::TAIL),
+            "{edit:?}"
+        );
+        assert_eq!(t.cell(1, 0).ch, '中');
+    }
+    // A wide character at the very end of the row survives an edit before it.
+    let t = run(6, 1, "abcd中\x1b[1G\x1b[X".as_bytes());
+    assert!(t.cell(4, 0).has(cell::WIDE) && t.cell(5, 0).has(cell::TAIL));
+}
+
+#[test]
+fn lines_are_inserted_and_deleted_on_the_regions_first_and_last_rows() {
+    let base = |top: usize| {
+        let mut t = run(4, 6, b"0\r\n1\r\n2\r\n3\r\n4\r\n5");
+        t.write(b"\x1b[2;5r");
+        t.write(std::format!("\x1b[{top};1H").as_bytes());
+        t
+    };
+    // The last row of the region (row 4, written 5;1).
+    let mut t = base(5);
+    t.write(b"\x1b[M");
+    assert_eq!(rows(&t), ["0", "1", "2", "3", "", "5"]);
+    let mut t = base(5);
+    t.write(b"\x1b[L");
+    assert_eq!(rows(&t), ["0", "1", "2", "3", "", "5"]);
+    // The first row of the region.
+    let mut t = base(2);
+    t.write(b"\x1b[M");
+    assert_eq!(rows(&t), ["0", "2", "3", "4", "", "5"]);
+    let mut t = base(2);
+    t.write(b"\x1b[L");
+    assert_eq!(rows(&t), ["0", "", "1", "2", "3", "5"]);
+    // Just outside: nothing.
+    for outside in [1, 6] {
+        let mut t = base(outside);
+        t.write(b"\x1b[M\x1b[L");
+        assert_eq!(rows(&t), ["0", "1", "2", "3", "4", "5"]);
+    }
+}
+
+#[test]
+fn erase_in_line_and_in_display_in_all_their_modes() {
+    let fill = || run(6, 4, b"aaaaaa\r\nbbbbbb\r\ncccccc\r\ndddddd\x1b[3;3H");
+    // EL: to the end, from the start (the cursor's cell included), the whole line.
+    let mut t = fill();
+    t.write(b"\x1b[K");
+    assert_eq!(rows(&t), ["aaaaaa", "bbbbbb", "cc", "dddddd"]);
+    let mut t = fill();
+    t.write(b"\x1b[1K");
+    assert_eq!(rows(&t), ["aaaaaa", "bbbbbb", "   ccc", "dddddd"]);
+    let mut t = fill();
+    t.write(b"\x1b[2K");
+    assert_eq!(rows(&t), ["aaaaaa", "bbbbbb", "", "dddddd"]);
+    assert_eq!(t.cursor(), (2, 2), "the cursor stays");
+    let mut t = fill();
+    t.write(b"\x1b[3K");
+    assert_eq!(
+        rows(&t),
+        ["aaaaaa", "bbbbbb", "cccccc", "dddddd"],
+        "mode 3 is none"
+    );
+    // ED: below, above (the cursor's cell included), all.
+    let mut t = fill();
+    t.write(b"\x1b[J");
+    assert_eq!(rows(&t), ["aaaaaa", "bbbbbb", "cc", ""]);
+    let mut t = fill();
+    t.write(b"\x1b[1J");
+    assert_eq!(rows(&t), ["", "", "   ccc", "dddddd"]);
+    let mut t = fill();
+    t.write(b"\x1b[2J");
+    assert_eq!(rows(&t), ["", "", "", ""]);
+    assert_eq!(t.cursor(), (2, 2));
+    let mut t = fill();
+    t.write(b"\x1b[4J");
+    assert_eq!(
+        rows(&t),
+        ["aaaaaa", "bbbbbb", "cccccc", "dddddd"],
+        "mode 4 is none"
+    );
+}
+
+#[test]
+fn a_scroll_by_more_than_the_region_clears_it_and_keeps_what_is_outside() {
+    let base = || run(4, 6, b"0\r\n1\r\n2\r\n3\r\n4\r\n5\x1b[2;4r");
+    let mut t = base();
+    t.write(b"\x1b[99S");
+    assert_eq!(rows(&t), ["0", "", "", "", "4", "5"]);
+    let mut t = base();
+    t.write(b"\x1b[99T");
+    assert_eq!(rows(&t), ["0", "", "", "", "4", "5"]);
+    // By exactly the height; by one less leaves one row.
+    let mut t = base();
+    t.write(b"\x1b[3S");
+    assert_eq!(rows(&t), ["0", "", "", "", "4", "5"]);
+    let mut t = base();
+    t.write(b"\x1b[2S");
+    assert_eq!(rows(&t), ["0", "3", "", "", "4", "5"]);
+    let mut t = base();
+    t.write(b"\x1b[2T");
+    assert_eq!(rows(&t), ["0", "", "", "1", "4", "5"]);
+    let mut t = base();
+    t.write(b"\x1b[3T");
+    assert_eq!(rows(&t), ["0", "", "", "", "4", "5"]);
+    // The whole screen: every row goes to the scrollback.
+    let mut t = Term::with_scrollback(4, 3, 10);
+    t.write(b"a\r\nb\r\nc\x1b[3S");
+    assert_eq!(t.history_len(), 3);
+    assert_eq!(rows(&t), ["", "", ""]);
+    t.write(b"\x1b[99S");
+    assert_eq!(
+        t.history_len(),
+        6,
+        "a count past the height scrolls only the height"
+    );
+}
+
+#[test]
+fn the_cursor_moves_freely_outside_the_region_and_stops_at_its_edges_inside() {
+    let at = |text: &[u8]| run(6, 8, text).cursor();
+    // Inside the region 3..6 (rows 2..5), up and down stop at its edges.
+    assert_eq!(at(b"\x1b[3;6r\x1b[5;1H\x1b[9A"), (0, 2));
+    assert_eq!(at(b"\x1b[3;6r\x1b[4;1H\x1b[9B"), (0, 5));
+    // Above it, up reaches the top of the screen and down goes as far as the region's bottom.
+    assert_eq!(at(b"\x1b[3;6r\x1b[2;1H\x1b[9A"), (0, 0));
+    assert_eq!(at(b"\x1b[3;6r\x1b[2;1H\x1b[9B"), (0, 5));
+    // Below it, down reaches the bottom of the screen, up goes to the region's top.
+    assert_eq!(at(b"\x1b[3;6r\x1b[8;1H\x1b[9B"), (0, 7));
+    assert_eq!(at(b"\x1b[3;6r\x1b[8;1H\x1b[9A"), (0, 2));
+    // On the edge rows themselves.
+    assert_eq!(at(b"\x1b[3;6r\x1b[3;1H\x1b[A"), (0, 2));
+    assert_eq!(at(b"\x1b[3;6r\x1b[6;1H\x1b[B"), (0, 5));
+    assert_eq!(at(b"\x1b[3;6r\x1b[6;1H\x1b[A"), (0, 4));
+    assert_eq!(at(b"\x1b[3;6r\x1b[3;1H\x1b[B"), (0, 3));
+    assert_eq!(
+        at(b"\x1b[3;6r\x1b[2;1H\x1b[A"),
+        (0, 0),
+        "from row 1 (0-based) to 0"
+    );
+}
+
+#[test]
+fn a_combining_mark_joins_the_cell_before_it_on_any_row() {
+    let t = run(5, 3, "ab\r\ncde\u{301}f\r\n\u{301}g".as_bytes());
+    assert_eq!(t.cell(2, 1).marks().count(), 1, "on the second row");
+    assert_eq!(t.line(1), "cde\u{301}f");
+    assert_eq!(t.cell(0, 2).marks().count(), 0, "at the start of the third");
+    assert_eq!(t.line(2), "g");
+    assert_eq!(
+        t.cell(0, 0).marks().count() + t.cell(1, 0).marks().count(),
+        0
+    );
+}
+
+/// `same_state` sees a change of each thing it names: the tests of the
+/// unknown sequences rely on it (mutation testing, 10a).
+#[test]
+fn same_state_tells_every_difference() {
+    let base = || {
+        let mut t = Term::with_scrollback(8, 4, 10);
+        t.write(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\x1b[2;3H\x1b7\x1b[?1049h\x1b[?1049l");
+        t
+    };
+    assert!(base().same_state(&base()));
+    let changes: [&[u8]; 18] = [
+        b"x",                       // screen
+        b"\x1b[2;2H",               // cursor
+        b"\x1b[1m",                 // pen
+        b"\x1b[?1h",                // modes
+        b"\x1b(0",                  // character set G0
+        b"\x1b)0\x0e",              // shift
+        b"\x1b[2;3r",               // region
+        b"\x1bH\x1b[3g",            // tab stops
+        b"\x1b[1;1H\x1b7",          // saved cursor
+        b"\x1b]4;3;#112233\x07",    // palette
+        b"\x1b[4 q",                // shape
+        b"\x1b[?1049h",             // the other screen shown
+        b"\r\nx\r\n",               // history and its length
+        b"\x1b[?1049hy\x1b[?1049l", // the screen not shown
+        b"\x1b[?25l",               // the cursor's visibility is a mode
+        b"\x1b[4h",                 // insert
+        b"\x1b[6;5H",               // cursor row
+        b"12345678",                // a pending wrap
+    ];
+    for change in changes {
+        let mut t = base();
+        t.write(change);
+        assert!(!t.same_state(&base()), "{change:?}");
+    }
+    // A different size is a different state.
+    let mut t = base();
+    t.resize(9, 4);
+    assert!(!t.same_state(&base()));
+    let mut t = base();
+    t.resize(8, 5);
+    assert!(!t.same_state(&base()));
+}
+
+#[test]
+fn memory_is_what_the_cells_and_registers_take_and_its_bound_is_stated() {
+    let t = Term::new(80, 24);
+    // Two screens of 80 x 24 cells of 16 bytes, 24 dirty flags and 80 tab stops.
+    assert_eq!(t.memory(), 2 * 80 * 24 * 16 + 24 + 80);
+    // At most: two screens and the full scrollback, each with a doubling vector's
+    // slack, the flags and stops, and the longest string.
+    assert_eq!(
+        t.memory_bound(),
+        (2 * 80 * 24 + 2 * 80 * 2000) * 16 + 24 + 80 + 2 * 4096
+    );
+    let t = Term::with_scrollback(3, 2, 0);
+    assert_eq!(t.memory_bound(), 2 * 3 * 2 * 16 + 2 + 3 + 2 * 4096);
+    let mut t = Term::new(2, 2);
+    t.write(b"\x1b]4;1;#000000");
+    assert!(
+        t.memory() > 2 * 2 * 2 * 16 + 2 + 2,
+        "an OSC being collected is held"
+    );
+}
+
+#[test]
+fn a_resize_resets_the_region_and_keeps_saved_cursors_inside() {
+    let mut t = run(
+        10,
+        6,
+        b"\x1b[2;4r\x1b[6;9H\x1b7\x1b[?1049h\x1b[6;9H\x1b7\x1b[?1048h",
+    );
+    t.resize(5, 3);
+    assert_eq!(
+        t.scroll_region(),
+        (0, 2),
+        "the region is the whole screen again"
+    );
+    t.write(b"\x1b8");
+    let (x, y) = t.cursor();
+    assert!(x < 5 && y < 3, "restored inside the grid: ({x}, {y})");
+    assert_eq!((x, y), (4, 2), "clamped to the corner it was in");
+    t.write(b"\x1b[?1048l");
+    assert_eq!(t.cursor(), (4, 2));
+    // Growing keeps a saved place as it was.
+    let mut t = run(10, 6, b"\x1b[2;3H\x1b7");
+    t.resize(20, 12);
+    t.write(b"\x1b[1;1H\x1b8");
+    assert_eq!(t.cursor(), (2, 1));
+}
+
+#[test]
+fn reinstate_clamps_the_region_to_the_screen() {
+    let mut t = run(10, 8, b"\x1b[3;7r");
+    let was = t.restore();
+    t.resize(10, 4);
+    t.reinstate(was);
+    let (top, bottom) = t.scroll_region();
+    assert!(top <= bottom && bottom < 4, "{top}..{bottom}");
+    assert_eq!((top, bottom), (2, 3));
+    // A region of one row after the clamp keeps top <= bottom.
+    let mut t = run(10, 8, b"\x1b[6;8r");
+    let was = t.restore();
+    t.resize(10, 3);
+    t.reinstate(was);
+    assert_eq!(t.scroll_region(), (2, 2));
+}
+
+#[test]
+fn default_tab_stops_every_eight_and_a_region_must_fit() {
+    let t = term(20, 6);
+    assert!(t.tab_stop(0) && t.tab_stop(8) && t.tab_stop(16));
+    assert!(!t.tab_stop(1) && !t.tab_stop(7) && !t.tab_stop(19));
+    assert!(!t.tab_stop(99), "no column, no stop");
+    // The bottom of a region is a row of the screen; one past it is refused.
+    let mut t = term(10, 6);
+    t.write(b"\x1b[2;7r");
+    assert_eq!(t.scroll_region(), (0, 5));
+    t.write(b"\x1b[2;6r");
+    assert_eq!(t.scroll_region(), (1, 5));
+    t.write(b"\x1b[5;6r");
+    assert_eq!(t.scroll_region(), (4, 5), "two rows are enough");
+    t.write(b"\x1b[6;6r");
+    assert_eq!(t.scroll_region(), (4, 5), "one is not");
+}
+
+#[test]
+fn a_full_reset_gives_the_default_tab_stops_back() {
+    let mut t = term(20, 2);
+    t.write(b"\x1b[3g\x1b[1;5H\x1bH\x1bc");
+    for x in 0..20 {
+        assert_eq!(t.tab_stop(x), x % 8 == 0, "{x}");
+    }
+    t.write(b"\t");
+    assert_eq!(t.cursor(), (8, 0));
+}
+
+#[test]
+fn the_cursor_is_drawn_in_each_shape_over_a_wide_character_too() {
+    use crate::Look;
+    use zoraya_tokens::{Appearance, Scale};
+    let mut look = Look::new(Scale::ONE, Appearance::Light);
+    let cw = look.cell_width();
+    let ch = look.cell_height();
+    for (shape, columns_inked) in [(0u8, 2usize), (1, 2), (2, 2)] {
+        // A block over the left half and over the right half of a wide character.
+        for x in [1usize, 2] {
+            let mut t = term(6, 1);
+            t.write(std::format!("a中b\x1b[{shape} q\x1b[1;{}H", x + 1).as_bytes());
+            let (w, h) = look.surface_size(6, 1);
+            let mut pixels = std::vec![0u32; w * h];
+            look.clear(&mut pixels);
+            t.redraw();
+            t.render(&mut look, &mut pixels, w, true);
+            let (px, py) = look.cell_origin(1, 0);
+            // The glyph (a box) is drawn over the block, in the other colour: most of
+            // each half is still the cursor's.
+            let inked = (0..2).filter(|cell| {
+                let n = (0..ch)
+                    .flat_map(|dy| (0..cw).map(move |dx| (dx, dy)))
+                    .filter(|(dx, dy)| {
+                        pixels[(py + dy) * w + px + cell * cw + dx] == look.fg.pixel()
+                    })
+                    .count();
+                n * 10 >= cw * ch * 6
+            });
+            assert_eq!(
+                inked.count(),
+                columns_inked,
+                "shape {shape}, cursor on column {x}: both halves are the block"
+            );
+        }
+    }
+    // An underline and a bar mark part of the wide cell only.
+    for shape in [3u8, 4, 5, 6] {
+        let mut t = term(6, 1);
+        t.write(std::format!("a中b\x1b[{shape} q\x1b[1;2H").as_bytes());
+        let (w, h) = look.surface_size(6, 1);
+        let mut pixels = std::vec![0u32; w * h];
+        look.clear(&mut pixels);
+        t.redraw();
+        t.render(&mut look, &mut pixels, w, true);
+        let (px, py) = look.cell_origin(1, 0);
+        let mark = (0..ch)
+            .flat_map(|dy| (0..2 * cw).map(move |dx| (dx, dy)))
+            .filter(|(dx, dy)| pixels[(py + dy) * w + px + dx] == look.fg.pixel())
+            .count();
+        assert!(mark > 0 && mark < 2 * cw * ch / 2, "shape {shape}: {mark}");
+        // The underline spans both cells of the wide character; the bar is at its left.
+        let right_half =
+            (0..ch).any(|dy| pixels[(py + dy) * w + px + cw + cw / 2] == look.fg.pixel());
+        assert_eq!(right_half, shape <= 4, "shape {shape}");
+    }
+}
+
+/// The cursor is the block of its own cell only (for a narrow character).
+#[test]
+fn the_cursor_block_covers_its_own_cell_alone() {
+    use crate::Look;
+    use zoraya_tokens::{Appearance, Scale};
+    let mut look = Look::new(Scale::ONE, Appearance::Light);
+    let mut t = term(6, 1);
+    t.write(b"abc");
+    let (w, h) = look.surface_size(6, 1);
+    let mut pixels = std::vec![0u32; w * h];
+    look.clear(&mut pixels);
+    t.render(&mut look, &mut pixels, w, true);
+    let corner = |x: usize| {
+        let (px, py) = look.cell_origin(x, 0);
+        pixels[py * w + px]
+    };
+    assert_eq!(
+        corner(2),
+        look.bg.pixel(),
+        "the character before the cursor"
+    );
+    assert_eq!(corner(3), look.fg.pixel(), "the cursor");
+    assert_eq!(corner(4), look.bg.pixel(), "the cell after it");
+    // Where a program says it is not shown, no cell is.
+    t.write(b"\x1b[?25l");
+    t.redraw();
+    look.clear(&mut pixels);
+    t.render(&mut look, &mut pixels, w, true);
+    let (px, py) = look.cell_origin(3, 0);
+    assert_eq!(pixels[py * w + px], look.bg.pixel());
+}

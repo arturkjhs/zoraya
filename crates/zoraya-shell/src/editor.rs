@@ -1030,6 +1030,9 @@ mod width_tests {
         assert_eq!(advance(0, "中中中".chars(), 5), 7);
         assert_eq!(advance(0, "e\u{301}".chars(), 5), 1);
         assert_eq!(take_columns("中中中", 5), "中中");
+        // In rows one cell wide nothing fits twice: no padding is added.
+        assert_eq!(advance(0, "中中".chars(), 1), 4);
+        assert_eq!(advance(0, "ab".chars(), 1), 2);
         assert_eq!(visible("\x1b[1m~\x1b[0m> "), 3);
     }
 }

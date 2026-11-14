@@ -36,7 +36,6 @@ impl Crlf {
     /// Appends `bytes` to `out`, with a carriage return before each line
     /// feed that has none when `onlcr` is set, and untouched when it is not.
     pub fn convert(&mut self, bytes: &[u8], onlcr: bool, out: &mut Vec<u8>) {
-        out.reserve(bytes.len() + bytes.len() / 16);
         for &b in bytes {
             if b == b'\n' && onlcr && !self.after_cr {
                 out.push(b'\r');
@@ -87,6 +86,27 @@ mod tests {
         assert_eq!(run(&[b"a", b"\nb"], true), b"a\r\nb");
         // The state follows the last byte only.
         assert_eq!(run(&[b"a\r", b"b\nc"], true), b"a\rb\r\nc");
+    }
+
+    /// A caller that keeps the state between calls itself (zosh's static) hands it
+    /// back with `after` and reads it with `ended_with_cr`.
+    #[test]
+    fn the_state_can_be_kept_by_the_caller() {
+        let mut out = Vec::new();
+        let mut c = Crlf::after(true);
+        assert!(c.ended_with_cr());
+        c.convert(b"\nb", true, &mut out);
+        assert_eq!(out, b"\nb", "the carriage return was written before");
+        assert!(!c.ended_with_cr());
+        let mut c = Crlf::after(false);
+        out.clear();
+        c.convert(b"a\r", true, &mut out);
+        assert!(c.ended_with_cr());
+        c.convert(b"\n", true, &mut out);
+        assert_eq!(out, b"a\r\n");
+        assert!(!c.ended_with_cr());
+        assert_eq!(Crlf::new(), Crlf::after(false));
+        assert_eq!(Crlf::default(), Crlf::new());
     }
 
     #[test]

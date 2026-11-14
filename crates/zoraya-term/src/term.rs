@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use zoraya_tokens::Color;
 
-use crate::cell::{Cell, Colour, FAINT, REVERSE, SGR_ATTRS, TAIL, WIDE};
+use crate::cell::{Cell, Colour, FAINT, REVERSE, TAIL, WIDE};
 use crate::{Look, MAX_PARAMS, MAX_SCROLLBACK, SCROLLBACK};
 
 /// The modes a program sets (ADR-0332 items 2 and 3), which `term` reads to
@@ -318,8 +318,6 @@ impl Term {
         // into the history first, so that the cursor's line stays on screen.
         if !self.alt {
             while self.y >= rows {
-                self.top = 0;
-                self.bottom = self.rows - 1;
                 self.scroll_up_in(0, self.rows - 1, 1, true);
                 self.y -= 1;
             }
@@ -366,10 +364,7 @@ impl Term {
         self.x = self.x.min(columns - 1);
         self.wrap = false;
         self.view = 0;
-        for s in &mut self.saved {
-            s.x = s.x.min(columns - 1);
-            s.y = s.y.min(rows - 1);
-        }
+        // The saved cursors are clamped when they are restored.
         self.dirty = vec![true; rows];
         for row in self.screen.chunks_mut(columns) {
             crate::screen::fix_cells(row);
@@ -651,14 +646,8 @@ impl Term {
     pub fn redraw(&mut self) {
         self.touch_all();
     }
-
-    /// Whether the cell at `(x, y)` of the live screen carries any of the
-    /// attributes of `mask` (a test and tool convenience).
-    pub fn cell_has(&self, x: usize, y: usize, mask: u16) -> bool {
-        self.cell(x, y).attrs() & mask & (SGR_ATTRS | WIDE | TAIL) != 0
-    }
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::of_pixel(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b))
+    Color::of_pixel(u32::from_be_bytes([0, r, g, b]))
 }
