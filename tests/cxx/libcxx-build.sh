@@ -73,6 +73,13 @@ for g in $(sed -e 's/#.*//' "$groups"); do
             continue
         fi
         flags=$(sed -n 's|^ *// *ADDITIONAL_COMPILE_FLAGS: *||p' "$f" | tr '\n' ' ')
+        # ADDITIONAL_COMPILE_FLAGS(FEATURE): flags for a configuration that has
+        # FEATURE (clang-18 in CI: -fsized-deallocation, which clang 19 has on).
+        for c in $(sed -n 's|^ *// *ADDITIONAL_COMPILE_FLAGS(\([^)]*\)):.*|\1|p' "$f" | sort -u); do
+            if has "$c"; then
+                flags="$flags $(sed -n "s|^ *// *ADDITIONAL_COMPILE_FLAGS($c): *||p" "$f" | tr '\n' ' ')"
+            fi
+        done
         # shellcheck disable=SC2086
         if tools/zc++ -O1 -w -Wl,--strip-debug -Wl,--gc-sections -I"$src/test/support" \
             -D_LIBCPP_DISABLE_DEPRECATION_WARNINGS $flags -o "$out/bin/$name" "$f" > "$out/bin/$name.log" 2>&1; then
