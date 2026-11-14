@@ -1,8 +1,11 @@
 # TASK-31 part 10c: a POSIX program has a terminal from `zosh` (report at a step boundary)
 
+A second agent (this report's items 7 to 11) wired the library halves into `zosh` and the broker; see the
+Remains list for what is still open.
+
 Branch `work/10c`, from `work/10b` at `b3989d2`. Written by an agent (Sonnet) that stopped at a clean boundary: the
 library halves are done and host-tested; the wiring that makes `sh` work in a window is not. Another agent continues from
-the "Remains" list. ADR numbers reserved: 0386 to 0389; 0386 is written (proposed), 0387 to 0389 are free.
+the "Remains" list. ADR numbers reserved: 0386 to 0389; 0386 to 0388 are written (proposed), 0389 is free.
 
 ## Done (each step committed and pushed)
 
@@ -31,47 +34,63 @@ the "Remains" list. ADR numbers reserved: 0386 to 0389; 0386 is written (propose
    names outside comments. The Status of INV-0331-2, -3, -4, -5, -6 says "partly: host tests" with what is missing.
 6. `docs/design.md` (terminal paragraph) says what exists and what not.
 
+7. **`zosh` hosts the discipline** (commit `3fc4c80`, REMAINS 1 of the first report). Each POSIX program whose fd 0,
+   1 or 2 is the terminal (the keys, or the terminal's output, neither redirected nor piped; a background line keeps
+   its empty fd 0) gets a tty description: a connection made by `Host::connect`, served on the shell's port
+   (`TTY_KEY`), and the write end of a stream to the terminal; `/dev/tty` is in its table
+   (`posix_child::Launch::tty`). Keys of a line with the terminal go through the discipline, `Size` calls
+   `Host::size`, such a line's output is relayed by `Host::relay`, a paste goes to `Host::paste`; the effects are
+   carried out in `Z::carry` (replies, echo, `job_signal`, the shell's own stop for `Suspend`, `Restore`,
+   `Reinstate`, the title). Every line in front, native ones too, ends with `Restore`; `zoraya_shell::reset` and its
+   notes in `docs/design.md` and `docs/backlog.md` are gone. The time is set before each call and `deadline()` is in
+   the wait. Before taking a request the shell relays what the line wrote (so `Drain` is answered when the output is
+   shown). A line's connections are closed at its end. `zoraya-tty` gains `set_foreground_line` (the whole line
+   reads until `tcsetpgrp` chooses). Proposed **ADR-0387** with INV-0387-1 and -2.
+8. **The broker's notices** (commit `597eb34`, REMAINS 2). `HostTerminal`, `GroupMade`, `ForegroundAsked` in
+   `zoraya-proto-posix` (16 to 18); the broker gives `zosh` the channel on its client connection; no reply either
+   way. A group made inside a client's line is made inside the line's job; join and `tcsetpgrp` across lines are
+   `EPERM`. `zosh` takes `ForegroundAsked` only for the line in front (`Host::foreground_asked`). Proposed
+   **ADR-0388** with INV-0388-1.
+9. **The 10b hidden-characters finding** (REMAINS 9, its second half): the paste to a program goes through the same
+   `paste::Feed` and `zoraya_proto_term::paste::clean` as the prompt's; `tty_host`'s
+   `a_paste_to_a_program_is_cleaned_as_at_the_prompt` checks U+200B, U+202E, U+2066 and U+FEFF are gone.
+10. **In-QEMU checks** in `tests/posix/zosh.script` (serial console, `make test-posix`): `isatty` of each fd with and
+   without a pipe (`t_posix rawkeys`), Ctrl-C reaches the line in front only, a background program's read of the
+   terminal is refused and it stops (`t_posix readerr`), raw mode survives Ctrl-Z and `fg`, and `sh` typed at the
+   prompt gives `$ `, runs a command and exits. `sh` has no job control yet (it needs `open("/dev/tty")`).
+11. A defect found on the way: a job-end packet of a job whose number a new job took was taken for the new job's end
+   (a running background job was once reported `done`); `take_ended` now takes only a job whose `TERMINATED` is set.
+
 Files of 10a or 10b touched: `crates/zoraya-shell/src/crlf.rs` (a test message reworded so the lint passes),
 `crates/zoraya-shell/src/lib.rs` (one `pub mod`), `crates/zoraya-shell/Cargo.toml` and `Cargo.lock`/`fuzz/Cargo.lock`
 (two path dependencies), `docs/adr/invariants.md` (Status of eight rows), `docs/design.md`.
 
 ## Remains (in this order)
 
-1. **`zosh` calls `Host`** (`user/src/bin/zosh.rs`, about 5,300 lines; the places are `read_keys`, `wait_foreground`,
-   `Relay`/`Feed`, `Ready::Posix`): a `Host<Handle>` per window; each POSIX program with a terminal on fd 0, 1 or 2
-   gets a tty description (a `Host::connect(line, group)` server end watched on the shell's port, the write end of the
-   line's output stream, ADR-0105 items 4 and 6); `Effect`s are carried out (`Tty(Reply)` as channel writes, `Show` as
-   output to `term`, `Signal` as `job_signal`, `Suspend` through the broker's suspend for POSIX elements, `Restore` and
-   `Reinstate` as `zoraya-proto-term` messages, `Question` as `Title`); `Size` calls `Host::size`; the output of a POSIX
-   program with a terminal goes through `Host::relay` instead of the fixed `onlcr`; `Paste` while a program is in
-   front goes to `Host::paste`. **Remove `zoraya_shell::reset` and its call (line about 5195) when `Restore` is sent**,
-   and the "Stop-gap" notes in `docs/design.md` and `docs/backlog.md`. `term.scrollback` and `console.term` are read here.
-   `time`: call `Host::tty.set_time(clock_monotonic() ms)` before each call and use `deadline()` in `port_wait`.
-2. **The broker's control channel to `zosh`** (`user/src/beside.rs`, `crates/zoraya-broker`): a POSIX shell's
-   `tcsetpgrp` is passed to `zosh` as `Host::tcsetpgrp`; the broker also tells `zosh` each group it creates in a line
-   (`Host::group_created`). Today the broker beside `zosh` answers "no terminal".
-3. **`libposix`**: the readiness request (`PollReadable`, idempotent: the look is re-run after each deferred wait;
-   replaces the "ready at once" arm in `pselect`; `work/poll`'s `poll`/`ppoll` use it when merged), `Flush` for
-   `tcflush` and the three `tcsetattr` actions (Drain, then Flush for `TCSAFLUSH`, then `SetAttr`), the status `IO` as
-   `EIO`, `open("/dev/tty")` (clone the program's own connection, `ENXIO` with no terminal), `ttyname`, the terminal
-   names of ADR-0342 items 4 and 5 with a committed C test program, retire the shim's two names, the deny list
-   (INV-0342-2, -3), `ioctl(TIOCSTI)` is `ENOTTY` (INV-0338-1), a table test for INV-0338-2.
-4. **`grants`' `keys` line** (`crates/zoraya-shell/src/grants.rs`, INV-0331-1 with a host test over every combination of
-   redirection and pipe), `TERM` for programs with a terminal (ADR-0333 items 1, 4, 5), `dash.cmd` no longer says it
-   has no terminal.
-5. **The in-QEMU and GUI checks**: a C program printing `isatty` of each fd and the open of `/dev/tty`; the 200 ms
-   `select` program; a raw-mode demo that draws a box following `SIGWINCH` and prints the keys it reads (F-keys,
-   Ctrl+arrows); the GUI scripts at 1920x1200, 1600x1000, scales 1 and 2 (fewer than 24 rows); `sh` with Ctrl-C and
-   Ctrl-Z; a background program that cannot read what is typed. These make INV-0331-1 to -6 fully checked and
-   INV-0332-5, INV-0333-2, -3, INV-0338-1, -2, INV-0342-2, -3 checked; then change the Status cells from "partly".
-6. **The relay measurement** (ADR-0331 item 14: `cat` of 1 MiB and 100 full repaints, under HVF and TCG, with the
-   share spent in `zosh`) and the recommendation between the shell and a `ttyd` per window, for the architect. No
-   number has been measured: none is claimed.
-7. **The same features in the session's `ttyd`** (`user/src/bin/ttyd.rs`): `set_time`/`tick`, `Flush`, `Drain`
-   (`set_output_pending`), `add_terminal` stays line 0 because `ttyd` never calls `set_front_line`.
-8. **Mutation run** of the second half; see below.
-9. The "Ctrl-C defect on a continued job" (10c row of `docs/backlog.md`) and the 10b review's finding on hidden
-   characters were not looked at.
+1. **GUI checks of the wiring** (the old REMAINS 5's GUI half): GUI scripts at 1920x1200, 1600x1000, scales 1 and 2
+   (fewer than 24 rows) for `sh` in a window with Ctrl-C and Ctrl-Z, a resize reaching a raw-mode program
+   (`SIGWINCH`, INV-0331-6), the screen's modes after a stop and `fg` (INV-0331-4), a paste to a program with and
+   without 2004 (INV-0332-5's program half). Not written: no GUI run was made in this session.
+2. **`libposix`** (the old REMAINS 3, unchanged): the readiness request, `Flush`, the three `tcsetattr` actions, `IO`
+   as `EIO`, `open("/dev/tty")`, `ttyname`, the terminal names with a committed C test program, the shim's two names,
+   the deny list, `TIOCSTI`, INV-0338-2's table. Until `open("/dev/tty")` works dash has no job control, so a POSIX
+   shell's `tcsetpgrp` through ADR-0388 is host-tested only. `t_posix rawkeys` uses `ioctl(TCGETS/TCSETS)` because
+   `tcsetattr` is not a name of `libc.a`; change it to `tcsetattr` then.
+3. **`grants`' `keys` line, `TERM`, `dash.cmd`** (the old REMAINS 4, unchanged), and `console.term`.
+4. **`term.scrollback`**: `term` cannot read the settings; it needs a message from `zosh` (a new `zoraya-proto-term`
+   ordinal) or a setting given at launch. Not done; no ADR written for it.
+5. **The relay measurement** (the old REMAINS 6, unchanged; nothing measured).
+6. **The same features in `ttyd`** (the old REMAINS 7, unchanged).
+7. **Mutation run** of `tty_host.rs` and of the broker's new code (`make mutants-host CRATE=zoraya-shell` and
+   `CRATE=zoraya-broker`, `--in-diff`); not run.
+8. **The Ctrl-C defect on a continued job** (`docs/backlog.md`, found in the POSIX session with `ttyd`): not
+   reproduced or looked into in this session. What was read: the broker resumes a suspended group job as a whole
+   (`signal_pids`, review R1) and the kernel's `Job::signal` walks the whole tree, so a later child of the group
+   should be reached; the next step is the slow-host reproduction of `scenarios.script` step V6 under TCG with a
+   print of the job handle `ttyd` signals.
+9. Not done in `zosh`: a line whose first element is native and reads the keys keeps them (ADR-0387 item 2); no kill
+   offer for a line with the terminal (item 4); the serial console's discipline echo goes through the kernel's
+   carriage return (ADR-0331 item 13).
 
 ## Decisions taken where the ADRs are silent (ADR-0386)
 

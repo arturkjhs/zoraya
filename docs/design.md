@@ -491,7 +491,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   column: the shell adds the carriage return (`zoraya_shell::crlf`). Bold is a weight and does not brighten; italic is
   drawn slanted, faint is half way to the background, underline and strike are lines; blink is stored. `Term::restore`
   gives the shell a working screen (the primary screen, cursor shown, modes, region, sets, pen and palette cleared)
-  and `Term::reinstate` sets it all again for a stopped line; nothing sends them yet (part 10c). *Keys, the pointer,
+  and `Term::reinstate` sets it all again for a stopped line; `zosh` sends them (part 10c). *Keys, the pointer,
   selection and paste (10b, ADR-0383 to ADR-0385).* `zoraya_term::Session` is the terminal as the window runs it, and the
   only code that makes anything to send: its gesture methods (`key`, `pointer`, `wheel`, `focus`, `paste`) fill an outbox,
   `output` cannot (INV-0332-2); `term` sends the outbox as `Input` (keys, mouse and focus reports) and `Paste`. The key
@@ -1345,7 +1345,7 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   EOF, `ICRNL`, `ONLCR`, INTR, QUIT, SUSP), connections tagged with a group, the foreground job, one held read per
   connection. Ctrl-C is `job_signal(foreground, Interrupt)`; Ctrl-Z goes to the broker as `suspend`. Backends: the
   serial console, and the stage 5 terminal window, to which `ttyd` speaks `zoraya-proto-term` as `zosh` does.
-  *Part 10c, so far (ADR-0331, ADR-0386; `zosh` does not call it yet):* `VMIN` and `VTIME` in POSIX's four cases with a
+  *Part 10c, so far (ADR-0331, ADR-0386 to ADR-0388):* `VMIN` and `VTIME` in POSIX's four cases with a
   clock the host gives (`set_time`, `deadline`, `tick`); `Flush` and `Drain` requests and the status `IO`; a line tag on
   every connection (a clone carries its parent's) with `set_front_line`, so that a `Read`, `PollReadable`, `SetAttr` or
   `Flush` from a line not in front is refused and changes nothing, and with no line in front nobody reads;
@@ -1353,9 +1353,16 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   rules around it, host-tested: the line in front, stop, `fg` and end (`Restore { keep }`, `Reinstate`, the attributes
   kept and restored, one `SIGWINCH`), `tcsetpgrp` only for a group created inside the front line, the relay's carriage
   return from the attributes, and the paste to a program (mode 2004 read from its output, a newline held for Enter
-  with the question in the window title, nothing in it that ends the bracket). Not yet: `zosh`'s event loop uses
-  none of it, so a POSIX program still gets no terminal; the broker's control channel, `libposix`'s readiness
-  request, `/dev/tty` and `ttyname`, `grants`' `keys` line, `TERM`, the raw-mode demo and the relay measurement (see
+  with the question in the window title, nothing in it that ends the bracket). `zosh` uses it: a POSIX program gets a
+  tty description on each of fds 0 to 2 that is the terminal (neither redirected nor piped; a background line's fd 0
+  stays empty) and `/dev/tty` in its table, its connections are served on the shell's port and closed at the line's
+  end, keys of a line with the terminal go through the discipline, `Size` is one `SIGWINCH`, the output of such a
+  line is relayed with the carriage return its attributes say, and every line in front ends with `Restore`. The
+  whole line in front reads until a `tcsetpgrp` chooses a group (`Terminal::set_foreground_line`); there is no kill
+  offer for a line with the terminal (ADR-0387). The broker beside `zosh` gives it a notice channel
+  (`HostTerminal`): `GroupMade` and `ForegroundAsked`, with no reply, and a group made inside a line stays inside its
+  job (ADR-0388). Not yet: `libposix`'s readiness request, `open("/dev/tty")` (so `sh` has no job control) and
+  `ttyname`, `grants`' `keys` line, `TERM`, `term.scrollback`, GUI checks and the relay measurement (see
   `docs/tasks/TASK-31-part-10c.md`). INV-0331-8 is a lint in `make check-kernel-tty`.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
