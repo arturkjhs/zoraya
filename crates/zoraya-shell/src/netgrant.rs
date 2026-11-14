@@ -39,6 +39,9 @@ enum Named {
     Any,
     /// The web rule of a description (ADR-0324), never a `+net` word.
     Public,
+    /// A URL operand's name under the web rule, on a port the web rule does
+    /// not have: its public answers only (ADR-0328), never a `+net` word.
+    PublicName(String),
 }
 
 impl NetWord {
@@ -51,6 +54,7 @@ impl NetWord {
                 Named::Prefix(a, l) => Target::Prefix(*a, *l),
                 Named::Any => Target::Any,
                 Named::Public => Target::Public,
+                Named::PublicName(n) => Target::PublicName(n),
             },
             ports: self.ports,
             protocols: self.protocols,
@@ -119,6 +123,14 @@ pub fn parse_word(text: &str) -> Result<NetWord, String> {
 /// values as written after the token), then the `url` operand of a
 /// base-system command. A URL that does not parse gives none of its own: the
 /// command says what is wrong with it.
+///
+/// Under the description's `net web` (ADR-0328, INV-0328-1), a literal URL
+/// whose host is a name gives no rule that names the name: on the web rule's
+/// ports (80, 443) it gives none (the web rule admits the name through its
+/// public answers), on another port a public-only name rule
+/// ([`Target::PublicName`]). A dotted address keeps its own rule (the person
+/// typed the address, which does not rebind), and a `+net` word that covers
+/// the URL keeps ADR-0223's rule (the person named the host).
 pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     let d = line.description;
     let mut words: Vec<NetWord> = Vec::new();
@@ -178,7 +190,18 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
                 });
             }
             if literal && !covered {
-                words.push(word);
+                let web = d.net_web && line.base_system;
+                match word.target {
+                    Named::Name(name) if web => {
+                        if !web_port(url.port) {
+                            words.push(NetWord {
+                                target: Named::PublicName(name),
+                                ..word
+                            });
+                        }
+                    }
+                    _ => words.push(word),
+                }
             }
         } else if !literal && words.is_empty() {
             return Err(Refused {
@@ -290,6 +313,11 @@ pub fn pills(scope: &[u8]) -> Vec<String> {
                 return Some(String::from(WEB_PILL));
             }
             let target = line.trim_start_matches("net: ").split_whitespace().next()?;
+            // A public-only name (ADR-0328) is the web's check on one more
+            // port: not `+net HOST:PORT`, which would take local answers.
+            if matches!(rule.target, Target::PublicName(_)) {
+                return Some(alloc::format!("{WEB_PILL} {target}"));
+            }
             Some(alloc::format!("+net {target}"))
         })
         .collect()
@@ -300,6 +328,12 @@ pub const WEB_PILL: &str = "web";
 
 /// The ports of the web rule (ADR-0324 item 3).
 pub const WEB_PORTS: [(u16, u16); 2] = [(80, 80), (443, 443)];
+
+/// Whether the web rule has `port` (ADR-0328: a URL's name on it needs no
+/// rule of its own).
+fn web_port(port: u16) -> bool {
+    WEB_PORTS.iter().any(|&(l, h)| l <= port && port <= h)
+}
 
 /// Whether a line may have the web rule its description asks for
 /// (ADR-0324 item 7, INV-0324-3): never in an untrusted room. This refusal
@@ -324,6 +358,8 @@ pub fn web_refused(d: &Description, untrusted: bool) -> Result<(), Refused> {
 /// one per reach rule: `net: example.org:443    reach (operand URL)`, or
 /// `net: example.org         reach, any port (grant +net)`. A rule over TCP
 /// alone is the `url` operand's; one over both protocols is a `+net` word's.
+/// A public-only name says so: `net: example.org:8080    reach, public
+/// answers only (operand URL)` (ADR-0328).
 /// A scope that does not decode (not made here) gives none.
 pub fn describe(scope: &[u8]) -> Vec<String> {
     let Some(scope) = Scope::decode(scope) else {
@@ -333,7 +369,7 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
         .reach_rules()
         .map(|rule| {
             let host = match rule.target {
-                Target::Name(n) => String::from(n),
+                Target::Name(n) | Target::PublicName(n) => String::from(n),
                 Target::Wildcard(n) => alloc::format!("*.{n}"),
                 Target::Address(a) => alloc::format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
                 Target::Prefix(a, l) => alloc::format!("{}.{}.{}.{}/{l}", a[0], a[1], a[2], a[3]),
@@ -375,10 +411,16 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
                     );
                 }
             };
+            let public = matches!(rule.target, Target::PublicName(_));
             let (shown, access) = if rule.protocols == Protocols::ECHO {
                 (host, "echo only")
             } else if rule.ports.is_any() {
-                (host, "reach, any port")
+                let access = if public {
+                    "reach, any port, public answers only"
+                } else {
+                    "reach, any port"
+                };
+                (host, access)
             } else {
                 let ports: Vec<String> = rule
                     .ports
@@ -392,7 +434,12 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
                         }
                     })
                     .collect();
-                (alloc::format!("{host}:{}", ports.join(",")), "reach")
+                let access = if public {
+                    "reach, public answers only"
+                } else {
+                    "reach"
+                };
+                (alloc::format!("{host}:{}", ports.join(",")), access)
             };
             let source = if rule.protocols == Protocols::ECHO {
                 "operand HOST"

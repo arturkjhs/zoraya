@@ -1951,3 +1951,79 @@ fn a_name_only_a_web_rule_admits_uses_public_answers_that_are_not_local() {
     w.connect(&fake, Target::Name("lan.zoraya".into()), 80);
     assert!(w.run_until(5_000_000, |_| fake.message(16).is_some()));
 }
+
+/// A public-only name rule (ADR-0328): the URL's name under `net web` on a
+/// port the web rule does not have.
+fn public_name_only(name: &'static str, port: u16) -> Vec<u8> {
+    scope_with(&[ReachRule {
+        target: zoraya_abi::net::Target::PublicName(name),
+        ports: Ports::one(port),
+        protocols: Protocols::TCP,
+    }])
+}
+
+/// INV-0328-1: a connection by a name that only a public-only name rule
+/// admits is made to a public answer, and never to a private or local one,
+/// from the DNS or from `net.hosts`; a rule that names the name beside it
+/// keeps ADR-0223's rule.
+#[test]
+fn a_name_only_a_public_name_rule_admits_uses_public_answers_that_are_not_local() {
+    const PUBLIC: [u8; 4] = [93, 184, 215, 14];
+    let mut w = World::new(Script::Sink, &[]);
+    w.scope = public_name_only("evil.example", 8080);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, PUBLIC, 60)]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("evil.example".into()), 8080);
+    w.run_until(2_000_000, |_| false);
+    assert_eq!(fake.failed(), None);
+    assert_eq!(w.client.tcp_count(), 1);
+    // The rebinding: the same name, a private answer the next time.
+    for refused in [
+        [192, 168, 1, 1],
+        [10, 1, 2, 3],
+        WEB,
+        SERVER_IP,
+        DNS,
+        [127, 0, 0, 1],
+        [169, 254, 169, 254],
+    ] {
+        let mut w = World::new(Script::Sink, &[]);
+        w.scope = public_name_only("evil.example", 8080);
+        w.peer.dns_script = Box::new(move |q| vec![a_record_reply(q, refused, 0)]);
+        let fake = Fake::new(1024);
+        w.connect(&fake, Target::Name("evil.example".into()), 8080);
+        assert!(
+            w.run_until(5_000_000, |_| fake.failed().is_some()),
+            "{refused:?}"
+        );
+        assert_eq!(fake.failed(), Some(reason::LOCAL), "{refused:?}");
+        assert_eq!(w.client.tcp_count(), 0, "{refused:?}");
+    }
+    // `net.hosts` gives no exemption either.
+    let mut w = World::new(Script::Sink, &[("lan.web.test", WEB)]);
+    w.scope = public_name_only("lan.web.test", 8080);
+    w.peer.dns_script = Box::new(|_| panic!("a query for a name in net.hosts"));
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("lan.web.test".into()), 8080);
+    assert!(w.run_until(1_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::LOCAL));
+    assert_eq!(w.client.tcp_count(), 0);
+    // A `+net` word's name rule beside it names the name: net.hosts may name
+    // a local address (ADR-0223).
+    let mut w = World::new(Script::Sink, &[("lan.web.test", WEB)]);
+    w.scope = scope_with(&[
+        ReachRule {
+            target: zoraya_abi::net::Target::PublicName("lan.web.test"),
+            ports: Ports::one(80),
+            protocols: Protocols::TCP,
+        },
+        ReachRule {
+            target: zoraya_abi::net::Target::Name("lan.web.test"),
+            ports: Ports::one(80),
+            protocols: Protocols::TCP,
+        },
+    ]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("lan.web.test".into()), 80);
+    assert!(w.run_until(5_000_000, |_| fake.message(16).is_some()));
+}

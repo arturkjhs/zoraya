@@ -938,3 +938,92 @@ fn netd_refuses_a_web_rule_over_udp_or_echo() {
     let scope = [1u8, 1, 0, 0, 5, 0xff, 1];
     assert!(Connection::new(rights::REACH, &scope).is_some());
 }
+
+/// ADR-0328 (INV-0328-1) through the service: a public-only name rule
+/// resolves its own name to public answers only (`net.hosts` included; none
+/// left is `NOT_GRANTED`, which NetSurf names with ADR-0325's page), connects
+/// by that name on its port only, and to no address.
+#[test]
+fn a_public_name_rule_resolves_its_name_to_public_answers_only() {
+    use zoraya_proto_net::Connecting;
+    const PUBLIC: [u8; 4] = [203, 0, 113, 11];
+    let mut net = Net::new(Config {
+        hosts: vec![
+            ("two.web.test".into(), PUBLIC),
+            ("lan.web.test".into(), [10, 0, 2, 2]),
+            ("home.web.test".into(), [192, 168, 1, 1]),
+        ],
+        ..static_config()
+    });
+    let mut service = Service::new();
+    let rule = |name| ReachRule {
+        target: Target::PublicName(name),
+        ports: Ports::one(8080),
+        protocols: Protocols::TCP,
+    };
+    let scope_of = |rules: &[ReachRule<'_>]| {
+        let mut out = vec![0u8; 256];
+        let n = encode_scope(rules, &[], &mut out).unwrap();
+        out.truncate(n);
+        out
+    };
+    let two = service
+        .add(Connection::new(rights::REACH, &scope_of(&[rule("two.web.test")])).unwrap())
+        .unwrap();
+    assert_eq!(
+        resolve_now(&mut service, &mut net, two, "two.web.test"),
+        (status::OK, vec![u32::from_be_bytes(PUBLIC)])
+    );
+    let m = bytes(
+        &zoraya_proto_net::Resolve {
+            name: Data(b"lan.web.test"),
+        },
+        5,
+    );
+    let Action::Reply(r) = service.handle(two, &m, 0, &mut net.client, net.now) else {
+        panic!("refused at once");
+    };
+    assert_eq!(
+        decode::<zoraya_proto_net::Resolved>(&r, 0)
+            .unwrap()
+            .1
+            .status
+            .0,
+        status::NOT_GRANTED,
+        "another name"
+    );
+    for name in ["lan.web.test", "home.web.test"] {
+        let id = service
+            .add(Connection::new(rights::REACH, &scope_of(&[rule(name)])).unwrap())
+            .unwrap();
+        assert_eq!(
+            resolve_now(&mut service, &mut net, id, name),
+            (status::NOT_GRANTED, vec![]),
+            "{name}"
+        );
+    }
+    let mut code = |id, message: &[u8]| match service.handle(id, message, 3, &mut net.client, 0) {
+        Action::Reply(r) => decode::<Connecting>(&r, 0).unwrap().1.status.0,
+        Action::Connect { .. } => status::OK,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        code(two, &connect_message("two.web.test", [0; 4], 8080)),
+        status::OK
+    );
+    for (name, port) in [
+        ("two.web.test", 80),
+        ("two.web.test", 8081),
+        ("other", 8080),
+    ] {
+        assert_eq!(
+            code(two, &connect_message(name, [0; 4], port)),
+            status::NOT_GRANTED,
+            "{name} {port}"
+        );
+    }
+    assert_eq!(
+        code(two, &connect_message("", PUBLIC, 8080)),
+        status::NOT_GRANTED
+    );
+}

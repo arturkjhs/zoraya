@@ -603,3 +603,159 @@ fn a_host_named_web_is_a_host_beside_the_web_rule() {
     let s = Scope::decode(&any.1).unwrap();
     assert_eq!(s.reach_rules().next().unwrap().target, Target::Any);
 }
+
+const WGET: &str = include_str!("../../../user/describe/posix/wget.cmd");
+
+/// The reach rules of a line's scope, owned.
+fn targets(scope: &[u8]) -> Vec<String> {
+    Scope::decode(scope)
+        .unwrap()
+        .reach_rules()
+        .map(|r| alloc::format!("{:?} {:?} {}", r.target, r.ports.list(), r.protocols.raw()))
+        .collect()
+}
+
+/// ADR-0328 (INV-0328-1): under the description's `net web`, a literal URL
+/// whose host is a name on port 80 or 443 adds no rule of its own: the web
+/// rule admits the name through its public answers only, so a later answer
+/// in the local network is refused (the rebinding of the 9f-net review,
+/// finding 2).
+#[test]
+fn under_web_a_url_name_on_80_or_443_adds_no_rule() {
+    use zoraya_abi::net::{NameGrant, Target};
+    for (url, port) in [
+        ("http://evil.example/cgi-bin/reboot", 80),
+        ("https://Evil.Example/", 443),
+        ("http://evil.example:443/", 443),
+    ] {
+        let ok = go(NETSURF, &[(url, true)], true).unwrap().expect("a scope");
+        let s = Scope::decode(&ok.1).unwrap();
+        let rules: Vec<_> = s.reach_rules().collect();
+        assert_eq!(rules.len(), 1, "{url}");
+        assert_eq!(rules[0].target, Target::Public, "{url}");
+        assert!(
+            !s.allows_name("evil.example", port, Protocols::TCP),
+            "{url}"
+        );
+        assert_eq!(
+            s.name_grant("evil.example", port, Protocols::TCP),
+            NameGrant::PublicOnly,
+            "{url}"
+        );
+        assert_eq!(s.resolve_grant("evil.example"), NameGrant::PublicOnly);
+        assert_eq!(crate::netgrant::pills(&ok.1), vec![String::from("web")]);
+        assert_eq!(crate::netgrant::describe(&ok.1).len(), 1);
+    }
+}
+
+/// ADR-0328 (INV-0328-1): on another port, a public-only name rule for the
+/// URL's name on that port alone, TCP; its pill is `web HOST:PORT` and
+/// `grants` says the answers are public only.
+#[test]
+fn under_web_a_url_name_on_another_port_adds_a_public_only_rule() {
+    use zoraya_abi::net::{NameGrant, Target};
+    let ok = go(
+        NETSURF,
+        &[("http://Two.Web.Test:8080/ns/web-port", true)],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    let s = Scope::decode(&ok.1).unwrap();
+    let rules: Vec<_> = s.reach_rules().collect();
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0].target, Target::PublicName("two.web.test"));
+    assert_eq!(rules[0].ports.list(), &[(8080, 8080)]);
+    assert_eq!(rules[0].protocols, Protocols::TCP);
+    assert_eq!(rules[1].target, Target::Public);
+    assert_eq!(
+        s.name_grant("two.web.test", 8080, Protocols::TCP),
+        NameGrant::PublicOnly
+    );
+    assert!(!s.allows_name("two.web.test", 8080, Protocols::TCP));
+    assert_eq!(
+        s.name_grant("other.test", 8080, Protocols::TCP),
+        NameGrant::No
+    );
+    assert_eq!(
+        s.name_grant("two.web.test", 8081, Protocols::TCP),
+        NameGrant::No
+    );
+    assert_eq!(
+        s.name_grant("two.web.test", 8080, Protocols::UDP),
+        NameGrant::No
+    );
+    for a in [[10, 0, 2, 2], [192, 168, 1, 1], [203, 0, 113, 11]] {
+        assert!(!s.names_address(a, 8080, Protocols::TCP));
+        assert!(!s.allows_address(a, 8080, Protocols::TCP));
+    }
+    assert_eq!(
+        crate::netgrant::pills(&ok.1),
+        vec![String::from("web two.web.test:8080"), String::from("web")]
+    );
+    assert_eq!(
+        crate::netgrant::describe(&ok.1)[0],
+        "net: two.web.test:8080       reach, public answers only (operand URL)"
+    );
+}
+
+/// ADR-0328: a dotted address keeps its own rule (it does not rebind), a
+/// `+net` word that covers the URL keeps ADR-0223's rule (the person named
+/// the host, local answers included), a URL from a value still needs a word,
+/// and curl and wget (no `net web`) keep the URL's name rule.
+#[test]
+fn under_web_an_address_a_net_word_and_programs_without_web_keep_their_rules() {
+    use zoraya_abi::net::{NameGrant, Target};
+    let address = go(NETSURF, &[("http://192.168.1.1/", true)], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&address.1).unwrap();
+    assert!(s.names_address([192, 168, 1, 1], 80, Protocols::TCP));
+    for word in [
+        "intranet",
+        "intranet:8080",
+        "*.intranet:8080",
+        "intranet:80",
+    ] {
+        let url = if word.ends_with(":80") {
+            "http://intranet/"
+        } else if word.starts_with('*') {
+            "http://a.intranet:8080/"
+        } else {
+            "http://intranet:8080/"
+        };
+        let host = url
+            .trim_start_matches("http://")
+            .split([':', '/'])
+            .next()
+            .unwrap();
+        let port = if url.contains(":8080") { 8080 } else { 80 };
+        let ok = go_nets(NETSURF, &[(url, true)], &[word], true)
+            .unwrap()
+            .expect("a scope");
+        let s = Scope::decode(&ok.1).unwrap();
+        assert_eq!(
+            s.name_grant(host, port, Protocols::TCP),
+            NameGrant::Named,
+            "{word}"
+        );
+        assert!(
+            s.reach_rules()
+                .all(|r| !matches!(r.target, Target::PublicName(_))),
+            "{word}"
+        );
+    }
+    assert!(go(NETSURF, &[("http://example.org:8080/", false)], true).is_err());
+    for d in [CURL, WGET] {
+        for url in ["http://example.org/", "http://example.org:8080/"] {
+            let ok = go(d, &[(url, true)], true).unwrap().expect("a scope");
+            let t = targets(&ok.1);
+            assert_eq!(t.len(), 1, "{t:?}");
+            assert!(t[0].starts_with("Name(\"example.org\")"), "{t:?}");
+        }
+    }
+    // A description outside the image has no web rule, so the URL keeps its
+    // name rule there.
+    let outside = go(NETSURF, &[("http://example.org:8080/", true)], false).unwrap();
+    assert_eq!(outside, None);
+}

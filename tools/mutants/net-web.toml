@@ -88,7 +88,7 @@ note = "a public gateway or DNS server by address under the web rule: a failed c
 [[mutant]]
 id = "W-web-rule-any-protocol"
 file = "crates/zoraya-abi/src/net.rs"
-find = 'if target == Target::Public && protocols != Protocols::TCP {'
+find = 'if matches!(target, Target::Public | Target::PublicName(_)) && protocols != Protocols::TCP {'
 replace = 'if false {'
 note = "a web rule over UDP or echo decodes, so netd takes one (INV-0324-1, 9f-net review finding 6)"
 
@@ -134,8 +134,95 @@ tests = ["make -s check-netsurf-refusal"]
 [[mutant]]
 id = "W-web-name-any-port-gui"
 file = "crates/zoraya-abi/src/net.rs"
-find = 'r.target == Target::Public && r.ports.contains(port) && r.protocols.contains(protocol)'
-replace = 'r.target == Target::Public && r.protocols.contains(protocol)'
+find = '''
+            r.target.admits_public_answers(name)
+                && r.ports.contains(port)'''
+replace = '''
+            r.target.admits_public_answers(name)'''
 note = "a name only the web rule admits is reached on any port: the relayed two.web.test:8080 is logged"
 tests = ["make -s test-netsurf"]
 timeout = 3000
+
+# ADR-0328 (INV-0328-1): the public-only name rule of a URL under `net web`.
+# Each mutant lets a URL's name answer into the local network, or widens the
+# rule; checked by hand once each when written (all killed, 9g-url report).
+
+[[mutant]]
+id = "U-public-name-every-name"
+file = "crates/zoraya-abi/src/net.rs"
+find = 'Target::PublicName(n) => *n == name,'
+replace = 'Target::PublicName(_) => true,'
+note = "a public-only name rule admits every name, not its own"
+tests = ["cargo test -q -p zoraya-abi --lib net", "cargo test -q -p zoraya-net --lib public_name"]
+
+[[mutant]]
+id = "U-public-name-names-the-name"
+file = "crates/zoraya-abi/src/net.rs"
+find = 'Target::Name(n) => *n == name,'
+replace = 'Target::Name(n) | Target::PublicName(n) => *n == name,'
+note = "the URL's name is named, so a private answer is used (the rebinding)"
+tests = ["cargo test -q -p zoraya-abi --lib net", "cargo test -q -p zoraya-net --lib public_name"]
+
+[[mutant]]
+id = "U-public-name-any-protocol"
+file = "crates/zoraya-abi/src/net.rs"
+find = 'if matches!(target, Target::Public | Target::PublicName(_)) && protocols != Protocols::TCP {'
+replace = 'if target == Target::Public && protocols != Protocols::TCP {'
+note = "the decoder takes a public-only name over UDP or echo"
+tests = ["cargo test -q -p zoraya-abi --lib net"]
+
+[[mutant]]
+id = "U-anything-within-public-name"
+file = "crates/zoraya-abi/src/net.rs"
+find = '(_, Target::PublicName(_)) | (Target::PublicName(_), _) => false,'
+replace = '(_, Target::PublicName(_)) => true, (Target::PublicName(_), _) => false,'
+note = "narrow from a public-only name to a name, address or web rule"
+tests = ["cargo test -q -p zoraya-abi --lib net"]
+
+[[mutant]]
+id = "U-public-name-within-other-name"
+file = "crates/zoraya-abi/src/net.rs"
+find = '(Target::PublicName(n), Target::PublicName(p)) => n == p,'
+replace = '(Target::PublicName(_), Target::PublicName(_)) => true,'
+note = "narrow from one public-only name to another name"
+tests = ["cargo test -q -p zoraya-abi --lib net"]
+
+[[mutant]]
+id = "U-shell-url-name-rule-kept"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'Named::Name(name) if web => {'
+replace = 'Named::Name(name) if false => {'
+note = "Option A again: the URL's name rule beside the web rule (9f-net review, finding 2)"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
+
+[[mutant]]
+id = "U-shell-public-name-is-a-name"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'target: Named::PublicName(name),'
+replace = 'target: Named::Name(name),'
+note = "on another port the URL's name takes every answer"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
+
+[[mutant]]
+id = "U-shell-rule-on-web-ports"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'if !web_port(url.port) {'
+replace = 'if true {'
+note = "a rule of its own on 80 and 443 (a second pill, a second grants line)"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
+
+[[mutant]]
+id = "U-shell-no-rule-on-other-port"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'if !web_port(url.port) {'
+replace = 'if false {'
+note = "Option C: no rule on another port, so the URL is refused"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
+
+[[mutant]]
+id = "U-shell-public-name-pill"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'return Some(alloc::format!("{WEB_PILL} {target}"));'
+replace = 'return Some(alloc::format!("+net {target}"));'
+note = "the pill reads as a +net word, which would take local answers"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
