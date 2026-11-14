@@ -169,6 +169,10 @@ t0=$(date +%s)
         if has test-python || has test-python-regr; then
             "$make" --no-print-directory python python-testlib
         fi &&
+        if has test-python-ext; then
+            "$make" --no-print-directory -f ports/Makefile python-ext-sample &&
+            "$make" --no-print-directory -f ports/Makefile python PYTHON_EXTRA_MODULES=build/python-ext-sample
+        fi &&
         if has test-unit; then
             ${CARGO:-cargo} test -q --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
         fi
