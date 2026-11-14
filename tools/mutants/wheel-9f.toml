@@ -29,8 +29,9 @@ note = "9f-wheel: a_turn_goes_to_the_innermost_widget_that_can_go_that_way"
 id = "W-no-reveal"
 file = "crates/zoraya-ui/src/lib.rs"
 find = '''
-                w.reveal(path[d]);'''
-replace = ''
+                moved |= w.reveal(path[d]);'''
+replace = '''
+                moved |= path[d] == usize::MAX;'''
 note = "9f-wheel: the_keyboards_focus_scrolls_into_view"
 
 [[mutant]]

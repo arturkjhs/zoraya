@@ -70,9 +70,9 @@ fn turns_become_rows_three_a_notch_with_parts_kept() {
     assert_eq!(s.turn(15), 0);
     assert_eq!(s.turn(15), 1);
     assert_eq!(s.rest(), 5);
-    // Back the other way: what was kept counts against it.
+    // Back the other way: what was kept is dropped, not counted against it.
     assert_eq!(s.turn(-45), -1);
-    assert_eq!(s.rest(), 0);
+    assert_eq!(s.rest(), -5);
     assert_eq!(s.turn(0), 0);
     s.turn(30);
     s.stop();
@@ -198,6 +198,7 @@ fn a_list_scrolls_its_rows_and_keeps_its_selection() {
     assert_eq!(
         w.scrolled(1),
         Some(Scrolled {
+            kind: "list",
             at: 3,
             free: false,
             cursor: 0
@@ -260,6 +261,31 @@ fn a_wheel_moves_no_focus() {
     assert_eq!(w.focused(), Some(vec![0]));
 }
 
+/// W1 of the review of 9f-wheel: a key the focused widget ignores still
+/// scrolls the view to show it, and the response says to paint again.
+#[test]
+fn an_ignored_key_that_scrolled_the_view_asks_for_a_repaint() {
+    let mut p = painter();
+    let mut w = ten(&mut p);
+    w.event(key(keys::TAB));
+    assert_eq!(w.focused(), Some(vec![0]));
+    w.event(wheel(100, 70, 240));
+    assert_eq!(first(&mut w), 6);
+    // A key code no button acts on: the button is shown again.
+    assert_eq!(w.event(key(30)), Response::Repaint);
+    assert_eq!(first(&mut w), 0);
+    // Shown already: nothing moved, nothing to paint.
+    assert_eq!(w.event(key(30)), Response::None);
+}
+
+#[test]
+fn a_fine_wheel_reversing_drops_the_part_kept() {
+    let mut s = WheelSteps::default();
+    assert_eq!(s.turn(39), 0);
+    assert_eq!(s.turn(-120), -3);
+    assert_eq!(s.rest(), 0);
+}
+
 #[test]
 fn a_replaced_tree_keeps_where_it_was_scrolled() {
     let mut p = painter();
@@ -278,6 +304,11 @@ fn a_replaced_tree_keeps_where_it_was_scrolled() {
         .collect();
     w.replace_keeping_scroll(Box::new(ScrollView::new(buttons)), &mut p);
     assert_eq!(first(&mut w), 1);
+    // A widget of another kind that scrolls takes nothing either.
+    w.event(wheel(100, 70, 240));
+    let rows = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    w.replace_keeping_scroll(Box::new(ListView::new(1, &rows)), &mut p);
+    assert_eq!(w.root.scrolled().unwrap().at, 0);
     // A widget that does not scroll at that place takes nothing.
     w.replace_keeping_scroll(Box::new(Button::new(1, "c")), &mut p);
     assert_eq!(w.root.scrolled(), None);

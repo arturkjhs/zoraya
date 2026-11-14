@@ -130,6 +130,10 @@ impl WheelSteps {
     /// worth either way.
     pub fn turn(&mut self, d: i32) -> i32 {
         let per_row = WHEEL_NOTCH / ROWS_PER_NOTCH;
+        // A turn the other way drops the part kept from the first way.
+        if (d < 0 && self.rest > 0) || (d > 0 && self.rest < 0) {
+            self.rest = 0;
+        }
         let sum = self.rest.saturating_add(d.clamp(-WHEEL_MAX, WHEEL_MAX));
         let sum = sum.clamp(-WHEEL_MAX, WHEEL_MAX);
         self.rest = sum % per_row;
@@ -154,6 +158,8 @@ impl WheelSteps {
 /// the cursor leaves `cursor`, where it was then).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Scrolled {
+    /// What scrolls: a restore only goes to a widget of the same kind.
+    pub kind: &'static str,
     pub at: usize,
     pub free: bool,
     pub cursor: usize,
@@ -318,7 +324,10 @@ pub trait Widget {
     fn set_scrolled(&mut self, _s: Scrolled) {}
     /// Scrolls so that its child `child` is in view, if it scrolls its
     /// children: the keyboard's focus is never on a widget out of view.
-    fn reveal(&mut self, _child: usize) {}
+    /// Returns whether it moved.
+    fn reveal(&mut self, _child: usize) -> bool {
+        false
+    }
 }
 
 /// A widget's value, by [`Widget::value`].
@@ -478,8 +487,16 @@ impl Window {
             Event::Key { .. } => match self.focused() {
                 Some(path) => {
                     // A key goes to a widget the person sees.
-                    self.reveal_focus();
-                    at_path(self.root.as_mut(), &path).map_or(Response::None, |w| w.event(&e))
+                    let moved = self.reveal_focus();
+                    let r =
+                        at_path(self.root.as_mut(), &path).map_or(Response::None, |w| w.event(&e));
+                    // A view that scrolled to show the widget is painted
+                    // again whatever the widget made of the key.
+                    if moved && r == Response::None {
+                        Response::Repaint
+                    } else {
+                        r
+                    }
                 }
                 None => Response::None,
             },
@@ -519,13 +536,18 @@ impl Window {
     }
 
     /// Scrolls every ancestor of the focused widget so that it is in view.
-    fn reveal_focus(&mut self) {
-        let Some(path) = self.focused() else { return };
+    /// Returns whether any of them moved.
+    fn reveal_focus(&mut self) -> bool {
+        let Some(path) = self.focused() else {
+            return false;
+        };
+        let mut moved = false;
         for d in 0..path.len() {
             if let Some(w) = at_path(self.root.as_mut(), &path[..d]) {
-                w.reveal(path[d]);
+                moved |= w.reveal(path[d]);
             }
         }
+        moved
     }
 
     /// Where the widget with `id` is scrolled, if it scrolls.
@@ -546,7 +568,7 @@ impl Window {
         self.root = root;
         for (path, s) in kept {
             if let Some(w) = at_path(self.root.as_mut(), &path)
-                && w.scrolled().is_some()
+                && w.scrolled().is_some_and(|now| now.kind == s.kind)
             {
                 w.set_scrolled(s);
             }

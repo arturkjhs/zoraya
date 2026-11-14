@@ -714,6 +714,7 @@ impl Widget for ListView {
     }
     fn scrolled(&self) -> Option<Scrolled> {
         Some(Scrolled {
+            kind: "list",
             at: self.top,
             free: false,
             cursor: 0,
@@ -880,6 +881,7 @@ impl Widget for ScrollView {
     }
     fn scrolled(&self) -> Option<Scrolled> {
         Some(Scrolled {
+            kind: "scroll",
             at: self.first,
             free: false,
             cursor: 0,
@@ -889,9 +891,9 @@ impl Widget for ScrollView {
         self.first = s.at;
         self.stale = true;
     }
-    fn reveal(&mut self, child: usize) {
+    fn reveal(&mut self, child: usize) -> bool {
         if child >= self.heights.len() {
-            return;
+            return false;
         }
         let was = self.first;
         if child < self.first {
@@ -903,6 +905,7 @@ impl Widget for ScrollView {
         if self.first != was {
             self.stale = true;
         }
+        self.first != was
     }
 }
 

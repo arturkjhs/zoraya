@@ -630,6 +630,24 @@ mod view {
         assert_eq!(wheel(&mut v, -40), Response::None);
     }
 
+    /// W4 of the review of 9f-wheel: Shift or Ctrl on its own does not bring
+    /// the view back to the cursor.
+    #[test]
+    fn a_modifier_key_alone_leaves_the_wheels_view() {
+        let text: alloc::vec::Vec<alloc::string::String> =
+            (0..40).map(|i| alloc::format!("{i}")).collect();
+        let (mut v, mut p) = view(&text.join("\n"), |_| {});
+        paint(&mut v, &mut p, true);
+        wheel(&mut v, 240);
+        assert!(v.scrolled().unwrap().free);
+        for code in [29, 42, 54, 56, 97, 100] {
+            v.event(&key(code, None, 0));
+            assert!(v.scrolled().unwrap().free, "code {code}");
+        }
+        v.event(&key(keys::DOWN, None, 0));
+        assert!(!v.scrolled().unwrap().free);
+    }
+
     #[test]
     fn a_press_in_a_scrolled_view_puts_the_cursor_on_the_line_shown() {
         let text: alloc::vec::Vec<alloc::string::String> =

@@ -26,6 +26,11 @@ const KEY_Y: u32 = 21;
 /// The Ctrl bit of the modifiers (`zoraya-keymap`'s).
 const CTRL: u32 = 2;
 
+/// The evdev codes of the modifier keys (Ctrl, Shift, Alt, Meta, Caps Lock).
+fn is_modifier(code: u32) -> bool {
+    matches!(code, 29 | 42 | 54 | 56 | 58 | 97 | 100 | 125 | 126)
+}
+
 pub struct EditorView {
     pub id: u32,
     pub buffer: Rc<RefCell<Buffer>>,
@@ -199,7 +204,11 @@ impl Widget for EditorView {
                 text,
                 modifiers,
             } => {
-                self.free = false;
+                // A modifier on its own is not a key to the text: the view
+                // the wheel left stays.
+                if !is_modifier(code) {
+                    self.free = false;
+                }
                 let shift = modifiers & keys::SHIFT != 0;
                 let ctrl = modifiers & CTRL != 0;
                 let mut b = self.buffer.borrow_mut();
@@ -288,6 +297,7 @@ impl Widget for EditorView {
     }
     fn scrolled(&self) -> Option<Scrolled> {
         Some(Scrolled {
+            kind: "editor",
             at: self.top,
             free: self.free,
             cursor: self.seen,
