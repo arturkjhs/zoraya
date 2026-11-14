@@ -1,0 +1,15 @@
+# ncurses' view (the pinned release), a file viewer: scrolling the screen with a
+# region (the entry's csr, indn, rin), the status line, and the end of the program.
+size 80 24
+env TERMINFO=@terminfo@
+run sh -c "i=1; while [ $i -le 60 ]; do echo \"row $i: a line of text for the viewer, long enough to be worth drawing\"; i=$((i+1)); done > rows.txt; exec @curses@/view rows.txt"
+mark first screen
+send \x06
+wait 1
+mark a page forward
+send 5r
+wait 1
+mark scrolled 5 columns right
+send q
+wait 1
+mark after quitting

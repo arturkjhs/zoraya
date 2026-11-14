@@ -1,9 +1,0 @@
-# ncurses' lrtest (the pinned release): characters in the corners of the screen, which
-# tests that the last cell is written without scrolling and that wide characters wrap.
-size 80 24
-env TERMINFO=@terminfo@
-run @curses@/lrtest
-mark corners
-send q
-wait 1
-mark after quitting

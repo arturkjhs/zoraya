@@ -1,0 +1,209 @@
+# curses-view: 3203 bytes replayed through zoraya-term 80x24
+@ 1936 first screen
+cursor 4 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|view Input rows.txt                                     Sat Nov 14 15:04:35 2026|
+|................................................................................|
+|  1:row 1: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  2:row 2: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  3:row 3: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  4:row 4: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  5:row 5: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  6:row 6: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  7:row 7: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  8:row 8: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+|  9:row 9: a line of text for the viewer, long enough to be worth drawing       |
+|................................................................................|
+| 10:row 10: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 11:row 11: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 12:row 12: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 13:row 13: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 14:row 14: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 15:row 15: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 16:row 16: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 17:row 17: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 18:row 18: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 19:row 19: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 20:row 20: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 21:row 21: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 22:row 22: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 23:row 23: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+@ 2894 a page forward
+cursor 4 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|view ^F rows.txt                                        Sat Nov 14 15:04:35 2026|
+|................................................................................|
+| 24:row 24: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 25:row 25: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 26:row 26: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 27:row 27: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 28:row 28: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 29:row 29: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 30:row 30: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 31:row 31: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 32:row 32: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 33:row 33: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 34:row 34: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 35:row 35: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 36:row 36: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 37:row 37: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 38:row 38: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 39:row 39: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 40:row 40: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 41:row 41: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 42:row 42: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 43:row 43: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 44:row 44: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 45:row 45: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+| 46:row 46: a line of text for the viewer, long enough to be worth drawing      |
+|................................................................................|
+@ 3171 scrolled 5 columns right
+cursor 4 23 screen=alternate view=0
+modes Modes { app_cursor: true, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: true, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|view r rows.txt                                         Sat Nov 14 15:04:36 2026|
+|................................................................................|
+| 24:4: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 25:5: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 26:6: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 27:7: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 28:8: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 29:9: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 30:0: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 31:1: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 32:2: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 33:3: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 34:4: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 35:5: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 36:6: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 37:7: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 38:8: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 39:9: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 40:0: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 41:1: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 42:2: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 43:3: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 44:4: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 45:5: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+| 46:6: a line of text for the viewer, long enough to be worth drawing           |
+|................................................................................|
+@ 3203 after quitting
+cursor 0 0 screen=primary view=0
+modes Modes { app_cursor: false, reverse_screen: false, origin: false, autowrap: true, cursor_visible: true, app_keypad: false, insert: false, bracketed_paste: false, mouse_press: false, mouse_drag: false, mouse_sgr: false, focus_events: false, synchronized: false }
+region (0, 23) shape 0 history 0
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
+|                                                                                |
+|................................................................................|
