@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -656,6 +656,11 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 #   test-python-long  the same over tests/python/regr-long.txt, the modules too
 #                     slow for a CI job under TCG; by hand, not in make test
 PYTHON_ROOT := $(BUILD)/rootfs-python
+# The hook is for ports/Makefile's python target and test-python-ext only: here it would
+# build -ext and leave the tests on the default python3.
+ifneq ($(origin PYTHON_EXTRA_MODULES),undefined)
+$(error PYTHON_EXTRA_MODULES: use make -f ports/Makefile python PYTHON_EXTRA_MODULES=DIR, or make test-python-ext (docs/design.md))
+endif
 python:
 	@$(MAKE) -f ports/Makefile python
 PYTHON_QEMU ?= --mem 512M
@@ -738,6 +743,25 @@ test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tool
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PY_DISK); rc=$$?; fi; \
 	exit $$rc
+
+# The python3 build hook (backlog, "Three requests from outside work"; docs/design.md):
+# a python3 built with PYTHON_EXTRA_MODULES=build/python-ext-sample (the sample
+# tests/python-ext/sample, its static library built by ports/Makefile) into
+# build/rootfs-python-ext, beside the default python3, which is not touched. The
+# script runs it in the shell without a network. It costs a second CPython build.
+PYEXT_ROOT := $(BUILD)/rootfs-python-ext
+PYEXT_TEST_ROOT := $(BUILD)/test-python-ext-root
+PYEXT_TEST_DISK := $(BUILD)/test-python-ext-disk.img
+test-python-ext: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -f ports/Makefile python-ext-sample
+	@$(MAKE) -f ports/Makefile python PYTHON_EXTRA_MODULES=$(BUILD)/python-ext-sample
+	rm -rf $(PYEXT_TEST_ROOT) && mkdir -p $(PYEXT_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYEXT_TEST_ROOT)/ && \
+	cp -R $(PYEXT_ROOT)/. $(PYEXT_TEST_ROOT)/ && mkdir -p $(PYEXT_TEST_ROOT)/home && cp tests/python-ext/ext.py $(PYEXT_TEST_ROOT)/home/ && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PYEXT_TEST_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 256M --from $(PYEXT_TEST_ROOT) $(PYEXT_TEST_DISK) && \
+	$(RUNNER) --timeout $(PYTHON_TIMEOUT) --script tests/shell/python-ext.script --label python-ext-$(PYTHON_ACCEL) -- \
+		$(RUN_QEMU) --test --keys --disk $(PYEXT_TEST_DISK) $(PYTHON_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL) && \
+	target/debug/zoraya-fsck $(PYEXT_TEST_DISK)
 
 # TASK-27 9d (proposed ADR-0317, ADR-0318): NetSurf in a window of the desktop. The
 # image is test-apps' (rootfs/, build/rootfs-apps with `netsurf`, the test PKI's root,
@@ -1616,7 +1640,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
