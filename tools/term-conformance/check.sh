@@ -74,4 +74,6 @@ awk '!/^#/ && NF && NF < 2 { print $1 }' "$EXC" | while read -r n; do echo "term
 [ -z "$(awk '!/^#/ && NF && NF < 2' "$EXC")" ] || fail=1
 [ "$fail" = 0 ] || exit 1
 deferred=$(grep -v "^#" "$EXC" | grep -c "deferred (10b)" || true)
-echo "term-conformance: $(wc -l < "$TMP/entry" | tr -d ' ') capabilities: $(wc -l < "$TMP/covered" | tr -d ' ') covered by tests, $(wc -l < "$TMP/excepted" | tr -d ' ') excepted with a reason ($deferred of them deferred to part 10b, the rest by ADR-0332 item 4)"
+# Part 10b has ended: a deferral to it is work that was not done.
+[ "$deferred" = 0 ] || { echo "term-conformance: $deferred exceptions are still deferred to part 10b" >&2; exit 1; }
+echo "term-conformance: $(wc -l < "$TMP/entry" | tr -d ' ') capabilities: $(wc -l < "$TMP/covered" | tr -d ' ') covered by tests, $(wc -l < "$TMP/excepted" | tr -d ' ') excepted with a reason (none deferred: each has its reason)"

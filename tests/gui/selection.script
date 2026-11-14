@@ -1,0 +1,86 @@
+# Part 10b (ADR-0332 items 7 and 8, ADR-0383 to ADR-0385): text selected with
+# the mouse in a terminal is copied with System+C and pasted at the prompt with
+# System+V, where it waits for Enter; a paste with a line end makes
+# continuation lines and runs nothing; the keys F5, F1, Alt+x and Ctrl+Right
+# send the sequences the entry names, shown at the prompt by Ctrl+V. Rows are 18
+# logical pixels high from y 120 (the first row's middle is 129), the text
+# starts at x 87 and a cell is 8 wide, whatever the display's size and scale;
+# a large display has fewer rows (22 at 1920 x 1200), so the script clears the
+# screen first and uses its first rows only. An empty row is term.bg, ffffff.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+chord ctrl l
+top ~> _
+type echo pasted text works\r
+screen pasted text works
+screen ~> _
+# Row 0 reads `~> echo pasted text works`: the command is cells 3 to 24, x 111
+# to 286. The drag runs on to cell 60 (x 571): a press, a pause (a frame between
+# the press and the move), the move and the release. The cells 26 to 29 hold
+# nothing and are drawn selected (bg.selection, dfe4ec); what is copied ends at
+# the last letter.
+drag 112 129 571 129 400
+region 296 121 32 16 dfe4ec
+# System+C offers it, System+V pastes it: at the prompt, row 2, not run.
+chord meta c
+pause 300
+chord meta v
+window
+screen ~> echo pasted text works_
+region 87 174 640 18 ffffff
+pause 800
+region 87 174 640 18 ffffff
+# Enter is the person's: now it runs.
+type \r
+window
+screen ~> echo pasted text works
+screen pasted text works
+screen ~> _
+# A selection across two rows, pasted with its line end: continuation lines.
+# The pointer of a drag stays where it ends, drawn over the two rows it is on, and
+# the reader sees it as a glyph there: the pointer is parked, by a wheel turn that
+# changes nothing (there is no scrollback), below the rows the script reads, and
+# the second drag ends on rows the script reads no more.
+wheel 650 480 down 1
+chord ctrl l
+window
+type echo echo A; echo echo B\r
+screen echo A
+screen echo B
+screen ~> _
+# Rows 1 and 2: `echo A` is cells 0 to 5 of row 1 (y 147), `echo B` of row 2
+# (y 165). The drag goes backwards, from cell 60 of row 2 (blanks, which are not
+# copied) to the first cell of row 1: the same selection, and the pointer ends
+# over rows 1 and 2, which are not read again.
+drag 571 165 88 147 400
+chord meta c
+pause 300
+chord meta v
+window
+screen ~> echo A
+screen ...> echo B_
+region 87 210 640 18 ffffff
+pause 800
+region 87 210 640 18 ffffff
+type \r
+window
+screen ...> echo B
+screen A
+screen B
+screen ~> _
+# Function keys, Alt and Ctrl+arrows as the terminal sends them, shown by
+# Ctrl+V at the prompt: F5 is CSI 15 ~, Ctrl+Right CSI 1;5 C, Alt+x ESC x, F1 SS3 P.
+chord ctrl l
+top ~> _
+chord ctrl v
+key f5
+chord ctrl v
+chord ctrl right
+chord ctrl v
+chord alt x
+chord ctrl v
+key f1
+top ~> ^[[15~^[[1;5C^[x^[OP_
+chord ctrl u
+top ~> _

@@ -40,8 +40,8 @@ use zoraya_command::Parsed;
 use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
 use zoraya_proto_term::{
-    Input as TermInput, MAX_OUTPUT, MAX_TITLE, Output as TermOutput, Size as TermSize,
-    Title as TermTitle,
+    Input as TermInput, MAX_OUTPUT, MAX_PASTE, MAX_TITLE, Output as TermOutput, Paste as TermPaste,
+    Size as TermSize, Title as TermTitle,
 };
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_shell::crlf::Crlf;
@@ -52,6 +52,7 @@ use zoraya_shell::eval::{
 };
 use zoraya_shell::grants;
 use zoraya_shell::jobs::{self, At, Exit, Jobs, State as JobState};
+use zoraya_shell::paste::{Reading, Routed};
 use zoraya_shell::record;
 use zoraya_shell::syntax;
 use zoraya_shell::syntax::Stream;
@@ -648,6 +649,9 @@ struct Z {
     columns: usize,
     /// Keys read but not yet used: typed after an Enter, for the next prompt.
     pending: Vec<u8>,
+    /// The parts of a paste not yet whole, and the pastes whole and waiting
+    /// for their place in the key stream (`zoraya_shell::paste`).
+    paste: zoraya_shell::paste::Feed,
     relays: Vec<Relay>,
     feeds: Vec<Feed>,
     next_stream: u64,
@@ -2600,7 +2604,9 @@ impl Z {
     fn read_keys(&mut self) -> Vec<u8> {
         let mut keys = core::mem::take(&mut self.pending);
         if let Some(end) = terminal() {
-            let mut message = [0u8; 512];
+            // Large enough for any message of the terminal: a read into less
+            // is an error, and a `Paste` carries `MAX_PASTE` bytes.
+            let mut message = [0u8; 512 + MAX_PASTE];
             let mut handles = [end; 1];
             loop {
                 let length = match channel_read(end, &mut message, &mut handles) {
@@ -2621,7 +2627,18 @@ impl Z {
                                 self.jobs
                                     .queue(format!("[input: {} bytes dropped]\n", m.dropped));
                             }
-                            keys.extend_from_slice(m.bytes.0);
+                            // No key is a paste's place (`zoraya_shell::paste`).
+                            self.paste.input(m.bytes.0, &mut keys);
+                        }
+                    }
+                    // A part of a paste (ADR-0332 item 8): kept until the last,
+                    // cleaned, and put in the key stream at its place.
+                    Ok(5) => {
+                        if let Ok((_, m)) = decode::<TermPaste<'_>>(bytes, 0)
+                            && !self.paste.part(m.bytes.0, m.first, m.last, &mut keys)
+                        {
+                            self.jobs
+                                .queue("zosh: paste: dropped: too many are waiting\n".into());
                         }
                     }
                     Ok(3) => {
@@ -2728,7 +2745,16 @@ impl Z {
                             show(&format!("[{number}] did not stop: {}\n", e.line));
                         }
                     }
-                    k => self.type_key(number, k, &mut echo),
+                    // A paste while a program runs: it is not sent to the
+                    // program (the paste path to a program is part 10c's).
+                    k => match self.paste.route(k, Reading::Elsewhere) {
+                        Routed::Key(k) => self.type_key(number, k, &mut echo),
+                        _ => {
+                            show_bytes(&echo);
+                            echo.clear();
+                            show("zosh: paste: not sent: a program is running\n");
+                        }
+                    },
                 }
             }
             show_bytes(&echo);
@@ -2781,7 +2807,9 @@ impl Z {
             };
             for packet in &packets[..count] {
                 if packet.key == CONSOLE_KEY {
-                    if self.read_keys().contains(&editor::CTRL_C) {
+                    let keys = self.read_keys();
+                    self.paste.discard(&keys);
+                    if keys.contains(&editor::CTRL_C) {
                         show("^C\n");
                         return false;
                     }
@@ -3019,7 +3047,10 @@ impl Z {
             };
             for packet in &packets[..count] {
                 if packet.key == CONSOLE_KEY {
-                    if let Some(k) = self.read_keys().first() {
+                    // A paste is no key here: it is dropped.
+                    let keys = self.read_keys();
+                    self.paste.discard(&keys);
+                    if let Some(k) = keys.iter().find(|k| !zoraya_shell::paste::is_mark(**k)) {
                         return *k;
                     }
                 } else {
@@ -4706,6 +4737,7 @@ impl Host for Z {
         // Keys after the last Ctrl-C wait for the prompt; those before it
         // go with what it ends.
         if let Some(at) = keys.iter().rposition(|k| *k == editor::CTRL_C) {
+            self.paste.discard(&keys[..=at]);
             keys.drain(..=at);
             self.pending_interrupt = true;
         }
@@ -5047,6 +5079,7 @@ fn main() -> i32 {
         rows: 24,
         columns: 80,
         pending: Vec::new(),
+        paste: zoraya_shell::paste::Feed::default(),
         relays: Vec::new(),
         feeds: Vec::new(),
         next_stream: 0,
@@ -5196,7 +5229,16 @@ fn main() -> i32 {
             let mut screen = Screen::default();
             for (i, k) in keys.iter().enumerate() {
                 out.clear();
-                let key = editor.key(*k, &mut out, &mut Helper { shell: &mut shell });
+                // A paste goes into the line and never runs it.
+                let key = match shell.host.paste.route(*k, Reading::Prompt) {
+                    Routed::Insert(text) => {
+                        editor.paste(&text, &mut out, &mut Helper { shell: &mut shell });
+                        screen.add(&out);
+                        continue;
+                    }
+                    Routed::Dropped => continue,
+                    Routed::Key(k) => editor.key(k, &mut out, &mut Helper { shell: &mut shell }),
+                };
                 screen.add(&out);
                 match key {
                     Key::Line(entry) => {

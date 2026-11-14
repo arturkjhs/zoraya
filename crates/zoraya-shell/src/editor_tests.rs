@@ -1012,3 +1012,258 @@ fn the_cursor_follows_the_width_table() {
     let (out4, _) = feed(&mut e, &mut a, b"\x1b[D");
     assert!(out4.ends_with("\x1b[3C"), "{out4:?}");
 }
+
+// ---- paste, quoted keys and word keys (ADR-0332 items 7 and 8, ADR-0383, ADR-0384) ----
+
+use crate::paste::{Feed, Reading, Routed};
+
+fn pasted(e: &mut Editor, a: &mut Fake, text: &str) -> (String, Pasted) {
+    let mut out = String::new();
+    let p = e.paste(text, &mut out, a);
+    (out, p)
+}
+
+/// INV-0332-5, the prompt's half: whatever a program printed into the
+/// clipboard, a paste reaches the line without `ESC` or another control
+/// character but tab (a space) and newline, never runs it, and the Enter after
+/// it is the person's.
+#[test]
+fn a_paste_never_runs_and_carries_no_control_character() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"echo ");
+    // The closing bracket mark, a sequence, bell, backspace, DEL, a C1
+    // control, NUL, a Ctrl-C and a carriage return, then a newline.
+    let hostile = "x\x1b[201~y\x1b]0;t\x07\x08\x7f\u{9b}\0\x03z\r\nrm -rf /\r";
+    let mut asm = crate::paste::Assembler::default();
+    let cleaned = asm.part(hostile.as_bytes(), true, true).unwrap();
+    let (out, p) = pasted(&mut e, &mut a, &cleaned);
+    assert_eq!(p.breaks, 2, "the CRLF and the last CR: two line ends");
+    assert_eq!(e.text(), "", "the paste ended with a line end: a new line");
+    // Nothing ran: the paste gave no Line, and the line has continuations.
+    let screen = screen_lines(&out);
+    assert!(
+        screen.iter().any(|l| l.starts_with("...> rm -rf /")),
+        "{screen:?}"
+    );
+    // Enter is the person's: now the entry runs, as one entry of three lines.
+    let (_, k) = feed(&mut e, &mut a, b"\r");
+    let Key::Line(entry) = k else {
+        panic!("Enter gives the entry")
+    };
+    assert_eq!(entry, "echo x[201~y]0;tz\nrm -rf /\n");
+    assert!(
+        entry.chars().all(|c| c == '\n' || !c.is_control()),
+        "{entry:?}"
+    );
+}
+
+#[test]
+fn a_paste_at_the_prompt_is_inserted_at_the_cursor() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"echo  end");
+    feed(&mut e, &mut a, b"\x1b[D\x1b[D\x1b[D\x1b[D");
+    let (out, p) = pasted(&mut e, &mut a, "one\ttwo");
+    assert_eq!(e.text(), "echo one two end");
+    assert_eq!((p.chars, p.breaks, p.cut), (7, 0, false));
+    assert_eq!(e.cursor(), "echo one two".chars().count() + 1 - 1);
+    assert_eq!(screen(&out), "~> echo one two end");
+    // A line end splits the line there: the tail goes after the text pasted.
+    let (_, p) = pasted(&mut e, &mut a, "A\nB");
+    assert_eq!(p.breaks, 1);
+    assert_eq!(e.text(), "B end");
+    let (_, k) = feed(&mut e, &mut a, b"\r");
+    let Key::Line(entry) = k else { panic!() };
+    assert_eq!(entry, "echo one twoA\nB end");
+}
+
+#[test]
+fn a_paste_ends_a_search_and_forgets_the_history_walk() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    e.remember("ls /a");
+    feed(&mut e, &mut a, b"\x12ls");
+    let (_, p) = pasted(&mut e, &mut a, "x");
+    assert_eq!(p.chars, 1);
+    assert_eq!(e.text(), "ls /ax");
+}
+
+#[test]
+fn an_empty_or_all_control_paste_changes_nothing() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"ab");
+    let (_, p) = pasted(&mut e, &mut a, "");
+    assert_eq!((p.chars, p.breaks, p.cut), (0, 0, false));
+    assert_eq!(e.text(), "ab");
+    assert_eq!(e.cursor(), 2);
+}
+
+#[test]
+fn a_paste_past_what_the_entry_holds_is_cut_and_said() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    let big: String = core::iter::repeat_n('a', MAX_CHARS + 500).collect();
+    let (out, p) = pasted(&mut e, &mut a, &big);
+    assert!(p.cut && p.chars == MAX_CHARS, "{}", p.chars);
+    assert!(out.contains("zosh: paste: only the first"), "{out:?}");
+    assert!(e.text().chars().count() == p.chars);
+    // Lines: at most 256 continuation lines, then the paste is cut.
+    let (mut e, _) = editor();
+    let many = "x\n".repeat(400);
+    let (_, p) = pasted(&mut e, &mut a, &many);
+    assert!(p.cut && p.breaks == 256, "{p:?}");
+}
+
+#[test]
+fn the_paste_path_end_to_end_waits_for_enter() {
+    // Messages in parts, the marks of the key stream, the keys around them.
+    let mut pf = Feed::default();
+    let mut stream = Vec::new();
+    pf.input(b"echo a ", &mut stream);
+    assert!(pf.part(b"first\nse", true, false, &mut stream));
+    assert!(pf.part(b"cond", false, true, &mut stream));
+    pf.input(b" zzz", &mut stream);
+    let mut a = fake();
+    let (mut e, _) = editor();
+    let mut ran = Vec::new();
+    for &k in &stream {
+        let mut out = String::new();
+        match pf.route(k, Reading::Prompt) {
+            Routed::Insert(t) => {
+                e.paste(&t, &mut out, &mut a);
+            }
+            Routed::Key(k) => {
+                if let Key::Line(l) = e.key(k, &mut out, &mut a) {
+                    ran.push(l);
+                }
+            }
+            Routed::Dropped => panic!("the paste is there"),
+        }
+    }
+    assert!(ran.is_empty(), "nothing ran before the person's Enter");
+    let (_, k) = feed(&mut e, &mut a, b"\r");
+    assert_eq!(k, Key::Line("echo a first\nsecond zzz".into()));
+}
+
+#[test]
+fn ctrl_v_shows_the_next_key_as_it_is_sent() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    // Ctrl+Right as the terminal sends it, F5, F1, Alt+x, Ctrl+A, DEL.
+    feed(&mut e, &mut a, b"\x16\x1b[1;5C ");
+    feed(&mut e, &mut a, b"\x16\x1b[15~ ");
+    feed(&mut e, &mut a, b"\x16\x1bOP ");
+    feed(&mut e, &mut a, b"\x16\x1bx ");
+    feed(&mut e, &mut a, b"\x16\x01 ");
+    feed(&mut e, &mut a, b"\x16\x7f");
+    assert_eq!(e.text(), "^[[1;5C ^[[15~ ^[OP ^[x ^A ^?");
+    // After it, keys are keys again.
+    feed(&mut e, &mut a, b" a");
+    assert!(e.text().ends_with(" a"));
+    // Ctrl+V and a letter of text: the letter.
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, "\x16\u{439}".as_bytes());
+    assert_eq!(e.text(), "й");
+    // Ctrl-C ends the quote and interrupts.
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"ab\x16");
+    let (_, k) = feed(&mut e, &mut a, b"\x03");
+    assert_eq!(k, Key::Interrupt);
+    feed(&mut e, &mut a, b"c");
+    assert_eq!(e.text(), "c");
+}
+
+#[test]
+fn control_and_alt_arrows_and_letters_move_by_word() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"one two  three");
+    feed(&mut e, &mut a, b"\x1b[1;5D");
+    assert_eq!(e.cursor(), 9);
+    feed(&mut e, &mut a, b"\x1b[1;3D");
+    assert_eq!(e.cursor(), 4);
+    feed(&mut e, &mut a, b"\x1bb");
+    assert_eq!(e.cursor(), 0);
+    feed(&mut e, &mut a, b"\x1b[1;5C");
+    assert_eq!(e.cursor(), 3);
+    feed(&mut e, &mut a, b"\x1b[1;3C");
+    assert_eq!(e.cursor(), 7);
+    feed(&mut e, &mut a, b"\x1bf");
+    assert_eq!(e.cursor(), 14);
+    feed(&mut e, &mut a, b"\x1bf");
+    assert_eq!(e.cursor(), 14, "the end stays the end");
+    // Alt+Backspace deletes the word before the cursor (`ESC DEL`).
+    feed(&mut e, &mut a, b"\x1b\x7f");
+    assert_eq!(e.text(), "one two  ");
+    // A plain arrow with a stray parameter is still an arrow.
+    feed(&mut e, &mut a, b"\x1b[D");
+    assert_eq!(e.cursor(), 8);
+    // Alt with another key is nothing.
+    feed(&mut e, &mut a, b"\x1bx");
+    assert_eq!(e.text(), "one two  ");
+}
+
+#[test]
+fn a_quoted_space_and_a_quoted_alt_enter_are_text_and_run_nothing() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    // A space is a space, not `^``; the key after ESC is quoted too, so Alt+Enter
+    // (ESC and a carriage return) shows `^[^M` and does not run the line.
+    feed(&mut e, &mut a, b"\x16 ");
+    let (_, k) = feed(&mut e, &mut a, b"\x16\x1b\r");
+    assert_eq!(k, Key::Edited);
+    feed(&mut e, &mut a, b"\x16\x1b\x7f\x16\x1b\t");
+    assert_eq!(e.text(), " ^[^M^[^?^[^I");
+    // A letter after ESC and a CSI's printable rest are typed, and the quote ends.
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"\x16\x1bx");
+    feed(&mut e, &mut a, b"\x7f");
+    assert_eq!(e.text(), "^[", "the quote ended after one byte past ESC");
+}
+
+#[test]
+fn the_editor_drops_control_characters_of_a_paste_it_was_given_uncleaned() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    let (_, p) = pasted(&mut e, &mut a, "a\x1bb\x07c\u{9b}d\0\tz");
+    assert_eq!(e.text(), "abcd z");
+    assert_eq!(p.chars, 6);
+}
+
+/// The room the entry has is MAX_CHARS less, for each continuation line, its
+/// width and one: a paste of lines of a hundred characters stops where the
+/// entry is full.
+#[test]
+fn a_paste_stops_where_the_entry_is_full_counting_each_line_and_its_end() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    let line: String = core::iter::repeat_n('x', 100).collect();
+    let text = alloc::format!("{line}\n").repeat(60);
+    let (_, p) = pasted(&mut e, &mut a, &text);
+    // 40 lines of 101 are 4040; the 41st takes 56 characters to reach 4096.
+    assert!(p.cut);
+    assert_eq!((p.breaks, p.chars), (40, 40 * 100 + 56));
+}
+
+#[test]
+fn a_paste_clears_a_pending_quote_and_a_lone_escape() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"\x16");
+    pasted(&mut e, &mut a, "x");
+    feed(&mut e, &mut a, b"a");
+    assert_eq!(e.text(), "xa", "the next key is a key, not quoted");
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"\x1b");
+    pasted(&mut e, &mut a, "x");
+    feed(&mut e, &mut a, b"a");
+    assert_eq!(e.text(), "xa", "the next key is not the byte after an Esc");
+    // Half of a UTF-8 letter is forgotten, too.
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, &[0xd0]);
+    pasted(&mut e, &mut a, "x");
+    feed(&mut e, &mut a, b"a");
+    assert_eq!(e.text(), "xa");
+}

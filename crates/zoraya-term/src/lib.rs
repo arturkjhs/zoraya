@@ -17,19 +17,27 @@ extern crate alloc;
 
 pub mod cell;
 pub mod colour;
+pub mod keys;
+pub mod mouse;
 pub mod parse;
+pub mod queue;
 pub mod read;
 mod screen;
+pub mod select;
+pub mod session;
 mod term;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zoraya_keymap::code;
 use zoraya_text::{CellMetrics, Font, FontList, Rect, Target, Text};
 use zoraya_tokens::{Appearance, Color, Scale, space, text};
 
 pub use cell::{Cell, Colour};
+pub use keys::{KeyModes, MAX_KEY_BYTES, Mods, key_bytes};
+pub use mouse::{Pointer, PointerEvent, focus_bytes};
+pub use queue::{Next, SendQueue};
+pub use session::{Outgoing, Session};
 pub use term::{Modes, Restored, Term};
 
 /// Lines of scrollback kept by default: the setting `term.scrollback`
@@ -164,6 +172,10 @@ pub struct Look {
     /// The default foreground and background (`term.fg`, `term.bg`).
     pub fg: Color,
     pub bg: Color,
+    /// A selected cell's text and ground (`fg.text.on-selection` on
+    /// `bg.selection`).
+    pub sel_fg: Color,
+    pub sel_bg: Color,
     /// A cell drawn apart, for slanting and for two-cell characters.
     scratch: Vec<u32>,
 }
@@ -193,6 +205,8 @@ impl Look {
             palette: palette(appearance),
             fg: p.term_fg,
             bg: p.term_bg,
+            sel_fg: p.fg_text_on_selection,
+            sel_bg: p.bg_selection,
             scratch: Vec::new(),
         }
     }
@@ -232,6 +246,18 @@ impl Look {
         (
             columns * self.cell_width() + 2 * self.pad,
             rows * self.cell_height() + 2 * self.pad,
+        )
+    }
+
+    /// The cell under a point of the surface, in physical pixels, in a grid
+    /// of `columns × rows`; a point in the padding or past the grid is the
+    /// nearest cell.
+    pub fn cell_at(&self, px: usize, py: usize, columns: usize, rows: usize) -> (usize, usize) {
+        let x = px.saturating_sub(self.pad) / self.cell_width();
+        let y = py.saturating_sub(self.pad) / self.cell_height();
+        (
+            x.min(columns.saturating_sub(1)),
+            y.min(rows.saturating_sub(1)),
         )
     }
 
@@ -394,37 +420,6 @@ impl Look {
     }
 }
 
-/// The bytes a key sends to the shell (ADR-0096), written to `out`; gives
-/// how many. `text` is what the keymap gave. Shift with Page Up or Page Down
-/// is the terminal's own and sends nothing.
-pub fn key_bytes(key: u32, shift: bool, text: Option<char>, out: &mut [u8; 8]) -> usize {
-    let sequence: &[u8] = match key {
-        code::ENTER => b"\r",
-        code::BACKSPACE => b"\x7f",
-        code::TAB => b"\t",
-        code::ESC => b"\x1b",
-        code::UP => b"\x1b[A",
-        code::DOWN => b"\x1b[B",
-        code::RIGHT => b"\x1b[C",
-        code::LEFT => b"\x1b[D",
-        code::HOME => b"\x1b[H",
-        code::END => b"\x1b[F",
-        code::INSERT => b"\x1b[2~",
-        code::DELETE => b"\x1b[3~",
-        code::PAGE_UP | code::PAGE_DOWN if shift => b"",
-        code::PAGE_UP => b"\x1b[5~",
-        code::PAGE_DOWN => b"\x1b[6~",
-        _ => {
-            return match text {
-                Some(c) => c.encode_utf8(&mut out[..]).len(),
-                None => 0,
-            };
-        }
-    };
-    out[..sequence.len()].copy_from_slice(sequence);
-    sequence.len()
-}
-
 /// What one wait on the compositor's channel gave.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Waited {
@@ -473,7 +468,11 @@ mod tests;
 #[cfg(test)]
 mod tests_caps;
 #[cfg(test)]
+mod tests_keys;
+#[cfg(test)]
 mod tests_parser;
+#[cfg(test)]
+mod tests_session;
 #[cfg(test)]
 mod tests_total;
 

@@ -19,7 +19,44 @@ pub mod code {
     pub const LEFT_ALT: u32 = 56;
     pub const SPACE: u32 = 57;
     pub const CAPS_LOCK: u32 = 58;
+    /// F1 to F10 are 59 to 68; F11 and F12 are 87 and 88.
+    pub const F1: u32 = 59;
+    pub const F2: u32 = 60;
+    pub const F3: u32 = 61;
+    pub const F4: u32 = 62;
+    pub const F5: u32 = 63;
+    pub const F6: u32 = 64;
+    pub const F7: u32 = 65;
+    pub const F8: u32 = 66;
+    pub const F9: u32 = 67;
+    pub const F10: u32 = 68;
+    pub const F11: u32 = 87;
     pub const F12: u32 = 88;
+    /// The numeric keypad (ADR-0383): the keymap gives them no text; the
+    /// terminal sends their characters, or their `SS3` forms in keypad
+    /// application mode.
+    pub const KP_ASTERISK: u32 = 55;
+    pub const KP7: u32 = 71;
+    pub const KP8: u32 = 72;
+    pub const KP9: u32 = 73;
+    pub const KP_MINUS: u32 = 74;
+    pub const KP4: u32 = 75;
+    pub const KP5: u32 = 76;
+    pub const KP6: u32 = 77;
+    pub const KP_PLUS: u32 = 78;
+    pub const KP1: u32 = 79;
+    pub const KP2: u32 = 80;
+    pub const KP3: u32 = 81;
+    pub const KP0: u32 = 82;
+    pub const KP_DOT: u32 = 83;
+    pub const KP_ENTER: u32 = 96;
+    pub const KP_SLASH: u32 = 98;
+    pub const KP_COMMA: u32 = 121;
+    /// The number-row keys that carry `2`, `6` and the minus sign on a US
+    /// keyboard, where Ctrl with Shift is NUL, 0x1e and 0x1f.
+    pub const DIGIT_2: u32 = 3;
+    pub const DIGIT_6: u32 = 7;
+    pub const MINUS: u32 = 12;
     pub const W: u32 = 17;
     pub const C: u32 = 46;
     pub const X: u32 = 45;
@@ -325,6 +362,19 @@ impl Keymap {
             if code == code::SPACE {
                 return Some('\0');
             }
+            // Ctrl+^ and Ctrl+_ are the control codes 0x1e and 0x1f, on the
+            // keys that carry `^` and `_` on a US keyboard, whatever the
+            // layout: a physical position, as `ctrl_base`'s fallback is
+            // (ADR-0332 item 7, ADR-0383). Ctrl+@ is NUL, which is no text:
+            // the terminal reads it from the code (`DIGIT_2` with Ctrl and
+            // Shift).
+            if self.shift != 0 {
+                match code {
+                    code::DIGIT_6 => return Some('\u{1e}'),
+                    code::MINUS => return Some('\u{1f}'),
+                    _ => {}
+                }
+            }
             // Ctrl with a letter, or with the punctuation of 0x1b..0x1f.
             return match ctrl_base(self.layout(), code)? {
                 c @ 'a'..='z' => Some(char::from(c as u8 - b'a' + 1)),
@@ -438,6 +488,70 @@ mod tests {
         assert_eq!(typed(&mut m, 2), None);
         m.key(code::RIGHT_CTRL, 0);
         assert_eq!(typed(&mut m, 46), Some('c'));
+    }
+
+    /// ADR-0332 item 7, ADR-0383: Ctrl+^ and Ctrl+_ are 0x1e and 0x1f on the
+    /// keys that carry them on a US keyboard, in every layout; Ctrl+Space is
+    /// NUL; without Shift, or without Ctrl, the keys are what they were.
+    #[test]
+    fn ctrl_shift_six_and_minus_are_control_codes_in_every_layout() {
+        for (index, layout) in LAYOUTS.iter().enumerate() {
+            let name = layout.name;
+            let mut m = Keymap::new();
+            m.set_layout(index);
+            m.key(code::LEFT_CTRL, 1);
+            m.key(code::LEFT_SHIFT, 1);
+            assert_eq!(typed(&mut m, code::DIGIT_6), Some('\u{1e}'), "{name}");
+            assert_eq!(typed(&mut m, code::MINUS), Some('\u{1f}'), "{name}");
+            // Ctrl+@: no text; the code and the modifiers are the terminal's.
+            assert_eq!(typed(&mut m, code::DIGIT_2), None, "{name}");
+            let k = m.key(code::DIGIT_2, 1);
+            assert_eq!(
+                (k.code, k.modifiers),
+                (code::DIGIT_2, CTRL | SHIFT),
+                "{name}"
+            );
+            m.key(code::DIGIT_2, 0);
+            m.key(code::LEFT_SHIFT, 0);
+            assert_eq!(typed(&mut m, code::DIGIT_6), None, "{name}: Ctrl alone");
+            assert_eq!(typed(&mut m, code::SPACE), Some('\0'), "{name}: Ctrl+Space");
+            m.key(code::LEFT_CTRL, 0);
+            m.key(code::LEFT_SHIFT, 1);
+            let six = typed(&mut m, code::DIGIT_6);
+            assert!(
+                six != Some('\u{1e}'),
+                "{name}: Shift alone is not a control"
+            );
+        }
+    }
+
+    /// The same chords on a letter are the same in every layout: the letter's
+    /// own position (a Cyrillic key is its Latin neighbour), Alt does not
+    /// change the text, and AltGr is no Alt.
+    #[test]
+    fn ctrl_alt_and_altgr_across_the_four_layouts() {
+        for (index, layout) in LAYOUTS.iter().enumerate() {
+            let name = layout.name;
+            let mut m = Keymap::new();
+            m.set_layout(index);
+            m.key(code::LEFT_CTRL, 1);
+            // The key labelled `c` in the US position (46) is Ctrl+C in all.
+            assert_eq!(typed(&mut m, code::C), Some('\u{3}'), "{name}");
+            m.key(code::LEFT_CTRL, 0);
+            m.key(code::LEFT_ALT, 1);
+            let k = m.key(code::C, 1);
+            m.key(code::C, 0);
+            assert_eq!(k.modifiers & ALT, ALT, "{name}");
+            assert!(k.text.is_some(), "{name}: Alt+C has its text");
+            m.key(code::LEFT_ALT, 0);
+            // The right Alt: AltGr where the layout has a third level, else Alt.
+            m.key(code::RIGHT_ALT, 1);
+            let k = m.key(code::C, 1);
+            m.key(code::C, 0);
+            let altgr = layout.has_altgr();
+            assert_eq!(k.modifiers & ALT != 0, !altgr, "{name}: right Alt");
+            m.key(code::RIGHT_ALT, 0);
+        }
     }
 
     /// Holes cargo-mutants found (TASK-14 review).

@@ -939,6 +939,7 @@ dependencies = [
  "zoraya-describe",
  "zoraya-http",
  "zoraya-proto-file",
+ "zoraya-proto-term",
  "zoraya-resolve",
  "zoraya-term",
  "zoraya-test-alloc",
@@ -968,6 +969,7 @@ version = "0.1.0"
 dependencies = [
  "zoraya-fonts",
  "zoraya-keymap",
+ "zoraya-proto-term",
  "zoraya-test-alloc",
  "zoraya-text",
  "zoraya-tokens",
