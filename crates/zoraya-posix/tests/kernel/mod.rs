@@ -426,6 +426,8 @@ pub struct Fake {
     /// Run when a wait finds nothing yet, before the services: what another
     /// process would do meanwhile (drain a stream, close its reader).
     pub meanwhile: Option<Meanwhile>,
+    /// `signals_of` fails, as for a kernel that cannot say (`poll`'s fallback).
+    pub signals_unknown: bool,
     /// A signal source: the wait point after this many more waits (counting
     /// `wait_any` calls) finds the process's `REQUEST_PENDING` asserted, as
     /// the kernel would when a signal request is queued (ADR-0106 item 3).
@@ -445,6 +447,7 @@ impl Fake {
             craft: None,
             craft_skip: 0,
             meanwhile: None,
+            signals_unknown: false,
             signal_after_waits: None,
             interrupts: Vec::new(),
             requests: VecDeque::new(),
@@ -632,6 +635,9 @@ impl Sys for Fake {
     }
 
     fn signals_of(&mut self, h: H) -> Result<u32, Status> {
+        if self.signals_unknown {
+            return Err(Status::BadSyscall);
+        }
         if self.net.borrow().object(h).is_none() {
             return Err(Status::BadHandle);
         }

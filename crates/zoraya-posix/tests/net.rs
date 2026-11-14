@@ -625,6 +625,8 @@ fn poll_on_a_connecting_socket_waits_for_the_channel() {
             .unwrap();
     // No connection yet: nothing to wait for, so ready at once.
     assert_eq!(polled(&mut t.r, fd, POLLOUT, Some(0)), (1, POLLOUT));
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (1, POLLIN));
+    assert_eq!(polled(&mut t.r, fd, 0, Some(0)), (0, 0));
     assert_eq!(t.r.p.connect(fd, &addr(EXAMPLE, 80)), Err(EINPROGRESS));
     let held = t.log.borrow().held[0];
     assert_eq!(polled(&mut t.r, fd, POLLOUT, Some(0)), (0, 0), "not yet");

@@ -326,3 +326,42 @@ fn the_layout_is_the_c_librarys() {
     );
     assert_eq!([POLLWRNORM, POLLWRBAND], [0x100, 0x200]);
 }
+
+#[test]
+fn a_kernel_that_cannot_tell_signals_makes_every_requested_end_ready() {
+    // As `select` falls back: ready, so that the call that follows decides.
+    let mut r = rig();
+    r.p.sys.signals_unknown = true;
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    assert_eq!(revents(&mut r, rd, POLLIN), POLLIN);
+    assert_eq!(revents(&mut r, wr, POLLOUT), POLLOUT);
+    // No hang-up or error can be known.
+    assert_eq!(revents(&mut r, rd, POLLIN | POLLPRI), POLLIN);
+}
+
+#[test]
+fn a_terminal_is_ready_at_once_until_it_has_a_readiness_request() {
+    // Part 10c replaces this: today a terminal is `select`'s "ready at once".
+    let mut r = rig();
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    for fd in [rd, wr] {
+        match r.p.fds.get_mut(fd) {
+            Some(process::Desc::Stream { tty, .. }) => *tty = true,
+            _ => panic!(),
+        }
+    }
+    assert_eq!(revents(&mut r, rd, POLLIN), POLLIN, "nothing to read");
+    assert_eq!(revents(&mut r, wr, POLLOUT), POLLOUT);
+    assert_eq!(revents(&mut r, rd, POLLIN | POLLOUT), POLLIN | POLLOUT);
+}
+
+#[test]
+fn one_look_after_a_deadline_wait_is_the_answer() {
+    let mut r = rig();
+    assert_eq!(r.p.poll_once(&mut [], Some(5_000_000)), Ok(Some(0)));
+    let (rd, _wr) = r.p.pipe(0).unwrap();
+    assert_eq!(
+        r.p.poll_once(&mut [pf(rd, POLLIN)], Some(5_000_000)),
+        Ok(Some(0))
+    );
+}
