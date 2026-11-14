@@ -205,6 +205,9 @@ pub struct Term {
     pub(crate) utf8_min: u32,
     /// Rows of the view that changed since the last render.
     pub(crate) dirty: Vec<bool>,
+    /// What the person selected with the pointer (ADR-0332 item 8,
+    /// ADR-0384), in cells of the view; gone when a cell under it changes.
+    pub(crate) selection: Option<crate::select::Selection>,
 }
 
 fn default_tabs(columns: usize) -> Vec<bool> {
@@ -267,6 +270,7 @@ impl Term {
             needed: 0,
             utf8_min: 0,
             dirty: vec![true; rows],
+            selection: None,
         }
     }
 
@@ -372,6 +376,7 @@ impl Term {
         self.view = 0;
         // The saved cursors are clamped when they are restored.
         self.dirty = vec![true; rows];
+        self.selection = None;
         for row in self.screen.chunks_mut(columns) {
             crate::screen::fix_cells(row);
         }
@@ -488,13 +493,30 @@ impl Term {
             && self.alt_saved_cursor == other.alt_saved_cursor
     }
 
+    /// A row changed: it is drawn again, and a selection that covers it is
+    /// gone, so that what is copied is what was seen (INV-0332-7, ADR-0384).
     pub(crate) fn touch(&mut self, y: usize) {
+        self.mark(y);
+        if self.selection.is_some_and(|s| s.covers_row(y)) {
+            self.selection = None;
+        }
+    }
+
+    /// Every row changed (a scroll of the view, a reset): and no selection.
+    pub(crate) fn touch_all(&mut self) {
+        self.mark_all();
+        self.selection = None;
+    }
+
+    /// A row is drawn again with its content unchanged (a selection's
+    /// highlight, the cursor).
+    pub(crate) fn mark(&mut self, y: usize) {
         if let Some(d) = self.dirty.get_mut(y) {
             *d = true;
         }
     }
 
-    pub(crate) fn touch_all(&mut self) {
+    pub(crate) fn mark_all(&mut self) {
         self.dirty.iter_mut().for_each(|d| *d = true);
     }
 
@@ -633,6 +655,14 @@ impl Term {
                 let wide = cell.has(WIDE);
                 let here = show_cursor && y == self.y && (x == self.x || (wide && x + 1 == self.x));
                 let (mut fg, mut bg) = self.colours_of(look, &cell);
+                if self.selected(x, y) {
+                    // A hidden cell stays hidden when it is selected.
+                    (fg, bg) = if fg == bg {
+                        (look.sel_bg, look.sel_bg)
+                    } else {
+                        (look.sel_fg, look.sel_bg)
+                    };
+                }
                 let block = here && self.shape < 3;
                 if block {
                     core::mem::swap(&mut fg, &mut bg);
@@ -653,7 +683,7 @@ impl Term {
 
     /// Marks every row for the next render.
     pub fn redraw(&mut self) {
-        self.touch_all();
+        self.mark_all();
     }
 }
 

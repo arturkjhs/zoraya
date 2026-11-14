@@ -5,6 +5,7 @@ use std::vec::Vec;
 
 use super::*;
 use crate::read::Reader;
+use zoraya_keymap::code;
 use zoraya_tokens::{Appearance, Scale};
 
 fn look() -> Look {
@@ -351,20 +352,24 @@ fn the_dark_set_and_scale_two_read_back_too() {
 
 #[test]
 fn keys_become_bytes() {
-    let mut out = [0u8; 8];
-    let mut bytes = |key, shift, text| {
-        let n = key_bytes(key, shift, text, &mut out);
+    let mut out = [0u8; MAX_KEY_BYTES];
+    let none = Mods::default();
+    let shift = Mods {
+        shift: true,
+        ..none
+    };
+    let mut bytes = |key, mods, text| {
+        let n = key_bytes(key, mods, text, KeyModes::default(), &mut out);
         out[..n].to_vec()
     };
-    assert_eq!(bytes(30, false, Some('a')), b"a");
-    assert_eq!(bytes(46, false, Some('\u{3}')), b"\x03");
-    assert_eq!(bytes(code::ENTER, false, None), b"\r");
-    assert_eq!(bytes(code::BACKSPACE, false, None), b"\x7f");
-    assert_eq!(bytes(code::UP, false, None), b"\x1b[A");
-    assert_eq!(bytes(code::PAGE_UP, false, None), b"\x1b[5~");
-    assert_eq!(bytes(code::PAGE_UP, true, None), b"");
-    assert_eq!(bytes(code::F12, false, None), b"");
-    assert_eq!(bytes(0x200, false, Some('€')), "€".as_bytes());
+    assert_eq!(bytes(30, none, Some('a')), b"a");
+    assert_eq!(bytes(46, none, Some('\u{3}')), b"\x03");
+    assert_eq!(bytes(code::ENTER, none, None), b"\r");
+    assert_eq!(bytes(code::BACKSPACE, none, None), b"\x7f");
+    assert_eq!(bytes(code::UP, none, None), b"\x1b[A");
+    assert_eq!(bytes(code::PAGE_UP, none, None), b"\x1b[5~");
+    assert_eq!(bytes(code::PAGE_UP, shift, None), b"");
+    assert_eq!(bytes(0x200, none, Some('€')), "€".as_bytes());
 }
 
 #[test]

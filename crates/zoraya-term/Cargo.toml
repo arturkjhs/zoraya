@@ -13,6 +13,7 @@ zoraya-text = { path = "../zoraya-text" }
 zoraya-tokens = { path = "../zoraya-tokens" }
 zoraya-keymap = { path = "../zoraya-keymap" }
 zoraya-width = { path = "../zoraya-width" }
+zoraya-proto-term = { path = "../zoraya-proto-term" }
 
 [lints]
 workspace = true

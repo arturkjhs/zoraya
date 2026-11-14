@@ -968,6 +968,7 @@ version = "0.1.0"
 dependencies = [
  "zoraya-fonts",
  "zoraya-keymap",
+ "zoraya-proto-term",
  "zoraya-test-alloc",
  "zoraya-text",
  "zoraya-tokens",

@@ -1,9 +1,16 @@
 //! The protocol between the terminal and the shell (ADR-0096). Output is a
 //! VT subset in `Output`; input is the bytes keys produce. The size goes out
 //! of band. Nothing the shell sends can make the terminal send input.
+//!
+//! A paste is not input: it is the text of the clipboard, which the person
+//! asked for with System+V, in `Paste` messages that the shell cleans
+//! ([`paste::clean`]) and inserts into its line without running it
+//! (ADR-0332 item 8, ADR-0384).
 
 #![no_std]
 #![forbid(unsafe_code)]
+
+pub mod paste;
 
 use zoraya_protocol::{Data, protocol};
 
@@ -11,6 +18,8 @@ pub const MAX_OUTPUT: usize = 4096;
 pub const MAX_INPUT: usize = 256;
 /// The longest `Title`, in bytes (a window title's limit less `zosh — `).
 pub const MAX_TITLE: usize = 240;
+/// The most bytes one `Paste` carries.
+pub const MAX_PASTE: usize = paste::MAX_CHUNK;
 
 protocol! {
     /// Shell to terminal, with no reply.
@@ -35,6 +44,16 @@ protocol! {
     /// terminal titles its window with it and never from output.
     message Title<'a> = 4, handles 0 {
         text: Data<'a, MAX_TITLE>,
+    }
+
+    /// Terminal to shell: a part of the text the person pasted with System+V
+    /// (ADR-0332 item 8), in order, each a whole number of characters;
+    /// `last` ends the paste. Never `Input`: the shell inserts it into its
+    /// line, or holds it for a program, after cleaning it. A new ordinal
+    /// under ADR-0052.
+    message Paste<'a> = 5, handles 0 {
+        last: bool,
+        bytes: Data<'a, MAX_PASTE>,
     }
 }
 

@@ -3,13 +3,19 @@
 
 //! The terminal (ADR-0096): a client of the compositor at slot 5, and the
 //! terminal end of the shell's channel at slot 6. It draws what the shell
-//! writes, and sends the shell the bytes keys make. It answers no query.
+//! writes, and sends the shell what the person does: the bytes keys make,
+//! the pointer's reports when a program asked for them, focus, and the text
+//! of a paste (`Paste`, never `Input`). Dragging selects text, and System+C
+//! offers it to the compositor's clipboard when the compositor asks
+//! (ADR-0170, ADR-0332 item 8). It answers no query: what it sends comes from
+//! `zoraya_term::Session`'s gesture methods and nowhere else (INV-0332-2).
 //!
 //! Since stage 7b it is a toplevel window (ADR-0160): its size is logical
 //! at the display's scale (ADR-0164), a `Configure` of another size gives
 //! the grid a new size and the window a new buffer, and the close button
 //! (`CloseRequested`) ends it, as `exit` in the shell does.
 
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use zoraya_abi::spawn::Transfer;
@@ -17,10 +23,10 @@ use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Rights, Status,
     channel_signals,
 };
-use zoraya_proto_gui::{self as gui, modifiers};
-use zoraya_proto_term::{Input, MAX_INPUT, Output, Size, Title};
+use zoraya_proto_gui as gui;
+use zoraya_proto_term::{Input, MAX_INPUT, Output, Paste, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{Look, Term, Waited, await_reply, key_bytes, sync_hold};
+use zoraya_term::{Look, Outgoing, Session, Term, Waited, await_reply, sync_hold};
 use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, memory_create,
@@ -36,13 +42,16 @@ const KEY_WRITABLE: u64 = 3;
 /// Key bytes held for a shell that is slow to read them. A person cannot
 /// type this far ahead; past it keys are dropped and counted.
 const PENDING_MAX: usize = 4096;
+/// Paste bytes held for a slow shell: two of the largest pastes. A paste that
+/// does not fit whole is dropped whole, so the shell never gets half of one.
+const PASTE_PENDING_MAX: usize = 2 * zoraya_proto_term::paste::MAX_PASTE_BYTES;
 /// Shell messages taken per wake, so that keys and frames stay prompt.
 const BATCH: usize = 16;
 
 struct Window {
     compositor: Handle,
     shell: Handle,
-    term: Term,
+    session: Session,
     look: Look,
     /// The compositor's name for the window, and the display's scale.
     id: u32,
@@ -54,15 +63,16 @@ struct Window {
     height: usize,
     /// A commit waits for its frame callback.
     outstanding: bool,
-    /// Key bytes not yet sent: the shell's queue was full. They go out
-    /// together, up to `MAX_INPUT` a message, when it has room (the TCG
-    /// key-burst loss, docs/backlog.md).
-    pending: Vec<u8>,
+    /// What is not yet sent: the shell's queue was full. It goes out in
+    /// order, input up to `MAX_INPUT` a message, when the shell has room (the
+    /// TCG key-burst loss, docs/backlog.md).
+    pending: VecDeque<Outgoing>,
+    /// The bytes of input and of paste in `pending`.
+    pending_input: usize,
+    pending_paste: usize,
     /// Input that did not fit in `pending`.
     dropped: u32,
     port: Handle,
-    /// The wheel's turns not yet a line (proposed ADR-0322).
-    wheel: zoraya_term::WheelLines,
     /// `KEY_WRITABLE` is subscribed.
     waiting: bool,
     message: Vec<u8>,
@@ -171,7 +181,7 @@ impl Window {
             self.outstanding = true;
         } else {
             // Not sent: draw it all again next time (review S2).
-            self.term.redraw();
+            self.session.term.redraw();
         }
     }
 
@@ -213,10 +223,10 @@ impl Window {
         let ch = self.look.cell_height();
         let columns = pw.saturating_sub(2 * self.look.pad) / cw;
         let rows = ph.saturating_sub(2 * self.look.pad) / ch;
-        self.term.resize(columns, rows);
-        let (columns, rows) = self.term.size();
+        self.session.term.resize(columns, rows);
+        let (columns, rows) = self.session.term.size();
         self.look.clear(self.pixels);
-        self.term.redraw();
+        self.session.term.redraw();
         let size = Size {
             columns: columns as u32,
             rows: rows as u32,
@@ -226,7 +236,8 @@ impl Window {
         }
         // The whole buffer goes with the next commit.
         self.outstanding = false;
-        self.term
+        self.session
+            .term
             .render(&mut self.look, self.pixels, self.stride, true);
         self.commit(0, self.height);
     }
@@ -238,7 +249,7 @@ impl Window {
         let h = sync_hold(
             clock_monotonic(),
             self.sync_since,
-            self.term.modes().synchronized,
+            self.session.term.modes().synchronized,
             self.outstanding,
         );
         self.sync_since = h.since;
@@ -247,7 +258,8 @@ impl Window {
             return;
         }
         if let Some((first, last)) =
-            self.term
+            self.session
+                .term
                 .render(&mut self.look, self.pixels, self.stride, true)
         {
             let cell = self.look.cell_height();
@@ -257,48 +269,115 @@ impl Window {
         }
     }
 
-    /// Queues key bytes for the shell; `flush` sends them.
-    /// A key's bytes go whole or not at all, so that the shell never gets
-    /// half an escape sequence or half a UTF-8 letter.
-    fn send(&mut self, bytes: &[u8]) {
-        if self.pending.len() + bytes.len() <= PENDING_MAX {
-            self.pending.extend_from_slice(bytes);
-        } else {
-            self.dropped = self.dropped.saturating_add(bytes.len() as u32);
+    /// Takes what the session has to send into the queue for `flush`.
+    /// Input goes whole or not at all, so that the shell never gets half an
+    /// escape sequence or half a UTF-8 letter; a paste goes whole or not
+    /// at all, for the same reason.
+    fn collect(&mut self) {
+        let mut paste: Vec<Outgoing> = Vec::new();
+        for item in self.session.take_outbox() {
+            match item {
+                Outgoing::Input(bytes) => {
+                    if self.pending_input + bytes.len() <= PENDING_MAX {
+                        self.pending_input += bytes.len();
+                        self.pending.push_back(Outgoing::Input(bytes));
+                    } else {
+                        self.dropped = self.dropped.saturating_add(bytes.len() as u32);
+                    }
+                }
+                Outgoing::Paste { bytes, last } => {
+                    paste.push(Outgoing::Paste { bytes, last });
+                    if last {
+                        let size: usize = paste
+                            .iter()
+                            .map(|p| match p {
+                                Outgoing::Paste { bytes, .. } => bytes.len(),
+                                Outgoing::Input(_) => 0,
+                            })
+                            .sum();
+                        if self.pending_paste + size <= PASTE_PENDING_MAX {
+                            self.pending_paste += size;
+                            self.pending.extend(paste.drain(..));
+                        } else {
+                            println!("term: a paste of {size} bytes dropped: the shell is slow");
+                            paste.clear();
+                        }
+                    }
+                }
+            }
         }
     }
 
-    /// Sends what keys wait, in as few messages as fit, and stops at the
-    /// first the shell's queue has no room for: the rest wait for
-    /// `WRITABLE`, in order.
+    /// Sends what waits, in order and in as few messages as fit, and stops
+    /// at the first the shell's queue has no room for: the rest waits for
+    /// `WRITABLE`.
     fn flush(&mut self) {
-        while !self.pending.is_empty() {
-            let n = self.pending.len().min(MAX_INPUT);
-            let m = Input {
-                dropped: self.dropped,
-                bytes: Data(&self.pending[..n]),
-            };
-            let mut out = [0u8; 64 + MAX_INPUT];
-            let Ok(length) = encode(&m, NO_REPLY, &mut out) else {
-                // Cannot happen for n <= MAX_INPUT; counted if it does.
-                self.dropped = self.dropped.saturating_add(self.pending.len() as u32);
-                self.pending.clear();
-                break;
-            };
-            match channel_write(self.shell, &out[..length], &[]) {
-                Ok(()) => {
-                    self.dropped = 0;
-                    self.pending.drain(..n);
+        self.collect();
+        while let Some(front) = self.pending.front_mut() {
+            let mut out = [0u8; 64 + zoraya_proto_term::MAX_PASTE];
+            let result = match front {
+                Outgoing::Input(bytes) => {
+                    let n = bytes.len().min(MAX_INPUT);
+                    let m = Input {
+                        dropped: self.dropped,
+                        bytes: Data(&bytes[..n]),
+                    };
+                    match encode(&m, NO_REPLY, &mut out) {
+                        Ok(length) => channel_write(self.shell, &out[..length], &[]).map(|()| n),
+                        // Cannot happen for n <= MAX_INPUT; counted if it does.
+                        Err(_) => Ok(usize::MAX),
+                    }
                 }
+                Outgoing::Paste { bytes, last } => {
+                    let m = Paste {
+                        last: *last,
+                        bytes: Data(&bytes[..]),
+                    };
+                    match encode(&m, NO_REPLY, &mut out) {
+                        Ok(length) => {
+                            channel_write(self.shell, &out[..length], &[]).map(|()| bytes.len())
+                        }
+                        Err(_) => Ok(usize::MAX),
+                    }
+                }
+            };
+            match result {
+                Ok(usize::MAX) => match self.pending.pop_front() {
+                    // Not encodable (it cannot happen: the parts are bounded
+                    // by what the messages carry): dropped, and counted.
+                    Some(Outgoing::Input(bytes)) => {
+                        self.pending_input -= bytes.len();
+                        self.dropped = self.dropped.saturating_add(bytes.len() as u32);
+                    }
+                    Some(Outgoing::Paste { bytes, .. }) => self.pending_paste -= bytes.len(),
+                    None => {}
+                },
+                Ok(n) => match front {
+                    Outgoing::Input(bytes) => {
+                        self.dropped = 0;
+                        self.pending_input -= n;
+                        if n == bytes.len() {
+                            self.pending.pop_front();
+                        } else {
+                            bytes.drain(..n);
+                        }
+                    }
+                    Outgoing::Paste { .. } => {
+                        self.pending_paste -= n;
+                        self.pending.pop_front();
+                    }
+                },
                 // The shell is slow: the terminal does not wait for it, and
                 // WRITABLE says when its queue has room.
                 Err(Status::WouldBlock) => break,
                 // Any other refusal (no kernel memory) leaves WRITABLE
-                // asserted: waiting for it would spin, so these keys are
+                // asserted: waiting for it would spin, so what waits is
                 // dropped and counted (review finding 8).
                 Err(_) => {
-                    self.dropped = self.dropped.saturating_add(self.pending.len() as u32);
+                    self.dropped = self.dropped.saturating_add(self.pending_input as u32);
                     self.pending.clear();
+                    self.pending_input = 0;
+                    self.pending_paste = 0;
                     break;
                 }
             }
@@ -316,6 +395,30 @@ impl Window {
         } else if !want && self.waiting {
             let _ = port_unsubscribe(self.port, KEY_WRITABLE);
             self.waiting = false;
+        }
+    }
+
+    /// The cell under a point of the window's body, in logical pixels.
+    fn cell_at(&self, x: u32, y: u32) -> (usize, usize) {
+        let k = self.scale as usize;
+        let (columns, rows) = self.session.term.size();
+        self.look
+            .cell_at(x as usize * k, y as usize * k, columns, rows)
+    }
+
+    /// The clipboard asked the terminal for its selection (System+C): offered
+    /// when there is one, and nothing otherwise, so that the clipboard stays as
+    /// it was.
+    fn offer(&mut self) {
+        let Some(text) = self.session.copy(&self.look, gui::MAX_CLIPBOARD) else {
+            return;
+        };
+        let m = gui::Offer {
+            text: Data(text.as_bytes()),
+        };
+        let mut out = alloc::vec![0u8; 64 + text.len()];
+        if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
+            let _ = channel_write(self.compositor, &out[..n], &[]);
         }
     }
 
@@ -348,15 +451,48 @@ impl Window {
                 // The close button: the terminal ends, as `exit` does.
                 20 => zoraya_user::process_exit(0),
                 // The wheel moves the view through the scrollback, as
-                // Shift+PageUp does (proposed ADR-0322).
+                // Shift+PageUp does (proposed ADR-0322), or is reported to a
+                // program that asked for the mouse (ADR-0385).
                 46 => {
                     if let Ok((_, w)) = decode::<gui::Wheel>(bytes, 0)
                         && w.window == self.id
                     {
-                        let lines = self.wheel.turn(w.dy);
-                        if lines != 0 {
-                            self.term.scroll_view(lines);
-                        }
+                        let (column, row) = self.cell_at(w.x, w.y);
+                        self.session.wheel(column, row, w.dy, w.modifiers.0);
+                    }
+                }
+                // The pointer over the body: a drag selects, or is reported.
+                30 => {
+                    if let Ok((_, p)) = decode::<gui::WindowPointerMods>(bytes, 0)
+                        && p.window == self.id
+                    {
+                        let (column, row) = self.cell_at(p.x, p.y);
+                        self.session
+                            .pointer(column, row, p.buttons.0, p.modifiers.0);
+                    }
+                }
+                22 => {
+                    if let Ok((_, f)) = decode::<gui::WindowFocus>(bytes, 0)
+                        && f.window == self.id
+                    {
+                        self.session.focus(f.focused);
+                    }
+                }
+                // System+C and System+X (ADR-0170): the selection is offered;
+                // a terminal cuts nothing.
+                27 => {
+                    if let Ok((_, c)) = decode::<gui::Copy>(bytes, 0)
+                        && c.window == self.id
+                    {
+                        self.offer();
+                    }
+                }
+                // System+V: the clipboard's text, for the shell, as a paste.
+                28 => {
+                    if let Ok((_, p)) = decode::<gui::Paste<'_>>(bytes, 0)
+                        && p.window == self.id
+                    {
+                        self.session.paste(p.text.0);
                     }
                 }
                 16 => {
@@ -366,19 +502,9 @@ impl Window {
                     if !k.pressed {
                         continue;
                     }
-                    let shift = k.modifiers.0 & modifiers::SHIFT != 0;
-                    let half = (self.term.size().1 / 2) as isize;
-                    match k.code {
-                        zoraya_keymap::code::PAGE_UP if shift => self.term.scroll_view(half),
-                        zoraya_keymap::code::PAGE_DOWN if shift => self.term.scroll_view(-half),
-                        _ => {
-                            // 0 is no text: Ctrl with Space sends nothing.
-                            let text = (k.text.0 != 0).then(|| char::from_u32(k.text.0)).flatten();
-                            let mut out = [0u8; 8];
-                            let n = key_bytes(k.code, shift, text, &mut out);
-                            self.send(&out[..n]);
-                        }
-                    }
+                    // 0 is no text: Ctrl with Space makes none.
+                    let text = (k.text.0 != 0).then(|| char::from_u32(k.text.0)).flatten();
+                    self.session.key(k.code, k.modifiers.0, text);
                 }
                 _ => {}
             }
@@ -397,7 +523,7 @@ impl Window {
                 }
                 Err((Status::WouldBlock, _)) => return,
                 Err((Status::PeerClosed, _)) => {
-                    self.term.write(b"\n[the shell ended]\n");
+                    self.session.output(b"\n[the shell ended]\n");
                     self.show();
                     zoraya_user::process_exit(0);
                 }
@@ -405,7 +531,7 @@ impl Window {
             };
             let bytes = &self.message[..length];
             if let Ok((_, m)) = decode::<Output<'_>>(bytes, 0) {
-                self.term.write(m.bytes.0);
+                self.session.output(m.bytes.0);
             } else if let Ok((_, t)) = decode::<Title<'_>>(bytes, 0) {
                 // `zosh — <directory>` (ADR-0168), never from output.
                 let mut title = alloc::vec::Vec::with_capacity(t.text.0.len() + 9);
@@ -491,7 +617,7 @@ fn main() -> i32 {
     let mut window = Window {
         compositor,
         shell,
-        term: Term::new(columns, rows),
+        session: Session::new(Term::new(columns, rows)),
         look,
         id,
         scale: k as u32,
@@ -500,10 +626,11 @@ fn main() -> i32 {
         stride: width,
         height,
         outstanding: false,
-        pending: Vec::new(),
+        pending: VecDeque::new(),
+        pending_input: 0,
+        pending_paste: 0,
         dropped: 0,
         port,
-        wheel: zoraya_term::WheelLines::default(),
         waiting: false,
         sync_since: None,
         sync_deadline: None,
@@ -513,6 +640,7 @@ fn main() -> i32 {
     };
     window.look.clear(window.pixels);
     window
+        .session
         .term
         .render(&mut window.look, window.pixels, width, true);
     window.commit(0, height);
