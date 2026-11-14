@@ -94,6 +94,9 @@ x tstp: continued
 > fg\r
 < requests a | t_posix tstp
 < tstp: continued
+# Once: the handler took the signal one time (line 77's forbidden pair of
+# lines depends on the exact line ends).
+o tstp: continued
 > \x03
 < ^C
 < (Ctrl-C again to kill it)

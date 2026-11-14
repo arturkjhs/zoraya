@@ -1043,7 +1043,8 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 | tcg-smp4-gicv3 | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
 
 On a Mac the three `auto` lines run under HVF, so they cover GICv3 only. GICv2 under HVF is not run, because QEMU
-cannot start it.
+cannot start it. Where `auto` is TCG (CI's runners), `auto-default` and `auto-el2` are the machines of `tcg-default`
+and `tcg-el2`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
 
 How the in-QEMU tests run and report:
 - The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A
@@ -2334,7 +2335,7 @@ ADR-0221 items 5, 6 and 8).
   driver whole, as before); a `Page::Several` is never given: each transport is split with `device_transport`, identified by
   `device_read`, and given to its driver, which opens it with `zoraya_user::mmio::Window::open` (a mapping, or calls if the
   kernel answers `device_map` with `AccessDenied`): the four drivers use one `Registers` type. `tools/run-qemu.sh` accepts
-  `--net` with `--gui`; `make test-gui` runs `tests/gui/net.script` (`net:auto:1`, `net:tcg:1` on CI): the terminal's
+  `--net` with `--gui`; `make test-gui` runs `tests/gui/net.script` (`net:auto:1`; with `FULL=1`, `net:tcg:1` too, which is the one CI runs): the terminal's
   `net status` shows the lease.
 - **The restart reaches the shell** (ADR-0221 items 5 and 6). `init` had restarted `ethd` and `netd` together, at most three
   times, since N2. It now also gives the console shell (which is the first terminal window's shell) a *services channel*
@@ -2494,7 +2495,8 @@ ADR-0221 items 5, 6 and 8).
 - **CI.** The CI workflow (`.github/workflows/test.yml`) runs on Linux with TCG, as small parallel jobs (ADR-0213's
   Decision): one build job (`make fetch-ports`, `make ci-build`) hands `build/` and `target/` to the others, and every
   step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
-  one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there;
+  one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there, and
+  where `auto` is TCG a run and its `tcg` twin are run once: CI's list holds the `tcg` one (ADR-0350);
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
   What a run contains is `tools/ci-plan.sh`'s plan: a merge candidate (tag `candidate/NAME`, a pull request) runs the steps its
   change touches (`tools/test-map.txt`) plus a smoke set; a push to `main` whose changes are all under `docs/` (except the docs a

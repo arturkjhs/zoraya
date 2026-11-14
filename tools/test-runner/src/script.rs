@@ -187,7 +187,10 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 let ms = ms
                     .parse()
                     .map_err(|_| format!("line {number}: not a time"))?;
-                Step::Quiet(ms, text.to_string())
+                Step::Quiet(
+                    ms,
+                    text_of(text).map_err(|e| format!("line {number}: {e}"))?,
+                )
             }
             "@" => {
                 let (keys, text) =
@@ -211,7 +214,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                     .map_err(|_| format!("line {number}: not a count"))?;
                 Step::Send(vec![b'x'; n])
             }
-            "!" => Step::Forbid(rest.to_string()),
+            "!" => Step::Forbid(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "%" => Step::Mark(rest.to_string()),
             "U" => {
                 let (n, prefix) = rest
@@ -722,6 +725,22 @@ mod tests {
         );
         assert!(unescape("\\q").is_err());
         assert!(unescape("\\x0").is_err());
+    }
+
+    /// Every instruction that takes TEXT takes the escapes: `~` and `!` kept
+    /// theirs as written, so `~ 400 \r\n/>` waited for a backslash and could
+    /// never fail (TASK-29, V1).
+    #[test]
+    fn quiet_and_forbid_take_the_escapes() {
+        assert_eq!(
+            parse("~ 400 \\r\\n/>\n! a\\r\\nb\n").unwrap(),
+            [
+                Step::Quiet(400, "\r\n/>".into()),
+                Step::Forbid("a\r\nb".into()),
+            ]
+        );
+        assert!(parse("~ 400 \\q\n").is_err());
+        assert!(parse("! \\q\n").is_err());
     }
 
     #[test]

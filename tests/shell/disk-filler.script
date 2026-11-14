@@ -45,7 +45,8 @@
 > echo home > /t/home/note.txt\r
 < \r\n/> 
 > cat /t/home/note.txt\r
-< home
+# The file's line, not the "home" of the typed path (TASK-29, V8).
+< \r\nhome
 < \r\n/> 
 > room other\r
 < other /t/other> 

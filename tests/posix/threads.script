@@ -1,6 +1,8 @@
 # Part 9b: fork, exec and spawn in a process with threads (ADR-0306), through
 # the broker, from dash, in the POSIX session.
-! -FAIL
+# t_posix prints "t_posix: NAME: FAIL line N: ..."; nothing here prints
+# "-FAIL" (TASK-29, V21), so a failure used to cost the whole timeout.
+! : FAIL line
 ! panicked
 ! ZORAYA-PANIC
 ! ZORAYA-FAULT

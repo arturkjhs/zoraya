@@ -43,11 +43,30 @@ BUILD := build
 # tour's second run (under TCG) and crash rounds past 2. FULL=1 runs
 # everything; CI (where GitHub sets CI=true) always does.
 FULL ?= $(if $(CI),1,0)
+# What `auto` is on this host (tools/run-qemu.sh): hvf on an Apple Silicon Mac,
+# tcg elsewhere, CI's runners among them. Where it is tcg an `auto` run and its
+# `tcg` twin are the same run, so FULL=1 runs one of them (ADR-0350):
+# the `tcg` one where both are listed, and no second run where a recipe adds
+# one. On a Mac nothing changes: FULL=1 runs HVF and TCG.
+# `--accel auto` is given, as the runs give it: ZORAYA_ACCEL does not change
+# what they resolve to, so it must not change this answer (review R3).
+HOST_ACCEL := $(shell tools/run-qemu.sh --accel auto --print-accel 2>/dev/null)
+AUTO_IS_TCG := $(if $(filter tcg,$(HOST_ACCEL)),1,0)
 ifeq ($(FULL),1)
+ifeq ($(AUTO_IS_TCG),1)
+LOCAL_ACCELS := tcg
+else
 LOCAL_ACCELS := auto tcg
+endif
 else
 LOCAL_ACCELS := auto
 endif
+# 1 if a recipe's second run under TCG is a run of its own: FULL=1 on a host
+# whose `auto` is not TCG.
+TCG_TOO := $(if $(filter 1,$(FULL)),$(if $(filter 1,$(AUTO_IS_TCG)),0,1),0)
+# The limit of an `auto` run whose `tcg` twin has a longer one, $(1): the
+# longer one where `auto` is TCG, QEMU_TIMEOUT under HVF.
+AUTO_TIMEOUT = $(if $(filter 1,$(AUTO_IS_TCG)),$(1),$(QEMU_TIMEOUT))
 # A recipe line that runs only with FULL=1.
 FULL_ONLY = [ "$(FULL)" = 1 ] || exit 0;
 KERNEL := $(BUILD)/zoraya-kernel.elf
@@ -79,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs print-legs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -225,18 +244,25 @@ EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
 # ADR-0213's Decision); make test-qemu runs them all, in this order, on one
 # test disk, with zoraya-fsck after each.
 QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2 tcg-el2 tcg-smp4-gicv3
-QEMU_RUN := $(if $(filter 1,$(FULL)),$(QEMU_CONFIGS),$(filter auto-%,$(QEMU_CONFIGS)))
+# The `auto` configurations that are a `tcg` one's machine where `auto` is TCG
+# (the same options but the accelerator; ADR-0350): FULL=1 leaves them
+# out there, and the `tcg` twin expects their lines too.
+QEMU_AUTO_TWINS := auto-default:tcg-default auto-el2:tcg-el2
+# The lines an `auto` twin expects, in one place for both targets of the
+# pair: a line added here is expected in CI too (review R2).
+AUTO_DEFAULT_EXPECT := --expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
+	--expect-line "memory: 131072 KiB total" \
+	--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
+	--expect-line "t_gui: all passed"
+AUTO_EL2_EXPECT := --expect-line "exception level at entry: EL2, now EL1"
+QEMU_RUN := $(if $(filter 1,$(FULL)),$(if $(filter 1,$(AUTO_IS_TCG)),$(filter-out $(foreach t,$(QEMU_AUTO_TWINS),$(firstword $(subst :, ,$(t)))),$(QEMU_CONFIGS)),$(QEMU_CONFIGS)),$(filter auto-%,$(QEMU_CONFIGS)))
 test-qemu: $(addprefix test-qemu-,$(QEMU_RUN))
 
 test-qemu-disk: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 
 test-qemu-auto-default: test-qemu-disk
-	$(RUN_TEST_SLOW) --label auto-default \
-		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
-		--expect-line "memory: 131072 KiB total" \
-		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
-		--expect-line "t_gui: all passed" \
+	$(RUN_TEST_SLOW) --label auto-default $(AUTO_DEFAULT_EXPECT) \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
@@ -247,15 +273,13 @@ test-qemu-auto-smp4-2g: test-qemu-disk
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-auto-el2: test-qemu-disk
-	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST_SLOW) --label auto-el2 \
-		--expect-line "exception level at entry: EL2, now EL1" \
+	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST_SLOW) --label auto-el2 $(AUTO_EL2_EXPECT) \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-default: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-default \
-		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
-		--expect-line "gic: version 2" --expect-line "t_gui: all passed" \
+	$(RUN_TEST_SLOW) --label tcg-default $(AUTO_DEFAULT_EXPECT) \
+		--expect-line "(GICv2)" --expect-line "gic: version 2" \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
@@ -266,8 +290,7 @@ test-qemu-tcg-smp4-gicv2: test-qemu-disk
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-el2: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-el2 \
-		--expect-line "exception level at entry: EL2, now EL1" --expect-line "psci: arm,psci-1.0 via smc" \
+	$(RUN_TEST_SLOW) --label tcg-el2 $(AUTO_EL2_EXPECT) --expect-line "psci: arm,psci-1.0 via smc" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
@@ -288,6 +311,13 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 # the point; the pcap stays in target/test-logs/. A host whose QEMU has no
 # user-mode networking skips the step, listed by `make test`'s summary (INV-0230-3);
 # on CI (CI set) a skip, and any other failure of the probe, fails it.
+# The start of a recipe that needs QEMU's user-mode networking: label $(1),
+# $(2) the word for the skip. A host without it skips the step, as test-net
+# does; on CI (CI set) there is no skip: a probe that fails, for whatever
+# reason, fails the step (it was a green job: TASK-29, V34).
+NET_OR_SKIP = $(RUN_QEMU) --probe-net >/dev/null 2>&1 || { \
+	if [ -n "$$CI" ]; then echo "[$(1)] FAIL: the networking probe failed on a CI runner"; exit 1; fi; \
+	echo "[$(1)] $(2): QEMU has no user-mode networking"; exit 0; };
 NET_DISK := $(BUILD)/net-disk.img
 NET_PCAP := target/test-logs/test-net.pcap
 # Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
@@ -301,6 +331,10 @@ NET_SCRIPT := tests/shell/net.script
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
 NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper' 'netd:net-test-dns-port'
+# The second run of the test kernel (net-tcg) stays where `auto` is TCG: it is
+# not net-auto again, it boots on the disk net-settings-auto left, with a
+# gateway and a DNS server set (review R4). net-boot-tcg is net-boot-auto
+# again there (no disk) and is left out (ADR-0350).
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
@@ -336,7 +370,7 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script tests/shell/net-settings.script --label net-settings-auto -- $(RUN_QEMU) --test --keys --net --disk $(NET_DISK) --accel auto $(KERNEL) && \
 	target/debug/zoraya-fsck $(NET_DISK) && \
-	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
+	( [ "$(TCG_TOO)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
 	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
 	$(MAKE) --no-print-directory test-net-fetch && \
 	$(MAKE) --no-print-directory test-net-posix && \
@@ -365,7 +399,7 @@ $(HTTPD): tools/test-httpd/src/main.rs
 test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		grep -a -q "$$s" $(NET_TEST_USER_DIR)/$$f || { echo "[net-fetch] FAIL: INV-0296-1's check is blind: $$f holds no '$$s'"; exit 1; }; done
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,net-fetch,skipped) \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
@@ -385,8 +419,8 @@ test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
 		-e "s/@SUM4M@/$$($(HTTPD) --checksum 4000000)/" \
 		$(NET_FETCH_TEMPLATE) > $(NET_FETCH_SCRIPT); \
-	$(call NET_FETCH_RUN,$(QEMU_TIMEOUT),net-fetch-auto,auto); rc=$$?; \
-	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
+	$(call NET_FETCH_RUN,$(call AUTO_TIMEOUT,400),net-fetch-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ] && [ "$(TCG_TOO)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
 		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd.log \
@@ -426,7 +460,7 @@ $(TEST_DNS): tools/test-dns/src/main.rs
 	$(CARGO) build -q -p zoraya-test-dns
 
 test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-lookup] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,net-lookup,skipped) \
 	mkdir -p $(NET_LOOKUP_ROOT) target/test-logs && cp -R rootfs/. $(NET_LOOKUP_ROOT)/ && \
 	rm -f $(NET_LOOKUP_PCAP) && : > $(NET_LOOKUP_DNS_READY) && : > $(NET_LOOKUP_HTTP_READY) && \
 	{ $(TEST_DNS) --port 0 --lifetime 300 --ready-file $(NET_LOOKUP_DNS_READY) \
@@ -460,7 +494,7 @@ test-net-lookup: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) $(TEST_DNS) tools-storage
 # asserted but that every fetch ends. The numbers go to docs/design.md by hand.
 NET_BENCH_SCRIPT := $(BUILD)/net-bench.script
 bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[bench-net] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,bench-net,skipped) \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
@@ -495,7 +529,7 @@ NET_POSIX_SCRIPT := $(BUILD)/net-posix.script
 NET_POSIX_RUN = $(RUNNER) --timeout $(1) --script $(NET_POSIX_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_POSIX_DISK) --accel $(3) $(KERNEL)
 
 test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-posix] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,net-posix,skipped) \
 	$(MAKE) -s -f ports/Makefile libc && $(MAKE) -s -f ports/Makefile check-libc && \
 	mkdir -p $(NET_POSIX_ROOT) target/test-logs && cp -R rootfs/. $(NET_POSIX_ROOT)/ && mkdir -p $(NET_POSIX_ROOT)/bin && \
 	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
@@ -515,8 +549,8 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
 		-e "s/@SUM4M@/$$($(HTTPD) --checksum 4000000)/" \
 		$(NET_POSIX_TEMPLATE) > $(NET_POSIX_SCRIPT); \
-	$(call NET_POSIX_RUN,$(QEMU_TIMEOUT),net-posix-auto,auto); rc=$$?; \
-	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_POSIX_RUN,400,net-posix-tcg,tcg); rc=$$?; fi; \
+	$(call NET_POSIX_RUN,$(call AUTO_TIMEOUT,400),net-posix-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ] && [ "$(TCG_TOO)" = 1 ]; then $(call NET_POSIX_RUN,400,net-posix-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_POSIX_DISK); rc=$$?; fi; \
 	exit $$rc
@@ -569,7 +603,7 @@ APPS_LAUNCHES := tests/shell/apps-launches.script
 APPS_LAUNCHES_RUN = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(APPS_LAUNCHES) --label apps-launches -- $(RUN_QEMU) --test --keys --disk $(APPS_DISK) --mem 128M --accel auto $(KERNEL)
 
 test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(CRYPTOTHREADS_BIN)
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[apps] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,apps,skipped) \
 	rm -rf $(APPS_TEST_ROOT) && mkdir -p $(APPS_TEST_ROOT) target/test-logs && cp -R rootfs/. $(APPS_TEST_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && cp $(TLSTHREADS_BIN) $(APPS_TEST_ROOT)/bin/tlsthreads && cp $(CRYPTOTHREADS_BIN) $(APPS_TEST_ROOT)/bin/cryptothreads && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
@@ -590,10 +624,10 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 		$(APPS_TEMPLATE) > $(APPS_SCRIPT); \
 	sed -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		$(APPS_REFUSALS_TEMPLATE) > $(APPS_REFUSALS_SCRIPT); \
-	$(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-auto,auto,$(APPS_SCRIPT)); rc=$$?; \
-	if [ $$rc = 0 ]; then $(call APPS_RUN,$(QEMU_SLOW_TIMEOUT),apps-refusals-auto,auto,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
-	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-tcg,tcg,$(APPS_SCRIPT)); rc=$$?; fi; \
-	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-refusals-tcg,tcg,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
+	$(call APPS_RUN,$(if $(filter 1,$(AUTO_IS_TCG)),$(APPS_TCG_TIMEOUT),$(QEMU_SLOW_TIMEOUT)),apps-auto,auto,$(APPS_SCRIPT)); rc=$$?; \
+	if [ $$rc = 0 ]; then $(call APPS_RUN,$(if $(filter 1,$(AUTO_IS_TCG)),$(APPS_TCG_TIMEOUT),$(QEMU_SLOW_TIMEOUT)),apps-refusals-auto,auto,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
+	if [ $$rc = 0 ] && [ "$(TCG_TOO)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-tcg,tcg,$(APPS_SCRIPT)); rc=$$?; fi; \
+	if [ $$rc = 0 ] && [ "$(TCG_TOO)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-refusals-tcg,tcg,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then $(APPS_LAUNCHES_RUN); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \
@@ -675,7 +709,7 @@ python-testlib: $(PYTHON_TESTLIB)
 # The TLS check (INV-0320-3) reads the server's log of test-python only: the
 # regrtest scripts make no connection to it.
 test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[$@] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,$@,skipped) \
 	rm -rf $(PY_ROOT) && mkdir -p $(PY_ROOT) target/test-logs && cp -R rootfs/. $(PY_ROOT)/ && \
 	cp -R $(PYTHON_ROOT)/. $(PY_ROOT)/ && mkdir -p $(PY_ROOT)/home && cp tests/python/*.py tests/python/regr-*.txt $(PY_ROOT)/home/ && \
 	mkdir -p $(PY_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PY_ROOT)/usr/lib/python3.15/test/ && \
@@ -737,7 +771,7 @@ NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).
 	--net-guestfwd "$(NS_NET).11:8080=$(NS_RELAY)" \
 	--mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
 test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,netsurf,skipped) \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
 	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
@@ -833,7 +867,7 @@ test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	if [ ! -f $(HAND_DISK).old.1 ] || ! cmp -s $(HAND_DISK).old $(BUILD)/hand-run-disk.copy; then \
 		echo "[hand-run] FAIL: tools/run-disk.sh overwrote an earlier .old disk"; cat $(BUILD)/hand-run-disk.log; exit 1; fi; \
 	echo "[hand-run] ok: a stale disk is replaced and never overwrites an earlier .old, a current one kept"
-	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[hand-run] skipped run-net: QEMU has no user-mode networking"; exit 0; }; \
+	@$(call NET_OR_SKIP,hand-run,skipped run-net) \
 	mkdir -p target/test-logs && : > $(HAND_HTTP_READY) && : > $(HAND_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(HAND_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(HAND_TLS_READY) > target/test-logs/test-httpd-hand-run.log 2>&1 & echo $$! > $(BUILD)/hand-run-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/hand-run-httpd.pid); \
@@ -1003,7 +1037,7 @@ test-posix-suites: $(KERNEL) $(RUNNER) tools-storage
 # tests/libc-test/threadtest3.script (the rollback-journal ones; the WAL ones
 # are in tests/libc-test/threads-excluded.txt) on SQLite's default unix VFS,
 # which takes `fcntl` record locks. libposix has them, in the process
-# (ADR-0319, INV-0319-3). A step of make test, on both accelerators in CI.
+# (ADR-0319, INV-0319-3). A step of make test; with FULL=1 under HVF and TCG on a Mac, once under TCG in CI (ADR-0350).
 # `make posix-threadtest3` is the same, under its old name.
 POSIX_TT := $(BUILD)/posix-tt
 posix-threadtest3: test-posix-threadtest3
@@ -1236,7 +1270,10 @@ GUI_IMAGE := $(BUILD)/gui.img
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
 GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 spinners:auto:1 spinners:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 wheel:auto:1 wheel:tcg:1 wheel:auto:2 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
-GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
+# FULL=1 where `auto` is TCG: not the `auto` run of a script and scale whose
+# `tcg` run is in the list (the same run; ADR-0350).
+GUI_RUNS_ONCE = $(foreach r,$(GUI_RUNS_ALL),$(if $(and $(findstring :auto:,$(r)),$(filter $(subst :auto:,:tcg:,$(r)),$(GUI_RUNS_ALL))),,$(r)))
+GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(if $(filter 1,$(AUTO_IS_TCG)),$(GUI_RUNS_ONCE),$(GUI_RUNS_ALL)),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
@@ -1485,11 +1522,16 @@ ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 check-ci-plan:
 	@tools/check-ci-plan.sh
 
+# The runs FULL=1 makes of each pair, for check-ci-jobs (INV-0350-2).
+print-legs:
+	@echo "accels: $(LOCAL_ACCELS)"; echo "qemu: $(QEMU_RUN)"; echo "gui: $(GUI_RUNS)"; echo "tcg-too: $(TCG_TOO)"
+
 CI_WORKFLOW ?= .github/workflows/test.yml
 CI_TESTS ?= tools/ci-tests.txt
 check-ci-jobs:
 	@TEST_STEPS="$(TEST_STEPS)" QEMU_CONFIGS="$(QEMU_CONFIGS)" POSIX_SCRIPTS="$(POSIX_SCRIPTS)" \
 	  POSIX_ACCELS="auto tcg" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" GUI_RUNS_ALL="$(GUI_RUNS_ALL)" \
+	  QEMU_AUTO_TWINS="$(QEMU_AUTO_TWINS)" MAKE="$(MAKE)" \
 	  tools/check-ci-jobs.sh $(CI_WORKFLOW) $(CI_TESTS)
 
 # The tiers (CLAUDE.md, "Testing"): make check on every commit (seconds);

@@ -73,11 +73,17 @@
 < hint: room agent-1 is at its memory limit of 48M
 < agent-1 /t/w> 
 > room --leave\r
-< /t/w> 
+# The prompt outside the room starts its line; "agent-1 /t/w> " would also
+# hold "/t/w> " (TASK-29, V14).
+< \r\n/t/w> 
 > room remove agent-1 --kill\r
+# The shell says the room's job was killed at the prompt after the removal,
+# before `room` is typed. (The step after `room --leave` used to match the
+# room's own prompt, so `room` was typed ahead and the line came after its
+# output; with the steps in step it comes here: candidate run 43575482537.)
+< sleep 300: killed
 < /t/w> 
 > room\r
 < home
-< sleep 300: killed
 < /t/w> 
 > poweroff\r

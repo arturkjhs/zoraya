@@ -181,6 +181,15 @@ fn every_crash_state_is_a_prefix() {
         t.images,
         started.elapsed()
     );
+    // The test is the checks made on each crash image: few made is not a
+    // pass. The seeds are fixed; on 2026-11-14 they gave 442 windows and
+    // 14460 images, and the floors are about half of that.
+    assert!(
+        t.images >= 7000 && t.windows >= 200,
+        "only {} crash images in {} windows were checked",
+        t.images,
+        t.windows
+    );
 }
 
 /// INV-0015-2: the same with the device completing every batch's writes in
@@ -192,6 +201,12 @@ fn crash_states_with_permuted_completion() {
         run_and_crash(seed, 80, true, CrashConfig::default(), None, &mut t);
     }
     eprintln!("permuted crash test: {} crash images", t.images);
+    // 4404 on 2026-11-14.
+    assert!(
+        t.images >= 2000,
+        "only {} crash images were checked",
+        t.images
+    );
 }
 
 /// INV-0010-2's targeted test: crash between every pair of block writes of a
@@ -248,6 +263,12 @@ fn rename_over_and_max_write_are_all_or_nothing() {
     let mut t = Totals::default();
     run_and_crash_big(1, &ops, &mut t);
     eprintln!("targeted crash test: {} crash images", t.images);
+    // 407 on 2026-11-14.
+    assert!(
+        t.images >= 200,
+        "only {} crash images were checked",
+        t.images
+    );
 }
 
 fn run_and_crash_big(seed: u64, ops: &[Op], t: &mut Totals) {

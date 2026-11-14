@@ -4,7 +4,7 @@
 ! panicked
 # Only the shell's own power_off ends this run (INV-0062-3).
 ! first process ended
-! no such command: hello
+! hello: no such command
 < heap check: Box and Vec work
 < timer check: 10 interrupts in
 < first process: init
@@ -106,14 +106,17 @@ x not run\r\n
 < \r\n/>
 # None is left: ticking children go silent once the shell reports the end.
 > fanout 4 tick\r
-< tick
+# A child's line, not the "tick" of the typed command.
+< \r\ntick
 > \x03
 < fanout: interrupted (Ctrl-C)
 < \r\n/> 
 ~ 500 tick
 # The shell waits for the job, not its first process: no prompt while a child lives.
 > fanout 1 tick leave\r
-< tick
+< \r\ntick
+# No prompt came before the child's first line, and none comes after it.
+x \r\n/>
 ~ 400 \r\n/>
 > \x03
 < \r\n/> 
@@ -210,14 +213,22 @@ x \r\n/>
 < sleep is a program, /zoraya/bin/sleep
 < \r\n/> 
 # A burst larger than the ring, during a job, drops bytes and counts them.
-> spin\r
-= 8192
-< bytes dropped]
+# The job is in front when the burst comes: its own line is waited for first.
+# The shell says what was dropped when it next shows a prompt, so the count
+# comes after the job has ended. (The burst used to follow `spin\r` at once
+# and the count was awaited before the Ctrl-C: that passed only when the
+# shell had not yet read the command and so dropped the bytes at its prompt,
+# before the job; when it had, the count waited for a prompt the script never
+# asked for. The test-boot flake of run 43437795275: TASK-29, F5.)
+> fanout 1\r
+< fanout: 1 children spinning
+= 65536
 # The key itself can be lost in a burst, so it is sent until it lands.
-@ \x03 | spin: interrupted
-< \r\n/> 
+@ \x03 | fanout: interrupted
+< bytes dropped]
+< /> 
 > uptime\r
-< up
+< \r\nup 
 < \r\n/> 
 # The count is reported once.
 > echo alive\r

@@ -4,7 +4,7 @@
 ! ZORAYA-FAULT
 ! panicked
 ! ZORAYA-PANIC
-! t_posix: FAIL
+! : FAIL line
 < PSURF> 
 > ZORAYA_POSIX_STATS=1 t_posix bench\r
 < t_posix: bench passed

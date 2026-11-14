@@ -107,7 +107,8 @@
 > echo fine > /home/fine.txt\r
 < \r\n/>
 > cat /home/fine.txt\r
-< fine
+# The file's line, not the "fine" of the typed path (TASK-29, V8).
+< \r\nfine
 < \r\n/>
 x power off
 > poweroff\r
