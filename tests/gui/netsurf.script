@@ -9,26 +9,32 @@ screen ~> _
 pause 3000
 # The window shows the grants of its line as pills (ADR-0317): the roots to read
 # and the one host and port it may reach.
-type netsurf http://10.0.2.2:@PORT@/ns/page\r
+type netsurf http://@HOST@:@PORT@/ns/page\r
 pause 15000
 region 110 175 150 40 0000ff
 region 110 235 80 40 00ff00
 region 400 300 100 40 ffffff
 shot netsurf-http
-# The pills on the window's title bar (INV-0317-1): three pills, the network's
-# first (left), +r /system/fonts, which comes with the window (ADR-0326), and
-# +r /system/tls (right, ending at the frame's edge), with the title bar's own
-# colour between them; the right one's last padding column is the pill fill.
+# The pills on the window's title bar (INV-0317-1): four pills, the URL's
+# `+net HOST:PORT`, `web` (ADR-0324, INV-0324-4), +r /system/fonts, which comes
+# with the window (ADR-0326), and +r /system/tls (right, ending at the frame's
+# edge), with the title bar's own colour between them; the right one's last
+# padding column is the pill fill.
 region 893 117 1 6 fcfcfc
 region 788 116 4 8 f1f1f3
+# Measured on a screendump of this step: the net pill 467..623 (its text is
+# monospace, `+net 203.0.113.2:PORT`), `web` 630..661, the fonts pill 668..785,
+# the gaps at 624..629, 662..667 and 786..791 the title bar's colour.
 region 663 116 4 8 f1f1f3
+region 625 116 4 8 f1f1f3
+region 633 117 2 6 fcfcfc
+region 656 117 2 6 fcfcfc
 # The fonts pill itself (T5 of the 9f-text review): its first padding columns
-# are the pill fill, and so are the net pill's (its text, monospace with a
-# five-digit port, is 137 pixels wide). Without the fonts pill the net pill
-# moves right by 124 pixels onto 649..785, so 528 is the title bar and 663 is
-# inside the net pill: both lines fail.
+# are the pill fill, and so are the net pill's. Without the fonts pill, `web`
+# and the net pill move right by 124 pixels (the net pill onto 591..747), so
+# 470 is the title bar and 671 is inside the net pill: both lines fail.
 region 671 116 3 8 fcfcfc
-region 528 116 3 8 fcfcfc
+region 470 116 3 8 fcfcfc
 # The form: type into the field, submit with Return; the result page is yellow.
 click 160 302
 type zoraya\r
@@ -46,7 +52,7 @@ screen closed
 # The wheel scrolls the page under the pointer, 100 pixels a notch (proposed
 # ADR-0322): /ns/tall is blue for 1200 pixels, then magenta. Fifteen notches
 # toward the person put magenta at the top of the page; fifteen away, blue.
-type netsurf http://10.0.2.2:@PORT@/ns/tall\r
+type netsurf http://@HOST@:@PORT@/ns/tall\r
 pause 15000
 region 110 175 150 40 0000ff
 wheel 400 400 down 15
@@ -66,7 +72,7 @@ screen closed-wheel
 # page /ns/cyrillic at scale 1 (tests/gui/netsurf-text.script has scale 2).
 # Line 1, ten і: ink where they are, and nothing where ten ж reach on line 2
 # (boxes, or the old 8-pixel cells, would make the two lines as wide).
-type netsurf http://10.0.2.2:@PORT@/ns/cyrillic\r
+type netsurf http://@HOST@:@PORT@/ns/cyrillic\r
 pause 15000
 shot netsurf-cyrillic
 ink 106 172 70 23 ffffff 300
@@ -119,5 +125,99 @@ click 300 87
 pause 500
 type echo closed3\r
 screen closed3
+# ADR-0324: the web grant. `grants` says it in words (on a clear screen: with
+# /system/fonts its lines reach past the window's last row).
+chord ctrl l
+top ~> _
+type grants netsurf\r
+prefix net: web 
+# A page on one public host (one.web.test, 203.0.113.10 of the test network,
+# relayed to the test server) links to a second (two.web.test, .11), to a
+# redirect to the second, and to hosts the web rule refuses: 10.0.2.2 (QEMU's
+# usual host, private), 127.0.0.1, the gateway 203.0.113.2 on port 80 (public
+# by range, but this side of the network) and two.web.test:8080 (not 80 or
+# 443), then a redirect to two.web.test:8080 and a name whose only answer is
+# private (lan.web.test, 10.0.2.2 in net.hosts: its lookup is refused). Each
+# link is a block of 40 pixels, one under the other: cyan, orange, maroon,
+# green, navy, olive, pink, azure.
+type netsurf 'http://one.web.test/ns/web-a?port=@PORT@'\r
+pause 15000
+region 110 175 150 20 00ffff
+region 110 215 150 20 ff8000
+region 110 375 150 20 808000
+# `web` between the gaps at 624..629 and 662..667 (the fonts and tls pills
+# keep their places; the net pill is this URL's).
+region 625 116 4 8 f1f1f3
+region 633 117 2 6 fcfcfc
+region 656 117 2 6 fcfcfc
+shot netsurf-web
+# The second host by a link: its page is magenta.
+click 150 188
+pause 8000
+region 400 300 200 200 ff00ff
+shot netsurf-web-link
+# Back (the toolbar's arrow), then the redirect to the second host.
+click 118 152
+pause 5000
+region 110 175 150 20 00ffff
+click 150 228
+pause 8000
+region 400 300 200 200 ff00ff
+shot netsurf-web-redirect
+# The refused hosts: each gets the page that names it and the line that would
+# allow it (ADR-0325), whose background is #ffe4b5.
+click 118 152
+pause 5000
+region 110 255 150 20 800000
+click 150 268
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-private
+click 118 152
+pause 5000
+region 110 295 150 20 008000
+click 150 308
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-loopback
+click 118 152
+pause 5000
+region 110 335 150 20 000080
+click 150 348
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-gateway
+click 118 152
+pause 5000
+region 110 375 150 20 808000
+click 150 388
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-port
+# A redirect to a refused host gets the page too (ADR-0325: "a refused link or
+# redirect"); SLIRP relays two.web.test:8080 to the server, so a leak would be
+# in its log.
+click 118 152
+pause 5000
+region 110 415 150 20 ff0080
+click 150 428
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-redirect
+# A lookup the web rule refuses (every answer private): the page, from curl's
+# own lookup (patch 0009 asks no second time).
+click 118 152
+pause 5000
+region 110 455 150 20 0080ff
+click 150 468
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-lookup
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-web\r
+screen closed-web
 type poweroff\r
 exit

@@ -24,7 +24,7 @@
 //! Keys: `name` or `topic`, `summary`, `usage` (one or more), `operand NAME
 //! KIND TEXT`, `option [SHORT] LONG [ARG KIND] TEXT` (an upper-case word is
 //! the argument only when a kind follows it), `when OPTION OPERAND
-//! KIND`, `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311), `cwd read|none`, `question`, `program PATH`, `needs net-status`, `exit
+//! KIND`, `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311), `cwd read|none`, `question`, `program PATH`, `needs net-status`, `net web` (ADR-0324), `exit
 //! CODE TEXT` and `setting NAME TYPE DEFAULT TEXT`.
 //!
 //! An operand's NAME says how many arguments it takes, as the usage line
@@ -496,6 +496,10 @@ pub struct Description {
     /// service for its state and nothing else. The shell honours it for
     /// base-system commands only.
     pub needs_net_status: bool,
+    /// `net web` (ADR-0324): the command reaches any public host on ports 80
+    /// and 443, with names resolved for it. The shell honours it for the
+    /// system image's descriptions only, and never in an untrusted room.
+    pub net_web: bool,
     /// `window TITLE` (ADR-0317): a POSIX program that opens one window; the
     /// title is what the compositor shows until the program sets its own. The
     /// shell honours it for a trusted room only.
@@ -522,6 +526,7 @@ impl Description {
             question: false,
             program: None,
             needs_net_status: false,
+            net_web: false,
             window: None,
             exits: Vec::new(),
             settings: Vec::new(),
@@ -1101,6 +1106,15 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 }
                 d.window = Some(t);
             }
+            "net" => {
+                if d.net_web {
+                    return err(number, "net web is given once");
+                }
+                if rest.trim_end() != "web" {
+                    return err(number, "net takes web");
+                }
+                d.net_web = true;
+            }
             "needs" => {
                 if d.needs_net_status {
                     return err(number, "needs net-status is given once");
@@ -1153,6 +1167,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             || seen_question
             || seen_program
             || d.needs_net_status
+            || d.net_web
             || d.window.is_some()
             || !d.exits.is_empty()
             || !d.settings.is_empty();

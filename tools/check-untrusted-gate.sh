@@ -133,5 +133,17 @@ if [ "$window_shell" -lt 1 ] || [ "$window_panel" -lt 1 ]; then
 	bad "a marker of the window refusal is gone ($window_shell of 1 in the shell, $window_panel of 1 in the panel; untrusted-gate: window-refusal, ADR-0317)"
 fi
 
+# The refusal of a description's web rule in an untrusted room (ADR-0324
+# item 7, INV-0324-3): the function in the shell's crate and its three calls
+# in zosh (a native command's scope, a POSIX program's, and `grants` for a
+# native command). Like the window's,
+# it stays after the gate opens: the gate's second stage opens a room's own
+# network words, never a description's web.
+web_fn=$(markers 'untrusted-gate: web-refusal (' crates/zoraya-shell/src/netgrant.rs)
+web_calls=$(markers 'untrusted-gate: web-refusal-call' user/src/bin/zosh.rs)
+if [ "$web_fn" -lt 1 ] || [ "$web_calls" -lt 3 ]; then
+	bad "a marker of the web refusal is gone ($web_fn of 1 in crates/zoraya-shell/src/netgrant.rs, $web_calls of 3 calls in the shell; untrusted-gate: web-refusal, ADR-0324)"
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "check-untrusted-gate: ok"

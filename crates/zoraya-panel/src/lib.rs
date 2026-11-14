@@ -597,7 +597,8 @@ pub fn window_record(
     let mut count = 0;
     for l in entries.split('\n').filter(|l| !l.is_empty()) {
         count += 1;
-        let word = ["+r ", "+w ", "+net "].iter().any(|p| l.starts_with(p));
+        // `web` is the web rule's pill (ADR-0324 item 6), exactly that word.
+        let word = l == "web" || ["+r ", "+w ", "+net "].iter().any(|p| l.starts_with(p));
         if count > 16 || !word || l.len() > 200 || !plain(l) {
             return Err(why::INVALID);
         }

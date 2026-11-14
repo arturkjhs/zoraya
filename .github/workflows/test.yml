@@ -301,6 +301,7 @@ jobs:
           - make check-quota-tests
           - make check-ethd-maps
           - make check-tls-roots
+          - make check-netsurf-refusal
           - make check-run-disk
           - make check-ci-plan
     name: ${{ matrix.cmd }}

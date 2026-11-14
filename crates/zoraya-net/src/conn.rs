@@ -19,7 +19,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use zoraya_abi::net::{Protocols, Scope};
+use zoraya_abi::net::{NameGrant, Protocols, Scope, is_public};
 use zoraya_proto_net::{Connected, Failed, Reset, reason, reset};
 use zoraya_protocol::{Below, NO_REPLY, encode};
 
@@ -121,6 +121,10 @@ pub struct Conn<C> {
     from_hosts: bool,
     /// Some candidate was dropped as local.
     saw_local: bool,
+    /// Only a web rule admitted the name (ADR-0324): a candidate must be
+    /// public and not local, or named by an address rule, `net.hosts` or
+    /// not.
+    public_only: bool,
     last_failure: u32,
 }
 
@@ -177,11 +181,18 @@ impl<C: Client> Conn<C> {
             let a = self.candidates[self.next];
             self.next += 1;
             // ADR-0223 item 4: an answer that is local is refused unless an
-            // address rule covers it; `net.hosts` is the person's own word.
-            if is_local(stack, a, now_us)
-                && !self.from_hosts
-                && !scope.allows_address(a, self.port, Protocols::TCP)
-            {
+            // address rule names it; `net.hosts` is the person's own word.
+            // ADR-0324: a name only a web rule admits uses public answers
+            // that are not local, `net.hosts` included, unless a rule names
+            // the address. A web rule never names one: an address target it
+            // admits is still refused when local (the gateway, our DNS).
+            let named = scope.names_address(a, self.port, Protocols::TCP);
+            let refused = if self.public_only {
+                !named && (!is_public(a) || is_local(stack, a, now_us))
+            } else {
+                is_local(stack, a, now_us) && !self.from_hosts && !named
+            };
+            if refused {
                 self.saw_local = true;
                 continue;
             }
@@ -545,6 +556,11 @@ impl<C: Client> Conns<C> {
         if slot == self.slots.len() {
             self.slots.push(None);
         }
+        let public_only = match &target {
+            Target::Name(n) => Scope::decode(scope)
+                .is_some_and(|s| s.name_grant(n, port, Protocols::TCP) == NameGrant::PublicOnly),
+            Target::Address(_) => false,
+        };
         let mut conn = Conn {
             client,
             owner,
@@ -555,6 +571,7 @@ impl<C: Client> Conns<C> {
             next: 0,
             from_hosts: false,
             saw_local: false,
+            public_only,
             last_failure: reason::UNRESOLVABLE,
         };
         let first = match target {

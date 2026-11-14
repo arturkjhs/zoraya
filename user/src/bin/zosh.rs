@@ -894,6 +894,8 @@ impl Z {
         let Some((d, base)) = self.program_description(exec.name) else {
             return Ok(None);
         };
+        // untrusted-gate: web-refusal-call (the POSIX path below has its own)
+        self.refuse_web_in_untrusted_room(&d)?;
         let net = Self::net_grant_with(exec, &d, base, &self.cwd)?;
         if net.is_some() {
             // untrusted-gate: net-refusal-call (the POSIX path below has its own)
@@ -992,7 +994,19 @@ impl Z {
         let Some(d) = grants::trusted_description(&trusted, path) else {
             return Ok(None);
         };
+        // untrusted-gate: web-refusal-call (the native path above has its own)
+        self.refuse_web_in_untrusted_room(d)?;
         Self::net_grant_with(exec, d, true, &self.cwd)
+    }
+
+    /// ADR-0324 item 7: a description's `net web` is never honoured in an
+    /// untrusted room; the line is refused (`zoraya_shell::netgrant::web_refused`).
+    fn refuse_web_in_untrusted_room(&self, d: &Description) -> Result<(), String> {
+        let untrusted = self.room.as_ref().is_some_and(|r| r.untrusted);
+        zoraya_shell::netgrant::web_refused(d, untrusted).map_err(|r| {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            zoraya_command::error("room", Some(&r.subject), &r.problem, &hints)
+        })
     }
 
     /// Whether the line gives a POSIX program of the image a connection that
@@ -1581,7 +1595,7 @@ impl Z {
             ));
         };
         let targets = match self.posix_net_scope(exec, path) {
-            Ok(Some((_, scope))) => zoraya_shell::netgrant::targets(&scope),
+            Ok(Some((_, scope))) => zoraya_shell::netgrant::pills(&scope),
             _ => Vec::new(),
         };
         // The window must show every grant: more pills than it takes is a
@@ -3917,8 +3931,12 @@ impl Host for Z {
         let scope = if code != 0 {
             None
         } else if let Some((d, base)) = self.program_description(exec.name) {
-            Self::net_grant_with(exec, &d, base, &self.cwd)
+            // Never the web rule a run would refuse (9f-net review, note 8),
+            // as `posix_net_scope` below does for a POSIX program.
+            // untrusted-gate: web-refusal-call (`grants`, a native command)
+            self.refuse_web_in_untrusted_room(&d)
                 .ok()
+                .and_then(|()| Self::net_grant_with(exec, &d, base, &self.cwd).ok())
                 .flatten()
         } else if self.lookup(exec.name) == Found::Program
             && let Some(path) = self.on_volume.get(exec.name).cloned()
