@@ -414,3 +414,137 @@ room's connections are the volume server's, so it is only a robustness note; `ch
 
 Recommendation: the fix is sound and fails closed; mergeable. Fix C1 on the branch (one comment); C2 can go to the
 backlog with the host test as the preferred form, but should be done before the table walk changes again.
+
+## Gate review of tr, expr and diff (ADR-0336 item 2)
+
+The reviewer did not port these three. Read: ADR-0336 (item 2, the revisit trigger), `work/10e` at `08bdde9`:
+`user/describe/posix/{tr,expr,diff}.cmd`, `ports/toybox-applets.txt`, `ports/patches/toybox/`, `tests/posix/w5.script`,
+`tests/posix/w10.script`, `tests/posix/rootfs/tests/w10.sh`; and `toys/pending/{tr,expr,diff}.c` of toybox 0.8.15. The
+archive is on disk (`build/ports/src/toybox-0.8.15.tar.gz`). Its SHA-256 is the one in `ports/sources.lock`
+(`44e2bab4...`), and the three files in `build/ports/work/toybox-0.8.15` are byte for byte the archive's: no Zoraya
+patch touches them. Nothing was fetched.
+
+How it was run: a host build of the pristine archive in a scratch directory (macOS, clang, `allnoconfig` with only
+`TR`, `EXPR`, `DIFF`). It used `-funsigned-char` to match the target (`zcc` defines `__CHAR_UNSIGNED__`) and
+`-fsanitize=address,undefined`. A second build used `-O2` without sanitizers, for timings. No QEMU was run in this
+review. W5 and W10 were not re-run; their logs in the 10e worktree (`target/test-logs/posix-w{5,10}-auto.log`,
+16:12) end with exit code 0.
+
+**toybox's own tests** (`scripts/test.sh tr|expr|diff`, sanitized build): tr 6/6, expr 44/44, diff 19/19 PASS, with no
+sanitizer report. This confirms the implementer's counts, now under ASan and UBSan. These tests do not reach the
+defects below.
+
+### Findings
+
+G1. error. `toys/pending/tr.c:116-183` (`expand_set`): heap buffer overflow, a write. The size check
+`if (i >= size)` runs once per input item, but a single item adds up to 256 bytes: a range `X-Y` adds `Y-X+1` bytes,
+and a class up to 52 or 62 (`[:xdigit:]` writes `set[i+6..i+11]`). With `i` anywhere in `1..255` and a range or
+class that follows, `tr` writes past the 256-byte buffer, by up to 255 bytes on later rounds as well. Reproduced
+with ASan: `tr "ab<0x01>-<0xff>" y` and `tr "<250 zeros>[:punct:]" y` both stop with `heap-buffer-overflow` (WRITE).
+Scenario: a script runs `tr "$set" ...` on data from a file or the network (configure scripts and git's scripts
+build tr sets). The overflow corrupts `tr`'s heap, including malloc's metadata. The damage stays inside `tr`'s own
+process and table (the terminal, `/tmp` of the line, system read), so nothing goes beyond what a normal process
+holds. It is still memory-unsafe code in a command scripts feed with data, which is exactly the review's question.
+Fix: a third toybox patch. Before each item, grow when `i + 256 > size` (for example
+`if (i > size - 256) set = xrealloc(set, size += 256);`, with the growth at the top of the loop). Add a regression
+case on the image.
+
+G2. warning. `toys/pending/tr.c:52-56` (`map_translation`): `if (set2[k + 1]) k++` uses a NUL byte as the end of
+SET2, but SET2 is a counted buffer (`TT.len2`) and is not terminated. (a) When SET2 expands to exactly a multiple of
+256 bytes, the loop reads one byte past the buffer. ASan reports `READ of size 1 ... 0 bytes after 256-byte region`
+for `tr <300 a's> "<0x01>-<0xff>z"`. After an `xrealloc` the bytes past `len2` are uninitialised, so `k` can walk on
+past the buffer. (b) A NUL in SET2 stops the walk: `echo abc | tr abc 'x\000y'` prints `xxx`, where POSIX and GNU
+give `x`, NUL, `y`. Fix (same patch): `if (k + 1 < TT.len2) k++;`.
+
+G3. warning. `toys/pending/tr.c:192`: `while ((n = read(0, ...)))` treats `-1` as data. On a read error `tr` spins
+at full CPU forever, writing nothing. On the host, `tr a b < /tmp` (stdin a directory) ran until the 10 s alarm. On
+Zoraya, any read error on fd 0 does the same (a directory, `EIO` from a closed terminal or pipe server). Only the
+person's own line hangs, and Ctrl-C ends it. Fix (same patch): `while ((n = read(0, toybuf, sizeof(toybuf))) > 0)`,
+then `if (n < 0) perror_exit("read")`.
+
+G4. warning. `toys/pending/expr.c:163`: comparisons compute `cmp = a - b`, which overflows.
+`expr 9223372036854775807 \> -1` prints `0` (UBSan: `signed integer overflow`). The arithmetic at `expr.c:184-188`
+overflows the same way: `expr 9223372036854775807 + 1`, and `-9223372036854775808 / -1`. That is undefined
+behaviour in C. On AArch64 `sdiv` does not trap, so nothing crashes, but the wrong value comes back with exit 0 or
+1, never 2. Scenario: a configure-style script compares sizes or versions with `expr` and takes the wrong branch.
+Fix: compare with `(a > b) - (a < b)`, and use `__builtin_{add,sub,mul}_overflow` (with `b == -1 && a == LLONG_MIN`
+for `/` and `%`) that ends in `error_exit("overflow")`, exit 2, as GNU does. If not patched, `expr.cmd` must say
+that results wrap.
+
+G5. warning. `toys/pending/diff.c:142-169, 300-307`: the Hunt-Szymanski core is quadratic in time (and grows its
+candidate lists) when a file has many equal lines. One file of N lines `x` against the same file plus one line
+took 0.71 s at N=5000, 1.03 s at 10000 and 5.62 s at 20000 (`-O2`, host). The sanitized build ran past 60 s at
+50000. 20000 distinct lines take 0.00 s. A larger input makes it run longer, not unsafely: only CPU, memory under
+the quota, Ctrl-C ends it, and nothing goes beyond a normal process. Scenario: `diff` on generated output with
+many blank or repeated lines (logs, CSV), on the slower guest. Fix: record it as a known limitation in `diff.cmd`
+(or `docs/design.md`). ADR-0336's revisit trigger (OpenBSD's `diff`) applies if it bites.
+
+G6. warning. `toys/pending/diff.c:528, 533, 891`: `diff -r` follows symbolic links by default
+(`DIRTREE_SYMFOLLOW`), and toybox's `dirtree` has no loop detection. With a link `s/loop -> ..` on both sides, the
+walk descends until open fds run out. The host (1M fds) ran past 20 s with no output; at `ulimit -n 64` it ends
+with `diff: xdup: Too many open files`, exit 2. On Zoraya `OPEN_MAX` is 512 (`zoraya_abi::posix`), so the walk
+ends in that error after at most about 512 levels. Links are followed only through the line's own table (10e's
+`open_or_link`), so a link cannot reach anything `diff` was not given. The flaw is cost and a misleading error, not
+rights. Fix: say in `diff.cmd` that `-r` follows links and that a loop ends in an error. Better, a patch that
+compares each directory's dev/ino with its ancestors'. `--no-dereference` is (rightly) not let through.
+
+G7. warning. `toys/pending/diff.c:403`: `print_line_matching_regex` loops `for (i = a; a > 0; --i)`, testing `a`
+instead of `i`. With `-F REGEX` and no line above the hunk matching, it reads `off_set[-1]` and below. ASan stops
+with `heap-buffer-overflow` (READ of size 4) on `diff -F zzz` of `seq 1 10` against the same with line 8 changed.
+`diff.cmd` does not let `-F` through, so `zosh` refuses the option. But a script under `sh` calls `/bin/diff`
+with whatever options it likes, and gets the out-of-bounds read inside its own process. Fix: keep `-F` out of
+`diff.cmd` (it is), and include `i > 0` in the toybox patch of G1, because scripts are outside the description's
+reach.
+
+G8. warning. The gate's workloads barely touch the commands. W5 runs one `tr a-z A-Z`. W10 runs `diff A B` on two
+identical files, so it exercises neither the LCS code, `-u` output, `-r`, nor a non-zero exit. `expr` has no
+workload. toybox's tests ran against the host's libc, not the image's. Fix: add to the userland script on the
+image: `diff -u` of two differing files against an expected hunk (exit 1); `diff -r` of two trees with an
+`Only in` line; `tr -d '\r'`, `tr -s`, `tr -c`; `expr 7 / 0` and `expr 1 + a` with exit 2; and regressions for G1
+to G3 (the two overflowing sets of G1, the `x\000y` case of G2, `tr a b < DIR` ending with an error).
+
+G9. note. POSIX gaps that `tr.cmd` does not state (`expr.cmd` does state its own). `[c*n]` and `[c*]` in SET2 are
+not supported: `echo abc | tr abc '[x*]'` prints `[x*`. With `-d` and SET2 but without `-s`, SET2 is silently
+ignored where POSIX makes it a usage error: `tr -d a b` prints `bc`, exit 0. `[=c=]` takes one byte. Fix: one
+sentence in `tr.cmd`'s body.
+
+G10. note. `toys/pending/expr.c:79`: `strtoll` with only `*end` checked accepts `""` as 0 (`expr '' + 1` prints
+`1`), and also leading blanks and a sign, and clamps out-of-range numbers silently (`ERANGE` is ignored). POSIX
+requires an integer argument. No safety impact. `diff.c:56` holds file offsets as `int`: for a file over 2 GiB the
+offsets wrap and `fseek` fails or seeks wrongly. That is wrong output or `fseek failed`, not memory-unsafe.
+
+### Checked and found sound
+
+- The descriptions let through only what ADR-0336 allows. `tr` and `expr` have only `text` operands. The code
+  matches: `tr` touches only fd 0 and fd 1, and `expr` opens nothing. `diff` has two `read` operands, and a `read`
+  directory is `read` and `clone` (ADR-0153's table), which covers `-r`'s tree as `grep -r`'s. No option takes a
+  path. The options left out are harmless except `-F` (G7): `-L`, `-S`, `--*-line-format`, `--color`,
+  `--no-dereference`, `-d`, `-t`, `-T` and `--strip-trailing-cr` for diff, and `-t` for tr. `diff -` and a FIFO
+  operand copy the input to `$TMPDIR` or `/tmp`, which is the line's own `/tmp` and counts against its quota. No
+  rights beyond the line's table.
+- `expr.cmd` is right. There is no `length`, `substr`, `index` or `match` in the code: `expr length abc` gives
+  `Unexpected extra input 'abc'`, exit 2. toybox's own `config EXPR` help does not say so, but `help expr` on
+  Zoraya is the description's page, which does. Exits: 0 and 1 by `is_false`, and 2 for errors, through
+  `TOYFLAG_ARGFAIL(2)` (`lib/lib.c:23`). `expr 1 + a` exits 2, as checked. diff uses `ARGFAIL(2)` as well.
+- `TT.map[set[k]]` and `TT.map[toybuf[i]]` in `tr` are in bounds because `char` is unsigned on the target. On a
+  signed-char host (macOS) they would index below the map, so a host build for tests needs `-funsigned-char`, as
+  this one had.
+- `expr` recursion (`eval_expr`) is bounded by the argument count. On Zoraya's 64 KiB stack with its guard page, a
+  deeply parenthesised line ends in a stack fault of `expr` alone (ADR-0034), not in corruption. 40000 levels ran
+  on the host's 8 MiB stack. The regex is libc's `regcomp` (BRE), the same as for `grep` and `sed`. Its
+  backreference blow-up is theirs, no worse.
+- diff's growth arithmetic for `v[]`, `offset[]` and `kcand[]` (`size * 11 / 10`, checked once per step against at
+  most one increment), its binary detection (NUL in the first block unless `-a`), and `quote_filename`'s two
+  passes under an unsigned `char`.
+- busybox is no longer in `ports/sources.lock`.
+
+### Verdict
+
+**Enable with these changes.** `expr` and `diff`: enable. Fix G4 (or state the wrap in `expr.cmd`) and document
+G5 and G6. `tr`: enable only with a toybox patch for G1, which is an error, together with the one-line fixes of G2
+and G3 and G7's `i > 0`. All four are under 15 lines, in a third file of `ports/patches/toybox/`. The regressions
+of G8 must run on the image. Until that patch lands, ADR-0336 item 2's condition ("a reviewer ... has read it")
+is met for `expr` and `diff` and not for `tr`. `tr` is already listed in `ports/toybox-applets.txt` at `08bdde9`,
+so the patch is due before 10e merges. None of the defects lets a hostile input do more than the process could do
+anyway: each stays inside the program's own table. G1 is still memory corruption from script data, and the gate
+exists to keep that out.
