@@ -1,10 +1,11 @@
 diff -ru a/lib/lib.c b/lib/lib.c
---- a/lib/lib.c	2026-10-02 23:31:14
-+++ b/lib/lib.c	2026-11-14 14:38:43
-@@ -774,11 +774,29 @@
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -773,12 +773,30 @@
+ {
    if (1 < (long)tempfile2zap) unlink(tempfile2zap);
  }
- 
++
 +#ifdef __zoraya__
 +// Zoraya (ADR-0336 item 6, ADR-0344): a file is changed in place. The result
 +// is written to a temporary file in /tmp (the line's own, always given) and,
@@ -15,7 +16,7 @@ diff -ru a/lib/lib.c b/lib/lib.c
 +// leave the file short.
 +static char *zoraya_original;
 +#endif
-+
+ 
  // Open a temporary file to copy an existing file into.
  int copy_tempfile(int fdin, char *name, char **tempname)
  {
@@ -31,7 +32,7 @@ diff -ru a/lib/lib.c b/lib/lib.c
  
    // Record tempfile for exit cleanup if interrupted
    if (!tempfile2zap) sigatexit(tempfile_handler);
-@@ -808,6 +826,29 @@
+@@ -808,6 +826,32 @@
    *tempname = NULL;
  }
  
@@ -46,12 +47,15 @@ diff -ru a/lib/lib.c b/lib/lib.c
 +    xclose(fdin);
 +  }
 +  xlseek(fdout, 0, SEEK_SET);
-+  out = xopen(zoraya_original, O_WRONLY|O_TRUNC);
-+  xsendfile(fdout, out);
++  // From the truncation on, the copy in /tmp is the only whole one: the exit
++  // handler must not remove it, and a failed copy back says where it is.
++  tempfile2zap = (char *)1;
++  out = open(zoraya_original, O_WRONLY|O_TRUNC);
++  if (out == -1 || sendfile_len(fdout, out, -1, 0) < 0)
++    perror_exit("%s: the edited text is kept in %s", zoraya_original, *tempname);
 +  xclose(out);
 +  xclose(fdout);
 +  unlink(*tempname);
-+  tempfile2zap = (char *)1;
 +  free(*tempname);
 +  free(zoraya_original);
 +  zoraya_original = NULL;
@@ -61,7 +65,7 @@ diff -ru a/lib/lib.c b/lib/lib.c
  // Copy the rest of the data and replace the original with the copy.
  void replace_tempfile(int fdin, int fdout, char **tempname)
  {
-@@ -825,6 +866,7 @@
+@@ -825,6 +869,7 @@
    free(temp);
    *tempname = NULL;
  }

@@ -357,9 +357,12 @@ comma := ,
 # ---------------------------------------------------------------- awk
 
 # one-true-awk, the second edition (UTF-8; ADR-0336 item 3), unpatched. Its
-# grammar is turned into C on the host by bison (a host tool, docs/dependencies.md)
-# and its table of token names by maketab, built and run on the host; the
-# program itself is compiled by zcc. The Lucent notice is the licence.
+# grammar is turned into C on the host by the pinned bison of sources.lock
+# (built into $(HOSTPFX), as for NetSurf; never the host's own, so that the
+# program does not depend on the build host: review of 10e, finding 11), and
+# its table of token names by maketab, built and run on the host; the
+# program itself is compiled by zcc, each command echoed into awk.log for
+# the __linux__ check of check-ports. The Lucent notice is the licence.
 AWK := $(WORK)/awk-$(call lock_ver,awk)
 AWK_BIN := $(AWK)/awk
 awk: $(AWK_BIN)
@@ -367,10 +370,12 @@ $(AWK): $(LOCK) $(wildcard ports/patches/awk/*.patch)
 	$(call unpack,awk,ports/patches/awk)
 	@touch $@
 AWK_SRCS := b.c main.c parse.c tran.c lib.c run.c lex.c math.c
-$(AWK_BIN): $(AWK) $(SYSROOT_STAMP)
-	@cd $(AWK) && $(call logged,sh -c 'bison -d -b awkgram awkgram.y && $(HOSTCC) -O1 -o maketab maketab.c && ./maketab awkgram.tab.h > proctab.c',awk-grammar)
+# $(HOSTPFX)/bin/bison, whose variable is set further down.
+AWK_BISON := $(PORTS)/host/bin/bison
+$(AWK_BIN): $(AWK) $(SYSROOT_STAMP) $(AWK_BISON)
+	@cd $(AWK) && $(call logged,sh -xc '$(AWK_BISON) --version && $(AWK_BISON) -d -b awkgram awkgram.y && $(HOSTCC) -O1 -o maketab maketab.c && ./maketab awkgram.tab.h > proctab.c',awk-grammar)
 	rm -f $(AWK_BIN)
-	@cd $(AWK) && $(call logged,sh -c 'mkdir -p objs && for f in awkgram.tab.c proctab.c $(AWK_SRCS); do $(ZCC) $(CROSS_CFLAGS) -c -o objs/$$(basename $$f .c).o $$f || exit 1; done && $(ZCC) $(CROSS_CFLAGS) -o awk objs/*.o -lm',awk)
+	@cd $(AWK) && $(call logged,sh -xc 'mkdir -p objs && for f in awkgram.tab.c proctab.c $(AWK_SRCS); do $(ZCC) $(CROSS_CFLAGS) -c -o objs/$$(basename $$f .c).o $$f || exit 1; done && $(ZCC) $(CROSS_CFLAGS) -o awk objs/*.o -lm',awk)
 	@touch $@
 
 # ---------------------------------------------------------------- tcc
@@ -1125,7 +1130,7 @@ check-ports: | tools
 	@for f in include/c++ $(CXX_IMAGE_LEFT_OUT); do \
 	  if [ -e $(ROOTFS)/usr/$$f ]; then echo "build/rootfs-posix/usr/$$f is in the image"; exit 1; fi; done
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
-	@for l in dash make pdpmake toybox tcc libtcc1 musl; do \
+	@for l in dash make pdpmake toybox awk tcc libtcc1 musl; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi

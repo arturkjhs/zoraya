@@ -25,8 +25,9 @@ import it:
 | `sigsetjmp` | `gzip` (toybox's `toys.rebound`) |
 | `statfs`, `pathconf` | `stat` |
 
-The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need-from-libc, stage-10/survey.md#the-userland-today), and CP-27 is the rule that a name needs a program behind it. one-true-awk (part 10e, ADR-0336 item 3) leaves twelve more, found the same way (`build/ports/logs/awk.log`): `feclearexcept`, `fetestexcept` (math.c), the ctype functions `isalpha`, `isdigit`, `isgraph`, `islower`, `isprint`, `isupper`, `random`, `srandom`, `towupper` and `wctomb`, all musl's own code. ADR-0342 items 7, 8 and 10 decide the meaning of the first nine rows; `fchdir`, `readv`, `settimeofday`, `sigsetjmp`,
-`statfs` and `pathconf` are not covered. This ADR records the block and the meanings the accepted ADRs leave open.
+The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need-from-libc, stage-10/survey.md#the-userland-today), and CP-27 is the rule that a name needs a program behind it. one-true-awk (part 10e, ADR-0336 item 3) leaves twelve more, found the same way (`build/ports/logs/awk.log`): `feclearexcept`, `fetestexcept` (math.c), the ctype functions `isalpha`, `isdigit`, `isgraph`, `islower`, `isprint`, `isupper`, `random`, `srandom`, `towupper` and `wctomb`, all musl's own code. ADR-0342 items 7, 8 and 10 decide the meaning of the rows from `dirname` to `mknod`; the six rows `fchdir`, `readv`,
+`settimeofday`, `sigsetjmp`, `statfs` and `pathconf` are not covered. This ADR records the block and the meanings the
+accepted ADRs leave open, as built in 10e.
 
 ## Decision drivers
 
@@ -36,18 +37,18 @@ The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need
 
 ## Considered options
 
-### Option A: export the six names and give each one a meaning (the recommendation)
+### Option A: export the six names and give each one a meaning
 - **Description:** `fchdir` and `readv` are built over what `libposix` has (a descriptor of a directory the
-  program holds; `readv` as reads into each buffer in order). `settimeofday` fails with `EPERM` (the clock is the
-  system's, ADR-0014 rule 5's reasoning). `statfs` and `pathconf` stay out: `stat -f` is patched out of toybox (item
-  4 below).
+  program holds; `readv` as reads into each buffer in order), `settimeofday` fails with `EPERM` (the clock is the
+  system's, ADR-0014 rule 5's reasoning), and `statfs` and `pathconf` get a meaning of their own.
 - **Evidence for:** drivers 1 to 3; the names are the ones the link probe printed.
 - **Evidence against:** each name is more surface to keep true.
 - **Cost:** *(estimate)* 150 lines of Rust and tests.
 - **Precedent:** ADR-0310's block.
 
 ### Option B: patch each use out of toybox
-- **Description:** `find` without `-execdir`'s `fchdir`, `date` without `-s`, `dd` without `readv`.
+- **Description:** `find` without `-execdir`'s `fchdir`, `stat` without `-f`'s `statfs` and `pathconf`, `date`
+  without `-s`, `dd` without `readv`.
 - **Evidence for:** no new names.
 - **Evidence against:** the patches are toybox's, repeated at each version (ADR-0310 option B's argument); `fchdir`
   and `readv` are standard POSIX and other ports will import them.
@@ -59,15 +60,19 @@ The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need
 
 ## Recommendation
 
-**Recommendation (not a decision): Option A.**
+**Recommendation (not a decision): Option A for `readv`, `settimeofday` and `sigsetjmp`, Option B for `fchdir`,
+`statfs` and `pathconf`**, which is what 10e built.
 
 1. The block below lists the names with the program that imports each; the export check (INV-0005-1) and
    `posix-surface-check imports` (INV-0342-1) read it.
 2. `settimeofday` fails with `EPERM` whatever the arguments; `date -s` reports it.
-3. `fchdir(fd)` changes the current directory to the directory `fd` was opened on if the entries the program
-   holds cover it, as `chdir` does for a path; otherwise `EACCES`.
-4. `stat -f` (file system status) is not supported: a patch of `ports/patches/toybox/` makes `-f` an error
-   ("no file system status on Zoraya"), so neither `statfs` nor `pathconf` is exported.
+3. `readv` reads into each buffer in order, as `read` would into one buffer of their total length (at most 1024
+   buffers; a null pointer is `EFAULT`); it is `libposix`'s, over the `writev` pattern.
+4. `fchdir`, `statfs` and `pathconf` are **not exported**. Patch 0002 of `ports/patches/toybox/` defines the three as
+   failing with `ENOSYS` inside toybox (`lib/lib.h`), so `stat -f` reports that error, and makes `find`'s
+   `-execdir` and `-okdir` an error at parse time ("-execdir is not supported on Zoraya"); a plain `-exec` runs in the
+   directory `find` was started in. A later port that needs `fchdir` brings Option A's meaning for it: the
+   directory `fd` was opened on, if the entries the program holds cover it, as `chdir` does for a path.
 5. `sigsetjmp` and `siglongjmp` are musl's own code; the signal mask is saved and restored through
    `sigprocmask`, which is exported.
 
@@ -102,7 +107,8 @@ strnlen toybox
 ## Consequences
 
 - **Positive.** Toybox's list links; the surface grows by the names a program imports.
-- **Negative.** `stat -f` and `df` are absent; `date -s` cannot set the clock.
+- **Negative.** `stat -f`, `df` and `find -execdir` are absent; `date -s` cannot set the clock. The patch that
+  removes them moves with each toybox version (Option B's cost).
 - **Follow-up.** Later parts (10d, 10g, 10h) add their own blocks; `awk`'s block is item 6 of ADR-0344.
 
 ## Invariants
@@ -118,6 +124,6 @@ strnlen toybox
 
 ## Revisit triggers
 
-- A second program needs `statfs`.
+- A second program needs `statfs` or `fchdir`.
 
 ## Architect's decision

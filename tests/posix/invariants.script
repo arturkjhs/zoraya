@@ -92,5 +92,12 @@
 < \n0
 < Z1
 < PSURF>
+# sed -i whose copy back fails (the 64K limit of /limited) keeps the edited
+# text in /tmp and says where (toybox patch 0002; review of 10e, finding 17).
+> yes abcdefghij | head -n 3700 > /limited/big; sed -i 's/.*/&&/' /limited/big; echo "SED=$?"; cat /tmp/toybox-* | wc -c; rm -f /tmp/toybox-* /limited/big\r
+< the edited text is kept in /tmp/toybox-
+< SED=1
+< 77700
+< PSURF>
 > exit\r
 < BROKER-STATS

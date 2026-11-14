@@ -15,7 +15,9 @@ exit     1  failed
 ---
 Edit a stream: toybox 0.8.15 (0BSD) as a POSIX program with the toolchain set (ADR-0336).
 cwd none (ADR-0336 item 6): each FILE arrives narrowed to the name written, read, or with -i changed in
-place (write). The change is not atomic. -e and -f are not listed: SCRIPT is always the first operand.
+place (write). The change is not atomic: the result is written to the line's /tmp and copied back, and if that copy
+fails sed says where the edited text is kept. On a link, -i writes through it to the target (GNU's sed replaces the
+link with a file). -e and -f are not listed: SCRIPT is always the first operand.
 Write the short options: the long names belong to the description.
 
 EXAMPLES
