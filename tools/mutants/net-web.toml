@@ -1,0 +1,79 @@
+# The web rule (ADR-0324, INV-0324-1 to -3): host tests only. Each mutant
+# widens what a web rule reaches or where the shell gives it; the tests of
+# zoraya-abi, zoraya-net and zoraya-shell must see it. Checked by hand once
+# each when written (all killed).
+tests = ["cargo test -q -p zoraya-abi --lib net", "cargo test -q -p zoraya-net --lib web"]
+timeout = 600
+
+[[mutant]]
+id = "W-every-address-public"
+file = "crates/zoraya-abi/src/net.rs"
+find = '.all(|&(block, len)| !prefix_has(block, len, address))'
+replace = '.all(|&(_block, _len)| true)'
+note = "the web rule would reach the local network"
+
+[[mutant]]
+id = "W-web-names-addresses"
+file = "crates/zoraya-abi/src/net.rs"
+find = '!matches!(self, Target::Public) && self.covers_address(address)'
+replace = 'self.covers_address(address)'
+note = "a public gateway or DNS server would pass the local rule"
+
+[[mutant]]
+id = "W-anything-within-web"
+file = "crates/zoraya-abi/src/net.rs"
+find = '(_, Target::Public) | (Target::Public, _) => false,'
+replace = '(_, Target::Public) => true, (Target::Public, _) => false,'
+note = "narrow from a web rule to an address or a name rule (INV-0324-2)"
+
+[[mutant]]
+id = "W-conn-private-answer"
+file = "crates/zoraya-net/src/conn.rs"
+find = '!named && (!is_public(a) || is_local(stack, a, now_us))'
+replace = '!named && is_local(stack, a, now_us)'
+note = "a name only the web rule admits connected to a private answer"
+
+[[mutant]]
+id = "W-conn-local-public-answer"
+file = "crates/zoraya-net/src/conn.rs"
+find = '!named && (!is_public(a) || is_local(stack, a, now_us))'
+replace = '!named && !is_public(a)'
+note = "a public DNS server or gateway as the answer"
+
+[[mutant]]
+id = "W-resolve-private-answer"
+file = "crates/zoraya-net/src/service.rs"
+find = 'scope.reaches_address(**a) || (zoraya_abi::net::is_public(**a) && !local)'
+replace = 'scope.reaches_address(**a) || !local'
+note = "resolve under the web rule answers a private address"
+
+[[mutant]]
+id = "W-resolve-local-not-granted"
+file = "crates/zoraya-net/src/service.rs"
+find = 'if usable.is_empty() && public_only {'
+replace = 'if false {'
+note = "the refusal reads as LOCAL (EAI_NONAME), so NetSurf cannot name it (ADR-0325)"
+
+[[mutant]]
+id = "W-shell-any-port"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'ports: Ports::ranges(&WEB_PORTS).unwrap_or(Ports::one(443)),'
+replace = 'ports: Ports::ANY,'
+note = "the web rule on every port"
+tests = ["cargo test -q -p zoraya-shell --lib web"]
+
+[[mutant]]
+id = "W-shell-untrusted"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'if d.net_web && untrusted {'
+replace = 'if false {'
+note = "the web rule in an untrusted room (INV-0324-3)"
+tests = ["cargo test -q -p zoraya-shell --lib web"]
+
+[[mutant]]
+id = "W-shell-any-description"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'if d.net_web && line.base_system {'
+replace = 'if d.net_web {'
+note = "a description outside the image takes the web"
+tests = ["cargo test -q -p zoraya-shell --lib web"]

@@ -884,9 +884,12 @@ $(DEPS)/lib/libcurl.a: $(CURL_BIN)
 	@touch $@
 
 netsurf-src: $(NETSURF)
-$(NETSURF): $(LOCK) $(wildcard ports/patches/netsurf/*.patch) ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h
+$(NETSURF): $(LOCK) $(wildcard ports/patches/netsurf/*.patch) ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h \
+	  ports/netsurf/zoraya_refusal.c ports/netsurf/zoraya_refusal.h
 	$(call unpack,netsurf,ports/patches/netsurf)
 	cp ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h $@/libnsfb/src/surface/
+	@# The page of a host the grant refused (ADR-0325, patch 0008).
+	cp ports/netsurf/zoraya_refusal.c ports/netsurf/zoraya_refusal.h $@/netsurf/content/fetchers/
 	@touch $@
 
 # The libraries, one make each, installed into $(DEPS). Tests are not built.

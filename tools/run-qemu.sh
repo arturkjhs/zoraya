@@ -48,6 +48,15 @@
 #                         guest's 10.0.2.15:PORT (tools/net-poke.sh connects to it,
 #                         so that SLIRP sends the guest an ARP who-has)
 #   --net-capture-all     with --net-pcap: whole frames, for benchmarks only
+#   --net-subnet A.B.C.0/24  with --net: QEMU's network is that /24 instead of
+#                         10.0.2.0/24 (the guest at .15, the host at .2, the DNS
+#                         forwarder at .3); `make test-netsurf` uses TEST-NET-3,
+#                         203.0.113.0/24, as public addresses (ADR-0324)
+#   --net-guestfwd A.B.C.D:PORT=COMMAND  with --net, repeatable: a guest's TCP
+#                         connection to A.B.C.D:PORT (inside the subnet) runs
+#                         COMMAND, its stdin and stdout the connection (SLIRP's
+#                         guestfwd ... cmd:, one process per connection);
+#                         COMMAND has no comma
 #   --qmp PATH            a QMP socket at PATH, for screendumps and keys
 #   --display-opts OPTS   the interactive display and its suboptions (with
 #                         --gui; ignored with --test); the default is below
@@ -105,6 +114,8 @@ net_pcap=
 net_forward=
 net_open=0
 net_maxlen=,maxlen=256
+net_subnet=
+net_guestfwd=
 qmp=
 display_opts=
 kernel=
@@ -130,6 +141,14 @@ while [ $# -gt 0 ]; do
         --net-pcap) [ $# -ge 2 ] || die "--net-pcap needs a file"; net_pcap=$2; shift 2 ;;
         --net-forward) [ $# -ge 2 ] || die "--net-forward needs a port"; net_forward=$2; shift 2 ;;
         --net-capture-all) net_maxlen=; shift ;;
+        --net-subnet) [ $# -ge 2 ] || die "--net-subnet needs A.B.C.0/24"; net_subnet=$2; shift 2 ;;
+        --net-guestfwd) [ $# -ge 2 ] || die "--net-guestfwd needs A.B.C.D:PORT=COMMAND"
+            case $2 in
+                *,*) die "--net-guestfwd: the command has a comma" ;;
+                [0-9]*.[0-9]*.[0-9]*.[0-9]*:[0-9]*=?*) ;;
+                *) die "--net-guestfwd needs A.B.C.D:PORT=COMMAND" ;;
+            esac
+            net_guestfwd="$net_guestfwd,guestfwd=tcp:${2%%=*}-cmd:${2#*=}"; shift 2 ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
@@ -238,6 +257,18 @@ fi
 if [ -n "$net_pcap" ] && [ "$net" != 1 ]; then
     die "--net-pcap needs --net"
 fi
+case $net_subnet in
+    "") ;;
+    *[!0-9./]*) die "--net-subnet needs A.B.C.0/24" ;;
+    [0-9]*.[0-9]*.[0-9]*.0/24) ;;
+    *) die "--net-subnet needs A.B.C.0/24" ;;
+esac
+if { [ -n "$net_subnet" ] || [ -n "$net_guestfwd" ]; } && [ "$net" != 1 ]; then
+    die "--net-subnet and --net-guestfwd need --net"
+fi
+if [ -n "$net_forward" ] && [ -n "$net_subnet" ]; then
+    die "--net-forward forwards to 10.0.2.15 and cannot go with --net-subnet"
+fi
 if [ "$test_disk" = 1 ] || [ -n "$disk" ] || [ "$gui" = 1 ] || [ "$net" = 1 ]; then
     set -- "$@" -global virtio-mmio.force-legacy=false
 fi
@@ -287,7 +318,9 @@ if [ "$net" = 1 ]; then
     [ "$mode" = test ] && [ "$net_open" != 1 ] && restrict=,restrict=on
     forward=
     [ -z "$net_forward" ] || forward=",hostfwd=tcp:127.0.0.1:$net_forward-10.0.2.15:$net_forward"
-    set -- "$@" -netdev "user,id=net0$restrict$forward" \
+    subnet=
+    [ -z "$net_subnet" ] || subnet=",net=$net_subnet"
+    set -- "$@" -netdev "user,id=net0$restrict$forward$subnet$net_guestfwd" \
         -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.16
     if [ -n "$net_pcap" ]; then
         set -- "$@" -object "filter-dump,id=dump0,netdev=net0,file=$net_pcap$net_maxlen"
