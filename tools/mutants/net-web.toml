@@ -125,3 +125,17 @@ find = 'put_html_cut(&o, url, ZORAYA_REFUSAL_URL_MAX,'
 replace = 'put_html_cut(&o, url, 100000,'
 note = "the whole long URL on the page: it no longer fits, NetSurf's bare error page (INV-0325-1)"
 tests = ["make -s check-netsurf-refusal"]
+
+# The server-log half of make test-netsurf's INV-0324-1 check (9f-net review,
+# finding 3): with the web rule's port check gone from name_grant, NetSurf
+# connects to two.web.test:8080, which SLIRP relays to the test server; the
+# server logs `must-not-reach` and the recipe fails (and the refusal page's
+# colour check with it).
+[[mutant]]
+id = "W-web-name-any-port-gui"
+file = "crates/zoraya-abi/src/net.rs"
+find = 'r.target == Target::Public && r.ports.contains(port) && r.protocols.contains(protocol)'
+replace = 'r.target == Target::Public && r.protocols.contains(protocol)'
+note = "a name only the web rule admits is reached on any port: the relayed two.web.test:8080 is logged"
+tests = ["make -s test-netsurf"]
+timeout = 3000

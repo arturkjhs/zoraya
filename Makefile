@@ -717,16 +717,22 @@ NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
 # QEMU's network is TEST-NET-3 here (ADR-0324): 203.0.113.2 is the host (the test
 # server), and 203.0.113.10 and .11 (one.web.test, two.web.test) are two "public"
 # hosts on port 80, each connection relayed to the same server by SLIRP's guestfwd.
+# 203.0.113.11:8080 is relayed too: the web rule refuses that port, and a
+# connection netd wrongly let through would reach the server and be logged
+# (`must-not-reach`, 9f-net review finding 3). The other refused legs (10.0.2.2,
+# 127.0.0.1, the gateway's port 80, lan.web.test's private answer) cannot be
+# routed to the server by SLIRP: they rest on the refusal page's colour alone.
 NS_NET := 203.0.113
 NS_RELAY = $(CURDIR)/$(HTTPD) --relay 127.0.0.1:$$port
 NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(NS_SCRIPT) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --net --net-open \
 	--net-subnet $(NS_NET).0/24 --net-guestfwd "$(NS_NET).10:80=$(NS_RELAY)" --net-guestfwd "$(NS_NET).11:80=$(NS_RELAY)" \
+	--net-guestfwd "$(NS_NET).11:8080=$(NS_RELAY)" \
 	--mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
 test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
-	printf 'net.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11\n' > $(NS_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
@@ -754,8 +760,9 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	if [ $$rc = 0 ]; then \
 		log=target/test-logs/test-httpd-netsurf.log; \
 		if grep -q 'must-not-reach' $$log || ! grep -q '^http: GET /ns/web-redirect ' $$log \
+		   || ! grep -q '^http: GET /ns/web-redirect-refused ' $$log \
 		   || [ "$$(grep -c '^http: GET /ns/web-b ' $$log)" -lt 2 ]; then \
-			echo "[netsurf] FAIL: INV-0324-1: a host the web grant refuses was reached, or the link or the redirect to the second host was not fetched"; cat $$log; rc=1; \
+			echo "[netsurf] FAIL: INV-0324-1: a host the web grant refuses was reached, or the link or the redirect to the second host, or the redirect to a refused one, was not fetched"; cat $$log; rc=1; \
 		else echo '[netsurf] ok: the web grant reached the second host by a link and a redirect, and none of the refused hosts'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \

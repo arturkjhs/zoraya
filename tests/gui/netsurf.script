@@ -105,8 +105,10 @@ prefix net: web
 # redirect to the second, and to hosts the web rule refuses: 10.0.2.2 (QEMU's
 # usual host, private), 127.0.0.1, the gateway 203.0.113.2 on port 80 (public
 # by range, but this side of the network) and two.web.test:8080 (not 80 or
-# 443). Each link is a block of 40 pixels, one under the other: cyan, orange,
-# maroon, green, navy, olive.
+# 443), then a redirect to two.web.test:8080 and a name whose only answer is
+# private (lan.web.test, 10.0.2.2 in net.hosts: its lookup is refused). Each
+# link is a block of 40 pixels, one under the other: cyan, orange, maroon,
+# green, navy, olive, pink, azure.
 type netsurf 'http://one.web.test/ns/web-a?port=@PORT@'\r
 pause 15000
 region 110 175 150 20 00ffff
@@ -159,6 +161,25 @@ click 150 388
 pause 8000
 region 110 175 20 20 ffe4b5
 shot netsurf-web-refused-port
+# A redirect to a refused host gets the page too (ADR-0325: "a refused link or
+# redirect"); SLIRP relays two.web.test:8080 to the server, so a leak would be
+# in its log.
+click 118 152
+pause 5000
+region 110 415 150 20 ff0080
+click 150 428
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-redirect
+# A lookup the web rule refuses (every answer private): the page, from curl's
+# own lookup (patch 0008 asks no second time).
+click 118 152
+pause 5000
+region 110 455 150 20 0080ff
+click 150 468
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-lookup
 click 122 119
 pause 3000
 click 300 87

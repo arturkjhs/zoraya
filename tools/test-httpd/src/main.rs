@@ -23,8 +23,9 @@
 //! /redirect          302 to /
 //! /slow/N            the pattern, 1 KiB per 10 ms (for backpressure)
 //! /reset             closes the connection with a reset after the head
-//! /ns/...            the NetSurf test's pages (`ns_page`), and /ns/web-redirect, 302 to
-//!                    http://two.web.test/ns/web-b (ADR-0324)
+//! /ns/...            the NetSurf test's pages (`ns_page`), /ns/web-redirect, 302 to
+//!                    http://two.web.test/ns/web-b (ADR-0324), and
+//!                    /ns/web-redirect-refused, 302 to http://two.web.test:8080/... (ADR-0325)
 //! ```
 //!
 //! `--relay ADDRESS:PORT` is one connection of QEMU's `guestfwd=...-cmd:`
@@ -209,6 +210,12 @@ fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
             body += &block("http://127.0.0.1/ns/must-not-reach", "008000");
             body += &block("http://203.0.113.2/ns/must-not-reach", "000080");
             body += &block("http://two.web.test:8080/ns/must-not-reach", "808000");
+            // A redirect to a refused host (two.web.test:8080, relayed to
+            // this server, so a leak is logged), and a name whose only
+            // answer is private (lan.web.test, 10.0.2.2 in net.hosts): its
+            // lookup is refused.
+            body += &block("http://one.web.test/ns/web-redirect-refused", "ff0080");
+            body += &block("http://lan.web.test/ns/must-not-reach", "0080ff");
             body += "</body></html>\n";
             Some(("text/html", body.into_bytes()))
         }
@@ -368,6 +375,19 @@ fn serve(mut stream: TcpStream) {
             302,
             "Found",
             &[("Location", "/".into()), ("Content-Length", "0".into())],
+        )),
+        // ADR-0325's test: a redirect to a host the web rule refuses (port
+        // 8080), which SLIRP relays here: a leak would be logged.
+        ["", "ns", "web-redirect-refused"] => stream.write_all(&head(
+            302,
+            "Found",
+            &[
+                (
+                    "Location",
+                    "http://two.web.test:8080/ns/must-not-reach".into(),
+                ),
+                ("Content-Length", "0".into()),
+            ],
         )),
         // ADR-0324's test: a redirect from one public host to another.
         ["", "ns", "web-redirect"] => stream.write_all(&head(
