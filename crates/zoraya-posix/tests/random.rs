@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use kernel::*;
 use zoraya_posix::errno::*;
-use zoraya_posix::random::{GRND_NONBLOCK, GRND_RANDOM};
+use zoraya_posix::random::{GRND_NONBLOCK, GRND_RANDOM, SPAN, in_spans};
 use zoraya_posix::sys::Sys;
 use zoraya_protocol::{Data, Header, decode, encode};
 use zoraya_rng::{Bytes, BytesReply};
@@ -154,4 +154,119 @@ fn a_signal_after_the_first_chunk_returns_the_bytes_written_and_before_it_eintr(
     let got = r.peek(0, 5000);
     assert!(got[..2048].iter().any(|&b| b != 0xAA));
     assert_eq!(got[2048..], vec![0xAA; 5000 - 2048]);
+}
+
+/// What the C boundary's `state` does (ADR-0302 item 9): runs `f`; a wait it
+/// asks for (`Err(PENDING)`) is made between two runs, and `f` runs again
+/// with the outcome. Gives the result and the number of runs.
+fn deferred<R>(
+    r: &mut Rig,
+    mut f: impl FnMut(&mut Rig) -> Result<R, i32>,
+) -> (Result<R, i32>, usize) {
+    use zoraya_posix::jobs::Resume;
+    let mut resume = None;
+    let mut runs = 0;
+    loop {
+        runs += 1;
+        assert!(runs < 100, "a deferred call that never ends");
+        r.p.set_resume(resume.take());
+        let out = f(r);
+        let Some(w) = r.p.end_run(&out) else {
+            return (out, runs);
+        };
+        let result = match w.sources.first() {
+            Some(&(h, wanted)) => r.p.sys.wait(h, wanted).map(|s| (0, s)),
+            None => Err(zoraya_abi::Status::DeadlineExceeded),
+        };
+        resume = Some(Resume {
+            sources: w.sources,
+            own_len: w.own_len,
+            result,
+            progress: w.progress,
+        });
+    }
+}
+
+/// A process with threads (`defer_waits`, every python3: patch 0004 runs the
+/// interpreter on a thread of its own) whose request finds no reply at the
+/// first read: the fake service answers only inside a wait, the timing in which
+/// `rngd` has not run between the request's write and its read. The wait for
+/// the reply is a service's, made inside the lock (ADR-0302 item 9), so the call
+/// is one run with every byte the service's and no request asked twice. Before
+/// the fix the deferral (`Err(PENDING)`) became `ENETDOWN` and then `EIO`, and
+/// OpenSSL, unable to seed, refused `SSL_CTX_new` with `ERR_R_RAND_LIB`
+/// (0xa080024, `make test-python` on main, run 43565853069).
+#[test]
+fn a_process_with_threads_gets_the_bytes_when_the_reply_comes_late() {
+    let (mut r, asked) = rigged(Mode::Honest);
+    r.p.defer_waits = true;
+    r.poke(0, &[0xAA; 5000]);
+    let u = r.arena.user(0, 5000);
+    let (got, runs) = deferred(&mut r, |r| r.p.getrandom(u, 0));
+    assert_eq!(got, Ok(5000));
+    assert_eq!(runs, 1);
+    assert_eq!(*asked.borrow(), vec![2048, 2048, 904]);
+    let want: Vec<u8> = (1..=5000u32).map(|i| (i % 256) as u8).collect();
+    assert_eq!(r.peek(0, 5000), want);
+    // A service that is gone is still EIO, not a deferred wait.
+    let (mut r, _) = rigged(Mode::Gone);
+    r.p.defer_waits = true;
+    let u = r.arena.user(0, 16);
+    assert_eq!(deferred(&mut r, |r| r.p.getrandom(u, 0)), (Err(EIO), 1));
+}
+
+/// A span that fills its part for the first `k` calls, then fails with `e`.
+fn fails_after(k: usize, e: i32) -> impl FnMut(zoraya_posix::sys::User) -> Result<usize, i32> {
+    let mut n = 0;
+    move |part| {
+        n += 1;
+        if n > k { Err(e) } else { Ok(part.length) }
+    }
+}
+
+/// Since that wait is inside the library lock, the C boundary takes the lock
+/// once per request (`in_spans`, INV-0302-2): a large `getrandom` in a process
+/// with threads holds it for one round trip to `rngd` at a time, not for one per
+/// 2 KiB of the whole buffer. The bytes and the errors are `getrandom`'s.
+#[test]
+fn the_c_boundary_holds_the_lock_for_one_request_at_a_time() {
+    let (mut r, asked) = rigged(Mode::Honest);
+    r.p.defer_waits = true;
+    let u = r.arena.user(0, 5000);
+    let mut spans = Vec::new();
+    let got = in_spans(u, |part| {
+        let before = asked.borrow().len();
+        let n = r.p.getrandom(part, 0);
+        // One run under the lock asks once.
+        assert_eq!(asked.borrow().len(), before + 1);
+        spans.push(part.length);
+        n
+    });
+    assert_eq!(got, Ok(5000));
+    assert_eq!(spans, vec![2048, 2048, 904]);
+    assert_eq!(*asked.borrow(), vec![2048, 2048, 904]);
+    let want: Vec<u8> = (1..=5000u32).map(|i| (i % 256) as u8).collect();
+    assert_eq!(r.peek(0, 5000), want);
+
+    // Zero bytes, a flag it does not know, no connection: one call, its answer.
+    let mut calls = 0;
+    let z = r.arena.user(0, 0);
+    let mut once = |part, flags| {
+        calls += 1;
+        r.p.getrandom(part, flags)
+    };
+    assert_eq!(in_spans(z, |part| once(part, 0)), Ok(0));
+    assert_eq!(in_spans(u, |part| once(part, 4)), Err(EINVAL));
+    assert_eq!(calls, 2);
+    r.p.random = None;
+    assert_eq!(in_spans(u, |part| r.p.getrandom(part, 0)), Err(ENOSYS));
+
+    // A failure in the first span is the error; in a later one, the count so
+    // far (EINTR of a handler without SA_RESTART, the service gone).
+    assert_eq!(in_spans(u, fails_after(0, EINTR)), Err(EINTR));
+    assert_eq!(in_spans(u, fails_after(1, EIO)), Ok(SPAN));
+    assert_eq!(in_spans(u, fails_after(2, EINTR)), Ok(2 * SPAN));
+    assert_eq!(in_spans(u, fails_after(3, EIO)), Ok(5000));
+    // A short span ends the call with what was written.
+    assert_eq!(in_spans(u, |part| Ok(part.length / 2)), Ok(SPAN / 2));
 }
