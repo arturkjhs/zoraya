@@ -57,6 +57,39 @@ x missing.h
 < t_libposix: files passed
 < posixrun: exit 0
 < \r\n~> 
+# poll and ppoll (ADR-0342 item 5, ADR-0414 item 1): one case at a time.
+> posixrun /bin/t_poll pipe\r
+< t_poll: pipe passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll select\r
+< t_poll: select passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll files\r
+< t_poll: files passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll socket\r
+< t_poll: socket passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll nval\r
+< t_poll: nval passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll timeout\r
+< t_poll: timeout passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll hostile\r
+< t_poll: hostile passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_poll mask\r
+< t_poll: mask passed
+< posixrun: exit 0
+< \r\n~> 
 # The measurements: through libposix, from C.
 > posixrun -e ZORAYA_POSIX_STATS=1 /bin/t_libposix bench\r
 < t_libposix: bench

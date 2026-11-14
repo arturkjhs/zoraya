@@ -91,6 +91,11 @@
 < t_threads: cancel passed
 < posixrun: exit 0
 < \r\n~> 
+# poll and ppoll from threads: the deferred wait (ADR-0315, ADR-0414 item 1).
+> posixrun /bin/t_poll threads\r
+< t_poll: threads passed
+< posixrun: exit 0
+< \r\n~> 
 # exit() flushes stdio (a write) while a sibling is blocked in read.
 > posixrun /bin/t_threads blockedexit\r
 < t_threads: flushed at exit
