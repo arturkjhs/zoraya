@@ -71,3 +71,14 @@ investigated here, so the QEMU steps of `test-changed` did not run. `make test-p
 - To `docs/backlog.md`: Setup.local before configure, subdirectory sources, `*shared*`, artifact/cache.
 - `make test-python-ext` again after the changes (the stamp rebuilt, since the hash file changed): `PASS: 19 steps`, fsck clean.
 - Finding 1 (CI shape) is left to the candidate run.
+
+## make test-changed, rerun
+
+The curl failure of the first run came from another `make` in this worktree (my own earlier `make test-python-ext` still running, a
+second one started beside it) that deleted or rewrote files under `build/ports/work/curl-8.23.0` and `zlib.log` while `apps` built.
+After `rm -rf build/ports/work/curl-8.23.0` (and zlib's tree, whose log a no-op rebuild had overwritten, which the ports check
+refuses) the rerun, alone in the worktree, built `apps` and `netsurf`. Result: 21 of 23 steps passed (test-boot, libposix,
+posix, gui, apps, netsurf, cxx and the others); `test-python*` printed SKIPPED (no PAR_LONG). Two steps failed with the same
+timing assertion, `t_cpu.rs:181` "a room at 25%: 2846291 ns masked, limit 2000000" (`test-qemu` auto-default and `test-net`), run
+in parallel lanes beside the GUI and C++ guests on a loaded host; the change touches no kernel, user or timing code. Not
+re-run alone here; the candidate run will say whether it recurs.
