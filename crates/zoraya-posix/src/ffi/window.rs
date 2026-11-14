@@ -344,3 +344,11 @@ pub extern "C" fn zoraya_window_close() {
         }
     });
 }
+
+/// The window's scale (physical pixels per logical pixel, ADR-0164): 1 with
+/// no window, or while another call is inside. For the size of text
+/// (ADR-0326 item 6).
+#[unsafe(no_mangle)]
+pub extern "C" fn zoraya_window_scale() -> u32 {
+    window(1, |slot| slot.as_ref().map_or(1, |s| s.scale()))
+}

@@ -16,7 +16,7 @@ use core::cell::RefCell;
 use zoraya_paint::{self as paint, Canvas};
 use zoraya_text::{Rect as TRect, Target, Text};
 use zoraya_tokens::{Color, Logical, shape, space, text};
-use zoraya_ui::{Event, LRect, Painter, Response, Value, Widget};
+use zoraya_ui::{Event, LRect, Painter, Response, Value, WheelSteps, Widget, widgets::wheel_rows};
 
 use crate::model::{Column, Focus, MENU, MenuItem, Model, mods};
 
@@ -87,6 +87,12 @@ pub struct FilesView {
     dragged: bool,
     /// The crumbs' boxes from the last paint, physical x ranges.
     crumbs: Vec<(i32, i32)>,
+    /// The wheel moved the list away from the cursor (proposed ADR-0329):
+    /// it does not follow the cursor until a key or the cursor moves.
+    free: bool,
+    /// The cursor at the last `follow`, to see that it moved.
+    seen: Option<usize>,
+    wheel: WheelSteps,
 }
 
 fn mix(a: Color, b: Color, t: u32) -> Color {
@@ -142,6 +148,9 @@ impl FilesView {
             last_press: None,
             dragged: false,
             crumbs: Vec::new(),
+            free: false,
+            seen: None,
+            wheel: WheelSteps::default(),
         }
     }
 
@@ -161,12 +170,17 @@ impl FilesView {
         ((l.h - (HEADER_H + 4) * self.k) / (ROW_H * self.k)).max(1) as usize
     }
 
-    /// Keeps the cursor's row in view.
+    /// Keeps the cursor's row in view, unless the wheel moved the list
+    /// away from it; the last row no higher than the bottom either way.
     fn follow(&mut self) {
         let rows = self.rows();
         let mut m = self.model.borrow_mut();
         let n = m.view().len();
-        if let Some(c) = m.cursor {
+        if m.cursor != self.seen {
+            self.seen = m.cursor;
+            self.free = false;
+        }
+        if let Some(c) = m.cursor.filter(|_| !self.free) {
             if c < m.top {
                 m.top = c;
             } else if c >= m.top + rows {
@@ -474,6 +488,29 @@ impl FilesView {
             return self.answer();
         }
         Response::None
+    }
+
+    /// The wheel over the list moves the rows shown, three a notch, and
+    /// leaves the selection and the cursor (proposed ADR-0329); over the
+    /// rest of the window, or with the menu or the card open, it does
+    /// nothing.
+    fn turn(&mut self, x: Logical, y: Logical, dy: i32) -> Response {
+        let k = self.k;
+        let s = zoraya_tokens::Scale::new(k as u32).unwrap_or(zoraya_tokens::Scale::ONE);
+        let (x, y) = (x.physical(s) as i32, y.physical(s) as i32);
+        let rows = self.rows();
+        let mut m = self.model.borrow_mut();
+        let l = self.list_rect();
+        if m.menu.is_some() || m.confirm.is_some() || !l.contains(x, y) {
+            return Response::None;
+        }
+        let last = m.view().len().saturating_sub(rows);
+        let r = wheel_rows(&mut self.wheel, &mut m.top, dy, last);
+        if r != Response::None {
+            self.free = true;
+            self.seen = m.cursor;
+        }
+        r
     }
 
     // ---- painting --------------------------------------------------------
@@ -1220,6 +1257,7 @@ impl Widget for FilesView {
                 modifiers,
             } => {
                 self.model.borrow_mut().key(code, text, modifiers);
+                self.free = false;
                 self.follow();
                 self.answer()
             }
@@ -1229,6 +1267,7 @@ impl Widget for FilesView {
                 buttons,
                 modifiers,
             } => self.pointer(x, y, buttons, modifiers),
+            Event::Wheel { x, y, dy, .. } => self.turn(x, y, dy),
             Event::Focus(_) => Response::Repaint,
         }
     }

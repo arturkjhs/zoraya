@@ -15,16 +15,26 @@ region 110 175 150 40 0000ff
 region 110 235 80 40 00ff00
 region 400 300 100 40 ffffff
 shot netsurf-http
-# The pills on the window's title bar (INV-0317-1): three pills, the URL's
-# `+net HOST:PORT`, `web` (ADR-0324, INV-0324-4) and +r /system/tls (right,
-# ending at the frame's edge), with the title bar's own colour between them;
-# the right one's last padding column is the pill fill. `web` is the short
-# pill between the gaps at 748..753 and 786..791.
+# The pills on the window's title bar (INV-0317-1): four pills, the URL's
+# `+net HOST:PORT`, `web` (ADR-0324, INV-0324-4), +r /system/fonts, which comes
+# with the window (ADR-0326), and +r /system/tls (right, ending at the frame's
+# edge), with the title bar's own colour between them; the right one's last
+# padding column is the pill fill.
 region 893 117 1 6 fcfcfc
 region 788 116 4 8 f1f1f3
-region 749 116 4 8 f1f1f3
-region 757 117 2 6 fcfcfc
-region 780 117 2 6 fcfcfc
+# Measured on a screendump of this step: the net pill 467..623 (its text is
+# monospace, `+net 203.0.113.2:PORT`), `web` 630..661, the fonts pill 668..785,
+# the gaps at 624..629, 662..667 and 786..791 the title bar's colour.
+region 663 116 4 8 f1f1f3
+region 625 116 4 8 f1f1f3
+region 633 117 2 6 fcfcfc
+region 656 117 2 6 fcfcfc
+# The fonts pill itself (T5 of the 9f-text review): its first padding columns
+# are the pill fill, and so are the net pill's. Without the fonts pill, `web`
+# and the net pill move right by 124 pixels (the net pill onto 591..747), so
+# 470 is the title bar and 671 is inside the net pill: both lines fail.
+region 671 116 3 8 fcfcfc
+region 470 116 3 8 fcfcfc
 # The form: type into the field, submit with Return; the result page is yellow.
 click 160 302
 type zoraya\r
@@ -58,6 +68,24 @@ click 300 87
 pause 500
 type echo closed-wheel\r
 screen closed-wheel
+# Russian and Ukrainian in the system's fonts (ADR-0326, INV-0326-2): the
+# page /ns/cyrillic at scale 1 (tests/gui/netsurf-text.script has scale 2).
+# Line 1, ten і: ink where they are, and nothing where ten ж reach on line 2
+# (boxes, or the old 8-pixel cells, would make the two lines as wide).
+type netsurf http://@HOST@:@PORT@/ns/cyrillic\r
+pause 15000
+shot netsurf-cyrillic
+ink 106 172 70 23 ffffff 300
+region 190 172 140 23 ffffff
+ink 190 214 140 17 ffffff 500
+# Line 3: Ґґ Єє Іі Її.
+ink 106 239 125 29 ffffff 400
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-cyrillic\r
+screen closed-cyrillic
 # No option replaces the roots or turns a check off (INV-0312-1): the line is
 # refused by the shell, with no window (ADR-0317 item 6).
 type netsurf --ca_bundle=/tmp/x.pem https://test.zoraya:@TLSVALID@/ns/page\r
@@ -97,7 +125,10 @@ click 300 87
 pause 500
 type echo closed3\r
 screen closed3
-# ADR-0324: the web grant. `grants` says it in words.
+# ADR-0324: the web grant. `grants` says it in words (on a clear screen: with
+# /system/fonts its lines reach past the window's last row).
+chord ctrl l
+top ~> _
 type grants netsurf\r
 prefix net: web 
 # A page on one public host (one.web.test, 203.0.113.10 of the test network,
@@ -114,9 +145,11 @@ pause 15000
 region 110 175 150 20 00ffff
 region 110 215 150 20 ff8000
 region 110 375 150 20 808000
-region 749 116 4 8 f1f1f3
-region 757 117 2 6 fcfcfc
-region 780 117 2 6 fcfcfc
+# `web` between the gaps at 624..629 and 662..667 (the fonts and tls pills
+# keep their places; the net pill is this URL's).
+region 625 116 4 8 f1f1f3
+region 633 117 2 6 fcfcfc
+region 656 117 2 6 fcfcfc
 shot netsurf-web
 # The second host by a link: its page is magenta.
 click 150 188
@@ -172,7 +205,7 @@ pause 8000
 region 110 175 20 20 ffe4b5
 shot netsurf-web-refused-redirect
 # A lookup the web rule refuses (every answer private): the page, from curl's
-# own lookup (patch 0008 asks no second time).
+# own lookup (patch 0009 asks no second time).
 click 118 152
 pause 5000
 region 110 455 150 20 0080ff

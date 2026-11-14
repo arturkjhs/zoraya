@@ -1,0 +1,29 @@
+# ADR-0326 (TASK-27 9f-text): NetSurf's text through zoraya-text at scale 2, in
+# a boot of its own (`make test-netsurf`'s second run; the first, at scale 1, is
+# tests/gui/netsurf.script). Coordinates are logical pixels; the runner reads
+# twice the pixels and wants an ink count four times as high. The page
+# (/ns/cyrillic) is in points, so it is the same in logical pixels at both
+# scales; NetSurf's toolbar keeps its pixel size, so the page starts 15 logical
+# pixels higher than at scale 1.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+type netsurf http://@HOST@:@PORT@/ns/cyrillic\r
+pause 15000
+shot netsurf-cyrillic-2
+# Line 1, ten і: ink where they are, and nothing where ten ж reach on line 2;
+# boxes or one cell width would make the two lines as wide (INV-0326-2).
+ink 106 157 70 23 ffffff 300
+region 190 157 140 23 ffffff
+ink 190 199 140 17 ffffff 500
+# Line 3: Ґґ Єє Іі Її.
+ink 106 224 125 29 ffffff 400
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed\r
+screen closed
+type poweroff\r
+exit

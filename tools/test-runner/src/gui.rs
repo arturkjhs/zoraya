@@ -185,6 +185,10 @@ pub enum Step {
     Key(String),
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
+    /// `ink X Y W H RGB N`: at least N pixels of the rectangle (N times the
+    /// scale's square on a scaled screen) are not RGB: something is drawn
+    /// there, text for instance (ADR-0326).
+    Ink(i64, i64, i64, i64, u32, usize),
     /// The count, and the bound on the median over one idle screendump read.
     Latency(usize, Option<Bound>, Option<Bound>),
     Click(i64, i64),
@@ -261,6 +265,19 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
                 let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
                 Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
+            }
+            "ink" => {
+                let v: Vec<&str> = rest.split_whitespace().collect();
+                if v.len() != 6 {
+                    return Err(bad("ink X Y W H RGB N"));
+                }
+                let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+                let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
+                let n = v[5].parse::<usize>().map_err(|_| bad("not a count"))?;
+                if n == 0 {
+                    return Err(bad("an ink count of 0 checks nothing"));
+                }
+                Step::Ink(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour, n)
             }
             "layout" => Step::Layout(
                 zoraya_keymap::by_name(rest).ok_or_else(|| bad("layout us, ua, ru or cz"))?,
@@ -1092,6 +1109,26 @@ impl Run {
                 }
                 std::thread::sleep(SCREEN_POLL);
             },
+            Step::Ink(x, y, w, h, colour, n) => loop {
+                if Instant::now() <= self.deadline {
+                    self.pump()?;
+                }
+                let screen = self.qmp.screen()?;
+                let k = i64::from(screen.scale().factor());
+                let want = n.saturating_mul((k * k) as usize);
+                let got = count_ink((x * k, y * k, w * k, h * k), *colour, |px, py| {
+                    screen.at(px as usize, py as usize)
+                });
+                if got >= want {
+                    return Ok(());
+                }
+                if Instant::now() > self.deadline {
+                    return Err(format!(
+                        "{got} pixels of {x},{y} {w}x{h} are not {colour:06x}, fewer than {want}"
+                    ));
+                }
+                std::thread::sleep(SCREEN_POLL);
+            },
             Step::Latency(n, bound, tcg) => {
                 // The bound of this accelerator, and how often the screen
                 // is read: under TCG every SCREEN_POLL (back to back dumps
@@ -1470,9 +1507,50 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     }
 }
 
+/// How many pixels of the rectangle (`x`, `y`, `w`, `h`, physical) are not
+/// `colour`, as `at` reads them.
+fn count_ink(
+    (x, y, w, h): (i64, i64, i64, i64),
+    colour: u32,
+    at: impl Fn(i64, i64) -> u32,
+) -> usize {
+    let mut n = 0;
+    for py in y..y + h {
+        for px in x..x + w {
+            if at(px, py) != colour {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ink_parses_and_counts_what_is_not_the_colour() {
+        assert_eq!(
+            parse("ink 10 20 30 40 ffffff 25\n").unwrap(),
+            [Step::Ink(10, 20, 30, 40, 0xff_ffff, 25)]
+        );
+        assert!(parse("ink 10 20 30 40 ffffff\n").is_err());
+        assert!(parse("ink 10 20 30 40 ffffff 0\n").is_err());
+        assert!(parse("ink 10 20 30 40 white 3\n").is_err());
+        // A 4x4 white square with a black 2x2 in it.
+        let at = |x: i64, y: i64| {
+            if (1..3).contains(&x) && (1..3).contains(&y) {
+                0
+            } else {
+                0xff_ffff
+            }
+        };
+        assert_eq!(count_ink((0, 0, 4, 4), 0xff_ffff, at), 4);
+        assert_eq!(count_ink((0, 0, 1, 4), 0xff_ffff, at), 0);
+        assert_eq!(count_ink((2, 2, 2, 2), 0xff_ffff, at), 1);
+        assert_eq!(count_ink((0, 0, 4, 4), 0, at), 12);
+    }
 
     #[test]
     fn a_script_parses() {

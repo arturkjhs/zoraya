@@ -25,11 +25,16 @@ roots, read only): a certificate that is expired, is for another name or is sign
 and port. When the network refuses a host, NetSurf shows a page that names it and the line that would allow it,
 `+net HOST:PORT netsurf URL` (ADR-0325). In an untrusted room the line is refused.
 
+With its window it gets /system/fonts, read only: its text is drawn in the system's fonts, Latin
+and Cyrillic (Ukrainian ґ є і ї included), at the window's scale (ADR-0326). It reads no other
+font and no font path from the line, the environment or a file.
+
 Its resources are in /usr/share/netsurf, which the toolchain set gives. It gets no current directory, so it
 cannot save a page or a download (the chooser comes later); its cache and settings are in memory.
 
-Known limits: JavaScript and SVG are not built; the text uses a bitmap font with Latin characters (ADR-0318);
-there is no cursor shape and no clipboard (ADR-0317). The wheel scrolls the page or the frame under the
+Known limits: JavaScript and SVG are not built; italic text is drawn upright (the system has no
+italic font); the toolbar keeps its size at scale 2; there is no cursor shape and no clipboard
+(ADR-0317). The wheel scrolls the page or the frame under the
 pointer, 100 pixels a notch; a horizontal wheel does nothing (libnsfb has no button for it).
 
 EXAMPLES

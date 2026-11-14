@@ -1457,9 +1457,12 @@ impl Z {
         // roots file and nothing else (`make check-tls-roots`); `grants`
         // says "with the network" as for a native program.
         let with_roots = net.is_some() && self.posix_reaches(exec, path);
+        // The system's fonts come with a window, read only (ADR-0326 item 4).
+        let fonts = Self::posix_fonts(path);
         let planned = self
             .posix_plan(exec, path)
             .map(|mut plan| {
+                plan.extend(fonts);
                 if with_roots {
                     plan.push(grants::Planned {
                         path: String::from(TLS_ROOTS_DIR),
@@ -1541,6 +1544,16 @@ impl Z {
             "the arguments are not ones its description gives",
             &["a program with a window runs only a line its description parses (see `help`)"],
         ))
+    }
+
+    /// `/system/fonts` read only for a POSIX program whose trusted
+    /// description has `window` (ADR-0326 item 4, INV-0326-1); none else.
+    fn posix_fonts(path: &str) -> Option<grants::Planned> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        grants::trusted_description(&trusted, path).and_then(grants::with_window)
     }
 
     /// The window channel for a POSIX program whose trusted description has
@@ -3814,8 +3827,12 @@ impl Z {
                     1
                 }
                 Ok(mut plan) => {
-                    // As a run adds it: the roots come with a network the
-                    // line gives a POSIX program (proposed ADR-0311 item 4).
+                    // As a run adds them: the fonts come with a window
+                    // (ADR-0326 item 4), the roots with a network the line
+                    // gives a POSIX program (ADR-0311 item 4).
+                    if !native {
+                        plan.extend(Self::posix_fonts(&path));
+                    }
                     if !native && self.posix_reaches(exec, &path) {
                         plan.push(grants::Planned {
                             path: String::from(TLS_ROOTS_DIR),

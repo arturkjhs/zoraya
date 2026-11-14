@@ -89,9 +89,42 @@ pub fn forget_taken<T>(option: &mut Option<T>) {
     core::mem::forget(option.take());
 }
 
+/// A `fork` child's copy of a lock and the `Option` it guards, when the
+/// value names nothing of the parent's but may be in the middle of a change:
+/// if the lock was held at the fork, a thread that is not in the child was
+/// changing the value (a `Vec` half grown, its old buffer freed), so the
+/// value is forgotten as `forget_taken` does and the child starts again from
+/// `None`; if it was free, the value is whole and stays. The lock is freed
+/// either way. Gives whether the value was forgotten (T2 of the 9f-text
+/// review). The forking thread itself must not hold the lock: nothing called
+/// with it held may `fork`.
+pub fn reset_after_fork<T>(lock: &Lock, option: &mut Option<T>) -> bool {
+    let held = lock.is_locked();
+    lock.reset();
+    if held {
+        forget_taken(option);
+    }
+    held
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fork_child_keeps_a_whole_value_and_forgets_a_half_changed_one() {
+        let drops = AtomicUsize::new(0);
+        let lock = Lock::new();
+        let mut cell = Some(Loud(&drops));
+        assert!(!reset_after_fork(&lock, &mut cell));
+        assert!(cell.is_some());
+        assert!(lock.try_lock());
+        // Held at the fork: forgotten, not dropped, and the lock is free.
+        assert!(reset_after_fork(&lock, &mut cell));
+        assert!(cell.is_none());
+        assert!(!lock.is_locked());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+    }
 
     /// A value whose drop would be seen.
     struct Loud<'a>(&'a AtomicUsize);

@@ -44,7 +44,8 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # names the same files (.github/workflows/test.yml, its build job).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
-	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md
+	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
+	docs/adr/0326-netsurf-text-through-zoraya-text.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -784,7 +785,7 @@ $(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a 
 
 # `make netsurf`: libpng, libjpeg and curl's header and library for NetSurf into
 # $(DEPS); NetSurf 3.11's own libraries into $(DEPS); then `netsurf` (the framebuffer
-# front end, its bitmap font, curl with OpenSSL from 9a) into $(APPS_ROOT)/bin, and
+# front end, its text over zoraya-text (ADR-0326), curl with OpenSSL from 9a) into $(APPS_ROOT)/bin, and
 # its resources (default.css, Messages, ...) into $(APPS_ROOT)/usr/share/netsurf.
 # Host tools, built into $(HOSTPFX) from the pinned archives so that the build needs no
 # more of the host than a C compiler, perl, gperf, flex and bison: pkg-config (only
@@ -885,9 +886,11 @@ $(DEPS)/lib/libcurl.a: $(CURL_BIN)
 
 netsurf-src: $(NETSURF)
 $(NETSURF): $(LOCK) $(wildcard ports/patches/netsurf/*.patch) ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h \
-	  ports/netsurf/zoraya_refusal.c ports/netsurf/zoraya_refusal.h
+	  ports/netsurf/zoraya_refusal.c ports/netsurf/zoraya_refusal.h \
+	  ports/netsurf/font_zoraya.c ports/netsurf/font_zoraya.h ports/netsurf/zoraya_text.h
 	$(call unpack,netsurf,ports/patches/netsurf)
 	cp ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h $@/libnsfb/src/surface/
+	cp ports/netsurf/font_zoraya.c ports/netsurf/font_zoraya.h ports/netsurf/zoraya_text.h $@/netsurf/frontends/framebuffer/
 	@# The page of a host the grant refused (ADR-0325, patch 0008).
 	cp ports/netsurf/zoraya_refusal.c ports/netsurf/zoraya_refusal.h $@/netsurf/content/fetchers/
 	@touch $@

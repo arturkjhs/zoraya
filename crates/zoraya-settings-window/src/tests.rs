@@ -195,3 +195,55 @@ fn only_the_fields_that_differ_are_changes_and_an_empty_one_is_none() {
     assert_eq!(preview(&rows, &[], 0), None);
     assert_eq!(preview(&rows, &drafts, 9), None);
 }
+
+/// Proposed ADR-0329: the page taller than the window scrolls with the
+/// wheel to its last control (Apply at the bottom) and back, and the page
+/// built again after a change keeps where it was.
+#[test]
+fn the_page_scrolls_with_the_wheel_to_apply_and_keeps_its_place() {
+    use zoraya_ui::{Event, Painter, Response};
+    let rows = rows();
+    let l = |v| zoraya_tokens::Scale::ONE.logical(v);
+    let mut p = Painter::new(zoraya_tokens::Scale::ONE, zoraya_tokens::Appearance::Light);
+    let mut w = zoraya_ui::Window::new(page_with_rooms(&s(b""), &rows, &[], ""), (l(600), l(520)));
+    w.layout(&mut p);
+    let wheel = |dy| Event::Wheel {
+        x: l(300),
+        y: l(260),
+        dx: 0,
+        dy,
+    };
+    // Apply is the last child: out of the frame (no height) at first.
+    let apply_rect = |w: &mut zoraya_ui::Window| w.root.children().last().unwrap().rect();
+    assert_eq!(apply_rect(&mut w).h, l(0));
+    let press = |r: zoraya_ui::LRect| Event::Pointer {
+        x: r.x + l(4),
+        y: r.y + l(4),
+        buttons: 1,
+        modifiers: 0,
+    };
+    assert_eq!(w.event(wheel(-120)), Response::None, "at the top already");
+    let mut notches = 0;
+    while w.event(wheel(120)) == Response::Repaint {
+        notches += 1;
+        assert!(notches < 40);
+    }
+    assert!(notches >= 2, "{notches}");
+    w.layout(&mut p);
+    let r = apply_rect(&mut w);
+    assert_eq!(r.h, l(28));
+    assert!(r.bottom() <= l(500), "{r:?}");
+    assert_eq!(w.event(press(r)), Response::Activated(APPLY_ROOMS));
+    // Built again (a field's draft), the page stays at the end.
+    let at = w.root.scrolled();
+    let drafts = vec![(field_id(1, 0), String::from("32M"))];
+    w.replace_keeping_scroll(page_with_rooms(&s(b""), &rows, &drafts, ""), &mut p);
+    assert_eq!(w.root.scrolled(), at);
+    let r = apply_rect(&mut w);
+    assert_eq!(w.event(press(r)), Response::Activated(APPLY_ROOMS));
+    // Back to the top: Apply out of the frame again.
+    w.event(wheel(-64 * 120));
+    w.layout(&mut p);
+    assert_eq!(w.root.scrolled().map(|s| s.at), Some(0));
+    assert_eq!(apply_rect(&mut w).h, l(0));
+}

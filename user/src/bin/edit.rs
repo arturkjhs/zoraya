@@ -348,7 +348,7 @@ fn main() -> i32 {
                 Some(Value::Text(t)) => String::from(t),
                 _ => String::new(),
             };
-            app.replace(window, editor(&buffer, &status, &find));
+            app.replace_keeping_scroll(window, editor(&buffer, &status, &find));
         }
         let _ = port_wait(port, DEADLINE_INFINITE, &mut packets);
     }

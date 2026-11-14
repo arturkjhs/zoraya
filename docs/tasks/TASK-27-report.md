@@ -796,6 +796,92 @@ patches `ports/patches/curl/0003-refuse-tls-weakening-options.patch` (curl's `ge
 (ADR-0321's open questions, `docs/backlog.md`): no check diffs the refused lists against a new curl or wget release; wget's
 `https` to `http` redirect rule; `--cert-status` by default.
 
+## 9f-text: NetSurf's text through `zoraya-text` (branch `work/9f-text`, 2026-11-14)
+
+The architect's decision of 2026-11-14 is recorded as ADR-0326 (accepted, "Decided by the architect; recorded by an agent at the
+architect's request"); it supersedes ADR-0318's fonts item only (ADR-0318's note and index row say so). Model: Opus 5.5, one
+session, 01:15 to about 02:30.
+
+Done:
+- `crates/zoraya-fontset` (`no_std`, no `unsafe`): four faces of the system's fonts with fallback lists, width, position and split as
+  NetSurf documents them, glyphs from `zoraya-text`'s cache; the fonts are asked for only as `/system/fonts/NAME` (14 host tests:
+  the paths read, missing and broken fonts, every Russian and Ukrainian letter a non-blank glyph that is not the box at 16 and 32
+  pixels (12.8 pt at scale 1 and 2), widths, position, split, invalid UTF-8, zero-width characters, random bytes).
+- `libc.a`: `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` (`crates/zoraya-posix/src/ffi/text.rs`) and
+  `zoraya_window_scale` (`ffi/window.rs`), ADR-0326's `posix-surface-added` block, added to `ADDED_ADRS`.
+- NetSurf: `ports/netsurf/font_zoraya.c` (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`), patch `0008` (font.h, the text
+  plotter, the toolkit's text fields; their pixel-to-point conversion uses the page's dpi, else the URL field's text was twice its
+  field at scale 2); dpi 90 times the window's scale.
+- The grant: `/system/fonts` read only with a `window` line (`zoraya_shell::grants::with_window`, `zosh` run and `grants`); the
+  window shows a third pill. `tools/run-disk.sh` copies `fonts/` into the disk's `/system/fonts` (in the key; `tools/test-run-disk.sh`
+  extended); `make test-netsurf`'s root too.
+- Tests: the runner's `ink X Y W H RGB N` step; `/ns/cyrillic` in `tools/test-httpd`; `tests/gui/netsurf.script` checks it at scale 1
+  and the new pill gap; `tests/gui/netsurf-text.script` at scale 2 in a second boot of `make test-netsurf`. Screens:
+  `docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`.
+- Found on the way: `zoraya-ar` dropped every symbol of an object whose `.bss` is larger than the file; with seven more names the
+  call log's `zoraya-calls.o` (a 648-byte `.bss` in a 704-byte object) lost `__zoraya_calls*` from `libc.a`'s index and
+  `make check-ports` failed. Fixed (`SHT_NOBITS` takes no file bytes) with a test.
+- Proposed ADR-0327: OFL-1.1 for unmodified font files as data in `CLAUDE.md`'s licence rule (Option A recommended). Until the
+  architect rules, no font was added: NetSurf reads the files ADR-0162 already ships, at run time.
+
+Run on the Mac (HVF): `make check`; `cargo test -p zoraya-fontset -p zoraya-ar`, the new `zoraya-shell` and runner tests;
+`tools/test-run-disk.sh`; `make netsurf`; `make -f ports/Makefile check-ports` up to its rootfs part (libc.a against the lists
+passed; the `rootfs-posix` check needs `make ports`, not built here); `make test-netsurf` (`netsurf-auto` PASS 86 steps,
+`netsurf-text-2` PASS 19 steps, the INV-0228-1 log check, fsck clean). One earlier exploratory run lost QMP (broken pipe at a
+screendump) once; the rerun and the real run did not.
+Also run after `libc.a` changed: `make test-libposix` (PASS 53 steps), `make test-posix` (every script PASS), `make test-apps`
+(`apps-auto` and `apps-refusals-auto` PASS 302 steps each, `apps-launches` 12); the host tests of `zoraya-ar`, `zoraya-fontset`,
+`zoraya-posix`, `zoraya-shell`, `zoraya-test-httpd` and `zoraya-test-runner` (18 test binaries, all ok). Not run: `make test-changed`
+(the change touches `Makefile`, `Cargo.toml` and the runner, so it maps to every step, which an agent session does not run), TCG,
+`test-python`, `test-gui`; the candidate CI runs them.
+
+Open for the architect: ADR-0327 (the licence rule); CI's `ports-build` cache key (`.github/workflows/test.yml`) does not name
+`docs/adr/0326-*.md` (left to 9f-ci: the task kept CI caching out of this part; `libc.a` is rebuilt on every build anyway, since
+`zoraya-posix` is `FORCE`); a person's disk from before 9f-text is replaced once (kept as `.old`), since the fonts are in its key.
+Limits: no italic, toolbar not scaled, text cost per page not measured, native GUI programs still embed their fonts.
+## 9f-wheel: the wheel in `zoraya-app` (branch `work/9f-wheel`, 2026-11-14)
+
+Decided by the architect 2026-11-14: the file manager, the editor and settings scroll with ADR-0322's `Wheel`, a notch
+consistent with the terminal's three lines, smooth with high-resolution axes, clamped, a list keeping its selection and
+cursor rules; the other native applications too where they share the toolkit. The new decision is ADR-0329 (`proposed`):
+a third widget event and its units. What exists is in `docs/design.md`, "The wheel in the applications (as built)".
+
+Done:
+- **Toolkit.** `zoraya_ui::Event::Wheel { x, y, dx, dy }`; `Window` routes it to the widget under the pointer, then up to
+  the nearest ancestor that can go that way (a widget at its end answers `None`); no focus moves. `WheelSteps` (3 rows a
+  notch, 40/120 a row, the rest kept, forgotten at an end, at most 64 notches); `scrolled_by`, `widgets::wheel_rows`.
+  `Widget::scrolled`/`set_scrolled`/`reveal`; `Window::scrolled(id)`, `Window::replace_keeping_scroll`.
+- **`ScrollView`** rebuilt: it never moved what it showed (its one child was laid out at the frame's top, the height cut).
+  It is now a column of children shown from `first`, children before it laid out empty, `first` clamped so the last child
+  is at the bottom, focus (Tab or a key) on a child out of view scrolls it in. `ScrollView::new` takes the children.
+- **`zoraya-app`**: ordinal 46 to `Event::Wheel` (saturated to `WHEEL_MAX`); after a turn or a key that changed something
+  the window is laid out again at once, so a press before the paint hits what is shown; `App::replace_keeping_scroll`.
+- **Applications.** `ListView` (the chooser's sheet, which now reads where the wheel left its list before it rebuilds, and
+  follows the selection only when it moved), the file manager's list (over the list only, not with the menu or card open)
+  and the editor: the first row or line moves, clamped; the selection and the cursor stay; a key, a press, or a cursor the
+  program moves (find, new folder) brings the view back. Settings: the page is always a `ScrollView` and is rebuilt with
+  `replace_keeping_scroll`; the editor too.
+- **Tests.** Host: `zoraya-ui` `tests_wheel.rs` (10 tests) and the two rewritten `ScrollView` tests, `zoraya-app` (2),
+  `zoraya-files` (4), `zoraya-editor` (4), `zoraya-settings-window` (1), `zoraya-chooser` (1). GUI: `tests/gui/wheel.script`
+  (new; `GUI_RUNS_ALL` and `tools/ci-tests.txt` gain `wheel:auto:1`, `wheel:tcg:1`, `wheel:auto:2`): the file manager's
+  selected row three rows up after a notch and back, a key after a far turn bringing the cursor back; settings (two rooms)
+  with its controls 135 pixels higher after a notch and back, then Apply reached at the end (`settings: No change.`); the
+  editor's empty lines in the rows that showed `x` lines after a notch away from the person, and at the top.
+- `tools/mutants/editor.toml`: three mutants re-anchored (`occurrence = 1`, the follow block's new indentation);
+  `tools/mutants/wheel-9f.toml`: seven mutations made by hand (parts of a notch dropped, the stop at both ends, no
+  routing up, no reveal, no layout after a turn, the file manager and the editor following the cursor anyway).
+
+Ran on the Mac (HVF, this session): `make check`; `cargo test` in `zoraya-ui`, `-app`, `-files`, `-editor`,
+`-settings-window`, `-chooser` (all pass); `make test-gui GUI_RUNS="wheel:auto:1"` and `"wheel:auto:2"` (74 steps
+each, PASS); `make mutants MUTANTS_ARGS=tools/mutants/wheel-9f.toml` (7 caught, 0 survived). `make test-changed`:
+the checks and the host tests of the 13 affected test binaries passed; since the `Makefile` changed it chose every step,
+and its build stopped at the ports (`build/ports/src/dash-0.5.13.5.tar.gz is missing`: this fresh worktree never ran
+`make fetch-ports`), so no QEMU step of it ran. Not run locally: `wheel:tcg:1`, the other GUI scripts, `make test`; the
+candidate run on CI covers them.
+
+Limits (also `docs/backlog.md`): settings scrolls by whole children, not pixels (`Logical` is unsigned; ADR-0329 Option A
+not taken); no scroll bar; `dx` scrolls nothing; no Page Up or Page Down in the file manager and the editor.
+
 ## 9f-net: the `web` grant for browsers and NetSurf's refusal page (branch `work/9f-net`, 2026-11-14)
 
 Decided by the architect (2026-11-14) and recorded at the architect's request as **ADR-0324** (the web grant) and **ADR-0325**
@@ -813,7 +899,7 @@ What exists (details in `docs/design.md`, "NetSurf on the web"):
   (the panel accepts that one word); `netgrant::web_refused` refuses it in an untrusted room (markers `untrusted-gate:
   web-refusal` and two `web-refusal-call`, checked by `make check-untrusted-gate`; `tools/untrusted-gate.txt` unchanged, the
   gate stays closed). NetSurf's description takes it; curl and wget keep the per-URL rule.
-- **The page.** NetSurf patch 0008 and `ports/netsurf/zoraya_refusal.c`: a fetch that ends with `connect` `EACCES`, or a lookup
+- **The page.** NetSurf patch 0009 (0008 before the merge with 9f-text, whose patch is 0008) and `ports/netsurf/zoraya_refusal.c`: a fetch that ends with `connect` `EACCES`, or a lookup
   refused (`EAI_SYSTEM`/`EACCES`, asked a second time), gets a 403 page `Not granted: HOST:PORT` with the line `+net HOST:PORT
   netsurf URL` (quoted, escaped); other failures keep NetSurf's error page.
 - **The test network.** `tools/run-qemu.sh --net-subnet` and `--net-guestfwd`; `make test-netsurf` runs on 203.0.113.0/24
@@ -850,7 +936,7 @@ the web rule cannot be written as a `+net` or room word (a word `web` on a line 
 - **4, fixed.** The shown URL is cut at 1024 bytes with a mark, the host at 253; a URL too long to repeat gets the line
   of the host's first page (`+net HOST:PORT netsurf SCHEME://HOST/`); the page always fits 16 KiB (tested at the worst
   bytes). That line is not the refused URL: ADR-0325 item 3 does not foresee it, for the architect to note.
-- **5, fixed.** Patch 0008 reads curl's own lookup through `--wrap=getaddrinfo` and asks no second time. ADR-0325 item 1
+- **5, fixed.** Patch 0009 reads curl's own lookup through `--wrap=getaddrinfo` and asks no second time. ADR-0325 item 1
   and its Consequences still say "a second `getaddrinfo`": the mechanism changed, the rule (`EAI_SYSTEM`/`EACCES`) did
   not.
 - **6, fixed.** The decoder refuses a web rule with any protocol but TCP, so `netd` does (host tests in `zoraya-abi` and

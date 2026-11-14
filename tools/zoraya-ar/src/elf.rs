@@ -4,6 +4,7 @@
 //! panics.
 
 const SHT_SYMTAB: u32 = 2;
+const SHT_NOBITS: u32 = 8;
 const SHN_UNDEF: u16 = 0;
 const STB_GLOBAL: u8 = 1;
 const STB_WEAK: u8 = 2;
@@ -42,7 +43,13 @@ fn section(elf: &[u8], i: usize) -> Option<(u32, usize, usize, usize)> {
     let offset = u64_at(elf, h + 24)?;
     let size = u64_at(elf, h + 32)?;
     let link = u32_at(elf, h + 40)? as usize;
-    elf.get(offset..offset.checked_add(size)?)?;
+    // A `.bss` (SHT_NOBITS) takes no bytes of the file: its size is memory.
+    // Checking it as a file range dropped every symbol of an object whose
+    // `.bss` was larger than the file (the call log's `zoraya-calls.o` once
+    // libc.a wrapped more than about 640 functions, 9f-text).
+    if kind != SHT_NOBITS {
+        elf.get(offset..offset.checked_add(size)?)?;
+    }
     Some((kind, offset, size, link))
 }
 
@@ -63,8 +70,13 @@ fn defined(elf: &[u8]) -> Option<Vec<String>> {
         if kind != SHT_SYMTAB {
             continue;
         }
-        let (_, str_off, str_size, _) = section(elf, link)?;
-        let strtab = &elf[str_off..str_off + str_size];
+        let (str_kind, str_off, str_size, _) = section(elf, link)?;
+        // A NOBITS string table has no bytes in the file, and `section`
+        // does not check its range: refuse it rather than index past the end.
+        if str_kind == SHT_NOBITS {
+            return None;
+        }
+        let strtab = elf.get(str_off..str_off.checked_add(str_size)?)?;
         // Entry 0 is the null symbol.
         for at in (offset..offset + size).step_by(24).skip(1) {
             let sym = elf.get(at..at + 24)?;

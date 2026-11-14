@@ -577,4 +577,136 @@ mod view {
         assert_eq!(press(x0 + g.cw / 4, y0 + 2 * g.lh + 1), (2, 0));
         assert_eq!(press(x0 + 5 * g.cw + g.cw / 4, y0 + 1), (0, 5));
     }
+
+    fn wheel(v: &mut EditorView, dy: i32) -> Response {
+        let l = |n: i32| Scale::ONE.logical(n as u32);
+        v.event(&Event::Wheel {
+            x: l(AT.0 + 50),
+            y: l(AT.1 + 50),
+            dx: 0,
+            dy,
+        })
+    }
+
+    /// Proposed ADR-0329: three lines a notch, parts of a notch kept, the
+    /// view clamped to the text, the cursor left where it is until a key.
+    #[test]
+    fn the_wheel_scrolls_three_lines_a_notch_and_leaves_the_cursor() {
+        let text: alloc::vec::Vec<alloc::string::String> =
+            (0..40).map(|i| alloc::format!("line {i}")).collect();
+        let (mut v, mut p) = view(&text.join("\n"), |_| {});
+        let g = geo(&mut p);
+        let rows = ((120 - 2 * g.pad) / g.lh) as usize;
+        paint(&mut v, &mut p, true);
+        assert_eq!(wheel(&mut v, -120), Response::None, "at the top");
+        assert_eq!(wheel(&mut v, 120), Response::Repaint);
+        paint(&mut v, &mut p, true);
+        assert_eq!(v.top(), 3, "the cursor on line 0 does not pull it back");
+        assert_eq!(v.buffer.borrow().cursor(), 0);
+        // A high-resolution wheel: 40 is a line.
+        wheel(&mut v, 20);
+        assert_eq!(v.top(), 3);
+        wheel(&mut v, 20);
+        assert_eq!(v.top(), 4);
+        // To the end: the last line in the last row, no further.
+        wheel(&mut v, i32::MAX);
+        paint(&mut v, &mut p, true);
+        assert_eq!(v.top(), 40 - rows);
+        assert_eq!(wheel(&mut v, 120), Response::None);
+        // The page kept across a rebuild of the window.
+        let s = v.scrolled().unwrap();
+        assert!(s.free);
+        let mut again = EditorView::new(7, v.buffer.clone());
+        again.set_scrolled(s);
+        assert_eq!(again.scrolled(), Some(s));
+        // A key brings the view back to the cursor (now on line 1).
+        v.event(&key(keys::DOWN, None, 0));
+        paint(&mut v, &mut p, true);
+        assert_eq!(v.top(), 1, "the cursor's line at the top");
+        assert!(!v.scrolled().unwrap().free);
+        wheel(&mut v, -40);
+        assert_eq!(v.top(), 0);
+        // Up from the top: nothing.
+        assert_eq!(wheel(&mut v, -40), Response::None);
+    }
+
+    /// W4 of the review of 9f-wheel: Shift or Ctrl on its own does not bring
+    /// the view back to the cursor.
+    #[test]
+    fn a_modifier_key_alone_leaves_the_wheels_view() {
+        let text: alloc::vec::Vec<alloc::string::String> =
+            (0..40).map(|i| alloc::format!("{i}")).collect();
+        let (mut v, mut p) = view(&text.join("\n"), |_| {});
+        paint(&mut v, &mut p, true);
+        wheel(&mut v, 240);
+        assert!(v.scrolled().unwrap().free);
+        for code in [29, 42, 54, 56, 97, 100] {
+            v.event(&key(code, None, 0));
+            assert!(v.scrolled().unwrap().free, "code {code}");
+        }
+        v.event(&key(keys::DOWN, None, 0));
+        assert!(!v.scrolled().unwrap().free);
+    }
+
+    #[test]
+    fn a_press_in_a_scrolled_view_puts_the_cursor_on_the_line_shown() {
+        let text: alloc::vec::Vec<alloc::string::String> =
+            (0..40).map(|i| alloc::format!("{i}")).collect();
+        let (mut v, mut p) = view(&text.join("\n"), |_| {});
+        let g = geo(&mut p);
+        paint(&mut v, &mut p, true);
+        wheel(&mut v, 240);
+        paint(&mut v, &mut p, true);
+        let l = |n: i32| Scale::ONE.logical(n as u32);
+        v.event(&Event::Pointer {
+            x: l(AT.0 + g.pad + 1),
+            y: l(AT.1 + g.pad + g.lh / 2),
+            buttons: 1,
+            modifiers: 0,
+        });
+        let line = {
+            let b = v.buffer.borrow();
+            b.line_col(b.cursor()).0
+        };
+        assert_eq!(line, 6);
+        paint(&mut v, &mut p, true);
+        assert_eq!(v.top(), 6);
+        assert!(!v.scrolled().unwrap().free);
+    }
+
+    /// A text shorter than the view does not scroll.
+    #[test]
+    fn a_short_text_takes_no_turn() {
+        let (mut v, mut p) = view("a\nb", |_| {});
+        paint(&mut v, &mut p, true);
+        assert_eq!(wheel(&mut v, 120), Response::None);
+        assert_eq!(wheel(&mut v, -120), Response::None);
+        assert_eq!(v.top(), 0);
+    }
+
+    /// A cursor the program moves (a find) is followed again, also across
+    /// a rebuild of the window; one left where it was is not.
+    #[test]
+    fn a_find_after_the_wheel_brings_its_match_into_view() {
+        let text: alloc::vec::Vec<alloc::string::String> =
+            (0..40).map(|i| alloc::format!("w{i}")).collect();
+        let (mut v, mut p) = view(&text.join("\n"), |_| {});
+        paint(&mut v, &mut p, true);
+        wheel(&mut v, 360);
+        paint(&mut v, &mut p, true);
+        assert_eq!(v.top(), 9);
+        // Rebuilt while free: it stays.
+        let mut again = EditorView::new(7, v.buffer.clone());
+        let l = |n: i32| Scale::ONE.logical(n as u32);
+        again.layout(LRect::new(l(AT.0), l(AT.1), l(300), l(120)), &mut p);
+        again.set_scrolled(v.scrolled().unwrap());
+        paint(&mut again, &mut p, true);
+        assert_eq!(again.top(), 9);
+        assert!(v.buffer.borrow_mut().find("w39"));
+        paint(&mut again, &mut p, true);
+        let g = geo(&mut p);
+        let rows = ((120 - 2 * g.pad) / g.lh) as usize;
+        assert_eq!(again.top(), 40 - rows);
+        assert!(!again.scrolled().unwrap().free);
+    }
 }

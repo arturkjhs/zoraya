@@ -713,8 +713,12 @@ test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tool
 NS_ROOT := $(BUILD)/netsurf-root
 NS_DISK := $(BUILD)/netsurf-disk.img
 NS_TEMPLATE := tests/gui/netsurf.script
-# The test server outlives the runner's timeout (review N6).
-NS_LIFETIME := $(shell expr $(QEMU_SLOW_TIMEOUT) + 60)
+# ADR-0326 (9f-text): the Cyrillic page again at scale 2, in a second boot (the
+# first run is at scale 1); the system's fonts are in the root's /system/fonts.
+NS_TEXT_TEMPLATE := tests/gui/netsurf-text.script
+NS_TEXT_SCRIPT := $(BUILD)/netsurf-text.script
+# The test server outlives both runs' timeouts (review N6).
+NS_LIFETIME := $(shell expr 2 \* $(QEMU_SLOW_TIMEOUT) + 60)
 NS_SCRIPT := $(BUILD)/netsurf.script
 NS_HTTP_READY := $(BUILD)/netsurf-httpd.port
 NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
@@ -728,7 +732,7 @@ NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
 # routed to the server by SLIRP: they rest on the refusal page's colour alone.
 NS_NET := 203.0.113
 NS_RELAY = $(CURDIR)/$(HTTPD) --relay 127.0.0.1:$$port
-NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(NS_SCRIPT) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --net --net-open \
+NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --gui-scale $(5) --net --net-open \
 	--net-subnet $(NS_NET).0/24 --net-guestfwd "$(NS_NET).10:80=$(NS_RELAY)" --net-guestfwd "$(NS_NET).11:80=$(NS_RELAY)" \
 	--net-guestfwd "$(NS_NET).11:8080=$(NS_RELAY)" \
 	--mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
@@ -736,6 +740,7 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
+	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
 	printf 'net.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
@@ -749,7 +754,9 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[netsurf] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-netsurf.log; exit 1; fi; \
 	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).2/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
-	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).2/g" $(NS_TEXT_TEMPLATE) > $(NS_TEXT_SCRIPT); \
+	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto,$(NS_SCRIPT),1); rc=$$?; \
+	if [ $$rc = 0 ]; then $(call NS_RUN,$(QEMU_SLOW_TIMEOUT),text-2,auto,$(NS_TEXT_SCRIPT),2); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
 		log=target/test-logs/test-httpd-netsurf.log; mark='^http: GET /ns/mark-before-proceed '; \
@@ -1212,7 +1219,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 spinners:auto:1 spinners:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 spinners:auto:1 spinners:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 wheel:auto:1 wheel:tcg:1 wheel:auto:2 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \

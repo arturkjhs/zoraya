@@ -91,6 +91,11 @@ Recommended: **Option B**, with the source set below. It is a recommendation, no
   first before `nslog_init`. INV-0318-2's check fails when a build log it reads is missing, instead of passing on
   nothing.
 
+- *Note (ADR-0326, 2026-11-14):* the fonts item of this ADR (Option B, the internal bitmap font) is superseded by
+  ADR-0326 (accepted 2026-11-14): NetSurf's text goes through `zoraya-text` (Option C), with the system's fonts read only
+  from `/system/fonts`, Cyrillic, at the window's scale. The source set, the build (item 5 apart from
+  `NETSURF_FB_FONTLIB`, now `zoraya`) and INV-0318-1 and -2 stand.
+
 ## Revisit triggers
 - A page the architect names that shows boxes where text is expected; a measured text-measure cost above 5% of a page load.
 
