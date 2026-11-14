@@ -1,2 +1,4 @@
 # Tests of tests/cxx/libcxx-groups.txt's groups that make test-cxx-libcxx
 # leaves out, with the reason: a path relative to libcxx/test/, then why.
+std/input.output/filesystems/fs.op.funcs/fs.op.status/status.pass.cpp                  makes an AF_UNIX socket file (bind): libposix has no AF_UNIX or bind (ADR-0225)
+std/input.output/filesystems/fs.op.funcs/fs.op.symlink_status/symlink_status.pass.cpp  the same

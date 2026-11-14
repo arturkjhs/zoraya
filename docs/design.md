@@ -2115,6 +2115,62 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
 
+## C++ for Zoraya programs (TASK-30)
+
+C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX programs (proposed ADR-0360 to ADR-0367).
+
+- **The runtime** (`make -f ports/Makefile cxx`, ADR-0360): LLVM 20.1.8's libc++, libc++abi and libunwind, static, the newest
+  release whose libc++ supports the Clang 18 CI has. `ports/sources.lock` pins the whole LLVM source (147 MB; `libcxx`,
+  `libcxxabi`, `libunwind` and `libc`, whose `shared/` headers libc++'s `from_chars` includes, are unpacked);
+  `ports/cxx/cxx.mk` compiles LLVM CMake's file lists with `zc++`, `ports/cxx/__config_site` is the configuration (exceptions,
+  RTTI, threads over libposix's pthreads, localization with the C locale, `std::filesystem`, `random_device`, no time zone
+  database, no `libc++experimental`, hardening `fast`). Patches `ports/patches/llvm/`: `0001` `random_device` over
+  `getentropy` (no `/dev/urandom`), `0002` `copy_file` without `sendfile`. Into `build/sysroot`: `usr/include/c++/v1`,
+  libunwind's headers in `usr/include`, `usr/lib/libc++.a` (2.5 MB), `libc++abi.a` (0.6 MB), `libunwind.a` (0.1 MB); about a
+  minute to build with three jobs on the Mac mini. Not in `build/rootfs-posix` (ADR-0365, INV-0365-1): no compiler there builds C++.
+- **`zc++`** (`tools/zc++`, a link to `tools/zcc`, which takes C++ from its name): libc++'s headers before musl's,
+  clang's g++ mode, exceptions and unwind tables on, `-D_GNU_SOURCE` always and `-std=c++23` unless the line names a standard
+  or a language (ADR-0364), and the three libraries in one group with `libc.a` and `--eh-frame-hdr` at the link (`-nostdlib++`
+  leaves them out). `build/ports/bin/aarch64-unknown-zoraya-c++` is the triple-prefixed name.
+- **Exceptions** (ADR-0361): libunwind finds `.eh_frame_hdr` through `PT_GNU_EH_FRAME` and musl's static `dl_iterate_phdr`, which
+  reads the auxiliary vector libposix lays out (`src/ldso/dl_iterate_phdr.c` is compiled into `libc.a`). An uncaught exception,
+  one out of a `noexcept` function and `std::terminate` print libc++abi's line and `abort()`: the shell says "ended by signal 6"
+  (ADR-0362). A hardening check traps (`brk`): "crashed (breakpoint, class 0x3c)".
+- **What `libc.a` gained** (ADR-0366): 51 names of musl's code (the `*_l` locale functions, the wide-character I/O and
+  conversions, `strtod_l` and kin, `swprintf`, `vsscanf`, `getentropy`, `dl_iterate_phdr`, `execv`, `wcsstr`, `towlower`...) and
+  libposix's new `aligned_alloc` and `posix_memalign` (`malloc`'s 16-byte header now holds the size and the distance to the heap
+  block's start, which is also its alignment; `free` reads both). A weak shim in `libc++.a` (`ports/cxx/zoraya-shim.c`):
+  `sched_yield` (libposix's own), `truncate` (`open` and `ftruncate`), `pathconf` (`PATH_MAX`, `NAME_MAX`), and `link` and
+  `statvfs` failing with `ENOTSUP`. `ports/cxx/cxx.mk` links a program with the whole of the three archives to prove no name is
+  missing (INV-0366-1).
+- **The locale** (ADR-0363): the C locale; musl accepts any name and keeps the C rules under it.
+- **CMake** (ADR-0367): `ports/cmake/zoraya.cmake` (`cmake -DCMAKE_TOOLCHAIN_FILE=ports/cmake/zoraya.cmake`) and
+  `ports/cmake/Platform/Zoraya.cmake` (`UNIX`, `ZORAYA`, static libraries only, no `-rdynamic` or PIE flags). GoogleTest 1.18.0
+  is built with it (`make -f ports/Makefile gtest`, its own tests on, gmock off; patch `googletest/0001` names Zoraya among the
+  systems with pthreads and death tests). CI's image has `cmake` for it.
+- **Tests.** `make test-cxx` (`tests/cxx/cxx.script`): `tests/cxx/cxxtest.cpp` through the shell with its description
+  (`user/describe/posix/cxxtest.cmd`): exceptions across 20 frames, out of a `std::thread` by `exception_ptr` and out of
+  `std::async`, library exceptions (`bad_alloc`, `out_of_range`, `system_error`), RTTI and `dynamic_cast` through virtual bases,
+  static constructors in order and destructors in reverse after `atexit`'s handler, `std::thread`, `mutex`,
+  `condition_variable`, `future`, `packaged_task`, `async`, atomic wait, `thread_local` destructors at thread exit, iostreams,
+  `fstream` in the program's `/tmp`, the C locale, `regex`, `random_device`, `std::filesystem` operations, a directory the line
+  grants (`+r /work/granted`) listed and one it does not refused (`ENOENT` and the shell's hint), and the three ends of an uncaught
+  exception; `tests/cxx/hello.cpp` by `posixrun`. `make test-cxx-libcxx`: libc++'s own run tests of
+  `tests/cxx/libcxx-groups.txt` (`support.exception`, `support.rtti`, `support.dynamic`, `std/thread`,
+  `std/input.output/filesystems`: 481 programs, 9 left out by their lit directives or `tests/cxx/libcxx-excluded.txt`), built
+  by `tests/cxx/libcxx-build.sh` (a test that does not compile is an error) and run each by `posixrun` in `/work`. `make
+  test-cxx-gtest`: GoogleTest's 27 self-checking test programs, death tests included (they `fork`, and the threadsafe style
+  executes the program again), each through `gtrun` (`tests/cxx/gtrun.c`, `user/describe/posix/gtrun.cmd`), with the
+  expectations of `tests/cxx/gtest-expect.txt`. `make ci-build` builds the runtime, GoogleTest and the libc++ subset, so that the
+  test jobs only run them.
+- **Sizes.** `hello` (iostream and one exception) is 1.0 MB stripped of `libc.a`'s debug information, 3.5 MB with it;
+  `cxxtest` 1.0 MB stripped; a libc++ test about 0.4 MB with `--gc-sections`.
+- **Known limits.** No C++ compiler inside Zoraya; no unwinding through `libc.a`'s callbacks (`qsort` with a throwing comparator
+  terminates: musl has no unwind tables); no function names in libunwind's backtraces (no `dladdr`); named locales are the C
+  locale; no time zone database (`std::chrono::current_zone` is absent), no `libc++experimental`; `std::filesystem::space` and
+  `create_hard_link` fail with `ENOTSUP`; a POSIX program's namespace has no `/` entry, so `current_path("/")` fails; no `AF_UNIX`
+  socket files. CMake `try_run` checks need answers in the cache.
+
 ## The window of a POSIX program and NetSurf (stage 9, 9d)
 
 A POSIX program can have one window (ADR-0317), and NetSurf 3.11 is the first (ADR-0318).

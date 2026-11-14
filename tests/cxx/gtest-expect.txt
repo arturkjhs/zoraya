@@ -1,2 +1,21 @@
-# GoogleTest programs of tests/cxx/gtest.sh that end otherwise than with
-# "[  PASSED  ]" and exit 0: the name, the exit status, a line of the output.
+# GoogleTest programs of tests/cxx/gtest.sh that are run otherwise than with no
+# arguments, or that end otherwise than with "[  PASSED  ] N tests." and exit
+# 0: NAME|FILTER (gtrun's operand)|EXIT STATUS|THE LAST LINE IT PRINTS. The script waits for
+# that line before it asks the shell for the status: a line typed while the
+# program runs goes to the program's terminal, not to the shell.
+#
+# Left out by a filter (a POSIX program's namespace has no "/" entry, ADR-0107,
+# so chdir("/") and opening "/" fail as they should): the current directory
+# after chdir("/") and "/" existing.
+googletest-filepath-test|*-GetCurrentDirTest.ReturnsCurrentDir:DirectoryTest.RootDirectoryExists|0|[  PASSED  ]
+# Left out, the same reason: each test changes to "/" and back.
+googletest-options-test|*-XmlOutputChangeDirTest.*|0|[  PASSED  ]
+# Programs that check GoogleTest from outside its own TEST macros and print
+# PASS at the end, or nothing (gtest_throw_on_failure_ex_test: the failure it
+# provokes is printed, then caught, and the program exits 0).
+gtest_environment_test||0|\r\nPASS
+gtest_repeat_test||0|\r\nPASS
+gtest_stress_test||0|\r\nPASS
+gtest_throw_on_failure_ex_test||0|Expected failure
+# No test at all: RUN_ALL_TESTS() fails, which the program expects.
+gtest_no_test_unittest||0| 0 FAILED TESTS
