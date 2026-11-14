@@ -92,7 +92,8 @@ broker never sees a path and holds no authority to hand out (ADR-0104 item 13). 
 Process limits that a port meets: `fork` copies every page at the call and carries at most 64 connections; `exec`
 reads the whole program each time (25 ms under HVF, 195 ms under TCG for a 1.4 MiB program; ADR-0212's image cache is
 not built); programs are static; a file cannot be mapped (`ENODEV`); `mprotect` is `ENOSYS`; there are no hard links,
-`st_nlink` is 1, the only identity is uid 1000 from `/etc/passwd` of the toolchain set, `chown` changes nothing;
+`st_nlink` is 1, the only identity is uid 1000 from `/etc/passwd` of the toolchain set, `chown` to that identity
+changes nothing and to any other fails with `EPERM` (ADR-0014 rule 5);
 `alarm` and `setitimer` are not offered (ADR-0106 item 10); `fcntl` record locks exclude only inside one process
 (ADR-0319); `setsid` is not offered. Threads exist (ADR-0308).
 
@@ -102,9 +103,10 @@ A program reaches a host only through a scoped connection to `netd` (ADR-0220). 
 described program, and a literal `url` operand of an image description designates its host and port; the `host`
 operand kind designates an echo only (proposed ADR-0330). Built in `libposix`: TCP over IPv4 with `connect`,
 `getaddrinfo`, `select` by a shim. Not built although decided: `bind`, `listen`, `accept`, UDP, `socketpair`, `poll`,
-`getnameinfo`, the inheritance of a socket or of the network connection by a child (ADR-0225 items 4, 5 and 9;
-ADR-0287 item 3: a child of a POSIX program has no network and, when it was not started by `zosh`, no random
-service), the `+listen` word, the rooms' network words, and the refusal report and hint of ADR-0224 item 5. A POSIX
+`getnameinfo`, the inheritance of an open socket by a child (ADR-0225 items 4, 5 and 9), the `+listen` word, the rooms' network words, and the refusal report and hint of ADR-0224 item 5. Not decided
+at all: a network connection of its own for a child. Accepted ADR-0287 item 3 says a child of a POSIX program has
+no network, and a child that `zosh` did not start has no random service (ADR-0310 item 3). *(Corrected by the
+review, finding 3.19: an earlier wording called the child's connection "decided".)* A POSIX
 program holds at most two connections. TLS for C programs is one static OpenSSL 3.5 (ADR-0312) that trusts
 `/system/tls/roots` and nothing a file or a variable names (ADR-0310 item 6). There is no key agent and no client
 certificate (ADR-0228 item 5).
@@ -135,7 +137,8 @@ from [T3], consistent with how [T13] labels the origin of each mode).
 
 xterm's control sequence document is the de-facto reference above that. The plain-text copy, "updated for XTerm
 Patch #411 (2026/08/23)", has 3,840 lines and 24,816 words (my count), and about 426 lines of the form "Ps = N -> meaning" (my
-count of the private-mode, SGR and window-operation lists) [T2]. It documents the sequences this survey cares about:
+count of the private-mode, SGR and window-operation lists) [T2]. *(The review could not reproduce 426: a search of
+the same file for `P[a-z] = [0-9]` gives 570 lines. Read it as "several hundred".)* It documents the sequences this survey cares about:
 DECCKM (mode 1), DECAWM (7), DECTCEM (25), alternate screen (47, 1047, 1048, 1049), mouse (1000, 1002, 1003, 1006),
 focus events (1004), bracketed paste (2004), DECSTBM, DECKPAM/DECKPNM and SGR 38/48 [T2]. About 1049 it says to use it
 "with terminfo-based applications rather than the 47 mode", and that it combines 1047 and 1048 [T2]. For colour it says
@@ -596,8 +599,11 @@ and 32-bit magic numbers), and it follows ncurses' search order: `TERMINFO`, `~/
 directories (`/etc/terminfo`, `/lib/terminfo`, `/usr/lib/terminfo`, `/usr/share/terminfo`,
 `/usr/share/lib/terminfo`, `/usr/share/misc/terminfo`, `/usr/local/lib/terminfo`, `/usr/local/share/terminfo`) [C21].
 Its `unix_console.py` now calls `terminfo.TermInfo`, `terminfo.tparm` [C21]. So from 3.14 the REPL no longer needs the
-`_curses` C module; it needs a compiled terminfo file in directory-tree form on disk (it does not handle `hex:`
-`TERMINFO` values, from what the file's search code shows) [C21].
+`_curses` C module; it reads a compiled terminfo file in directory-tree form if it finds one (it does not handle
+`hex:` `TERMINFO` values, from what the file's search code shows) [C21]. *Corrected by the review (finding 1.6):
+the same file falls back to built-in tables when it finds no entry (`TermInfo(..., fallback=True)`): an `ansi`
+capability set for `xterm-256color`, `xterm`, `screen*`, `tmux*`, `vt100`, `vt220` and the rxvt names, `dumb` for
+anything else. So the 3.14 REPL does not need a file for those names.*
 
 Python's `site.py` sets up readline history automatically: `gethistoryfile()` returns `PYTHON_HISTORY` if set, else
 `~/.python_history` [C23]. That is a home-directory file the command line never names.
@@ -640,6 +646,16 @@ links `db1` if `dbopen` is not in libc [C26]. nvi 1.81.6 (2007) instead ships it
 library" in a `db` directory [C27]. The `INSTALL.md` also demands `/var/tmp/vi.recover/` with mode 41777 (sticky,
 world-writable) [C26], and nvi2's CMake sets the preserve path `/var/tmp/vi.recover/` [C26]. nvi2's CMake needs
 `libbsd` where `strlcpy` or `getprogname` is missing [C26].
+
+*Corrected and completed by the review (findings 2.1, 2.6, 2.7, 2.8, 2.20), from nvi2's own source, which this
+section had not read (it read OpenBSD's `exf.c`):* `dbopen` is called on the edited file itself, read-only; the
+record database's backing file is the recovery file in the recovery directory, and `/tmp/vi.XXXXXXXXXX` is used
+only for a file that does not exist yet or has no name. With recovery removed, DB 1 makes its own unlinked
+temporary file. DB 1 first tries to map the edited file and falls back to reading. nvi2 **saves in place**:
+`file_write` in `common/exf.c` opens the edited name with `O_CREAT|O_WRONLY|O_TRUNC` and writes into it, with no
+rename. Its ex command `:script` (`ex/ex_script.c`) calls `openpty` and `setsid` and is always compiled in, as is
+the `flock` call. It reads `/etc/vi.exrc`, `NEXINIT` or `EXINIT`, and `~/.nexrc` or `~/.exrc` whatever the `exrc`
+option says. It builds with CMake and Ninja only.
 
 ### Vim
 
@@ -1227,6 +1243,9 @@ a pty can also feed programs that refuse to read from pipes, such as `su` and `p
 | foot (MIT) | yes | Opens the master, `ptsname`, child does `setsid` + `TIOCSCTTY` | [P40] |
 
 Python 3.15's `pty` page says Availability: Unix [P32]; this is the doc page version I fetched.
+
+*Added by the review (finding 2.1): nvi2 belongs in this table. Its `:script` command creates a pair with
+`openpty`; the rest of the editor does not.*
 
 A pattern from the table: every program that creates a pty is a terminal emulator, a remote-login server, a multiplexer or
 a recorder. None of the programs Zoraya's stage 10 lists (vi, less, git, ssh *client*, tools) creates one. They consume the

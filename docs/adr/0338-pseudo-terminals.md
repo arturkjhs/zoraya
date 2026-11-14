@@ -17,9 +17,11 @@ would be on a system with no global names.
 **What is known.**
 
 - Only four kinds of program create a pair: terminal emulators, multiplexers (`tmux`, `screen`), remote-login
-  servers (`sshd`) and recorders (`script`, `expect`, Python's `pty` module). `vi`, `less`, git and the ssh client
+  servers (`sshd`) and recorders (`script`, `expect`, Python's `pty` module). `less`, git and the ssh client
   never do: they use the terminal they are given or open `/dev/tty`
-  (`stage-10/survey.md#which-programs-need-a-pty`, `stage-10/survey.md#the-name-devtty`).
+  (`stage-10/survey.md#which-programs-need-a-pty`, `stage-10/survey.md#the-name-devtty`). The chosen `vi` has one
+  such command: nvi2's `:script` runs a shell on a pair it makes with `openpty` (found by the review in nvi2's
+  source); ADR-0335 removes that command.
 - Zoraya's own terminal needs none: `term` speaks messages to the shell, and the shell or `ttyd` hosts the
   discipline (ADR-0331, `stage-10/survey.md#the-tty-service-as-built`).
 - The master end sees everything the slave side writes and everything typed, injects input and, through the
@@ -27,9 +29,10 @@ would be on a system with no global names.
   access, not from the pair: the set-uid helper for `grantpt`, the shared `/dev/ptmx`, `TIOCSTI`, which Linux now
   restricts and OpenBSD removed (`stage-10/survey.md#a-pty-pair-as-capabilities`,
   `stage-10/survey.md#pty-security-history`).
-- Systems without `/dev/ptmx`: Fuchsia's `ptysvc` hands each caller a fresh pair over a routed protocol; Redox's
-  `ptyd` keeps the discipline in a daemon and the group to signal in the pair's object; Windows returns a handle
-  from a call; Plan 9 has no pairs and runs foreign programs in an emulator; Genode's libc fakes a fixed termios
+- Other systems: Fuchsia's `ptysvc` gives each caller a fresh pair over a routed protocol and further clients by
+  handle; Redox's `ptyd` keeps the discipline in a daemon and the group to signal in the pair's object, but names
+  each slave by a sequential number that any holder of the scheme can open; Windows returns a handle from a call; Plan
+  9 has no pairs and runs foreign programs in an emulator; Genode's libc fakes a fixed termios
   (`stage-10/survey.md#ptys-without-a-global-name`).
 
 **What is assumed.** That `tmux`, an ssh server and Python's `pty` module are wanted after stage 10, not in it
@@ -66,8 +69,10 @@ would be on a system with no global names.
   a name that only the creating process's table resolves.
 - **Evidence for:** Drivers 2 to 4. `ttyd` with a channel backend is what already runs behind the terminal window
   in a session (`stage-10/survey.md#the-tty-service-as-built`), so the pair is existing code under a new starter.
-  It is Fuchsia's and Redox's shape: a service, a fresh pair per request, access by handle
-  (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`, `alternatives-postmortem.md#redox`).
+  It is the shape of Fuchsia's service: a fresh pair per request and clients by handle; and it keeps what Redox's
+  daemon does (the discipline and the group to signal in a user process) without Redox's numbered names
+  (`stage-10/survey.md#ptys-without-a-global-name`; the systems are those of
+  `alternatives-postmortem.md#fuchsia--zircon-incl-starnix` and `alternatives-postmortem.md#redox`).
 - **Evidence against:** A process per pair, which a multiplexer with twenty panes pays twenty times. The broker
   gains a request and starts programs for its clients. Programs that pass the slave's *name* to an unrelated
   process do not work.
@@ -101,9 +106,9 @@ would be on a system with no global names.
 
 **Recommendation (not a decision): build nothing in stage 10, and record Option B as the shape.**
 
-1. **Stage 10 has no pseudo-terminal.** No program in its list creates one. `posix_openpt`, `openpty`, `forkpty`,
-   `grantpt`, `unlockpt` and `ptsname` are not exported by `libc.a` (ADR-0342), so a port that calls them fails at
-   link time and names itself.
+1. **Stage 10 has no pseudo-terminal.** No program in its list needs one once nvi2's `:script` is cut
+   (ADR-0335 item 1). The pair's functions are not exported by `libc.a` and are on ADR-0342 item 12's guarded
+   list, so a port that calls them fails at link time and names itself.
 2. **`TIOCSTI` is never offered**, with or without pairs.
 3. **When the first program in scope needs one**, the pair is Option B:
    - `posix_openpt` is a broker request. It returns the master: a channel carrying `zoraya-proto-term`'s messages
@@ -149,9 +154,9 @@ object. Networking: an ssh server is the second likely user (ADR-0340). Threads:
 
 ## Invariants
 
-- **INV-0338-1.** `libc.a` exports none of `posix_openpt`, `openpty`, `forkpty`, `login_tty`, `grantpt`,
-  `unlockpt`, `ptsname`, and no ioctl request injects input. *Check:* the export check of `libc.a` (INV-0005-1)
-  with these names on its deny list, and a `libposix` host test that `ioctl(TIOCSTI)` on a terminal fd is `ENOTTY`.
+- **INV-0338-1.** `libc.a` exports none of the pseudo-terminal functions of ADR-0342 item 12, and no ioctl request
+  injects input. *Check:* INV-0342-3's deny list, and a `libposix` host test that `ioctl(TIOCSTI)` on a terminal
+  fd is `ENOTTY`.
 - **INV-0338-2.** No path in any namespace table names a terminal other than the process's own `/dev/tty`.
   *Check:* a host test over the entry kinds of ADR-0107's encoding and the tables the shell and `libposix` build.
 

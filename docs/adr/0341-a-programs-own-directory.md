@@ -31,6 +31,10 @@ decides where a program's own files live and how it is given them.
 - A launcher can show a directory to a program under another name: Wasmtime's `--dir HOST::GUEST`
   (`stage-10/survey.md#pattern-a-grants-fixed-at-start`); ADR-0107's table is prefixes mapped to connections and
   allows the same.
+- The first terminal's shell holds the whole volume to read (ADR-0172's decision of 2026-11-09), and every
+  command gets the current directory to read (ADR-0153 rule 1); ADR-0265 limits a room's storage on its `+w`
+  directories and its `/tmp`; OpenSSH finds its directory through the user database's home, git through `HOME`
+  (read in the code and the sources by the review).
 - Configuration that every program finds by a fixed name, and that libraries read implicitly, is what DM-085 and
   DM-087 record; CP-21 and CP-23 ask that configuration be owned and attributable.
 
@@ -39,8 +43,8 @@ are few and known when the image is built.
 
 ## Decision drivers
 
-1. **A program's secrets are its own**: no other program can read ssh's keys because it happens to run as the same
-   person (CP-01, DM-010).
+1. **A program's secrets are its own**: no other program is given ssh's keys because it happens to run as the
+   same person; reaching them takes a grant that names them (CP-01, DM-010).
 2. **Unmodified programs find their files** where they look (`stage-10/survey.md#files-the-ssh-client-touches-unasked`).
 3. **Owned and attributable**: one place, visible, per program, and per room so that an untrusted room's git has
    nothing of the person's (CP-23, ADR-0172).
@@ -107,15 +111,22 @@ are few and known when the image is built.
 
 **Recommendation (not a decision): Option C, with Option D's agent recorded as the later path for keys.**
 
-1. **The key.** A description in the system image may carry one line `data NAME as PATH`: for example
-   `data git as ~/.config/git` and `data ssh as ~/.ssh`. `NAME` is a plain word; `PATH` begins with `~/`. A
-   description outside the image cannot carry it (INV-0153-6's rule).
+1. **The key.** A description in the system image may carry one line `data NAME as PATH`, or
+   `data NAME as PATH read`: for example `data git as ~/.config/git` and `data ssh as ~/.ssh`. `NAME` is a plain
+   word; `PATH` begins with `~/`; `read` gives the directory to read only. A description outside the image cannot
+   carry the line (INV-0153-6's rule).
 2. **The directory** is `/data/ROOM/NAME`, `/data/home/NAME` outside a room: the place and the form ADR-0245
    uses for an application. The shell makes it when a program with that line first runs. For that the shell's own
-   table gains `/data/ROOM` (`/data/home` for the first terminal), given by whoever starts the shell.
-3. **What the program gets.** One more table entry: the prefix is `PATH` with `~` as the program's `HOME`, the
-   connection is that directory with `tree` rights. The program opens `~/.ssh/known_hosts` and reaches
-   `/data/home/ssh/known_hosts`. Nothing else under the home directory is given.
+   table gains `/data/ROOM` (`/data/home` for the first terminal), given by whoever starts the shell. It is the
+   shell's own entry: it is not a grant of the room, is not written in `/config/rooms`, is not added to the room's
+   lines and is not shown as a pill.
+3. **What the program gets.** One more table entry: the prefix is `PATH` with `~` as the home directory of the
+   image's user database (`/home`), the connection is that directory with `tree` rights (or `read`). For such a
+   program the shell sets `HOME` to that same directory whatever `shell.home` is, and refuses a line that sets
+   `HOME` itself: OpenSSH finds `~/.ssh` through the user database, git through `HOME`, and both must land on the
+   entry. The program opens `~/.ssh/known_hosts` and reaches `/data/home/ssh/known_hosts`. Nothing else under the
+   home directory is given. The own-directory entry is never merged: a `+r` or `+w` of the line on the same
+   prefix is refused.
 4. **Shown.** `grants` prints it in both names:
 
    ```
@@ -125,21 +136,29 @@ are few and known when the image is built.
    and `help NAME` lists the files under FILES with both.
 5. **Sharing is by name and decided in the image.** Programs whose descriptions carry the same `NAME` share the
    directory (`ssh`, `ssh-keygen`, `scp` and `sftp` share `ssh`). One file in the tree lists every `NAME` with the
-   programs that use it, and a lint keeps the descriptions to it.
+   programs that use it, and a lint keeps the descriptions and the panel's application names to it. A program
+   that only passes the directory on to a child (`scp` and `sftp`, for the `ssh` they start) carries it `read`.
 6. **Per room.** A room's programs get the room's directory, created empty. An untrusted room's git has no
-   identity and no credentials of the person's, and its directory counts against the room's storage limit
-   (ADR-0265).
-7. **Children.** A program a POSIX program starts inherits its parent's table (ADR-0107), the parent's own
-   directory included, and gets no own directory of its own name: `vi` started by git sees git's directory, and
-   `ssh` started by git does not see ssh's. ADR-0339 states what that means for git over ssh.
-8. **A port looks nowhere else.** A program with a `data` line is built or configured so that it names no path in
+   identity and no credentials of the person's. Its directory must count against the room's storage limit:
+   ADR-0265 item 5 puts the limit on the room's `+w` directories and its `/tmp`, so `/data/ROOM` of a limited
+   room joins them, a stated change to that item.
+7. **Children get it to read, never to write.** A program a POSIX program starts inherits its parent's table
+   (ADR-0107); the own-directory entry carries a mark, and `libposix` passes it on with `read` rights only. So a
+   hook, an editor or a helper started by git can read git's configuration and cannot change it, and the `ssh`
+   that `scp` starts can read the keys and cannot rewrite `known_hosts`. A child gets no own directory of its own
+   name: `ssh` started by git does not see ssh's (ADR-0339 item 6).
+8. **Nothing designates into `/data`.** Inside `/data/ROOM/NAME` the current-directory default and the
+   designation of operands do not apply to other programs: `cd /data/home/ssh` and then `cat id_ed25519` is
+   refused with the hint to write `+r`. Another program reaches a program's own files only by a `+r` or `+w` word
+   that names them. (The first terminal's shell holds `+r /`, so the person can always write that word.)
+9. **A port looks nowhere else.** A program with a `data` line is built or configured so that it names no path in
    the home directory outside its own directory in normal operation, as curl and wget read no configuration
    (ADR-0310 item 6). Otherwise every run would report refused dotfiles (driver 6).
-9. **The person reaches the files as files.** They are ordinary: `ls /data/home/ssh`, `edit /data/home/git/config`,
+10. **The person reaches the files as files.** They are ordinary: `ls /data/home/ssh`, `edit /data/home/git/config`,
    a backup of `/data/home`. A program reads them only if a line gives them (`+r /data/home/ssh/known_hosts cat ...`).
-10. **Modes mean nothing here.** Privacy is the entry, not the mode bits. `libposix` reports the mode a file was
+11. **Modes mean nothing here.** Privacy is the entry, not the mode bits. `libposix` reports the mode a file was
     created with, so a port's own checks on its key files pass when the port created them properly.
-11. **Later.** Keys in an agent that signs and never reveals (Option D) is the path ADR-0228 already names; this
+12. **Later.** Keys in an agent that signs and never reveals (Option D) is the path ADR-0228 already names; this
     directory is then where the agent's program keeps them.
 
 **Examples.**
@@ -149,16 +168,23 @@ are few and known when the image is built.
 ~> ls /data/home/git
 config
 ~> grants git status
-git gets:
+git gets (a POSIX program):
   in, out, err         the terminal
+  keys                 the terminal, while this line is in front
   ~                    read (current directory)
   /data/home/git       its own files (it sees them as ~/.config/git)
-~> room agent-1 git config --global user.name
-~>
+  /bin /usr /etc       read (system)
+  /proc/self/exe       read (system)
+  /tmp                 change anything in (this line's own)
+  /dev/null
+~> room proj git config --global user.name
+~> cd /data/home/git
+/data/home/git> cat config
 ```
 
-(with the lines every POSIX program has). The last command prints nothing: in the room `agent-1`, git's directory
-is `/data/agent-1/git`, and it is empty. On the desktop the file manager shows `/data/home/git/config` as any
+The `room` line prints nothing: in the room `proj`, git's directory is `/data/proj/git`, and it is empty. The last
+line is refused, with the hint to write `+r config cat config` (item 8). On the desktop the file manager shows
+`/data/home/git/config` as any
 file; opening it starts `edit`.
 
 **Tensions with accepted ADRs.**
@@ -172,7 +198,13 @@ file; opening it starts `edit`.
 - *ADR-0156*: one more key in the description format.
 - *ADR-0172's decision of 2026-11-09* lists what the first terminal's shell holds (`+r /`, `+w ~`, `+w /config`,
   `+w /tmp`) and that a room's shell holds the room's grants: both gain `/data/ROOM`, with `tree` rights, so that
-  the shell can make and give the directories. A room's pills show it.
+  the shell can make and give the directories. It is not a room grant and no pill shows it (item 2), which
+  INV-0172-2's "exactly the room's entries" must be read with.
+- *ADR-0153 rules 1 and 2*: the current directory and operands designate everywhere; item 8 excepts the inside
+  of a program's own directory. *ADR-0153 rule 10's note*: a POSIX program gets `HOME` "unless the line sets it";
+  for a program with a `data` line the line may not (item 3).
+- *ADR-0107*: `libposix` builds a child's table from its own; item 7 makes it lower one marked entry to `read`.
+- *ADR-0265 item 5*: the storage limit of a limited room also covers its `/data/ROOM` (item 6).
 - *ADR-0245*: the panel's and the shell's directories for one name and room are the same directory. A graphical
   application and a terminal program of the same name would share it; no such pair exists.
 - *ADR-0107*: an entry whose prefix differs from the path its connection came from. The table allows it; `getcwd`
@@ -181,14 +213,16 @@ file; opening it starts `edit`.
 ### Effect of the vision
 
 For target 2 this is the difference between "an agent's git" and "my git": a room's programs have their own empty
-state, bounded by the room's storage, and no path leads from it to the person's keys. A supervisor reads an
+state, bounded by the room's storage, and no line of that room can name the person's keys, which are outside
+what the room's shell holds. A supervisor reads an
 agent's `/data/agent-1` as plain files. Target 3: one notion of an application's data for the desktop and the
 shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340). Threads: none.
 
 ## Consequences
 
-- **Positive.** git and ssh can keep configuration, known hosts and keys; no other program can read them; rooms
-  separate them; unmodified programs find them; the person sees them as files and `grants` shows them.
+- **Positive.** git and ssh can keep configuration, known hosts and keys; no other program is given them unless a
+  line names them; children cannot change them; rooms separate them; unmodified programs find them; the person sees
+  them as files and `grants` shows them.
 - **Negative.** A third exception to "only what the person typed". Two names for one directory. Unix habits
   (`~/.ssh`, `~/.gitconfig` in the home directory) do not hold: the files are under `/data`. A program started
   by another does not get its own directory.
@@ -208,9 +242,18 @@ shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340).
 - **INV-0341-3.** `grants` prints the entry with the real path and the path the program sees. *Check:*
   INV-0153-4's comparison test, extended.
 - **INV-0341-4.** Every `NAME` in a `data` line is in the list of names, with exactly the programs that carry
-  it. *Check:* a lint in `make check` over `user/describe/` and the list.
-- **INV-0341-5.** A program with a `data` line, started and ended with no operand, reports no refused path under
-  the home directory. *Check:* an in-QEMU script per such program that reads the report count (ADR-0153 rule 11).
+  it, and no application name of the panel equals one. *Check:* a lint in `make check` over `user/describe/`, the
+  panel's application table and the list.
+- **INV-0341-5.** A program with a `data` line reports no refused path at all when started and ended with no
+  operand, and when it first writes its own files (`git config --global`, `ssh-keygen`), with `shell.home` set to
+  another directory too. *Check:* an in-QEMU script per such program that reads the report count (ADR-0153
+  rule 11).
+- **INV-0341-6.** A child of a program with an own directory can read it and cannot create, change or remove
+  anything in it. *Check:* a host test of `libposix`'s table for a child, and an in-QEMU script in which a git
+  hook tries to write git's configuration and is refused.
+- **INV-0341-7.** No program receives a path inside another name's own directory from the current-directory
+  default or from an operand; only a literal `+r` or `+w` word gives one. *Check:* a host test of the shell's
+  planner with the current directory and operands inside `/data/home/ssh`.
 
 ## Open questions
 

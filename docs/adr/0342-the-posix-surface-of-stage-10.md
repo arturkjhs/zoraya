@@ -111,19 +111,25 @@ each port settles it.
 
 1. Each part of stage 10 that ports a program runs a link probe of it and adds the names it needs to `libc.a` in a
    `posix-surface-added` block of that part's as-built ADR, naming the program behind each name; the export check
-   (INV-0005-1) then knows them. The union of those blocks is tier T10.
+   (INV-0005-1) then knows them. The union of those blocks is tier T10. A part that builds a function before any
+   port of the stage imports it (the terminal names of item 4, in the part that builds the terminal) names its
+   committed test program instead, and the first port's block takes the name over. The evidence for a name is
+   thus that a program in the image imports it, where ADR-0005 asked for a measured workload that calls it; a
+   name a port imports and never calls is exported all the same.
 2. A name whose behaviour is not musl's own pure code and is not covered below gets a numbered item in that
    as-built ADR saying what it does.
 3. `ports/apps/zshim.c`'s `select` and its `tcsetattr` refusal are retired when the real functions exist.
 
 **The meanings.**
 
-4. **Terminal modes.** `tcsetattr` with its three actions as ADR-0331 item 4 says; `cfmakeraw`; `cfgetispeed`,
+4. **Terminal modes.** `tcsetattr` with its three actions as ADR-0331 item 5 says; `cfmakeraw`; `cfgetispeed`,
    `cfgetospeed`, `cfsetispeed`, `cfsetospeed` (stored, without effect); `tcflush`; `tcdrain`; `tcflow` and
    `tcsendbreak` succeed and do nothing; `ctermid` gives `/dev/tty`; `ttyname` and `ttyname_r` give `/dev/tty` for a
-   terminal fd; `tcgetwinsize` is `TIOCGWINSZ`; `tcsetwinsize` and `TIOCSWINSZ` fail with `ENOTTY`.
+   terminal fd; `tcgetwinsize` is `TIOCGWINSZ`; `tcsetwinsize` and `TIOCSWINSZ` on a terminal fail with `EPERM`.
+   (`ttyname` and
+   `getlogin` answer nothing today; both change.)
 5. **Waiting.** `poll`, `ppoll` and `select` are exported and are the same wait as `pselect`: on a stream end or a
-   socket by the handle's signals, on a terminal by the readiness request (ADR-0331 item 4), on a file or a
+   socket by the handle's signals, on a terminal by the readiness request (ADR-0331 item 5), on a file or a
    directory ready at once. This ends ADR-0005's exclusion of general `poll` and `select` and builds what ADR-0225
    item 1 listed. `epoll` stays out.
 6. **Timers that signal stay out.** `alarm` and `setitimer` are not exported (ADR-0106 item 10). A port that uses
@@ -134,12 +140,13 @@ each port settles it.
    `/etc/group` of the toolchain set, which hold one identity; `getgroups` and `getgrouplist` give its one group;
    `getlogin` gives its name. `setuid` and the rest stay unexported (ADR-0005).
 8. **What the file system does not have.** `link` fails with `EPERM` (there are no hard links, ADR-0013); `mknod`
-   fails with `EPERM`; `chown`, `fchown` and `lchown` succeed and change nothing, as `chown` does today;
+   of a FIFO is ADR-0180 item 9's, of any other node `EPERM`; `chown`, `fchown` and `lchown` to the one identity
+   succeed and change nothing, and to any other fail with `EPERM` (ADR-0014 rule 5);
    `sethostname` fails with `EPERM`; `flock` stays unexported (ADR-0319's locks are in the process only); a file
    still cannot be mapped.
 9. **Wide characters and the locale.** musl's classification and conversion functions that a port imports
    (`iswprint`, `iswalpha`, `towupper`, `towlower`, `wcswidth`, `mbstowcs`, `wcstombs` and their kin) are exported
-   as they are, with `wcwidth` and `wcswidth` taking their widths from ADR-0332 item 8's table. The shell sets no
+   as they are; the terminal takes its widths from musl's tables, not the reverse (ADR-0332 item 9). The shell sets no
    `LANG` or `LC_*`; `setlocale(LC_ALL, "")` with none set gives a UTF-8 locale, and a test holds it. `iconv` is not
    exported; ports are built without it.
 10. **Small names with no decision in them** (`getline`, `dirname`, `mkdtemp`, `dprintf`, `strncasecmp`,
@@ -147,8 +154,11 @@ each port settles it.
     block.
 11. **Network names** follow ADR-0225 as decided: `getnameinfo` in its numeric form, `socketpair`, `getservbyname`
     from its table, `sendmsg` and `recvmsg` without ancillary data, when a probe asks for them.
-12. **Never.** The pseudo-terminal functions (ADR-0338), any ioctl that injects input, `setsid` (it stays refused),
-    `ptrace`, `dlopen`, System V IPC: on the export check's deny list, so that a block cannot add them by mistake.
+12. **Not in stage 10, and guarded.** The pseudo-terminal functions (`posix_openpt`, `openpty`, `forkpty`,
+    `login_tty`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, `getpt`; ADR-0338 says when they come), `setsid`,
+    `ptrace`, `dlopen` and System V IPC are on a deny list beside the export check, which itself admits only listed
+    names: a block that adds one of these fails the build, so they return only by an ADR that takes them off the
+    list. An ioctl that injects input is never offered.
 
 **Examples.** A person meets the surface only when they build a program themselves:
 
@@ -158,8 +168,8 @@ each port settles it.
 ```
 
 where `clock.c` calls `poll` on the terminal with a timeout and `tcsetattr`, and now links and runs. A program
-that calls `forkpty` still stops at the link, with tcc's message naming the function. On the desktop there is nothing to
-see.
+that calls `forkpty` still stops at the link, with tcc's message naming the function. On the desktop there is
+nothing to see.
 
 **Tensions with accepted ADRs.**
 
@@ -167,6 +177,11 @@ see.
   (`tcsetattr`, raw mode)" and "Job control beyond Ctrl-C ... `SIGWINCH`" stop binding for the names items 4 and 5
   add; the rows for record locks (already changed by ADR-0319), timers, `ptrace`, System V IPC, `dlopen`, set-uid
   and `MAP_SHARED` stand. Accepting this ADR supersedes those three rows, as ADR-0308 superseded the thread row.
+- *ADR-0005's rule of admission* ("adds rows with a measured workload") becomes "a program in the image imports
+  it" (rule item 1); ADR-0005 and ADR-0100 item 6 tell names imported from names called, and this rule does not.
+- *ADR-0014 rule 5* and *ADR-0180 item 9* are followed as written (item 8).
+- *ADR-0104* (`getlogin` gives a fixed name) and *ADR-0105 item 6* (`ttyname`) are carried out; the code answers
+  nothing for both today.
 - *ADR-0106 item 10* (no `alarm`, no `setitimer`) stands (item 6).
 - *ADR-0141*: the hiding of names outside the lists stands; the lists grow by blocks.
 - *ADR-0180 item 9* made the user-database lookups that reach for a daemon fail; item 7 keeps that and answers
@@ -197,13 +212,15 @@ the calling thread (ADR-0304).
 ## Invariants
 
 - **INV-0342-1.** Every name `libc.a` exports that the lists before stage 10 did not hold is in a
-  `posix-surface-added` block of an ADR that names a ported program importing it. *Check:* the export check of
-  INV-0005-1, as it runs for ADR-0310's block.
+  `posix-surface-added` block of an ADR, on a line that names a program, and that program's objects have the name
+  among their undefined symbols. *Check:* the export check of INV-0005-1 for the first half; for the second, a
+  script in `make check-ports` that reads each block line's program and the probe's list of that program's
+  undefined names.
 - **INV-0342-2.** `poll`, `select` and `pselect` report the same readiness for the same fd, and for a terminal,
   a stream end and a socket they report readable only when a read would not block. *Check:* a host test of
   `zoraya-posix` over the fake kernel for each kind of fd and each of the three calls.
-- **INV-0342-3.** No name of item 12 is exported. *Check:* a deny list in the export check, which fails the build
-  if a block or the library adds one.
+- **INV-0342-3.** No name of item 12 is exported. *Check:* a deny list beside the export check, which fails the
+  build if a block or the library adds one.
 - **INV-0342-4.** With no `LANG` and no `LC_*` set, a program that calls `setlocale(LC_ALL, "")` decodes UTF-8:
   `MB_CUR_MAX` is 4 and a three-byte character converts to one wide character of the right value. *Check:* a C test
   in the libc conformance step.

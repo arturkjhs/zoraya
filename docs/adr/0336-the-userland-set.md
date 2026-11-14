@@ -119,8 +119,9 @@ review and the tests named below; that a working day needs roughly the tools of 
    one per line, and the build takes its list from it. A command is listed when it is in toybox's finished
    directories and does not need what Zoraya lacks by design (users, devices, mounts, the Linux `/proc`). The first
    list is the finished rows of `stage-10/survey.md#everyday-tools-compared`: `cat cp mv rm ls mkdir rmdir ln chmod
-   touch stat du df head tail sort uniq cut wc tee grep sed find xargs patch cmp tar cpio gzip gunzip zcat bzcat
-   dd od xxd date sleep env printf test seq basename dirname realpath which file echo true yes uname`.
+   touch stat du head tail sort uniq cut wc tee grep sed find xargs patch cmp tar cpio gzip gunzip zcat bzcat
+   dd od xxd date sleep env printf test seq basename dirname realpath which file echo true yes uname`. (`df` is
+   left out: it reads the mount table.)
 2. **Three from `pending`, after review:** `tr`, `expr` and `diff`. Each is enabled only when a reviewer who did
    not port it has read it and it passes toybox's own tests for it and the stage 6 workloads that today run
    busybox's (`w5` for `tr`, `w10` for `diff`). **busybox then leaves the image and `ports/sources.lock`.**
@@ -134,19 +135,29 @@ review and the tests named below; that a working day needs roughly the tools of 
    in `user/describe/posix/` naming `/bin/NAME`, with a kind for every operand and option argument that is a path
    (ADR-0156). The options a description lists are the options the shell lets through, as for `curl`. Examples of
    kinds: `grep PATTERN [FILE...]` reads its files, and `-r` makes them trees to read; `sed -i` makes its files
-   `write`; `sort -o FILE` is `create`; `tar -c -f ARCHIVE PATH...` creates the archive and reads the paths, and
+   `write` (item 6); `sort -o FILE` is `create`; `tar -c -f ARCHIVE PATH...` creates the archive and reads the paths,
+   and
    `tar -x -f ARCHIVE -C DIR` reads the archive and gets `DIR` as a tree; `find PATH...` reads trees, and with
    `-delete` they become `remove-tree`. A command that runs others (`xargs`, `find -exec`, `env`) passes its own
    table to them (ADR-0107) and no more: `find . -name '*.o' -exec rm {} +` needs `+w .`, and says so by ADR-0153's
    hint.
-6. **One command per name for the person.** `shell.path` stays `/zoraya/bin /bin`: where a native command and a
-   toybox command share a name (`cat`, `cp`, `ls`, `mv`, `rm`, `head`, `find`, `mkdir`, `stat`, `date`, `sleep`),
-   `zosh` runs the native one, and `help NAME` says so. A script run by `sh` has `PATH=/bin:/usr/bin` and gets
-   toybox's. A person who wants the POSIX one types `/bin/ls`.
-7. **Users.** The tools ask `libposix` and get the one identity of `/etc/passwd` in the toolchain set (uid 1000);
-   `ls -l` prints it, `id` prints it, `chown` succeeds and changes nothing, `tar` stores and ignores it. No applet
-   is patched for this.
-8. **Order.** (a) the missing libc names and the image cache of ADR-0212, as the architect ordered on 2026-11-04;
+6. **Changing a file in place.** toybox's `sed -i` and `patch` (and the other users of its `copy_tempfile`) write
+   a temporary sibling and rename it over the file, which needs rights on the directory that a `write` operand
+   does not give (ADR-0153 rule 2's table). One patch to that helper makes them, on Zoraya, write the result back
+   into the file itself: the operand's `write` kind is then enough, and the directory is not touched. The price is
+   the same as for `vi` (ADR-0335 item 4): the change is not atomic, and an interrupted one can leave the file
+   short.
+7. **One command per name for the person.** `shell.path` stays `/zoraya/bin /bin`: where a native command and a
+   toybox command share a name (`cat`, `cp`, `ls`, `mv`, `rm`, `head`, `find`, `mkdir`, `stat`, `date`, `sleep`,
+   `echo`), `zosh` runs the native one, and `help NAME` says so. A script run by `sh` has `PATH=/bin:/usr/bin` and
+   gets toybox's. A person who wants the POSIX one types `/bin/ls`.
+8. **Every name in `/bin` is described.** The multi-call binary itself moves out of `/bin` (to
+   `/usr/libexec/toybox`, with the links in `/bin` pointing there), so that no undescribed `toybox sed ...` exists.
+   The links `sh` (to dash) and `cc` (to tcc) get descriptions of their own, naming their paths.
+9. **Users.** The tools ask `libposix` and get the one identity of `/etc/passwd` in the toolchain set (uid 1000):
+   `ls -l` prints it and `tar` stores it. Changing an owner to that same identity succeeds and changes nothing;
+   to any other it fails with `EPERM` (ADR-0014 rule 5). No applet is patched for this.
+10. **Order.** (a) the missing libc names and the image cache of ADR-0212, as the architect ordered on 2026-11-04;
    (b) the text tools `grep sed sort uniq cut tr head tail wc tee xargs find`, which is where T2's `configure`
    stops today; (c) the file tools; (d) `diff`, `patch`, `cmp`, `tar`, `gzip`; (e) `awk`; (f) the rest of the list.
    After (b) and (e), workload W4 is run for its measurement (ADR-0005's condition for T2).
@@ -157,24 +168,31 @@ review and the tests named below; that a working day needs roughly the tools of 
 ~/proj> grep -n TODO *.c
 main.c:14:  /* TODO: check the length */
 ~/proj> grants grep -n TODO main.c
-grep gets:
+grep gets (a POSIX program):
   in, out, err         the terminal
+  keys                 the terminal, while this line is in front
   ~/proj               read (current directory)
   ~/proj/main.c        read (operand FILE)
+  /bin /usr /etc       read (system)
+  /proc/self/exe       read (system)
+  /tmp                 change anything in (this line's own)
+  /dev/null
 ~/proj> sed -i s/colour/color/ notes.txt
-~/proj> tar -c -z -f ~/backup/proj.tar.gz .
-~/proj> grants tar -c -z -f ~/backup/proj.tar.gz .
-tar gets:
+~/proj> grants sed -i s/colour/color/ notes.txt
+sed gets (a POSIX program):
   in, out, err         the terminal
+  keys                 the terminal, while this line is in front
   ~/proj               read (current directory)
-  ~/backup             create or replace proj.tar.gz (option -f)
-  ~/proj               read, and all in it (operand PATH)
+  ~/proj/notes.txt     change (operand FILE)
+  ...
+~/proj> tar -c -z -f ~/backup/proj.tar.gz .
 ~/proj> help ls
-ls: list a directory (a native command; /bin/ls is toybox's, for scripts)
 ```
 
-(each with the lines every POSIX program has). `sed -i` changes `notes.txt` with no grant because the operand
-designates it and `sed` is in the image. On the desktop these are lines in a terminal window; the show-commands mode
+(`...` stands for the four system lines; the `keys` line is ADR-0331's). `help ls` begins by saying that `ls` is a
+native command and that `/bin/ls` is toybox's, for scripts (ADR-0156 item 4's first line). `sed -i` changes
+`notes.txt` with no grant word because the operand designates it and `sed` is in the image; it gets that file to
+change and nothing else to write. On the desktop these are lines in a terminal window; the show-commands mode
 has nothing to add, since they are already text.
 
 **Tensions with accepted ADRs.**
@@ -183,11 +201,15 @@ has nothing to add, since they are already text.
   item 3 replace them by toybox's and one-true-awk, with the same workloads as the acceptance tests. Accepting this
   ADR supersedes those words of ADR-0005's tier definitions; the surface itself is ADR-0342's.
 - *ADR-0153's open question* ("which descriptions to ship for toybox applets, and whether toybox runs as POSIX
-  programs with the toolchain set") is answered by items 5 and 6; its note that "toybox runs with the toolchain set
+  programs with the toolchain set") is answered by items 5 and 7; its note that "toybox runs with the toolchain set
   and no description" ends.
 - *ADR-0154 rule 6*: the hints for `grep` and `wc` when nothing of that name exists end for the names that now
   exist.
-- *ADR-0109 item 6* lists the applets built; the list moves to the file of item 1.
+- *ADR-0109 item 6* lists the applets built and puts `/bin/toybox` beside its links; the list moves to the file
+  of item 1 and the binary out of `/bin` (item 8).
+- *ADR-0110 item 2* defines workload W10 as diffing outputs "with busybox `diff`", and *ADR-0211*'s
+  `posix-calls-exempt` block justifies a name by busybox's `tr` and `diff`. Both are re-read with toybox's
+  commands: the T1 workloads are run again on them, and passing is the gate for item 2.
 
 ### Effect of the vision
 
@@ -201,7 +223,8 @@ the network. Threads: none.
 - **Positive.** A day's tools under 0BSD from one already-ported source; busybox and its licence leave; every tool
   is designated and explained; T2's `configure` can proceed.
 - **Negative.** About sixty descriptions to write and keep true, each a small security statement. Three commands
-  rest on a review of unreviewed upstream code. Two `ls` exist, one for people and one for scripts. No `bc`, `ed`,
+  rest on a review of unreviewed upstream code. Two `ls` exist, one for people and one for scripts. `sed -i` and
+  `patch` change a file in place, not atomically. No `bc`, `ed`,
   xz or zip yet.
 - **Follow-up.** The applet list file and its build rule; the descriptions and their lint; the review of `tr`,
   `expr`, `diff`; the `awk` port; removing busybox; `docs/dependencies.md`; W4's measurement.
@@ -212,16 +235,21 @@ the network. Threads: none.
   `ports/toybox-applets.txt`, and no line names a command from toybox's `pending` directory other than those item 2
   admits. *Check:* a script in `make check-ports` comparing the file, the built binary's command list and the
   directory of each command's source in the pinned archive.
-- **INV-0336-2.** Every program in the image's `/bin` has a trusted description naming its path, and every option
+- **INV-0336-2.** Every name in the image's `/bin`, links included, has a trusted description naming its path, and
+  every option
   of that description that takes a path gives it a kind. *Check:* a lint in `make check` over
   `user/describe/posix/` and the image's file list.
-- **INV-0336-3.** No program or archive under GPL version 2 only is in `ports/sources.lock` once item 2 is done.
-  *Check:* `ports/README.md`'s licence table, compared by a script with `sources.lock`.
+- **INV-0336-3.** busybox is not in `ports/sources.lock` or the image once item 2 is done, and every archive in
+  `sources.lock` under a copyleft licence is listed in `ports/README.md` as a separate program with the ADR that
+  admits it. *Check:* a script in `make check-ports` over `sources.lock` and `ports/README.md`'s licence table.
 - **INV-0336-4.** For a name that is both a native command and a toybox command, `zosh` runs the native one and
   `sh` the toybox one. *Check:* an in-QEMU script running `ls --version`-style probes from both and matching each
   program's own output.
 - **INV-0336-5.** A command started by `xargs`, `find -exec` or `env` holds exactly its parent's entries. *Check:*
   an in-QEMU script in which `find . -exec cat /config/settings` is refused without a grant and allowed with `+r`.
+- **INV-0336-6.** `sed -i FILE` and `patch` change their files holding only the `write` entry of each: the file's
+  content changes and its directory holds the same names before and after. *Check:* an in-QEMU script running
+  both on a file outside the current directory and comparing the directory listings.
 
 ## Open questions
 

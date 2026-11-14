@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0100, ADR-0109, ADR-0141, ADR-0331, ADR-0333, ADR-0342
-- **Evidence:** CP-27, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#curses-libraries-compared, stage-10/survey.md#editors-and-pagers-compared, stage-10/survey.md#ncurses, stage-10/survey.md#netbsd-curses, stage-10/survey.md#programs-and-libraries-without-curses, stage-10/survey.md#python-curses-readline-and-the-repl, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#what-ncurses-needs-from-libc
+- **Evidence:** CP-27, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#curses-libraries-compared, stage-10/survey.md#editors-and-pagers-compared, stage-10/survey.md#how-ncurses-finds-a-terminal-description, stage-10/survey.md#ncurses, stage-10/survey.md#netbsd-curses, stage-10/survey.md#programs-and-libraries-without-curses, stage-10/survey.md#python-curses-readline-and-the-repl, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#what-ncurses-needs-from-libc
 
 ## Context
 
@@ -27,8 +27,14 @@ This ADR decides which library is ported, in which configuration, and where it l
   (`stage-10/survey.md#programs-and-libraries-without-curses`).
 - Both curses libraries need termios, `SIGWINCH` and `SIGTSTP` handlers, and `poll` or `select` on the terminal
   (`stage-10/survey.md#what-ncurses-needs-from-libc`), which ADR-0331 and ADR-0342 supply.
-- Python 3.14's REPL reads compiled terminfo files in ncurses' directory layout by itself; Python's `curses` module
-  "is designed to match the API of ncurses" (`stage-10/survey.md#python-curses-readline-and-the-repl`).
+- Python 3.14's REPL reads compiled terminfo files in ncurses' directory layout by itself, and has a built-in
+  table for xterm-like names when it finds none; Python's `curses` module "is designed to match the API of
+  ncurses" (`stage-10/survey.md#python-curses-readline-and-the-repl`).
+- NetBSD's own base system builds nvi and `less` against its curses and its `libterminfo`, unpatched (found by
+  the review in NetBSD's makefiles, `stage-10/review-notes.md` finding 1.7).
+- By default ncurses also looks in `$HOME/.terminfo`, and it chooses the layout of its directory tree by testing
+  the build host's file system for case sensitivity (`stage-10/survey.md#ncurses`,
+  `stage-10/survey.md#how-ncurses-finds-a-terminal-description`).
 
 **What is assumed.** That more curses programs follow `vi` (the task's survey list names `htop` and `tmux`). The
 size of the static library in a Zoraya program is not measured; it is 10b's first number.
@@ -37,8 +43,8 @@ size of the static library in a Zoraya program is not measured; it is 10b's firs
 
 1. **The programs in scope build without patches to their curses use** (CP-27: a port's cost is its patch set;
    `stage-10/survey.md#curses-libraries-compared`).
-2. **One terminfo format and one place**, the file of ADR-0333, read by the library and by Python's own reader
-   (`stage-10/survey.md#python-curses-readline-and-the-repl`).
+2. **One terminfo format and one place**, the file of ADR-0333, which the library's own `tic` produces and which
+   Python's reader can also read (`stage-10/survey.md#python-curses-readline-and-the-repl`).
 3. **Wide characters**, since file names and text are UTF-8 (ADR-0013; `stage-10/survey.md#ncurses`).
 4. **A permissive licence** and a pinned source (ADR-0109).
 5. **Size**, because every program is static and loaded whole at each `exec`
@@ -65,11 +71,14 @@ size of the static library in a Zoraya program is not measured; it is 10b's firs
 - **Description:** Port the portable fork of NetBSD's curses and its `libterminfo`.
 - **Evidence for:** Drivers 3, 4 and 5: BSD licences, under half the binary size by its authors' measure, a plain
   makefile, already built on musl (`stage-10/survey.md#netbsd-curses`).
-- **Evidence against:** Driver 1: programs that touch curses structures need patches, mouse functions are no-ops,
-  some functions are missing. Driver 2: its database is one CDB file, which Python's reader and ncurses-built
-  programs do not read, so the image would carry two formats or lose Python's REPL
-  (`stage-10/survey.md#netbsd-curses`, `stage-10/survey.md#python-curses-readline-and-the-repl`).
-- **Cost:** *(estimate)* A smaller port now; a patch per later program.
+  It builds both programs of stage 10 as they are: NetBSD links nvi and `less` against it.
+- **Evidence against:** The cost comes with the later programs, not with stage 10's: programs that touch curses
+  structures need patches (its authors cite Midnight Commander and Python's `curses` module), mouse functions are
+  no-ops, some functions are missing, and `htop` and `tmux` are written against ncurses
+  (`stage-10/survey.md#netbsd-curses`, `stage-10/survey.md#curses-libraries-compared`). Driver 2: its database is
+  one CDB file or its small embedded set, so the entry files of ADR-0333 would need a second tool or would not be
+  used by it.
+- **Cost:** *(estimate)* A smaller port now; a patch per later program; a second terminfo format or none on disk.
 - **Precedent:** NetBSD; sabotage Linux, whose authors list the patched programs.
 
 ### Option C: No curses library: only programs that write sequences themselves
@@ -98,12 +107,18 @@ size of the static library in a Zoraya program is not measured; it is 10b's firs
 
 ## Recommendation
 
-**Recommendation (not a decision): Option A.**
+**Recommendation (not a decision): Option A.** For stage 10's two programs alone Option B would do, at about half
+the size by its authors' figures. ncurses is recommended for what follows them (Python's `curses` module in stage
+9's CPython, `htop`, `tmux`) and because the entry files and the library then come from one archive. The size
+difference is not measured on Zoraya; the first open question asks for that measurement, and it could reverse the
+choice.
 
 1. **The port.** ncurses 6.6 `[assumption: the release current on 2026-11-13; 10b pins the archive and its
    SHA-256]`, in `ports/sources.lock`, built by `zcc` as two static archives in the sysroot: `libtinfow.a` (the
    terminfo half, `--with-termlib`) and `libncursesw.a` (`--enable-widec`), with headers in `/usr/include`. No C++
-   binding (`--without-cxx`), no shared library, no programs for the target.
+   binding (`--without-cxx`), no shared library, no programs for the target, no lookup in the home directory
+   (`--disable-home-terminfo`: otherwise every run would name `~/.terminfo` and be refused and reported), and
+   letter-named directories whatever the build host (`--enable-mixed-case`, ADR-0333 item 2).
 2. **One database, on disk.** The library is configured with `--with-default-terminfo-dir=/usr/share/terminfo` and
    no compiled-in entries. `tic` is built for the host from the same source and compiles the files of ADR-0333.
 3. **Who links what.** A program that only positions the cursor through terminfo (`less`) links `libtinfow.a`; a
@@ -156,10 +171,11 @@ the sequences ADR-0332 bounds. Target 3: the usual full-screen programs become p
 - **INV-0334-1.** The image and the sysroot hold exactly one terminfo reader library: ncurses' two archives.
   *Check:* a script over `ports/sources.lock` and the sysroot's `lib` directory, in `make check-ports`, that fails
   on another curses, termcap or terminfo archive.
-- **INV-0334-2.** The library looks for entries in `/usr/share/terminfo` only by default and holds no compiled-in
-  entry. *Check:* the port's build log records the configured directory and an empty fallback list, and an in-QEMU
-  test runs a program that calls `setupterm("xterm-256color")` with success and `setupterm("no-such-terminal")`
-  with the not-found result.
+- **INV-0334-2.** The library looks for entries in `/usr/share/terminfo` only by default, never in the home
+  directory, and holds no compiled-in entry. *Check:* the port's build log records the configured directory, the
+  disabled home lookup and an empty fallback list; an in-QEMU test runs a program that calls
+  `setupterm("xterm-256color")` with success and `setupterm("no-such-terminal")` with the not-found result, from
+  `/tmp`, and the shell prints no hint for a refused path afterwards.
 - **INV-0334-3.** A curses program gets the window's real size at start and a `KEY_RESIZE` after each change.
   *Check:* a C test program in the GUI script that prints `LINES` and `COLS` at start and on `KEY_RESIZE` while the
   runner resizes the window.
