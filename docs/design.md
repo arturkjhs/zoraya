@@ -2173,7 +2173,11 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   (names and content, `build/ports/obj/python-ext.hash`, rewritten only when it changes), so that a changed module or library
   rebuilds it. Test: `make test-python-ext` (`tests/shell/python-ext.script`; the sample is `tests/python-ext/sample`, a C module
   `zsample` over a static library `libzhelper.a`, built by `make -f ports/Makefile python-ext-sample`); it costs a second
-  CPython build and is in the `test-python` lane, run only with `PAR_LONG=1` locally. Limits: the whole CPython is built again
+  CPython build and is in the `test-python` lane, run only with `PAR_LONG=1` locally. The value is given on the command line only (an environment value is refused, and the top-level Makefile refuses it
+  altogether: it would build `-ext` and leave the tests on the default python3); its path may hold only `A-Za-z0-9._/+-` (it is
+  put into shell and `sed` commands; anything else is refused with a message), while names inside it may hold blanks and links
+  (the hash follows links). The `-ext` build's logs are `python-ext*.log`. `tools/test-par.sh` builds it before the lanes when
+  `test-python-ext` runs. Limits: the whole CPython is built again
   (the default build's objects are not reused); the CI ports cache (key: `ports/**`...) holds the default python3 only, so a
   CI job that wanted a cached `-ext` build would add DIR's hash to its key; a library built from an `ar` that stamps times changes
   the hash at each rebuild; modules are built in, never shared (no `dlopen`), and C++ modules need their runtime library named in

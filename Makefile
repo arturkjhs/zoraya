@@ -656,6 +656,11 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 #   test-python-long  the same over tests/python/regr-long.txt, the modules too
 #                     slow for a CI job under TCG; by hand, not in make test
 PYTHON_ROOT := $(BUILD)/rootfs-python
+# The hook is for ports/Makefile's python target and test-python-ext only: here it would
+# build -ext and leave the tests on the default python3.
+ifneq ($(origin PYTHON_EXTRA_MODULES),undefined)
+$(error PYTHON_EXTRA_MODULES: use make -f ports/Makefile python PYTHON_EXTRA_MODULES=DIR, or make test-python-ext (docs/design.md))
+endif
 python:
 	@$(MAKE) -f ports/Makefile python
 PYTHON_QEMU ?= --mem 512M

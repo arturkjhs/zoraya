@@ -53,3 +53,21 @@ Backlog, "Three requests from outside work", item 1. Branch `work/py-hook` from 
 step: libcurl's compile stopped with `Missing definition of macro swrite` (`build/ports/logs/curl.log`: `curl_setup.h:944`;
 curl's configure in this fresh worktree). That is the curl port, not the python hook (no python path is involved); not
 investigated here, so the QEMU steps of `test-changed` did not run. `make test-python-ext` was run alone (above).
+
+## Review fixes (TASK-31-review-py-hook, findings 2 to 4 and notes)
+
+- Hash (2): `find -L . -type f -print0 | sort -z | xargs -0 shasum`, written to a list file whose status is checked. Shown by hand
+  on a scratch directory with `my mod.c` and `lib/libx.a` as a link to a file outside DIR: the hash changed (61c0f5df... to
+  1b2faf59... to f7a4a805...) after the content of the spaced file and of the linked library changed, and stayed when rewritten
+  with the same bytes.
+- DIR (3): refused unless it is `A-Za-z0-9._/+-` (checked in the hash recipe, which runs first, through the environment, so
+  the value is not parsed by the shell); shown for `bad dir`, `q'x`, `a&b`: "has a character outside A-Za-z0-9._/+-". Recipe uses quote DIR.
+- Only on the command line: `PYTHON_EXTRA_MODULES=x make -f ports/Makefile -n python` gives an error naming the command line; the
+  top-level Makefile errors for any origin, pointing at `ports/Makefile` and `make test-python-ext`.
+- `tools/test-par.sh` builds the sample and the `-ext` python before the lanes when `test-python-ext` is selected (`sh -n` only; not
+  run: `test-par` is not for agent sessions).
+- Script: `! Traceback`, `! ModuleNotFoundError`. `tools/zoraya-ar/` line of the map has `test-python-ext`. Logs of the `-ext` build:
+  `python-ext.log`, `python-configure-ext.log`, `python-install-ext.log`, `python-compileall-ext.log`.
+- To `docs/backlog.md`: Setup.local before configure, subdirectory sources, `*shared*`, artifact/cache.
+- `make test-python-ext` again after the changes (the stamp rebuilt, since the hash file changed): `PASS: 19 steps`, fsck clean.
+- Finding 1 (CI shape) is left to the candidate run.

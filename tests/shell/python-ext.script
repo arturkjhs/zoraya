@@ -3,6 +3,8 @@
 # function is in a prebuilt static library. No network.
 ! panicked
 ! first process ended
+! Traceback
+! ModuleNotFoundError
 < Type help to begin, or help tour.
 < \r\n~>
 > python3 -c 'import zsample; print(zsample.mul_add(6, 7, 0))'\r
