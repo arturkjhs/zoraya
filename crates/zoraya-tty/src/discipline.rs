@@ -119,6 +119,10 @@ pub struct Discipline {
     /// a zero-length line is an end of file.
     ends: VecDeque<usize>,
     pub dropped: u64,
+    /// The clock the host last gave (milliseconds), and when the last byte
+    /// entered the raw queue: `VTIME`'s timers (ADR-0331 item 5).
+    now: u64,
+    last_byte: u64,
 }
 
 impl Default for Discipline {
@@ -135,7 +139,69 @@ impl Discipline {
             ready: VecDeque::new(),
             ends: VecDeque::new(),
             dropped: 0,
+            now: 0,
+            last_byte: 0,
         }
+    }
+
+    /// The host's clock, in milliseconds, for `VTIME`.
+    pub fn set_now(&mut self, now: u64) {
+        self.now = now;
+    }
+
+    /// `(VMIN, VTIME in milliseconds)`.
+    fn min_time(&self) -> (usize, u64) {
+        (
+            usize::from(self.attr.cc[VMIN]),
+            u64::from(self.attr.cc[VTIME]) * 100,
+        )
+    }
+
+    /// True if a read of at most `max` bytes, begun at `since`, returns now
+    /// (POSIX's four cases of `VMIN` and `VTIME`; canonical mode ignores
+    /// them).
+    pub fn read_ready(&self, max: usize, since: u64) -> bool {
+        if self.canonical() {
+            return !self.ends.is_empty();
+        }
+        let avail = self.ready.len();
+        let (vmin, vtime) = self.min_time();
+        if vmin == 0 {
+            // Case 3 (VTIME 0): at once. Case 4: the first byte, or the time
+            // from the start of the read.
+            return vtime == 0 || avail > 0 || self.now >= since.saturating_add(vtime);
+        }
+        if avail >= vmin.min(max).max(1) {
+            return true;
+        }
+        // Case 2: the interbyte timer, running once a byte has come.
+        vtime > 0 && avail > 0 && self.now >= self.last_byte.saturating_add(vtime)
+    }
+
+    /// When a held read becomes ready by the clock alone, if it does.
+    pub fn read_deadline(&self, max: usize, since: u64) -> Option<u64> {
+        if self.canonical() || self.read_ready(max, since) {
+            return None;
+        }
+        let avail = self.ready.len();
+        let (vmin, vtime) = self.min_time();
+        if vtime == 0 {
+            return None;
+        }
+        if vmin == 0 {
+            Some(since.saturating_add(vtime))
+        } else if avail > 0 {
+            Some(self.last_byte.saturating_add(vtime))
+        } else {
+            None
+        }
+    }
+
+    /// The bytes of a read that `read_ready` has accepted in raw mode,
+    /// possibly none (a timed-out or `VMIN` 0 read returns 0).
+    pub fn read_raw(&mut self, max: usize) -> Vec<u8> {
+        let n = max.min(self.ready.len());
+        self.ready.drain(..n).collect()
     }
 
     fn canonical(&self) -> bool {
@@ -178,7 +244,9 @@ impl Discipline {
             }
         }
         if !self.canonical() {
-            self.push_ready(&[byte]);
+            if self.push_ready(&[byte]) {
+                self.last_byte = self.now;
+            }
             if self.echoing() {
                 self.echo_byte(byte, echo);
             }
@@ -301,10 +369,15 @@ impl Discipline {
     /// True if a read would not block.
     pub fn readable(&self) -> bool {
         if self.canonical() {
-            !self.ends.is_empty()
-        } else {
-            !self.ready.is_empty()
+            return !self.ends.is_empty();
         }
+        // Linux's rule for poll: `VMIN` bytes, or one byte under `VMIN` 0
+        // with a timer; with neither, a read returns at once.
+        let (vmin, vtime) = self.min_time();
+        if vmin == 0 && vtime == 0 {
+            return true;
+        }
+        self.ready.len() >= vmin.max(1)
     }
 
     /// Up to `max` bytes of the next line (canonical) or of what there is;

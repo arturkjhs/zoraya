@@ -610,3 +610,250 @@ fn attributes_change_the_mode_without_losing_input() {
     feed(&mut d, b"\n");
     assert_eq!(d.read(100).unwrap(), b"q\n");
 }
+
+// ---- Part 10c: VMIN and VTIME, flush, drain, lines (ADR-0331 items 4 and 5).
+
+use discipline::bits::{ECHO, ICANON, VMIN, VTIME};
+
+/// The session with `ICANON` and `ECHO` off and the given `VMIN` and
+/// `VTIME` (tenths of a second).
+fn raw(vmin: u8, vtime: u8) -> Terminal<H> {
+    let mut t = session();
+    let mut a = t.discipline.attr;
+    a.lflag &= !(ICANON | ECHO);
+    a.cc[VMIN] = vmin;
+    a.cc[VTIME] = vtime;
+    let m = SetAttr {
+        iflag: a.iflag,
+        oflag: a.oflag,
+        cflag: a.cflag,
+        lflag: a.lflag,
+        cc: Data(&a.cc),
+    };
+    let r = t.request(1, &message(&m, 2), vec![]);
+    assert_eq!(reply_status(&replies(&r)[0].1), status::OK);
+    t
+}
+
+fn read(t: &mut Terminal<H>, max: u32, tr: u32) -> Vec<Action<H>> {
+    t.request(1, &message(&Read { max }, tr), vec![])
+}
+
+#[test]
+fn vmin_0_vtime_0_returns_at_once_with_what_there_is() {
+    // POSIX case 3 (INV-0331-3).
+    let mut t = raw(0, 0);
+    let a = read(&mut t, 10, 3);
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"");
+    t.keys(b"ab");
+    let a = read(&mut t, 10, 4);
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"ab");
+    assert_eq!(t.deadline(), None);
+}
+
+#[test]
+fn vmin_n_vtime_0_waits_for_n_bytes() {
+    // POSIX case 1.
+    let mut t = raw(3, 0);
+    t.set_time(0);
+    assert!(replies(&read(&mut t, 10, 3)).is_empty());
+    assert!(replies(&t.keys(b"ab")).is_empty());
+    assert_eq!(t.deadline(), None, "no timer without VTIME");
+    assert!(replies(&t.tick(1_000_000)).is_empty());
+    let a = t.keys(b"c");
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"abc");
+    // A read of fewer bytes than VMIN returns when that many are there.
+    t.keys(b"xy");
+    let a = read(&mut t, 2, 4);
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"xy");
+}
+
+#[test]
+fn vmin_n_vtime_t_is_an_interbyte_timer_started_by_the_first_byte() {
+    // POSIX case 2: no timer before a byte; each byte restarts it.
+    let mut t = raw(3, 2); // 200 ms
+    t.set_time(1_000);
+    assert!(replies(&read(&mut t, 10, 3)).is_empty());
+    assert_eq!(t.deadline(), None, "blocks for ever with no byte");
+    assert!(replies(&t.tick(50_000)).is_empty());
+    t.set_time(60_000);
+    assert!(replies(&t.keys(b"a")).is_empty());
+    assert_eq!(t.deadline(), Some(60_200));
+    t.set_time(60_150);
+    assert!(replies(&t.keys(b"b")).is_empty());
+    assert_eq!(t.deadline(), Some(60_350), "the second byte restarted it");
+    assert!(replies(&t.tick(60_349)).is_empty());
+    let a = t.tick(60_350);
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"ab");
+    // VMIN bytes before the timer ends: at once.
+    t.set_time(70_000);
+    assert!(replies(&read(&mut t, 10, 4)).is_empty());
+    let a = t.keys(b"xyz");
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"xyz");
+}
+
+#[test]
+fn vmin_0_vtime_t_is_a_timeout_from_the_start_of_the_read() {
+    // POSIX case 4: the first byte or the time, whichever comes first.
+    let mut t = raw(0, 5); // 500 ms
+    t.set_time(1_000);
+    assert!(replies(&read(&mut t, 10, 3)).is_empty());
+    assert_eq!(t.deadline(), Some(1_500));
+    assert!(replies(&t.tick(1_499)).is_empty());
+    let a = t.tick(1_500);
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"", "0 bytes");
+    assert_eq!(t.deadline(), None);
+    t.set_time(2_000);
+    assert!(replies(&read(&mut t, 10, 4)).is_empty());
+    t.set_time(2_100);
+    let a = t.keys(b"k");
+    assert_eq!(
+        read_reply(&replies(&a)[0].1).unwrap(),
+        b"k",
+        "one byte ends it"
+    );
+}
+
+#[test]
+fn poll_is_ready_only_when_a_read_would_not_block() {
+    // INV-0331-3: VMIN 2 with one byte is not ready; the poll is idempotent
+    // (a second poll after an answer is held afresh).
+    let mut t = raw(2, 0);
+    assert!(replies(&t.request(1, &message(&PollReadable {}, 3), vec![])).is_empty());
+    assert!(replies(&t.keys(b"a")).is_empty(), "one byte is below VMIN");
+    let a = t.keys(b"b");
+    assert_eq!(replies(&a).len(), 1);
+    let a = t.request(1, &message(&PollReadable {}, 4), vec![]);
+    assert_eq!(replies(&a).len(), 1, "still readable: answered at once");
+    // VMIN 0 and VTIME 0: always ready.
+    let mut t = raw(0, 0);
+    let a = t.request(1, &message(&PollReadable {}, 3), vec![]);
+    assert_eq!(replies(&a).len(), 1);
+}
+
+#[test]
+fn flush_drops_unread_input_and_drain_waits_for_the_output() {
+    let mut t = raw(1, 0);
+    t.keys(b"abc");
+    let a = t.request(1, &message(&Flush { queue: 0 }, 3), vec![]);
+    assert_eq!(reply_status(&replies(&a)[0].1), status::OK);
+    assert!(replies(&read(&mut t, 10, 4)).is_empty(), "nothing left");
+    let a = t.request(1, &message(&Flush { queue: 1 }, 5), vec![]);
+    assert_eq!(reply_status(&replies(&a)[0].1), status::INVALID);
+    // Drain: at once with nothing on its way, held with output pending.
+    let a = t.request(1, &message(&Drain {}, 6), vec![]);
+    assert_eq!(replies(&a).len(), 1);
+    t.set_output_pending(true);
+    let a = t.request(1, &message(&Drain {}, 7), vec![]);
+    assert!(replies(&a).is_empty());
+    let a = t.request(1, &message(&Drain {}, 8), vec![]);
+    assert_eq!(reply_status(&replies(&a)[0].1), status::BUSY);
+    let a = t.set_output_pending(false);
+    let r = replies(&a);
+    assert_eq!(r.len(), 1);
+    assert_eq!(Header::decode(&r[0].1).unwrap().0.transaction, 7);
+}
+
+/// Two lines: line 1 in front with connection 1 (group 2), line 2's program
+/// on connection 2 declaring the front line's group.
+fn two_lines() -> (Terminal<H>, Id) {
+    let mut t = Terminal::new();
+    t.add_control();
+    let first = t.add_terminal_in(2, 1).unwrap();
+    assert_eq!(first, 1);
+    let other = t.add_terminal_in(2, 2).unwrap();
+    t.set_foreground(2, 100);
+    t.set_front_line(Some(1));
+    (t, other)
+}
+
+#[test]
+fn a_connection_of_another_line_cannot_read_poll_or_change_modes() {
+    // INV-0331-2, the discipline's half: the declared group is the front
+    // line's, and every request is still refused and changes nothing.
+    let (mut t, other) = two_lines();
+    t.keys(b"secret\n");
+    let a = t.request(other, &message(&Read { max: 100 }, 3), vec![]);
+    assert_eq!(read_reply(&replies(&a)[0].1), Err(status::NOT_FOREGROUND));
+    let a = t.request(other, &message(&PollReadable {}, 4), vec![]);
+    assert_eq!(reply_status(&replies(&a)[0].1), status::IO);
+    let before = t.discipline.attr;
+    let mut a = before;
+    a.lflag &= !(ICANON | ECHO);
+    let m = SetAttr {
+        iflag: a.iflag,
+        oflag: a.oflag,
+        cflag: a.cflag,
+        lflag: a.lflag,
+        cc: Data(&a.cc),
+    };
+    let r = t.request(other, &message(&m, 5), vec![]);
+    assert_eq!(reply_status(&replies(&r)[0].1), status::IO);
+    assert_eq!(t.discipline.attr, before, "the modes are unchanged");
+    let r = t.request(other, &message(&Flush { queue: 0 }, 6), vec![]);
+    assert_eq!(reply_status(&replies(&r)[0].1), status::IO);
+    // Nothing was consumed: the front line reads its line.
+    let a = t.request(1, &message(&Read { max: 100 }, 7), vec![]);
+    assert_eq!(read_reply(&replies(&a)[0].1).unwrap(), b"secret\n");
+    // GetAttr and the size are answered for any connection.
+    let r = t.request(other, &message(&GetAttr {}, 8), vec![]);
+    assert!(decode::<Attr<'_>>(&replies(&r)[0].1, 0).is_ok());
+    let r = t.request(other, &message(&WindowSize {}, 9), vec![]);
+    assert!(decode::<WindowSizeReply>(&replies(&r)[0].1, 0).is_ok());
+}
+
+#[test]
+fn a_clone_carries_its_parents_line_whatever_group_it_declares() {
+    let (mut t, other) = two_lines();
+    let a = t.request(other, &message(&Clone { group: 2 }, 3), vec![77]);
+    let id = a
+        .iter()
+        .find_map(|a| match a {
+            Action::Watch { id, end: 77 } => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    let r = t.request(id, &message(&Read { max: 10 }, 4), vec![]);
+    assert_eq!(read_reply(&replies(&r)[0].1), Err(status::NOT_FOREGROUND));
+    // A clone of the front line's connection is of the front line.
+    let a = t.request(1, &message(&Clone { group: 2 }, 5), vec![78]);
+    let mine = a
+        .iter()
+        .find_map(|a| match a {
+            Action::Watch { id, end: 78 } => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    t.keys(b"x\n");
+    let r = t.request(mine, &message(&Read { max: 10 }, 6), vec![]);
+    assert_eq!(read_reply(&replies(&r)[0].1).unwrap(), b"x\n");
+}
+
+#[test]
+fn a_held_read_goes_when_its_line_goes_to_the_back() {
+    let (mut t, _) = two_lines();
+    assert!(replies(&t.request(1, &message(&Read { max: 10 }, 3), vec![])).is_empty());
+    let a = t.set_front_line(Some(2));
+    let r = replies(&a);
+    assert_eq!(r.len(), 1);
+    assert_eq!(read_reply(&r[0].1), Err(status::NOT_FOREGROUND));
+    // With no line in front nobody reads.
+    let a = t.set_front_line(None);
+    assert!(replies(&a).is_empty());
+    t.keys(b"k\n");
+    let r = t.request(1, &message(&Read { max: 10 }, 4), vec![]);
+    assert_eq!(read_reply(&replies(&r)[0].1), Err(status::NOT_FOREGROUND));
+}
+
+#[test]
+fn the_end_of_a_line_restores_the_defaults_and_fg_gives_the_attributes_back() {
+    // INV-0331-4, the discipline's half.
+    let mut t = raw(5, 3);
+    t.keys(b"zz");
+    let (was, _) = t.end_line();
+    assert_eq!(t.discipline.attr, Termios::default());
+    assert_ne!(was, Termios::default());
+    assert!(replies(&read(&mut t, 10, 3)).is_empty(), "input dropped");
+    t.continue_line(was);
+    assert_eq!(t.discipline.attr, was);
+}

@@ -121,7 +121,12 @@ fn pick_terminal(data: &[u8]) -> bool {
 fn terminal(data: &[u8]) {
     let mut t: Terminal<u32> = Terminal::new();
     let mut ids: Vec<usize> = t.add_control().into_iter().collect();
-    ids.extend(t.add_terminal(2));
+    ids.extend(t.add_terminal_in(2, 1));
+    ids.extend(t.add_terminal_in(2, 2));
+    // `zosh`'s host calls (ADR-0331), driven by the input as well: lines told
+    // apart, the clock, timers, drains, the end and the return of a line.
+    let _ = t.set_front_line(Some(1));
+    let mut now = 0u64;
     for m in wire::messages(data, 48) {
         let id = if ids.is_empty() { 0 } else { ids[usize::from(m.sel) % ids.len()] };
         let handles: Vec<u32> = (0..m.handles as u32).map(|i| 5 + i).collect();
@@ -142,6 +147,25 @@ fn terminal(data: &[u8]) {
                 t.output(&m.bytes, &mut out);
             }
             3 => t.closed(id),
+            4 => {
+                now += u64::from(m.sel) * 37;
+                let _ = t.tick(now);
+                let _ = t.deadline();
+            }
+            5 => {
+                let _ = t.set_front_line(match m.sel & 3 {
+                    0 => None,
+                    n => Some(u32::from(n)),
+                });
+                let _ = t.set_output_pending(m.sel & 4 != 0);
+            }
+            6 => {
+                let (was, _) = t.end_line();
+                let _ = t.continue_line(was);
+            }
+            7 => {
+                let _ = t.set_foreground(u32::from(m.sel & 3), 9);
+            }
             _ => {}
         }
     }
