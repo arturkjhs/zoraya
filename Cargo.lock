@@ -762,6 +762,7 @@ dependencies = [
  "zoraya-rt",
  "zoraya-surface",
  "zoraya-test-alloc",
+ "zoraya-tty",
 ]
 
 [[package]]

@@ -47,6 +47,11 @@ pub trait Sys {
     fn close(&mut self, h: Self::H);
     /// A duplicate with the same rights, for the scratch buffer.
     fn duplicate(&mut self, h: Self::H) -> Result<Self::H, Status>;
+    /// A duplicate of a stream's write end, for `open("/dev/tty")`: the
+    /// terminal's output has more than one writer.
+    fn duplicate_stream_write(&mut self, h: Self::H) -> Result<Self::H, Status> {
+        self.duplicate(h)
+    }
 
     fn channel_create(&mut self) -> Result<(Self::H, Self::H), Status>;
     /// Sends a message, moving `moved`. Whatever happens, the moved handles

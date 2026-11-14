@@ -19,6 +19,7 @@ pub mod netgrant;
 pub mod paste;
 pub mod record;
 pub mod syntax;
+pub mod terminal;
 pub mod tty_host;
 
 #[cfg(test)]

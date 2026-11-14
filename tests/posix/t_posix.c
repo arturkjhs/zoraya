@@ -1033,14 +1033,13 @@ static void tstp(void)
  * across a stop. `isatty` of each fd; then, with the terminal on fd 0, line
  * editing and echo off (the signal characters kept, so Ctrl-Z stops it), each
  * key read as it is typed and reported with whether the mode is still raw,
- * until `q`. The modes are set with `ioctl` (TCGETS, TCSETS), which libposix
- * serves; `tcsetattr` is not yet a name of libc.a (ADR-0342 item 4). */
+ * until `q`. The modes are set with `tcsetattr` (ADR-0342 item 4, ADR-0389). */
 static void rawkeys(void)
 {
 	struct termios was, t;
 	printf("rawkeys: tty %d %d %d\n", isatty(0), isatty(1), isatty(2));
 	fflush(stdout);
-	if (ioctl(0, TCGETS, &was) != 0) {
+	if (tcgetattr(0, &was) != 0) {
 		printf("rawkeys: fd 0 is no terminal\n");
 		return;
 	}
@@ -1048,8 +1047,8 @@ static void rawkeys(void)
 	t.c_lflag &= ~(ICANON | ECHO);
 	t.c_cc[VMIN] = 1;
 	t.c_cc[VTIME] = 0;
-	if (ioctl(0, TCSETS, &t) != 0) {
-		printf("rawkeys: TCSETS: errno %d\n", errno);
+	if (tcsetattr(0, TCSANOW, &t) != 0) {
+		printf("rawkeys: tcsetattr: errno %d\n", errno);
 		return;
 	}
 	printf("rawkeys: raw\n");
@@ -1064,11 +1063,11 @@ static void rawkeys(void)
 		}
 		if (c == 'q')
 			break;
-		ioctl(0, TCGETS, &now);
+		tcgetattr(0, &now);
 		printf("rawkeys: key %02x canonical %d\n", c, (now.c_lflag & ICANON) != 0);
 		fflush(stdout);
 	}
-	ioctl(0, TCSETS, &was);
+	tcsetattr(0, TCSANOW, &was);
 	printf("rawkeys: done\n");
 }
 

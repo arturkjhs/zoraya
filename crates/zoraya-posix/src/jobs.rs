@@ -100,6 +100,17 @@ pub fn broker_errno(s: u32) -> i32 {
     }
 }
 
+/// What a look at a terminal's input found (`Posix::tty_input_ready`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TtyLook {
+    /// A read would not block.
+    Ready,
+    /// The service has gone: a read gives end of file.
+    Hup,
+    /// Nothing yet; the connection's channel tells when.
+    Wait,
+}
+
 impl<S: Sys> Posix<S> {
     // ------------------------------------------------------------ wait points
 
@@ -498,6 +509,8 @@ impl<S: Sys> Posix<S> {
         if into.length == 0 {
             return Ok(0);
         }
+        // A readiness the last look saw is spent by this read.
+        self.tty_poll_ready.retain(|h| *h != conn);
         // What an earlier answer gave beyond its reader's buffer (review R3).
         if let Some(i) = self.tty_rest.iter().position(|(c, _)| *c == conn) {
             let rest = &mut self.tty_rest[i].1;
@@ -561,7 +574,11 @@ impl<S: Sys> Posix<S> {
                 continue;
             };
             if header.transaction != t {
-                // A reply to nothing outstanding: dropped.
+                // The answer to a `PollReadable` this read overtook: the
+                // data it announces is what this read takes. Any other
+                // reply is to nothing outstanding: dropped.
+                self.tty_polls
+                    .retain(|&(c, pt)| !(c == conn && pt == header.transaction));
                 continue;
             }
             self.tty_reads.retain(|(c, _)| *c != conn);
@@ -604,6 +621,229 @@ impl<S: Sys> Posix<S> {
             self.sys.copy_out(into.part(0, got), &mine);
             return Ok(got);
         }
+    }
+
+    /// Whether a `read` of the terminal connection `conn` would not block
+    /// (ADR-0331 item 5): what the library kept, or the answer to a
+    /// `PollReadable` sent to the service, which holds it until the
+    /// discipline can answer a read and the connection's line is in front.
+    ///
+    /// The request is idempotent: the connection has at most one outstanding
+    /// (`tty_polls`), so the same look run again after a deferred wait
+    /// (ADR-0302 item 9), or by another `poll` call, reads the channel and
+    /// does not send another. Any answer is "ready", an error status too: a
+    /// read will then say why (`EIO` for a line that is not in front, a stop
+    /// for a background group).
+    pub(crate) fn tty_input_ready(&mut self, conn: S::H) -> TtyLook {
+        if self.tty_rest.iter().any(|(c, _)| *c == conn)
+            || self.tty_stash.iter().any(|(c, _)| *c == conn)
+        {
+            return TtyLook::Ready;
+        }
+        if let Some(i) = self.tty_poll_ready.iter().position(|c| *c == conn) {
+            self.tty_poll_ready.swap_remove(i);
+            return TtyLook::Ready;
+        }
+        let signals_now = self.sys.signals_of(conn).unwrap_or(0);
+        if self.tty_reads.iter().any(|(c, _)| *c == conn) {
+            // A `Read` is held (another thread's, or an interrupted one):
+            // its answer is what a read takes, and arrives on this channel.
+            return if signals_now & signals::READABLE != 0 {
+                TtyLook::Ready
+            } else if signals_now & signals::PEER_CLOSED != 0 {
+                TtyLook::Hup
+            } else {
+                TtyLook::Wait
+            };
+        }
+        // At most two rounds: send, then read what may already be there.
+        for _ in 0..3 {
+            let Some(&(_, t)) = self.tty_polls.iter().find(|(c, _)| *c == conn) else {
+                self.transaction = self.transaction.wrapping_add(1).max(1);
+                let t = self.transaction;
+                let Ok(n) = encode(&tp::PollReadable {}, t, &mut self.out) else {
+                    return TtyLook::Ready;
+                };
+                if self.sys.channel_write(conn, &self.out[..n], &[]).is_err() {
+                    return TtyLook::Hup;
+                }
+                self.tty_polls.push((conn, t));
+                continue;
+            };
+            for h in self.handles.drain(..) {
+                self.sys.close(h);
+            }
+            match self
+                .sys
+                .channel_read(conn, &mut self.input, &mut self.handles)
+            {
+                Ok(n) => {
+                    if let Ok((header, _)) = Header::decode(&self.input[..n])
+                        && header.transaction == t
+                    {
+                        self.tty_polls.retain(|(c, _)| *c != conn);
+                        return TtyLook::Ready;
+                    }
+                    // Something else (a reply to nothing outstanding): dropped.
+                }
+                Err(Status::WouldBlock) => return TtyLook::Wait,
+                Err(_) => {
+                    self.tty_polls.retain(|(c, _)| *c != conn);
+                    return TtyLook::Hup;
+                }
+            }
+        }
+        TtyLook::Wait
+    }
+
+    // ------------------------------------------------------------ termios
+
+    /// The errno of a terminal reply of `size` bytes: its status first
+    /// (`SetAttrReply`, `FlushReply`, `DrainReply` and the generic error all
+    /// have it there). `IO`, a connection of a line that is not in front, is
+    /// `EIO` (ADR-0331 item 4); a control request on a program's connection
+    /// is `EPERM`; anything else the service refuses is `EINVAL`.
+    fn tty_reply_errno(&self, size: usize) -> i32 {
+        match self.status_of(size) {
+            s if s == tp::status::OK => 0,
+            s if s == tp::status::IO => EIO,
+            s if s == tp::status::NOT_ALLOWED => EPERM,
+            _ => EINVAL,
+        }
+    }
+
+    /// `tcgetattr`: musl's `struct termios` of the terminal at `fd`.
+    pub fn tty_get_attr(&mut self, fd: i32) -> Result<[u8; crate::termios::SIZE], i32> {
+        let conn = self.tty_of(fd)?;
+        let n = self.tty_call(conn, &tp::GetAttr {})?;
+        let (_, a) = decode::<tp::Attr<'_>>(&self.input[..n], 0).map_err(|_| EIO)?;
+        let mut t = [0u8; crate::termios::SIZE];
+        for (i, w) in [a.iflag, a.oflag, a.cflag, a.lflag].iter().enumerate() {
+            t[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+        }
+        let cc = a.cc.0.len().min(32);
+        t[17..17 + cc].copy_from_slice(&a.cc.0[..cc]);
+        // B38400 in and out.
+        t[52..56].copy_from_slice(&15u32.to_le_bytes());
+        t[56..60].copy_from_slice(&15u32.to_le_bytes());
+        Ok(t)
+    }
+
+    /// `tcsetattr` with its three actions (ADR-0331 item 5): `TCSADRAIN`
+    /// waits until what was written has been shown (`Drain`), `TCSAFLUSH`
+    /// does that and drops the unread input (`Flush`) before the change.
+    pub fn tty_set_attr(
+        &mut self,
+        fd: i32,
+        when: i32,
+        t: &[u8; crate::termios::SIZE],
+    ) -> Result<(), i32> {
+        let when = crate::termios::check_action(when)?;
+        let conn = self.tty_of(fd)?;
+        if when != crate::termios::TCSANOW {
+            self.tty_drain_conn(conn)?;
+        }
+        if when == crate::termios::TCSAFLUSH {
+            self.tty_flush_conn(conn)?;
+        }
+        let word =
+            |i: usize| u32::from_le_bytes([t[i * 4], t[i * 4 + 1], t[i * 4 + 2], t[i * 4 + 3]]);
+        let m = tp::SetAttr {
+            iflag: word(0),
+            oflag: word(1),
+            cflag: word(2),
+            lflag: word(3),
+            cc: zoraya_protocol::Data(&t[17..49]),
+        };
+        let n = self.tty_call(conn, &m)?;
+        match self.tty_reply_errno(n) {
+            0 => Ok(()),
+            e => Err(e),
+        }
+    }
+
+    fn tty_drain_conn(&mut self, conn: S::H) -> Result<(), i32> {
+        let n = self.tty_call(conn, &tp::Drain {})?;
+        match self.tty_reply_errno(n) {
+            0 => Ok(()),
+            e => Err(e),
+        }
+    }
+
+    fn tty_flush_conn(&mut self, conn: S::H) -> Result<(), i32> {
+        // What the library kept from an earlier answer is unread input too.
+        self.tty_rest.retain(|(c, _)| *c != conn);
+        self.tty_stash.retain(|(c, _)| *c != conn);
+        self.tty_poll_ready.retain(|c| *c != conn);
+        let n = self.tty_call(conn, &tp::Flush { queue: 0 })?;
+        match self.tty_reply_errno(n) {
+            0 => Ok(()),
+            e => Err(e),
+        }
+    }
+
+    /// `tcdrain`.
+    pub fn tty_drain(&mut self, fd: i32) -> Result<(), i32> {
+        let conn = self.tty_of(fd)?;
+        self.tty_drain_conn(conn)
+    }
+
+    /// `tcflush`: the unread input goes for `TCIFLUSH` and `TCIOFLUSH`;
+    /// output is a stream the library has already written into, so
+    /// `TCOFLUSH` is a no-op that still checks the descriptor.
+    pub fn tty_flush(&mut self, fd: i32, queue: i32) -> Result<(), i32> {
+        let input = crate::termios::flushes_input(queue)?;
+        let conn = self.tty_of(fd)?;
+        if input {
+            self.tty_flush_conn(conn)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// `open("/dev/tty")` (ADR-0331 item 2, ADR-0105 items 4 and 6): a new
+    /// connection cloned from the namespace entry's, tagged with the
+    /// caller's own group, and the write end of the terminal's output taken
+    /// from a terminal descriptor the process still holds (none: the
+    /// descriptor reads but its writes fail with `EBADF`).
+    pub(crate) fn open_tty(&mut self, entry: usize, nonblock: bool) -> Result<i32, i32> {
+        let Some(base) = self.entries.get(entry).and_then(|e| e.handle) else {
+            return Err(ENXIO);
+        };
+        let output = self
+            .fds
+            .fds()
+            .into_iter()
+            .find_map(|fd| match self.fds.get(fd as i32) {
+                Some(Desc::Stream {
+                    write: Some(w),
+                    tty: true,
+                    ..
+                }) => Some(*w),
+                _ => None,
+            });
+        let write = match output {
+            Some(w) => Some(self.sys.duplicate_stream_write(w).map_err(|_| EMFILE)?),
+            None => None,
+        };
+        let group = self.facts.pgid;
+        let conn = match self.clone_tty(base, group) {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(w) = write {
+                    self.sys.close(w);
+                }
+                return Err(e);
+            }
+        };
+        let desc = Desc::Stream {
+            read: None,
+            write,
+            nonblock,
+            tty: true,
+            conn: Some(conn),
+        };
+        self.install_desc(desc, false)
     }
 
     // ------------------------------------------------------------ inheritance
@@ -955,6 +1195,8 @@ impl<S: Sys> Posix<S> {
         self.tty_reads.clear();
         self.tty_stash.clear();
         self.tty_rest.clear();
+        self.tty_polls.clear();
+        self.tty_poll_ready.clear();
         self.signals.pending = 0;
         self.threads_after_fork();
         // The copy names the parent's locks and the parent's connections:

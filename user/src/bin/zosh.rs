@@ -41,7 +41,8 @@ use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
 use zoraya_proto_term::{
     Input as TermInput, MAX_OUTPUT, MAX_PASTE, MAX_TITLE, Output as TermOutput, Paste as TermPaste,
-    Reinstate as TermReinstate, Restore as TermRestore, Size as TermSize, Title as TermTitle,
+    Reinstate as TermReinstate, Restore as TermRestore, Scrollback as TermScrollback,
+    Size as TermSize, Title as TermTitle,
 };
 use zoraya_protocol::{Data, Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode};
 use zoraya_shell::crlf::Crlf;
@@ -228,6 +229,9 @@ fn show_processed(bytes: &[u8]) {
 struct Carried {
     interrupt: bool,
     suspend: bool,
+    /// The group the suspend character is for: the one a POSIX shell chose
+    /// with `tcsetpgrp`, or 0 when the whole line reads.
+    suspend_group: u32,
 }
 
 /// The carriage-return state of what the shell has written to the terminal:
@@ -2062,11 +2066,18 @@ impl Z {
         let mut all = Vec::new();
         let mut any_tty = false;
         for (i, exec) in pipe.programs.iter().enumerate() {
-            let mut tty = [
-                i == 0 && pipe.input.is_none() && !pipe.background,
-                i + 1 == n && pipe.out == Sink::Terminal,
-                !(exec.err_too && i + 1 < n) && pipe.err == Sink::Terminal,
-            ];
+            // The rule of ADR-0331 item 2, with the element's own redirections
+            // applied below as the files they open.
+            let mut tty = zoraya_shell::terminal::terminal_fds(
+                i,
+                n,
+                pipe.input.is_none(),
+                pipe.background,
+                pipe.out == Sink::Terminal,
+                pipe.err == Sink::Terminal,
+                exec.err_too,
+                &[],
+            );
             let mut ends = [
                 if i == 0 { first } else { pipes[i - 1].0 },
                 if i + 1 < n { pipes[i].1 } else { out },
@@ -2290,7 +2301,10 @@ impl Z {
                     carried.interrupt |= kind == RequestKind::Interrupt;
                     let _ = job_signal(job, kind, detail);
                 }
-                Effect::Tty(TtyAction::Suspend { .. }) => carried.suspend = true,
+                Effect::Tty(TtyAction::Suspend { group, .. }) => {
+                    carried.suspend = true;
+                    carried.suspend_group = group;
+                }
                 Effect::Tty(TtyAction::Watch { id, end }) => match number {
                     Some(n) => {
                         let _ = self.tty_watch(id, end, n);
@@ -3068,6 +3082,15 @@ impl Z {
                     };
                     let carried = self.carry(effects, None);
                     ctrl_c |= carried.interrupt;
+                    // A POSIX shell with job control (`sh`) chose a group of
+                    // its own with `tcsetpgrp`: the suspend character is for
+                    // that group, and the line goes on, as `sh` is the line
+                    // and says what it did itself (ADR-0331 item 6). Only
+                    // when the shell has the terminal again, or nobody chose
+                    // a group, is the line stopped (ADR-0200).
+                    if carried.suspend && self.signal_chosen_group(number, carried.suspend_group) {
+                        continue;
+                    }
                     if carried.suspend
                         && let Some(stopped) = self.suspend_front(number)
                     {
@@ -3131,6 +3154,23 @@ impl Z {
     /// shell's stop of every element. Stopped, the line leaves the front of
     /// the discipline with its attributes kept and the screen restored
     /// (ADR-0331 item 9); otherwise it stays in front.
+    /// `SIGTSTP` to a group a POSIX shell chose with `tcsetpgrp`, which is
+    /// not one of the line's own (the line's own groups are what the line's
+    /// stop covers). Says whether it was sent.
+    fn signal_chosen_group(&mut self, number: u32, group: u32) -> bool {
+        let Some(e) = self.jobs.get(number) else {
+            return false;
+        };
+        if group == 0 || e.payload.posix.iter().any(|(_, pgid, _)| *pgid == group) {
+            return false;
+        }
+        let Some(broker) = self.broker.as_ref() else {
+            return false;
+        };
+        let _ = broker.signal_group(group, zoraya_abi::posix::signal::SIGTSTP);
+        true
+    }
+
     fn suspend_front(&mut self, number: u32) -> Option<u32> {
         show("\n");
         let stopped = self.stop_job(number);
@@ -4320,7 +4360,16 @@ impl Z {
     fn write_settings(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.publish_file(SETTINGS, bytes)?;
         self.settings = zoraya_settings::read(bytes, &self.declared);
+        self.send_scrollback();
         Ok(())
+    }
+
+    /// `term.scrollback` to the window's terminal, which cannot read the
+    /// settings (ADR-0332 item 11): at start and after each change.
+    fn send_scrollback(&self) {
+        let lines = zoraya_describe::parse_number(&self.setting("term.scrollback"))
+            .map_or(2000, |n| n.clamp(100, 10_000) as u32);
+        term_message(&TermScrollback { lines });
     }
 
     /// `grants LINE...`: what the command on the line would receive, and
@@ -4376,8 +4425,33 @@ impl Z {
                         });
                     }
                     let home = self.home();
-                    io.out
-                        .push_str(&grants::report(name, &plan, &home, "the terminal", !native));
+                    // The fds a run of this command alone would give the
+                    // terminal (ADR-0331 items 2 and 3): its own redirections
+                    // are the only ones `grants` sees.
+                    let redirected: Vec<Stream> = exec.redirects.iter().map(|r| r.0).collect();
+                    let tty = zoraya_shell::terminal::terminal_fds(
+                        0,
+                        1,
+                        true,
+                        false,
+                        true,
+                        true,
+                        false,
+                        &redirected,
+                    );
+                    let words = if native {
+                        String::from("the terminal")
+                    } else {
+                        zoraya_shell::terminal::streams_words(tty)
+                    };
+                    io.out.push_str(&grants::report(
+                        name,
+                        &plan,
+                        &home,
+                        &words,
+                        !native,
+                        !native && tty.contains(&true),
+                    ));
                     0
                 }
             };
@@ -4395,8 +4469,14 @@ impl Z {
             }
             Ok(Some(plan)) => {
                 let home = self.home();
-                io.out
-                    .push_str(&grants::report(name, &plan, &home, "the terminal", false));
+                io.out.push_str(&grants::report(
+                    name,
+                    &plan,
+                    &home,
+                    "the terminal",
+                    false,
+                    false,
+                ));
                 0
             }
         }
@@ -4944,15 +5024,16 @@ impl Host for Z {
                         args.extend(exec.args.iter().map(|a| a.text.as_bytes()));
                         // PATH and HOME for a POSIX program unless the line
                         // gives them (ADR-0104 item 12 gives a session's).
-                        let mut env: Vec<String> = exec.env.to_vec();
-                        let home = format!("HOME={}", self.home());
-                        for (name, value) in
-                            [("PATH=", "PATH=/bin:/usr/bin"), ("HOME=", home.as_str())]
-                        {
-                            if !env.iter().any(|v| v.starts_with(name)) {
-                                env.push(value.into());
-                            }
-                        }
+                        // TERM too for a program with the terminal on any of
+                        // its fds (ADR-0333 item 1; `console.term` on the
+                        // serial console, item 5).
+                        let env = zoraya_shell::terminal::posix_env(
+                            exec.env,
+                            &self.home(),
+                            tty.contains(&true),
+                            crate::terminal().is_some(),
+                            &self.setting("console.term"),
+                        );
                         let env: Vec<&[u8]> = env.iter().map(|v| v.as_bytes()).collect();
                         let launch = posix_child::Launch {
                             line_job: job,
@@ -5586,6 +5667,7 @@ fn main() -> i32 {
         show(&e);
     }
     z.send_title();
+    z.send_scrollback();
     // A late answer of the panel is closed when it comes, not at the next
     // request (9e).
     if let Some(panel) = z.panel {

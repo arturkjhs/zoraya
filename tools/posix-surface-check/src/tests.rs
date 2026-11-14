@@ -736,6 +736,22 @@ fn the_exclusion_table_is_inv_0005_2_s() {
         "alarm",
         "epoll_create",
         "epoll_wait",
+        // ADR-0342 item 12 (INV-0342-3).
+        "posix_openpt",
+        "openpty",
+        "forkpty",
+        "login_tty",
+        "grantpt",
+        "unlockpt",
+        "ptsname",
+        "ptsname_r",
+        "getpt",
+        "setsid",
+        "msgget",
+        "semget",
+        "shmget",
+        "ptrace",
+        "dlopen",
     ] {
         assert!(surface::is_denied(n), "{n}");
     }
@@ -869,4 +885,31 @@ fn a_block_line_may_name_its_program() {
         ]
     );
     assert!(surface::block_lines("text").is_err());
+}
+
+#[test]
+fn a_block_that_names_a_guarded_name_fails() {
+    // INV-0342-3: the pseudo-terminal functions and `setsid` do not come in
+    // by an ADR's `posix-surface-added` block.
+    for n in [
+        "posix_openpt",
+        "openpty",
+        "forkpty",
+        "login_tty",
+        "grantpt",
+        "unlockpt",
+        "ptsname",
+        "ptsname_r",
+        "getpt",
+        "setsid",
+        "ptrace",
+    ] {
+        let adr = format!(
+            "# ADR\n\n- **Status:** accepted\n\n```posix-surface-added\ntcflush t_tty\n{n} t_tty\n```\n"
+        );
+        let e = surface::added_names(&adr).unwrap_err();
+        assert!(e.contains(n) && e.contains("INV-0342-3"), "{e}");
+    }
+    let ok = "# ADR\n\n- **Status:** accepted\n\n```posix-surface-added\ntcflush t_tty\n```\n";
+    assert_eq!(surface::added_names(ok).unwrap().0, ["tcflush"]);
 }

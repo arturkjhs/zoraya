@@ -72,6 +72,15 @@ protocol! {
     /// the terminal sets again what the last `Restore` with `keep` cleared.
     /// With nothing kept it does nothing.
     message Reinstate = 7, handles 0 {}
+
+    /// Shell to terminal, no reply (ADR-0332 item 11, ADR-0389): the setting
+    /// `term.scrollback`, which the terminal cannot read itself. At start
+    /// and after each change; the terminal keeps at most this many lines
+    /// (and never more than its own bound). A new ordinal under ADR-0052;
+    /// `ttyd` ignores it.
+    message Scrollback = 8, handles 0 {
+        lines: u32,
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +130,9 @@ mod tests {
         });
         let length = encode(&Reinstate {}, 0, &mut out).unwrap();
         decode::<Reinstate>(&out[..length], 0).unwrap();
+        let length = encode(&Scrollback { lines: 2000 }, 0, &mut out).unwrap();
+        let (_, back) = decode::<Scrollback>(&out[..length], 0).unwrap();
+        assert_eq!(back, Scrollback { lines: 2000 });
     }
 
     #[test]

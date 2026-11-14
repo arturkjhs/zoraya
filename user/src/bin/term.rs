@@ -23,7 +23,7 @@ use zoraya_abi::{
     channel_signals,
 };
 use zoraya_proto_gui as gui;
-use zoraya_proto_term::{Input, Output, Paste, Reinstate, Restore, Size, Title};
+use zoraya_proto_term::{Input, Output, Paste, Reinstate, Restore, Scrollback, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_term::{Look, Next, Restored, SendQueue, Session, Term, Waited, await_reply, sync_hold};
 use zoraya_tokens::{Appearance, Scale};
@@ -463,6 +463,11 @@ impl Window {
                 // keeps what it cleared for `fg`.
                 let was = self.session.term.restore();
                 self.kept = r.keep.then_some(was);
+                self.show();
+            } else if let Ok((_, m)) = decode::<Scrollback>(bytes, 0) {
+                // The setting `term.scrollback` (ADR-0332 item 11), which
+                // the terminal cannot read: the shell says it.
+                self.session.term.set_scrollback(m.lines as usize);
                 self.show();
             } else if decode::<Reinstate>(bytes, 0).is_ok() {
                 if let Some(was) = self.kept.take() {

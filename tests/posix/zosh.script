@@ -172,11 +172,48 @@ w notstp: ready
 > q
 < rawkeys: done
 < \r\n~> 
-# `sh` typed at the prompt is interactive: it has the terminal on 0 and 2.
+# The terminal's names and calls through libposix (ADR-0342 item 4, ADR-0389):
+# /dev/tty, ttyname, the three tcsetattr actions, tcflush, tcdrain, and the
+# refusals (TIOCSWINSZ is EPERM, TIOCSTI ENOTTY).
+> t_tty names\r
+< t_tty: written through /dev/tty
+< t_tty: names passed
+< \r\n~> 
+# INV-0331-3: an idle terminal is not ready (poll and select wait their
+# timeout), and a key wakes a call that also polls a pipe nobody writes with
+# the terminal alone.
+> t_tty poll\r
+< poll: idle ok
+< select: idle ok
+< poll: type a key
+> x
+< poll: key 78
+< select: type a key
+> y
+< select: key 79
+< t_tty: poll passed
+< \r\n~> 
+# `sh` typed at the prompt is interactive: it has the terminal on 0 and 2,
+# and job control through /dev/tty and tcsetpgrp (ADR-0331 item 6, ADR-0388):
+# Ctrl-C ends the foreground job and sh goes on; Ctrl-Z stops it and sh says so.
 > sh\r
 < $ 
 > echo in sh\r
 < in sh
+< $ 
+> /bin/sleep 30\r
+~ 700 zzz
+> \x03
+< $ 
+> /bin/sleep 31\r
+~ 700 zzz
+> \x1a
+< Stopped
+< $ 
+> jobs\r
+< Stopped
+< $ 
+> kill -9 %1\r
 < $ 
 > exit\r
 < \r\n~> 

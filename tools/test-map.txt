@@ -201,6 +201,7 @@ tests/cxx/gtest               test-cxx-gtest
 user/describe/posix/cxxtest.cmd test-cxx test-files
 docs/adr/0366-surface-for-cxx.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-cxx test-cxx-libcxx test-cxx-gtest
 docs/adr/0398-poll-and-ppoll-as-built.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr
+docs/adr/0389-the-terminal-calls-of-libposix-where-adr-0331-and-adr-0342-are-silent.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
