@@ -170,12 +170,13 @@ user/describe/posix/python3.cmd test-python test-files
 tests/python/                test-python test-python-regr
 tests/shell/python.script    test-python
 tests/shell/python-regr.script test-python-regr
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-gtest
+ports/musl/                   test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
 ports/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
 ports/cmake/                  test-cxx-gtest
 ports/patches/llvm/           test-cxx test-cxx-libcxx test-cxx-gtest
 ports/patches/googletest/     test-cxx-gtest
-tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-gtest
 tools/zc++                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/cxx/libcxx-             test-cxx-libcxx
