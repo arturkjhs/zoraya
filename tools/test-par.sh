@@ -158,15 +158,16 @@ t0=$(date +%s)
             ${CARGO:-cargo} build -q -p zoraya-test-runner
     fi &&
         # The ports the lanes' steps need, built once here so that the lanes do not
-        # build them at the same time (needs `make fetch-ports` once).
+        # build them at the same time (needs `make fetch-ports` once). Not -s: the ports'
+        # checks read the compile commands in the logs (ci-build is not -s either).
         if has test-posix-suites || has test-posix-threadtest3; then
-            "$make" --no-print-directory -s -f ports/Makefile libc suites workloads
+            "$make" --no-print-directory -f ports/Makefile libc suites workloads
         fi &&
         if has test-apps || has test-netsurf; then
-            "$make" --no-print-directory -s apps netsurf
+            "$make" --no-print-directory apps netsurf
         fi &&
         if has test-python || has test-python-regr; then
-            "$make" --no-print-directory -s python python-testlib
+            "$make" --no-print-directory python python-testlib
         fi &&
         if has test-unit; then
             ${CARGO:-cargo} test -q --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
