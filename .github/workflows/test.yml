@@ -308,6 +308,7 @@ jobs:
           - make check-charged-alloc
           - make check-untrusted-gate
           - make check-quota-tests
+          - make check-net-open
           - make check-ethd-maps
           - make check-tls-roots
           - make check-netsurf-refusal

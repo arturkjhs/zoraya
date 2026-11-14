@@ -2266,7 +2266,7 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   not enforced, FIFOs only in `/tmp`, no hard links, lexical `..`, times that never go back, no `statvfs`; one, `weakly_canonical`
   of missing components, not analysed further)), built by `tests/cxx/libcxx-build.sh` (a test that does not compile is an
   error; patch `llvm/0004` makes the filesystem tests' helper work without a shell) and run each by `posixrun` in `/work`
-  (99 s under HVF on the Mac mini). `make
+  (99 s under HVF on the Mac mini). Limit: under TCG, which is every CI job, `thread.semaphore/`, `thread.barrier/` and `thread.latch/` are left out (`tests/cxx/libcxx-tcg-excluded.txt`: libc++'s atomic wait polls with a backoff here); no CI job runs them, only HVF on the Mac does, until libc++'s wait goes over the futex (ADR-0301, `docs/backlog.md`). `make
   test-cxx-gtest`: GoogleTest's 27 self-checking test programs, death tests included (they `fork`, and the threadsafe style
   executes the program again), each through `gtrun` (`tests/cxx/gtrun.c`, `user/describe/posix/gtrun.cmd`), with the
   expectations of `tests/cxx/gtest-expect.txt`. `make ci-build` builds the runtime, GoogleTest and the libc++ subset, so that the

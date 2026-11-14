@@ -8,10 +8,10 @@
 //! was when its objects are gone.
 
 use zoraya_abi::quota::JobLimits;
-use zoraya_abi::spawn::Encoder;
+use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
-    DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MemoryFlags, OBJECT_TYPES, ObjectType,
-    Rights, Status, job_signals,
+    ChannelObject, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MemoryFlags,
+    OBJECT_TYPES, ObjectType, Rights, Status, job_signals,
 };
 use zoraya_user::{
     assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, handle_type, image,
@@ -54,6 +54,15 @@ const EXIT_AFTER_REFUSAL: i32 = 42;
 
 fn nap(ms: u64) {
     sleep_until(clock_monotonic() + ms * 1_000_000);
+}
+
+/// Waits for a message on `end` and drops it: the handshake of the tests that
+/// need the other side to have reached a point (no sleeps, no guessed times).
+fn await_message(end: Handle) {
+    assert!(
+        eventually(|| zoraya_user::channel_read(end, &mut [0; 16], &mut []).is_ok()),
+        "no message"
+    );
 }
 
 fn eventually(done: impl Fn() -> bool) -> bool {
@@ -426,16 +435,26 @@ fn mapping_a_foreign_object_at_the_limit_is_refused() {
         foreign,
         Rights::READ.union(Rights::WRITE).union(Rights::DUPLICATE),
     ));
+    // A channel for the handshake: the child says it is ready, and goes on
+    // only when the limit is narrowed.
+    let (ours, theirs) = zoraya_user::channel_create().expect("channel");
+    e.handle(HandleEntry {
+        slot: 9,
+        handle: theirs,
+        rights: ChannelObject::RIGHTS,
+        transfer: Transfer::Move,
+    });
     e.arg(b"map-foreign");
     let length = e.finish().expect("room");
     let p = spawn(&buffer[..length]).expect("spawn");
     handle_close(program).expect("image");
-    // While the child sleeps, the room's limit becomes its use plus half a
+    // Once the child is ready, the room's limit becomes its use plus half a
     // page: not even the first page table of an 8 MiB mapping fits. It reports in
     // its exit code.
-    nap(150);
+    await_message(ours);
     let used = job_get_usage(room, false).expect("usage").memory.used;
     job_set_limits(room, &limits(Some(used + 2048), None)).expect("narrower");
+    zoraya_user::channel_write(ours, b"go", &[]).expect("go");
     let record = wait_exit(p);
     assert_eq!(record.code, EXIT_AFTER_REFUSAL, "{record:?}");
     handle_close(p).expect("close");
@@ -446,7 +465,9 @@ fn mapping_a_foreign_object_at_the_limit_is_refused() {
 /// In the child of `mapping_a_foreign_object_at_the_limit_is_refused`.
 fn map_foreign() -> i32 {
     let object = Handle::from_parts(8, 0).expect("slot");
-    nap(400);
+    let channel = Handle::from_parts(9, 0).expect("slot");
+    zoraya_user::channel_write(channel, b"ready", &[]).expect("ready");
+    await_message(channel);
     let before = job_get_usage(JOB, false).expect("usage").memory;
     let result = zoraya_user::memory_map(object, 0, 8 * MIB, zoraya_abi::MapFlags::WRITE);
     if result != Err(Status::OverQuota) {
