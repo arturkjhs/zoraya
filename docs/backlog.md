@@ -160,29 +160,42 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 ## Follow-ups from the architect's decisions on part 9 (2026-11-13)
 
 - A program started by `dash` or `make` (for example `curl`) has no `getrandom` connection, so OpenSSL cannot seed (ADR-0310; the shell gives the connection only to programs it launches itself).
-- Record locks shared across processes (ADR-0319 Option B): the lock table lives in `fsd`, keyed by the process's connection. Reason: with the in-process table two processes on one SQLite file do not see each other's locks and can corrupt it. Needs a protocol change and a review.
-- The wheel beyond 9f-wheel (proposed ADR-0329): settings scrolls by whole children, not pixels (`Logical` is unsigned; a translated canvas and hit test would be Option A); no scroll bar; no horizontal turn in the toolkit (`dx` is dropped); no Page Up or Page Down in the file manager and the editor. NetSurf takes no horizontal turn (libnsfb has no button for it).
+- Record locks shared across processes (ADR-0319 Option B): the lock table lives in `fsd`, keyed by the process's connection. Reason: with the in-process table two processes on one SQLite file do not see each other's locks and can corrupt it. Needs a protocol change and a review. Decided 2026-11-14: it stays in the backlog until stage 10 and is not scheduled before.
+- The wheel in the native applications beyond the terminal (9e, proposed ADR-0322): `zoraya-app` drops `Wheel` (ordinal 46), so the file manager's list, the editor and the settings window do not scroll with it; `zoraya-ui`'s `ScrollView` and the list need a wheel event of their own. NetSurf takes no horizontal turn (libnsfb has no button for it).
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs.
 
 
-## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`)
+## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`) - done (9f-ci, 2026-11-14)
 
-`make fetch-ports` (`tools/fetch-ports.sh`) downloads every source of `ports/sources.lock` from the Internet when CI's ports cache
-misses. On `main`'s run 43511821485 (attempt 1) the `build` job failed there: `https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz` timed
-out five times (curl exit 28, connect timeout after 30 s) and so did its `ftpmirror.gnu.org` fallback; the re-run of the job passed.
-The change was not at fault, but `main`'s run was red until the job was re-run by hand. Fix: keep the pinned archives where an upstream outage cannot reach
-them, for example a GitHub release or an Actions cache of `build/ports/src` keyed by each archive's SHA-256 (`ports/sources.lock`),
-filled once and read before any upstream URL; `fetch-ports.sh` then tries the mirror first and the upstream URLs only for an archive
-the mirror lacks. The SHA-256 check stays as it is, so the mirror is not trusted more than the upstream.
+`make fetch-ports` downloaded every source of `ports/sources.lock` when CI's ports cache missed, and the cache key was the hash of the
+lock, so any change of the lock missed and every archive came from the Internet (`main`'s run 43511821485: `ftp.gnu.org` timed out for
+`make-4.4.1.tar.gz`). Done, with no new ADR (the cache is a CI detail under ADR-0109, whose SHA-256 check is unchanged): the build job
+restores `build/ports/src` with `actions/cache/restore` (key `ports-src-` plus the lock's hash, restore key `ports-src-`, so a changed
+lock starts from the newest older entry and downloads only the new archives) and saves it with `actions/cache/save` after the fetch even
+if a later step fails. `tools/fetch-ports.sh` verifies every archive against the lock and downloads again one that fails, so a corrupted
+entry is never trusted (`ports/test-fetch.sh`). `tools/check-fetch-cache.sh` (run by `make check-fetch-ports`, so by `make check`)
+fails if a job fetches without those steps. Left: a first run on an empty cache still reaches the upstream servers, and a GitHub release as
+a mirror in `sources.lock` is not built; a fetch outside `build` (the nightly's, if one is added) must follow the same steps.
+
+## Memory of the run machines (2026-11-14)
+
+The `Makefile` comment above `RUN_NET_CMD` gave the per-launch leak of 8.5 MiB (`curl`, `wget`) as the reason for 512 MiB. That leak
+is fixed (`a9f0cfe`; `apps-launches` runs 16 launches on 128 MiB), so the reason was wrong. The real one is the working set: the
+programs a person runs there are large (`python3` 15.5 MB, NetSurf 12.5 MB, `curl` and `wget` 6.7 MiB each, loaded whole), each
+Python thread stack is committed in full and `os.fork` copies the whole writable space (11 children on 512 MiB with 8 MiB stacks, 16
+with 1 MiB), the GUI surfaces are 1024 x 768 per client, and the charge reserve is 1/16 of memory (`docs/design.md`: the 256 MiB GUI
+test refused the files manager's menu). No limit smaller than 512 MiB has been measured for these machines, so 512 MiB stays and
+nothing is known to go wrong with less; measuring the smallest size that runs `make run-gui` with a Python program and NetSurf is not
+done.
 
 ## Stage 9 parts: what the reports left (TASK-27, 2026-11-13)
 
 From the "Not done" and limits lists of `docs/tasks/TASK-27-report.md` that no row above holds yet:
 
-- **Threads (9b).** INV-0306-3 (a fork child has one thread and no parent thread handle), INV-0306-5 (a failed `snapshot_process`
-  parks no thread) and INV-0308-3 (a program without threads makes no thread call, over fresh logs of every workload) still say
-  `not yet applicable (stage 9)` in `docs/adr/invariants.md` though stage 9 is done: write the checks or record why not (ADR-0001
-  rule 6). The mapping count of a CPython-sized process with 128 thread stacks is not measured (ADR-0300's open question; 9c measured
+- **Threads (9b).** INV-0306-3 (a fork child has one thread and no parent thread handle) and INV-0306-5 (a failed `snapshot_process`
+  parks no thread) still say `not yet applicable (stage 9)` in `docs/adr/invariants.md` though stage 9 is done: no in-QEMU test of
+  either exists (a `job_get_usage` of the child's job; a refused charge, then the siblings' counter): write them or record why not
+  (ADR-0001 rule 6). INV-0308-3 is checked by `make posix-calls` since 9f-ci (`posix-stats --no-thread-calls`, already in the Makefile). The mapping count of a CPython-sized process with 128 thread stacks is not measured (ADR-0300's open question; 9c measured
   4000 threads one at a time, not 128 at once). The SHA-256 / AES-GCM / `RAND_bytes` half of ADR-0309 item 4
   (`tests/posix/ossl_threads.c`) is not written.
 - **TLS programs (9a).** No `tls.roots` setting reaches C programs (they read `/system/tls/roots` only). 9a's own code (`random.rs`,
@@ -193,8 +206,8 @@ From the "Not done" and limits lists of `docs/tasks/TASK-27-report.md` that no r
 - **NetSurf (9d).** Downloads through the chooser (a second `ZPBX` slot for a chooser channel); a shell that `init` restarts gets no
   window channel until the panel restarts; a page's links to other hosts need `+net HOST` words on the line; timed waits are a 2 ms
   poll loop; no JavaScript, SVG, cookies, proxy, clipboard or cursor shape; titles Latin only. INV-0317-1's shell side is checked
-  only by the marker script (the refusal is unreachable while an untrusted room cannot be entered). `docs/design.md` has no section
-  for the window of a POSIX program and NetSurf (ADR-0317, ADR-0318); write one when the area is next touched.
+  only by the marker script (the refusal is unreachable while an untrusted room cannot be entered). `docs/design.md` has the section on the window of a POSIX
+  program and NetSurf (9f-ci).
 - **CPython (9c).** `make test-python-long` (`test_queue`, `test_threading`) runs only by hand: too long for CI's 45-minute jobs under
   TCG; `test_threading` ends "env changed" because `os.fork` runs out of memory (no copy-on-write). No `socketpair`, `AF_UNIX`,
   server sockets, `posix_spawn`, shared modules or `ctypes`. The archive's Sigstore bundle is not checked. The cold-cache time of CI's

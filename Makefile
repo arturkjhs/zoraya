@@ -151,9 +151,13 @@ FORCE:
 # The test boots RUN_GUI_CMD as it is, so with the network.
 NET ?= 1
 RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
-# 512 MiB: curl and wget are 6.7 MiB each and the machine gives back about 8.5 MiB
-# less than it takes at each launch of one (TASK-27 9a, the report): on 128 MiB
-# the ninth launch is refused ("over quota"), on 256 MiB the twenty-fourth.
+# 512 MiB for the working set, not for a leak (the 8.5 MiB leak per `curl` launch is
+# fixed): the programs of the volume are large (python3 15.5 MB, NetSurf 12.5 MB, curl
+# and wget 6.7 MiB each), a Python thread's stack is committed in full and `os.fork`
+# copies the writable space (11 children at once on 512 MiB at 8 MiB a stack), the GUI
+# surfaces are 1024 x 768 a client, and 1/16 of memory is the charge reserve (the GUI
+# test on 256 MiB refused a menu). No smaller size has been measured (docs/backlog.md,
+# "Memory of the run machines").
 RUN_NET_CMD = $(RUN_QEMU) --net --mem 512M --disk $(1) $(KERNEL)
 RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
 
@@ -1282,6 +1286,7 @@ fetch-ports ports check-ports clean-ports check-python-cache:
 # INV-0109-3 and INV-0109-4: the fetch step and the cache, offline.
 check-fetch-ports:
 	ports/test-fetch.sh
+	tools/check-fetch-cache.sh
 
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck

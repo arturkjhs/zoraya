@@ -28,8 +28,10 @@ its operands and the line's +r, +w and +net words designate. It is a program lik
 files and reach the hosts and ports the line gives it, and nothing else. `+net example.org:443 python3 fetch.py` lets the
 script open a connection to that host and port; the system's roots (/system/tls) come with the network, and
 ssl.create_default_context() trusts those roots (OpenSSL's default file is /system/tls/roots) and nothing a PYTHON* or
-SSL_* variable says. What a program does with the ssl module is its own: ssl.CERT_NONE and _create_unverified_context()
-turn verification off, and nothing here stops it (curl's -k is refused; a Python program is not mediated).
+SSL_* variable says. INV-0312-1 (the chain, the clock and the name are checked, and no request byte follows a failed check) covers connections
+made with OpenSSL's defaults, which is what ssl.create_default_context() gives. What a program does with the ssl module
+beyond that is its own: a script that passes ssl.CERT_NONE or calls _create_unverified_context() chose to turn
+verification off itself, and nothing here stops it (curl's -k is refused; a Python program is not mediated).
 
 The environment decides nothing: PYTHONPATH, PYTHONHOME, PYTHONSTARTUP, PYTHONSAFEPATH, PYTHONWARNINGS and the rest are
 not read (the program runs as with -E), and urllib takes no proxy from http_proxy or https_proxy. What it imports from is
