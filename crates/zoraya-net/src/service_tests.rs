@@ -662,3 +662,196 @@ fn a_run_whose_connection_went_is_not_given_to_the_next_asker() {
         Action::Deferred
     );
 }
+
+fn web_scope(extra: &[ReachRule<'_>]) -> Vec<u8> {
+    let mut rules = vec![ReachRule {
+        target: Target::Public,
+        ports: Ports::ranges(&[(80, 80), (443, 443)]).unwrap(),
+        protocols: Protocols::TCP,
+    }];
+    rules.extend_from_slice(extra);
+    let mut out = vec![0u8; 256];
+    let n = encode_scope(&rules, &[], &mut out).unwrap();
+    out.truncate(n);
+    out
+}
+
+/// The status and the addresses of a `resolve` answered at once (a
+/// `net.hosts` name).
+fn resolve_now(service: &mut Service, net: &mut Net, id: usize, name: &str) -> (u32, Vec<u32>) {
+    use zoraya_proto_net::{Resolve, Resolved};
+    let m = bytes(
+        &Resolve {
+            name: Data(name.as_bytes()),
+        },
+        5,
+    );
+    let Action::Reply(r) = service.handle(id, &m, 0, &mut net.client, net.now) else {
+        panic!("answered at once: {name}");
+    };
+    let (_, reply) = decode::<Resolved>(&r, 0).unwrap();
+    let addresses = reply.addresses.iter().map(|a| a.address).collect();
+    (reply.status.0, addresses)
+}
+
+/// ADR-0324 items 2 and 5 (INV-0324-1): a web rule resolves any name but
+/// answers only with public addresses that are not local, `net.hosts`
+/// included; none left is `NOT_GRANTED`. It connects to public addresses on
+/// its ports, and to names on its ports, whose answers `Conns` then checks.
+#[test]
+fn a_web_rule_resolves_to_public_answers_only_and_connects_on_its_ports() {
+    use zoraya_proto_net::Connecting;
+    const PUBLIC: [u8; 4] = [93, 184, 215, 14];
+    let mut net = Net::new(Config {
+        hosts: vec![
+            ("pub".into(), PUBLIC),
+            ("lan".into(), [10, 0, 2, 9]),
+            ("gateway".into(), SERVER_IP),
+            ("loop".into(), [127, 0, 0, 1]),
+            ("home".into(), [192, 168, 1, 1]),
+        ],
+        ..static_config()
+    });
+    let mut service = Service::new();
+    let web = service
+        .add(Connection::new(rights::REACH, &web_scope(&[])).unwrap())
+        .unwrap();
+    assert_eq!(
+        resolve_now(&mut service, &mut net, web, "pub"),
+        (status::OK, vec![u32::from_be_bytes(PUBLIC)])
+    );
+    for name in ["lan", "gateway", "loop", "home"] {
+        assert_eq!(
+            resolve_now(&mut service, &mut net, web, name),
+            (status::NOT_GRANTED, vec![]),
+            "{name}"
+        );
+    }
+    // A rule that names the address lets it through; a rule that names the
+    // name keeps ADR-0223's rule (net.hosts is the person's word).
+    let lan = [10, 0, 2, 9];
+    let named = ReachRule {
+        target: Target::Address(lan),
+        ports: Ports::one(8080),
+        protocols: Protocols::TCP,
+    };
+    let with_address = service
+        .add(Connection::new(rights::REACH, &web_scope(&[named])).unwrap())
+        .unwrap();
+    assert_eq!(
+        resolve_now(&mut service, &mut net, with_address, "lan"),
+        (status::OK, vec![u32::from_be_bytes(lan)])
+    );
+    let by_name = ReachRule {
+        target: Target::Name("gateway"),
+        ports: Ports::one(8080),
+        protocols: Protocols::TCP,
+    };
+    let with_name = service
+        .add(Connection::new(rights::REACH, &web_scope(&[by_name])).unwrap())
+        .unwrap();
+    assert_eq!(
+        resolve_now(&mut service, &mut net, with_name, "gateway"),
+        (status::OK, vec![u32::from_be_bytes(SERVER_IP)])
+    );
+    // Connections: public addresses and any name on 80 and 443 only; never a
+    // local or private address.
+    let mut code = |id, message: &[u8]| match service.handle(id, message, 3, &mut net.client, 0) {
+        Action::Reply(r) => decode::<Connecting>(&r, 0).unwrap().1.status.0,
+        Action::Connect { .. } => status::OK,
+        other => panic!("{other:?}"),
+    };
+    for port in [80, 443] {
+        assert_eq!(code(web, &connect_message("", PUBLIC, port)), status::OK);
+        assert_eq!(
+            code(web, &connect_message("", [203, 0, 113, 10], port)),
+            status::OK
+        );
+        assert_eq!(
+            code(web, &connect_message("example.org", [0; 4], port)),
+            status::OK
+        );
+        for local in [
+            SERVER_IP,
+            [127, 0, 0, 1],
+            [10, 0, 2, 9],
+            [192, 168, 1, 1],
+            [169, 254, 0, 1],
+        ] {
+            assert_eq!(
+                code(web, &connect_message("", local, port)),
+                status::NOT_GRANTED,
+                "{local:?}"
+            );
+        }
+    }
+    for port in [22, 81, 444, 8080] {
+        assert_eq!(
+            code(web, &connect_message("", PUBLIC, port)),
+            status::NOT_GRANTED
+        );
+        assert_eq!(
+            code(web, &connect_message("example.org", [0; 4], port)),
+            status::NOT_GRANTED
+        );
+    }
+    assert_eq!(
+        code(with_address, &connect_message("", lan, 8080)),
+        status::OK
+    );
+    // No echo through it.
+    let Action::Reply(r) = service.handle(web, &ping_message(PUBLIC, 1), 0, &mut net.client, 0)
+    else {
+        panic!("refused at once");
+    };
+    assert_eq!(
+        decode::<PingReply>(&r, 0).unwrap().1.status.0,
+        status::NOT_GRANTED
+    );
+}
+
+/// INV-0324-2 through the service: a web connection narrows to a web rule
+/// and to nothing that would name an address or a host.
+#[test]
+fn a_web_connection_narrows_only_to_a_web_rule() {
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let web = service
+        .add(Connection::new(rights::REACH | rights::NARROW, &web_scope(&[])).unwrap())
+        .unwrap();
+    let narrow = |target, port| {
+        let r = ReachRule {
+            target,
+            ports: Ports::one(port),
+            protocols: Protocols::TCP,
+        };
+        let mut out = vec![0u8; 128];
+        let n = encode_scope(&[r], &[], &mut out).unwrap();
+        out.truncate(n);
+        out
+    };
+    let mut ask = |scope: &[u8]| {
+        let m = bytes(
+            &Narrow {
+                rights: rights::REACH,
+                scope: Data(scope),
+            },
+            6,
+        );
+        match service.handle(web, &m, 1, &mut net.client, 0) {
+            Action::Reply(r) => decode::<Narrowed>(&r, 0).unwrap().1.status.0,
+            Action::Narrowed { .. } => status::OK,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(ask(&narrow(Target::Public, 443)), status::OK);
+    for outside in [
+        narrow(Target::Address([93, 184, 215, 14]), 443),
+        narrow(Target::Address(SERVER_IP), 80),
+        narrow(Target::Name("example.org"), 443),
+        narrow(Target::Any, 443),
+        narrow(Target::Public, 8080),
+    ] {
+        assert_eq!(ask(&outside), status::NOT_GRANTED);
+    }
+}

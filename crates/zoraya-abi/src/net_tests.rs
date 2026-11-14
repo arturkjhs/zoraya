@@ -30,24 +30,27 @@ const NAMES: [&str; 6] = [
     "x",
 ];
 const SUFFIXES: [&str; 4] = ["example.org", "b.example.org", "org", "example"];
-const ADDRESSES: [[u8; 4]; 4] = [
+const ADDRESSES: [[u8; 4]; 6] = [
     [10, 0, 2, 2],
     [10, 0, 2, 15],
     [10, 1, 0, 1],
     [192, 168, 0, 1],
+    [203, 0, 113, 10],
+    [93, 184, 215, 14],
 ];
 
 fn random_target(rng: &mut Rng) -> Target<'static> {
-    match rng.below(5) {
+    match rng.below(6) {
         0 => Target::Name(NAMES[rng.below(6) as usize]),
         1 => Target::Wildcard(SUFFIXES[rng.below(4) as usize]),
-        2 => Target::Address(ADDRESSES[rng.below(4) as usize]),
+        2 => Target::Address(ADDRESSES[rng.below(6) as usize]),
         3 => {
             let len = [0u8, 8, 16, 24, 30, 32][rng.below(6) as usize];
-            let a = ADDRESSES[rng.below(4) as usize];
+            let a = ADDRESSES[rng.below(6) as usize];
             let m = u32::from_be_bytes(a) & if len == 0 { 0 } else { u32::MAX << (32 - len) };
             Target::Prefix(m.to_be_bytes(), len)
         }
+        4 => Target::Public,
         _ => Target::Any,
     }
 }
@@ -307,20 +310,33 @@ fn a_scope_within_another_allows_nothing_the_other_does_not() {
             continue;
         }
         subsets += 1;
+        // ADR-0324: a web grant of the child is a web grant or a named one
+        // of the parent; a named one stays named (INV-0324-2).
+        let rank = |g: NameGrant| match g {
+            NameGrant::No => 0,
+            NameGrant::PublicOnly => 1,
+            NameGrant::Named => 2,
+        };
         for name in NAMES.iter().chain(SUFFIXES.iter()) {
             for port in [22, 80, 85, 443, 1000, 8080] {
                 for p in [Protocols::TCP, Protocols::UDP] {
                     if a.allows_name(name, port, p) {
                         assert!(b.allows_name(name, port, p), "{name} {port}");
                     }
+                    let (ga, gb) = (a.name_grant(name, port, p), b.name_grant(name, port, p));
+                    assert!(rank(ga) <= rank(gb), "{name} {port} {ga:?} {gb:?}");
                 }
             }
+            assert!(rank(a.resolve_grant(name)) <= rank(b.resolve_grant(name)));
         }
         for address in ADDRESSES {
             for port in [22, 80, 85, 443, 1000, 8080] {
                 for p in [Protocols::TCP, Protocols::UDP] {
                     if a.allows_address(address, port, p) {
                         assert!(b.allows_address(address, port, p));
+                    }
+                    if a.names_address(address, port, p) {
+                        assert!(b.names_address(address, port, p));
                     }
                 }
             }
@@ -413,4 +429,177 @@ fn an_echo_rule_grants_echo_and_no_connection_and_no_datagram() {
         protocols: Protocols::ALL,
     };
     assert!(encode(&[], &[listen], &mut out).is_none());
+}
+
+/// ADR-0324 item 2: the blocks a web rule never reaches, at their edges.
+#[test]
+fn is_public_refuses_every_local_block_at_both_edges() {
+    for (block, len) in NOT_PUBLIC {
+        let first = u32::from_be_bytes(block);
+        let last = first
+            | if len == 0 {
+                u32::MAX
+            } else {
+                !(u32::MAX << (32 - len))
+            };
+        assert!(!is_public(first.to_be_bytes()), "{block:?}/{len} first");
+        assert!(!is_public(last.to_be_bytes()), "{block:?}/{len} last");
+        let middle = first + (last - first) / 2;
+        assert!(!is_public(middle.to_be_bytes()));
+        // The neighbours are public unless another block holds them.
+        for n in [first.wrapping_sub(1), last.wrapping_add(1)] {
+            let inside = NOT_PUBLIC.iter().any(|&(b, l)| {
+                let m = if l == 0 { 0 } else { u32::MAX << (32 - l) };
+                n & m == u32::from_be_bytes(b)
+            });
+            assert_eq!(
+                is_public(n.to_be_bytes()),
+                !inside,
+                "{n:#x} beside {block:?}/{len}"
+            );
+        }
+    }
+    for a in [
+        [10, 0, 2, 2],
+        [10, 0, 2, 15],
+        [127, 0, 0, 1],
+        [192, 168, 1, 1],
+        [172, 31, 255, 255],
+        [169, 254, 169, 254],
+        [100, 64, 0, 1],
+        [0, 0, 0, 0],
+        [255, 255, 255, 255],
+        [224, 0, 0, 1],
+        [198, 19, 0, 1],
+    ] {
+        assert!(!is_public(a), "{a:?}");
+    }
+    for a in [
+        [93, 184, 215, 14],
+        [1, 1, 1, 1],
+        [8, 8, 8, 8],
+        [203, 0, 113, 10],
+        [172, 32, 0, 1],
+        [100, 128, 0, 1],
+        [11, 0, 0, 1],
+        [192, 0, 2, 1],
+        [198, 51, 100, 1],
+        [223, 255, 255, 254],
+    ] {
+        assert!(is_public(a), "{a:?}");
+    }
+}
+
+fn web() -> Vec<u8> {
+    one(
+        Target::Public,
+        Ports::ranges(&[(80, 80), (443, 443)]).unwrap(),
+        Protocols::TCP,
+    )
+}
+
+/// ADR-0324: a web rule reaches public addresses on its ports, admits a name
+/// only through public answers, and never names a local address.
+#[test]
+fn a_web_rule_reaches_public_addresses_and_admits_names_through_their_answers() {
+    let bytes = web();
+    let s = Scope::decode(&bytes).unwrap();
+    assert_eq!(re_encode(&s), bytes);
+    assert_eq!(s.reach_rules().next().unwrap().target, Target::Public);
+    for port in [80, 443] {
+        assert!(s.allows_address([93, 184, 215, 14], port, Protocols::TCP));
+        assert!(s.allows_address([203, 0, 113, 10], port, Protocols::TCP));
+        for local in [
+            [10, 0, 2, 2],
+            [127, 0, 0, 1],
+            [192, 168, 0, 1],
+            [169, 254, 1, 1],
+        ] {
+            assert!(!s.allows_address(local, port, Protocols::TCP), "{local:?}");
+        }
+        // Never a name rule, never a rule that names an address.
+        assert!(!s.allows_name("example.org", port, Protocols::TCP));
+        assert!(!s.names_address([93, 184, 215, 14], port, Protocols::TCP));
+        assert_eq!(
+            s.name_grant("example.org", port, Protocols::TCP),
+            NameGrant::PublicOnly
+        );
+    }
+    for port in [22, 81, 442, 444, 8080] {
+        assert!(!s.allows_address([93, 184, 215, 14], port, Protocols::TCP));
+        assert_eq!(
+            s.name_grant("example.org", port, Protocols::TCP),
+            NameGrant::No
+        );
+    }
+    assert!(!s.allows_address([93, 184, 215, 14], 443, Protocols::UDP));
+    assert_eq!(
+        s.name_grant("example.org", 443, Protocols::UDP),
+        NameGrant::No
+    );
+    assert!(!s.allows_echo_name("example.org"));
+    assert!(!s.allows_echo_address([93, 184, 215, 14]));
+    assert!(!s.reaches_name("example.org"));
+    assert!(!s.reaches_address([93, 184, 215, 14]));
+    assert_eq!(s.resolve_grant("example.org"), NameGrant::PublicOnly);
+    assert_eq!(Scope::EMPTY.resolve_grant("example.org"), NameGrant::No);
+    // With a name rule beside it, that name is named.
+    let mut out = vec![0u8; 128];
+    let rules = [
+        s.reach_rules().next().unwrap(),
+        ReachRule {
+            target: Target::Name("test.zoraya"),
+            ports: Ports::one(8080),
+            protocols: Protocols::TCP,
+        },
+    ];
+    let n = encode(&rules, &[], &mut out).unwrap();
+    let both = Scope::decode(&out[..n]).unwrap();
+    assert_eq!(
+        both.name_grant("test.zoraya", 8080, Protocols::TCP),
+        NameGrant::Named
+    );
+    assert_eq!(
+        both.name_grant("test.zoraya", 80, Protocols::TCP),
+        NameGrant::PublicOnly
+    );
+    assert_eq!(both.resolve_grant("test.zoraya"), NameGrant::Named);
+}
+
+/// INV-0324-2: only a web rule is inside a web rule, and a web rule is inside
+/// only a web rule or `any`.
+#[test]
+fn only_a_web_rule_narrows_from_a_web_rule() {
+    let bytes = web();
+    let parent = Scope::decode(&bytes).unwrap();
+    let narrower = one(Target::Public, Ports::one(443), Protocols::TCP);
+    assert!(Scope::decode(&narrower).unwrap().within(&parent));
+    for outside in [
+        one(
+            Target::Address([93, 184, 215, 14]),
+            Ports::one(443),
+            Protocols::TCP,
+        ),
+        one(
+            Target::Prefix([93, 184, 215, 0], 24),
+            Ports::one(443),
+            Protocols::TCP,
+        ),
+        one(Target::Name("example.org"), Ports::one(443), Protocols::TCP),
+        one(Target::Wildcard("org"), Ports::one(443), Protocols::TCP),
+        one(Target::Any, Ports::one(443), Protocols::TCP),
+        one(Target::Public, Ports::one(8080), Protocols::TCP),
+        one(Target::Public, Ports::one(443), Protocols::BOTH),
+        one(Target::Public, Ports::one(443), Protocols::ECHO),
+    ] {
+        assert!(!Scope::decode(&outside).unwrap().within(&parent));
+    }
+    let any = one(Target::Any, Ports::ANY, Protocols::ALL);
+    assert!(parent.within(&Scope::decode(&any).unwrap()));
+    for not_outer in [
+        one(Target::Prefix([0, 0, 0, 0], 0), Ports::ANY, Protocols::ALL),
+        one(Target::Wildcard("org"), Ports::ANY, Protocols::ALL),
+    ] {
+        assert!(!parent.within(&Scope::decode(&not_outer).unwrap()));
+    }
 }

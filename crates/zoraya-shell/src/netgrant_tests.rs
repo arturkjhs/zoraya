@@ -442,7 +442,92 @@ fn net_targets_are_the_scope_hosts() {
     let ok = go_nets(NET, &[], &["example.org"], true).unwrap();
     let scope = ok.expect("a scope").1;
     assert_eq!(
-        crate::netgrant::targets(&scope),
-        vec![String::from("example.org")]
+        crate::netgrant::pills(&scope),
+        vec![String::from("+net example.org")]
     );
+}
+
+/// ADR-0324 items 1, 3 and 6 (INV-0324-3, INV-0324-4): the image's NetSurf
+/// gets the web rule (public hosts, ports 80 and 443, TCP) beside its URL's
+/// own rule; curl does not; a description outside the image does not; the
+/// pill is `web` and `grants` says what it reaches.
+#[test]
+fn the_web_rule_is_the_descriptions_and_shows_as_web() {
+    use zoraya_abi::net::{NameGrant, Target};
+    let ok = go(NETSURF, &[], true).unwrap().expect("a scope");
+    assert_eq!(ok.0, rights::REACH);
+    let s = Scope::decode(&ok.1).unwrap();
+    let rules: Vec<_> = s.reach_rules().collect();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].target, Target::Public);
+    assert_eq!(rules[0].protocols, Protocols::TCP);
+    assert_eq!(rules[0].ports.list(), &[(80, 80), (443, 443)]);
+    assert!(s.allows_address([93, 184, 215, 14], 443, Protocols::TCP));
+    assert!(!s.allows_address([10, 0, 2, 2], 80, Protocols::TCP));
+    assert!(!s.allows_address([127, 0, 0, 1], 80, Protocols::TCP));
+    assert!(!s.allows_address([93, 184, 215, 14], 8080, Protocols::TCP));
+    assert!(!s.allows_echo_address([93, 184, 215, 14]));
+    assert_eq!(crate::netgrant::pills(&ok.1), vec![String::from("web")]);
+    assert_eq!(
+        crate::netgrant::describe(&ok.1),
+        vec![String::from(
+            "net: web                     reach public hosts, ports 80 and 443; not this machine or its network (description)"
+        )]
+    );
+    // With a URL: its own rule too, which names its host (a private one).
+    let url = go(NETSURF, &[("http://10.0.2.2:8080/ns/page", true)], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&url.1).unwrap();
+    assert!(s.allows_address([10, 0, 2, 2], 8080, Protocols::TCP));
+    assert!(s.names_address([10, 0, 2, 2], 8080, Protocols::TCP));
+    assert!(!s.allows_address([10, 0, 2, 2], 80, Protocols::TCP));
+    assert_eq!(
+        crate::netgrant::pills(&url.1),
+        vec![String::from("+net 10.0.2.2:8080"), String::from("web")]
+    );
+    // +net words name local hosts beside it.
+    let words = go_nets(NETSURF, &[], &["192.168.1.1:80"], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&words.1).unwrap();
+    assert!(s.names_address([192, 168, 1, 1], 80, Protocols::TCP));
+    assert_eq!(
+        s.name_grant("example.org", 443, Protocols::TCP),
+        NameGrant::PublicOnly
+    );
+    // A URL from a value still needs a +net word: the web rule does not make
+    // it designate.
+    assert!(go(NETSURF, &[("http://example.org/", false)], true).is_err());
+    // Not for a description outside the image, and not for curl.
+    assert_eq!(go(NETSURF, &[], false).unwrap(), None);
+    let curl = go(CURL, &[("https://example.org/", true)], true)
+        .unwrap()
+        .expect("a scope");
+    assert!(
+        Scope::decode(&curl.1)
+            .unwrap()
+            .reach_rules()
+            .all(|r| r.target != Target::Public)
+    );
+}
+
+/// ADR-0324 item 7 (INV-0324-3): a description's web rule is refused in an
+/// untrusted room, and only there; a description without it is not.
+#[test]
+fn the_web_rule_is_refused_in_an_untrusted_room() {
+    use crate::netgrant::web_refused;
+    let ns = zoraya_describe::parse(NETSURF.as_bytes()).unwrap();
+    assert!(ns.net_web);
+    let refused = web_refused(&ns, true).unwrap_err();
+    assert_eq!(refused.subject, "netsurf");
+    assert!(
+        refused.problem.contains("untrusted room"),
+        "{}",
+        refused.problem
+    );
+    assert!(web_refused(&ns, false).is_ok());
+    let curl = zoraya_describe::parse(CURL.as_bytes()).unwrap();
+    assert!(!curl.net_web);
+    assert!(web_refused(&curl, true).is_ok());
 }

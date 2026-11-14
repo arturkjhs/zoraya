@@ -737,7 +737,7 @@ fn read_of(path: &str) -> Planned {
 #[test]
 fn window_pills_list_the_network_first_then_the_files() {
     let plan = vec![read_of("/a"), read_of("/b")];
-    let net = vec![String::from("example.org:443")];
+    let net = vec![String::from("+net example.org:443")];
     assert_eq!(
         crate::grants::window_pills(&plan, &net).unwrap(),
         vec!["+net example.org:443", "+r /a", "+r /b"]
@@ -757,7 +757,7 @@ fn window_pills_refuse_more_than_sixteen() {
     let max = crate::grants::MAX_WINDOW_PILLS;
     let files: Vec<Planned> = (0..max).map(|i| read_of(&format!("/d{i}"))).collect();
     assert_eq!(crate::grants::window_pills(&files, &[]).unwrap().len(), max);
-    let net = vec![String::from("h")];
+    let net = vec![String::from("+net h")];
     assert_eq!(crate::grants::window_pills(&files, &net), Err(max + 1));
     let fewer: Vec<Planned> = files[..max - 1].to_vec();
     let pills = crate::grants::window_pills(&fewer, &net).unwrap();
