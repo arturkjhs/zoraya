@@ -151,11 +151,12 @@ are few and known when the image is built.
    hook, an editor or a helper started by git can read git's configuration and cannot change it, and the `ssh`
    that `scp` starts can read the keys and cannot rewrite `known_hosts`. A child gets no own directory of its own
    name: `ssh` started by git does not see ssh's (ADR-0339 item 6).
-8. **The current directory does not reach into `/data`.** The current-directory default (ADR-0153 rule 1) never
-   covers a program's own directory: with the current directory at `/`, `/data` or inside `/data/ROOM/NAME`, a
-   program gets nothing of another name's files from it. A path there reaches another program only when the
-   person names it: as a literal operand (`cat /data/home/git/config`, `ls /data/home/ssh`), which designates as
-   everywhere, or by a `+r` or `+w` word.
+8. **The current directory does not reach into `/data`.** A read connection on a directory reaches everything
+   below it, and nothing can cut a subtree out of one. So when the current directory is `/`, `/data`, a
+   `/data/ROOM` or inside a program's own directory, a program gets **no** current-directory entry at all, as if
+   its description said `cwd none` (ADR-0311 item 5: it starts where that item says, and relative operands still
+   resolve). A path under `/data` reaches another program only when the person names it: as a literal operand
+   (`cat /data/home/git/config`, `ls /data/home/ssh`), which designates as everywhere, or by a `+r` or `+w` word.
 9. **A port looks nowhere else.** A program with a `data` line is built or configured so that it names no path in
    the home directory outside its own directory in normal operation, as curl and wget read no configuration
    (ADR-0310 item 6). Otherwise every run would report refused dotfiles (driver 6).
@@ -207,8 +208,8 @@ file; opening it starts `edit`.
   `+w /tmp`) and that a room's shell holds the room's grants: both gain `/data/ROOM`, with `tree` rights, so that
   the shell can make and give the directories. It is not a room grant and no pill shows it (item 2), which
   INV-0172-2's "exactly the room's entries" must be read with.
-- *ADR-0153 rule 1*: the current directory is given to read wherever it is; item 8 excepts programs' own
-  directories under `/data`. *ADR-0153 rule 10's note*: a POSIX program gets `HOME` "unless the line sets it";
+- *ADR-0153 rule 1*: the current directory is given to read wherever it is; item 8 gives none when it is `/`,
+  `/data` or below. *ADR-0153 rule 10's note*: a POSIX program gets `HOME` "unless the line sets it";
   for a program with a `data` line the line may not (item 3).
 - *ADR-0107*: `libposix` builds a child's table from its own; item 7 makes it lower one marked entry to `read`.
 - *ADR-0265 item 5*: the storage limit of a limited room also covers its `/data/ROOM` (item 6).
@@ -261,7 +262,8 @@ shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340).
   given, by the library and by a raw request, and is refused both ways, and a planted link is not followed.
 - **INV-0341-7.** No program receives a path inside another name's own directory from the current-directory
   default; a literal operand or a literal `+r` or `+w` word is the only way. *Check:* a host test of the shell's
-  planner with the current directory at `/`, at `/data` and inside `/data/home/ssh`, with and without an operand.
+  planner with the current directory at `/`, at `/data`, at `/data/home` and inside `/data/home/ssh`, with and
+  without an operand, asserting that no current-directory entry is given.
 
 ## Open questions
 

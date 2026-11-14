@@ -156,7 +156,7 @@ answers `ENODEV` to a file mapping.
 9. **Descriptions**, in the image (ADR-0153 rule 10):
 
    ```
-      name     vi
+   name     vi
    summary  edit text files (nvi, a POSIX program)
    usage    vi [-R] [-c COMMAND] [FILE...]
    program  /bin/vi

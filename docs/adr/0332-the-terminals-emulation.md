@@ -190,8 +190,8 @@ coverage (no CJK, no emoji) is acceptable for stage 10. Neither is measured.
    waits, no other key does anything.
 9. **Width.** One table gives the width of every code point, and it is musl's own: at build time the `wcwidth`
    of the musl release pinned in `ports/sources.lock` is compiled for the host and asked for every code point,
-   and the answers are the terminal's table. (Its two data headers alone are not enough: above U+20000 musl
-   decides by code.) So a code point is 0 wide where musl says nonspacing, 2 where it says wide, 1
+   and the answers are the terminal's table. (Its two data headers alone are not enough: musl decides some ranges by
+   code.) So a code point is 0 wide where musl says nonspacing, 2 where it says wide, 1
    otherwise, in the grid, in every ported program, and in `zosh`'s own editor, which uses the same table. A
    width-0 character joins the cell before it (at most two per cell, more are dropped); a width-2 character takes
    two cells and wraps whole. A character with no glyph draws the hollow box at its width. No grapheme clustering,

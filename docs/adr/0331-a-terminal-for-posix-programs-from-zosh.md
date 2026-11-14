@@ -275,8 +275,9 @@ every program in `/bin` a description, `sh` included.)
 For target 2 this is where ADR-0105's split has to become real, because every program of every line now holds a
 terminal connection. Item 4 is the answer: a program of another line, in the background or not, cannot read what is
 typed to the program in front and cannot change its modes; the service on the other end is the room's own shell,
-which holds no more than the room (ADR-0172). What remains is inside one line, whose programs share their grants
-anyway, and the shell's exposure to the requests of the programs it runs, which Option C would remove. A supervisor
+which holds no more than the room (ADR-0172). What remains is inside one line, whose programs share their grants but
+can also each read what is typed there, a password included (item 4), and the shell's exposure to the requests of the
+programs it runs, which Option C would remove. A supervisor
 of an agent would be one more client of the same connection kind. For target 3 each terminal window is
 self-contained: one `term`, one `zosh`. Networking: the ssh client needs exactly items 2, 5 and 7. Threads: a tty
 read is a wait point of the thread that makes it (ADR-0304).

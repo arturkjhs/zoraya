@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-13
-- **Depends on:** ADR-0005, ADR-0107, ADR-0109, ADR-0153, ADR-0154, ADR-0155, ADR-0156, ADR-0200, ADR-0212, ADR-0335, ADR-0342
+- **Depends on:** ADR-0005, ADR-0107, ADR-0109, ADR-0153, ADR-0154, ADR-0155, ADR-0156, ADR-0200, ADR-0212, ADR-0311, ADR-0335, ADR-0337, ADR-0342
 - **Evidence:** CP-01, CP-05, CP-27, DM-010, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#awk, stage-10/survey.md#bsd-and-other-permissive-sources, stage-10/survey.md#busybox, stage-10/survey.md#everyday-tools-compared, stage-10/survey.md#ports-as-built, stage-10/survey.md#the-userland-today, stage-10/survey.md#toybox-upstream, stage-10/survey.md#what-posix-has-and-what-people-rely-on, stage-10/survey.md#what-the-missing-tools-need-from-libc
 
 ## Context
@@ -143,12 +143,14 @@ review and the tests named below; that a working day needs roughly the tools of 
    hint.
 6. **Changing a file in place.** toybox's `sed -i` (and the other users of its `copy_tempfile`) writes a
    temporary sibling and renames it over the file, which needs rights on the directory. One patch to that helper
-   makes it, on Zoraya, write the result back into the file itself, so that the one file is enough. Two things
-   deliver that one file: `sed`'s description says `cwd none`, so that the file's entry is not merged with the
-   current directory's (ADR-0153 rule 2; ADR-0311 item 5 for curl); and a `write` operand of a POSIX program,
-   which is given directories only, arrives as its directory narrowed to that one existing name with read and
-   write, the form ADR-0311 item 5 gave `create`. The shell does not do the second today: it refuses such a line
-   or relies on a directory entry. The price of in-place writing is the same as for `vi` (ADR-0335 item 4): the
+   makes it, on Zoraya, write the result back into the file itself, so that the one file is enough. Two things deliver
+   that one file: `sed`'s description says `cwd none`, so that the file's entry is not merged
+   with the current directory's (ADR-0153 rule 2; ADR-0311 item 5 for curl); and every file operand of a POSIX
+   program whose description says `cwd none`, read ones as well as `write` ones, arrives as its directory
+   narrowed to the names the line gives, each with its kind's rights: ADR-0311 item 5's form for `create`, with
+   the list of names of ADR-0337 item 8. The shell does not do this today: it refuses a designated file that lies
+   in no directory entry. `grants` words such an entry `change NAME` or `read NAME`, as it says `create or replace
+   NAME`. The price of in-place writing is the same as for `vi` (ADR-0335 item 4): the
    change is not atomic, and an interrupted one can leave the file short. `patch` is different: it changes the
    files its input names, which no operand designates, so it needs `+w` on the tree, as `make` does.
 7. **One command per name for the person.** `shell.path` stays `/zoraya/bin /bin`: where a native command and a
@@ -258,7 +260,8 @@ the network. Threads: none.
   an in-QEMU script in which `find . -exec cat /config/settings` is refused without a grant and allowed with `+r`.
 - **INV-0336-6.** `sed -i FILE` changes its file holding only that one name of the file's directory, in the
   current directory and outside it: the file's content changes, the directory holds the same names before and
-  after, and a second file of the directory cannot be read. *Check:* a host test of the shell's plan for both
+  after, and a second file of the directory cannot be read; `sed` without `-i` on a
+  file reads it through the same narrowed entry. *Check:* a host test of the shell's plan for both
   cases, and an in-QEMU script comparing the directory listings.
 
 ## Open questions

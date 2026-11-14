@@ -638,3 +638,84 @@ Everything outside these is clean: the template, the counts, the plan's invarian
 cross-ADR agreement on replies, the serial console and `TIOCSWINSZ`. The one further round TASK-28 allows should
 cover these 26 items, and its check needs to read only the changed sentences.
 
+
+## The last check
+
+The one further round TASK-28 allows: a fifth reviewer checked commit `eb08afb` against `9765226`, the 26 points of
+the check above and the sentences changed for them. It found 24 of the 26 dispositions carried out in full and 2 in
+part, and 2 medium and 4 low points with 4 notes; no high one. The external claims of the second round held
+(OpenSSH's `--`, git's `credential.helper` and `core.askPass`, musl's `wcwidth`, the shell's connection budget), the
+template is intact in all twelve ADRs, and the 61 invariant rows match their ADRs word for word. The ten points
+were fixed in the final commit; **those last edits were not reviewed again**, since the allowed rounds are used up.
+Its report follows.
+
+
+**Read and run.** I read C1 to C26 and their dispositions (`review-notes.md` 555-640) and
+`git diff 9765226 eb08afb -- docs/adr docs/research/stage-10/plan.md docs/research/stage-10/rows-to-add.md`.
+At HEAD I checked: ADR-0311 item 5, ADR-0337 item 8, ADR-0341 items 3 and 11, the open questions of ADR-0331, the
+Depends-on lines, `crates/zoraya-shell/src/grants.rs` (`Access::words`), `crates/zoraya-describe/src/lib.rs`
+(header keys), `user/describe/posix/*.cmd`, and `user/src/bin/zosh.rs:71`. I also fetched OpenSSH `ssh.c`
+(master). The scripts were read-only: one compares the template headings, the status and the empty "Architect's
+decision", and one compares every INV in ADR-0331 to 0342 with its row in `rows-to-add.md`.
+
+**Clean:**
+- **Template:** all twelve ADRs have the nine headings in order, `proposed`, and an empty "Architect's decision".
+- **Rows:** all 61 INV rows match their ADR word for word, statement and check, after whitespace is normalised.
+  That covers every invariant this round changed, and the index summaries of 0332, 0336 and 0341.
+- **External claims, which hold:**
+  - With `--` before the host, OpenSSH does not parse options again. After `getopt`, `opt_terminated = 1` is set
+    when `av[optind-1]` is `--`, and the re-parse runs only when `!opt_terminated`.
+  - git reads `credential.helper` and runs it through the shell, and `core.askPass` and `SSH_ASKPASS` replace the
+    terminal prompt.
+  - musl decides by code above U+20000.
+  - `POSIX_NET_BUDGET` is `2` (`zosh.rs:71`).
+- **Cross-references, which point where they should:** ADR-0311 item 5 (start in `/bin`, the narrowed `create`),
+  ADR-0337 item 8 (`narrow` with a list), ADR-0341 item 3 (the own-directory entry is never merged), ADR-0341
+  item 11 (modes), INV-0331-8, and ADR-0331's open question on the broker's check.
+
+| # | Where | Severity | Finding | Suggested fix  | Disposition |
+|---|---|---|---|---|---|
+| L1 | ADR-0341 item 8, INV-0341-7, plan 10g | medium | **A new mechanism is implied but not stated.** The item now says that with the current directory "at `/`, `/data` or inside `/data/ROOM/NAME`" a program "gets nothing of another name's files from it". ADR-0153 rule 1 gives the current directory as a read connection, and a read connection on `/` reaches `/data/home/ssh/id_ed25519`. Nothing (no `narrow`, no ADR) can give a directory with one subtree cut out. Scenario: `cd /` and then `sh -c 'cat data/home/ssh/id_ed25519'` reads the key through the current-directory entry. The list also leaves out `/data/ROOM` itself (`cd /data/home`). | State the mechanism. When the current directory is `/`, `/data`, `/data/ROOM` or inside `/data/ROOM/NAME`, the default is not given: either a dead placeholder at its prefix, as ADR-0311 item 5 does, or the program starts in `/bin`. Add `/data/home` to INV-0341-7's cases.  | **Fixed.** ADR-0341 item 8 states the mechanism: at `/`, `/data`, a `/data/ROOM` or inside a program's own directory no current-directory entry is given at all; INV-0341-7 tests `/data/home` too. |
+| L2 | ADR-0336 item 6, plan 10e | medium | **`cwd none` cuts off `sed`'s read operands.** With `cwd none` for `sed`, only a `write` operand is given the narrowed form. A `read` operand gets no delivery: `sed s/a/b/ notes.txt` (no `-i`), or `sed -f x.sed f`. The shell as built refuses a designated file that lies in no directory entry (`zosh.rs:1594`). So `sed` without `-i` breaks in 10e. 10e is planned in parallel with 10a to 10d, before ADR-0337 item 8 (10f), which narrows every file. | Make the narrowed form cover every file operand of a POSIX program, citing ADR-0337 item 8 as the same mechanism, or build it in 10e. Add a read-only `sed` case to INV-0336-6.  | **Fixed.** ADR-0336 item 6: every file operand of a `cwd none` POSIX program is delivered as a narrowed name, read ones included, with ADR-0337 item 8's list; INV-0336-6 has the read-only case; the plan builds the list in 10d or 10e, whichever is first. |
+| L3 | ADR-0339 line 251-252; INV-0339-1 statement | low | **C24 is half carried.** The example still says that in `~` the command ``git status` ends with `hint: ...``, which reads as if git ran. Item 2 now refuses the line before git starts. INV-0339-1's statement still says "a `.git` file, the home directory and the root give no entry", and only its check says the line is refused (for the home directory alone). | Change "ends with" to "is refused with". In INV-0339-1's statement (and its row), say that these three cases refuse the line.  | **Fixed.** The example says the line is refused before git starts; INV-0339-1's statement says so for all three cases. |
+| L4 | ADR-0331, Effect of the vision (line ~279) | low | **C4 is half carried.** The text still reads: "What remains is inside one line, whose programs share their grants anyway". C4 said that shared grants do not cover a typed password, and the disposition says this paragraph was changed. Only the sentence before it changed. | Add: "and any of them can read what is typed there, a password included (item 4)".  | **Fixed.** The sentence in ADR-0331's Effect of the vision. |
+| L5 | ADR-0337 Depends on; ADR-0336 Depends on | low | **New references are missing from Depends on.** ADR-0337 item 7 now cites ADR-0341 item 3, and ADR-0341 is not in 0337's Depends on. ADR-0336 item 6 and its Tensions now cite ADR-0311 item 5, and ADR-0311 is not in 0336's. C15 and C16 fixed exactly this kind of gap. | Add ADR-0341 to 0337 and ADR-0311 (and ADR-0337, for #2) to 0336, in the ADRs and in the index rows.  | **Fixed.** ADR-0341 in ADR-0337's dependencies, ADR-0311 and ADR-0337 in ADR-0336's; the index rows are regenerated. |
+| L6 | ADR-0335 item 9, the `vi` description block | low | **Indentation slip.** The `name` line is indented six spaces where the other lines have three. The parser skips leading space, so the description itself is unaffected. | Use three spaces.  | **Fixed.** |
+| L7 | ADR-0336 example (`~/proj  change notes.txt (operand FILE)`) | note | **New `grants` wording, not declared.** `grants` has no "change NAME" form today (`Access::Change` carries no name, `grants.rs:69`). This wording is new and goes with item 6's new mechanism. | List the wording among item 6's follow-ups.  | **Fixed.** ADR-0336 item 6 names the new `grants` wording. |
+| L8 | ADR-0332 item 9's parenthetical; plan 10a | note | **Width wording.** "above U+20000 musl decides by code" is incomplete: code also decides below U+0100 and for U+xFFFE and U+xFFFF. Plan 10a still says "generated from the pinned musl's data". The mechanism, which compiles `wcwidth`, is right. | "(musl decides some ranges by code)". Plan 10a: "from the pinned musl's `wcwidth`".  | **Fixed.** ADR-0332 item 9's parenthesis and plan 10a. |
+| L9 | ADR-0340 item 4 | note | **The patch is redundant.** `--` before `HOST` already stops OpenSSH's re-parse (`opt_terminated`), so the port patch is a second guard, not needed. | Say the patch is defence in depth, or drop it.  | **Fixed.** ADR-0340 item 4: `--` is the mechanism, the patch a second guard. |
+| L10 | ADR-0339 item 7 | note | **"Connection" means two things.** In this item "connection" names both a `netd` client channel ("a second connection") and the TCP connections the budget counts. The code cites ADR-0262 item 2 for the budget. | "the budget of two open connections of the account (ADR-0262 item 2)".  | **Not changed.** The sentence names the shell's budget by its constant; the ADR-0262 citation is left to the implementing part. |
+| 11 | ADR-0339 item 8 | note | **Helpers per URL.** "`credential.helper` in any scope" does not plainly cover `credential.<url>.helper`. | Write "`credential.helper` and `credential.<url>.helper`, in any scope". |
+
+### The 26 verdicts (last check)
+
+- C1: yes.
+- C2: yes (see #11).
+- C3: yes. The mechanism is stated, but it covers `write` only (see #2).
+- C4: partly. The text still reads "What remains is inside one line, whose programs share their grants anyway" (#4).
+- C5: yes.
+- C6: yes (see #8).
+- C7: yes.
+- C8: yes.
+- C9: yes. The examples are consistent now, but the widened item 8 adds #1.
+- C10: yes. It says "implementing part" in some places and "implementation part" in others, which is harmless.
+- C11: yes.
+- C12: yes.
+- C13: yes.
+- C14: yes.
+- C15: yes.
+- C16: yes.
+- C17: yes.
+- C18: yes.
+- C19: yes.
+- C20: yes.
+- C21: yes. The Depends-on line is missing ADR-0341 (#5).
+- C22: yes.
+- C23: yes.
+- C24: partly. The text still reads "``git status` ends with `hint: this repository is your whole home directory; ...``" (#3).
+- C25: yes.
+- C26: yes. The indentation slip is #6.
+
+**Verdict:** fit to hand to the architect once #1 and #2 (each a sentence or two, plus a test case) and the four
+lows are fixed. The notes can travel as they are.
+
