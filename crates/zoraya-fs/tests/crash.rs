@@ -181,6 +181,8 @@ fn every_crash_state_is_a_prefix() {
         t.images,
         started.elapsed()
     );
+    // The test is the checks made on each crash image: none made is not a pass.
+    assert!(t.images > 0 && t.windows > 0, "no crash image was checked");
 }
 
 /// INV-0015-2: the same with the device completing every batch's writes in
@@ -192,6 +194,7 @@ fn crash_states_with_permuted_completion() {
         run_and_crash(seed, 80, true, CrashConfig::default(), None, &mut t);
     }
     eprintln!("permuted crash test: {} crash images", t.images);
+    assert!(t.images > 0, "no crash image was checked");
 }
 
 /// INV-0010-2's targeted test: crash between every pair of block writes of a
@@ -248,6 +251,7 @@ fn rename_over_and_max_write_are_all_or_nothing() {
     let mut t = Totals::default();
     run_and_crash_big(1, &ops, &mut t);
     eprintln!("targeted crash test: {} crash images", t.images);
+    assert!(t.images > 0, "no crash image was checked");
 }
 
 fn run_and_crash_big(seed: u64, ops: &[Op], t: &mut Totals) {
