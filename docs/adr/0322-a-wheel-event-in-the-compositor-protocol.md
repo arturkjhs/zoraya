@@ -1,6 +1,6 @@
 # ADR-0322: A wheel event in the compositor protocol: one message in 120ths of a notch, to the body under the pointer
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0052, ADR-0092, ADR-0093, ADR-0094, ADR-0160, ADR-0164, ADR-0245, ADR-0248, ADR-0317
 - **Evidence:** CP-24, desktop/survey.md#focus-and-stacking
@@ -115,3 +115,6 @@ Recommended: **Option C**. It is a recommendation, not a decision. As built in p
 - A touchpad or a device with kinetic scrolling on QEMU or real hardware; a client that needs the source.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C.

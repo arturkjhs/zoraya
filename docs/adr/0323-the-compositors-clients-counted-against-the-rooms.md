@@ -1,6 +1,6 @@
 # ADR-0323: The compositor's clients: 32 slots, an untrusted room's clients counted against its account, the panel's reserve from the session's share
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0093, ADR-0160, ADR-0168, ADR-0172, ADR-0260, ADR-0261, ADR-0262, ADR-0263, ADR-0267, ADR-0294, ADR-0317
 - **Evidence:** CP-07, quotas/survey.md#genode-resource-trading, quotas/survey.md#zoraya-today
@@ -112,3 +112,6 @@ protocol's; `AddRoomClient` of an untrusted room past its account is `OVER_QUOTA
 - A measured desktop that needs more than 20 session clients; a compositor heap measured near its limit.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C, with its deviation from ADR-0262 accepted.

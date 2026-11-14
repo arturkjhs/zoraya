@@ -1,6 +1,6 @@
 # ADR-0320: CPython 3.15 as a port: a static build with `zcc`, the shims, six patches, the environment policy
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0005, ADR-0100, ADR-0109, ADR-0153, ADR-0224, ADR-0228, ADR-0302, ADR-0309, ADR-0310, ADR-0311, ADR-0312, ADR-0315, ADR-0319
 - **Evidence:** CP-27
@@ -325,4 +325,6 @@ wmemcmp
 - A Python release that changes its stack guard, `getpath` or the `_ssl` socket code (patches 0001, 0004 and 0005).
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A, with item 10's reading: INV-0312-1 covers connections made with OpenSSL's defaults; a script that passes `ssl.CERT_NONE` chose it itself. `python3`'s description says so.

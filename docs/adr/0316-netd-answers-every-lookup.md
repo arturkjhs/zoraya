@@ -1,6 +1,6 @@
 # ADR-0316: `netd` answers every request that needs a lookup: a timed-out lookup says so, and clients wait for its bound
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0221, ADR-0222, ADR-0223, ADR-0225, ADR-0281, ADR-0330
 - **Evidence:** CP-12
@@ -154,3 +154,6 @@ failed. Targets 2 and 3: an agent or a desktop program that resolves gets `EAI_A
 - smoltcp exposing its neighbour cache, which would let the probes ask only for what is missing.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option B.

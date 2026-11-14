@@ -1,6 +1,6 @@
 # ADR-0321: `curl` and `wget` refuse every option that disables or replaces TLS verification or the roots
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0109, ADR-0224, ADR-0228, ADR-0310, ADR-0311, ADR-0312
 - **Evidence:** network/survey.md#what-a-fetch-over-https-needs
@@ -108,4 +108,6 @@ Option C. Marked as a recommendation, not a decision. Items:
 - A port whose options are not reachable through one function.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C.
