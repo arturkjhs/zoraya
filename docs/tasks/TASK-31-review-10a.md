@@ -218,3 +218,123 @@ before the merge (1 by the architect's decision, 2 to 4 are small).
 Merge after findings 2, 3 and 4 are fixed (each is small and local) and the architect has decided finding 1 (accept
 the window until 10c in writing, or the stop-gap reset). Findings 5 to 7 can go with the merge if they are recorded as
 open items for 10b and 10c; 8 to 14 are corrections of text and small tests.
+
+## Check of the fix pass
+
+A check of the changed lines of `git diff 67b35e5 8757e88` on `work/10a` (the fix pass `a99661f`, the candidate fixes
+`cb5d881` and `8757e88`; the merge of `origin/main` left out), by the same reviewer. Read only: nothing was built or
+run in this check, so every statement below is by reading the code at `8757e88`, and the arithmetic is shown.
+
+### Findings 1 to 7: fixed?
+
+- **1 (stop-gap reset): fixed, with the notes C4.** `crates/zoraya-shell/src/reset.rs:14` is a constant
+  (`ESC[?1049l ESC[!p ESC[?25h ESC(B SI ESC[m`); program output cannot change it. `zosh.rs:5064-5073` pushes it into the
+  same `out` as the prompt, so reset and prompt are one `Output` message, only when `terminal()` is a window. It has no
+  line feed, so INV-0331-7 is untouched. It works from any state the program left the parser in: in a string the `ESC`
+  abandons it and `[` starts a `CSI` (`parse.rs:185-195`), mid-`CSI` or mid-escape the `ESC` restarts. `leave_alt` is a
+  no-op off the alternate screen (`screen.rs:450`), and `soft_reset` keeps the cursor's place (`screen.rs:466`), so
+  after a command that printed plainly nothing moves. The host test covers the hostile case.
+- **2 (comments as covers): fixed.** `check.sh` strips `//` before the grep. `selftest` exercises the same `covered_in`
+  and runs in `make check`. See C5.
+- **3 (independent sweep table): fixed.** `ADR_CSI`/`ADR_ESC` (`tests_parser.rs`) match ADR-0332 items 2 and 3 as
+  written (checked against the ADR's list, final by final). `the_parsers_lists_are_the_adr_s` makes `csi_known` and
+  `escape_known` agree over five markers, seven intermediates and every final, and the sweep uses the table.
+  `same_state` compares `last` and `alt_saved_cursor`. Breaks B and B2 now fail by construction.
+- **4 (REP bound): the cost is bounded, but the result is wrong; see C1.**
+- **5 (hold): fixed.** `sync_hold` is pure and tested, including "no deadline while outstanding" and "a deadline is
+  never in the past". `term`'s loop calls `show()` on every iteration (after each wake, deadline or packet), so a hold
+  that ran past its deadline during a commit is drawn at the `CommitDone` wake. No spin is left.
+- **6 (recordings): half fixed; see C3.** `vttest` is open in ADR-0332's note and the backlog. `vi-edit` was re-recorded:
+  its queries are now in the stream (`ESC[>c` once, `ESC[6n` twice, 2,659 bytes against 2,590). `less-page` was not.
+- **7 (strings swallowed whole): fixed.** `string()` keeps at most `MAX_STRING` bytes of an `OSC`, sets `osc_over`, and
+  `finish_string` does not run an overrun `OSC`. Every exit path clears `osc_over` (`abort`, `escape`, `finish_string`).
+  Nothing of a string is printed. (b) A string ends only at `ST`, BEL (for an `OSC`), `CAN`, `SUB` or an `ESC` that
+  starts something else, so an unterminated one swallows plain text for as long as plain text keeps coming. It cannot
+  swallow the prompt: the stop-gap's first byte is `ESC`, and the editor's redraw after output that arrived while
+  editing begins with `\r\x1b[J` (`editor.rs` `hide`). The one exception is the first prompt of a session (no reset)
+  after a `START` script that left a string open, when the prompt has no escape. That is negligible.
+- **(d) terminal script.** Reading only `line 60`, `line 70`, the colour row and `(END)` does not touch INV-0332-6: that
+  invariant's check is `tests/replay.rs` at the recording's own 80 × 24, not the GUI script. The script is now a smoke
+  test of a 24-row stream drawn into a grid that may have fewer rows (the cursor addressing is clamped), and it says
+  so. `cat …; sleep 300` with `chord ctrl c` also exercises the stop-gap in QEMU (`screen ~> _` after the interrupt).
+- **(e) the reader / runner test.** `gui.rs:1677` now writes `\r\n`, as the shell does under ADR-0332 item 2. The test
+  is as strict as before. No other host user of `Term::write` feeds a bare `\n` (only `term.rs` and this test construct
+  a `Term` outside the crate).
+
+### New findings
+
+C1. **should-fix.** `crates/zoraya-term/src/parse.rs:573`, with `tests_parser.rs:1543` (`rep_is_bounded_by_the_screen`),
+    proposed ADR-0380 item 9. **What.** `n.min(rows * columns)` changes the result of the repeat, not only the
+    scrollback. The final cursor column depends on `n mod columns`, and the clamp drops that. The top visible row's
+    prefix also comes from the original contents instead of the repeated character. Finding 4's own suggestion ("beyond
+    a full screen only the scrollback's contents differ") was wrong, and the fix followed it. **Scenario.** 80 × 24,
+    `a ESC[65535b`: 65,536 `a`s end at linear position 65,535, column 15. The bottom row should hold 16 `a`s with the
+    cursor at column 16. The clamp gives 1,921 `a`s: the bottom row is `a`, the cursor is at column 1, and every later
+    character lands 15 columns off. The new test asserts `line(23) == "a"`, which freezes the divergent state. **Fix.**
+    Keep the period. With `full = rows * columns + columns`, when `n > full` repeat
+    `full + (n - full) % p` times, where `p = columns` for a narrow character, or with autowrap off. For a wide
+    character `p = max(1, columns / 2)`, because a row holds `columns / 2` wide characters and an odd last column is
+    padded. Assert 16 `a`s and cursor `(16, 23)`, and add a check that compares `CSI n b` with `n` plain `put`s for
+    several `n` above the bound on small grids (both narrow and wide, autowrap on and off, inside a region). Reword ADR-0380 item 9 to
+    "the work is bounded by a screenful; the result is that of the full repeat but for the scrollback".
+
+C2. **should-fix.** `crates/zoraya-term/src/term.rs:453-460` (`memory_bound`) with `term.rs:280-297`
+    (`set_scrollback`). **What.** The fix pass dropped the doubling slack from the bound because `push_history` now
+    calls `reserve_exact`. `set_scrollback` still rebuilds the history with `Vec::new()` and `extend_from_slice`, line
+    by line, so it grows by doubling, and the history can no longer reach the reserve in `push_history` to correct it
+    once `kept == capacity`. **Scenario.** `Term::with_scrollback(80, 24, 2000)`, more than 2,000 lines output,
+    `set_scrollback(1500)`. 1,500 lines are 120,000 cells. The vector's capacity goes 80, 160, … 81,920, 163,840 cells.
+    `memory()` then exceeds `memory_bound()` by 43,840 × 16 − 4,096 ≈ 697 KB. With an `OSC` buffer already at 4 KiB
+    the slack is zero, and any shrink to a non-power-of-two line count breaks the bound. The fuzz (`set_scrollback`
+    up to 11 lines on small grids) stays inside the `MAX_STRING` slack, which is why it passes. `term` does not call
+    `set_scrollback` yet; 10c will (`term.scrollback`). **Fix.** In `set_scrollback`, start from
+    `Vec::with_capacity(lines.min(old.len()) * columns)` and `reserve_exact` up to `lines * columns`, as `resize` does
+    with its `with_capacity`. Add a test: fill 2,000 lines, shrink to 1,500 and to 3, and assert
+    `memory() <= memory_bound()` with the `OSC` buffer full first.
+
+C3. **should-fix.** `crates/zoraya-term/recordings/less-page.session` (the added `env TERMINFO=@terminfo@`) and the
+    report's row 6 ("`vi-edit` and `less-page` re-recorded … with the pinned entry"). **What.** `less-page.rec`,
+    `.grids` and `.marks` (and the GUI cut `less-end.rec`) are unchanged since `45cdd3f`. The pinned entry's `smcup` is
+    `\E[?1049h\E[22;0;0t` (`entry/xterm-256color.caps`). The pinned-entry sessions carry `ESC[22;0;0t` (`curses-acs.rec`
+    does). `less-page.rec` has `ESC[?1049h` alone, which is the host's entry. The session file now describes a
+    recording that is not the committed one, and the next `record.py` run will change the bytes and the GUI cut.
+    **Fix.** Re-record `less-page`, re-freeze its grids (a person reviews the diff), and re-cut
+    `tools/term-record/gui-files.sh write`. Alternatively, remove the line, say in the report that `less` was not
+    re-recorded, and keep the finding open.
+
+C4. **note (the stop-gap's edges, for the architect; none blocks).**
+    (a) It fires before every prompt after the first (an empty line, a builtin, a Ctrl-C at the prompt), not only
+    after a foreground command as `reset.rs`, the backlog and the report say. It is harmless (idempotent, the screen is
+    kept), but say so.
+    (b) `soft_reset` clears a pending wrap (`screen.rs:476`). After output that fills the last column without a newline
+    (`printf '%80s' x`), the prompt's first character now overwrites that column, where before it wrapped to the next
+    row.
+    (c) It is not `Restore`: the palette (`OSC 4`) is kept on purpose, while Restore clears it (ADR-0380 item 10). A
+    file that sets entries 1 to 15 to the background colour leaves coloured output (`ls`, syntax colours) invisible
+    until `ESC c`. `ESC]104 BEL` (bare: all entries, `parse.rs:443-455`) would close that gap, at the price of a
+    palette theme set from the shell. Either way, write the choice next to the constant.
+    (d) A cursor shape a person sets at the prompt (`printf '\e[5 q'`) is undone at the next prompt, as Restore will do.
+    (e) A job stopped with Ctrl-Z loses its modes (alternate screen, DECCKM, a hidden cursor, the saved cursors), and
+    `fg` gives nothing back. A native element is `job_suspend`ed and cannot redraw. A POSIX one gets `SIGCONT` and
+    usually re-inits. That is INV-0331-4's second half (`reinstate`, 10c). Until then the backlog line should say that
+    `fg` of a full-screen job is not restored.
+    (f) Output from a background job while the editor is active is not followed by a reset.
+
+C5. **note.** `tools/term-conformance/check.sh` `covered_in`: a call inside `/* … */` still counts as a cover, and a
+    `//` inside a string literal drops a real call after it on that line (this fails safe). Consider stripping block
+    comments too, or require the call to be at the start of a statement.
+
+C6. **note (text).**
+    - ADR-0332's new rule-6 note says "four ncurses sessions"; there are five (`curses-acs`, `-attr`, `-colors`, `-hanoi`,
+      `-view`).
+    - The backlog's 2026 line says "`Restore` (10c) ends it". The stop-gap's `ESC[!p` already ends it at the next prompt,
+      as `docs/design.md` says, so the hold lasts until the command ends.
+    - `rep_is_bounded_by_the_screen` says "a thousand of them" and loops 100 times.
+
+### Recommendation of the check
+
+Findings 2, 3, 5 and 7 are fixed. Finding 1 is fixed, as a stop-gap with the edges in C4. Finding 6 is fixed for `vi`
+and `vttest`, but not for `less` (C3). Finding 4's fix bounds the cost but changes the result (C1), and the tightened
+memory bound is now false after `set_scrollback` (C2). C1 and C2 are small and local to `zoraya-term`, with host
+tests. C3 is a re-record, or a correction of the session file and the report. **Merge after C1 and C2 are fixed and C3 is
+re-recorded or truthfully stated**; C4 to C6 can go with the merge as text (C4 (c) is the architect's call).
