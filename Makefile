@@ -1588,6 +1588,8 @@ check-test-caps:
 	if [ -n "$$bad" ]; then echo "no heap cap in:$$bad"; exit 1; fi
 	@# INV-0332-1: every capability of the pinned entry has a host test of zoraya-term or a reason (offline).
 	@tools/term-conformance/check.sh
+	@# The recorded full-screen session the terminal GUI script plays is cut from the committed recording.
+	@tools/term-record/gui-files.sh check
 
 # INV-0161-1: no colour or duration literal in a GUI crate; they come from
 # zoraya-tokens. The crates ADR-0161 names that exist (the compositor, the

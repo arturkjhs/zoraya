@@ -112,7 +112,7 @@ line 67: the quick brown fox jumps over the lazy dog[m
 line 68: the quick brown fox jumps over the lazy dog[m
 line 69: the quick brown fox jumps over the lazy dog[m
 line 70: the quick brown fox jumps over the lazy dog[m
-[1;31mred bold[0m [4munderlined[0m [48;5;21m[38;5;226mblue background, yellow text[0m [38;2;255;128;0morange[0m[m
+[1;31mred bold[0m [48;5;21m[38;5;226mblue background, yellow text[0m [38;2;255;128;0morange[0m[m
 [1m~[0m
 [7m(END)[27m[K[K...skipping...
 line 49: the quick brown fox jumps over the lazy dog[m
@@ -137,5 +137,5 @@ line 67: the quick brown fox jumps over the lazy dog[m
 line 68: the quick brown fox jumps over the lazy dog[m
 line 69: the quick brown fox jumps over the lazy dog[m
 line 70: the quick brown fox jumps over the lazy dog[m
-[1;31mred bold[0m [4munderlined[0m [48;5;21m[38;5;226mblue background, yellow text[0m [38;2;255;128;0morange[0m[m
+[1;31mred bold[0m [48;5;21m[38;5;226mblue background, yellow text[0m [38;2;255;128;0morange[0m[m
 [7m(END)[27m[K[K[?1l>[?1049l
