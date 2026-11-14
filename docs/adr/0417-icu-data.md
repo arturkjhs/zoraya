@@ -16,8 +16,10 @@ ICU 64's documentation names its largest parts: conversion 4.9 MiB, break dictio
 2.7, currencies 2.5, locales 2.4.
 
 Zoraya has no `dlopen` (denied, ADR-0342 item 12) and no file mapping (browser-engine/survey.md#the-posix-library);
-libc++ uses the C locale only (ADR-0363). Three engine processes each link ICU; with ADR-0415 item 2 their read-only
-data is shared, without it each process would hold its own copy.
+libc++ uses the C locale only (ADR-0363). The browser is one executable that is also its Web and network processes
+(ADR-0410 item 5); with ADR-0415 item 2 the helpers share one image, so the static data is in memory twice (the UI
+process's image and the helpers' one); without ADR-0415 item 2, once per process. ICU also accepts its data from the
+application by a pointer, `udata_setCommonData()` (browser-engine/survey.md#libraries-and-interfaces).
 
 ## Decision drivers
 
@@ -39,11 +41,12 @@ data is shared, without it each process would hold its own copy.
 
 ### Option B: Static data linked into each program (`--with-data-packaging=static`), shared through read-only segments, filtered after a full build
 
-- **Description:** ICU and its data as static archives; the data is read-only data of each engine program, so ADR-0415
-  item 2 shares it between the processes; the first build uses all of it, the next one filters it.
+- **Description:** ICU and its data as static archives; the data is read-only data of the browser's executable, held
+  twice in memory with ADR-0415 item 2 (the UI process and the helpers' shared image); the first build uses all of it,
+  the next one filters it.
 - **Evidence for:** Drivers 1 to 5; no run-time loading; the task's choice.
-- **Evidence against:** 33.6 MB in every engine program on disk until filtered; relies on ADR-0415 item 2 to avoid three
-  copies in memory.
+- **Evidence against:** 33.6 MB in the executable until filtered, and twice in memory (67 MB with the full data, about
+  24 MB filtered `(estimate)`); without ADR-0415 item 2, once per process.
 - **Cost:** *(estimate)* An ICU port with a filter file; a test list for the filter.
 - **Precedent:** Embedded ICU builds; Fuchsia's components that carry their ICU data (Fuchsia ships `icudtl.dat` with
   its components, the survey did not fetch its documentation, so this is `[outside evidence]`).
@@ -53,14 +56,17 @@ data is shared, without it each process would hold its own copy.
 - **Description:** `archive` packaging; the UI process reads `/usr/share/icu/icudt79l.dat` into a memory descriptor
   (ADR-0413), passes it read-only to each helper (ADR-0412), and each calls ICU's API for data supplied by pointer.
 - **Evidence for:** One copy in memory without ADR-0415 item 2; programs smaller on disk.
-- **Evidence against:** A patch to WebKit's process start-up; the API for supplying data by pointer is not in a page
-  the survey fetched (`[unverified]` there).
+- **Evidence against:** A patch to WebKit's process start-up (each helper maps the descriptor and calls
+  `udata_setCommonData` before ICU's first use); a descriptor more per helper; the data is a file in the image that the
+  UI process reads at start.
 - **Cost:** *(estimate)* 150 lines of patch, a descriptor more per helper.
 - **Precedent:** Chromium's `icudtl.dat` loaded and passed to its child processes (`[outside evidence]`, not fetched).
 
 ## Recommendation
 
-**Recommendation (not a decision): Option B**, with Option C as the fallback if ADR-0415 item 2 is not accepted.
+**Recommendation (not a decision): Option B**, with Option C if ADR-0415 item 2 is not accepted or if the measured
+memory of the second copy matters (E6 measures it). B is chosen first because it needs no patch to WebKit and its cost
+is one extra copy of a filtered data set.
 
 1. **Packaging.** ICU4C (pinned, Unicode-3.0) built static with `--with-data-packaging=static`, `--disable-shared`,
    `-DU_STATIC_IMPLEMENTATION`, no tools in the image; `U_CHARSET_IS_UTF8=1`.

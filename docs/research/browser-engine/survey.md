@@ -48,16 +48,18 @@ by the main session in the files named. Every ADR cited here is `accepted` unles
 
 - A memory object is fixed in size and all its frames are committed when it is made (ADR-0051); two processes may map
   one object; a READ-only duplicate gives a read-only view. No right maps anything executable (INV-0051-2), no
-  executable mapping comes from user space (ADR-0108 item 6), and W^X holds for the kernel and for every loaded segment
+  executable mapping comes from user space (ADR-0108's decision driver 6), and W^X holds for the kernel and for every loaded segment
   (ADR-0020, ADR-0033). ADR-0051 names executable mappings for language runtimes as "a later ADR".
 - A memory object's frames are paid by its creator's job for its whole life, however many processes map it; mapping
   charges only page tables (ADR-0261 item 8).
 - 256 mappings per process: the kernel's `MAX_MAPPINGS` (`kernel/src/memory/user.rs:33`) and libposix's
   `MAPPING_SLOTS` (`crates/zoraya-posix/src/ffi.rs:778`). Each private `mmap`, each thread stack and each step of the
-  heap is one mapping. The heap grows by `GROW_SIZE` = 1 MiB (`crates/zoraya-heap/src/lib.rs:25`), one memory object
-  and one mapping per step, so a heap of small blocks ends near 250 MiB. ADR-0320 measured this with CPython (an
-  `obmalloc` arena per mapping, `MemoryError` at about 33,000 frames of recursion) and left the limit as it is because
-  the kernel's number is the same.
+  heap is one mapping, and each keeps its memory object's handle (`crates/zoraya-posix/src/ffi.rs:571-586`,
+  `:829-831`) in a table of 1024 handles (`crates/zoraya-abi/src/lib.rs:89`). The heap grows by `GROW_SIZE` = 1 MiB
+  (`crates/zoraya-heap/src/lib.rs:25`), one memory object and one mapping per step. ADR-0320 measured CPython's deep
+  recursion ending with `MemoryError` at about 33,000 frames (each frame chunk and each `obmalloc` arena of 1 MiB,
+  mapped by `mmap`, is one mapping), and derived from the count of slots, "not measured", that about 250 MiB of small
+  objects ends the same way; it left the limit as it is because the kernel's number is the same.
 - The default guest has 128 MiB and one CPU (`tools/run-qemu.sh:95-96`), leaving about 86 MiB of session memory
   (ADR-0266). The frame allocator was designed for 128 MiB to 2 GiB (ADR-0021).
 
@@ -125,7 +127,9 @@ Sources [L1] to [L55]; measured facts are from [Measurements](#measurements).
 and Linux "coming later this year" and no date [L1][L2]. The October 2026 update reports a LibJS JIT on Linux and
 macOS for x86-64 and AArch64, a new WebAssembly engine with its own interpreter and JIT, style, layout and paint
 recording off the main thread, and Web Platform Tests subtest counts of 2,184,722 (Chrome 2,244,397, Firefox
-2,189,315, Safari Technology Preview 2,172,990) [L2]. These are subtest counts, not a pass rate. The April 2026 issue
+2,189,315, Safari Technology Preview 2,172,990) [L2]. These are subtest counts, not a pass rate. The JIT is a build option, `ENABLE_JS_JIT`, on by default for x86-64 and
+AArch64 on Linux (not Android) and Apple systems and x86-64 on Windows, and off elsewhere, where LibJS interprets
+[L56]. The April 2026 issue
 reports 333 merged pull requests from 35 contributors in a month [L3]. Windows builds and tests the JS engine; Android
 and iOS come later [L1]. The porting document names Alpine, FreeBSD, OpenBSD and Haiku as POSIX systems known to work,
 and says LibIPC needs Unix domain sockets [L45].
@@ -193,7 +197,8 @@ the research; the Compositor's Rust and C++ hold 30,859 lines [M]).
 
 **Front ends.** `UI/CMakeLists.txt` builds exactly one of two front ends: Android, or Qt for every other platform (the
 macOS shims are `.mm` files inside `UI/Qt`) [L42][L23]. **Measured**: `UI/Qt` is 64,515 lines, `UI/Android` 1,319 [M].
-The April issue names GTK4 and AppKit front ends that are not on `master` [L3][L23]: unresolved. What a front end
+The April issue names GTK4 and AppKit front ends that are not on `master` [L3][L23]: unresolved. A headless mode
+(`--headless`) exists for tests (`ProcessArchitecture.md`, read by the review) [L9]. What a front end
 implements is `WebView::ViewImplementation`: three pure virtual functions (`viewport_size`, `to_content_position`,
 `to_widget_position`) and optional hooks for the backing store, the clipboard (`clipboard_item`,
 `read_clipboard_item`, `insert_clipboard_item`), screen rectangles, the theme, context menus, zoom and new tabs;
@@ -261,7 +266,9 @@ What they had to build:
 - **Haiku**'s first port used Haiku's own API for the user interface and networking and POSIX for threads, and was
   removed from upstream WebKit for lack of a build bot and maintainers [O7]. Its WebKit2 work (GSoC 2024) moved WebKit's IPC from Haiku's native messaging to UNIX sockets and its shared
   memory to POSIX shared memory, which the author says lowers maintenance; the run loop is still Haiku's `BLooper` and
-  drawing uses `BBitmap`; accelerated compositing is off because it crashed on EGL [O9]. Upstream WebKit would take the
+  drawing uses `BBitmap`; accelerated compositing is off because it crashed on EGL; the report also says the build needed
+20 to 25 GB, that linking took about 30 minutes with `ld`, that the 2019 project's work had bit-rotted, and that after
+it keyboard input, copy and paste and resizing still did not work (read by the review, `review-notes.md`) [O9]. Upstream WebKit would take the
   port back with two or three people eligible for commit access and a build bot [O8].
 - **Genode** 20.08 based its Qt WebEngine port on FreeBSD's, which "resolved most libc problems", implemented shared
   memory with `mmap`, needed cache maintenance for JIT code, and did not yet use multimedia, certificate verification
@@ -285,15 +292,15 @@ releases); (3) memory without overcommit is named by Genode as the risk, which i
 Sources [P1] to [P56].
 
 **ICU.** ICU4C 79.1 is current [P4]. `--with-data-packaging` has five modes: `library` (the default), `static` (one
-large static library), `auto`, `files` and `archive` (one `icudt*.dat` file); every mode still links the stub data
-library [P3]. The Data Build Tool filters data by locale, by feature (collation, currencies, time zones, units,
+large static library), `auto`, `files` and `archive` (one `icudt*.dat` file); with `files` and `archive` the
+program links ICU's stub data library, with `library` and `static` the data library itself [P3]. The Data Build Tool filters data by locale, by feature (collation, currencies, time zones, units,
 conversion, break iteration) and by resource, through `ICU_DATA_FILTER_FILE` [P1]. Its page gives the full data of
 ICU 64 as about 27 MiB (11 MiB gzipped), the largest parts conversion mappings 4.9 MiB, break dictionaries 2.8 MiB,
 collation 2.8 MiB, time zones 2.7 MiB, currencies 2.5 MiB, locales 2.4 MiB [P1]. **Measured**: `icudt79l.dat` in the
 79.1 source is 33,558,160 bytes; ICU's C and C++ are 630,850 lines outside tests [M]. Licence: Unicode-3.0, with old
 versions under the ICU licence; two build-time helpers are GPL with an Autoconf exception and are not linked [P6].
-ICU can also be given its data at run time by a pointer (`udata_setCommonData`) `[unverified]`: not in a fetched page;
-the ADR that uses it records this.
+ICU can also be given its data at run time by a pointer: the same page says ICU uses the data an application provided
+with `udata_setCommonData()` [P3].
 
 **FreeType and HarfBuzz.** FreeType 2.15.0 (2026-10-12), under the FreeType License or GPLv2 [P7][P8]; HarfBuzz
 15.1.0 (2026-11-04), "Old MIT" [P11][P12]; HarfBuzz has its own OpenType font functions (`hb-ot`) beside the FreeType
@@ -485,9 +492,9 @@ tarball):
 | libepoxy | 1.5.4 | MIT [W57] | GL loader |
 | libxkbcommon | 0.4 | MIT [W58] | keymaps |
 | libxml2 | 2.9.13 | MIT [W54] | XML |
-| libgcrypt (if not OpenSSL) | 1.7 | LGPL-2.1 [W61] | crypto |
+| libgcrypt (required in 2.54.2; replaced by OpenSSL on `main`), with libgpg-error | 1.7 | LGPL-2.1 [W61] | Web Crypto |
 | OpenSSL (on `main`) | 3.0 | Apache-2.0 [W68] | crypto |
-| libtasn1 | any | `[unverified]` | ASN.1 |
+| libtasn1 (required in 2.54.2) | any | `[unverified]` | ASN.1 |
 | libjpeg-turbo, libpng, libwebp | any | IJG/BSD mix, PNG v2, BSD-3 [W55][W70][W56] | images |
 | SQLite | any | public domain [W53] | storage |
 | zlib | any | zlib [W59] | |
@@ -519,9 +526,9 @@ The numbers a decision needs, measured where the table says **measured**, else f
 |---|---|---|---|---|
 | Code to port (outside tests) | **measured** 4.39 M lines of first-party C++ plus 2.69 M bundled (ANGLE, Skia); only the platform layer is written here | **measured** 0.83 M C++ plus 1.02 M Rust | about 1 M lines of Rust `(estimate)`, plus SpiderMonkey | more than 10 M lines each `(estimate)`; 4.8 M and 2.9 M executable lines in 2013 [B19] |
 | Code to write here `(estimate)` | a WPEPlatform backend (the built-in ones are 3 to 10 thousand lines each: **measured** total 29.5 k for the library with three backends), a launcher (hundreds of lines), the browser's own window and chrome (a few thousand) | a front end in place of Qt (the Qt one is **measured** 64.5 k lines; a minimal one a few thousand), the transport and sandbox hooks | an embedder with a GL context | Ozone or widget, `base` or NSPR, sandbox: tens of thousands |
-| External libraries | about 20 required with the Wayland, DRM, media and sandbox options off (counted from the table above) | 49 in `vcpkg.json` (**measured** count), fewer needed on a platform without media | hundreds of crates `(estimate)` | hundreds `(estimate)` |
+| External libraries | about 28 for a CPU-only build with the Wayland, DRM, media and sandbox options off: the required set of the table above with GLib's own (libffi, PCRE2), libsoup's (libpsl, nghttp2, brotli), glib-networking, libgpg-error, plus bundled Skia (counted by the main session) | 49 entries in `vcpkg.json` (**measured**), about 38 distinct names once platform duplicates and Windows-only entries are removed (the review's count, `review-notes.md`); fewer for a CPU-only build without media, not counted; curl, OpenSSL, zlib, libpng and SQLite are already ported here | hundreds of crates `(estimate)` | hundreds `(estimate)` |
 | Languages and compiler | C++23; clang 18 still supported; GCC 12.2 (13.1 on `main`) | C++23 with clang 19 or GCC 14; Rust 1.98 for every build | Rust `std` | Chromium's own clang; Rust for Firefox |
-| JIT-free mode | the assembly LLInt or the C loop, selectable at build time [W30][W31] | not found in the sources (a JIT was added in October 2026 [L2]) | not documented [B9] | V8 jitless and SpiderMonkey's interpreter exist `[unverified]` |
+| JIT-free mode | the assembly LLInt or the C loop, selectable at build time [W30][W31] | `ENABLE_JS_JIT`, off by default on every system but Linux, macOS and Windows: "Elsewhere, LibJS runs JavaScript in its interpreter alone" [L56]; the WebAssembly engine's JIT has no option of its own in that file (not read further) | not documented [B9] | V8 jitless and SpiderMonkey's interpreter exist `[unverified]` |
 | Process model | UI, Web, Network (GPU optional) | UI, Hub, Compositor, WebContent, RequestServer, ImageDecoder, media helpers | one or several | many |
 | IPC | `socketpair` `SOCK_SEQPACKET`, `SCM_RIGHTS`, memfd | `socketpair` `SOCK_STREAM`, `SCM_RIGHTS`, memfd | ipc-channel `(estimate)` | Mojo, IPDL |
 | Event loop | GLib `poll` | `ppoll` or `poll` | tokio and others `(estimate)` | own |
@@ -715,6 +722,9 @@ Tags carry the letter of their section. Every entry was fetched on 2026-11-14.
   later by default.
 - [L54] OpenSSL `LICENSE.txt`, https://raw.githubusercontent.com/openssl/openssl/master/LICENSE.txt, primary.
 - [L55] curl `COPYING`, https://raw.githubusercontent.com/curl/curl/master/COPYING, primary.
+- [L56] `Meta/CMake/cmake_options.cmake` at the measured commit,
+  https://raw.githubusercontent.com/LadybirdBrowser/ladybird/8ab2c0bb9c4376f50bbcb7ea6f1b7717b089ff6e/Meta/CMake/cmake_options.cmake,
+  primary (fetched by the main session after the review). `ENABLE_JS_JIT` and its default.
 
 ### Sources: Servo, Blink and Gecko (B)
 

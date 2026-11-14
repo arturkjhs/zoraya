@@ -90,7 +90,8 @@ resize and close events, integer scale (ADR-0164); no cursor shape, no clipboard
    a download asks `Save` with the suggested name and writes through the returned entry; `<input type=file>` asks
    `Open` and passes the chosen file's bytes to the page through the UI process. The window's pills gain the chosen
    entries (ADR-0172 point 4). No download is written without a chooser answer; there is no downloads directory.
-7. **Not offered.** Cursor shapes (the protocol has none), a second window (`window.open` and `target=_blank` open in
+7. **Not offered.** In an untrusted room, downloads and uploads (its programs get no chooser channel, INV-0172-2);
+   cursor shapes (the protocol has none), a second window (`window.open` and `target=_blank` open in
    the same window, the previous page in history), pointer lock, gamepads, input methods.
 
 ### Effect of the vision

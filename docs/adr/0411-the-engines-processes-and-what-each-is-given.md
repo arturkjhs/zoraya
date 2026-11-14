@@ -76,44 +76,52 @@ the Web process gets nearly nothing. `posix_spawn` exists with `adddup2` and `ad
 
 - **Description:** Build WebKit's single-process mode, as Genode's first Chromium did.
 - **Evidence for:** No IPC, no launcher.
-- **Evidence against:** WebKit2 has no supported single-process mode in WPE; the page's JavaScript would run with the
-  window and the network (driver 1).
+- **Evidence against:** WPE offers no single-process mode in its build options `[assumption: none was seen in
+  OptionsWPE.cmake]`; the page's JavaScript would run with the window and the network (driver 1).
 - **Cost:** Patches against WebKit's architecture.
 - **Precedent:** Genode 20.08 (multi-process not in use), Haiku's WebKitLegacy.
 
 ## Recommendation
 
-**Recommendation (not a decision): Option B.**
+**Recommendation (not a decision): Option B.** It changes three accepted ADRs, for children started with the new
+attributes only: ADR-0287 item 3 and ADR-0310 item 3 (a POSIX child gets no network and no random service) become "no
+network and no random service unless its parent passes its own with the grant mask"; ADR-0341 item 7 (children get a
+program's own directory read-only) becomes "read-only unless the parent lists a subtree of it without `:ro` in the
+namespace list". Without the attributes every child is given exactly what it is given today (INV-0411-4). A parent
+can only narrow what it holds, never widen it.
 
 1. **The extensions.** In `libc.a`, under a `posix-surface-added` block of the ADR that builds them:
    `posix_spawnattr_setnamespace_np(attr, const char *const *entries)` where each entry is `PATH` or `PATH:ro` and must
    be inside an entry of the parent's table with at least that access (else `EACCES` at `posix_spawn`);
    `posix_spawnattr_setgrants_np(attr, unsigned flags)` with `POSIX_SPAWN_GRANT_NET`, `_RANDOM`, `_WINDOW` (the
-   parent's connection is shared to the child, ADR-0310's `ZPBX` flags; a flag for a connection the parent lacks is
-   `EACCES`); and the flag `POSIX_SPAWN_EMPTY_NAMESPACE` for `posix_spawnattr_setflags`. Without them `posix_spawn`
+   parent's connection is shared to the child, ADR-0310's `ZPBX` flags) and `POSIX_SPAWN_MOVE_NET` (the parent's network
+   connection is moved: the parent has none afterwards); a flag for a connection the parent lacks is `EACCES`; and the flag `POSIX_SPAWN_EMPTY_NAMESPACE` for `posix_spawnattr_setflags`. Without them `posix_spawn`
    behaves as today. `posix_spawnp` (a PATH search) and `posix_spawn_file_actions_addopen` join them, because GLib and
    other ports call them (ADR-0342's link probe decides).
 2. **What each process is given:**
 
    | Process | Table | Grants | Descriptors |
    |---|---|---|---|
-   | `browser` (UI) | its description's: `/usr/share/wpe` read-only, `/system/fonts`, `/system/tls`, its own directory (ADR-0341, `data browser as ~/.local/share/browser`), files the person gives on the line or through the chooser (ADR-0419) | `net web` (ADR-0324), random, window | its terminal's |
-   | `WPENetworkProcess` | `/system/tls` read-only, `~/.local/share/browser/network` read-write (cookies, cache, HSTS) | net, random | its IPC socket |
-   | `WPEWebProcess` | `/usr/share/wpe` and `/system/fonts` read-only; nothing else (no `/tmp`, no current directory) | random | its IPC socket, the ICU data descriptor if ADR-0417 item 3 applies |
+   | `browser` (UI) | its description's: `/usr/share/wpe` read-only, `/system/fonts`, `/system/tls`, its own directory (ADR-0341, `data browser as ~/.local/share/browser`), files the person gives on the line or through the chooser (ADR-0419) | `net web` (ADR-0324) until it moves it to the network process, random, window | its terminal's |
+   | network process | `/system/tls` read-only, `~/.local/share/browser/network` read-write (cookies, cache, HSTS) | net (moved, `POSIX_SPAWN_MOVE_NET`), random | its IPC socket |
+   | Web process | `/usr/share/wpe` and `/system/fonts` read-only; nothing else (no `/tmp`, no current directory) | random | its IPC socket, the ICU data descriptor if ADR-0417 item 3 applies |
    | a download | written by the UI process through the chooser's entry (ADR-0419) | | |
 
 3. **The launcher.** `Source/WebKit/UIProcess/Launcher/zoraya/ProcessLauncherZoraya.cpp` (a patch in
    `ports/patches/wpewebkit/`): makes the socket pair (ADR-0412), sets `POSIX_SPAWN_EMPTY_NAMESPACE`, the table and
    grants of item 2 per process type, `adddup2` of the child's socket end to a fixed descriptor and that number on the
-   command line, as the GLib launcher does; then closes its copy. No environment but `LANG` and the engine's own
+   command line, as the GLib launcher does; then closes its copy. The network process is spawned with
+   `POSIX_SPAWN_MOVE_NET`, so after it starts the UI process has no network: a network process that dies cannot be
+   restarted, and the browser says so and ends (the person starts it again). The helpers are the browser's own
+   executable started with a role flag (ADR-0410 item 5). No environment but `LANG` and the engine's own
    variables reaches a helper (the environment policy of ADR-0320).
 4. **Jobs.** Each helper is a child process of the UI process in the broker's job tree (ADR-0104), so the room's limits
    cover the whole browser and `top ROOM` lists them under it (ADR-0267). A helper that dies is restarted by WebKit; the
    UI process's death ends the helpers (their IPC peer closes).
 5. **What the person sees.** The window's pills are the description's grants (ADR-0172): `web`, `/system/fonts`,
-   `/system/tls`, `~browser`. `grants browser` adds "(network process only)" to the `net` line; the description says
-   which helper gets which grant with a new key, `helper NAME GRANT...`, that only the image's descriptions may have and
-   that the shell prints but does not enforce (the boundary is item 2, enforced by the launcher's tests, INV-0411-2).
+   `/system/tls`, `~browser`. `grants browser` prints them as for any program; it does not claim which process holds
+   them, because nothing the shell trusts enforces the split: it is the browser's own code, checked by INV-0411-2 and
+   INV-0420-2 and described in `help browser`. `top ROOM` shows the processes (ADR-0267).
 
 ### Effect of the vision
 
@@ -127,8 +135,8 @@ reach the UI process only. Networking: one process holds the grant. Threads: unc
 $ top home
 ROOM  JOB                    MEM      PROCS
 home  browser                412M     3
-        WPENetworkProcess     38M
-        WPEWebProcess        301M
+        browser --network     38M
+        browser --web        301M
 ```
 
 A page's script that tries `fetch("file:///home/me/notes.txt")` fails in the Web process: its table has no such entry,
@@ -138,9 +146,11 @@ and the network process refuses `file:` URLs from a page.
 
 - **Positive.** The content process has nothing to steal by construction; no filter, no namespace; the extensions also
   serve other multi-process ports (Python's `multiprocessing` with `spawn`, build tools).
-- **Negative.** Three non-standard names; WebKit carries a Zoraya launcher; the UI and network processes are as trusted
-  as the browser program.
-- **Follow-up.** The extensions and their tests; the launcher patch; `helper` in `zoraya-describe` and `grants`.
+- **Negative.** Four non-standard names; WebKit carries a Zoraya launcher; the UI and network processes are as trusted
+  as the browser program, and the split between them is the browser's code, not a boundary the shell enforces; a
+  network process that dies ends the browser.
+- **Follow-up.** The extensions and their tests; the launcher patch; Option C as a later hardening if a boundary the
+  shell enforces is wanted.
 
 ## Invariants
 
@@ -148,11 +158,15 @@ and the network process refuses `file:` URLs from a page.
   than the parent's), exactly the connections the grant mask names, and exactly the descriptors the file actions name.
   *Check:* `cargo test -p zoraya-posix` (the plan of a spawn from attributes, host test) and an in-QEMU C program that
   spawns itself with each combination and prints its table, `isatty`, and whether `connect` and `getrandom` work.
-- **INV-0411-2.** `WPEWebProcess` has no network connection, no window channel, no writable table entry, and no entry
+- **INV-0411-2.** The Web process has no network connection, no window channel, no writable table entry, and no entry
   outside `/usr/share/wpe` and `/system/fonts`. *Check:* a test step of the engine (`make test-browser`) whose page
   makes the Web process print its table and try `socket`/`connect`, and asserts the refusals.
 - **INV-0411-3.** No engine process is created by `fork`. *Check:* the launcher test counts `snapshot_process` calls
   (zero) through the broker's statistics in the same step.
+
+- **INV-0411-4.** A child started without the new attributes gets what it gets today: its parent's table with the
+  parent's own directory read-only, and no network, random or window connection. *Check:* the existing spawn tests of
+  `zoraya-posix` and ADR-0341's tests, kept unchanged and passing.
 
 ## Open questions
 

@@ -10,7 +10,10 @@
 WebKit's run loop iterates a `GMainContext` by hand and calls the context's poll function, which is GLib's `g_poll`,
 `poll()` where available (browser-engine/survey.md#wpe-webkit-in-detail, browser-engine/survey.md#libraries-and-interfaces).
 GLib's wake-up uses `eventfd` where present (else a pipe); WebKit's repeating timers use a `timerfd` under
-`HAVE(TIMERFD)`; its `IPC::Semaphore` on Unix is an `eventfd` (browser-engine/survey.md#measurements). Ladybird waits
+`HAVE(TIMERFD)`; its `IPC::Semaphore` uses `eventfd` only under `OS(LINUX)` in 2.54.2 (browser-engine/survey.md#measurements;
+on `main` the Linux path is a futex in shared memory). Zoraya's compiler defines `__zoraya__` and refuses `__linux__`
+(INV-0109-2), so WebKit's `OS(LINUX)` branches are not taken: what the generic branch of `IPCSemaphoreUnix.cpp` does is
+read by the plan's OS-layer part; its users are the GPU process's stream connections, which are off (ADR-0410 item 2). Ladybird waits
 with `ppoll` on Linux and `poll` elsewhere and wakes itself with a pipe (browser-engine/survey.md#ladybird). libcurl
 waits with its own poll or reports sockets to the caller's loop. Neither engine's code uses `epoll` or `kqueue` for its
 loop: the one `epoll_` in WebKit is a seccomp table; Ladybird's are a Windows loop and a sandbox list.
@@ -58,7 +61,8 @@ lock and waits on a port made for it (ADR-0315).
 ### Option C: A native event-loop backend for GLib (a `GMainContext` poll function over ports)
 
 - **Description:** Replace GLib's `g_poll` with a Zoraya function that waits on the handles behind the descriptors, as
-  GLib's Windows path waits with `WaitForMultipleObjects` (browser-engine/survey.md#libraries-and-interfaces).
+  GLib's Windows path does `[outside evidence: gpoll.c's G_OS_WIN32 branch, read only as present]`, over Windows'
+  `WaitForMultipleObjects` (browser-engine/survey.md#libraries-and-interfaces).
 - **Evidence for:** One port per loop kept across iterations, no per-call subscription.
 - **Evidence against:** A patch to GLib and every other loop (Ladybird, curl, CPython) still wants `poll`; the cost it
   saves is not measured.
@@ -78,7 +82,10 @@ lock and waits on a port made for it (ADR-0315).
    A `write` adds (blocks or `EAGAIN` at `0xfffffffffffffffe`); a `read` takes the counter (or 1 with
    `EFD_SEMAPHORE`), blocking at 0; readiness is a non-zero counter. A write that makes the counter non-zero queues a
    user packet (`port_queue`) on the port of every thread of the process waiting on that descriptor (ADR-0315's thread
-   table), and a single-threaded process never waits on it while writing. Sending one with `SCM_RIGHTS` or listing it in
+   table), and a single-threaded process never waits on it while writing. The order that makes this free of lost
+   wake-ups: a thread about to wait records the port it will wait on and the descriptors in the thread table while it
+   holds the library lock, before ADR-0315's boundary releases the lock; a writer, under the same lock, queues a packet
+   for every thread so recorded; a packet queued before the wait starts is found by the wait. Sending one with `SCM_RIGHTS` or listing it in
    a spawn is `EINVAL` (ADR-0412 item 3); `fork` gives the child a copy of the counter.
 3. **Not offered.** `epoll_*` stays denied; `kqueue`, `timerfd_*` and `signalfd` are not exported; a port that probes
    for them is configured without them (GLib's `HAVE_EVENTFD` on, WebKit's `HAVE(TIMERFD)` off).
@@ -113,7 +120,8 @@ POLLIN}], 2, 16)` where 7 is the IPC socket and 9 GLib's `eventfd`; a page's `se
 - **INV-0414-2.** A thread waiting in `poll` on an `eventfd` wakes after another thread's `write` within one wait of
   the scheduler, and no write is lost. *Check:* an in-QEMU threaded C test with 10,000 writes and a counter check.
 - **INV-0414-3.** `libc.a` exports no `epoll_*`, `kqueue`, `timerfd_*` or `signalfd`. *Check:* `posix-surface-check`'s
-  deny list (ADR-0342 item 12).
+  deny list (ADR-0342 item 12), to which `kqueue`, `kevent`, the prefix `timerfd_` and `signalfd` are added (today it
+  denies the prefix `epoll_` only).
 
 ## Open questions
 
@@ -122,6 +130,9 @@ POLLIN}], 2, 16)` where 7 is the IPC socket and 9 GLib's `eventfd`; a page's `se
 - Whether WebKit's network process uses libsoup's own timeouts that expect `timerfd`.
 
 ## Revisit triggers
+
+- WebKit's `IPC::Semaphore` on the line Zoraya pins needs a futex or an event shared between processes on a path Zoraya
+  takes (on `main` the Linux path already is a futex in shared memory): a cross-process event, its own ADR.
 
 - A port that cannot be built without `epoll` (a server under real load): an ADR on a persistent interest set.
 - The GPU process or WebKit's stream connections are wanted: a cross-process event (a kernel object), its own ADR.

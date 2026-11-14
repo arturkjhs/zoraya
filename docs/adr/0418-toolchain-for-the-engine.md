@@ -44,6 +44,10 @@ Rust programs on Zoraya are native and `no_std`; there is no Rust `std` for the 
   and libc++ to the newest that supports it (ADR-0360's own revisit), in one part, before the engine moves.
 - **Evidence for:** Drivers 1, 3 and 4; WPE 2.54 states clang 18 support.
 - **Evidence against:** The FIXME means the next WPE line may require clang 19; the step then blocks an engine upgrade.
+  The stated support is for clang 18 with libstdc++ (the workaround's own comment is about libstdc++'s `<expected>`,
+  and it defines `__cpp_concepts` for every compile); clang 18 with libc++ 20 is not tested upstream on Linux
+  (browser-engine/survey.md#wpe-webkit-in-detail), so the plan's E1 builds JavaScriptCore with exactly Zoraya's clang
+  and libc++ before anything else depends on it.
 - **Cost:** *(estimate)* CMake, Ruby, gperf and unifdef in the CI image; nothing else now.
 - **Precedent:** Genode, which pins its browser to a Qt release and moves engine and toolchain together
   (browser-engine/survey.md#how-other-systems-got-a-browser).
@@ -102,14 +106,14 @@ $ make -f ports/Makefile wpewebkit     # on the M4: configures with ports/cmake/
 
 ## Invariants
 
-- **INV-0418-1.** Every port, the engine included, is compiled by the one clang of the CI image (or the Mac's host
-  clang) and links the sysroot's libc++. *Check:* `zoraya-elf-check` gains a check of the `.comment` section's
-  compiler string against the image's clang version for each program in the apps volume.
+- **INV-0418-1.** In an image built by CI, every port, the engine included, is compiled by the CI image's one clang
+  and links the sysroot's libc++. *Check:* `zoraya-elf-check` gains a check, run in CI's build job, of the `.comment`
+  section's compiler string of each program in the apps volume against the CI image's clang version.
 
 ## Open questions
 
-- Whether libc++ 20 lacks a C++23 library feature WPE 2.54 uses (`std::expected` and friends are in it; others are
-  found by the first build).
+- Whether libc++ 20 with clang 18 builds WPE 2.54 at all (the upstream combination is libstdc++), and whether the
+  global `-D__cpp_concepts=202002` workaround is harmless under libc++; E1 answers both.
 - CI's job time and disk for the engine.
 
 ## Revisit triggers

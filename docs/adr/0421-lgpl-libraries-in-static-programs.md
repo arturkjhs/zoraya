@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0109, ADR-0410, ADR-0420
-- **Evidence:** CP-27, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#wpe-webkit-in-detail
+- **Evidence:** browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#wpe-webkit-in-detail
 
 ## Context
 
@@ -21,7 +21,7 @@ section 6, not fetched by the survey]`.
 1. **No code of a different licence in the kernel or the native `no_std` crates** (unchanged).
 2. **Ports are built from fetched sources by `ports/Makefile`, never committed** (ADR-0109), so a person who has the
    repository can rebuild any program from source.
-3. **The POSIX layer carries what the chosen engine needs** (CP-27): rejecting LGPL rejects WPE.
+3. **The chosen engine needs them**: rejecting LGPL libraries rejects WPE (ADR-0410).
 
 ## Considered options
 
@@ -64,8 +64,8 @@ section 6, not fetched by the survey]`.
    `docs/dependencies.md` lists it with its licence and the programs that link it. Never in the kernel, a native
    program or a `no_std` crate.
 2. **Recorded in `CLAUDE.md`** by the architect if accepted, beside the GPL and OFL clauses.
-3. **Listed**: GLib, libsoup, glib-networking, WebKit's LGPL files; libgcrypt only if the pinned WPE needs it (on `main`
-   OpenSSL replaces it); libtasn1 and libhyphen with their licences once read.
+3. **Listed**: GLib, libsoup, glib-networking, WebKit's LGPL files, libgcrypt and libgpg-error (required by WPE 2.54.x;
+   on `main` OpenSSL replaces libgcrypt); libtasn1 and libhyphen with their licences once read.
 
 ### Effect of the vision
 
@@ -74,7 +74,7 @@ none. Threads: none.
 
 ### Examples
 
-`docs/dependencies.md` gains rows such as `| GLib | 2.84.x | LGPL-2.1-or-later | libglib, libgio, libgobject in browser, WPENetworkProcess, WPEWebProcess (static) |`.
+`docs/dependencies.md` gains rows such as `| GLib | 2.84.x | LGPL-2.1-or-later | libglib, libgio, libgobject in browser (static) |`.
 
 ## Consequences
 

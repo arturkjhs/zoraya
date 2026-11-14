@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0051, ADR-0103, ADR-0108, ADR-0261, ADR-0262, ADR-0342, ADR-0410, ADR-0412
-- **Evidence:** CP-01, CP-14, CP-16, DM-019, DM-031, DM-032, GR-007, X-6, alternatives-postmortem.md#genode, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#memory, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#wpe-webkit-in-detail
+- **Evidence:** CP-01, CP-14, CP-16, DM-019, DM-031, DM-032, GR-007, X-6, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#memory, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#wpe-webkit-in-detail
 
 ## Context
 
@@ -12,7 +12,7 @@ WebKit's `SharedMemoryUnix.cpp` makes a `memfd_create` (else `shm_open`), sizes 
 (browser-engine/survey.md#wpe-webkit-in-detail). Ladybird's `anon_create` is `memfd_create` on Linux and FreeBSD,
 `shm_open(SHM_ANON)` where it exists, seals `F_SEAL_SHRINK|F_SEAL_GROW`, maps `MAP_SHARED`, and reads payloads back
 with `pread` (browser-engine/survey.md#ladybird). Genode implemented its Chromium's shared memory with `mmap`
-(alternatives-postmortem.md#genode, browser-engine/survey.md#how-other-systems-got-a-browser).
+(browser-engine/survey.md#how-other-systems-got-a-browser).
 
 Zoraya's memory object is what these need: fixed size, frames committed at creation, mappable by several processes,
 read-only by a READ-only duplicate, paid by its creator's job for its whole life (ADR-0051, ADR-0261 item 8;
@@ -62,15 +62,22 @@ browser-engine/survey.md#memory). `libposix` offers none of it: `mmap` is privat
 
 ## Recommendation
 
-**Recommendation (not a decision): Option B.**
+**Recommendation (not a decision): Option B.** It changes ADR-0103 item 12 (`MAP_SHARED` is `ENODEV`) for memory
+descriptors, and the meaning of today's `memfd_create` (a `tmpd` file that grows by `write`).
 
 1. **Making one.** `memfd_create(name, flags)` (`MFD_CLOEXEC`, `MFD_ALLOW_SEALING`; `MFD_HUGETLB` is `EINVAL`) and
    `shm_open(SHM_ANON, O_RDWR, mode)` return a memory descriptor of size 0. The name is kept for `fstat` and
-   `/proc/self/fd`-style reports only. `shm_open` of any other name is `EACCES`; `shm_unlink` is `ENOENT`.
+   `/proc/self/fd`-style reports only. `shm_open` of any other name is `EACCES`; `shm_unlink` is `ENOENT`. The
+   sysroot's `sys/mman.h` defines `SHM_ANON` (a Zoraya addition to musl's header), so that ports test for it and take
+   the anonymous path: WebKit's `SharedMemoryUnix.cpp` uses `shm_open(SHM_ANON)` when the header has it (its `memfd`
+   path is Linux's raw `syscall`, not taken), Ladybird's `anon_create` likewise.
 2. **Sizing.** The first `ftruncate(fd, n)` creates the memory object of `n` bytes rounded up to pages, frames committed
    now (`ENOMEM` when the frames or the room's limit run out, ADR-0263). A later `ftruncate` to the same size succeeds; to
    another size it succeeds only while the descriptor has never been mapped or sent (the library replaces the object and
-   copies), else `EBUSY`. So `F_SEAL_SHRINK` and `F_SEAL_GROW` are accepted and always hold once mapped.
+   copies), else `EBUSY`. So `F_SEAL_SHRINK` and `F_SEAL_GROW` are accepted and always hold once mapped. A `write` or
+   `pwrite` past the end grows the descriptor the same way (replace and copy, in steps that at least double) while it has
+   never been mapped or sent, so a program that uses `memfd_create` as a growing anonymous file keeps working; after
+   that, a write past the end is `EFBIG`.
 3. **Mapping.** `mmap(addr=NULL, len, PROT_READ[|PROT_WRITE], MAP_SHARED, fd, off)` maps `len` bytes at page offset
    `off` of the object; `PROT_WRITE` needs a writable descriptor; `PROT_EXEC` is `EACCES`; `MAP_PRIVATE` of a memory
    descriptor is a private copy (one memory object, copied once). `munmap` takes the whole mapping (as today).
@@ -82,7 +89,8 @@ browser-engine/survey.md#memory). `libposix` offers none of it: `mmap` is privat
    Without `MFD_ALLOW_SEALING` only `F_SEAL_SEAL` is set.
 5. **Who pays.** ADR-0261 item 8 stands: the creator's job pays for the frames for the object's life. The Web process
    pays for the buffers it paints and sends; the UI process for the ICU data it shares (ADR-0417).
-6. **No executable shared memory.** `PROT_EXEC` on any mapping stays refused (ADR-0051 INV-0051-2).
+6. **No executable memory.** `PROT_EXEC` on any `mmap` becomes `EACCES` (today `mmap` ignores `prot` and returns a
+   read-write mapping); the kernel never maps a memory object executable (ADR-0051 INV-0051-2).
 7. **Not offered.** `MAP_SHARED` of a regular file, `msync`, `mremap`, `madvise` beyond `MADV_DONTNEED` on a memory
    descriptor (a no-op: frames are committed) and `MADV_WILLNEED`/`MADV_POPULATE_READ` (no-ops that succeed).
 
@@ -94,7 +102,7 @@ Threads: none.
 
 ### Examples
 
-A WebKit page paints into a 4 MiB buffer the Web process made; `top home` charges the 4 MiB to `WPEWebProcess`; the UI
+A WebKit page paints into a 4 MiB buffer the Web process made; `top home` charges the 4 MiB to the Web process; the UI
 process maps the same frames read-only and copies them into its window (ADR-0419).
 
 ## Consequences
@@ -119,6 +127,10 @@ process maps the same frames read-only and copies them into its window (ADR-0419
   zoraya-posix` (every `prot` combination) and INV-0051-2's kernel test.
 
 ## Open questions
+
+- Whether a port asks for `PROT_EXEC` (libffi's closures in GLib's GObject, for one): today it silently gets a
+  read-write mapping that faults if executed; with item 6 it gets `EACCES` and can take its fallback (libffi's static
+  trampolines). The GLib part (plan D4) finds out.
 
 - Whether WebKit's `SharedMemory::createHandle(ReadOnly)` uses seals or a second descriptor; read in the 2.54 source
   by the first engine part.

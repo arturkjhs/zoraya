@@ -48,8 +48,9 @@ browser-engine/survey.md#the-window-text-and-the-network). The `web` grant admit
 
 - **Description:** Build WPE with `USE_CURL` in place of libsoup, as the PlayStation and Windows ports do.
 - **Evidence for:** Reuses the curl and OpenSSL ports and their tests; no glib-networking.
-- **Evidence against:** WPE does not build with curl upstream: a combination nobody tests, carried by Zoraya alone
-  (driver 4).
+- **Evidence against:** WPE's build options require libsoup 3 (browser-engine/survey.md#wpe-webkit-in-detail) and offer
+  no curl switch, so this is a combination nobody tests, carried by Zoraya alone (driver 4); that the Windows port uses
+  curl is `[outside evidence: not fetched]`.
 - **Cost:** *(estimate)* CMake and source patches across WebKit's network process.
 - **Precedent:** WebKit on the PlayStation (a console system with a cURL network layer); Haiku's WebKit, which did
   its networking through Haiku's own API (browser-engine/survey.md#how-other-systems-got-a-browser).
@@ -62,9 +63,14 @@ browser-engine/survey.md#the-window-text-and-the-network). The `web` grant admit
    (ADR-0411 item 2); no proxy resolver, no GSSAPI, no `SOUP_DEBUG` effect.
 2. **glib-networking** with only the OpenSSL backend, static; a patch that refuses to turn verification off
    (`G_TLS_CERTIFICATE_*` flags ignored, as ADR-0312 patched curl), and a TLS database from `/system/tls/roots` only.
-3. **Name resolution.** GIO's resolver calls `getaddrinfo`, which `libposix` sends to `netd` (ADR-0225), so the `web`
+   No environment variable decides what is trusted or loaded (INV-0228-1, ADR-0310 item 6): GIO's `GIO_USE_TLS`,
+   `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR` and OpenSSL's `SSL_CERT_FILE` and `SSL_CERT_DIR` are ignored by patches, and
+   the launcher passes no environment but `LANG` (ADR-0411 item 3).
+3. **A second crypto library.** WPE 2.54.x also requires libgcrypt (with libgpg-error) and libtasn1; WebKit uses
+   libgcrypt for Web Crypto, not for TLS. On `main` OpenSSL replaces libgcrypt; the move to that line drops it.
+4. **Name resolution.** GIO's resolver calls `getaddrinfo`, which `libposix` sends to `netd` (ADR-0225), so the `web`
    grant's checks of answers apply (ADR-0324).
-4. **What the person sees** when a host is refused: WebKit's error page with the refusal's wording of ADR-0325, made by
+5. **What the person sees** when a host is refused: WebKit's error page with the refusal's wording of ADR-0325, made by
    the browser from the network process's error.
 
 ### Effect of the vision
@@ -88,8 +94,13 @@ Networking: as ADR-0324. Threads: libsoup runs in the network process's threads.
 - **INV-0420-1.** No engine process completes a TLS handshake with a certificate that does not chain to
   `/system/tls/roots`, whatever the page or the configuration asks. *Check:* the engine's test step against
   `tools/test-httpd` with the expired and wrong-name certificates, asserting zero request bytes at the server.
-- **INV-0420-2.** Only `WPENetworkProcess` opens TCP connections. *Check:* the same step reads `netd`'s connection list
-  and asserts every connection's process.
+- **INV-0420-2.** After the network process has started, the UI process holds no network connection and the Web
+  process never held one, so a `connect` in either is refused. *Check:* the engine's test step makes the UI process and
+  a page's Web process attempt `connect` to `tools/test-httpd` through a test hook and asserts `EACCES` in both and no
+  request at the server.
+- **INV-0420-3.** No environment variable changes the TLS database or the TLS backend of the network process. *Check:*
+  the same step runs the browser with `SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIO_USE_TLS` and `GIO_EXTRA_MODULES` set to a
+  test root and a bogus module, and asserts that a certificate of that root is still refused.
 
 ## Open questions
 

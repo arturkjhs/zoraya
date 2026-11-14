@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0050, ADR-0101, ADR-0103, ADR-0107, ADR-0225, ADR-0261, ADR-0287, ADR-0315, ADR-0341, ADR-0342, ADR-0410, ADR-0411
-- **Evidence:** CP-01, CP-02, DM-019, DM-022, DM-074, GR-001, GR-008, alternatives-postmortem.md#haiku--beos, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#measurements, browser-engine/survey.md#processes-handles-and-channels, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#why-blink-and-gecko-are-out-of-reach
+- **Evidence:** CP-01, CP-02, DM-019, DM-022, DM-074, GR-001, GR-008, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#measurements, browser-engine/survey.md#processes-handles-and-channels, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#why-blink-and-gecko-are-out-of-reach
 
 ## Context
 
@@ -46,18 +46,19 @@ endpoint with handles queued in it cannot be moved (ADR-0050).
 
 ### Option B: `AF_UNIX` in `libposix` over channels; `socketpair` and descriptor passing; socket files only in a program's own directory or its line's `/tmp`
 
-- **Description:** A Unix socket descriptor is one channel endpoint. `socketpair` makes a channel. `SOCK_SEQPACKET` and
-  `SOCK_DGRAM` send one channel message per `sendmsg`; `SOCK_STREAM` sends bytes in messages and a reader may take
-  them across message boundaries. `SCM_RIGHTS` turns each descriptor into the handle (or connection) behind it, sent
-  in the same message. `bind` with a path works only under a program's own directory (ADR-0341) or its line's `/tmp`
+- **Description:** A `SOCK_SEQPACKET` or `SOCK_DGRAM` Unix socket is one channel endpoint, one `sendmsg` one channel
+  message. A `SOCK_STREAM` socket keeps ADR-0225 item 10's two crossed byte streams for its data and adds one channel
+  beside them that carries only ancillary data, each message tagged with the stream offset its descriptors belong to.
+  `SCM_RIGHTS` turns each descriptor into the handle (or connection) behind it. `bind` with a path works only under a program's own directory (ADR-0341) or its line's `/tmp`
   (ADR-0107), where the file service keeps a rendezvous object that hands out channels; elsewhere `EACCES`.
-- **Evidence for:** Drivers 1 to 5; no kernel change; Haiku's WebKit2 port moved from native messaging to Unix sockets
-  because it cut maintenance (alternatives-postmortem.md#haiku--beos,
-  browser-engine/survey.md#how-other-systems-got-a-browser).
-- **Evidence against:** Deviations the engines may notice: a socket end given to another process leaves the sender
-  (endpoints cannot be duplicated); 64 descriptors a message, not 253; a message of at most 64 KiB; no
-  `SCM_CREDENTIALS`.
-- **Cost:** *(estimate)* 900 lines in `libposix` with host tests; 300 in `fsd`/`tmpd` for the rendezvous.
+- **Evidence for:** Drivers 1 to 5; no kernel change; stream sockets keep the 64 KiB buffering, duplication and `fork`
+  of ADR-0225's byte streams; Haiku's WebKit2 port moved from native messaging to Unix sockets because it cut
+  maintenance (browser-engine/survey.md#how-other-systems-got-a-browser).
+- **Evidence against:** Deviations the engines may notice: a channel end (a sequenced-packet socket, a stream socket's
+  ancillary channel) given to another process leaves the sender, since endpoints cannot be duplicated; a sequenced
+  packet socket blocks its writer at 64 queued messages; 64 descriptors a message, not 253; a message of at most 64 KiB;
+  no `SCM_CREDENTIALS`; a new, transient object in the file services.
+- **Cost:** *(estimate)* 1,100 lines in `libposix` with host tests; 300 in `fsd`/`tmpd` for the rendezvous.
 - **Precedent:** Fuchsia, where what passes between processes is a handle moved through a channel with its rights
   (browser-engine/survey.md#libraries-and-interfaces).
 
@@ -65,13 +66,13 @@ endpoint with handles queued in it cannot be moved (ADR-0050).
 
 - **Description:** WebKit's `IPC::Connection` gets a Zoraya backend that calls the channel ABI directly, as Mojo has
   per-OS platform channels (browser-engine/survey.md#why-blink-and-gecko-are-out-of-reach) and WebKit has a Darwin
-  backend over Mach ports.
+  backend over Mach ports `[outside evidence: not fetched]`.
 - **Evidence for:** No POSIX emulation in the path; handles typed end to end.
 - **Evidence against:** A second IPC backend to keep in step with upstream; GLib's event source and GIO's `GSocket`
   still need a descriptor to poll; every other port (Ladybird, CPython) gets nothing; Chromium dropped its Mach-port
   IPC because the native primitive did not join the event loop (browser-engine/survey.md#why-blink-and-gecko-are-out-of-reach).
 - **Cost:** *(estimate)* 1,500 lines inside WebKit, carried at each upgrade.
-- **Precedent:** Mojo on Fuchsia and Windows; WebKit's Darwin backend.
+- **Precedent:** Mojo on Fuchsia and Windows; WebKit's Darwin backend `[outside evidence]`.
 
 ### Option D: No socket files at all; `socketpair` only
 
@@ -83,17 +84,22 @@ endpoint with handles queued in it cannot be moved (ADR-0050).
 
 ## Recommendation
 
-**Recommendation (not a decision): Option B.** It changes ADR-0225 item 10 (`socketpair` becomes a channel, not two
-crossed streams) and ADR-0342 item 11 (`sendmsg`/`recvmsg` carry `SCM_RIGHTS`), and narrows ADR-0225's refusal of
-paths (refused outside the two places below).
+**Recommendation (not a decision): Option B.** It extends ADR-0225 item 10 (a stream pair keeps its two crossed byte
+streams and gains an ancillary channel; sequenced-packet and datagram pairs are channels), changes ADR-0342 item 11
+(`sendmsg`/`recvmsg` carry `SCM_RIGHTS`), narrows ADR-0225 item 1's refusal of paths (refused outside the two places
+below), and adds a transient socket object to the file service protocol (ADR-0055).
 
 1. **The descriptor.** `socket(AF_UNIX, type)` with `SOCK_STREAM`, `SOCK_SEQPACKET` or `SOCK_DGRAM` (and
-   `SOCK_CLOEXEC`, `SOCK_NONBLOCK`) gives an unconnected descriptor; `socketpair` gives a connected pair, one channel.
-   `AF_LOCAL` is the same.
+   `SOCK_CLOEXEC`, `SOCK_NONBLOCK`) gives an unconnected descriptor; `socketpair` gives a connected pair: for
+   `SOCK_STREAM` two crossed byte streams (ADR-0101, 64 KiB each way) and one ancillary channel, for the other types one
+   channel. `AF_LOCAL` is the same.
 2. **Messages.** `SOCK_SEQPACKET`/`SOCK_DGRAM`: one `sendmsg` is one channel message of at most 65,536 bytes
-   (`EMSGSIZE` above); a `recvmsg` with a shorter buffer truncates and sets `MSG_TRUNC`, as Linux does. `SOCK_STREAM`:
-   a `send` of more than 65,536 bytes is several messages; a `recv` returns what is queued up to its length, keeping a
-   partly read message in the library; ancillary data is delivered with the first byte of its message.
+   (`EMSGSIZE` above); a `recvmsg` with a shorter buffer truncates and sets `MSG_TRUNC`, as Linux does; a writer blocks
+   (or gets `EAGAIN`) at 64 queued messages or 256 KiB. `SOCK_STREAM`: bytes go through the byte stream as a pipe's do;
+   a `sendmsg` with `SCM_RIGHTS` writes its bytes (at least one, as Linux requires) and then a message on the ancillary
+   channel holding the descriptors and the stream offset of its first byte; a `recvmsg` returns the descriptors whose
+   offset falls in the bytes it returns, and never returns bytes past the next tagged offset together with bytes
+   before it, so descriptors arrive with the byte they were sent with.
 3. **`SCM_RIGHTS`.** At most 64 descriptors a message (`ETOOMANYREFS` above, the Linux error). Each descriptor becomes
    its handle with the descriptor's rights: a file or directory a fresh connection to the same description (ADR-0103's
    `share`), a pipe or FIFO end its stream handle, a memory descriptor (ADR-0413) its memory object (read-only if the
@@ -105,12 +111,17 @@ paths (refused outside the two places below).
 4. **Not offered.** `SCM_CREDENTIALS`, `SO_PASSCRED` and `SO_PEERCRED` (one identity, ADR-0104); the abstract
    namespace (`EAFNOSUPPORT`); `MSG_OOB`, `MSG_PEEK` on streams beyond the queued bytes (`EOPNOTSUPP`).
 5. **Socket files.** `bind(AF_UNIX, PATH)` succeeds only where `PATH` is in the program's own directory (ADR-0341) or
-   its line's `/tmp` (ADR-0107); the file service makes a socket object there (`S_IFSOCK`) holding a listener channel;
-   `connect(PATH)` asks the service, which sends a new channel's end to the listener; `accept` takes it. Anywhere else
-   `bind` is `EACCES` and the refusal is reported as other path refusals are. A socket object is removed by `unlink` or
-   when its listener closes.
-6. **Inheritance.** A Unix socket listed in a spawn's file actions moves to the child (driver: endpoints cannot be
-   duplicated); `fork` with an open Unix socket is `ENOTSUP`, as with TCP sockets today (ADR-0287).
+   its line's `/tmp` (ADR-0107); the file service makes a socket object there holding a listener channel; `connect(PATH)`
+   asks the service, which makes the new pair's objects and sends one end to the listener; `accept` takes it. Anywhere
+   else `bind` is `EACCES` and the refusal is reported as other path refusals are. The socket object lives only in the
+   service's memory, never on disk: `readdir` and `stat` show it as `S_IFSOCK` while its listener lives; it disappears
+   with `unlink`, with its listener, or when the service restarts, and nothing of it is written to the volume
+   (ADR-0013's and ADR-0014's metadata are unchanged; ADR-0055's protocol gains `bind`, `connect` and the object kind).
+6. **Inheritance.** A stream socket's byte streams are duplicated to a spawned or forked child as pipes are; its
+   ancillary channel moves to a spawned child that is given the socket and stays with the parent on `fork`, where the
+   child's `SCM_RIGHTS` on it is `EOPNOTSUPP` (an asyncio program can fork, and its self-pipe works in the child). A
+   sequenced-packet or datagram socket listed in a spawn's file actions moves to the child; `fork` with one open is
+   `ENOTSUP`, as with TCP sockets today (ADR-0287).
 7. **Waiting and charges.** Readiness is the channel's readable, writable and peer-closed signals in `poll` (ADR-0414);
    blocking reads and writes are ADR-0315 long waits; a full queue is `EAGAIN` for a non-blocking send. The writer pays
    for queued messages (ADR-0261); a peer that does not read blocks its writer at 64 messages or 256 KiB.
@@ -138,8 +149,9 @@ A program that tries `bind("/home/me/sock")` gets `EACCES` and the shell shows
 
 - **Positive.** WebKit's and Ladybird's IPC run as written; CPython's `socketpair` users and tmux follow; descriptor
   passing is the kernel's handle transfer.
-- **Negative.** A sent socket end leaves the sender; 64 descriptors and 64 KiB a message; a rendezvous object in two
-  file services; two accepted ADRs change in a stated way.
+- **Negative.** A sent channel end leaves the sender; a stream socket's descriptor passing stays with one process
+  after `fork`; 64 descriptors and 64 KiB a message, 64 queued messages for sequenced packets; a transient object in two
+  file services; three accepted ADRs change in a stated way.
 - **Follow-up.** `libposix`'s Unix socket module, `fsd`/`tmpd`'s socket objects, a `posix-surface-added` block, an
   in-QEMU test with descriptors of every kind.
 
@@ -150,8 +162,9 @@ A program that tries `bind("/home/me/sock")` gets `EACCES` and the shell shows
   (a fake kernel; every kind of descriptor, full tables, endpoints with queued handles) and an in-QEMU C test that
   passes each kind between two processes and uses it.
 - **INV-0412-2.** `SOCK_SEQPACKET` and `SOCK_DGRAM` keep message boundaries, and `SOCK_STREAM` delivers the bytes in
-  order with nothing lost or repeated, for any split of sends and receives. *Check:* a host property test over random
-  send and receive sizes.
+  order with nothing lost or repeated, for any split of sends and receives, and descriptors sent with a byte are
+  returned by the `recvmsg` that returns that byte. *Check:* a host property test over random send and receive sizes
+  with descriptors attached to random sends.
 - **INV-0412-3.** `bind` of an `AF_UNIX` path succeeds only inside the program's own directory or its line's `/tmp`.
   *Check:* `cargo test -p zoraya-posix` (the path rule) and an in-QEMU script binding inside and outside both.
 
