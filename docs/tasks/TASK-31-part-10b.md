@@ -154,3 +154,18 @@ exception, not a change.
 About three hours of wall time on the Mac mini (one Sonnet session): reading, the key table and its test against the entry, the mouse,
 selection and `Session`, the protocol, the shell and the editor, four runs of the GUI script to get it passing (two of my script's faults), the
 three ADRs, the mutation passes (about 35 minutes) and this report.
+
+## Fix pass after the review (`TASK-31-review-10b.md`)
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 | The shell's paste path moved out of `zosh.rs` into `zoraya_shell::paste::Feed` (`input`, `part`, `route`, `discard`); `zosh` only calls it. INV-0384-3 now names the hostile-`Input` test and a `zoraya-term` sweep | `paste::tests::no_input_can_be_a_pastes_place_and_a_paste_is_used_once` (every byte 0..255 as `Input`, forged marks, bracket ends, ESC, a paste used once, dropped while a program runs); `nothing_the_terminal_sends_is_a_pastes_place` (every key code, modifier set, both modes, text up to U+10FFFF, reports and focus never write 0xF8..0xFF) |
+| 2 | A cell is seen only if a channel differs by more than 8 (`select::UNSEEN_WITHIN`); U+200B..U+200F, U+202A..U+202E, U+2060..U+2064, U+2066..U+2069 and U+FEFF are dropped from copy and from `paste::clean` (ADR-0384) | `nearly_invisible_text_and_format_characters_are_not_copied` (254 on 255 and the probe), `zero_width_and_bidirectional_characters_go`, the sweep of `clean` now to U+10FFF |
+| 3 | ADR-0383: the unsourced `getch` claim removed; `km`/`smm`/`rmm` stay excepted because 8-bit Alt+x..Alt+DEL would be 0xF8..0xFF (also in `exceptions.txt` and ADR-0384); `kbs` listed in `docs/backlog.md` as the architect's before 10d | `make check` (the conformance tool) |
+| 4 | A ninth waiting paste is refused with `zosh: paste: dropped: too many are waiting`, the older keep their place; `Paste` has a `first` flag so a cut paste is not joined to the next; a paste clears a pending Ctrl+V, lone Esc and half a UTF-8 letter | `the_ninth_paste_is_refused_and_the_first_is_kept`, `a_cut_paste_is_not_joined_to_the_next`, `a_paste_clears_a_pending_quote_and_a_lone_escape`, `tests_session` (`first`) |
+| 6, 7 | ADR-0384 item 5 says which pastes wait and which are dropped; "only code that sends" reworded in ADR-0385 and `docs/design.md` (`Size` and `Offer` are `term`'s) | |
+| 9, 11 | Not done: a GUI paste above 4 KiB (a screen holds less than 4 KiB; the parts and the queue have host tests); no whole-crate mutation figure; both in `docs/backlog.md` | |
+
+Run after the fix: `make check` (before the commit and after merging `origin/main`, which merged without conflicts), `cargo test` of the
+four crates (20, 10, 181, 184 + 2 pass), `GUI_RUNS="selection:auto:1 selection:auto:1920x1200" make test-gui` PASS at both. The mutation run was not
+repeated on the new code.
