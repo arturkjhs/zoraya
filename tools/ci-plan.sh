@@ -6,7 +6,8 @@
 # one GUI run (terminal, host accelerator, scale 1), the POSIX hello
 # script and the machines a person runs by hand (test-hand-run). Host tests: the changed crates and their dependents. A change that
 # needs only `check` (docs, the map) runs no machine at all, and no build.
-# The fuzz jobs of a candidate run 60 s a target; the full set runs 600 s.
+# The fuzz jobs of a candidate run 60 s a target unless the map sends the
+# change to them; the full set runs 600 s.
 #
 #   tools/ci-plan.sh [BASE]     (BASE: origin/main; FULL=1: the full set)
 #   DOCS_BEFORE=SHA DOCS_AFTER=SHA tools/ci-plan.sh
@@ -106,6 +107,13 @@ if [ -n "$(echo "$sel" | grep .)" ]; then
     has "hello.script" || sel=$(printf '%s\n%s\n' "$sel" 'make test-posix POSIX_SCRIPTS="tests/posix/hello.script" POSIX_ACCELS="auto"')
 fi
 # A candidate's fuzz jobs run 60 s a target, not the full set's 600 s
-# (TASK-29, T3): the long run is not about the change, and the full set
-# (main, nightly, candidate-full/) keeps it (ADR-0298 item 3).
-echo "$sel" | grep . | sort -u | sed 's/FUZZ_SECONDS=600/FUZZ_SECONDS=60/' | emit "candidate"
+# (TASK-29, T3), when they are in the plan only because a path the map does
+# not know widened it to every step: the long run is then not about the
+# change, and the full set (main, nightly, candidate-full/) keeps it
+# (ADR-0298 item 3). A change the map sends to a fuzz step (fuzz/, the
+# script, a fuzzed decoder) keeps ADR-0268's 600 s (review R7).
+case " $mapped " in
+    *" test-fuzz "* | *" test-fuzz-net "*) fuzz_seconds=600 ;;
+    *) fuzz_seconds=60 ;;
+esac
+echo "$sel" | grep . | sort -u | sed "s/FUZZ_SECONDS=600/FUZZ_SECONDS=$fuzz_seconds/" | emit "candidate"

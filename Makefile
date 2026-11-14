@@ -48,7 +48,9 @@ FULL ?= $(if $(CI),1,0)
 # `tcg` twin are the same run, so FULL=1 runs one of them (proposed ADR-0350):
 # the `tcg` one where both are listed, and no second run where a recipe adds
 # one. On a Mac nothing changes: FULL=1 runs HVF and TCG.
-HOST_ACCEL := $(shell tools/run-qemu.sh --print-accel 2>/dev/null)
+# `--accel auto` is given, as the runs give it: ZORAYA_ACCEL does not change
+# what they resolve to, so it must not change this answer (review R3).
+HOST_ACCEL := $(shell tools/run-qemu.sh --accel auto --print-accel 2>/dev/null)
 AUTO_IS_TCG := $(if $(filter tcg,$(HOST_ACCEL)),1,0)
 ifeq ($(FULL),1)
 ifeq ($(AUTO_IS_TCG),1)
@@ -246,6 +248,13 @@ QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2 tc
 # (the same options but the accelerator; proposed ADR-0350): FULL=1 leaves them
 # out there, and the `tcg` twin expects their lines too.
 QEMU_AUTO_TWINS := auto-default:tcg-default auto-el2:tcg-el2
+# The lines an `auto` twin expects, in one place for both targets of the
+# pair: a line added here is expected in CI too (review R2).
+AUTO_DEFAULT_EXPECT := --expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
+	--expect-line "memory: 131072 KiB total" \
+	--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
+	--expect-line "t_gui: all passed"
+AUTO_EL2_EXPECT := --expect-line "exception level at entry: EL2, now EL1"
 QEMU_RUN := $(if $(filter 1,$(FULL)),$(if $(filter 1,$(AUTO_IS_TCG)),$(filter-out $(foreach t,$(QEMU_AUTO_TWINS),$(firstword $(subst :, ,$(t)))),$(QEMU_CONFIGS)),$(QEMU_CONFIGS)),$(filter auto-%,$(QEMU_CONFIGS)))
 test-qemu: $(addprefix test-qemu-,$(QEMU_RUN))
 
@@ -253,11 +262,7 @@ test-qemu-disk: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 
 test-qemu-auto-default: test-qemu-disk
-	$(RUN_TEST_SLOW) --label auto-default \
-		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
-		--expect-line "memory: 131072 KiB total" \
-		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
-		--expect-line "t_gui: all passed" \
+	$(RUN_TEST_SLOW) --label auto-default $(AUTO_DEFAULT_EXPECT) \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
@@ -268,17 +273,13 @@ test-qemu-auto-smp4-2g: test-qemu-disk
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-auto-el2: test-qemu-disk
-	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST_SLOW) --label auto-el2 \
-		--expect-line "exception level at entry: EL2, now EL1" \
+	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST_SLOW) --label auto-el2 $(AUTO_EL2_EXPECT) \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-default: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-default \
-		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
-		--expect-line "gic: version 2" --expect-line "t_gui: all passed" \
-		--expect-line "cpus: 1" --expect-line "memory: 131072 KiB total" \
-		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
+	$(RUN_TEST_SLOW) --label tcg-default $(AUTO_DEFAULT_EXPECT) \
+		--expect-line "(GICv2)" --expect-line "gic: version 2" \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
@@ -289,8 +290,7 @@ test-qemu-tcg-smp4-gicv2: test-qemu-disk
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-el2: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-el2 \
-		--expect-line "exception level at entry: EL2, now EL1" --expect-line "psci: arm,psci-1.0 via smc" \
+	$(RUN_TEST_SLOW) --label tcg-el2 $(AUTO_EL2_EXPECT) --expect-line "psci: arm,psci-1.0 via smc" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
@@ -331,6 +331,10 @@ NET_SCRIPT := tests/shell/net.script
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
 NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper' 'netd:net-test-dns-port'
+# The second run of the test kernel (net-tcg) stays where `auto` is TCG: it is
+# not net-auto again, it boots on the disk net-settings-auto left, with a
+# gateway and a DNS server set (review R4). net-boot-tcg is net-boot-auto
+# again there (no disk) and is left out (ADR-0350).
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
@@ -367,7 +371,7 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script tests/shell/net-settings.script --label net-settings-auto -- $(RUN_QEMU) --test --keys --net --disk $(NET_DISK) --accel auto $(KERNEL) && \
 	target/debug/zoraya-fsck $(NET_DISK) && \
 	( [ "$(TCG_TOO)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
-	( [ "$(TCG_TOO)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
+	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
 	$(MAKE) --no-print-directory test-net-fetch && \
 	$(MAKE) --no-print-directory test-net-posix && \
 	$(MAKE) --no-print-directory test-net-lookup

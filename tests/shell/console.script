@@ -106,14 +106,17 @@ x not run\r\n
 < \r\n/>
 # None is left: ticking children go silent once the shell reports the end.
 > fanout 4 tick\r
-< tick
+# A child's line, not the "tick" of the typed command.
+< \r\ntick
 > \x03
 < fanout: interrupted (Ctrl-C)
 < \r\n/> 
 ~ 500 tick
 # The shell waits for the job, not its first process: no prompt while a child lives.
 > fanout 1 tick leave\r
-< tick
+< \r\ntick
+# No prompt came before the child's first line, and none comes after it.
+x \r\n/>
 ~ 400 \r\n/>
 > \x03
 < \r\n/> 
@@ -219,13 +222,13 @@ x \r\n/>
 # asked for. The test-boot flake of run 43437795275: TASK-29, F5.)
 > fanout 1\r
 < fanout: 1 children spinning
-= 8192
+= 65536
 # The key itself can be lost in a burst, so it is sent until it lands.
 @ \x03 | fanout: interrupted
 < bytes dropped]
 < /> 
 > uptime\r
-< up
+< \r\nup 
 < \r\n/> 
 # The count is reported once.
 > echo alive\r

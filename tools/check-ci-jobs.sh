@@ -53,6 +53,9 @@ done)
 has_pair() {
 	echo "$pairs" | grep -q -x "$1"
 }
+# The same script under the same accelerator on two lines is the run twice.
+twice=$(echo "$pairs" | grep -v -x UNSPLIT | sort | uniq -d | tr '\n' ' ')
+[ -z "$twice" ] || need "each script under an accelerator once (twice: $twice)"
 
 first_accel=${POSIX_ACCELS%% *}
 for step in $TEST_STEPS; do
@@ -174,21 +177,27 @@ leg() { echo "$1" | sed -n "s/^$2: //p"; }
 	need "every run of GUI_RUNS_ALL with FULL=1 where auto is HVF"
 [ "$(leg "$tcg" accels)" = "tcg" ] || need "one accelerator with FULL=1 where auto is TCG (make print-legs gives '$(leg "$tcg" accels)')"
 [ "$(leg "$tcg" tcg-too)" = 0 ] || need "no second run under TCG inside a recipe where auto is TCG"
-for t in ${QEMU_AUTO_TWINS:-}; do
-	case " $(leg "$tcg" qemu) " in
-	*" ${t%%:*} "*) need "test-qemu-${t%%:*} left out with FULL=1 where auto is TCG (its twin is ${t#*:})" ;;
-	esac
-	case " $(leg "$tcg" qemu) " in
-	*" ${t#*:} "*) ;;
-	*) need "test-qemu-${t#*:} with FULL=1 where auto is TCG" ;;
-	esac
-done
-for r in $(leg "$tcg" gui); do
-	case $r in
-	*:auto:*)
-		twin=$(echo "$r" | sed 's/:auto:/:tcg:/')
-		case " $(leg "$tcg" gui) " in *" $twin "*) need "only one of GUI runs $r and $twin with FULL=1 where auto is TCG" ;; esac ;;
-	esac
+# Where auto is TCG the sets are exactly the full ones without the `auto`
+# twins: nothing else may be left out (review R1).
+want_qemu=$(for c in $QEMU_CONFIGS; do
+	skip=0
+	for t in ${QEMU_AUTO_TWINS:-}; do [ "${t%%:*}" = "$c" ] && skip=1; done
+	[ "$skip" = 1 ] || echo "$c"
+done | sort | tr '\n' ' ')
+[ "$(leg "$tcg" qemu | tr ' ' '\n' | grep . | sort | tr '\n' ' ')" = "$want_qemu" ] ||
+	need "every configuration of test-qemu but the auto twins with FULL=1 where auto is TCG (make print-legs gives '$(leg "$tcg" qemu)')"
+all_gui=$(echo "${GUI_RUNS_ALL:-}" | tr ' ' '\n' | grep .)
+want_gui=$(for r in $all_gui; do
+	twin=$(echo "$r" | sed 's/:auto:/:tcg:/')
+	if [ "$twin" != "$r" ] && echo "$all_gui" | grep -q -x -F "$twin"; then continue; fi
+	echo "$r"
+done | sort | tr '\n' ' ')
+[ "$(leg "$tcg" gui | tr ' ' '\n' | grep . | sort | tr '\n' ' ')" = "$want_gui" ] ||
+	need "every run of GUI_RUNS_ALL but the auto twins with FULL=1 where auto is TCG"
+# With FULL=0 a host runs `auto` only, whatever `auto` is.
+for h in hvf tcg; do
+	local_legs=$($mk -s --no-print-directory print-legs FULL=0 HOST_ACCEL=$h 2>/dev/null || true)
+	[ "$(leg "$local_legs" accels)" = "auto" ] || need "only auto with FULL=0 (HOST_ACCEL=$h gives '$(leg "$local_legs" accels)')"
 done
 if [ "$missing" -gt 0 ]; then
 	echo "check-ci-jobs: $missing missing" >&2

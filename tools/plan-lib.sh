@@ -4,6 +4,7 @@
 #   all        every step of make test that runs a machine
 #   steps      the steps the map gives the paths (sorted, without `check`)
 #   everything 1 if a path is not in the map (steps is then $all)
+#   mapped     the steps the map gave the paths it knows (unsorted)
 #   packages   the host-test packages: changed crates and their dependents
 # and prints a line to stderr for each path the map does not know. A path the
 # map does not know runs every step.
@@ -34,6 +35,9 @@ plan_changed() {
             steps="$steps $found"
         fi
     done
+    # What the map itself gave the paths, before a path it does not know
+    # widens the plan to every step.
+    mapped=$steps
     if [ "$everything" = 1 ]; then
         steps=$all
     fi

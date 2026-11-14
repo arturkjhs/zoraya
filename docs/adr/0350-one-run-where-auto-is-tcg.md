@@ -15,10 +15,11 @@ HVF and under TCG. ADR-0213's Decision made every step a CI job and added INV-02
 Measured by TASK-29 (test-audit/report.md#2-duplicates): on GitHub's runners `tools/run-qemu.sh` resolves `auto` to
 `tcg`, there is no HVF and no KVM, and nothing else tells the two runs apart. The guest does not read the
 accelerator (`t_cpu` and `t_bound` calibrate themselves), the runner asks `run-qemu.sh --print-accel`, and the
-machine options of each pair are the same. So CI runs the same QEMU command line twice for: two of the seven
+machine options of each pair are the same. (One second run is not a twin and stays: `test-net`'s `net-tcg` boots on
+the disk the settings script left.) So CI runs the same QEMU command line twice for: two of the seven
 `test-qemu` configurations, the tour in the window, `w9-term.script`, `tour.script`, eight more POSIX scripts, four
-`libposix` steps, `test-posix-gui`, twelve GUI runs and the second runs inside `test-net` and `test-apps`. In run
-43553496171 that was about 58 of 284 runner-minutes (test-audit/report.md#5-time). The one difference found is
+`libposix` steps, `test-posix-gui`, twelve GUI runs and the second runs inside `test-net` (but `net-tcg`) and `test-apps`. In run
+43553496171 that was about 54 of 284 runner-minutes (test-audit/report.md#5-time). The one difference found is
 against the `auto` run: several keep the 180 s limit set for HVF while their `tcg` twin has 400 s or more.
 
 Assumed, not measured: the wall time this saves (it depends on the queue).
@@ -35,12 +36,15 @@ Assumed, not measured: the wall time this saves (it depends on the queue).
 
 ## Considered options
 
+This is a decision about CI's own list, so ADR-0001 rule 5's Linux baseline and non-Unix precedent have no
+counterpart; the three options are the ones the question has.
+
 ### Option A: keep both runs everywhere (ADR-0213 as it is)
 
 - **Description:** CI runs every pair twice, as now.
 - **Evidence for:** Two samples a run: of the flake classes of the last two weeks, two failed in one leg and passed
   in the other inside one job (test-audit/report.md#2-duplicates). No change to a check.
-- **Evidence against:** Driver 1: 58 runner-minutes a run for no new coverage. The `auto` runs carry the HVF time
+- **Evidence against:** Driver 1: 54 runner-minutes a run for no new coverage. The `auto` runs carry the HVF time
   limit under TCG, which only makes them fail earlier on a slow runner.
 - **Cost:** none to build; the CI time above on every run *(measured)*.
 - **Precedent:** the state since ADR-0213.
@@ -58,7 +62,7 @@ Assumed, not measured: the wall time this saves (it depends on the queue).
 - **Evidence against:** Driver 3: one sample a run instead of two; the nightly run still samples every night.
   `auto-smp4-2g` has no twin (4 CPUs, 2 GiB, GICv2) and stays, as do W8's builds and the GUI runs that exist only
   under `auto`.
-- **Cost:** *(estimate)* a few lines of `Makefile`, the list and the check; about 58 runner-minutes less a run.
+- **Cost:** *(estimate)* a few lines of `Makefile`, the list and the check; about 54 runner-minutes less a run.
 - **Precedent:** ADR-0212's Decision, which runs W8 under one accelerator in `make test` for CI's budget.
 
 ### Option C: one run on merge candidates, both in the full set
