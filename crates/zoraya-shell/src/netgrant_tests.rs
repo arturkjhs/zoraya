@@ -603,3 +603,282 @@ fn a_host_named_web_is_a_host_beside_the_web_rule() {
     let s = Scope::decode(&any.1).unwrap();
     assert_eq!(s.reach_rules().next().unwrap().target, Target::Any);
 }
+
+const WGET: &str = include_str!("../../../user/describe/posix/wget.cmd");
+
+/// The reach rules of a line's scope, owned.
+fn targets(scope: &[u8]) -> Vec<String> {
+    Scope::decode(scope)
+        .unwrap()
+        .reach_rules()
+        .map(|r| alloc::format!("{:?} {:?} {}", r.target, r.ports.list(), r.protocols.raw()))
+        .collect()
+}
+
+/// ADR-0328 (INV-0328-1): under the description's `net web`, a literal URL
+/// whose host is a name on port 80 or 443 adds no rule of its own: the web
+/// rule admits the name through its public answers only, so a later answer
+/// in the local network is refused (the rebinding of the 9f-net review,
+/// finding 2).
+#[test]
+fn under_web_a_url_name_on_80_or_443_adds_no_rule() {
+    use zoraya_abi::net::{NameGrant, Target};
+    for (url, port) in [
+        ("http://evil.example/cgi-bin/reboot", 80),
+        ("https://Evil.Example/", 443),
+        ("http://evil.example:443/", 443),
+    ] {
+        let ok = go(NETSURF, &[(url, true)], true).unwrap().expect("a scope");
+        let s = Scope::decode(&ok.1).unwrap();
+        let rules: Vec<_> = s.reach_rules().collect();
+        assert_eq!(rules.len(), 1, "{url}");
+        assert_eq!(rules[0].target, Target::Public, "{url}");
+        assert!(
+            !s.allows_name("evil.example", port, Protocols::TCP),
+            "{url}"
+        );
+        assert_eq!(
+            s.name_grant("evil.example", port, Protocols::TCP),
+            NameGrant::PublicOnly,
+            "{url}"
+        );
+        assert_eq!(s.resolve_grant("evil.example"), NameGrant::PublicOnly);
+        assert_eq!(crate::netgrant::pills(&ok.1), vec![String::from("web")]);
+        assert_eq!(crate::netgrant::describe(&ok.1).len(), 1);
+    }
+}
+
+/// ADR-0328 (INV-0328-1): on another port, a public-only name rule for the
+/// URL's name on that port alone, TCP; its pill is `+net HOST:PORT public` and
+/// `grants` says the answers are public only.
+#[test]
+fn under_web_a_url_name_on_another_port_adds_a_public_only_rule() {
+    use zoraya_abi::net::{NameGrant, Target};
+    let ok = go(
+        NETSURF,
+        &[("http://Two.Web.Test:8080/ns/web-port", true)],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    let s = Scope::decode(&ok.1).unwrap();
+    let rules: Vec<_> = s.reach_rules().collect();
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0].target, Target::PublicName("two.web.test"));
+    assert_eq!(rules[0].ports.list(), &[(8080, 8080)]);
+    assert_eq!(rules[0].protocols, Protocols::TCP);
+    assert_eq!(rules[1].target, Target::Public);
+    assert_eq!(
+        s.name_grant("two.web.test", 8080, Protocols::TCP),
+        NameGrant::PublicOnly
+    );
+    assert!(!s.allows_name("two.web.test", 8080, Protocols::TCP));
+    assert_eq!(
+        s.name_grant("other.test", 8080, Protocols::TCP),
+        NameGrant::No
+    );
+    assert_eq!(
+        s.name_grant("two.web.test", 8081, Protocols::TCP),
+        NameGrant::No
+    );
+    assert_eq!(
+        s.name_grant("two.web.test", 8080, Protocols::UDP),
+        NameGrant::No
+    );
+    for a in [[10, 0, 2, 2], [192, 168, 1, 1], [203, 0, 113, 11]] {
+        assert!(!s.names_address(a, 8080, Protocols::TCP));
+        assert!(!s.allows_address(a, 8080, Protocols::TCP));
+    }
+    assert_eq!(
+        crate::netgrant::pills(&ok.1),
+        vec![
+            String::from("+net two.web.test:8080 public"),
+            String::from("web")
+        ]
+    );
+    assert_eq!(
+        crate::netgrant::describe(&ok.1)[0],
+        "net: two.web.test:8080       reach, public answers only (operand URL)"
+    );
+}
+
+/// ADR-0328: a dotted address keeps its own rule (it does not rebind), a
+/// `+net` word that covers the URL keeps ADR-0223's rule (the person named
+/// the host, local answers included), a URL from a value still needs a word,
+/// and the native `fetch` keeps the URL's name rule.
+#[test]
+fn under_web_an_address_a_net_word_and_programs_without_web_keep_their_rules() {
+    use zoraya_abi::net::{NameGrant, Target};
+    let address = go(NETSURF, &[("http://192.168.1.1/", true)], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&address.1).unwrap();
+    assert!(s.names_address([192, 168, 1, 1], 80, Protocols::TCP));
+    for word in [
+        "intranet",
+        "intranet:8080",
+        "*.intranet:8080",
+        "intranet:80",
+    ] {
+        let url = if word.ends_with(":80") {
+            "http://intranet/"
+        } else if word.starts_with('*') {
+            "http://a.intranet:8080/"
+        } else {
+            "http://intranet:8080/"
+        };
+        let host = url
+            .trim_start_matches("http://")
+            .split([':', '/'])
+            .next()
+            .unwrap();
+        let port = if url.contains(":8080") { 8080 } else { 80 };
+        let ok = go_nets(NETSURF, &[(url, true)], &[word], true)
+            .unwrap()
+            .expect("a scope");
+        let s = Scope::decode(&ok.1).unwrap();
+        assert_eq!(
+            s.name_grant(host, port, Protocols::TCP),
+            NameGrant::Named,
+            "{word}"
+        );
+        assert!(
+            s.reach_rules()
+                .all(|r| !matches!(r.target, Target::PublicName(_))),
+            "{word}"
+        );
+    }
+    assert!(go(NETSURF, &[("http://example.org:8080/", false)], true).is_err());
+    for url in ["http://example.org/", "http://example.org:8080/"] {
+        let ok = go(FETCH, &[(url, true)], true).unwrap().expect("a scope");
+        let t = targets(&ok.1);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert!(t[0].starts_with("Name(\"example.org\")"), "{t:?}");
+    }
+    // Outside the image (`base_system` false) a `url` operand gives no rule
+    // at all: `net_for` reads operands only for the image's descriptions.
+    let outside = go(NETSURF, &[("http://example.org:8080/", true)], false).unwrap();
+    assert_eq!(outside, None);
+}
+
+/// `grants` of a public-only name on any port (a scope narrowed by hand;
+/// `net_for` always gives the URL's one port) says so (9g-url review, note 5).
+#[test]
+fn grants_says_a_public_only_name_on_any_port() {
+    use zoraya_abi::net::{Ports, ReachRule, Target, encode};
+    let rule = ReachRule {
+        target: Target::PublicName("example.org"),
+        ports: Ports::ANY,
+        protocols: Protocols::TCP,
+    };
+    let mut out = vec![0u8; 128];
+    let n = encode(&[rule], &[], &mut out).unwrap();
+    assert_eq!(
+        crate::netgrant::describe(&out[..n]),
+        vec![String::from(
+            "net: example.org             reach, any port, public answers only (operand URL)"
+        )]
+    );
+    assert_eq!(
+        crate::netgrant::pills(&out[..n]),
+        vec![String::from("+net example.org public")]
+    );
+}
+
+/// The pill of a public-only name is 7 bytes longer than a `+net` word's:
+/// for a host of 196 bytes on a five-digit port it passes the panel's
+/// 200-byte limit, and the panel refuses the window (no window, never a cut
+/// pill: 9g-url review, note 3; `zoraya-panel`'s test of the same line).
+#[test]
+fn a_public_only_pill_past_the_panels_limit_is_long() {
+    let label = "a".repeat(62);
+    let host = alloc::format!("{label}.{label}.{label}.example");
+    assert_eq!(host.len(), 196);
+    let url = alloc::format!("http://{host}:65535/");
+    let ok = go(NETSURF, &[(&url, true)], true)
+        .unwrap()
+        .expect("a scope");
+    let pills = crate::netgrant::pills(&ok.1);
+    assert_eq!(pills[0], alloc::format!("+net {host}:65535 public"));
+    assert!(pills[0].len() > 200, "{}", pills[0].len());
+}
+
+/// A host longer than the `grants` column keeps a space before what
+/// follows, so its pill is the host alone (`pills` takes the first word of
+/// the line); before 9g-url a 24-byte or longer target ran into "reach".
+#[test]
+fn a_long_host_keeps_its_pill_and_its_grants_line_apart() {
+    let ok = go_nets(NET, &[], &["a-very-long-host-name.example.org:8080"], true)
+        .unwrap()
+        .expect("a scope");
+    assert_eq!(
+        crate::netgrant::pills(&ok.1),
+        vec![String::from("+net a-very-long-host-name.example.org:8080")]
+    );
+    assert_eq!(
+        crate::netgrant::describe(&ok.1),
+        vec![String::from(
+            "net: a-very-long-host-name.example.org:8080 reach (grant +net)"
+        )]
+    );
+}
+
+/// The architect's decision of 2026-11-14 on ADR-0328's open question: curl
+/// and wget (no `net web`) take a literal URL's name with its public answers
+/// only, on its port, 80 and 443 included; a dotted address keeps its rule,
+/// a `+net` word that covers the URL keeps ADR-0223's rule, a URL from a
+/// value still needs a word.
+#[test]
+fn curl_and_wget_take_a_url_name_with_public_answers_only() {
+    use zoraya_abi::net::{NameGrant, Target};
+    for d in [CURL, WGET] {
+        for (url, port) in [
+            ("http://Test.Zoraya/", 80),
+            ("https://test.zoraya/", 443),
+            ("https://test.zoraya:8443/x", 8443),
+        ] {
+            let ok = go(d, &[(url, true)], true).unwrap().expect("a scope");
+            assert_eq!(ok.0, rights::REACH);
+            let s = Scope::decode(&ok.1).unwrap();
+            let rules: Vec<_> = s.reach_rules().collect();
+            assert_eq!(rules.len(), 1, "{url}");
+            assert_eq!(rules[0].target, Target::PublicName("test.zoraya"), "{url}");
+            assert_eq!(rules[0].ports.list(), &[(port, port)], "{url}");
+            assert_eq!(rules[0].protocols, Protocols::TCP);
+            assert_eq!(
+                s.name_grant("test.zoraya", port, Protocols::TCP),
+                NameGrant::PublicOnly,
+                "{url}"
+            );
+            assert!(!s.allows_name("test.zoraya", port, Protocols::TCP));
+            assert_eq!(s.resolve_grant("test.zoraya"), NameGrant::PublicOnly);
+            assert!(!s.reaches_address([10, 0, 2, 2]));
+            assert_eq!(
+                crate::netgrant::pills(&ok.1),
+                vec![alloc::format!("+net test.zoraya:{port} public")]
+            );
+            // A +net word that names the host: ADR-0223's rule, no public-only
+            // rule beside it.
+            let named = go_nets(d, &[(url, true)], &["test.zoraya"], true)
+                .unwrap()
+                .expect("a scope");
+            let s = Scope::decode(&named.1).unwrap();
+            assert_eq!(
+                s.name_grant("test.zoraya", port, Protocols::TCP),
+                NameGrant::Named
+            );
+            assert!(
+                s.reach_rules()
+                    .all(|r| !matches!(r.target, Target::PublicName(_)))
+            );
+        }
+        // A dotted address keeps its own rule, a private one included.
+        let address = go(d, &[("http://10.0.2.2:8080/", true)], true)
+            .unwrap()
+            .expect("a scope");
+        let s = Scope::decode(&address.1).unwrap();
+        assert!(s.names_address([10, 0, 2, 2], 8080, Protocols::TCP));
+        // From a value: refused without a word.
+        assert!(go(d, &[("http://test.zoraya/", false)], true).is_err());
+    }
+}

@@ -997,3 +997,90 @@ which decide whether Wikipedia looks like itself; (3) a CJK-capable font, if the
 the line under `net web` gets its own name rule), since a real redirect from the typed host to another one now happens in the field.
 Untrusted code never ran, the gate stays closed, and no code of the kernel or the shell changed in this step (a Makefile target and two
 scripts).
+
+## 9g-url: a URL's name rule under `net web` is public-only (branch `work/9g-url`, 2026-11-14)
+
+ADR-0328 Option B, accepted by the architect (closes the 9f-net review's finding 2: `netsurf http://evil.example/` kept a
+name rule that took a later answer of 192.168.1.1, a GET to the router).
+
+- **The rule.** `zoraya_abi::net::Target::PublicName` (encoding kind 6: a length byte and the name), TCP only in the
+  decoder. It admits its one name on its ports through the public, non-local answers (`name_grant`/`resolve_grant` give
+  `PublicOnly`, `Target::admits_public_answers`), so `netd`'s checks of a web rule's answers apply with no change in
+  `netd`; it covers and names no address. Subset: within a web rule on its ports, the same public-only name, a name or
+  wildcard rule that names the name, and `any`; only the same public-only name is within it.
+- **The shell.** Under the description's `net web` a literal URL whose host is a name adds no rule on 80 and 443 and a
+  public-only name rule on another port; a dotted address keeps its address rule; a `+net` word that covers the URL keeps
+  ADR-0223's rule; curl and wget (no `net web`) are unchanged. Pill `+net HOST:PORT public` (the panel takes `web` only
+  alone, ADR-0324 item 6, so the mark follows the target; a panel test admits it), `grants` line `reach, public answers
+  only (operand URL)`.
+- **Decisions taken without asking.** A new kind, not a flag bit (a decoder that ignored a flag would read a name rule,
+  which takes every answer); a wildcard rule over the name counts as a parent; the pill's form above. Recorded in
+  ADR-0328's open questions (rule-6 note); notes in ADR-0324 (item 2's words "and the URL operand's rule", INV-0324-2
+  with the new kind) and ADR-0325 (a private-only URL name now gets the page). INV-0328-1: `checked: make test-unit,
+  make test-netsurf`.
+- **`make test-netsurf`.** The `one.web.test` window has no pill for its URL; `netsurf http://two.web.test:8080/ns/web-port`
+  (public answer, relayed) shows the server's lime page; `netsurf http://lan.web.test:8080/...` (10.0.2.2 in
+  `net.hosts`) gets ADR-0325's page with `+net lan.web.test:8080`. The HTTPS steps on `test.zoraya` and `expired.zoraya`
+  (the gateway 203.0.113.2 in `net.hosts`, on ports that are not 80 or 443) now type `+net HOST:PORT` first, as a person
+  would: without it their rule refuses the gateway's answer, which is ADR-0328's point.
+- **Ran (HVF, this session).** `make check`; `cargo test -p zoraya-abi`, `-p zoraya-net`, `-p zoraya-shell`, `-p
+  zoraya-panel`; `make mutants` with the new `U-*` mutants of `tools/mutants/net-web.toml` and `W-web-rule-any-protocol`
+  (11 caught, 0 survived), and `U-public-name-names-the-name` by hand against `zoraya-net` alone (both netd tests fail);
+  `make test-netsurf` (186 and 19 steps, both server-log checks ok). Two earlier runs failed on this branch's own script
+  until fixed: the pill `web HOST:PORT` was refused by the panel (no window), and the HTTPS steps needed their `+net` words.
+  `make test-changed`: `make check`, host tests (51 binaries), build, test-boot, test-qemu, test-files, test-posix,
+  test-tour-gui, test-gui, test-net all ok; its plan also named test-apps, test-netsurf, test-python and
+  test-python-regr, which its lanes did not run (test-netsurf ran on its own, above; the others are left to CI).
+- **Not done / limits.** curl and wget keep a URL's name rule (ADR-0328's open question). The refusal page says "does not
+  cover HOST on port PORT" also when the rule covers the name but not its private answer. `W-web-name-any-port-gui` (a
+  `make test-netsurf` mutant) was not rerun.
+
+### 9g-url: the review's findings (`docs/tasks/TASK-27-review-9g-url.md` on `docs/review-9g-url`)
+
+- **1 (should-fix), fixed.** One reply with a public and a private answer, in both orders: at the connection
+  (`a_public_name_rule_with_mixed_answers_tries_the_public_one_only`: the public answer is tried, the private one, the
+  reachable test server, is never connected; private answers alone are `Local` with no socket) and at the lookup
+  (`a_public_name_lookup_with_mixed_answers_gives_the_public_ones_only`, through `found_reply`, now `pub(crate)`).
+  Mutants `U-conn-stop-at-refused-answer` (`continue` to `break`), `U-conn-first-answer-only` and
+  `U-lookup-stop-at-refused-answer` (`filter` to `take_while`), each applied by hand: all three fail the new tests and
+  passed every test before them.
+- **3, 4, 5 (notes), done.** A pill past the panel's 200 bytes (a public-only name of 196 bytes on port 65535) is
+  refused by the panel, no window (tests in `zoraya-shell` and `zoraya-panel`; a known limit in `docs/design.md`).
+  Writing that test found a bug older than 9g-url: a `grants` target of 24 bytes or more ran into the word after it
+  (`{shown:<24}{access}`), so its pill read `+net HOST:PORTreach`; the column is now 23 and a space, the same text for
+  every shorter target (`a_long_host_keeps_its_pill_and_its_grants_line_apart`). The comment of the outside-the-image
+  case says what it checks. The `any port, public answers only` line of `describe` has a test.
+- **6 (note).** The wildcard and `any` parents of a public-only name are this branch's decision (above).
+
+### 9g-url: for the architect
+
+- **INV-0324-2's text is false since 9g-url** (review finding 2). It reads "No rule but a web rule is within a web rule,
+  and a web rule is within no rule but a web rule or `any`", and `Target::PublicName` is within a web rule on its ports,
+  as ADR-0328's accepted recommendation decides. Proposed wording: "No rule but a web rule or a public-only name rule
+  (ADR-0328) is within a web rule, and a web rule is within no rule but a web rule or `any`." Its check
+  (`only_a_web_rule_narrows_from_a_web_rule`, the random subset property) checks the proposed wording, not the old one:
+  it never asserts that a public-only name is outside a web rule (`a_public_name_rule_narrows_from_a_web_rule_or_its_name_rule_only`
+  asserts the opposite). The table row (`checked: make test-unit`) is left as it is, as told; it is true of the
+  proposed text only.
+
+
+### 9g-url: curl and wget take a URL's name with its public answers only (the architect, 2026-11-14)
+
+- **What changed.** ADR-0328's open question, decided: a grant derived from a URL operand whose host is a name reaches
+  public addresses only. `net_for` gives every POSIX program of the image without `net web` (curl, wget, and the test
+  programs `zfetch` and `tlsthreads`, which share the per-URL rule) the public-only name rule on the URL's port, 80
+  and 443 included; a dotted address keeps its rule; a covering `+net` word keeps ADR-0223's rule; a URL from a value
+  still needs a word. Their pill would be `+net HOST:PORT public` and `grants` says `reach, public answers only
+  (operand URL)`. The native `fetch` (not a POSIX program) keeps ADR-0224's name rule: **for the architect**, whether it
+  takes the same rule (its tests in `net-fetch`, `net-dns` and `net-lookup` use names of 10.0.2.2).
+- **What a refused name looks like.** curl and wget have no refusal page: the lookup is `NotGranted`
+  (`EAI_SYSTEM`/`EACCES`), so curl prints `curl: (6) Could not resolve: test.zoraya:PORT` (exit 6), and wget
+  `Resolving test.zoraya... failed: Permission denied.` and `wget: unable to resolve host address 'test.zoraya'`
+  (exit 4), with no hint of the `+net` word (ADR-0224 item 5's `REPORT` is not built). wget's run also printed its
+  existing `~/.netrc` hint.
+- **Tests.** `curl_and_wget_take_a_url_name_with_public_answers_only` (`zoraya-shell`); mutant
+  `U-shell-posix-url-name-rule-kept`; `tests/shell/apps.script`: `curl` and `wget` of `http://test.zoraya:PORT/`
+  (10.0.2.2 in `net.hosts`) refused without a word and fetched with `+net test.zoraya[:PORT]`. The script's other
+  lines by name (`test.zoraya`, `expired.zoraya`, `wrong.zoraya`, all 10.0.2.2) now type `+net HOST:PORT`, as do
+  `net-posix.script`'s `zfetch` line; the two lines that do not parse (`curl -k`, `wget --no-check-certificate`) give
+  no network and are unchanged; the `grants curl`/`grants wget` lines read `reach, public answers only`.

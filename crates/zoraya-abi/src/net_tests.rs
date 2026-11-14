@@ -40,7 +40,7 @@ const ADDRESSES: [[u8; 4]; 6] = [
 ];
 
 fn random_target(rng: &mut Rng) -> Target<'static> {
-    match rng.below(6) {
+    match rng.below(7) {
         0 => Target::Name(NAMES[rng.below(6) as usize]),
         1 => Target::Wildcard(SUFFIXES[rng.below(4) as usize]),
         2 => Target::Address(ADDRESSES[rng.below(6) as usize]),
@@ -51,6 +51,7 @@ fn random_target(rng: &mut Rng) -> Target<'static> {
             Target::Prefix(m.to_be_bytes(), len)
         }
         4 => Target::Public,
+        5 => Target::PublicName(NAMES[rng.below(6) as usize]),
         _ => Target::Any,
     }
 }
@@ -74,8 +75,9 @@ fn random_scope(rng: &mut Rng) -> Vec<u8> {
             let target = random_target(rng);
             let ports = random_ports(rng);
             let protocols = random_protocols(rng);
-            // A web rule is TCP alone (INV-0324-1); the decoder refuses others.
-            let protocols = if target == Target::Public {
+            // A web rule and a public-only name are TCP alone (INV-0324-1,
+            // INV-0328-1); the decoder refuses others.
+            let protocols = if matches!(target, Target::Public | Target::PublicName(_)) {
                 Protocols::TCP
             } else {
                 protocols
@@ -636,4 +638,164 @@ fn a_web_rule_with_udp_or_echo_does_not_decode() {
     let s = Scope::decode(&tcp).expect("a web rule over TCP decodes");
     assert!(!s.allows_echo_address([93, 184, 215, 14]));
     assert!(s.allows_address([93, 184, 215, 14], 443, Protocols::TCP));
+}
+
+fn public_name(name: &'static str, port: u16) -> Vec<u8> {
+    one(Target::PublicName(name), Ports::one(port), Protocols::TCP)
+}
+
+/// ADR-0328 (INV-0328-1): a public-only name rule admits its own name, on its
+/// own port over TCP, through the public answers only; it covers no other
+/// name and no address, and names none, so no local answer passes it.
+#[test]
+fn a_public_name_rule_admits_its_name_through_public_answers_on_its_port() {
+    let bytes = public_name("example.org", 8080);
+    // Kind 6, the name's length and bytes, one port, TCP.
+    let mut by_hand = vec![VERSION, 1, 0, 0, 6, 11];
+    by_hand.extend_from_slice(b"example.org");
+    by_hand.extend_from_slice(&[1, 0x90, 0x1f, 0x90, 0x1f, 1]);
+    assert_eq!(bytes, by_hand);
+    let s = Scope::decode(&bytes).unwrap();
+    assert_eq!(re_encode(&s), bytes);
+    assert_eq!(
+        s.reach_rules().next().unwrap().target,
+        Target::PublicName("example.org")
+    );
+    assert_eq!(
+        s.name_grant("example.org", 8080, Protocols::TCP),
+        NameGrant::PublicOnly
+    );
+    assert_eq!(s.resolve_grant("example.org"), NameGrant::PublicOnly);
+    for (name, port, protocol) in [
+        ("example.org", 8081, Protocols::TCP),
+        ("example.org", 80, Protocols::TCP),
+        ("example.org", 8080, Protocols::UDP),
+        ("www.example.org", 8080, Protocols::TCP),
+        ("other.example", 8080, Protocols::TCP),
+    ] {
+        assert_eq!(
+            s.name_grant(name, port, protocol),
+            NameGrant::No,
+            "{name} {port}"
+        );
+    }
+    assert_eq!(s.resolve_grant("other.example"), NameGrant::No);
+    // Never a rule that names the name (that would take every answer).
+    assert!(!s.allows_name("example.org", 8080, Protocols::TCP));
+    assert!(!s.reaches_name("example.org"));
+    assert!(!s.allows_echo_name("example.org"));
+    for address in ADDRESSES {
+        assert!(!s.allows_address(address, 8080, Protocols::TCP));
+        assert!(!s.names_address(address, 8080, Protocols::TCP));
+        assert!(!s.reaches_address(address));
+        assert!(!s.allows_echo_address(address));
+    }
+    // A name rule of the same name beside it names it: every answer.
+    let mut out = vec![0u8; 128];
+    let rules = [
+        s.reach_rules().next().unwrap(),
+        ReachRule {
+            target: Target::Name("example.org"),
+            ports: Ports::one(8080),
+            protocols: Protocols::TCP,
+        },
+    ];
+    let n = encode(&rules, &[], &mut out).unwrap();
+    let both = Scope::decode(&out[..n]).unwrap();
+    assert_eq!(
+        both.name_grant("example.org", 8080, Protocols::TCP),
+        NameGrant::Named
+    );
+}
+
+/// INV-0328-1: a public-only name admits no protocol but TCP, whoever made
+/// the scope, and its name is a valid name.
+#[test]
+fn a_public_name_rule_with_udp_or_echo_or_a_bad_name_does_not_decode() {
+    for raw in [2u8, 3, 4, 5, 6, 7] {
+        let rule = ReachRule {
+            target: Target::PublicName("example.org"),
+            ports: Ports::one(8080),
+            protocols: Protocols::from_raw(raw).unwrap(),
+        };
+        let mut out = vec![0u8; 64];
+        assert_eq!(encode(&[rule], &[], &mut out), None, "{raw}");
+        let mut bytes = vec![VERSION, 1, 0, 0, 6, 1, b'x', 1, 0x90, 0x1f, 0x90, 0x1f];
+        bytes.push(raw);
+        assert!(Scope::decode(&bytes).is_none(), "{raw}");
+    }
+    let tcp = [VERSION, 1, 0, 0, 6, 1, b'x', 1, 0x90, 0x1f, 0x90, 0x1f, 1];
+    assert!(Scope::decode(&tcp).is_some());
+    for bad in [&b"X"[..], b"1.2.3.4", b"", b"a..b"] {
+        let mut bytes = vec![VERSION, 1, 0, 0, 6, bad.len() as u8];
+        bytes.extend_from_slice(bad);
+        bytes.extend_from_slice(&[1, 0x90, 0x1f, 0x90, 0x1f, 1]);
+        assert!(Scope::decode(&bytes).is_none(), "{bad:?}");
+    }
+}
+
+/// ADR-0328's subset rule: a public-only name is inside a web rule on its
+/// port, the same public-only name, and a name or wildcard rule that names
+/// the name; nothing but those is inside it.
+#[test]
+fn a_public_name_rule_narrows_from_a_web_rule_or_its_name_rule_only() {
+    let child = public_name("www.example.org", 443);
+    let child = Scope::decode(&child).unwrap();
+    for parent in [
+        web(),
+        public_name("www.example.org", 443),
+        one(
+            Target::Name("www.example.org"),
+            Ports::one(443),
+            Protocols::TCP,
+        ),
+        one(Target::Wildcard("example.org"), Ports::ANY, Protocols::BOTH),
+        one(Target::Any, Ports::ANY, Protocols::ALL),
+    ] {
+        assert!(child.within(&Scope::decode(&parent).unwrap()));
+    }
+    for parent in [
+        one(Target::Public, Ports::one(80), Protocols::TCP),
+        public_name("example.org", 443),
+        public_name("www.example.org", 80),
+        one(Target::Name("example.org"), Ports::one(443), Protocols::TCP),
+        one(
+            Target::Wildcard("www.example.org"),
+            Ports::ANY,
+            Protocols::BOTH,
+        ),
+        one(
+            Target::Address([93, 184, 215, 14]),
+            Ports::ANY,
+            Protocols::BOTH,
+        ),
+        one(Target::Prefix([0, 0, 0, 0], 0), Ports::ANY, Protocols::BOTH),
+    ] {
+        assert!(!child.within(&Scope::decode(&parent).unwrap()));
+    }
+    // Nothing else is inside a public-only name: each would skip the check of
+    // the answers, or name more.
+    let parent = public_name("www.example.org", 443);
+    let parent = Scope::decode(&parent).unwrap();
+    for inside in [
+        one(
+            Target::Name("www.example.org"),
+            Ports::one(443),
+            Protocols::TCP,
+        ),
+        one(Target::Public, Ports::one(443), Protocols::TCP),
+        one(
+            Target::Wildcard("example.org"),
+            Ports::one(443),
+            Protocols::TCP,
+        ),
+        one(
+            Target::Address([93, 184, 215, 14]),
+            Ports::one(443),
+            Protocols::TCP,
+        ),
+        one(Target::Any, Ports::one(443), Protocols::TCP),
+    ] {
+        assert!(!Scope::decode(&inside).unwrap().within(&parent));
+    }
 }

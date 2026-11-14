@@ -131,6 +131,13 @@ for the Internet, the host and the LAN always closed).
 ## Open questions
 - Whether a second word (`web+` for any port) is wanted; not now.
 - Whether the documentation blocks should be excluded too once the tests do not need a public-looking network.
+- *Note (9g-url, ADR-0001 rule 6).* ADR-0328 (accepted 2026-11-14) replaces the words "and the URL operand's rule" of
+  item 2 for a URL whose host is a name: under `net web` such a URL gives no rule on ports 80 and 443 and a public-only
+  name rule (`Target::PublicName`, kind 6) on another port; a dotted address and `+net` words keep their rules.
+  INV-0324-2 is checked with that rule counted with the web rules, as ADR-0328 decides its subset rule: a public-only
+  name is within a web rule on its ports (it skips no check of the answers), and no address, prefix, name, wildcard or
+  `any` rule is within a web rule (`only_a_web_rule_narrows_from_a_web_rule` and
+  `a_public_name_rule_narrows_from_a_web_rule_or_its_name_rule_only` in `crates/zoraya-abi/src/net_tests.rs`).
 
 ## Revisit triggers
 - IPv6 (ADR-0229 item 5): the blocks gain fc00::/7, fe80::/10 and ::1.

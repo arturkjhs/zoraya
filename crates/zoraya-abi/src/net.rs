@@ -19,12 +19,13 @@
 //! target   Name 0 / Wildcard 1: length u8, the ASCII bytes (a wildcard
 //!          without its "*." prefix); Address 2: 4 bytes; Prefix 3: 4 bytes,
 //!          length u8 (0..=32, the host bits zero); Any 4: nothing;
-//!          Public 5: nothing (ADR-0324, the shell's `web`)
+//!          Public 5: nothing (ADR-0324, the shell's `web`); PublicName 6:
+//!          length u8, the ASCII bytes (ADR-0328, a URL's name under `web`)
 //! ports    0xFF for any port, or a count 1..=8 and that many (low, high)
 //!          pairs of u16, little endian, 1 <= low <= high
 //! protocols u8, a set of bits: 1 (TCP), 2 (UDP), 4 (echo, ADR-0330); 1 to 7
-//!          in a reach rule (1 alone in a Public rule, INV-0324-1), 1 to 3 in
-//!          a listen rule
+//!          in a reach rule (1 alone in a Public or PublicName rule,
+//!          INV-0324-1, INV-0328-1), 1 to 3 in a listen rule
 //! ```
 //!
 //! Decisions where the ADR is silent (docs/adr/0281): addresses are IPv4 (the
@@ -198,6 +199,11 @@ pub enum Target<'a> {
     /// name this rule alone admits may use only the public answers of its
     /// lookup, which `netd` checks: [`Scope::name_grant`] says so.
     Public,
+    /// One exact name, through its public answers only, as a web rule admits
+    /// a name (ADR-0328: the name of a URL operand under `net web`, on a port
+    /// the web rule does not have). It covers no address and names none: a
+    /// connection or lookup it admits is [`NameGrant::PublicOnly`].
+    PublicName(&'a str),
 }
 
 /// The blocks a [`Target::Public`] rule never reaches (ADR-0324 item 2): this
@@ -233,8 +239,9 @@ pub fn is_public(address: [u8; 4]) -> bool {
 pub enum NameGrant {
     /// No rule covers it.
     No,
-    /// Only a web rule ([`Target::Public`]): only answers that are public,
-    /// and not local to this machine's network, may be used.
+    /// Only a web rule ([`Target::Public`]) or a public-only name rule
+    /// ([`Target::PublicName`]): only answers that are public, and not local
+    /// to this machine's network, may be used.
     PublicOnly,
     /// A rule names it (a name, a wildcard or `any`): every answer, local
     /// ones as ADR-0223 item 4 says.
@@ -292,6 +299,16 @@ impl Target<'_> {
             // Only a web rule is inside a web rule (INV-0324-2): an address or
             // a name rule would skip the public check of its answers.
             (Target::Public, Target::Public) => true,
+            // A public-only name (ADR-0328) is inside a web rule (which
+            // admits every name through the same check of its answers), the
+            // same public-only name, and a rule that names the name (which
+            // admits every answer); nothing else is inside it, since every
+            // other rule skips the check or names more.
+            (Target::PublicName(_), Target::Public) => true,
+            (Target::PublicName(n), Target::PublicName(p)) => n == p,
+            (Target::PublicName(n), Target::Name(p)) => n == p,
+            (Target::PublicName(n), Target::Wildcard(s)) => under(n, s),
+            (_, Target::PublicName(_)) | (Target::PublicName(_), _) => false,
             (_, Target::Public) | (Target::Public, _) => false,
             (Target::Name(n), Target::Name(p)) => n == p,
             (Target::Name(n), Target::Wildcard(s)) => under(n, s),
@@ -335,9 +352,20 @@ impl Target<'_> {
         !matches!(self, Target::Public) && self.covers_address(address)
     }
 
+    /// Whether this rule admits `name` through its public answers only: a
+    /// web rule admits every name so, a public-only name rule its own name
+    /// (ADR-0324 item 2, ADR-0328).
+    pub fn admits_public_answers(&self, name: &str) -> bool {
+        match self {
+            Target::Public => true,
+            Target::PublicName(n) => *n == name,
+            _ => false,
+        }
+    }
+
     fn valid(&self) -> bool {
         match self {
-            Target::Name(n) | Target::Wildcard(n) => valid_name(n),
+            Target::Name(n) | Target::Wildcard(n) | Target::PublicName(n) => valid_name(n),
             Target::Prefix(p, l) => *l <= 32 && u32::from_be_bytes(*p) & !mask(*l) == 0,
             _ => true,
         }
@@ -421,13 +449,13 @@ impl<'a> Reader<'a> {
     fn reach(&mut self) -> Option<ReachRule<'a>> {
         let kind = self.u8()?;
         let target = match kind {
-            0 | 1 => {
+            0 | 1 | 6 => {
                 let length = usize::from(self.u8()?);
                 let name = core::str::from_utf8(self.take(length)?).ok()?;
-                if kind == 0 {
-                    Target::Name(name)
-                } else {
-                    Target::Wildcard(name)
+                match kind {
+                    0 => Target::Name(name),
+                    1 => Target::Wildcard(name),
+                    _ => Target::PublicName(name),
                 }
             }
             2 => Target::Address(self.take(4)?.try_into().ok()?),
@@ -444,9 +472,10 @@ impl<'a> Reader<'a> {
         }
         let ports = self.ports()?;
         let protocols = Protocols::from_raw(self.u8()?)?;
-        // A web rule admits no protocol but TCP (INV-0324-1): the decoder,
-        // and so `netd`, holds it to that whoever made the scope.
-        if target == Target::Public && protocols != Protocols::TCP {
+        // A web rule admits no protocol but TCP (INV-0324-1), nor does a
+        // public-only name (INV-0328-1): the decoder, and so `netd`, holds
+        // them to that whoever made the scope.
+        if matches!(target, Target::Public | Target::PublicName(_)) && protocols != Protocols::TCP {
             return None;
         }
         Some(ReachRule {
@@ -567,13 +596,16 @@ impl<'a> Scope<'a> {
     }
 
     /// How a connection to `name`:`port` over `protocol` is admitted
-    /// (ADR-0324): by a rule that names it, by a web rule alone (its answers
-    /// must then be public), or not at all.
+    /// (ADR-0324, ADR-0328): by a rule that names it, by a web rule or a
+    /// public-only name rule alone (its answers must then be public), or not
+    /// at all.
     pub fn name_grant(&self, name: &str, port: u16, protocol: Protocols) -> NameGrant {
         if self.allows_name(name, port, protocol) {
             NameGrant::Named
         } else if self.reach_rules().any(|r| {
-            r.target == Target::Public && r.ports.contains(port) && r.protocols.contains(protocol)
+            r.target.admits_public_answers(name)
+                && r.ports.contains(port)
+                && r.protocols.contains(protocol)
         }) {
             NameGrant::PublicOnly
         } else {
@@ -582,11 +614,14 @@ impl<'a> Scope<'a> {
     }
 
     /// As [`Scope::name_grant`] for a lookup, which names no port: any rule
-    /// that covers the name, else any web rule.
+    /// that covers the name, else any web rule or the name's public-only rule.
     pub fn resolve_grant(&self, name: &str) -> NameGrant {
         if self.reaches_name(name) {
             NameGrant::Named
-        } else if self.reach_rules().any(|r| r.target == Target::Public) {
+        } else if self
+            .reach_rules()
+            .any(|r| r.target.admits_public_answers(name))
+        {
             NameGrant::PublicOnly
         } else {
             NameGrant::No
@@ -677,8 +712,12 @@ pub fn encode(reach: &[ReachRule<'_>], listen: &[ListenRule], out: &mut [u8]) ->
     put(&[VERSION, reach.len() as u8, listen.len() as u8, 0])?;
     for r in reach {
         match r.target {
-            Target::Name(n) | Target::Wildcard(n) => {
-                let kind = u8::from(matches!(r.target, Target::Wildcard(_)));
+            Target::Name(n) | Target::Wildcard(n) | Target::PublicName(n) => {
+                let kind = match r.target {
+                    Target::Name(_) => 0,
+                    Target::Wildcard(_) => 1,
+                    _ => 6,
+                };
                 put(&[kind, u8::try_from(n.len()).ok()?])?;
                 put(n.as_bytes())?;
             }

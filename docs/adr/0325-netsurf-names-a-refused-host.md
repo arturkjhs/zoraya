@@ -96,6 +96,10 @@ data, finished) as its `about:` fetchers do.
 ## Open questions
 - Whether a refusal because a name's answer is local under a name rule (`Local`, `getaddrinfo`'s `EAI_NONAME`) should
   get the page too, with `+net ADDRESS` (ADR-0224 item 5's second form); `libposix` cannot tell it from a missing name.
+- *Note (9g-url, ADR-0001 rule 6).* Under ADR-0328 a URL on NetSurf's line whose name has only private or local
+  answers is refused by its lookup (`NotGranted`, `EAI_SYSTEM`/`EACCES`) and gets this page with
+  `+net HOST:PORT netsurf URL`; it no longer reaches the old name rule's `Local` case above. INV-0325-1's checks are
+  unchanged; `make test-netsurf` adds `netsurf http://lan.web.test:8080/` (10.0.2.2 in `net.hosts`) to them.
 
 ## Revisit triggers
 - The `REPORT` channel and the shell's hint are built: the page and the hint should say the same line.

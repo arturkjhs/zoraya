@@ -702,7 +702,7 @@ fn resolved_reply(status: u32, addresses: &[Address], t: u32) -> Vec<u8> {
 /// A name only a web rule admits (`public_only`, ADR-0324) keeps only public
 /// answers that are not local, `net.hosts` included, unless a rule names the
 /// address; none left is `NOT_GRANTED`: the grant, not the name, is why.
-fn found_reply<L: Link>(
+pub(crate) fn found_reply<L: Link>(
     found: &Found,
     scope: &[u8],
     public_only: bool,

@@ -938,3 +938,139 @@ fn netd_refuses_a_web_rule_over_udp_or_echo() {
     let scope = [1u8, 1, 0, 0, 5, 0xff, 1];
     assert!(Connection::new(rights::REACH, &scope).is_some());
 }
+
+/// ADR-0328 (INV-0328-1) through the service: a public-only name rule
+/// resolves its own name to public answers only (`net.hosts` included; none
+/// left is `NOT_GRANTED`, which NetSurf names with ADR-0325's page), connects
+/// by that name on its port only, and to no address.
+#[test]
+fn a_public_name_rule_resolves_its_name_to_public_answers_only() {
+    use zoraya_proto_net::Connecting;
+    const PUBLIC: [u8; 4] = [203, 0, 113, 11];
+    let mut net = Net::new(Config {
+        hosts: vec![
+            ("two.web.test".into(), PUBLIC),
+            ("lan.web.test".into(), [10, 0, 2, 2]),
+            ("home.web.test".into(), [192, 168, 1, 1]),
+        ],
+        ..static_config()
+    });
+    let mut service = Service::new();
+    let rule = |name| ReachRule {
+        target: Target::PublicName(name),
+        ports: Ports::one(8080),
+        protocols: Protocols::TCP,
+    };
+    let scope_of = |rules: &[ReachRule<'_>]| {
+        let mut out = vec![0u8; 256];
+        let n = encode_scope(rules, &[], &mut out).unwrap();
+        out.truncate(n);
+        out
+    };
+    let two = service
+        .add(Connection::new(rights::REACH, &scope_of(&[rule("two.web.test")])).unwrap())
+        .unwrap();
+    assert_eq!(
+        resolve_now(&mut service, &mut net, two, "two.web.test"),
+        (status::OK, vec![u32::from_be_bytes(PUBLIC)])
+    );
+    let m = bytes(
+        &zoraya_proto_net::Resolve {
+            name: Data(b"lan.web.test"),
+        },
+        5,
+    );
+    let Action::Reply(r) = service.handle(two, &m, 0, &mut net.client, net.now) else {
+        panic!("refused at once");
+    };
+    assert_eq!(
+        decode::<zoraya_proto_net::Resolved>(&r, 0)
+            .unwrap()
+            .1
+            .status
+            .0,
+        status::NOT_GRANTED,
+        "another name"
+    );
+    for name in ["lan.web.test", "home.web.test"] {
+        let id = service
+            .add(Connection::new(rights::REACH, &scope_of(&[rule(name)])).unwrap())
+            .unwrap();
+        assert_eq!(
+            resolve_now(&mut service, &mut net, id, name),
+            (status::NOT_GRANTED, vec![]),
+            "{name}"
+        );
+    }
+    let mut code = |id, message: &[u8]| match service.handle(id, message, 3, &mut net.client, 0) {
+        Action::Reply(r) => decode::<Connecting>(&r, 0).unwrap().1.status.0,
+        Action::Connect { .. } => status::OK,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        code(two, &connect_message("two.web.test", [0; 4], 8080)),
+        status::OK
+    );
+    for (name, port) in [
+        ("two.web.test", 80),
+        ("two.web.test", 8081),
+        ("other", 8080),
+    ] {
+        assert_eq!(
+            code(two, &connect_message(name, [0; 4], port)),
+            status::NOT_GRANTED,
+            "{name} {port}"
+        );
+    }
+    assert_eq!(
+        code(two, &connect_message("", PUBLIC, 8080)),
+        status::NOT_GRANTED
+    );
+}
+
+/// INV-0328-1 at the lookup (9g-url review, finding 1): one answer with a
+/// public and a private address, in both orders, gives the public address
+/// alone; private and local addresses alone are `NOT_GRANTED`. Each address
+/// is checked, not the first or the last.
+#[test]
+fn a_public_name_lookup_with_mixed_answers_gives_the_public_ones_only() {
+    use crate::dns::Found;
+    use crate::service::found_reply;
+    use zoraya_proto_net::Resolved;
+    const PUBLIC: [u8; 4] = [93, 184, 215, 14];
+    const OTHER: [u8; 4] = [203, 0, 113, 11];
+    let net = Net::new(static_config());
+    let mut out = vec![0u8; 256];
+    let rule = ReachRule {
+        target: Target::PublicName("evil.example"),
+        ports: Ports::one(8080),
+        protocols: Protocols::TCP,
+    };
+    let n = encode_scope(&[rule], &[], &mut out).unwrap();
+    let scope = &out[..n];
+    let ask = |addresses: &[[u8; 4]]| {
+        let found = Found {
+            addresses: addresses.to_vec(),
+            from_hosts: false,
+        };
+        let r = found_reply(&found, scope, true, &net.client, net.now, 5);
+        let (_, reply) = decode::<Resolved>(&r, 0).unwrap();
+        let list: Vec<[u8; 4]> = reply
+            .addresses
+            .iter()
+            .map(|a| a.address.to_be_bytes())
+            .collect();
+        (reply.status.0, list)
+    };
+    let private = [192, 168, 1, 1];
+    assert_eq!(ask(&[private, PUBLIC]), (status::OK, vec![PUBLIC]));
+    assert_eq!(ask(&[PUBLIC, private]), (status::OK, vec![PUBLIC]));
+    assert_eq!(
+        ask(&[PUBLIC, [10, 1, 2, 3], OTHER, SERVER_IP]),
+        (status::OK, vec![PUBLIC, OTHER])
+    );
+    assert_eq!(
+        ask(&[private, [10, 1, 2, 3], [127, 0, 0, 1], SERVER_IP]),
+        (status::NOT_GRANTED, vec![])
+    );
+}

@@ -98,8 +98,27 @@ of the same name).
 ## Open questions
 - Whether curl and wget should get the same rule (a URL's name public-only unless a `+net` word names it); they have
   no web grant, and an intranet URL is their common use.
+  - *Note (9g-url, ADR-0001 rule 6).* The architect decided (2026-11-14) that they do: a grant derived from a URL
+    operand whose host is a name reaches public addresses only, and the local network needs `+net HOST`. Built for
+    every POSIX program of the image without `net web` (curl, wget and the test programs `zfetch` and `tlsthreads`):
+    the public-only name rule on the URL's port, 80 and 443 included; a dotted address and a covering `+net` word keep
+    their rules. The native `fetch` keeps ADR-0224's name rule, for the architect to decide. Checks:
+    `curl_and_wget_take_a_url_name_with_public_answers_only` (`zoraya-shell`), `make test-apps` (`curl` and `wget` of
+    `http://test.zoraya:PORT/`, 10.0.2.2 in `net.hosts`, refused without `+net test.zoraya` and fetched with it),
+    mutant `U-shell-posix-url-name-rule-kept`.
 - Whether a public-only name rule is a new kind or a flag bit on the name rule (an encoding question for
   `zoraya_abi::net`).
+  - *Note (9g-url, ADR-0001 rule 6).* Built as a new kind, `Target::PublicName`, encoding kind 6 (a length byte and the
+    name, as kind 0), TCP only in the decoder. A flag on kind 0 would let a decoder that ignores the flag read the rule
+    as a name rule, which takes every answer; a decoder that does not know kind 6 refuses the scope. Its subset rule:
+    within a web rule on its ports, the same public-only name, a name rule of the same name or a wildcard rule over it,
+    and `any`; only the same public-only name is within it. The pill is `+net HOST:PORT public` (not a bare
+    `+net HOST:PORT`, which would read as a word that takes local answers; the panel takes `web` only as that one word),
+    and `grants` says `reach, public answers only (operand URL)`.
+    INV-0328-1's checks: `under_web_*` in `crates/zoraya-shell/src/netgrant_tests.rs`, `a_public_name_rule_*` in
+    `crates/zoraya-abi/src/net_tests.rs` and in `crates/zoraya-net/src/{conn,service}_tests.rs`, `make test-netsurf`
+    (`two.web.test:8080` reached, `lan.web.test:8080` refused with the page), the `U-*` mutants of
+    `tools/mutants/net-web.toml`.
 
 ## Revisit triggers
 - A browser with JavaScript: a rebinding could then read the answer, which makes Option A's gap a data leak.
