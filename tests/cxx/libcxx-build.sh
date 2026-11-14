@@ -14,10 +14,12 @@
 # it has, when it is an XFAIL for one it has, or when it uses a lit
 # substitution (%{...}) or a FILE_DEPENDENCIES; an item with an operator (&&,
 # ||, !, a regular expression) counts as not matching. A test that does not
-# compile, or a test named in tests/cxx/libcxx-excluded.txt, is left out with
-# that reason; a test that is in the excluded list but builds and is not
-# listed as failing at run time is an error, so that the list stays true.
+# compile is an error; a test named in tests/cxx/libcxx-excluded.txt is left
+# out with the reason given there, and a name there that is not a test of the
+# source is an error.
 set -eu
+# The items of lit's lines may be *, which must not be a pattern here.
+set -f
 src=$1
 out=$2
 here=$(dirname "$0")
@@ -29,7 +31,7 @@ mkdir -p "$out/bin"
 clang_major=$(${ZORAYA_CLANG:-clang} -dM -E -x c /dev/null | awk '$2 == "__clang_major__" { print $3 }')
 # The features of this configuration, as lit's names them.
 features=" c++23 stdlib=libc++ stdlib=llvm-libc++ libcpp-hardening-mode=fast clang clang-$clang_major has-unix-headers \
-  target=aarch64-unknown-zoraya libcpp-abi-version=1 objective-c++-unsupported "
+  target=aarch64-unknown-zoraya libcpp-abi-version=1 objective-c++-unsupported can-create-symlinks "
 
 has() { case "$features" in *" $1 "*) return 0 ;; esac; return 1; }
 
@@ -63,7 +65,7 @@ for g in $(sed -e 's/#.*//' "$groups"); do
         fi
         if [ -z "$why" ]; then
             for x in $(directive XFAIL "$f" | tr ' ' '_'); do
-                has "$x" && { why="expected to fail on $x"; break; }
+                { [ "$x" = '*' ] || has "$x"; } && { why="expected to fail on $x"; break; }
             done
         fi
         if [ -n "$why" ]; then
@@ -77,8 +79,9 @@ for g in $(sed -e 's/#.*//' "$groups"); do
             rm -f "$out/bin/$name.log"
             echo "$name $rel" >> "$out/list"
         else
-            skip "$rel" "does not compile with zc++ ($out/bin/$name.log)"
-            mv "$out/bin/$name.log" "$out/$name.compile.log"
+            echo "libcxx-build: $rel does not compile with zc++:" >&2
+            head -c 4000 "$out/bin/$name.log" >&2
+            exit 1
         fi
     done
 done
@@ -91,5 +94,6 @@ done
     while read -r name rel; do
         printf '# %s\n> posixrun -C /work /bin/lc/%s\\r\n< posixrun: exit 0\n< \\r\\n~> \n' "$rel" "$name"
     done < "$out/list"
+    printf '%s\n' '> poweroff\r'
 } > "$out/script"
 echo "libcxx-build: $(wc -l < "$out/list" | tr -d ' ') tests built, $(wc -l < "$out/skipped" | tr -d ' ') left out ($out/skipped)"

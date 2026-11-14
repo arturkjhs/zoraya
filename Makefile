@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE test-cxx test-cxx-libcxx test-cxx-gtest apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -960,6 +960,50 @@ test-cxx: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --keys --disk $(CXX_TEST)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(CXX_TEST)/disk.img || exit 1; done
 
+# libc++'s own tests of tests/cxx/libcxx-groups.txt (exceptions, RTTI, new and
+# delete, threads, filesystem), built by tests/cxx/libcxx-build.sh from the
+# unpacked LLVM tree (make ci-build makes them, so that CI's test jobs only
+# run them) and run each by posixrun in /work.
+CXX_LIBCXX := $(BUILD)/cxx-libcxx
+CXX_LIBCXX_STAMP := $(CXX_LIBCXX)/lct/.stamp
+LLVM_TREE := $(BUILD)/ports/work/llvm-20.1.8
+CXX_LIBCXX_TIMEOUT ?= 1500
+cxx-libcxx-tests: $(CXX_LIBCXX_STAMP)
+$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt
+	@$(MAKE) -s -f ports/Makefile cxx
+	rm -rf $(CXX_LIBCXX)/lct && mkdir -p $(CXX_LIBCXX)/lct
+	tests/cxx/libcxx-build.sh $(LLVM_TREE)/libcxx $(CXX_LIBCXX)/lct
+	@touch $@
+test-cxx-libcxx: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
+	rm -rf $(CXX_LIBCXX)/root && mkdir -p $(CXX_LIBCXX)/root/bin/lc $(CXX_LIBCXX)/root/work
+	cp -R rootfs/. $(CXX_LIBCXX)/root/
+	cp $(CXX_LIBCXX)/lct/bin/* $(CXX_LIBCXX)/root/bin/lc/
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(CXX_LIBCXX)/root/bin/lc
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 256M --from $(CXX_LIBCXX)/root $(CXX_LIBCXX)/disk.img && \
+	  $(RUNNER) --timeout $(CXX_LIBCXX_TIMEOUT) --script $(CXX_LIBCXX)/lct/script --label cxx-libcxx-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(CXX_LIBCXX)/disk.img --mem 512M --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(CXX_LIBCXX)/disk.img || exit 1; done
+
+# GoogleTest's own tests (make -f ports/Makefile gtest: CMake with
+# ports/cmake/zoraya.cmake), death tests among them (they fork, and the
+# threadsafe style executes the program again), each by posixrun in /work.
+# tests/cxx/gtest.sh writes the script from the list the build left.
+CXX_GTEST := $(BUILD)/cxx-gtest
+CXX_GTEST_TIMEOUT ?= 1500
+test-cxx-gtest: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile gtest
+	rm -rf $(CXX_GTEST) && mkdir -p $(CXX_GTEST)/root/bin/gt $(CXX_GTEST)/root/work
+	cp -R rootfs/. $(CXX_GTEST)/root/
+	cp $(BUILD)/gtest-tests/bin/* $(CXX_GTEST)/root/bin/gt/
+	tests/cxx/gtest.sh $(BUILD)/gtest-tests/list > $(CXX_GTEST)/script
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 128M --from $(CXX_GTEST)/root $(CXX_GTEST)/disk.img && \
+	  $(RUNNER) --timeout $(CXX_GTEST_TIMEOUT) --script $(CXX_GTEST)/script --label cxx-gtest-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(CXX_GTEST)/disk.img --mem 512M --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(CXX_GTEST)/disk.img || exit 1; done
+
 # Part 9b's thread suites (ADR-0309 items 1 and 2): musl's libc-test thread
 # tests (tests/libc-test/threads-excluded.txt names what is left out and why),
 # each run by posixrun on the image of test-libposix. They need
@@ -1450,8 +1494,8 @@ TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net ch
 # configuration, a script under an accelerator, or a W8 build.
 ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
-	$(MAKE) -f ports/Makefile ports workloads apps netsurf python
-	@$(MAKE) -s python-testlib
+	$(MAKE) -f ports/Makefile ports workloads apps netsurf python cxx gtest
+	@$(MAKE) -s python-testlib cxx-libcxx-tests
 	@$(MAKE) -s posix-image
 	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
 	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint

@@ -91,3 +91,4 @@
 > status\r
 < \r\ncrashed (breakpoint, class 0x3c)
 < \r\n~> 
+> poweroff\r

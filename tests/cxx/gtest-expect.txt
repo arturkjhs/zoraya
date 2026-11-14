@@ -1,0 +1,2 @@
+# GoogleTest programs of tests/cxx/gtest.sh that end otherwise than with
+# "[  PASSED  ]" and exit 0: the name, the exit status, a line of the output.
