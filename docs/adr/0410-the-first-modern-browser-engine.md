@@ -41,7 +41,7 @@ its SHM path (not confirmed by a fetched page). These are the first engine parts
    it is not refreshed (browser-engine/survey.md#how-other-systems-got-a-browser). A release line that changes twice a
    year is easier to carry than a pre-alpha tree with 333 merged pull requests a month.
 4. **Size and portability.** Less code to build and to port means a smaller machine and faster iterations; Ladybird
-   was rendering basic pages on Haiku within days in 2023, while Haiku's WebKit2 took years.
+   was rendering basic pages on Haiku in September 2023 after GCC 13 made it build, while Haiku's WebKit2 took years.
 5. **What the web needs.** JavaScript, modern CSS, TLS, web fonts; WebKit ships in Safari; Ladybird's WPT subtest count
    passed Safari Technology Preview's in October 2026.
 6. **The POSIX surface and the licences** (CP-27, X-1): the engine's demands on `libc.a` should be ones other ports
@@ -98,11 +98,12 @@ its SHM path (not confirmed by a fetched page). These are the first engine parts
   (the default off Linux, macOS and Windows).
 - **Evidence for:** Less than half the code (0.83 million lines of C++, 1.02 million of Rust; driver 4); written to be
   portable: its porting document names Alpine, FreeBSD, OpenBSD and Haiku as working POSIX systems, and the Haiku port
-  rendered pages within days (browser-engine/survey.md#ladybird, browser-engine/survey.md#how-other-systems-got-a-browser);
+  rendered basic pages in 2023 (browser-engine/survey.md#ladybird, browser-engine/survey.md#how-other-systems-got-a-browser);
   its processes already split network (RequestServer) from content (WebContent); its IPC is a `SOCK_STREAM` socket pair
   with `SCM_RIGHTS` and anonymous shared memory, its loop `poll`; its HTTP is curl and OpenSSL, both ported here
-  already (ADR-0310, ADR-0312); BSD-2 and mostly permissive dependencies (no LGPL ADR needed but for FFmpeg); a
-  memory-safe JavaScript engine (driver 5: its WPT subtest count passed Safari Technology Preview's).
+  already (ADR-0310, ADR-0312); BSD-2 and mostly permissive dependencies (FFmpeg is LGPL, so ADR-0421 applies unless
+  media is left out, which was not checked); a JavaScript engine in Rust `[assumption: Rust's safety holds for it]`;
+  its WPT subtest count passed Safari Technology Preview's (driver 5).
 - **Evidence against:** Rust is mandatory and LibJS and much of LibWeb are now Rust, so Zoraya needs Rust `std` for POSIX
   programs first, which needs a nightly feature or a patched compiler (driver 2); clang 19 or GCC 14, so CI's clang and
   libc++ change first; pre-alpha, alpha "later this year", 333 merged pull requests a month, so the port is a
@@ -150,9 +151,12 @@ architect can decide C at any point before the plan's E parts without losing wor
    (the test platform), the Zoraya platform of ADR-0419, Skia on the CPU.
 3. **No loader.** GLib's GModule is built without a loader (`g_module_supported()` false); libepoxy, which WPE requires
    and which resolves GL by `dlopen`, is linked with a shim local to the engine's programs whose `dlopen` and `dlsym`
-   always fail (as NetSurf's `nsshim.c` supplies names `libc.a` lacks). `libc.a` keeps no `dlopen` (ADR-0342 item 12
-   unchanged); the shim is a stated stretch of that item's intent for one port, and if the architect refuses it, WPE is
-   patched to make epoxy optional when no GL is built.
+   always fail and whose `dlerror` gives a message (as NetSurf's `nsshim.c` supplies names `libc.a` lacks). libepoxy
+   calls `abort()` when its `dlopen` or `dlsym` fails on the way to a GL or EGL function, so the shim is safe only if no
+   epoxy entry point is ever called, which a CPU-only build should give but is unverified (WebCore may initialise EGL at
+   start); the shim counts its calls and E2's test asserts zero. `libc.a` keeps no `dlopen` (ADR-0342 item 12
+   unchanged); the shim is a stated stretch of that item's intent for one port, and if the architect refuses it or the
+   count is not zero, WPE is patched to make epoxy optional when no GL is built.
 4. **No executable memory, ever, from this engine.** Nothing in the engine asks for `PROT_EXEC`; `libposix` starts
    refusing it (today `mmap` ignores `prot` and returns a read-write mapping; ADR-0413 item 6). A JIT is a separate,
    later decision with its own ADR (revisit triggers).

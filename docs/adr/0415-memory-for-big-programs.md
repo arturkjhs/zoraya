@@ -90,9 +90,11 @@ segments are shared), ADR-0051's assumed limit of 256 mappings, and, if item 3 i
    executable for text, as loaded today) instead of copying. Writable segments are still copied. The image's creator
    pays for the shared frames for the image's life (ADR-0261 item 8). W^X holds: no segment is ever writable and
    executable, and no shared frame is ever writable (INV-0033-2 unchanged). Sharing needs one image object reused, so:
-   (a) **a program spawning its own executable** reuses one image: `libposix` makes the image of `/proc/self/exe` once
-   and keeps its handle for later spawns of that path; the browser is one executable that is also its Web and network
-   processes (ADR-0410 item 5), so all its helpers share one copy (the UI process, started by the shell, keeps its own);
+   (a) **a program spawning its own executable** spawns from the image it was started from: ADR-0107 already gives every
+   process its `Image` handle as the entry `/proc/self/exe`, and `libposix` uses that handle for a spawn of that path
+   instead of reading the file again; the browser is one executable that is also its Web and network processes
+   (ADR-0410 item 5), so the UI process and all its helpers share one copy. That image's shared frames are paid by its
+   creator, the shell's side that started the browser (ADR-0261 item 8), not by the browser's room;
    (b) **any other spawn** shares only through ADR-0212's broker cache when it is built, whose accounting of cached
    images (frames held by the broker's job for every room) is ADR-0212's open item, not changed here.
 3. **Reservations, only if needed.** If the first engine build cannot run without reserving address space, the shape
@@ -153,8 +155,8 @@ home  browser                412M     3
 - **INV-0415-2.** No frame of an image's shared segments is ever mapped writable, two processes spawned from one image
   map the same frames for its read-only segments, and a program's spawns of its own executable use one image.
   *Check:* an in-kernel test spawning one image twice and comparing the physical frames of a text page; a
-  `cargo test -p zoraya-posix` test that two `posix_spawn`s of `/proc/self/exe` make one `image_create`; INV-0033-2's
-  test unchanged.
+  `cargo test -p zoraya-posix` test that a `posix_spawn` of `/proc/self/exe` makes no `image_create` and uses the
+  bootstrap's `Image` entry; INV-0033-2's test unchanged.
 - **INV-0415-3.** If reservations are built, no reserved range ever has frames except where committed, and committing
   fails with `NoMemory` at the call when frames or the job's limit are short. *Check:* `cargo test -p zoraya-posix`
   and an in-QEMU test that reserves 1 GiB in a 256 MiB room and commits until refused.

@@ -46,8 +46,9 @@ Rust programs on Zoraya are native and `no_std`; there is no Rust `std` for the 
 - **Evidence against:** The FIXME means the next WPE line may require clang 19; the step then blocks an engine upgrade.
   The stated support is for clang 18 with libstdc++ (the workaround's own comment is about libstdc++'s `<expected>`,
   and it defines `__cpp_concepts` for every compile); clang 18 with libc++ 20 is not tested upstream on Linux
-  (browser-engine/survey.md#wpe-webkit-in-detail), so the plan's E1 builds JavaScriptCore with exactly Zoraya's clang
-  and libc++ before anything else depends on it.
+  (browser-engine/survey.md#wpe-webkit-in-detail), so the plan's E1 builds JavaScriptCore with LLVM 18 (CI's version,
+  installed on the Mac beside Apple clang 21, which would not exercise the clang-18 workaround) and libc++ 20.1.8
+  before anything else depends on it.
 - **Cost:** *(estimate)* CMake, Ruby, gperf and unifdef in the CI image; nothing else now.
 - **Precedent:** Genode, which pins its browser to a Qt release and moves engine and toolchain together
   (browser-engine/survey.md#how-other-systems-got-a-browser).

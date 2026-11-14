@@ -71,7 +71,9 @@ lock and waits on a port made for it (ADR-0315).
 
 ## Recommendation
 
-**Recommendation (not a decision): Option B.**
+**Recommendation (not a decision): Option B.** It changes ADR-0315's deferred wait (item 1: "releases the lock, makes the
+wait on a port of its own, created for the wait ... no per-thread port to track"): for a wait that includes an `eventfd`,
+the port is created, and recorded with its descriptors in the thread table, before the lock is released.
 
 1. **`poll` and `ppoll`** as ADR-0342 item 5 (one wait with `pselect`; INV-0342-2). Readiness by kind: stream and TCP
    socket as `pselect` today; Unix socket the channel's readable (`POLLIN`), writable (`POLLOUT`) and peer-closed
@@ -118,7 +120,9 @@ POLLIN}], 2, 16)` where 7 is the IPC socket and 9 GLib's `eventfd`; a page's `se
   -p zoraya-posix` (each kind against the fake kernel) and an in-QEMU C test over pipes, TCP and Unix sockets, memory
   descriptors and `eventfd`.
 - **INV-0414-2.** A thread waiting in `poll` on an `eventfd` wakes after another thread's `write` within one wait of
-  the scheduler, and no write is lost. *Check:* an in-QEMU threaded C test with 10,000 writes and a counter check.
+  the scheduler, and no write is lost, whichever thread runs first around the release of the library lock. *Check:*
+  an in-QEMU threaded C test with 10,000 writes and a counter check, and a host test of ADR-0315's boundary (beside
+  INV-0315-1's `deferred` tests) that queues the write at each step between recording the port and waiting.
 - **INV-0414-3.** `libc.a` exports no `epoll_*`, `kqueue`, `timerfd_*` or `signalfd`. *Check:* `posix-surface-check`'s
   deny list (ADR-0342 item 12), to which `kqueue`, `kevent`, the prefix `timerfd_` and `signalfd` are added (today it
   denies the prefix `epoll_` only).

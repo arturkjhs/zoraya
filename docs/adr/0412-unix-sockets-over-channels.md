@@ -86,7 +86,7 @@ endpoint with handles queued in it cannot be moved (ADR-0050).
 
 **Recommendation (not a decision): Option B.** It extends ADR-0225 item 10 (a stream pair keeps its two crossed byte
 streams and gains an ancillary channel; sequenced-packet and datagram pairs are channels), changes ADR-0342 item 11
-(`sendmsg`/`recvmsg` carry `SCM_RIGHTS`), narrows ADR-0225 item 1's refusal of paths (refused outside the two places
+(`sendmsg`/`recvmsg` carry `SCM_RIGHTS`), narrows ADR-0225 item 10's refusal of paths (refused outside the two places
 below), and adds a transient socket object to the file service protocol (ADR-0055).
 
 1. **The descriptor.** `socket(AF_UNIX, type)` with `SOCK_STREAM`, `SOCK_SEQPACKET` or `SOCK_DGRAM` (and
@@ -96,10 +96,13 @@ below), and adds a transient socket object to the file service protocol (ADR-005
 2. **Messages.** `SOCK_SEQPACKET`/`SOCK_DGRAM`: one `sendmsg` is one channel message of at most 65,536 bytes
    (`EMSGSIZE` above); a `recvmsg` with a shorter buffer truncates and sets `MSG_TRUNC`, as Linux does; a writer blocks
    (or gets `EAGAIN`) at 64 queued messages or 256 KiB. `SOCK_STREAM`: bytes go through the byte stream as a pipe's do;
-   a `sendmsg` with `SCM_RIGHTS` writes its bytes (at least one, as Linux requires) and then a message on the ancillary
-   channel holding the descriptors and the stream offset of its first byte; a `recvmsg` returns the descriptors whose
-   offset falls in the bytes it returns, and never returns bytes past the next tagged offset together with bytes
-   before it, so descriptors arrive with the byte they were sent with.
+   a `sendmsg` with `SCM_RIGHTS` first queues a message on the ancillary channel holding the descriptors and the
+   stream offset of its first byte, then writes its bytes (at least one, as Linux requires); a `recvmsg` reads the
+   bytes, then the ancillary channel, returns the descriptors whose offset falls in the bytes it returns, and keeps in
+   the library any bytes past the next tagged offset, so descriptors arrive with the byte they were sent with. The
+   offsets count every byte of the stream, so they hold only while one process writes and one reads it: once a
+   stream socket's byte streams are held by more than one process (after `fork`, or a spawn that duplicated them),
+   `SCM_RIGHTS` on it is `EOPNOTSUPP` in every process that holds it.
 3. **`SCM_RIGHTS`.** At most 64 descriptors a message (`ETOOMANYREFS` above, the Linux error). Each descriptor becomes
    its handle with the descriptor's rights: a file or directory a fresh connection to the same description (ADR-0103's
    `share`), a pipe or FIFO end its stream handle, a memory descriptor (ADR-0413) its memory object (read-only if the
@@ -118,8 +121,9 @@ below), and adds a transient socket object to the file service protocol (ADR-005
    with `unlink`, with its listener, or when the service restarts, and nothing of it is written to the volume
    (ADR-0013's and ADR-0014's metadata are unchanged; ADR-0055's protocol gains `bind`, `connect` and the object kind).
 6. **Inheritance.** A stream socket's byte streams are duplicated to a spawned or forked child as pipes are; its
-   ancillary channel moves to a spawned child that is given the socket and stays with the parent on `fork`, where the
-   child's `SCM_RIGHTS` on it is `EOPNOTSUPP` (an asyncio program can fork, and its self-pipe works in the child). A
+   ancillary channel moves to a spawned child that is given the socket and stays with the parent on `fork`; from then
+   `SCM_RIGHTS` on that socket is `EOPNOTSUPP` in both (item 2), while its bytes flow as before (an asyncio program can
+   fork, and its self-pipe works in both). A
    sequenced-packet or datagram socket listed in a spawn's file actions moves to the child; `fork` with one open is
    `ENOTSUP`, as with TCP sockets today (ADR-0287).
 7. **Waiting and charges.** Readiness is the channel's readable, writable and peer-closed signals in `poll` (ADR-0414);
@@ -164,7 +168,8 @@ A program that tries `bind("/home/me/sock")` gets `EACCES` and the shell shows
 - **INV-0412-2.** `SOCK_SEQPACKET` and `SOCK_DGRAM` keep message boundaries, and `SOCK_STREAM` delivers the bytes in
   order with nothing lost or repeated, for any split of sends and receives, and descriptors sent with a byte are
   returned by the `recvmsg` that returns that byte. *Check:* a host property test over random send and receive sizes
-  with descriptors attached to random sends.
+  with descriptors attached to random sends, and a shared case: after a simulated `fork`, `SCM_RIGHTS` is refused in
+  both processes and the bytes still arrive in order.
 - **INV-0412-3.** `bind` of an `AF_UNIX` path succeeds only inside the program's own directory or its line's `/tmp`.
   *Check:* `cargo test -p zoraya-posix` (the path rule) and an in-QEMU script binding inside and outside both.
 

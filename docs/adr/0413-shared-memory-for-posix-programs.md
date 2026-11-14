@@ -67,16 +67,18 @@ descriptors, and the meaning of today's `memfd_create` (a `tmpd` file that grows
 
 1. **Making one.** `memfd_create(name, flags)` (`MFD_CLOEXEC`, `MFD_ALLOW_SEALING`; `MFD_HUGETLB` is `EINVAL`) and
    `shm_open(SHM_ANON, O_RDWR, mode)` return a memory descriptor of size 0. The name is kept for `fstat` and
-   `/proc/self/fd`-style reports only. `shm_open` of any other name is `EACCES`; `shm_unlink` is `ENOENT`. The
-   sysroot's `sys/mman.h` defines `SHM_ANON` (a Zoraya addition to musl's header), so that ports test for it and take
+   `/proc/self/fd`-style reports only. `shm_open` of any other name is `EACCES`; `shm_unlink` is `ENOENT`. A Zoraya
+   header that the sysroot's `sys/mman.h` includes defines `SHM_ANON` as FreeBSD does, the pointer `((char *)1)`,
+   which `shm_open` compares as a pointer (a change of ADR-0100 item 1's convention that the sysroot's headers are
+   musl's, by one included header), so that ports test for it and take
    the anonymous path: WebKit's `SharedMemoryUnix.cpp` uses `shm_open(SHM_ANON)` when the header has it (its `memfd`
    path is Linux's raw `syscall`, not taken), Ladybird's `anon_create` likewise.
 2. **Sizing.** The first `ftruncate(fd, n)` creates the memory object of `n` bytes rounded up to pages, frames committed
    now (`ENOMEM` when the frames or the room's limit run out, ADR-0263). A later `ftruncate` to the same size succeeds; to
-   another size it succeeds only while the descriptor has never been mapped or sent (the library replaces the object and
+   another size it succeeds only while the descriptor has never been mapped, sent, inherited or forked (the library replaces the object and
    copies), else `EBUSY`. So `F_SEAL_SHRINK` and `F_SEAL_GROW` are accepted and always hold once mapped. A `write` or
    `pwrite` past the end grows the descriptor the same way (replace and copy, in steps that at least double) while it has
-   never been mapped or sent, so a program that uses `memfd_create` as a growing anonymous file keeps working; after
+   never been mapped, sent, inherited or forked, so a program that uses `memfd_create` as a growing anonymous file keeps working; after
    that, a write past the end is `EFBIG`.
 3. **Mapping.** `mmap(addr=NULL, len, PROT_READ[|PROT_WRITE], MAP_SHARED, fd, off)` maps `len` bytes at page offset
    `off` of the object; `PROT_WRITE` needs a writable descriptor; `PROT_EXEC` is `EACCES`; `MAP_PRIVATE` of a memory

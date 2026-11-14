@@ -364,3 +364,119 @@ Every finding was accepted; none was rejected. What changed:
   (CP-27 removed from ADR-0421). **L10** fixed (ADR-0419 item 7). **L11** fixed (survey). **L12** fixed (pills,
   `rows-to-add.md`'s wording, Option C's front end).
 - `status.md` was written by the main session before the review; it is the task's status file.
+
+## Check of the changed lines
+
+The reviewer checked commit `48d78a8c` against `2365e17a`, changed lines only. The checker still reports only the 12
+expected `INV-0001-5` errors, and every ADR's Evidence line still matches its body (checked by script).
+
+**Resolved:**
+- **H1:** the survey, ADR-0410 Context, drivers and Option C are corrected, with [L56].
+- **H3:** ADR-0415 item 1 closes the handles, and INV-0415-1 now tests through `malloc` and `mmap`. ADR-0051's
+  "each handle, each mapping ... holds the object" (line 53) supports closing the handle.
+- **H4:** ADR-0411 lists ADR-0287 item 3, ADR-0310 item 3 and ADR-0341 item 7, and adds INV-0411-4.
+- **H5:** ADR-0413 item 1 requires `SHM_ANON`, ADR-0414 restates what WebKit takes without `OS(LINUX)`, ADR-0410
+  adds the cost, and the plan adds E0.
+- **Medium findings:**
+  - M3, M8 and M9 are resolved.
+  - M7: the remaining gap is point 6 below.
+  - M10: the remaining gap is point 2 below.
+  - M11 is resolved.
+- **Low findings:** L1 to L12 are resolved as described in the dispositions.
+
+**Problems in the fixes:**
+
+1. **(medium) ADR-0414 item 2: unlisted tension with ADR-0315.** *Problem:* The new ordering has a waiting thread
+   "record the port it will wait on ... while it holds the library lock, before ADR-0315's boundary releases the
+   lock". ADR-0315 (accepted, Recommendation, lines 57-59) does the opposite: on `PENDING` the boundary "releases the
+   lock, makes the wait on a port of its own, created for the wait ... no per-thread port to track". The fix
+   therefore changes ADR-0315's order: the port is created under the lock and kept in the thread table. ADR-0414 does
+   not say so. *Fix:* Add "It changes ADR-0315's deferred wait: the port is created, and recorded with its
+   descriptors in the thread table, before the lock is released" to the Recommendation's opening paragraph. Either
+   extend INV-0315-1's test or add INV-0414-2's ordering to it.
+
+2. **(medium) Plan E1, ADR-0418 Context and E1: the M4 does not have Zoraya's CI compiler.** *Problem:* E1 builds
+   `jsc` "on the M4 with Zoraya's clang and libc++" and claims to answer "the clang 18 with libc++ question". ADR-0418
+   Context says the development Mac has Apple clang 21. INV-0418-1 now checks only CI-built images. A build with
+   Apple clang 21 does not exercise the clang-18-only workaround (`VERSION_LESS 19`) and does not settle M1. *Fix:*
+   Name the compiler E1 uses: LLVM 18 installed on the Mac beside Apple clang, or CI's container image run on the M4.
+   Make "the compiler string is clang 18" part of E1's "done when".
+
+3. **(medium) ADR-0410 item 3: the failing-`dlopen` shim and libepoxy's aborts.** *Problem:* libepoxy calls
+   `abort()` when `dlopen` or `dlsym` fails on its `exit_on_fail` paths (`src/dispatch_common.c:315-317, 342-344,
+   688-692`, fetched from libepoxy `master`). Every GL or EGL entry point resolved through epoxy's dispatch takes
+   those paths, so the shim works only if no engine code ever calls an epoxy-dispatched function. With Skia on the
+   CPU that is plausible but unverified: WebCore's `PlatformDisplay` may initialise EGL at start. The shim must also
+   supply `dlerror`, which epoxy prints. *Fix:* Say that the shim is safe only if no epoxy entry point is called. Make
+   E2's "done when" include a run with the shim's `dlopen` counting calls (zero expected). If the count is not zero,
+   fall back to the WPE patch now named as the alternative.
+
+4. **(medium) ADR-0412 item 2: the stream offsets go wrong on shared streams, and the order is not given.**
+   *Problem 1, shared streams:* Descriptors are tagged with "the stream offset of [the] first byte". Item 6 now
+   duplicates a stream socket's byte streams to forked and spawned children, so two processes can write to (or read
+   from) one stream. Each library counts only its own bytes, so a parent's tag is wrong as soon as the child writes
+   or reads, and descriptors are delivered with the wrong byte or never matched. The asyncio self-pipe case the fix
+   was made for is exactly a stream that parent and child both hold. *Problem 2, order:* The ADR does not say whether
+   the ancillary message is queued before or after the bytes. Writing the bytes first (as worded: "writes its bytes
+   ... and then a message") lets a reader take the tagged byte before the tag has arrived. *Fix:* Queue the ancillary
+   message *before* the bytes, and have `recvmsg` read the ancillary channel after reading bytes, holding back bytes
+   past a tag in the library. Make `SCM_RIGHTS` on a stream whose byte-stream ends are held by more than one process
+   (after `fork`, or after a spawn that duplicated them) `EOPNOTSUPP` in both processes, not only in the child. Add
+   the shared case to INV-0412-2's property test.
+
+5. **(low) ADR-0415 item 2(a) and ADR-0417: the second copy is not needed.** *Problem:* `libposix` "makes the image of
+   `/proc/self/exe` once", and the UI process "keeps its own", so ICU's data is held twice (ADR-0417: 67 MB unfiltered).
+   ADR-0107 (Recommendation, lines 162-169, 183) already gives every process its own image handle as the namespace
+   entry `/proc/self/exe` → `Image`. Spawning the helpers from that handle shares the UI process's frames as well. The
+   UI image's frames are then paid by the image's creator, the shell's side (ADR-0261 item 8), not the browser's room;
+   say so. *Fix:* Spawn helpers from the bootstrap `Image` entry, drop "the UI process keeps its own", correct
+   ADR-0417's "twice" and its 67 MB and 24 MB figures, and add one sentence on who pays for the image's shared frames.
+
+6. **(low) ADR-0413 item 2: "never mapped or sent" leaves out inheritance.** *Problem:* A descriptor duplicated into
+   a `fork` child or listed in a spawn's file actions is held by two processes as surely as one sent with
+   `SCM_RIGHTS`, and replace-and-copy growth in one breaks the other. *Fix:* "never mapped, sent, inherited or forked".
+
+7. **(low) ADR-0413 item 1: `SHM_ANON` in musl's header.** *Problem:* ADR-0100 (Recommendation item 1) makes musl's
+   headers the sysroot's. Adding `SHM_ANON` to `sys/mman.h` is a change to that convention, and it is not listed.
+   *Fix:* List it, or put the definition in a Zoraya header that `sys/mman.h` includes. Give its value: FreeBSD's is
+   the pointer `(char *)1`, which `shm_open` must compare as a pointer.
+
+8. **(low) ADR-0410 drivers 4 and 5 and Option C: new unsourced wording.** *Problem:* "Ladybird was rendering basic
+   pages on Haiku within days in 2023": the survey ([O11]) says "basic pages in September 2023, after GCC 13",
+   nothing about days. "A memory-safe JavaScript engine" has no source. "No LGPL ADR needed but for FFmpeg" means
+   Option C also needs ADR-0421 unless media is off; say which. *Fix:* Drop "within days" or source it. Tag
+   "memory-safe" `[assumption]` or drop it. State that a CPU-only build without media needs no LGPL library, if that
+   is so.
+
+9. **(low) ADR-0412 Recommendation: wrong item number.** *Problem:* It "narrows ADR-0225 item 1's refusal of paths",
+   but the refusal (`AF_UNIX` with a path is `EAFNOSUPPORT`) is in ADR-0225 item 10. *Fix:* Change it to item 10.
+
+10. **(low) Plan E0's "done when".** *Problem:* `TestWTF` lives in `Tools/TestWebKitAPI`. Whether the WPE release
+    tarball ships `Tools/` was not checked by the documents or by this review, and the tarball was deleted. *Fix:*
+    Confirm it is in 2.54.2. Otherwise name a test that is (for example `jsc`'s own tests for E1, and for E0 a small
+    program over WTF built in `tests/wpe/`).
+
+**No new problems found** in:
+- ADR-0411's `POSIX_SPAWN_MOVE_NET`. It is consistent with INV-0420-2. The browser ending when the network process
+  dies is stated.
+- The new INV-0420-2 and INV-0420-3.
+- ADR-0420's environment patches, and libgcrypt as a second crypto library.
+- INV-0418-1.
+- ADR-0419 item 7.
+- The rewritten ADR-0412 item 5 (socket objects transient and in memory, ADR-0055 listed).
+- ADR-0413 item 6 and its libffi open question.
+- Plan F5, F6, D4 and D6, which match the ADRs.
+
+### Dispositions of the check (the main session)
+
+All ten accepted and fixed: (1) ADR-0414's Recommendation states its change of ADR-0315 item 1, and INV-0414-2's
+check adds a host test of the boundary's order; (2) plan E1 and ADR-0418 name LLVM 18 beside Apple clang and make the
+clang 18 compiler string part of E1's "done when"; (3) ADR-0410 item 3 states libepoxy's `abort()`, the shim's
+`dlerror` and call count, and E2's "done when" asserts zero calls, with the WPE patch as the fallback; (4) ADR-0412
+item 2 queues the ancillary message before the bytes, holds back bytes past a tag, and refuses `SCM_RIGHTS` in every
+process once a stream is shared; INV-0412-2's test gains the shared case; (5) ADR-0415 item 2(a) spawns from the
+bootstrap's `Image` entry (ADR-0107), so the UI process and its helpers share one copy, paid by the image's creator;
+ADR-0417 corrected to one copy; (6) ADR-0413 "never mapped, sent, inherited or forked"; (7) `SHM_ANON` in a Zoraya
+header included by `sys/mman.h`, FreeBSD's pointer value, the ADR-0100 change stated; (8) ADR-0410's unsourced wording
+removed or tagged, FFmpeg's licence stated; (9) ADR-0225 item 10; (10) the measured tarball holds `Tools/`
+(`TestWebKitAPI`), said in plan E0. Not reviewed again: TASK-33 asks for one check of the changed lines.
