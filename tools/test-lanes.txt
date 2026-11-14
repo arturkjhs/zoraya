@@ -1,0 +1,37 @@
+# The lanes of tools/test-par.sh (make test-par, and the second half of make
+# test-changed): which of make test's steps it runs, and which it does not.
+# make check-test-lanes checks that every step make test-changed can select
+# (tools/test-map.txt, tools/plan-lib.sh's `all`) and every test step of
+# TEST_STEPS is here. A step selected and not here FAILS the run: a step that
+# is listed must run, or print `SKIPPED: STEP: REASON` in the summary; it
+# never passes silently.
+#
+#   solo STEP                 runs alone, before the lanes
+#   lane STEP...              steps that share an image or a build directory,
+#                             run one after another; lanes run side by side,
+#                             at most PAR_QEMU (3) at once
+#   optin VAR STEP... -- WHY  the steps (also in a lane) run only when VAR=1;
+#                             otherwise the run prints SKIPPED and WHY
+#   skip STEP... -- WHY       the ALLOW_SKIP list: steps with no lane, printed
+#                             as SKIPPED and WHY; they do not fail the run
+#
+# test-files and test-crash write build/crash.img; test-posix-gui and
+# test-tour-gui build/posix-gui.img. test-boot runs alone: its console test
+# needs a burst to overflow the guest's ring while a job runs, which other
+# guests' load can keep from happening (2026-11-09). test-posix-suites and
+# test-posix-threadtest3 share build/ports (libc.a, the suites); test-apps and
+# test-netsurf share the apps' build and each starts its own test server on a
+# free port, with its own root and disk (APPS_TEST_ROOT, NS_ROOT).
+solo test-boot
+lane test-qemu
+lane test-libposix test-posix-threads
+lane test-files test-crash test-keeper test-hand-run
+lane test-posix
+lane test-posix-gui test-tour-gui
+lane test-gui
+lane test-net
+lane test-fuzz test-fuzz-net
+lane test-posix-suites test-posix-threadtest3
+lane test-apps test-netsurf
+lane test-python test-python-regr
+optin PAR_LONG test-python test-python-regr -- 15 and 25 minutes of QEMU time (PYTHON_TIMEOUT 900 s, PYTHON_REGR_TIMEOUT 1500 s), too long for an agent session: PAR_LONG=1 runs them

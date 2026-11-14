@@ -307,6 +307,7 @@ jobs:
           - make check-netsurf-refusal
           - make check-run-disk
           - make check-ci-plan
+          - make check-test-lanes
           - make check-mutant-lists
     name: ${{ matrix.cmd }}
     env:

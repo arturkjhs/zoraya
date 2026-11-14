@@ -1006,6 +1006,14 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   header's count, source and date, and `docs/dependencies.md` agreeing; `cargo test -p zoraya-tls --test production_roots` loads every
   one into the verifier;
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
+- `make check-test-lanes`: every step `make test-changed` can select (`tools/test-map.txt`, `all` in `tools/plan-lib.sh`) and every
+  test step of `make test` has a lane in `tools/test-lanes.txt` (the lanes of `tools/test-par.sh`) or a line in its skip list
+  (ALLOW_SKIP) with a reason, and runs `tools/test-lanes-test.sh`: with a fake map, `make test-changed` (DRY=1) fails for a selected
+  step with no lane, prints `SKIPPED: STEP: REASON` for a skipped one and passes. A step that is selected and not run never passes
+  silently. Lanes now cover `test-posix-suites` and `test-posix-threadtest3` (one lane, `build/ports`), `test-apps` and
+  `test-netsurf` (one lane, each with its own test server, root and disk); the lanes build the ports they need once, before they
+  start (`make fetch-ports` once). `test-python` and `test-python-regr` (15 and 25 minutes) have a lane but print `SKIPPED` unless
+  `PAR_LONG=1`. `Makefile`, `tools/run-qemu.sh` and `tools/test-runner/` map to every step in `tools/test-map.txt`, explicitly;
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-libposix`, the stage 6c criterion (below, under "How the in-QEMU tests run");
 - `make test-posix`, stage 6e's acceptance in `make test` ("Stage 6 acceptance" above); on CI a job of its own. Two
