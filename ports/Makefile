@@ -1121,6 +1121,9 @@ check-libc: | tools
 check-ports: | tools
 	@echo "== the terminal's width table is musl's wcwidth (INV-0332-4)"
 	tools/term-width/gen.sh check
+	@echo "== the terminfo files and the conformance dump are the pinned tic's (INV-0333-1, INV-0332-1)"
+	tools/term-terminfo/terminfo.sh check
+	tools/term-conformance/check.sh pin
 	@echo "== the tier list is the one ADR-0100 item 7's rule gives"
 	$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
 	@echo "== libc.a against the tier list (INV-0100-1, INV-0100-2, INV-0005-1, INV-0005-2)"
