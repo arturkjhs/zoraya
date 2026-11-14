@@ -185,13 +185,31 @@ jobs:
           shared-key: build
           key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
       # ADR-0109: the fetch step is outside make test, as the toolchain's install is.
-      - name: Cache the ports' archives
-        uses: actions/cache@v4
+      # The archives are kept in Actions' cache, so that an upstream outage
+      # (ftp.gnu.org timed out on main's run 43511821485) does not reach the
+      # job: the exact key (the hash of ports/sources.lock) hits when the lock
+      # is unchanged; a lock that changed restores the newest entry of an older
+      # lock (the restore key), and `make fetch-ports` downloads only what that
+      # entry lacks. Whatever came back is not trusted: fetch-ports.sh checks
+      # every archive against the lock's SHA-256 and downloads again an archive
+      # that fails (a corrupted entry). The entry is saved after the fetch even
+      # when a later step fails (tools/check-fetch-cache.sh checks that every
+      # fetch has this restore step).
+      - name: Restore the ports' archives
+        id: ports-src
+        uses: actions/cache/restore@v4
         with:
           path: build/ports/src
           key: ports-src-${{ hashFiles('ports/sources.lock') }}
+          restore-keys: ports-src-
       - name: make fetch-ports
         run: make fetch-ports
+      - name: Save the ports' archives
+        if: ${{ always() && steps.ports-src.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: build/ports/src
+          key: ports-src-${{ hashFiles('ports/sources.lock') }}
       # The ports' build (make reads times): the key is every file under
       # ports/ (sources.lock among them) and tools/zcc/, and those files get
       # an old time first, so that the restored outputs are newer than them.

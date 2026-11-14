@@ -2097,7 +2097,7 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   on a thread with a 2 MiB stack (committed in full, copied by every `fork` child; measured 8, 2 and 1 MiB, ADR-0320 item 5) and ends the process with `exit(status)` from it, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB (the main thread blocks every signal, so Ctrl-C reaches the interpreter's thread); no `pyvenv.cfg`
   search; `-c`, `-m` and a program read from standard input put no directory on `sys.path`; `urllib` takes no proxy from the environment. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`, and `_PYTHREAD_NAME_MAXLEN` is 15 (configure does not know the platform), so a long thread name is truncated, not refused.
 - **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
-  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. `ssl.create_default_context()` finds the roots with no `cafile` (OpenSSL's `OPENSSLDIR` is `/system/tls`). `PYTHON*` variables decide nothing. A script imports from the standard library and its own directory (the current directory is readable), not from the current directory under `-c`, `-m` or a program read from standard input. Python is not mediated: a script can turn verification off (`ssl.CERT_NONE`), unlike curl's refused `-k`.
+  `+net HOST:PORT` word, and the roots (`/system/tls/roots`) with it. INV-0312-1 covers connections made with OpenSSL's defaults; a script that passes `ssl.CERT_NONE` (or `_create_unverified_context()`) chose that itself, and the description says so (ADR-0320 item 10, accepted option A). `ssl.create_default_context()` finds the roots with no `cafile` (OpenSSL's `OPENSSLDIR` is `/system/tls`). `PYTHON*` variables decide nothing. A script imports from the standard library and its own directory (the current directory is readable), not from the current directory under `-c`, `-m` or a program read from standard input. Python is not mediated: a script can turn verification off (`ssl.CERT_NONE`), unlike curl's refused `-k`.
 - **The volume.** `tools/run-disk.sh` takes several `EXTRA_ROOT` directories separated by colons and `DISK_SIZE` (default 64M, in
   the disk's key): curl, wget and Python do not fit in 64M, so `make run` with Python is
   `EXTRA_ROOT=build/rootfs-apps:build/rootfs-python DISK_SIZE=192M`, which also holds NetSurf (9d: `bin/netsurf` 12.5 MB and
@@ -2114,6 +2114,37 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
+
+## The window of a POSIX program and NetSurf (stage 9, 9d)
+
+A POSIX program can have one window (ADR-0317), and NetSurf 3.11 is the first (ADR-0318).
+
+- **The request.** The program's description has a `window TITLE` line (once, at most 48 characters, command only;
+  `user/describe/posix/netsurf.cmd` says `window NetSurf`). `zosh` then asks the panel (`OpenWindow` in `zoraya-proto-chooser`;
+  the shell holds the channel at slot 14, `WINDOW_SLOT`, and `init` gives its first shell one too). The panel
+  (`zoraya_panel::window_record`) refuses an untrusted room and a malformed request (`WindowRefused`), and otherwise adds
+  the client with `AddRoomClient`, with the room's record and the pills of the line's grants, at most 8 windows a shell
+  (`WindowOpened`). `posix_child` moves the client end into the program as `EXT_WINDOW` of the `ZPBX` bootstrap
+  (ADR-0310). The compositor draws, from its records only, the title and the grants the program holds (INV-0172-1); the program asks for no
+  position, focus or stacking (INV-0165-2). `tools/check-untrusted-gate.sh` requires the `untrusted-gate: window-refusal`
+  marker in the shell and in the panel.
+- **The client.** `crates/zoraya-surface` is a static library that sends only the client requests of `zoraya-proto-gui`
+  and bounds every buffer (16384 per side, 64 Mi pixels). `ports/netsurf/zoraya.c` registers a `libnsfb` surface over it
+  and maps the compositor's key, text, pointer, resize and (since 9e, ADR-0322) wheel events. A closed channel
+  (`ClientGone`) ends the program; a fork child forgets the window.
+- **NetSurf.** `make netsurf` builds libpng, IJG libjpeg, libcurl and NetSurf's own libraries, then `netsurf` with its
+  internal bitmap font (`zoraya-text` later), curl and the OpenSSL of 9a; `bin/netsurf` is 12.5 MB, its resources are in
+  `/usr/share/netsurf` (read with the toolchain set, no extra grant). Patches: no cookies or proxy (libcurl is built without
+  them); a file fetcher that reads the file (libposix maps none); the privacy error page's "Proceed" never turns
+  verification off (INV-0312-1). The `+net` words come from the `url` operand as for curl; since 9f-net the `web` grant
+  (next section) reaches the links to other public hosts.
+- **Tests.** `make test-netsurf` (`tests/gui/netsurf.script`): a page's CSS and PNG by colour regions, a form result,
+  HTTPS to `test.zoraya`, and the expired certificate giving the privacy error page with 0 request bytes at the server even
+  after a click on Proceed.
+- **Known limits.** No downloads (a chooser channel needs a second `ZPBX` slot), no JavaScript, SVG, cookies, proxy,
+  clipboard or cursor shape, titles Latin only, timed waits are a 2 ms poll loop; a shell that `init` restarts gets no
+  window channel until the panel restarts; the shell-side refusal of an untrusted room is unreachable in QEMU while such a
+  room cannot be entered (the panel's is tested on the host).
 
 ## NetSurf on the web: the `web` grant and the refusal page (stage 9, 9f-net)
 

@@ -100,6 +100,17 @@ fi
 printf 'x' >> "$tmp/cache/good.tar.gz"
 if tools/fetch-ports.sh --verify "$tmp/lock" "$tmp/cache" good > "$tmp/out" 2>&1; then fail "--verify accepted a corrupted cached archive"; fi
 echo "test-fetch: a cached archive corrupted later fails --verify (INV-0109-4)"
+# A restored cache entry is not trusted (CI's Actions cache): the corrupted
+# archive is removed and downloaded again; a cache that holds the good archive
+# makes no download (the source is gone, and the fetch still passes).
+tools/fetch-ports.sh "$tmp/lock" "$tmp/cache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "a corrupted cached archive was not fetched again"; }
+cmp -s "$tmp/cache/good.tar.gz" "$tmp/remote/good.tar.gz" || fail "the corrupted cached archive was kept"
+mv "$tmp/remote/good.tar.gz" "$tmp/remote/good.gone"
+tools/fetch-ports.sh "$tmp/lock" "$tmp/cache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "a good cached archive was fetched"; }
+grep -q "from file://" "$tmp/out" && fail "a good cached archive caused a download"
+mv "$tmp/remote/good.gone" "$tmp/remote/good.tar.gz"
+printf 'x' >> "$tmp/cache/good.tar.gz"
+echo "test-fetch: a corrupted cached archive is downloaded again, a good one is not (the Actions cache)"
 if tools/fetch-ports.sh --verify "$tmp/lock" "$tmp/cache" nosuch > "$tmp/out" 2>&1; then fail "--verify passed a name not in the lock"; fi
 
 # The same through ports/Makefile: a corrupted musl archive in the cache stops
@@ -124,3 +135,12 @@ grep -q "run 'make fetch-ports' first" "$tmp/out" || { cat "$tmp/out"; fail "the
 [ -z "$(ls -A "$tmp/empty")" ] || fail "ports/Makefile put something into the cache"
 echo "test-fetch: an empty cache stops the build with a message naming make fetch-ports (INV-0109-3)"
 cd "$root"
+
+# tools/check-fetch-cache.sh: the real workflows pass; a workflow that fetches
+# without the restore step, or without the save step, fails.
+tools/check-fetch-cache.sh > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "the workflows' fetch has no cache steps"; }
+sed 's|actions/cache/restore@|actions/checkout@|' .github/workflows/test.yml > "$tmp/nores.yml"
+if tools/check-fetch-cache.sh "$tmp/nores.yml" > "$tmp/out" 2>&1; then fail "a fetch without a restore step passed"; fi
+sed 's|actions/cache/save@|actions/checkout@|' .github/workflows/test.yml > "$tmp/nosave.yml"
+if tools/check-fetch-cache.sh "$tmp/nosave.yml" > "$tmp/out" 2>&1; then fail "a fetch without a save step passed"; fi
+echo "test-fetch: every fetch in the workflows restores and saves the archives' cache"
