@@ -4,7 +4,20 @@
 # check only. Host tests are not listed: every changed crate's tests run,
 # with the tests of the crates that depend on it.
 #
+# The build and the machine's own runners touch every test, so they map to every
+# step explicitly (the same list as `all` in tools/plan-lib.sh, which
+# `make check-test-lanes` compares): the Makefile, tools/run-qemu.sh (the only
+# thing that invokes QEMU) and tools/test-runner/. Steps that tools/test-lanes.txt
+# does not run print SKIPPED, e.g. test-python without PAR_LONG=1.
+#
 # PREFIX                      STEPS
+Makefile                      check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-fuzz test-fuzz-net
+tools/run-qemu.sh             check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-fuzz test-fuzz-net
+tools/test-runner/            check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-fuzz test-fuzz-net
+tools/test-par.sh             check
+tools/test-lanes.txt          check
+tools/check-test-lanes.sh     check
+tools/test-lanes-test.sh      check
 docs/                         check
 docs/adr/posix-surface-T9.txt  check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 README                        check

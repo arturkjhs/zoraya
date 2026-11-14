@@ -4,25 +4,32 @@
 # tools/test-map.txt to the steps of make test that cover it; make check;
 # the host tests of the changed crates and of the crates that depend on
 # them; and those steps, in parallel lanes under HVF (tools/test-par.sh with
-# FULL=0). A path the map does not know runs every step.
+# FULL=0; the steps with no lane print SKIPPED, tools/test-lanes.txt). A path the map does not know runs every step.
 #
 #   tools/test-changed.sh [BASE]     (BASE: origin/main)
 #
-# DRY=1 prints what would run and runs nothing.
+# DRY=1 prints what would run and runs nothing; it also prints the SKIPPED
+# lines of the steps tools/test-lanes.txt does not run, and exits 1 for a
+# step it has no lane for (the run itself would).
 
 set -u
 
 base=${1:-origin/main}
-map=tools/test-map.txt
+map=${TEST_MAP:-tools/test-map.txt}
 cargo=${CARGO:-cargo}
 
-changed=$(
-    {
-        git diff --name-only "$(git merge-base "$base" HEAD)" HEAD
-        git diff --name-only HEAD
-        git ls-files --others --exclude-standard
-    } | sort -u
-)
+# TEST_CHANGED_PATHS (tools/test-lanes-test.sh) stands for the git paths.
+if [ -n "${TEST_CHANGED_PATHS:-}" ]; then
+    changed=$(printf '%s\n' $TEST_CHANGED_PATHS | sort -u)
+else
+    changed=$(
+        {
+            git diff --name-only "$(git merge-base "$base" HEAD)" HEAD
+            git diff --name-only HEAD
+            git ls-files --others --exclude-standard
+        } | sort -u
+    )
+fi
 if [ -z "$changed" ]; then
     echo "make test-changed: nothing changed since $base; make check only"
     exec "${MAKE:-make}" --no-print-directory check
@@ -35,7 +42,15 @@ plan_changed
 echo "make test-changed: since $base"
 echo "  host tests: ${packages:-none}"
 echo "  steps: ${steps:-none} (under HVF)"
-[ "${DRY:-0}" = 1 ] && exit 0
+if [ "${DRY:-0}" = 1 ]; then
+    # The lanes' own verdict: which steps run, which print SKIPPED, which fail.
+    if [ -n "$steps" ]; then
+        # shellcheck disable=SC2086 # the steps
+        DRY=1 tools/test-par.sh $steps
+        exit $?
+    fi
+    exit 0
+fi
 
 status=0
 "${MAKE:-make}" --no-print-directory check || status=1

@@ -253,9 +253,11 @@ states, to be taken up later:
   TASK-31's part 10c.
 - `work/test-fixes`, a small part after `stage-cxx`, beside TASK-31's first parts: the open items of the test and CI audit
   (`docs/research/test-audit/report.md`): the remaining vacuous-test findings; the `test-crash` check and the `t_quota` handshake;
-  `Makefile` in `tools/test-map.txt`; the `libc.a` relink that rebuilds every port in the build job; the stale "not yet
+  the `libc.a` relink that rebuilds every port in the build job; the stale "not yet
   applicable" invariant rows and `adr-check` accepting any text after `checked:`; checks for INV-0172-4 and INV-0230-1.
-  Also: `tools/test-par.sh` has no lane for `test-apps`, `test-netsurf`, `test-python`, `test-python-regr`, `test-posix-suites` or
-  `test-posix-threadtest3`, so `make test-changed` lists these steps and silently skips them; only CI runs them (TASK-29's merge agent).
+  Done (first item): `tools/test-lanes.txt` gives `test-apps`, `test-netsurf`, `test-posix-suites` and `test-posix-threadtest3` lanes,
+  `test-python` and `test-python-regr` print `SKIPPED` unless `PAR_LONG=1`, a step with no lane fails the run, `Makefile`,
+  `tools/run-qemu.sh` and `tools/test-runner/` are in the map (`make check-test-lanes`). The new lanes were not run end to end here
+  (no ports cache in the worktree); see the part's report.
 - A URL operand's name rule is public-only for curl and wget too, not only for NetSurf (ADR-0328, extended by the architect on
   2026-11-14): done in `work/9g-url` when it merges; until then curl and wget keep ADR-0223's name rule.

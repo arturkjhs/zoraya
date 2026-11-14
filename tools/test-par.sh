@@ -24,20 +24,27 @@ case "${1:-}" in
 esac
 logs=build/logs-par
 max_qemu=${PAR_QEMU:-3}
-mkdir -p "$logs"
-[ -n "$internal" ] || rm -f "$logs"/*.log "$logs"/*.status
+[ "${DRY:-0}" = 1 ] || mkdir -p "$logs"
+[ -n "$internal" ] || [ "${DRY:-0}" = 1 ] || rm -f "$logs"/*.log "$logs"/*.status
 
-checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-run-disk"
-# The QEMU lanes, each a list of steps sharing an image: test-files and
-# test-crash write build/crash.img; test-posix-gui and test-tour-gui
-# build/posix-gui.img.
-# test-boot runs alone, before the lanes: its console test needs a burst to
-# overflow the guest's ring while a job runs, which other guests' load can
-# keep from happening (2026-11-09).
-solo="test-boot"
-lanes="test-qemu;test-libposix test-posix-threads;test-files test-crash test-keeper test-hand-run;test-posix;test-posix-gui test-tour-gui;test-gui;test-net;test-fuzz test-fuzz-net"
+checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-run-disk check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-netsurf-refusal check-ci-plan check-test-lanes"
+# The lanes, the steps run alone and the steps that are skipped come from
+# tools/test-lanes.txt (make check-test-lanes checks it against make test's
+# steps and the test map).
+lanes_file=${TEST_LANES:-tools/test-lanes.txt}
+solo=$(awk '$1 == "solo" { printf "%s ", $2 }' "$lanes_file")
+solo=${solo% }
+lanes=$(awk '$1 == "lane" { $1 = ""; sub(/^ /, ""); printf "%s;", $0 }' "$lanes_file")
 all_lanes="$solo $(echo "$lanes" | tr ';' ' ')"
-
+# Steps run only when VAR=1 (optin) and steps with no lane (skip): "STEP|REASON" a line.
+optin=$(awk '$1 == "optin" { v = $2; s = ""; r = ""; seen = 0
+    for (i = 3; i <= NF; i++) { if ($i == "--") { seen = 1; continue }
+        if (seen) r = r " " $i; else s = s " " $i }
+    n = split(s, w, " "); for (i = 1; i <= n; i++) print w[i] "|" v "|" substr(r, 2) }' "$lanes_file")
+skipped_steps=$(awk '$1 == "skip" { s = ""; r = ""; seen = 0
+    for (i = 2; i <= NF; i++) { if ($i == "--") { seen = 1; continue }
+        if (seen) r = r " " $i; else s = s " " $i }
+    n = split(s, w, " "); for (i = 1; i <= n; i++) print w[i] "|" substr(r, 2) }' "$lanes_file")
 
 if [ -n "$internal" ]; then
     wanted=${WANTED:- $* }
@@ -47,6 +54,50 @@ else
     wanted=" test-unit $checks $all_lanes "
 fi
 has() { case "$wanted" in *" $1 "*) return 0 ;; esac; return 1; }
+
+# A step asked for and not run: SKIPPED with its reason when the lanes file
+# allows it, FAIL when nothing knows it (a step with no lane must not pass
+# silently). Both are printed in the summary.
+skip_lines=
+unlaned=
+if [ -z "$internal" ]; then
+    known=" test-unit $checks $all_lanes "
+    for s in $wanted; do
+        hit=$(printf '%s\n' "$skipped_steps" | awk -F'|' -v s="$s" '$1 == s { print $2; exit }')
+        if [ -n "$hit" ]; then
+            skip_lines="$skip_lines$s|$hit
+"
+            wanted=$(echo " $wanted " | sed "s/ $s / /")
+            continue
+        fi
+        hit=$(printf '%s\n' "$optin" | awk -F'|' -v s="$s" '$1 == s { print $2 "|" $3; exit }')
+        if [ -n "$hit" ]; then
+            var=${hit%%|*}
+            eval "val=\${$var:-0}"
+            if [ "$val" != 1 ]; then
+                skip_lines="$skip_lines$s|${hit#*|}
+"
+                wanted=$(echo " $wanted " | sed "s/ $s / /")
+            fi
+            continue
+        fi
+        case "$known" in
+            *" $s "*) ;;
+            *) unlaned="$unlaned $s" ;;
+        esac
+    done
+    wanted=" $(echo $wanted) "
+fi
+
+# The SKIPPED and FAIL lines of the steps that do not run.
+summary_skips() {
+    printf '%s' "$skip_lines" | while IFS='|' read -r s why; do
+        [ -n "$s" ] && echo "  SKIPPED: $s: $why"
+    done
+    for s in $unlaned; do
+        echo "  FAIL  $s: no lane in $lanes_file and not in its skip list: the step would not run (add a lane, or a skip line with the reason)"
+    done
+}
 
 start_all=$(date +%s)
 summary=
@@ -85,6 +136,13 @@ if [ "$internal" = __lane ]; then
     exit 0
 fi
 
+# DRY=1: the plan and the summary lines for the steps that will not run, no run.
+if [ "${DRY:-0}" = 1 ] && [ -z "$internal" ]; then
+    echo "make test-par (dry): run:${wanted}"
+    summary_skips
+    exit "$([ -n "$unlaned" ] && echo 1 || echo 0)"
+fi
+
 # 1. The checks, one after another (seconds), and the build, alone.
 for c in $checks; do
     has "$c" && step "$c"
@@ -99,6 +157,18 @@ t0=$(date +%s)
             "$make" --no-print-directory -s posix-image &&
             ${CARGO:-cargo} build -q -p zoraya-test-runner
     fi &&
+        # The ports the lanes' steps need, built once here so that the lanes do not
+        # build them at the same time (needs `make fetch-ports` once). Not -s: the ports'
+        # checks read the compile commands in the logs (ci-build is not -s either).
+        if has test-posix-suites || has test-posix-threadtest3; then
+            "$make" --no-print-directory -f ports/Makefile libc suites workloads
+        fi &&
+        if has test-apps || has test-netsurf; then
+            "$make" --no-print-directory apps netsurf
+        fi &&
+        if has test-python || has test-python-regr; then
+            "$make" --no-print-directory python python-testlib
+        fi &&
         if has test-unit; then
             ${CARGO:-cargo} test -q --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
         fi
@@ -178,5 +248,7 @@ for s in test-unit $checks $all_lanes; do
             ;;
     esac
 done
+summary_skips
+[ -z "$unlaned" ] || failed=1
 [ "${FULL:-0}" = 1 ] || echo "  (local: TCG runs, the tour's second run and crash rounds past 2 skipped; FULL=1 runs them)"
 exit "$failed"
