@@ -62,6 +62,7 @@ ports/patches/netsurf/        check test-netsurf
 ports/apps/nsshim.c           check test-netsurf test-apps
 user/describe/posix/netsurf.cmd  test-netsurf test-files
 tests/gui/netsurf.script      test-netsurf
+tests/gui/netsurf-text.script test-netsurf
 user/src/windowclient.rs      test-netsurf
 user/src/bin/panel.rs         test-gui test-netsurf
 crates/zoraya-text/           test-gui test-qemu

@@ -368,6 +368,21 @@ pub fn merge(plan: &[Planned]) -> Vec<Merged> {
     covered(by_path(plan))
 }
 
+/// The directory of the system's fonts (ADR-0162, ADR-0326 item 4).
+pub const SYSTEM_FONTS: &str = "/system/fonts";
+
+/// What a POSIX program of the image is given with its window (ADR-0326
+/// item 4, INV-0326-1): `/system/fonts` read only, "with the window", when
+/// its description has `window`; nothing for one without. This is the only
+/// place that gives a POSIX program that directory.
+pub fn with_window(description: &Description) -> Option<Planned> {
+    description.window.as_ref().map(|_| Planned {
+        path: String::from(SYSTEM_FONTS),
+        access: Access::Read,
+        reason: String::from("with the window"),
+    })
+}
+
 /// The most pills a window shows (`zoraya_panel::window_record` accepts as
 /// many lines).
 pub const MAX_WINDOW_PILLS: usize = 16;

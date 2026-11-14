@@ -1,6 +1,23 @@
 --- a/netsurf/frontends/framebuffer/fbtk/text.c
 +++ b/netsurf/frontends/framebuffer/fbtk/text.c
-@@ -62,7 +62,7 @@
+@@ -49,8 +49,16 @@
+ 	 ((((7 * ((c1 >> 8) & 0xff)) >> 3) + 32) << 8) |	\
+ 	 ((((7 * (c1 & 0xff)) >> 3) + 32) << 0))
+ 
++#ifdef FB_USE_ZORAYA
++/* Zoraya (ADR-0326): the page's dpi follows the window's scale, and the
++ * toolkit's widgets keep their pixel sizes, so a field's text converts its
++ * pixels to points at that dpi, not at FBTK_DPI. */
++#include "netsurf/browser.h"
++#define px_to_pt(x) (((x) * 72) / browser_get_dpi())
++#else
+ /* Convert pixels to points, assuming a DPI of 90 */
+ #define px_to_pt(x) (((x) * 72) / FBTK_DPI)
++#endif
+ 
+ /* Get a font style for a text input */
+ static inline void
+@@ -62,7 +70,7 @@
  	else
  		*padding = 0;
  
@@ -9,7 +26,7 @@
  	*padding += widget->height / 6;
  	*font_height = widget->height - *padding - *padding;
  #else
-@@ -136,7 +136,7 @@
+@@ -136,7 +144,7 @@
  		int x = bbox.x0 + padding;
  		int y = bbox.y0 + ((fh * 3 + 2) / 4) + padding;
  

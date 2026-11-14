@@ -763,3 +763,28 @@ fn window_pills_refuse_more_than_sixteen() {
     let pills = crate::grants::window_pills(&fewer, &net).unwrap();
     assert_eq!((pills.len(), pills[0].as_str()), (max, "+net h"));
 }
+
+/// INV-0326-1, the shell's half: a description with `window` gives
+/// `/system/fonts` read only, and nothing else does.
+#[test]
+fn the_fonts_come_with_a_window_read_only_and_only_with_it() {
+    let netsurf = d(include_str!("../../../user/describe/posix/netsurf.cmd"));
+    let fonts = crate::grants::with_window(&netsurf).expect("netsurf has a window");
+    assert_eq!(fonts.path, "/system/fonts");
+    assert_eq!(fonts.access, Access::Read);
+    assert_eq!(fonts.reason, "with the window");
+    // The pill says read, never write.
+    assert_eq!(
+        crate::grants::window_pills(&[fonts], &[]).unwrap(),
+        vec!["+r /system/fonts"]
+    );
+    for text in [
+        include_str!("../../../user/describe/posix/curl.cmd"),
+        include_str!("../../../user/describe/posix/tcc.cmd"),
+        include_str!("../../../user/describe/posix/python3.cmd"),
+    ] {
+        let plain = d(text);
+        assert!(plain.window.is_none());
+        assert_eq!(crate::grants::with_window(&plain), None, "{}", plain.name);
+    }
+}
