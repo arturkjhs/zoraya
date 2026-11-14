@@ -1347,6 +1347,18 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   EOF, `ICRNL`, `ONLCR`, INTR, QUIT, SUSP), connections tagged with a group, the foreground job, one held read per
   connection. Ctrl-C is `job_signal(foreground, Interrupt)`; Ctrl-Z goes to the broker as `suspend`. Backends: the
   serial console, and the stage 5 terminal window, to which `ttyd` speaks `zoraya-proto-term` as `zosh` does.
+  *Part 10c, so far (ADR-0331, ADR-0386; `zosh` does not call it yet):* `VMIN` and `VTIME` in POSIX's four cases with a
+  clock the host gives (`set_time`, `deadline`, `tick`); `Flush` and `Drain` requests and the status `IO`; a line tag on
+  every connection (a clone carries its parent's) with `set_front_line`, so that a `Read`, `PollReadable`, `SetAttr` or
+  `Flush` from a line not in front is refused and changes nothing, and with no line in front nobody reads;
+  `set_foreground`, `end_line` and `continue_line` for the shell's host. `zoraya_shell::tty_host::Host` is the shell's
+  rules around it, host-tested: the line in front, stop, `fg` and end (`Restore { keep }`, `Reinstate`, the attributes
+  kept and restored, one `SIGWINCH`), `tcsetpgrp` only for a group created inside the front line, the relay's carriage
+  return from the attributes, and the paste to a program (mode 2004 read from its output, a newline held for Enter
+  with the question in the window title, nothing in it that ends the bracket). Not yet: `zosh`'s event loop uses
+  none of it, so a POSIX program still gets no terminal; the broker's control channel, `libposix`'s readiness
+  request, `/dev/tty` and `ttyname`, `grants`' `keys` line, `TERM`, the raw-mode demo and the relay measurement (see
+  `docs/tasks/TASK-31-part-10c.md`). INV-0331-8 is a lint in `make check-kernel-tty`.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).

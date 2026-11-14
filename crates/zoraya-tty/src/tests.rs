@@ -857,3 +857,87 @@ fn the_end_of_a_line_restores_the_defaults_and_fg_gives_the_attributes_back() {
     t.continue_line(was);
     assert_eq!(t.discipline.attr, was);
 }
+
+// ---- Holes the mutation run of part 10c found.
+
+#[test]
+fn raw_is_cfmakeraw_and_nothing_else() {
+    use discipline::bits::*;
+    let d = Termios::default();
+    let r = Termios::raw();
+    assert_eq!(r.iflag, d.iflag & !(ICRNL | INLCR | IGNCR | IXON));
+    assert_eq!(r.iflag & IUTF8, IUTF8, "UTF-8 input mode stays");
+    assert_eq!(r.oflag, d.oflag & !OPOST, "ONLCR stays but OPOST is off");
+    assert_eq!(r.lflag & (ISIG | ICANON | ECHO | ECHONL | IEXTEN), 0);
+    assert_eq!(r.lflag, d.lflag & !(ISIG | ICANON | ECHO | ECHONL | IEXTEN));
+    assert_ne!(r.lflag, 0, "the other local flags are kept");
+    assert_eq!((r.cflag, r.cc), (d.cflag, d.cc));
+    assert_ne!(r, d);
+    // Each flag it clears is set in the default, so each clear matters.
+    for f in [ISIG, ICANON, ECHO, IEXTEN] {
+        assert_ne!(d.lflag & f, 0);
+    }
+    for f in [ICRNL, IXON] {
+        assert_ne!(d.iflag & f, 0);
+    }
+    assert_ne!(d.oflag & OPOST, 0);
+}
+
+#[test]
+fn set_attr_request_is_the_message_a_client_sends() {
+    let mut t = session();
+    let raw = Termios::raw();
+    let bytes = set_attr_request(&raw, 77);
+    assert!(!bytes.is_empty());
+    let (h, _) = Header::decode(&bytes).unwrap();
+    assert_eq!((h.ordinal, h.transaction), (SetAttr::ORDINAL, 77));
+    let a = t.request(1, &bytes, vec![]);
+    assert_eq!(reply_status(&replies(&a)[0].1), status::OK);
+    assert_eq!(t.discipline.attr, raw);
+}
+
+#[test]
+fn the_host_calls_move_the_front_line_and_the_foreground() {
+    let mut t: Terminal<H> = Terminal::new();
+    assert_eq!(t.front_line(), None);
+    let c = t.add_terminal_in(5, 3).unwrap();
+    t.set_front_line(Some(3));
+    assert_eq!(t.front_line(), Some(3));
+    t.set_front_line(Some(0));
+    assert_eq!(t.front_line(), Some(0));
+    t.set_front_line(Some(3));
+    // A read held with no foreground group is answered when one is set, and
+    // asking again after the group changed to another is refused.
+    t.keys(b"a\n");
+    assert!(!replies(&t.request(c, &message(&Read { max: 9 }, 1), vec![])).is_empty());
+    t.request(c, &message(&Read { max: 9 }, 2), vec![]);
+    let a = t.set_foreground(9, 100);
+    let r = replies(&a);
+    assert_eq!(r.len(), 1, "the held read of group 5 is told NotForeground");
+    assert_eq!(read_reply(&r[0].1), Err(status::NOT_FOREGROUND));
+    assert_eq!(t.foreground(), Some(9));
+    t.clear_foreground_group();
+    assert_eq!(t.foreground(), None);
+    // With no foreground group the signal characters send nothing.
+    assert!(
+        !t.keys(&[0x03])
+            .iter()
+            .any(|a| matches!(a, Action::Signal { .. }))
+    );
+}
+
+#[test]
+fn read_ready_and_deadline_in_canonical_mode_follow_lines_only() {
+    let mut d = Discipline::new();
+    d.attr.cc[discipline::bits::VMIN] = 0;
+    d.attr.cc[discipline::bits::VTIME] = 5;
+    d.set_now(10);
+    assert!(!d.read_ready(10, 0), "no line yet");
+    assert_eq!(d.read_deadline(10, 0), None, "VTIME is for raw mode only");
+    let mut echo = Vec::new();
+    for &b in b"x\n" {
+        d.input(b, &mut echo);
+    }
+    assert!(d.read_ready(10, 0));
+    assert_eq!(d.read_deadline(10, 0), None);
+}
