@@ -13,10 +13,26 @@ pub const MAX_CHUNK: usize = 4096;
 /// The most bytes of one paste `[assumption]` (ADR-0332 item 8).
 pub const MAX_PASTE_BYTES: usize = 64 * 1024;
 
+/// A character that is drawn as nothing and changes what a line means or
+/// how it reads: the zero-width spaces and joiners, the marks of direction
+/// and the bidirectional controls (`Cf`), and the byte-order mark. They are
+/// neither pasted nor copied (ADR-0384).
+pub const fn invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+    )
+}
+
 /// Whether a character may be in pasted text: not a control character
-/// (C0, DEL and C1 are `is_control`), with tab and newline excepted.
+/// (C0, DEL and C1 are `is_control`) and not an [`invisible_format`]
+/// character, with tab and newline excepted.
 pub const fn keeps(c: char) -> bool {
-    c == '\t' || c == '\n' || !c.is_control()
+    c == '\t' || c == '\n' || !(c.is_control() || invisible_format(c))
 }
 
 /// The text of a paste as a program or a line may take it: `\r\n` and a lone
@@ -93,6 +109,26 @@ mod tests {
     }
 
     #[test]
+    fn zero_width_and_bidirectional_characters_go() {
+        for c in ('\u{200b}'..='\u{200f}')
+            .chain('\u{202a}'..='\u{202e}')
+            .chain('\u{2060}'..='\u{2064}')
+            .chain('\u{2066}'..='\u{2069}')
+            .chain(core::iter::once('\u{feff}'))
+        {
+            assert!(invisible_format(c) && !keeps(c), "{c:?}");
+            assert_eq!(cleaned(&std::format!("a{c}b")), "ab");
+        }
+        // The neighbours of the ranges are text.
+        for c in [
+            '\u{200a}', '\u{2010}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{2065}', '\u{206a}',
+            '\u{fefe}', '\u{ff00}',
+        ] {
+            assert!(!invisible_format(c) && keeps(c) || c.is_control(), "{c:?}");
+        }
+    }
+
+    #[test]
     fn carriage_returns_are_line_ends() {
         assert_eq!(cleaned("a\r\nb"), "a\nb");
         assert_eq!(cleaned("a\rb"), "a\nb");
@@ -104,13 +140,17 @@ mod tests {
 
     #[test]
     fn nothing_cleaned_holds_an_escape_or_a_control_but_tab_and_newline() {
-        for c in (0u32..0x200).filter_map(char::from_u32) {
+        for c in (0u32..0x11000).filter_map(char::from_u32) {
             let mut text = String::new();
             text.push('a');
             text.push(c);
             text.push('b');
             for k in clean(&text) {
-                assert!(k == '\t' || k == '\n' || !k.is_control(), "{:?}", c);
+                assert!(
+                    k == '\t' || k == '\n' || !(k.is_control() || invisible_format(k)),
+                    "{:?}",
+                    c
+                );
             }
         }
     }

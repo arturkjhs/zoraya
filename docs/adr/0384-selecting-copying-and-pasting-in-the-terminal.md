@@ -43,22 +43,32 @@ terminal a client of the clipboard. Building it (TASK-31 part 10b) met these pla
      without a drag selects nothing. The selection ends when a row it covers is written, when the view scrolls
      (the wheel, Shift+Page), when the window is resized or a program resets the screen; so a copy is always of what
      is drawn highlighted. A row's trailing blank cells are not copied; a hidden cell is (as a space); a wide
-     character is one character with its marks; a control character in a cell is a space. A row that wrapped is
+     character is one character with its marks; a control character in a cell is a space. A cell is seen only when
+     some channel of its foreground differs from its background by more than 8 (`select::UNSEEN_WITHIN`): text one
+     unit from its ground is hidden, so it is copied as a space like invisible text. The zero-width and
+     bidirectional characters (U+200B to U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to U+2069, U+FEFF) are not
+     copied, and `paste::clean` drops them from a paste. A row that wrapped is
      two lines (no wrap flag). While a program has the mouse (1000 or 1002), Shift+drag selects.
   2. **Copy.** `Copy` (and `Cut`, which the terminal treats as a copy) is answered with `Offer` of the selected text,
      at most `MAX_CLIPBOARD` bytes at a character boundary, only when something is selected: with nothing selected the
      clipboard stays as it was.
-  3. **Paste.** `term` sends the compositor's text to the shell as `Paste { last, bytes }` messages (ordinal 5) of
+  3. **Paste.** `term` sends the compositor's text to the shell as `Paste { first, last, bytes }` messages (ordinal 5; `first`
+     makes the shell forget the head of a paste that was cut and never ended) of
      at most 4,096 bytes each, a whole number of characters, at most 64 KiB in all, in order with the keys around
      them; they wait in `term`'s queue as keys do when the shell's queue is full, and a paste that does not fit the
      queue is dropped whole.
   4. **The shell cleans and places.** `zosh` joins the parts, replaces invalid UTF-8 by U+FFFD, removes `ESC` and every
      control character (C0, DEL, C1) but tab and newline, makes `\r\n` and `\r` a newline, and puts the text in the key
-     stream at the place it came in, as one of the bytes 0xF8 to 0xFF (never in UTF-8, so no key makes one).
+     stream at the place it came in, as one of the bytes 0xF8 to 0xFF (never in UTF-8, so no key makes one, and the
+     shell drops such a byte from any `Input`; meta mode, which would make Alt+x those bytes, is therefore
+     excepted for good, ADR-0383). Eight pastes wait at most; a ninth is refused with a line saying so, and the
+     older ones keep their place. `zoraya_shell::paste::Feed` is the whole of this path and `zosh` only calls it.
   5. **At the prompt** the text goes into the line at the cursor: a tab is a space, a newline ends a line of the
      entry, which becomes a continuation line, and Enter, the person's, sends the entry. A paste past the editor's
      limits is cut, and the line says how many characters fit. While a program is in front, a paste is dropped with a
-     line saying so (ADR-0332's paste to a program, with its confirmation, is part 10c's).
+     line saying so (ADR-0332's paste to a program, with its confirmation, is part 10c's). A paste that arrives during a
+     builtin, or in the keys after a Ctrl-Z, waits and is inserted at the next prompt; one read while a reporting
+     wait or a pager is up is dropped. None of them runs anything.
 - **Evidence for:** Drivers 1 to 5; INV-0332-5 and INV-0332-7 are host tests.
 - **Evidence against:** A selection is lost when output arrives on its rows (a person scrolling through a build
   cannot select what is moving); a wrapped line is copied as two; a paste is limited to what the editor holds.
@@ -108,8 +118,10 @@ becomes input holds for what a program put in the clipboard, too.
   (`what_changes_under_a_selection_ends_it`).
 - **INV-0384-2.** A paste is never `Input`: `Session::paste` produces only `Paste` parts, whatever the text and the
   modes. *Check:* `cargo test -p zoraya-term` (`a_paste_is_not_input_and_is_not_filtered_here`).
-- **INV-0384-3.** No byte of `Input` is one of the bytes that stand for a paste in the shell's key stream. *Check:*
-  `cargo test -p zoraya-shell` (`paste::tests`).
+- **INV-0384-3.** No byte of `Input` is one of the bytes that stand for a paste in the shell's key stream, and no key, report
+  or focus event the terminal makes is one. *Check:* `cargo test -p zoraya-shell` (`paste::tests`:
+  `no_input_can_be_a_pastes_place_and_a_paste_is_used_once`, a hostile `Input` of every byte) and `cargo test -p zoraya-term`
+  (`nothing_the_terminal_sends_is_a_pastes_place`).
 
 ## Open questions
 

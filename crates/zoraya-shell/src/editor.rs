@@ -1095,6 +1095,11 @@ impl Editor {
         self.typed = None;
         self.tabbed = false;
         self.shown_suggestion = false;
+        // What a key began (Ctrl+V, a lone Esc, half a letter) does not take
+        // the paste's first byte or the next key.
+        self.quote = None;
+        self.escape = Escape::None;
+        self.utf8.clear();
         let tail = self.line.split_off(self.cursor);
         let mut done = Pasted {
             chars: 0,

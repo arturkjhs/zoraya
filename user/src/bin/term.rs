@@ -276,8 +276,9 @@ impl Window {
                     NO_REPLY,
                     &mut out,
                 ),
-                Next::Paste { last, bytes } => encode(
+                Next::Paste { first, last, bytes } => encode(
                     &Paste {
+                        first,
                         last,
                         bytes: Data(bytes),
                     },

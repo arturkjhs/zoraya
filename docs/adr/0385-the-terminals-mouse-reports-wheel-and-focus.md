@@ -47,9 +47,11 @@ producing input": the program asked to be told what the person did.
   2. **The wheel.** While a program has 1000 or 1002 and Shift is not held, each notch is a press of button 64 (away
      from the person) or 65 (toward), at most 8 reports for one turn; otherwise the wheel moves the view (ADR-0322).
   3. **Focus.** `CSI I` and `CSI O` while 1004 is set, from `WindowFocus`.
-  4. **One place.** `zoraya_term::Session` is the terminal as the window runs it; its gesture methods (`key`,
-     `pointer`, `wheel`, `focus`, `paste`) are the only code that makes anything to send, into an outbox; `output`
-     (what the shell wrote) cannot reach it, and `term` sends the outbox as `Input` (reports and keys) and `Paste`.
+  4. **One place for what the person's gestures make.** `zoraya_term::Session` is the terminal as the window runs
+     it; its gesture methods (`key`, `pointer`, `wheel`, `focus`, `paste`) are the only code that makes input or a
+     paste to send, into an outbox; `output` (what the shell wrote) cannot reach it, and `term` sends the outbox as
+     `Input` (reports and keys) and `Paste`. `term` also sends `Size` (from the compositor's `Configure`) and `Offer`
+     (in answer to `Copy`); neither depends on output, and neither is in `Session` (INV-0385-2 covers the outbox).
      Focus is the person's own gesture and joins ADR-0332's list.
   5. **Ordinals.** `Paste` is ordinal 5 of `zoraya-proto-term` (ADR-0052); `Restore` (ADR-0331) and `Status`
      (ADR-0337) take the next numbers in their parts.

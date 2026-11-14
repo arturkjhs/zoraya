@@ -48,10 +48,12 @@ protocol! {
 
     /// Terminal to shell: a part of the text the person pasted with System+V
     /// (ADR-0332 item 8), in order, each a whole number of characters;
-    /// `last` ends the paste. Never `Input`: the shell inserts it into its
+    /// `first` begins a paste (what the shell held of an earlier
+    /// one that was cut is dropped) and `last` ends it. Never `Input`: the shell inserts it into its
     /// line, or holds it for a program, after cleaning it. A new ordinal
     /// under ADR-0052.
     message Paste<'a> = 5, handles 0 {
+        first: bool,
         last: bool,
         bytes: Data<'a, MAX_PASTE>,
     }

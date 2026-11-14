@@ -8,6 +8,8 @@
 
 use alloc::string::String;
 
+use zoraya_proto_term::paste::invisible_format;
+
 use crate::Look;
 use crate::cell::TAIL;
 use crate::term::Term;
@@ -45,6 +47,19 @@ impl Selection {
     const fn is_empty(&self) -> bool {
         self.anchor.0 == self.head.0 && self.anchor.1 == self.head.1
     }
+}
+
+/// The most a channel may differ for a foreground that is on its background to
+/// be taken as unseen (ADR-0384): colours that close read as one to a person,
+/// and a program that draws text one unit from its ground is hiding it.
+pub const UNSEEN_WITHIN: u8 = 8;
+
+/// Whether text drawn in `fg` on `bg` (pixels, `0x00RRGGBB`) can be seen: some
+/// channel differs by more than [`UNSEEN_WITHIN`].
+pub fn seen(fg: u32, bg: u32) -> bool {
+    [0, 8, 16].into_iter().any(|shift| {
+        ((fg >> shift) & 0xff).abs_diff((bg >> shift) & 0xff) > u32::from(UNSEEN_WITHIN)
+    })
 }
 
 impl Term {
@@ -152,11 +167,16 @@ impl Term {
                     continue;
                 }
                 let (fg, bg) = self.colours_of(look, cell);
-                let shown = fg != bg && !cell.ch.is_control();
+                let shown = seen(fg.pixel(), bg.pixel())
+                    && !cell.ch.is_control()
+                    && !invisible_format(cell.ch);
                 let c = if shown { cell.ch } else { ' ' };
                 line.push(c);
                 if shown {
-                    line.extend(cell.marks().filter(|m| !m.is_control()));
+                    line.extend(
+                        cell.marks()
+                            .filter(|m| !m.is_control() && !invisible_format(*m)),
+                    );
                 }
                 // A hidden cell that held something is not trimmed (it was
                 // there, and its place in the line with it); a blank is.

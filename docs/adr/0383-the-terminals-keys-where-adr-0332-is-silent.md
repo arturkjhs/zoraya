@@ -61,15 +61,19 @@ nothing in stage 10's list reads `kbs` to decide what Backspace means rather tha
      1, Alt 2, Ctrl 4), also while DECCKM is set; bare cursor keys, Home and End are `SS3` only while DECCKM is set.
   5. Shift alone with Page Up or Page Down moves the view (ADR-0332 item 7) and sends nothing, so the entry's `kPRV`
      and `kNXT` are exceptions; every other modified Page key is sent. Shift+Tab is `CSI Z`.
-  6. F12 and Alt+Tab are the compositor's; the table has F12's bytes (`kf12`) and a client never receives the key.
-  7. **To see a key's bytes**: at the prompt Ctrl+V shows the next key as it is sent, in the form `cat -v` prints
+  6. Meta mode (`km`, `smm`, `rmm`, mode 1034) stays an exception for good: it would make Alt+x to Alt+DEL the bytes
+     0xF8 to 0xFF, which the shell uses as the places of pastes in its key stream (ADR-0384 item 4); Alt is an `ESC`
+     prefix only.
+  7. F12 and Alt+Tab are the compositor's; the table has F12's bytes (`kf12`) and a client never receives the key.
+  8. **To see a key's bytes**: at the prompt Ctrl+V shows the next key as it is sent, in the form `cat -v` prints
      (`^[[1;5C` for Ctrl+Right, `^[OP` for F1), put into the line as text; Ctrl+Left and Ctrl+Right (and the Alt forms)
      move by a word, Alt+b and Alt+f likewise, Alt+Backspace deletes a word. The test program of 10b's done-when is
      this; a raw-mode C program is part 10c's.
 - **Evidence for:** Drivers 1 to 5. The checks of INV-0332-1 run over 256 of the entry's 287 capabilities.
 - **Evidence against:** The entry says `^H` for Backspace, so a program that uses `kbs` to recognise the key and not
-  the tty's erase character sees `0x7f` as an unknown key (ncurses' own `getch` maps the erase character to
-  `KEY_BACKSPACE` too).
+  the tty's erase character sees `0x7f` as an unknown key. Whether ncurses maps the tty's erase character to
+  `KEY_BACKSPACE` as well was not checked against the pinned source and is not claimed; part 10d's curses test program
+  must press Backspace (open question).
 - **Cost:** *(estimate)* As built: 140 lines of table, 200 of tests; 30 of editor.
 - **Precedent:** xterm, `st`, `foot` (all send `0x7f` and ship entries with `kbs=^?`).
 
@@ -122,6 +126,9 @@ the smallest way to see the sequences without a raw-mode program; programs that 
 
 ## Open questions
 
+- **Before part 10d:** the architect decides Option C (build the entry with `kbs=^?`) or accepts the exception, and
+  10d's curses test program presses Backspace; a curses program with `keypad(TRUE)` that reads `kbs` would otherwise
+  see `0x7f` as a plain character. This is listed in `docs/backlog.md`.
 - Whether Backspace should be `^H` (Option B) if a ported program turns out to need `kbs`.
 - A NumLock state for the keypad (the keymap would track it; the compositor sends no LED state).
 - Ctrl+digit and Ctrl+punctuation other than `[ \ ] ^ _ @` send nothing; xterm's modifyOtherKeys is not implemented.

@@ -346,6 +346,7 @@ fn a_paste_goes_in_parts_of_whole_characters_in_order() {
         s.take_outbox(),
         vec![Outgoing::Paste {
             bytes: b"hello".to_vec(),
+            first: true,
             last: true
         }]
     );
@@ -356,10 +357,11 @@ fn a_paste_goes_in_parts_of_whole_characters_in_order() {
     assert!(parts.len() >= 3);
     let mut joined = Vec::new();
     for (i, p) in parts.iter().enumerate() {
-        let Outgoing::Paste { bytes, last } = p else {
+        let Outgoing::Paste { bytes, first, last } = p else {
             panic!("not a paste")
         };
         assert!(bytes.len() <= MAX_CHUNK && core::str::from_utf8(bytes).is_ok());
+        assert_eq!(*first, i == 0);
         assert_eq!(*last, i + 1 == parts.len());
         joined.extend_from_slice(bytes);
     }
@@ -697,4 +699,81 @@ fn a_selected_cell_is_drawn_selected_and_a_hidden_one_stays_hidden() {
     // `z` is not selected.
     let z = region(4);
     assert!(z.contains(&bg) && !z.contains(&sel_bg));
+}
+
+/// ADR-0384: a cell is seen when its colours differ by more than a few units; zero-width
+/// and bidirectional characters are not copied.
+#[test]
+fn nearly_invisible_text_and_format_characters_are_not_copied() {
+    use crate::select::{UNSEEN_WITHIN, seen};
+    let u = u32::from(UNSEEN_WITHIN);
+    assert!(!seen(0x0010_2030, 0x0010_2030));
+    assert!(!seen(0x00fe_fefe, 0x00ff_ffff));
+    assert!(!seen(0x0010_2030 + u, 0x0010_2030));
+    assert!(seen(0x0010_2030 + u + 1, 0x0010_2030), "one unit past it");
+    assert!(seen(0x0010_2030 + ((u + 1) << 8), 0x0010_2030), "green");
+    assert!(seen(0x0010_2030 + ((u + 1) << 16), 0x0010_2030), "red");
+    assert!(seen(0x0000_0000, 0x00ff_ffff));
+    let mut s = session(40, 2);
+    // Visible, then `; curl x|sh` in 254,254,254 on 255,255,255 (the default ground is white).
+    s.output(b"ls \x1b[38;2;254;254;254;48;2;255;255;255m; curl x|sh\x1b[0m");
+    // Then characters drawn as nothing and a visible rest.
+    s.output("\r\nok\u{200b}\u{202e}\u{feff}\u{2066}go".as_bytes());
+    s.pointer(0, 0, LEFT, 0);
+    s.pointer(39, 1, LEFT, 0);
+    s.pointer(39, 1, 0, 0);
+    assert_eq!(
+        text_of(&s),
+        std::format!("ls {}\nok", " ".repeat(11)) + "go"
+    );
+}
+
+/// ADR-0384's marks: no byte a key, a report or a focus event makes is a
+/// paste's place in the shell's key stream (0xF8 to 0xFF).
+#[test]
+fn nothing_the_terminal_sends_is_a_pastes_place() {
+    use crate::keys::{KeyModes, MAX_KEY_BYTES, Mods, key_bytes};
+    let mut out = [0u8; MAX_KEY_BYTES];
+    let texts = [
+        None,
+        Some('a'),
+        Some('\u{7ff}'),
+        Some('\u{ffff}'),
+        Some('\u{10ffff}'),
+        Some('\u{3}'),
+    ];
+    for key in 0..0x200u32 {
+        for bits in 0..8u32 {
+            let mods = Mods::from_bits(bits);
+            for app in [false, true] {
+                let modes = KeyModes {
+                    app_cursor: app,
+                    app_keypad: app,
+                };
+                for text in texts {
+                    let n = key_bytes(key, mods, text, modes, &mut out);
+                    assert!(
+                        out[..n].iter().all(|b| *b < 0xf8),
+                        "key {key} {bits} {text:?}"
+                    );
+                }
+            }
+        }
+    }
+    // Reports and focus, with every mode a program can set, at the corners of a large grid.
+    let mut s = session(500, 500);
+    s.output(b"\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h");
+    for (x, y) in [(0, 0), (499, 499), (255, 255), (248, 249)] {
+        for buttons in 0..8u32 {
+            for mods in [0, ALT, CTRL, ALT | CTRL] {
+                s.pointer(x, y, buttons, mods);
+                s.wheel(x, y, 120 * 7, mods);
+                s.wheel(x, y, -120 * 7, mods);
+            }
+        }
+    }
+    s.focus(true);
+    s.focus(false);
+    let bytes = input(&mut s);
+    assert!(!bytes.is_empty() && bytes.iter().all(|b| *b < 0xf8));
 }

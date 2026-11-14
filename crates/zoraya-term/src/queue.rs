@@ -23,7 +23,11 @@ pub enum Next<'a> {
     /// `Input`: how many bytes were dropped before these, and the bytes.
     Input { dropped: u32, bytes: &'a [u8] },
     /// `Paste`.
-    Paste { last: bool, bytes: &'a [u8] },
+    Paste {
+        first: bool,
+        last: bool,
+        bytes: &'a [u8],
+    },
 }
 
 /// The queue.
@@ -51,8 +55,8 @@ impl SendQueue {
                         self.dropped = self.dropped.saturating_add(bytes.len() as u32);
                     }
                 }
-                Outgoing::Paste { bytes, last } => {
-                    group.push(Outgoing::Paste { bytes, last });
+                Outgoing::Paste { bytes, first, last } => {
+                    group.push(Outgoing::Paste { bytes, first, last });
                     if last {
                         let size: usize = group
                             .iter()
@@ -82,7 +86,11 @@ impl SendQueue {
                 dropped: self.dropped,
                 bytes: &bytes[..bytes.len().min(MAX_INPUT)],
             },
-            Outgoing::Paste { bytes, last } => Next::Paste { last: *last, bytes },
+            Outgoing::Paste { bytes, first, last } => Next::Paste {
+                first: *first,
+                last: *last,
+                bytes,
+            },
         })
     }
 
@@ -140,6 +148,7 @@ mod tests {
             .enumerate()
             .map(|(i, n)| Outgoing::Paste {
                 bytes: vec![b'p'; *n],
+                first: i == 0,
                 last: i == last,
             })
             .collect()
@@ -203,7 +212,7 @@ mod tests {
         while let Some(n) = q.next() {
             got.push(match n {
                 Next::Input { bytes, .. } => ('i', bytes.len(), false),
-                Next::Paste { last, bytes } => ('p', bytes.len(), last),
+                Next::Paste { last, bytes, .. } => ('p', bytes.len(), last),
             });
             q.sent();
         }

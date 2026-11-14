@@ -22,8 +22,12 @@ use zoraya_keymap::code;
 pub enum Outgoing {
     /// Bytes for `Input`: keys, mouse and focus reports.
     Input(Vec<u8>),
-    /// A part of a paste, for `Paste`; `last` ends it. Whole characters.
-    Paste { bytes: Vec<u8>, last: bool },
+    /// A part of a paste, for `Paste`; `first` begins it and `last` ends it. Whole characters.
+    Paste {
+        bytes: Vec<u8>,
+        first: bool,
+        last: bool,
+    },
 }
 
 /// The grid, the pointer and what waits to be sent.
@@ -128,6 +132,7 @@ impl Session {
     pub fn paste(&mut self, text: &[u8]) {
         let text = String::from_utf8_lossy(text);
         let mut rest = &text[..paste::boundary(&text, MAX_PASTE_BYTES)];
+        let mut first = true;
         while !rest.is_empty() {
             let mut at = paste::boundary(rest, MAX_CHUNK);
             if at == 0 {
@@ -137,8 +142,10 @@ impl Session {
             let (head, tail) = rest.split_at(at);
             self.outbox.push(Outgoing::Paste {
                 bytes: head.as_bytes().to_vec(),
+                first,
                 last: tail.is_empty(),
             });
+            first = false;
             rest = tail;
         }
     }

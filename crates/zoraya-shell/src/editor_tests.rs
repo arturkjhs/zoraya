@@ -1015,7 +1015,7 @@ fn the_cursor_follows_the_width_table() {
 
 // ---- paste, quoted keys and word keys (ADR-0332 items 7 and 8, ADR-0383, ADR-0384) ----
 
-use crate::paste::{Assembler, Store, is_mark};
+use crate::paste::{Feed, Reading, Routed};
 
 fn pasted(e: &mut Editor, a: &mut Fake, text: &str) -> (String, Pasted) {
     let mut out = String::new();
@@ -1035,8 +1035,8 @@ fn a_paste_never_runs_and_carries_no_control_character() {
     // The closing bracket mark, a sequence, bell, backspace, DEL, a C1
     // control, NUL, a Ctrl-C and a carriage return, then a newline.
     let hostile = "x\x1b[201~y\x1b]0;t\x07\x08\x7f\u{9b}\0\x03z\r\nrm -rf /\r";
-    let mut asm = Assembler::default();
-    let cleaned = asm.part(hostile.as_bytes(), true).unwrap();
+    let mut asm = crate::paste::Assembler::default();
+    let cleaned = asm.part(hostile.as_bytes(), true, true).unwrap();
     let (out, p) = pasted(&mut e, &mut a, &cleaned);
     assert_eq!(p.breaks, 2, "the CRLF and the last CR: two line ends");
     assert_eq!(e.text(), "", "the paste ended with a line end: a new line");
@@ -1119,24 +1119,27 @@ fn a_paste_past_what_the_entry_holds_is_cut_and_said() {
 #[test]
 fn the_paste_path_end_to_end_waits_for_enter() {
     // Messages in parts, the marks of the key stream, the keys around them.
-    let mut asm = Assembler::default();
-    let mut store = Store::default();
+    let mut pf = Feed::default();
     let mut stream = Vec::new();
-    stream.extend_from_slice(b"echo a ");
-    assert_eq!(asm.part(b"first\nse", false), None);
-    let text = asm.part(b"cond", true).unwrap();
-    stream.push(store.put(text));
-    stream.extend_from_slice(b" zzz");
+    pf.input(b"echo a ", &mut stream);
+    assert!(pf.part(b"first\nse", true, false, &mut stream));
+    assert!(pf.part(b"cond", false, true, &mut stream));
+    pf.input(b" zzz", &mut stream);
     let mut a = fake();
     let (mut e, _) = editor();
     let mut ran = Vec::new();
     for &k in &stream {
         let mut out = String::new();
-        if is_mark(k) {
-            let t = store.take(k).unwrap();
-            e.paste(&t, &mut out, &mut a);
-        } else if let Key::Line(l) = e.key(k, &mut out, &mut a) {
-            ran.push(l);
+        match pf.route(k, Reading::Prompt) {
+            Routed::Insert(t) => {
+                e.paste(&t, &mut out, &mut a);
+            }
+            Routed::Key(k) => {
+                if let Key::Line(l) = e.key(k, &mut out, &mut a) {
+                    ran.push(l);
+                }
+            }
+            Routed::Dropped => panic!("the paste is there"),
         }
     }
     assert!(ran.is_empty(), "nothing ran before the person's Enter");
@@ -1242,4 +1245,25 @@ fn a_paste_stops_where_the_entry_is_full_counting_each_line_and_its_end() {
     // 40 lines of 101 are 4040; the 41st takes 56 characters to reach 4096.
     assert!(p.cut);
     assert_eq!((p.breaks, p.chars), (40, 40 * 100 + 56));
+}
+
+#[test]
+fn a_paste_clears_a_pending_quote_and_a_lone_escape() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"\x16");
+    pasted(&mut e, &mut a, "x");
+    feed(&mut e, &mut a, b"a");
+    assert_eq!(e.text(), "xa", "the next key is a key, not quoted");
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"\x1b");
+    pasted(&mut e, &mut a, "x");
+    feed(&mut e, &mut a, b"a");
+    assert_eq!(e.text(), "xa", "the next key is not the byte after an Esc");
+    // Half of a UTF-8 letter is forgotten, too.
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, &[0xd0]);
+    pasted(&mut e, &mut a, "x");
+    feed(&mut e, &mut a, b"a");
+    assert_eq!(e.text(), "xa");
 }
