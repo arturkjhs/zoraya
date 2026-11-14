@@ -224,7 +224,7 @@ jobs:
       # builds everything, as before. If a restored build is ever wrong, change
       # the prefix `ports-build-v3`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
-        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0317-*.md' 'docs/adr/0320-*.md' 'docs/adr/0366-*.md' | xargs -0 touch -h -t 200001010000
+        run: git ls-files -z ports tools/zcc tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt 'docs/adr/posix-surface-T*.txt' 'docs/adr/0142-*.md' 'docs/adr/0144-*.md' 'docs/adr/0210-*.md' 'docs/adr/0287-*.md' 'docs/adr/0310-*.md' 'docs/adr/0317-*.md' 'docs/adr/0320-*.md' 'docs/adr/0326-*.md' 'docs/adr/0366-*.md' | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
         uses: actions/cache@v4
         with:
@@ -246,7 +246,7 @@ jobs:
             !build/ports/work/hostpython-build
             !build/ports/work/python-build
             !build/ports/work/googletest-build
-          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0317-*.md', 'docs/adr/0320-*.md', 'docs/adr/0366-*.md') }}
+          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0317-*.md', 'docs/adr/0320-*.md', 'docs/adr/0326-*.md', 'docs/adr/0366-*.md') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -257,7 +257,11 @@ jobs:
         # build/ports/host (NetSurf's host tools, 9d) stays: test-netsurf's make reads
         # its libpng16.a; the host python has a prefix of its own (build/ports/hostpython).
         # NetSurf's build/rootfs-apps/bin/netsurf and usr/share/netsurf are in build/.
-        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental --exclude='build/ports/work/Python-*' --exclude=build/ports/work/hostpython-build --exclude=build/ports/work/python-build --exclude=build/ports/hostpython --exclude=build/ports/python-stage --exclude=build/ports/work/googletest-build build target
+        # Not LLVM's archive (140 MB, xz) nor what is under its unpacked tree
+        # (TASK-30): the tests read build/sysroot and the prebuilt libc++ tests
+        # (build/cxx-libcxx/lct); the tree's directory itself stays, with its
+        # time, so that ports/Makefile sees the runtime as built from it.
+        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental --exclude='build/ports/work/Python-*' --exclude=build/ports/work/hostpython-build --exclude=build/ports/work/python-build --exclude=build/ports/hostpython --exclude=build/ports/python-stage --exclude=build/ports/work/googletest-build --exclude='build/ports/src/llvm-project-*' --exclude='build/ports/work/llvm-20.1.8/*' build target
       - uses: actions/upload-artifact@v4
         with:
           name: build
