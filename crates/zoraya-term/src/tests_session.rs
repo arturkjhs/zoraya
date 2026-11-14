@@ -515,3 +515,186 @@ fn a_cell_is_found_under_a_point_of_the_surface() {
     assert_eq!(l.cell_at(10_000, 10_000, 80, 24), (79, 23));
     assert_eq!(l.cell_at(10_000, 10_000, 0, 0), (0, 0));
 }
+
+// ---- holes the mutation run found ------------------------------------------
+
+#[test]
+fn a_selection_follows_the_pointer_as_long_as_the_button_is_down() {
+    let mut s = session(20, 2);
+    s.output(b"0123456789abcdefghij");
+    s.pointer(2, 0, LEFT, 0);
+    s.pointer(5, 0, LEFT, 0);
+    s.pointer(8, 0, LEFT, 0);
+    assert_eq!(text_of(&s), "2345678", "the second move extends it");
+    s.pointer(8, 0, 0, 0);
+    assert_eq!(text_of(&s), "2345678");
+    // After its end the pointer moves it no more.
+    s.pointer(12, 0, 0, 0);
+    assert_eq!(text_of(&s), "2345678");
+    // A hover is no start: the press is where the selection begins.
+    s.pointer(1, 0, 0, 0);
+    s.pointer(4, 0, LEFT, 0);
+    s.pointer(6, 0, LEFT, 0);
+    s.pointer(6, 0, 0, 0);
+    assert_eq!(text_of(&s), "456");
+}
+
+#[test]
+fn a_release_is_reported_only_for_the_press_that_was() {
+    let mut s = session(20, 2);
+    // A press with the mode off is nobody's: the release after the mode comes on is not reported.
+    s.pointer(1, 1, RIGHT, 0);
+    s.output(b"\x1b[?1000h");
+    s.pointer(1, 1, 0, 0);
+    assert!(s.outbox_is_empty());
+    // A reported press and its release; then the same release without the press is not.
+    s.pointer(1, 1, RIGHT, 0);
+    assert_eq!(input(&mut s), b"\x1b[<2;2;2M");
+    s.pointer(1, 1, 0, 0);
+    assert_eq!(input(&mut s), b"\x1b[<2;2;2m");
+    s.output(b"\x1b[?1000l");
+    s.pointer(1, 1, RIGHT, 0);
+    s.output(b"\x1b[?1000h");
+    s.pointer(1, 1, 0, 0);
+    assert!(s.outbox_is_empty(), "the first release is not told twice");
+    // The other buttons are as they were: a press with the mode off, a release after.
+    s.output(b"\x1b[?1000l");
+    s.pointer(1, 1, MIDDLE, 0);
+    s.output(b"\x1b[?1000h");
+    s.pointer(1, 1, 0, 0);
+    assert!(s.outbox_is_empty(), "the release of a press nobody heard");
+    // A press with Shift is not reported (it selects), and nor is its release;
+    // an earlier report's release leaves no other button marked as heard.
+    s.pointer(1, 1, RIGHT, 0);
+    assert_eq!(input(&mut s), b"\x1b[<2;2;2M");
+    s.pointer(1, 1, 0, 0);
+    assert_eq!(input(&mut s), b"\x1b[<2;2;2m");
+    s.pointer(1, 1, MIDDLE, SHIFT);
+    s.pointer(1, 1, 0, 0);
+    assert!(
+        s.outbox_is_empty(),
+        "a Shift press is never reported, nor its release"
+    );
+}
+
+#[test]
+fn the_pointer_alone_answers_the_wheel_only_while_asked_and_without_shift() {
+    use crate::Pointer;
+    use crate::keys::Mods;
+    let mut t = Term::new(10, 2);
+    let mut out = Vec::new();
+    let mut p = Pointer::default();
+    let none = Mods::default();
+    assert!(
+        !p.wheel(&t, 1, 1, 1, none, &mut out) && out.is_empty(),
+        "not asked"
+    );
+    t.write(b"\x1b[?1000h");
+    let shift = Mods {
+        shift: true,
+        ..none
+    };
+    assert!(
+        !p.wheel(&t, 1, 1, 1, shift, &mut out) && out.is_empty(),
+        "Shift"
+    );
+    assert!(p.wheel(&t, 1, 1, 1, none, &mut out));
+    assert_eq!(out, b"\x1b[<65;2;2M");
+    out.clear();
+    assert!(p.wheel(&t, 1, 1, -1, Mods { alt: true, ..none }, &mut out));
+    assert_eq!(out, b"\x1b[<72;2;2M", "away is 64, Alt adds 8");
+    out.clear();
+    assert!(p.wheel(&t, 1, 1, 0, none, &mut out) && out.is_empty());
+}
+
+#[test]
+fn page_keys_with_shift_and_another_modifier_are_sent() {
+    let mut s = session(20, 10);
+    for _ in 0..30 {
+        s.output(b"x\r\n");
+    }
+    s.key(code::PAGE_DOWN, SHIFT | CTRL, None);
+    assert_eq!(input(&mut s), b"\x1b[6;6~");
+    s.key(code::PAGE_DOWN, SHIFT | ALT, None);
+    assert_eq!(input(&mut s), b"\x1b[6;4~");
+    s.key(code::PAGE_UP, SHIFT | ALT, None);
+    assert_eq!(input(&mut s), b"\x1b[5;4~");
+    assert_eq!(s.term.view(), 0);
+    s.key(code::PAGE_UP, SHIFT, None);
+    assert!(s.outbox_is_empty() && s.term.view() == 5);
+    s.key(30, 0, Some('a'));
+    assert!(!s.outbox_is_empty());
+}
+
+#[test]
+fn the_selection_api_on_its_own() {
+    let mut t = Term::new(10, 3);
+    t.write("a\u{4e2d}b".as_bytes());
+    // Beyond the grid is the last cell; the right half of a wide character is it.
+    t.select_start(999, 999);
+    assert!(
+        !t.selected(9, 2) && !t.has_selection(),
+        "one cell is no selection"
+    );
+    t.select_extend(0, 0);
+    assert!(t.has_selection());
+    t.select_end();
+    assert!(t.has_selection() && t.selected(0, 0) && t.selected(9, 2));
+    // Ended: it moves no more.
+    t.select_extend(5, 0);
+    assert!(t.selected(9, 2) && t.selected(1, 0));
+    t.select_clear();
+    assert!(!t.has_selection() && !t.selected(0, 0) && !t.selected(9, 2));
+    assert_eq!(t.selected_text(&look()), "");
+    // A click is no selection.
+    t.select_start(1, 0);
+    t.select_extend(1, 0);
+    t.select_end();
+    assert!(!t.has_selection() && t.selected_text(&look()).is_empty());
+    t.select_extend(4, 0);
+    assert!(!t.has_selection(), "a click's selection is not live");
+    // The tail of a wide character is selected with its head (and a start on the tail is on the head).
+    t.select_start(0, 0);
+    t.select_extend(1, 0);
+    t.select_end();
+    assert!(t.selected(0, 0) && t.selected(1, 0) && t.selected(2, 0));
+    assert!(!t.selected(3, 0));
+    t.select_start(2, 0);
+    t.select_extend(4, 0);
+    t.select_end();
+    assert!(t.selected(1, 0) && t.selected(2, 0) && t.selected(4, 0) && !t.selected(0, 0));
+    // Asking about cells outside the grid is no fault.
+    assert!(!t.selected(10, 0) && !t.selected(0, 3) && !t.selected(10, 3) && !t.selected(1, 3));
+}
+
+#[test]
+fn a_selected_cell_is_drawn_selected_and_a_hidden_one_stays_hidden() {
+    let mut s = session(6, 1);
+    s.output(b"ab\x1b[8mXY\x1b[0mz");
+    s.pointer(0, 0, LEFT, 0);
+    s.pointer(3, 0, LEFT, 0);
+    s.pointer(3, 0, 0, 0);
+    let mut l = look();
+    let (w, h) = l.surface_size(6, 1);
+    let mut pixels = vec![0u32; w * h];
+    s.term.render(&mut l, &mut pixels, w, false);
+    let (cw, ch) = (l.cell_width(), l.cell_height());
+    let region = |x: usize| -> Vec<u32> {
+        let (ox, oy) = l.cell_origin(x, 0);
+        (0..ch)
+            .flat_map(|dy| (0..cw).map(move |dx| (dx, dy)))
+            .map(|(dx, dy)| pixels[(oy + dy) * w + ox + dx])
+            .collect()
+    };
+    let (sel_bg, bg) = (l.sel_bg.pixel(), l.bg.pixel());
+    // `a` is selected: its ground is bg.selection and some pixels are the text's
+    // (a blend: the glyph is anti-aliased).
+    let a = region(0);
+    assert!(a.contains(&sel_bg) && a.iter().any(|p| *p != sel_bg) && !a.contains(&bg));
+    // `X` is hidden and selected: the whole cell is the selection's ground.
+    assert!(region(2).iter().all(|p| *p == sel_bg));
+    assert!(region(3).iter().all(|p| *p == sel_bg));
+    // `z` is not selected.
+    let z = region(4);
+    assert!(z.contains(&bg) && !z.contains(&sel_bg));
+}

@@ -273,13 +273,20 @@ states, to be taken up later:
   - **Stop-gap to remove in 10c:** `zoraya_shell::reset::BEFORE_PROMPT`, written before a prompt that follows a command, until the
     shell sends `Restore` (ADR-0331 item 9). Also in `docs/design.md`.
   - **`term.scrollback`** and `console.term` (ADR-0157 settings) are declared by `zosh` and read by `term` in part 10c.
-  - **Deferred to 10b:** 165 capabilities of `crates/zoraya-term/entry/exceptions.txt` whose reason begins `deferred (10b):` (the keys,
-    the mouse strings, the paste marks, `km`, `xm`); part 10b is not done while any is left. Nothing fails if one is, yet: make 10b's plan
-    row check `tools/term-conformance/check.sh`'s count of them.
+  - **Deferred to 10b:** done: the 165 are implemented or excepted with a reason, and `tools/term-conformance/check.sh` fails if a
+    reason begins `deferred (10b)` again.
   - **A program that sets 2026 and never ends it** has each later update held 150 ms until the next prompt, whose stop-gap reset ends it.
   - **The stop-gap's edges** (`zoraya_shell::reset`): it fires before every prompt after the first, clears a pending wrap, resets the palette and
     the cursor shape, and `fg` of a stopped full-screen job is not restored (modes are lost): 10c's `Restore` and `reinstate`.
   - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
+- Part 10b (TASK-31) leftovers (`docs/tasks/TASK-31-part-10b.md`):
+  - **`kbs`:** the pinned entry says Backspace is `^H`; the terminal sends `0x7f` (ADR-0096). Proposed ADR-0383 lists it as an exception;
+    the fix at the source is building the entry with `kbs=^?` (ADR-0333, the architect's).
+  - **A paste to a program in front** (brackets for 2004, the confirmation of a newline, `paste N lines?`) is part 10c's; until then `zosh`
+    drops it with a line, and the session's `ttyd` ignores `Paste`.
+  - **A raw-mode test program** that prints the keys it reads (the F-keys and Ctrl+arrows from a program, not the prompt's Ctrl+V) is 10c's.
+  - **Selection** is gone when its rows change or the view scrolls; no word or line selection, no wrap flag (a wrapped line copies as
+    two), no selection across a scroll (proposed ADR-0384, Option B).
 ## Three requests from outside work (2026-11-14, from the architect)
 
 For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.

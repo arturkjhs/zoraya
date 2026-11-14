@@ -230,6 +230,70 @@ mod tests {
     }
 
     #[test]
+    fn what_fits_in_sum_is_kept_and_the_room_comes_back_when_sent() {
+        let mut q = SendQueue::default();
+        assert!(q.is_empty());
+        q.push(vec![input(100), input(100)]);
+        assert!(!q.is_empty());
+        let mut sent = 0;
+        while let Some(Next::Input { bytes, .. }) = q.next() {
+            sent += bytes.len();
+            q.sent();
+        }
+        assert_eq!(sent, 200, "100 and 100 fit, though their product does not");
+        // The room is back after what was sent: the same again fits whole.
+        q.push(vec![input(INPUT_MAX)]);
+        while q.next().is_some() {
+            q.sent();
+        }
+        q.push(vec![input(INPUT_MAX)]);
+        let mut sent = 0;
+        while let Some(Next::Input { bytes, .. }) = q.next() {
+            sent += bytes.len();
+            q.sent();
+        }
+        assert_eq!(sent, INPUT_MAX);
+        // And the same for a paste.
+        for _ in 0..3 {
+            assert_eq!(q.push(paste(&[16384, 16384, 16384, 16384])), 0);
+            while q.next().is_some() {
+                q.sent();
+            }
+        }
+    }
+
+    #[test]
+    fn what_is_sent_frees_exactly_its_room() {
+        let mut q = SendQueue::default();
+        // Input: full with sixteen messages of MAX_INPUT; one sent frees one.
+        q.push((0..16).map(|_| input(MAX_INPUT)).collect());
+        assert!(q.next().is_some());
+        q.sent();
+        q.push(vec![input(MAX_INPUT + 40)]);
+        let mut total = 0;
+        while let Some(Next::Input { bytes, .. }) = q.next() {
+            total += bytes.len();
+            q.sent();
+        }
+        assert_eq!(
+            total,
+            15 * MAX_INPUT,
+            "the room freed was MAX_INPUT, not enough for MAX_INPUT + 40"
+        );
+        // A paste: two of 64 KiB fill it; one part sent frees that part only.
+        let mut q = SendQueue::default();
+        assert_eq!(q.push(paste(&[16384; 4])), 0);
+        assert_eq!(q.push(paste(&[16384; 4])), 0);
+        q.sent();
+        assert_eq!(
+            q.push(paste(&[16384, 16384])),
+            32768,
+            "16 KiB of room is not 32 KiB"
+        );
+        assert_eq!(q.push(paste(&[16384])), 0, "but it is 16 KiB");
+    }
+
+    #[test]
     fn a_failed_write_drops_everything_and_counts_the_input() {
         let mut q = SendQueue::default();
         q.push([vec![input(5)], paste(&[10]), vec![input(7)]].concat());

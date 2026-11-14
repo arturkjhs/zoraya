@@ -80,17 +80,15 @@ pub enum Key {
     Interrupt,
 }
 
-/// A key being quoted: how far its bytes have come.
+/// A key being quoted: how far its bytes have come. After `ESC` one byte
+/// more is quoted (`Alt+Enter` is `ESC` and a carriage return, which must not
+/// run the line); the printable rest of a sequence is typed as text anyway.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Quote {
     /// The first byte.
     First,
     /// After `ESC`.
     Escape,
-    /// In `ESC [`, up to its final byte.
-    Csi,
-    /// After `ESC O`: one byte more.
-    Ss3,
 }
 
 /// What a paste did.
@@ -684,13 +682,12 @@ impl Editor {
 
     /// One byte of a key being quoted (Ctrl+V): its bytes go into the line as
     /// text, `ESC` as `^[` and a control character as `^` and its letter, so
-    /// that a person sees what a key sends. A letter that is not ASCII is
-    /// typed as it is.
+    /// that a person sees what a key sends. Text is typed as it is.
     fn quoted(&mut self, stage: Quote, byte: u8, out: &mut String, assist: &mut dyn Assist) -> Key {
         let shown = match byte {
             0x7f => "^?".to_string(),
             b if b < 0x20 => format!("^{}", char::from(b + 0x40)),
-            b if b < 0x7f => char::from(b).to_string(),
+            // A letter, a digit, a space or a letter of UTF-8: typed as it is.
             _ => {
                 self.quote = None;
                 return self.key(byte, out, assist);
@@ -698,9 +695,6 @@ impl Editor {
         };
         self.quote = match (stage, byte) {
             (Quote::First, 0x1b) => Some(Quote::Escape),
-            (Quote::Escape, b'[') => Some(Quote::Csi),
-            (Quote::Escape, b'O') => Some(Quote::Ss3),
-            (Quote::Csi, 0x20..=0x3f) => Some(Quote::Csi),
             _ => None,
         };
         for c in shown.chars() {

@@ -26,23 +26,18 @@ pub const fn is_mark(byte: u8) -> bool {
 #[derive(Debug, Default)]
 pub struct Assembler {
     bytes: Vec<u8>,
-    /// More arrived than a paste may hold: the rest is dropped.
-    cut: bool,
 }
 
 impl Assembler {
     /// A part of a paste; the cleaned text when `last` ends it.
     pub fn part(&mut self, part: &[u8], last: bool) -> Option<String> {
+        // More than a paste may hold is dropped.
         let room = MAX_PASTE_BYTES - self.bytes.len();
-        if part.len() > room {
-            self.cut = true;
-        }
         self.bytes.extend_from_slice(&part[..part.len().min(room)]);
         if !last {
             return None;
         }
         let bytes = core::mem::take(&mut self.bytes);
-        self.cut = false;
         // A character cut in half (a part at the bound) or broken is the
         // replacement character.
         Some(clean(&String::from_utf8_lossy(&bytes)).collect())

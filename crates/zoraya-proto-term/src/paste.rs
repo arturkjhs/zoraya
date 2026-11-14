@@ -116,6 +116,13 @@ mod tests {
     }
 
     #[test]
+    fn the_bounds_are_the_adr_s() {
+        // ADR-0332 item 8: at most 64 KiB `[assumption]`, in parts of 4 KiB.
+        assert_eq!(MAX_PASTE_BYTES, 65536);
+        assert_eq!(MAX_CHUNK, 4096);
+    }
+
+    #[test]
     fn the_marks_are_the_entry_s() {
         assert_eq!(BEGIN, b"\x1b[200~");
         assert_eq!(END, b"\x1b[201~");

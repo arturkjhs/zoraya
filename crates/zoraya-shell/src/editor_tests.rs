@@ -1201,3 +1201,45 @@ fn control_and_alt_arrows_and_letters_move_by_word() {
     feed(&mut e, &mut a, b"\x1bx");
     assert_eq!(e.text(), "one two  ");
 }
+
+#[test]
+fn a_quoted_space_and_a_quoted_alt_enter_are_text_and_run_nothing() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    // A space is a space, not `^``; the key after ESC is quoted too, so Alt+Enter
+    // (ESC and a carriage return) shows `^[^M` and does not run the line.
+    feed(&mut e, &mut a, b"\x16 ");
+    let (_, k) = feed(&mut e, &mut a, b"\x16\x1b\r");
+    assert_eq!(k, Key::Edited);
+    feed(&mut e, &mut a, b"\x16\x1b\x7f\x16\x1b\t");
+    assert_eq!(e.text(), " ^[^M^[^?^[^I");
+    // A letter after ESC and a CSI's printable rest are typed, and the quote ends.
+    let (mut e, _) = editor();
+    feed(&mut e, &mut a, b"\x16\x1bx");
+    feed(&mut e, &mut a, b"\x7f");
+    assert_eq!(e.text(), "^[", "the quote ended after one byte past ESC");
+}
+
+#[test]
+fn the_editor_drops_control_characters_of_a_paste_it_was_given_uncleaned() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    let (_, p) = pasted(&mut e, &mut a, "a\x1bb\x07c\u{9b}d\0\tz");
+    assert_eq!(e.text(), "abcd z");
+    assert_eq!(p.chars, 6);
+}
+
+/// The room the entry has is MAX_CHARS less, for each continuation line, its
+/// width and one: a paste of lines of a hundred characters stops where the
+/// entry is full.
+#[test]
+fn a_paste_stops_where_the_entry_is_full_counting_each_line_and_its_end() {
+    let mut a = fake();
+    let (mut e, _) = editor();
+    let line: String = core::iter::repeat_n('x', 100).collect();
+    let text = alloc::format!("{line}\n").repeat(60);
+    let (_, p) = pasted(&mut e, &mut a, &text);
+    // 40 lines of 101 are 4040; the 41st takes 56 characters to reach 4096.
+    assert!(p.cut);
+    assert_eq!((p.breaks, p.chars), (40, 40 * 100 + 56));
+}
