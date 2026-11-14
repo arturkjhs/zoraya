@@ -96,7 +96,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs print-legs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs print-legs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -808,6 +808,22 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
 	exit $$rc
+
+# TASK-27 9f (final step): NetSurf on the real Wikipedia, by hand, never in CI. The test
+# image of test-netsurf with no test names and no test PKI: the production roots, the
+# host's real Internet through QEMU's user network. tests/gui/netsurf-wikipedia.script
+# takes the screens into build/shots/.
+WP_ROOT := $(BUILD)/wikipedia-root
+WP_DISK := $(BUILD)/wikipedia-disk.img
+hand-netsurf-wikipedia hand-netsurf-wikipedia-2: $(KERNEL) $(RUNNER) tools-storage netsurf
+	@rm -rf $(WP_ROOT) && mkdir -p $(WP_ROOT) target/test-logs && cp -R rootfs/. $(WP_ROOT)/ && \
+	cp -R $(APPS_ROOT)/. $(WP_ROOT)/ && \
+	mkdir -p $(WP_ROOT)/system/fonts && cp -R fonts/. $(WP_ROOT)/system/fonts/ && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(WP_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 64M --from $(WP_ROOT) $(WP_DISK) && \
+	$(RUNNER) --timeout 900 --gui-script tests/gui/netsurf-wikipedia$(if $(filter %-2,$@),-2).script --qmp $(BUILD)/wikipedia.qmp --label wikipedia -- \
+		$(RUN_QEMU) --test --gui --gui-scale 1 --net --net-open --mem 768M --qmp $(BUILD)/wikipedia.qmp \
+		--disk $(WP_DISK) --accel auto $(KERNEL)
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.

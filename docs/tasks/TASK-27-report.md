@@ -946,3 +946,54 @@ the web rule cannot be written as a `+net` or room word (a word `web` on a line 
   lookup (`make test-netsurf`), and hosts named `web` and `any` (shell and page host tests).
 - **7, not changed.** Other hosts of a public on-link subnet are reachable under `web` (ADR-0324 item 2 defines local as
   ADR-0223 does); recorded in `docs/design.md`'s limits, an open question for ADR-0324.
+
+## 9f: a usable browser (branch `docs/9f-final`, 2026-11-14)
+
+The final step of part 9f: the real desktop (`main` at `e8bf184`, NetSurf 3.11 with the `web` grant, ADR-0324/0325/0326) on the real
+Wikipedia, through QEMU's user network to the Internet. Nothing is mirrored or faked. Two hand-run scripts, in no CI list:
+`make hand-netsurf-wikipedia` (`tests/gui/netsurf-wikipedia.script`: front page and article of ru and uk) and `make
+hand-netsurf-wikipedia-2` (`tests/gui/netsurf-wikipedia-2.script`: scrolling, a click on a link, a redirect to another host). The image
+is `test-netsurf`'s with no test names and no test PKI: the production roots in `/system/tls/roots`, DNS from QEMU's lease, `--net
+--net-open`, scale 1, 1024x768, under HVF. The script types `netsurf URL` into the terminal, waits and takes screendumps through the
+runner's QMP (`shot`); nothing is asserted (the sites change). Both runs ended `PASS` (44 and 30 steps). Cyrillic URLs are typed
+percent-encoded (the runner types keys, not UTF-8).
+
+Screens (`docs/netsurf/`, 1024x768 PNG, 100 to 150 KB each; the screen 45 s after the start and 105 s after it are identical):
+
+| Screen | What it shows |
+|---|---|
+| `wikipedia-ru-front.png` | `https://ru.wikipedia.org/` redirected (same host) to `/wiki/Заглавная_страница`; pills `+net ru.wikipedia.org:443`, `web`, fonts, tls |
+| `wikipedia-ru-moskva.png` | `/wiki/Москва`, the top of the article ("Done (1.1s)") |
+| `wikipedia-ru-moskva-scrolled.png` | the same after 6 wheel notches: a caption, the infobox rows (Страна, Статус, Субъект Федерации) |
+| `wikipedia-ru-link.png` | a click on a link of the article (a `Файл:` page of the same host): page, back button live |
+| `wikipedia-uk-front.png` | `https://uk.wikipedia.org/` redirected to `/wiki/Головна_сторінка`; the Ukrainian welcome text |
+| `wikipedia-uk-kyiv.png` | `/wiki/Київ` (percent-encoded `%D0%9A%D0%B8%D1%97%D0%B2`) |
+| `wikipedia-redirect-www.png` | `http://wikipedia.org/` (port 80) redirected to `https://www.wikipedia.org/`, a second host and port, which the web grant admits; the title bar keeps the line's `+net wikipedia.org:80` and `web` |
+
+What works: TLS to the real sites with the production roots (no refusal), DNS through the web rule's public-only answers, HTTP to HTTPS
+and cross-host redirects, Russian and Ukrainian text (ґ є і ї included) in the system's fonts, with links in blue, headings, bold, the
+navigation row, a page's logo (PNG), the `web` pill, the wheel, the back button, same-host links. Each page was done in 0.3 to 1.3 s
+after the fetch by the status bar's count, and was complete within 45 s of the command.
+
+What does not, plainly:
+- **Pages are not laid out as a browser would.** The article is a column of left-aligned pieces: the infobox is flattened, and in the
+  article views the prose below the lead did not appear in what I scrolled (21 notches on Москва ended on blank space and the
+  "Москва" captions, `wp2-ru-scroll-2`, not kept): either NetSurf's CSS 2.1 layout loses Wikipedia's current (flex, grid, `:has`,
+  variables) styles, or text is hidden by a rule it does not read. Not diagnosed. Kyiv shows a title, the "other meanings" lines and the
+  flag and coat of arms captions (as text) and then blank space.
+- **Empty frames are images.** The boxes (the search icon, the menu and language buttons, the flag and coat of arms images) are SVG
+  or WebP files, which NetSurf here does not decode (no SVG, ADR-0318); those from `upload.wikimedia.org` are fetched under the web grant
+  (a second host), but are not drawn. The logo, a PNG on the page's own host, is.
+- **CJK and the other scripts show as boxes** (`wikipedia-redirect-www.png`: the Japanese, Chinese and Korean portal entries): the
+  system's fonts have Latin and Cyrillic only (ADR-0326).
+- Text overlaps on `www.wikipedia.org` (the portal's absolutely positioned labels), the Ukrainian title row's "Перевірена версія" sits
+  over the tab row; the search box is missing (it is a form of the page's script and an SVG button). No JavaScript runs, so a page that
+  needs it for content shows what its `noscript` or static HTML gives.
+- The runs take about 12 and 6 minutes because of the waits I chose (45 s and 60 to 90 s per page), not because the pages are slow.
+
+What the architect should look at: (1) the flattened article layout and the missing prose below the lead (is it CSS support, or a
+bug in `zoraya-text` or layout of tall boxes? a `netsurf -v` run of the article would say which style sheet fails); (2) SVG and WebP,
+which decide whether Wikipedia looks like itself; (3) a CJK-capable font, if the world's scripts are in scope; (4) ADR-0328 (a URL on
+the line under `net web` gets its own name rule), since a real redirect from the typed host to another one now happens in the field.
+Untrusted code never ran, the gate stays closed, and no code of the kernel or the shell changed in this step (a Makefile target and two
+scripts).

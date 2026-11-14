@@ -1,0 +1,34 @@
+# TASK-27 9f, the final step, second hand run (make hand-netsurf-wikipedia-2): what the
+# first run's article screens did not show (the page below the fold, a click on a link) and
+# a redirect to another host: http://wikipedia.org/ (port 80) goes to https://www.wikipedia.org/.
+# Screens only (build/shots/); nothing asserted.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+type netsurf https://ru.wikipedia.org/wiki/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0\r
+pause 60000
+wheel 400 400 down 6
+pause 4000
+shot wp2-ru-scroll-1
+wheel 400 400 down 15
+pause 4000
+shot wp2-ru-scroll-2
+click 640 435
+pause 40000
+shot wp2-ru-link
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type netsurf http://wikipedia.org/\r
+pause 60000
+shot wp2-redirect-host
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed\r
+screen closed
+type poweroff\r
+exit
