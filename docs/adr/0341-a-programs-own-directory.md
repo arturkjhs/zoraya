@@ -138,24 +138,29 @@ are few and known when the image is built.
    directory (`ssh`, `ssh-keygen`, `scp` and `sftp` share `ssh`). One file in the tree lists every `NAME` with the
    programs that use it, and a lint keeps the descriptions and the panel's application names to it. A program
    that only passes the directory on to a child (`scp` and `sftp`, for the `ssh` they start) carries it `read`.
-6. **Per room.** A room's programs get the room's directory, created empty. An untrusted room's git has no
+6. **Per room.** A room's programs get the room's directory, created empty. A limited room's git has no
    identity and no credentials of the person's. Its directory must count against the room's storage limit:
    ADR-0265 item 5 puts the limit on the room's `+w` directories and its `/tmp`, so `/data/ROOM` of a limited
    room joins them, a stated change to that item.
 7. **Children get it to read, never to write.** A program a POSIX program starts inherits its parent's table
-   (ADR-0107); the own-directory entry carries a mark, and `libposix` passes it on with `read` rights only. So a
+   (ADR-0107); the own-directory entry carries a mark, and for a marked entry the parent's `libposix` asks the
+   file service for a second connection with `read` rights only and hands the child that one. The child never
+   holds a handle that can write, whatever its own runtime does. A link object that resolves into a program's
+   own directory is not followed from outside that directory, so a repository cannot make git's own write land
+   there through a planted link. So a
    hook, an editor or a helper started by git can read git's configuration and cannot change it, and the `ssh`
    that `scp` starts can read the keys and cannot rewrite `known_hosts`. A child gets no own directory of its own
    name: `ssh` started by git does not see ssh's (ADR-0339 item 6).
-8. **Nothing designates into `/data`.** Inside `/data/ROOM/NAME` the current-directory default and the
-   designation of operands do not apply to other programs: `cd /data/home/ssh` and then `cat id_ed25519` is
-   refused with the hint to write `+r`. Another program reaches a program's own files only by a `+r` or `+w` word
-   that names them. (The first terminal's shell holds `+r /`, so the person can always write that word.)
+8. **The current directory does not reach into `/data`.** The current-directory default (ADR-0153 rule 1) never
+   covers a program's own directory: with the current directory at `/`, `/data` or inside `/data/ROOM/NAME`, a
+   program gets nothing of another name's files from it. A path there reaches another program only when the
+   person names it: as a literal operand (`cat /data/home/git/config`, `ls /data/home/ssh`), which designates as
+   everywhere, or by a `+r` or `+w` word.
 9. **A port looks nowhere else.** A program with a `data` line is built or configured so that it names no path in
    the home directory outside its own directory in normal operation, as curl and wget read no configuration
    (ADR-0310 item 6). Otherwise every run would report refused dotfiles (driver 6).
 10. **The person reaches the files as files.** They are ordinary: `ls /data/home/ssh`, `edit /data/home/git/config`,
-   a backup of `/data/home`. A program reads them only if a line gives them (`+r /data/home/ssh/known_hosts cat ...`).
+   a backup of `/data/home`. A program reads them only if a line names them.
 11. **Modes mean nothing here.** Privacy is the entry, not the mode bits. `libposix` reports the mode a file was
     created with, so a port's own checks on its key files pass when the port created them properly.
 12. **Later.** Keys in an agent that signs and never reveals (Option D) is the path ADR-0228 already names; this
@@ -178,12 +183,14 @@ git gets (a POSIX program):
   /tmp                 change anything in (this line's own)
   /dev/null
 ~> room proj git config --global user.name
-~> cd /data/home/git
-/data/home/git> cat config
+~> cd /data/home/ssh
+/data/home/ssh> sh -c 'cat id_ed25519'
 ```
 
 The `room` line prints nothing: in the room `proj`, git's directory is `/data/proj/git`, and it is empty. The last
-line is refused, with the hint to write `+r config cat config` (item 8). On the desktop the file manager shows
+line is refused, though the current directory is ssh's own: `sh` was given no name there, and the current directory
+gives none (item 8); `cat id_ed25519`, with the name typed as an operand, would print the key. On the desktop the file
+manager shows
 `/data/home/git/config` as any
 file; opening it starts `edit`.
 
@@ -200,8 +207,8 @@ file; opening it starts `edit`.
   `+w /tmp`) and that a room's shell holds the room's grants: both gain `/data/ROOM`, with `tree` rights, so that
   the shell can make and give the directories. It is not a room grant and no pill shows it (item 2), which
   INV-0172-2's "exactly the room's entries" must be read with.
-- *ADR-0153 rules 1 and 2*: the current directory and operands designate everywhere; item 8 excepts the inside
-  of a program's own directory. *ADR-0153 rule 10's note*: a POSIX program gets `HOME` "unless the line sets it";
+- *ADR-0153 rule 1*: the current directory is given to read wherever it is; item 8 excepts programs' own
+  directories under `/data`. *ADR-0153 rule 10's note*: a POSIX program gets `HOME` "unless the line sets it";
   for a program with a `data` line the line may not (item 3).
 - *ADR-0107*: `libposix` builds a child's table from its own; item 7 makes it lower one marked entry to `read`.
 - *ADR-0265 item 5*: the storage limit of a limited room also covers its `/data/ROOM` (item 6).
@@ -248,12 +255,13 @@ shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340).
   operand, and when it first writes its own files (`git config --global`, `ssh-keygen`), with `shell.home` set to
   another directory too. *Check:* an in-QEMU script per such program that reads the report count (ADR-0153
   rule 11).
-- **INV-0341-6.** A child of a program with an own directory can read it and cannot create, change or remove
-  anything in it. *Check:* a host test of `libposix`'s table for a child, and an in-QEMU script in which a git
-  hook tries to write git's configuration and is refused.
+- **INV-0341-6.** A child of a program with an own directory holds a connection to it that the file service
+  serves for reading only, and no link object leads a write from outside into it. *Check:* a host test of
+  `libposix`'s table for a child, and an in-QEMU script in which a git hook writes through the handle it was
+  given, by the library and by a raw request, and is refused both ways, and a planted link is not followed.
 - **INV-0341-7.** No program receives a path inside another name's own directory from the current-directory
-  default or from an operand; only a literal `+r` or `+w` word gives one. *Check:* a host test of the shell's
-  planner with the current directory and operands inside `/data/home/ssh`.
+  default; a literal operand or a literal `+r` or `+w` word is the only way. *Check:* a host test of the shell's
+  planner with the current directory at `/`, at `/data` and inside `/data/home/ssh`, with and without an operand.
 
 ## Open questions
 

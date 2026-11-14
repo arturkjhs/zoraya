@@ -61,8 +61,8 @@ programs; a typed console that unmodified programs cannot use needed a translato
    no program sees (`stage-10/survey.md#the-terminal-as-built`).
 5. **The person always gets a working screen back**, whatever a program left behind.
 6. **Only the line in front reads keys or changes the terminal's modes**: nothing typed for one program reaches a
-   program of another line, and no program in the background can turn echo on under a password prompt (DM-072,
-   CP-25).
+   program of another line, and no program of another line can turn echo on under a password prompt (DM-072,
+   CP-25). Inside one line this ADR does not separate programs (item 4).
 
 ## Considered options
 
@@ -139,7 +139,7 @@ knowingly; items 2 to 13 hold under either, with `ttyd` in the shell's place.
 
 1. **The shell is the terminal service of its window.** `zosh` holds a `zoraya_tty::Terminal` and answers
    `zoraya-proto-tty` requests in its event loop. `ttyd` stays the host for the session of `/etc/zoraya/session`
-   and for the tests that drive it. Both hosts get the same crate, so items 4, 5 and 7 hold in a session too;
+   and for the tests that drive it. Both hosts get the same crate, so items 5 and 7 hold in a session too;
    `ttyd` ignores the messages of `zoraya-proto-term` it does not know (`Paste`, `Restore`, ADR-0337's).
 2. **What a POSIX program receives.** Each of fds 0, 1 and 2 that the line does not redirect or pipe is a tty
    description (ADR-0103, ADR-0105 item 6): a terminal connection and the write end of the line's output stream.
@@ -163,7 +163,12 @@ knowingly; items 2 to 13 hold under either, with `ttyd` in the shell's place.
    is believed only among the programs of that same line, which share one set of grants. `Read`, `PollReadable`
    and `SetAttr` from a connection whose line is not in front are refused: the read as ADR-0105 item 8 says
    (`NotForeground`, then the stop or `EIO`), the others with `EIO`. `GetAttr` and the window size are answered for
-   any connection. This closes, for programs of different lines, the gap ADR-0105 left open.
+   any connection. This closes, for programs of different lines, the gap ADR-0105 left open. **It does not close it
+   inside a line**, and a line lasts as long as any process of its job: a child that a command typed inside `vi`
+   leaves running, or a job a POSIX shell put in its own background, is still of the line in front, can declare
+   the chosen group, and can then read what is typed there (a password included) or change the modes. The broker
+   knows which group each process was created in and could refuse a false declaration; that check is not part of
+   this ADR (open question), and the gap is recorded as accepted for stage 10.
 5. **Raw mode is complete.** `zoraya-tty` implements `VMIN` and `VTIME` in POSIX's four cases; `libposix` sends
    `PollReadable`, so `pselect`, `select` and `poll` on a terminal wait until a read would not block;
    `tcsetattr`'s three actions differ as POSIX says (`TCSADRAIN` waits for the output to be shown, `TCSAFLUSH` also
@@ -268,7 +273,7 @@ every program in `/bin` a description, `sh` included.)
 ### Effect of the vision
 
 For target 2 this is where ADR-0105's split has to become real, because every program of every line now holds a
-terminal connection. Item 4 is the answer: a program in the background, or in another line, cannot read what is
+terminal connection. Item 4 is the answer: a program of another line, in the background or not, cannot read what is
 typed to the program in front and cannot change its modes; the service on the other end is the room's own shell,
 which holds no more than the room (ADR-0172). What remains is inside one line, whose programs share their grants
 anyway, and the shell's exposure to the requests of the programs it runs, which Option C would remove. A supervisor
@@ -284,7 +289,7 @@ read is a wait point of the thread that makes it (ADR-0304).
 - **Negative.** `zosh` carries the discipline and parses its programs' terminal requests. The broker gains a
   channel to the shell. Output is copied through the shell. A native program still cannot draw a full screen. The
   serial console does not carry full-screen output. The session's `ttyd` and the shell must be kept in step by
-  shared tests.
+  shared tests. Inside one line any of its processes can read the keys.
 - **Follow-up.** `VMIN`/`VTIME`, flush, drain and line tags in `zoraya-tty`; the readiness request, `/dev/tty` and
   `ttyname` in `libposix`; the broker's control channel; `Restore` in `zoraya-proto-term` and `term`; the carriage
   return in the shell's relay; `grants`' `keys` line; the measurement of item 14; `dash.cmd`'s sentence on having

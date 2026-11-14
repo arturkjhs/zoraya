@@ -42,7 +42,7 @@ would be on a system with no global names.
 
 1. **Build what a program in scope needs, and nothing ahead of it** (CP-27; ADR-0105's own rule for this item).
 2. **No global name and no ambient access** (CP-01; `stage-10/survey.md#pty-security-history`).
-3. **The discipline exists once** (DM-069; INV-0331-6).
+3. **The discipline exists once** (DM-069; INV-0331-8).
 4. **The holder of the master gets authority over its own children only**, and never a way to inject into another
    terminal (DM-072, CP-25, DM-070).
 5. **The shape is decided before the first port that needs it**, so that port is not the place where it is

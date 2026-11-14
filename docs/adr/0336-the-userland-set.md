@@ -141,18 +141,24 @@ review and the tests named below; that a working day needs roughly the tools of 
    `-delete` they become `remove-tree`. A command that runs others (`xargs`, `find -exec`, `env`) passes its own
    table to them (ADR-0107) and no more: `find . -name '*.o' -exec rm {} +` needs `+w .`, and says so by ADR-0153's
    hint.
-6. **Changing a file in place.** toybox's `sed -i` and `patch` (and the other users of its `copy_tempfile`) write
-   a temporary sibling and rename it over the file, which needs rights on the directory that a `write` operand
-   does not give (ADR-0153 rule 2's table). One patch to that helper makes them, on Zoraya, write the result back
-   into the file itself: the operand's `write` kind is then enough, and the directory is not touched. The price is
-   the same as for `vi` (ADR-0335 item 4): the change is not atomic, and an interrupted one can leave the file
-   short.
+6. **Changing a file in place.** toybox's `sed -i` (and the other users of its `copy_tempfile`) writes a
+   temporary sibling and renames it over the file, which needs rights on the directory. One patch to that helper
+   makes it, on Zoraya, write the result back into the file itself, so that the one file is enough. Two things
+   deliver that one file: `sed`'s description says `cwd none`, so that the file's entry is not merged with the
+   current directory's (ADR-0153 rule 2; ADR-0311 item 5 for curl); and a `write` operand of a POSIX program,
+   which is given directories only, arrives as its directory narrowed to that one existing name with read and
+   write, the form ADR-0311 item 5 gave `create`. The shell does not do the second today: it refuses such a line
+   or relies on a directory entry. The price of in-place writing is the same as for `vi` (ADR-0335 item 4): the
+   change is not atomic, and an interrupted one can leave the file short. `patch` is different: it changes the
+   files its input names, which no operand designates, so it needs `+w` on the tree, as `make` does.
 7. **One command per name for the person.** `shell.path` stays `/zoraya/bin /bin`: where a native command and a
    toybox command share a name (`cat`, `cp`, `ls`, `mv`, `rm`, `head`, `find`, `mkdir`, `stat`, `date`, `sleep`,
    `echo`), `zosh` runs the native one, and `help NAME` says so. A script run by `sh` has `PATH=/bin:/usr/bin` and
    gets toybox's. A person who wants the POSIX one types `/bin/ls`.
 8. **Every name in `/bin` is described.** The multi-call binary itself moves out of `/bin` (to
-   `/usr/libexec/toybox`, with the links in `/bin` pointing there), so that no undescribed `toybox sed ...` exists.
+   `/usr/libexec/toybox`, with the links in `/bin` pointing there), so that `toybox sed ...` is not found by name; run
+   by its full path it is a program without a description
+   and gets no designations.
    The links `sh` (to dash) and `cc` (to tcc) get descriptions of their own, naming their paths.
 9. **Users.** The tools ask `libposix` and get the one identity of `/etc/passwd` in the toolchain set (uid 1000):
    `ls -l` prints it and `tar` stores it. Changing an owner to that same identity succeeds and changes nothing;
@@ -182,9 +188,9 @@ grep gets (a POSIX program):
 sed gets (a POSIX program):
   in, out, err         the terminal
   keys                 the terminal, while this line is in front
-  ~/proj               read (current directory)
-  ~/proj/notes.txt     change (operand FILE)
+  ~/proj               change notes.txt (operand FILE)
   ...
+
 ~/proj> tar -c -z -f ~/backup/proj.tar.gz .
 ~/proj> help ls
 ```
@@ -192,7 +198,7 @@ sed gets (a POSIX program):
 (`...` stands for the four system lines; the `keys` line is ADR-0331's). `help ls` begins by saying that `ls` is a
 native command and that `/bin/ls` is toybox's, for scripts (ADR-0156 item 4's first line). `sed -i` changes
 `notes.txt` with no grant word because the operand designates it and `sed` is in the image; it gets that file to
-change and nothing else to write. On the desktop these are lines in a terminal window; the show-commands mode
+change and nothing else of the directory. On the desktop these are lines in a terminal window; the show-commands mode
 has nothing to add, since they are already text.
 
 **Tensions with accepted ADRs.**
@@ -205,6 +211,9 @@ has nothing to add, since they are already text.
   and no description" ends.
 - *ADR-0154 rule 6*: the hints for `grep` and `wc` when nothing of that name exists end for the names that now
   exist.
+- *ADR-0153 rule 10's note* (a POSIX program is given directories only, and a designated file must lie in one)
+  and *ADR-0311 item 5* (a narrowed entry for a `create` name): item 6 extends the narrowed entry to a `write`
+  operand.
 - *ADR-0109 item 6* lists the applets built and puts `/bin/toybox` beside its links; the list moves to the file
   of item 1 and the binary out of `/bin` (item 8).
 - *ADR-0110 item 2* defines workload W10 as diffing outputs "with busybox `diff`", and *ADR-0211*'s
@@ -223,8 +232,8 @@ the network. Threads: none.
 - **Positive.** A day's tools under 0BSD from one already-ported source; busybox and its licence leave; every tool
   is designated and explained; T2's `configure` can proceed.
 - **Negative.** About sixty descriptions to write and keep true, each a small security statement. Three commands
-  rest on a review of unreviewed upstream code. Two `ls` exist, one for people and one for scripts. `sed -i` and
-  `patch` change a file in place, not atomically. No `bc`, `ed`,
+  rest on a review of unreviewed upstream code. Two `ls` exist, one for people and one for scripts. `sed -i` changes a
+  file in place, not atomically; `patch` needs the tree. No `bc`, `ed`,
   xz or zip yet.
 - **Follow-up.** The applet list file and its build rule; the descriptions and their lint; the review of `tr`,
   `expr`, `diff`; the `awk` port; removing busybox; `docs/dependencies.md`; W4's measurement.
@@ -247,9 +256,10 @@ the network. Threads: none.
   program's own output.
 - **INV-0336-5.** A command started by `xargs`, `find -exec` or `env` holds exactly its parent's entries. *Check:*
   an in-QEMU script in which `find . -exec cat /config/settings` is refused without a grant and allowed with `+r`.
-- **INV-0336-6.** `sed -i FILE` and `patch` change their files holding only the `write` entry of each: the file's
-  content changes and its directory holds the same names before and after. *Check:* an in-QEMU script running
-  both on a file outside the current directory and comparing the directory listings.
+- **INV-0336-6.** `sed -i FILE` changes its file holding only that one name of the file's directory, in the
+  current directory and outside it: the file's content changes, the directory holds the same names before and
+  after, and a second file of the directory cannot be read. *Check:* a host test of the shell's plan for both
+  cases, and an in-QEMU script comparing the directory listings.
 
 ## Open questions
 

@@ -177,8 +177,10 @@ nothing to see.
   (`tcsetattr`, raw mode)" and "Job control beyond Ctrl-C ... `SIGWINCH`" stop binding for the names items 4 and 5
   add; the rows for record locks (already changed by ADR-0319), timers, `ptrace`, System V IPC, `dlopen`, set-uid
   and `MAP_SHARED` stand. Accepting this ADR supersedes those three rows, as ADR-0308 superseded the thread row.
-- *ADR-0005's rule of admission* ("adds rows with a measured workload") becomes "a program in the image imports
-  it" (rule item 1); ADR-0005 and ADR-0100 item 6 tell names imported from names called, and this rule does not.
+- *ADR-0005's rule of admission* ("adds rows with a measured workload") becomes "a program in the image imports it",
+  or for a name built ahead of its first port a committed test
+  program does (rule item 1); ADR-0005 and ADR-0100 item 6 tell names imported from names called, and this rule does
+  not.
 - *ADR-0014 rule 5* and *ADR-0180 item 9* are followed as written (item 8).
 - *ADR-0104* (`getlogin` gives a fixed name) and *ADR-0105 item 6* (`ttyname`) are carried out; the code answers
   nothing for both today.
@@ -224,8 +226,9 @@ the calling thread (ADR-0304).
 - **INV-0342-4.** With no `LANG` and no `LC_*` set, a program that calls `setlocale(LC_ALL, "")` decodes UTF-8:
   `MB_CUR_MAX` is 4 and a three-byte character converts to one wide character of the right value. *Check:* a C test
   in the libc conformance step.
-- **INV-0342-5.** A program started by `zosh` gets an entry from `getpwuid(getuid())`, and `link` and `mknod`
-  fail with `EPERM`. *Check:* a C test in the in-QEMU POSIX script.
+- **INV-0342-5.** A program started by `zosh` gets an entry from `getpwuid(getuid())`, and `link`, and `mknod` of
+  anything
+  but a FIFO, fail with `EPERM`. *Check:* a C test in the in-QEMU POSIX script.
 
 ## Open questions
 

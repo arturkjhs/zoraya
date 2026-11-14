@@ -179,9 +179,11 @@ Items 1 to 3 are Option C and stand alone: if the architect declines the grant l
    channel (ADR-0153 rule 11), now once per path *and* access, and the limit of 16 counts the reports since the
    program last received a grant, so a long session does not fall silent.
 2. **A report is hostile data.** The shell shows a reported path only if, after it normalises the path itself,
-   the whole of it is made of characters from a fixed safe set (letters and digits of any script, and
-   `/ . - _ + ~ @ , =`, as ADR-0311 allows for names), contains no space, control, format or bidirectional
-   character, and fits the row whole. Anything else is shown as `a path that cannot be shown`. The same rule and
+   the whole of it is made of the characters ADR-0311 allows in a name (ASCII letters and digits and
+   `. - _ + ~ @ , =`) and `/`, and it fits the row whole. No other script is shown: letters that look like
+   others, or that are drawn right to left, could make a shown path read as a different one. Anything else is shown as
+   `a path that cannot be shown`, which also happens to honest names in other scripts
+   (open question). The same rule and
    ADR-0150's quoting apply to the hint ADR-0153 rule 11 prints after a job, which today prints the path as it
    came. What is shown is what the program *reported*; a program can report a path it never opened, and cannot
    make the line say anything but a path.
@@ -215,9 +217,10 @@ Items 1 to 3 are Option C and stand alone: if the architect declines the grant l
    `+w PATH`, `+net HOST[:PORT]`, as literal words (no variable, no substitution), with the shell's completion of
    paths against its own table. **The line opens empty and nothing is suggested**: the status line above it
    shows what was refused, and the person types what they mean. Enter gives; Escape or the key again closes the
-   line. When the line in front is a pipeline, the field names the element that last reported a refusal, or the
-   last element if none did, and Tab on the empty field moves to the next element; the grant goes to that one
-   element (ADR-0153 rule 3). With no line in front the key does nothing: the prompt is already where grants are
+   line. When the line in front is a pipeline, the field names the element whose refusal was on the status line when
+   the key was pressed, or the last element if there was none; it does not change while the line is open, except
+   by the person's Tab on the empty field, which moves to the next element. The grant goes to that one element
+   (ADR-0153 rule 3). With no line in front the key does nothing: the prompt is already where grants are
    typed.
 6. **What is given, and from what.** The shell parses the line's text with its own parser and resolves each word
    against its own table and network scope, exactly as for a grant before a command (ADR-0153 rule 3, ADR-0224
@@ -234,7 +237,9 @@ Items 1 to 3 are Option C and stand alone: if the architect declines the grant l
    one's and the new rule's union. The runtime (`libposix`, `zoraya-rt`) reads the channel only when a path
    resolves to no entry or to an entry without the right, or `netd` answers `NotGranted`; it then resolves once
    more before it fails and reports. A path that resolves costs nothing new. An entry that arrives for a prefix
-   the table already has replaces it. The table's limit of 64 entries stands; at the limit the grant is refused
+   the table already has is joined with it, the rights being the union (ADR-0153 rule 2); the prefix of a
+   program's own directory is never touched (ADR-0341 item 3). The table's limit of 64 entries stands; at the limit
+   the grant is refused
    on the status line. Children started afterwards inherit the entries as they inherit the table; a child already
    running does not receive them.
 8. **A file, for a program whose table holds directories.** A file given to a POSIX program is its directory
@@ -316,6 +321,8 @@ a path outside `~/proj` reads `vi asked for ~/other.txt, which this shell does n
 - *ADR-0224's revisit trigger* ("a program that follows redirects across hosts ... the question becomes a prompt or
   a proxy policy") is met by `+net` on the grant line, the person's act, not a prompt. *INV-0224-1* holds: the
   word is literal and typed.
+- *ADR-0245*'s guard for sheets is taken over for the grant line (item 4). *ADR-0154*: Tab completes; on the
+  empty field of a pipeline's grant line it moves to the next element instead (item 5).
 - *ADR-0332 item 8*: a paste while the grant line is open goes into the line, and its newlines do not confirm.
 
 ### Effect of the vision
@@ -361,12 +368,15 @@ same line gives a host. Threads: the runtime's re-read is under the library's lo
 - **INV-0337-4.** A grant made on the grant line goes to one element of the line, ends with that line and is
   stored nowhere. *Check:* a host test that the shell closes the write end and drops the record at the line's
   end; an in-QEMU script that gives a file to one `vi`, ends it, starts another and sees the refusal again, with
-  `/config/rooms` unchanged; a pipeline of two programs in which only the named one can open the file.
+  `/config/rooms` unchanged; a pipeline of two programs in which only the named one can open the file, and in which a
+  report
+  written by the other while the line is open does not change the element.
 - **INV-0337-5.** The status line's cells change only by the shell's `Status` message, and every path in a
   `Status` text or a printed hint passed item 2's filter; a report that does not is shown as `a path that cannot
   be shown`. *Check:* the fuzz test of INV-0096-1 with the status row's contents compared before and after; a
-  host test of the shell with hand-written reports holding `ESC`, spaces, U+202E, a newline, a `;` and 4096
-  bytes, asserting the text shown for each and the quoting of the hint.
+  host test of the shell with hand-written reports holding `ESC`, spaces, U+202E, a newline, a `;`, a Hebrew name, a
+  name mixing Latin and
+  Cyrillic letters, and 4096 bytes, asserting the text shown for each and the quoting of the hint.
 - **INV-0337-6.** A refused path of a program of the line in front appears on the status line while it runs,
   worded by which of item 3's three cases the shell's own lookup finds, and the lookup opens nothing and follows
   no link object. *Check:* INV-0153-7's host test of the reporter extended to live reads and to (path, access);
@@ -383,6 +393,9 @@ same line gives a host. Threads: the runtime's re-read is under the library's lo
   the review showed that the path, the access and the moment are then the program's, accepted by three habitual
   keys. If typing proves too slow, a suggestion would need at least: frozen when the line opens, never a
   directory, never a path of another program's own directory, and a pause before it can be taken.
+- A wider set of characters for shown paths: names in other scripts are ordinary on this system (ADR-0013,
+  ADR-0163) and are hidden by item 2's filter; a set that admits one script per component and no right-to-left
+  letters would show most of them.
 - A word that gives one name to create (`+w` on a file that does not exist yet has to name its directory today);
   the chooser's `Save` already gives one name.
 - Whether the key should open the graphical chooser as a sheet on the terminal window, and give what is picked.

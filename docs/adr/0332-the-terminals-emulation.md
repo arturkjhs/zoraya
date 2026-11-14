@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-13
-- **Depends on:** ADR-0052, ADR-0096, ADR-0100, ADR-0154, ADR-0160, ADR-0161, ADR-0162, ADR-0163, ADR-0168, ADR-0170, ADR-0331, ADR-0333
+- **Depends on:** ADR-0052, ADR-0096, ADR-0100, ADR-0154, ADR-0157, ADR-0160, ADR-0161, ADR-0162, ADR-0163, ADR-0168, ADR-0170, ADR-0331, ADR-0333, ADR-0337
 - **Evidence:** CP-22, CP-25, DM-071, DM-072, DM-073, GR-015, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#how-the-terminal-ecosystem-is-layered, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks, stage-10/survey.md#programs-and-libraries-without-curses, stage-10/survey.md#terminfo-entries-compared, stage-10/survey.md#testing-a-terminal, stage-10/survey.md#the-terminal-as-built, stage-10/survey.md#utf-8-and-character-width, stage-10/survey.md#what-a-small-terminal-implements, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#which-term-to-claim
 
 ## Context
@@ -163,7 +163,8 @@ coverage (no CJK, no emoji) is acceptable for stage 10. Neither is measured.
    (ADR-0170); the window title, because nothing a program prints sets it (ADR-0168) and the title stack inside
    `smcup` and `rmcup` is ignored with it; printing (`mc0`, `mc4`, `mc5`); memory lock (`meml`, `memu`); left and
    right margins (`smglp`, `smglr`, `smgrp`); the cursor colour (`Cs`, `Cr`); meta mode (`smm`, `rmm`): Alt always
-   sends an `ESC` prefix; 132-column mode. Each is consumed and ignored. The list is what ADR-0333 weighs against
+   sends an `ESC` prefix; 132-column mode and smooth scrolling. Each is consumed and ignored. The list is what
+   ADR-0333 weighs against
    the claim of the name.
 5. **No replies.** The terminal answers no query: not the status report, not the cursor position, not device
    attributes, not a mode report, not titles, colours, the clipboard or answerback. INV-0096-2 stands as written.
@@ -185,10 +186,12 @@ coverage (no CJK, no emoji) is acceptable for stage 10. Neither is measured.
    passes the text through the discipline, between `CSI 200 ~` and `CSI 201 ~` when the program set 2004, with
    `ESC` and the other control characters except tab and newline removed either way, so that a paste cannot end
    the bracket or send a sequence. A paste that holds a newline, for a program that has not set 2004, is held: the
-   shell shows `paste N lines?` on the status line (ADR-0337) and passes it on Enter, drops it on Escape.
-9. **Width.** One table gives the width of every code point, and it is musl's own: the terminal's table is
-   generated from the `wide.h` and `nonspacing.h` of the musl release pinned in `ports/sources.lock`, the data
-   behind `libposix`'s `wcwidth`. So a code point is 0 wide where musl says nonspacing, 2 where it says wide, 1
+   shell shows `paste N lines?` on the status line (ADR-0337) and passes it on Enter, drops it on Escape; while it
+   waits, no other key does anything.
+9. **Width.** One table gives the width of every code point, and it is musl's own: at build time the `wcwidth`
+   of the musl release pinned in `ports/sources.lock` is compiled for the host and asked for every code point,
+   and the answers are the terminal's table. (Its two data headers alone are not enough: above U+20000 musl
+   decides by code.) So a code point is 0 wide where musl says nonspacing, 2 where it says wide, 1
    otherwise, in the grid, in every ported program, and in `zosh`'s own editor, which uses the same table. A
    width-0 character joins the cell before it (at most two per cell, more are dropped); a width-2 character takes
    two cells and wraps whole. A character with no glyph draws the hollow box at its width. No grapheme clustering,
@@ -232,7 +235,8 @@ grid first.
   parameters". Item 2 makes LF a line feed (ADR-0331 item 8 says who writes the carriage return); item 1 raises
   the bound to 32.
 - *ADR-0096's protocol* gains `Paste` (and `Restore`, ADR-0331), new ordinals under ADR-0052.
-- *ADR-0096*'s 500-line scrollback becomes a setting (its open question).
+- *ADR-0096*'s 500-line scrollback becomes a setting (its open question), `term.scrollback`, declared under
+  ADR-0157.
 - *ADR-0154 rule 7* (the shell's editor "counts one column for each" scalar value): item 9 makes the editor use
   the width table, since the grid now does.
 - *ADR-0100 item 2* (musl's `src/ctype` compiled unchanged) is kept: the table is generated from it, not put in
@@ -277,9 +281,9 @@ list is also what a remote `vi` gets; a remote program that queries gets no answ
   extended with the grammar of `CSI`, `OSC` and `DCS` and a comparison of the state before and after each unknown
   final.
 - **INV-0332-4.** The terminal's grid, `zosh`'s editor and `libposix`'s `wcwidth` give every code point the same
-  width. *Check:* a host test that generates the table from the pinned musl files and compares it, for every code
-  point, with the generated table the terminal and the editor link; a check that the generator's inputs are the
-  files of the pinned archive.
+  width. *Check:* a host test that compiles the pinned musl's `wcwidth.c`, enumerates every code point and compares the
+  answers with the table the terminal and the editor link; a check that the file compiled is the one of the
+  pinned archive.
 - **INV-0332-5.** Pasted text reaches a program without `ESC` or another control character except tab and newline,
   between the bracket marks exactly when mode 2004 is set, and a paste with a newline reaches a program without
   2004 only after the person's Enter. *Check:* a host test of the paste path with text holding the closing mark,

@@ -37,7 +37,7 @@ This ADR decides which library is ported, in which configuration, and where it l
   `stage-10/survey.md#how-ncurses-finds-a-terminal-description`).
 
 **What is assumed.** That more curses programs follow `vi` (the task's survey list names `htop` and `tmux`). The
-size of the static library in a Zoraya program is not measured; it is 10b's first number.
+size of the static library in a Zoraya program is not measured; it is the implementing part's first number.
 
 ## Decision drivers
 
@@ -113,7 +113,8 @@ the size by its authors' figures. ncurses is recommended for what follows them (
 difference is not measured on Zoraya; the first open question asks for that measurement, and it could reverse the
 choice.
 
-1. **The port.** ncurses 6.6 `[assumption: the release current on 2026-11-13; 10b pins the archive and its
+1. **The port.** ncurses 6.6 `[assumption: the release current on 2026-11-13; the implementing part pins the archive
+   and its
    SHA-256]`, in `ports/sources.lock`, built by `zcc` as two static archives in the sysroot: `libtinfow.a` (the
    terminfo half, `--with-termlib`) and `libncursesw.a` (`--enable-widec`), with headers in `/usr/include`. No C++
    binding (`--without-cxx`), no shared library, no programs for the target, no lookup in the home directory

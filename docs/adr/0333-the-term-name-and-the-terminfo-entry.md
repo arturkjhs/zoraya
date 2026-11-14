@@ -134,7 +134,9 @@ ways ADR-0332's "ignore what is unknown" rule absorbs.
    `terminfo.src` of the ncurses release that ADR-0334 pins in `ports/sources.lock`. With it ship `xterm` (for
    programs that strip the suffix), `vt100` and `dumb`, and no
    other entry. `/usr` is in every POSIX program's table already, so the entry needs no grant, no `TERMINFO`
-   variable and no copy inside each program; ncurses, `less` and Python's reader all find it at their default path.
+   variable and no copy inside each program; ncurses and `less` find it at their default path; so does Python's
+   reader, after it has first tried the home
+   directory and two system directories that no program is given (open question).
 3. **The entry is the specification, with its exceptions.** ADR-0332 implements the capabilities of the pinned
    `xterm-256color` except the ones its item 4 lists, and its conformance tool reads this same file and that list
    (INV-0332-1). When the pin moves, the tool lists what changed.
@@ -207,6 +209,9 @@ the one they know. Networking: the choice is made for ssh (driver 1). Threads: n
   ported program needs it, nothing is set.
 - Whether the terminal should have a way to be recognised (a variable or the device-attribute version) for
   programs that want to enable Zoraya-specific behaviour; none exists yet.
+- Python 3.14's reader looks in `~/.terminfo`, `/etc/terminfo` and `/lib/terminfo` before `/usr/share/terminfo`;
+  each is a refused path that would be reported after every run of its REPL. Stage 9's port of CPython has to
+  remove those lookups or point `TERMINFO` at the directory, which item 4 would then have to allow for it.
 - Whether `console.term` should default to `vt100` once the serial console carries bytes exactly (ADR-0331's open
   question).
 

@@ -89,7 +89,7 @@ answers `ENODEV` to a file mapping.
   and its mail, the system and home start-up files, and a build of its own, because the ports have no CMake. It
   needs a DB 1 library that musl does not have. In-place saving means an interrupted save can lose the file. It
   has no syntax colouring and fewer comforts than Vim.
-- **Cost:** *(estimate)* Two ports, a small DB 1 library, a hand-written makefile for nvi2 and five patches.
+- **Cost:** *(estimate)* Two ports, a small DB 1 library, a hand-written makefile for nvi2 and four patches.
 - **Precedent:** The BSDs' `vi`; Chimera Linux ships nvi as its `vi`
   (`stage-10/survey.md#bsd-and-other-permissive-sources`).
 
@@ -126,13 +126,18 @@ answers `ENODEV` to a file mapping.
    removed (it needs a pseudo-terminal, ADR-0338); the `flock` call and the `lock` option are removed; recovery,
    its directory and its mail are removed; the system and home start-up files are not read.
 2. **Its buffer.** `dbopen` comes from a DB 1 library built with the port from the BSD `db` sources
-   `[assumption: 10c pins which copy; nvi 1.81.6 bundles a reduced one]`. With recovery cut, the buffer's record
+   `[assumption: the implementation part pins which copy; nvi 1.81.6 bundles a reduced one]`. With recovery cut, the
+   buffer's record
    file is DB 1's own unlinked temporary file in the line's `/tmp` (ADR-0153 rule 10), gone when the line ends.
 3. **What the line gives: its operands, and nothing of the current directory.** The description says `cwd none`
    (ADR-0311 item 5's mechanism): `vi FILE` is given `FILE` as ADR-0153's `create` kind, the one name to read,
    change, create or replace, and no other name of its directory, whether or not that is the current directory.
    Another file, also one beside it, is a refusal that ADR-0337 shows and lets the person lift; a person who
-   wants a directory says so (`+w . vi notes.txt`) or works in a room.
+   wants a directory says so (`+w . vi notes.txt`) or works in a room. Two files of one directory
+   (`vi a.txt b.txt`) need a connection narrowed to both names, which is ADR-0337 item 8's change to `narrow` and
+   is built with this port. With no operand in the current directory the program starts in `/bin`, read-only
+   (ADR-0311 item 5): `vi` alone and then `:w notes.txt` is refused there, and `help vi` says to name the file on
+   the line.
 4. **Saving is in place and not atomic.** nvi truncates and rewrites the file. A crash, a kill or a full volume
    during `:w` can leave it short, and with recovery cut no other copy exists. `help vi` says so.
 5. **No recovery in stage 10.** `vi -r` is not offered. A crash loses the unsaved session. ADR-0341's directory is
@@ -142,7 +147,8 @@ answers `ENODEV` to a file mapping.
    default has it.
 7. **Programs it starts.** `:!`, `:r !cmd` and filters run `/bin/sh` as a child with the editor's own table
    (ADR-0107), so a command typed inside `vi` reaches exactly what `vi` reaches. No `secure` mode is forced.
-8. **`less`.** One release of `less`, pinned by part 10c, under the Less License, linked with the terminfo half of
+8. **`less`.** One release of `less`, pinned by its implementation part, under the Less License, linked with the
+   terminfo half of
    ADR-0334's library, as `/bin/less`, also `cwd none`. Compiled-in defaults: no history file, no key files, no
    input preprocessor (`LESSOPEN` is ignored), no tags. `v` starts `vi` and `!` a shell, as children with the
    pager's table. `LESSSECURE` is not set: the table is the confinement. With its input from a pipe it reads keys
@@ -150,7 +156,8 @@ answers `ENODEV` to a file mapping.
 9. **Descriptions**, in the image (ADR-0153 rule 10):
 
    ```
-   name     vi
+      name     vi
+   summary  edit text files (nvi, a POSIX program)
    usage    vi [-R] [-c COMMAND] [FILE...]
    program  /bin/vi
    cwd      none
@@ -160,7 +167,9 @@ answers `ENODEV` to a file mapping.
    option   -c COMMAND text  an ex command to run first
    ```
 
-   and for `less`, `cwd none` and `operand [FILE...] read`. `view` and `ex` have their own with the same operand.
+   and for `less`, `cwd none` and `operand [FILE...] read`. (The format wants a long form for every option and nvi
+   has none; the implementing part either lets a description give a short form alone or has the shell pass the
+   short one.) `view` and `ex` have their own with the same operand.
 10. **Environment.** The shell sets no `EDITOR`, `VISUAL` or `PAGER`: git and `less` fall back to `vi` and `less`
     by themselves, and a person who wants another exports it.
 11. **What `edit` remains for.** `edit` is the desktop's editor: a window, the chooser, the clipboard, no modes. It
@@ -189,7 +198,8 @@ vi gets (a POSIX program):
 ```
 
 Inside, `:e todo.txt` is refused, the terminal says so, and System+G gives the file (ADR-0337).
-`+r . vi notes.txt` starts it with the directory to read; `vi -R /config/settings` gives that file to read only.
+`+w . vi notes.txt` starts it with the whole directory, to change (a `+r .` would be merged with the file's entry
+into the same thing, by ADR-0153 rule 2); `vi -R /config/settings` gives that file to read only.
 
 ```
 ~/proj> less big.log
@@ -226,7 +236,7 @@ Networking, threads: none.
   enough to edit it and is all the editor has. Neither program leaves files the person did not ask for.
 - **Negative.** A save is not atomic: an interrupted `:w` can lose the file, and there is no recovery. Opening a
   second file, even one beside the first, needs a grant. No start-up file; no `:script`; no syntax colouring. A
-  DB 1 library, a makefile and five patches to carry.
+  DB 1 library, a makefile and four patches to carry.
 - **Follow-up.** The two ports, the makefile and the DB 1 library; their descriptions and `help` pages; the hint
   texts; `docs/dependencies.md`; `docs/tour.md` gains an editing step.
 
@@ -236,6 +246,7 @@ Networking, threads: none.
   other; it reads, changes and saves `FILE`, the directory holds the same names afterwards, and `:w OTHER` in that
   directory is refused. *Check:* a host test of the shell's plan for `vi` with a file in and outside the current
   directory; an in-QEMU script that edits and saves each (the keys typed by the runner), tries `:w` of a sibling,
+  edits two files of one directory in one `vi`,
   and compares the directory listings and the files' content.
 - **INV-0335-2.** From start to exit with no command typed but quit, `vi` and `less` name no path outside their
   entries and leave nothing in `/tmp`. *Check:* the same script reads the `REPORT` channel's count for each
