@@ -112,11 +112,13 @@ image `build/cxx-dbg`; the script ran the upstream test 200 times, a copy that p
 |---|---|---|---|---|---|
 | HVF, with the fix | 200 of 200 passed | none | 0 in all 20 | 5 of 5 | 356 s |
 | TCG, not throttled, with the fix | 200 of 200 passed | none | 0 to 3 | 5 of 5 | 1258 s |
-| TCG throttled (`taskpolicy -b`), before the fix | 3 of 3 passed | none | 764, 792, 768 (a copy without the counter check) | not yet written | |
+| TCG throttled (`taskpolicy -b`), with the fix | 30 of 30 passed | none | 0 to 79 in 10 runs | (run unthrottled above) | |
+| TCG throttled, before the fix | 3 of 3 passed | none | 764, 792, 768 (a copy without the counter check) | not yet written | |
 
 Command: `target/debug/zoraya-test-runner --timeout N --script LOOP --label cxx-loop-MODE -- tools/run-qemu.sh --test --keys
---disk build/cxx-dbg/disk.img --accel auto|tcg build/zoraya-kernel.elf`. The throttled run with the fix is in the next row once
-measured.
+--disk build/cxx-dbg/disk.img --accel auto|tcg build/zoraya-kernel.elf`. The throttled runs had the guest QEMU on the efficiency cores
+(`taskpolicy -b -p PID`). Before the fix, three throttled runs of the counter copy passed 764 to 792 of 1000 rounds with the
+workers done before the waiter: with the notification first, the waiter seldom had to sleep; with the fix it rarely misses.
 
 **What upstream says.** The test's own comment: "Due to OS scheduling the workers might have terminated when this code is
 reached. In that case the wait will not sleep and the call to notify_all_at_thread_exit has no effect ... Keep track of how
