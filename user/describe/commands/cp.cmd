@@ -7,6 +7,7 @@ option   -f --force    replace TO if it exists
 exit     0  copied
 exit     1  not copied
 ---
+cp is a native command; /bin/cp is toybox's, for scripts, with its own options (help /bin/cp).
 Copies the file FROM to a new file TO. TO must not exist unless --force is given.
 
 EXAMPLES

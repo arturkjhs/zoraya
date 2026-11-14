@@ -5,6 +5,7 @@ operand  SECONDS  text  how long to wait, a whole number
 cwd      none
 exit     0  waited
 ---
+sleep is a native command; /bin/sleep is toybox's, for scripts, with its own options (help /bin/sleep).
 Waits SECONDS seconds, then ends. Ctrl-C ends it sooner.
 
 EXAMPLES

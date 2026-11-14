@@ -159,17 +159,17 @@ Finding nothing is a "no": status 1, nothing printed, and unlike a failure it do
 
 **10a. Names from elsewhere.** The shell knows the names you may bring from other systems and says what to type here.
 ```
-~> grep milk notes.txt
-zosh: grep: no such command
-  hint: on Zoraya this is search: search TEXT FILE...
+~> more notes.txt
+zosh: more: no such command
+  hint: to print a file: cat FILE (help pages page by themselves)
 ~> man cp
 zosh: man: no such command
   hint: on Zoraya this is help: help NAME
 ~> count --lines notes.txt
 2
 ```
-A name that is a program on the volume runs instead: this image has `wc`, a POSIX program (stage 6b's toybox),
-so `wc -l notes.txt` counts as it does elsewhere.
+A name that is a program on the volume runs instead: this image has `grep` and `wc`, POSIX programs (toybox,
+stage 10e), so `grep milk notes.txt` and `wc -l notes.txt` work as they do elsewhere.
 
 ## Getting help
 

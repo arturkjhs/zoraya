@@ -34,6 +34,12 @@ pub enum Access {
     Rename(String),
     /// `tree` or `+w`: the directory and everything below it.
     Tree,
+    /// `read` operand of a `cwd none` description (ADR-0336 item 6): the
+    /// parent directory, narrowed to the name, to read it.
+    ReadName(String),
+    /// `write` operand of a `cwd none` description: the parent, narrowed to
+    /// the name, to change the existing file (no create, no remove).
+    ChangeName(String),
 }
 
 impl Access {
@@ -50,14 +56,33 @@ impl Access {
                 rights::READ | rights::RENAME | rights::CREATE | rights::REMOVE | rights::CLONE
             }
             Access::Tree => rights::ALL & !rights::PUBLISH,
+            Access::ReadName(_) => rights::READ | rights::CLONE,
+            Access::ChangeName(_) => rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
         }
     }
 
     /// The one name a narrowed entry may use.
     pub fn name(&self) -> Option<&str> {
         match self {
-            Access::Create(n) | Access::Remove(n) | Access::Rename(n) => Some(n),
+            Access::Create(n)
+            | Access::Remove(n)
+            | Access::Rename(n)
+            | Access::ReadName(n)
+            | Access::ChangeName(n) => Some(n),
             _ => None,
+        }
+    }
+
+    /// The same access narrowed to `name` instead (an entry followed
+    /// through a link, rule 5). A whole access stays as it is.
+    pub fn renamed(&self, name: String) -> Access {
+        match self {
+            Access::Create(_) => Access::Create(name),
+            Access::Remove(_) => Access::Remove(name),
+            Access::Rename(_) => Access::Rename(name),
+            Access::ReadName(_) => Access::ReadName(name),
+            Access::ChangeName(_) => Access::ChangeName(name),
+            other => other.clone(),
         }
     }
 
@@ -71,6 +96,8 @@ impl Access {
             Access::Remove(n) => format!("remove {n}"),
             Access::Rename(n) => format!("rename {n}"),
             Access::Tree => "change anything in".into(),
+            Access::ReadName(n) => format!("read {n}"),
+            Access::ChangeName(n) => format!("change {n}"),
         }
     }
 }
@@ -207,11 +234,12 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             let literal = value_of(line.args, text).is_some_and(|v| v.literal);
             // A kind that narrows the parent needs the path strictly below:
             // a value naming the current directory itself would give its
-            // parent (review S16).
+            // parent (review S16). A file operand of a `cwd none`
+            // description narrows the parent too (below).
             let narrows = matches!(
                 kind,
                 Kind::Create | Kind::Remove | Kind::RemoveTree | Kind::Rename
-            );
+            ) || (d.cwd == Cwd::None && matches!(kind, Kind::Read | Kind::Write));
             let within = |base: &str| covers(base, &abs) && !(narrows && abs == base);
             let inside = within(line.cwd) || granted.iter().any(|g| within(g));
             if !literal && !inside {
@@ -233,6 +261,25 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             // ADR-0153's Decision: only base-system commands get more than
             // `read` without a grant.
             if kind != Kind::Read && !line.base_system {
+                return Ok(());
+            }
+            // ADR-0336 item 6: a file operand of a `cwd none` description
+            // arrives as its directory narrowed to the name, so the one
+            // file is enough and its siblings are not given.
+            if d.cwd == Cwd::None
+                && matches!(kind, Kind::Read | Kind::Write)
+                && let Some((parent, name)) = parent_and_name(&abs)
+            {
+                let access = if kind == Kind::Read {
+                    Access::ReadName(name)
+                } else {
+                    Access::ChangeName(name)
+                };
+                out.push(Planned {
+                    path: parent,
+                    access,
+                    reason,
+                });
                 return Ok(());
             }
             entries_for(kind, &abs, &reason, out);
@@ -306,6 +353,8 @@ fn fallback(access: &Access) -> String {
         Access::Create(_) => "create and change anything in".into(),
         Access::Remove(_) => "remove anything in".into(),
         Access::Rename(_) => "rename, create and remove anything in".into(),
+        Access::ReadName(_) => "read anything in".into(),
+        Access::ChangeName(_) => "read and change anything in".into(),
         other => other.words(),
     }
 }
@@ -326,6 +375,7 @@ pub fn through_links(
     let is_grant = |e: &Planned| e.reason == "+r" || e.reason == "+w";
     let mut roots: Vec<String> = alloc::vec![cwd.into()];
     let mut out = plan;
+    let mut links: Vec<Planned> = Vec::new();
     for e in out.iter_mut().filter(|e| is_grant(e)) {
         if let Some(t) = target(&e.path) {
             e.path = t;
@@ -336,6 +386,46 @@ pub fn through_links(
         if is_grant(e) || e.reason == "current directory" {
             continue;
         }
+        // A narrowed read or change name (a `cwd none` file operand) is
+        // followed at that name, not only at its directory: the name itself
+        // may be the link, and the program's open follows it (review of
+        // 10e, finding 7). Its target must lie strictly below a root, since
+        // the entry becomes the target's parent narrowed to the target's
+        // name. The link's own name stays given with the same rights, so
+        // that the program's open (for writing too: the service checks the
+        // rights before it answers that the name is a link) meets the link
+        // and libposix follows it to the target's entry (check of the fix
+        // pass, N1). Without CREATE, REMOVE or RENAME the link itself cannot
+        // be replaced through it. `create`, `remove` and
+        // `rename` act on the link object itself (`ln -sf`, `mv` onto a
+        // link), so only their directory is followed (below; N2).
+        let opens = matches!(e.access, Access::ReadName(_) | Access::ChangeName(_));
+        let named = e.access.name().filter(|_| opens).map(String::from);
+        if let Some(name) = named
+            && let full = join(&e.path, 0, &name)
+            && let Some(t) = target(&full).filter(|t| *t != full)
+        {
+            let below = |r: &String| zoraya_resolve::covers(r, &t) && *r != t;
+            if roots.iter().any(below)
+                && let Some((parent, tname)) = parent_and_name(&t)
+            {
+                links.push(Planned {
+                    path: e.path.clone(),
+                    access: e.access.clone(),
+                    reason: format!("{}, the link itself", e.reason),
+                });
+                e.reason = format!("{}, through a link at {}", e.reason, shown(&full, home));
+                e.path = parent;
+                e.access = e.access.renamed(tname);
+                continue;
+            }
+            let marker = if matches!(e.access, Access::ReadName(_)) {
+                "+r"
+            } else {
+                "+w"
+            };
+            return Err(link_refused(&full, &t, marker, home));
+        }
         let Some(t) = target(&e.path).filter(|t| *t != e.path) else {
             continue;
         };
@@ -345,19 +435,26 @@ pub fn through_links(
             continue;
         }
         let marker = if e.access == Access::Read { "+r" } else { "+w" };
-        return Err(Refused {
-            subject: shown(&e.path, home),
-            problem: format!(
-                "leads through a link to {}, outside the current directory and this line's grants",
-                shown(&t, home)
-            ),
-            hint: Some(format!(
-                "to give it, put {marker} {} before the command",
-                shown(&t, home)
-            )),
-        });
+        return Err(link_refused(&e.path, &t, marker, home));
     }
+    out.extend(links);
     Ok(out)
+}
+
+/// Rule 5's refusal: `path` leads through a link to `t`, which no root
+/// covers.
+fn link_refused(path: &str, t: &str, marker: &str, home: &str) -> Refused {
+    Refused {
+        subject: shown(path, home),
+        problem: format!(
+            "leads through a link to {}, outside the current directory and this line's grants",
+            shown(t, home)
+        ),
+        hint: Some(format!(
+            "to give it, put {marker} {} before the command",
+            shown(t, home)
+        )),
+    }
 }
 
 /// Merges a plan's entries by path, in the order each path first appears.

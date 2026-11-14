@@ -381,8 +381,38 @@ pub fn added_names(adr: &str) -> Result<(Vec<String>, bool), String> {
             return Ok((names, accepted));
         }
         if !l.is_empty() {
-            names.push(l.to_string());
+            // A line is `NAME` or, since ADR-0342 item 1, `NAME PROGRAM`: the
+            // program that imports the name. Only the name is admitted here;
+            // `block_lines` gives both for INV-0342-1's second half.
+            let name = l.split_whitespace().next().unwrap_or(l);
+            names.push(name.to_string());
         }
+    }
+    Err("unterminated posix-surface-added block".into())
+}
+
+/// The lines of an ADR's `posix-surface-added` block as `(name, program)`;
+/// the program is `None` on a line that gives only the name (blocks written
+/// before ADR-0342). INV-0342-1: a block written under ADR-0342 names the
+/// program behind every name.
+pub fn block_lines(adr: &str) -> Result<Vec<(String, Option<String>)>, String> {
+    let mut lines = adr.lines();
+    if !lines.any(|l| l.trim() == "```posix-surface-added") {
+        return Err("no posix-surface-added block".into());
+    }
+    let mut out = Vec::new();
+    for l in lines {
+        let l = l.trim();
+        if l == "```" {
+            return Ok(out);
+        }
+        if l.is_empty() {
+            continue;
+        }
+        let mut words = l.split_whitespace();
+        let name = words.next().unwrap_or(l).to_string();
+        let program = words.next().map(String::from);
+        out.push((name, program));
     }
     Err("unterminated posix-surface-added block".into())
 }

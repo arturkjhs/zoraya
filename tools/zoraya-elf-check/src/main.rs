@@ -21,6 +21,16 @@ fn walk(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     } else if meta.is_file() {
         out.push(path.to_path_buf());
     } else if meta.file_type().is_symlink() && std::fs::metadata(path).is_err() {
+        // An absolute target is the image's own path (ADR-0336 item 8: the
+        // links of /bin point at /usr/libexec/toybox): it is found under
+        // one of the link's ancestors, the image's root.
+        let target = std::fs::read_link(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if target.is_absolute() {
+            let inside = target.strip_prefix("/").unwrap_or(&target);
+            if path.ancestors().skip(1).any(|a| a.join(inside).is_file()) {
+                return Ok(());
+            }
+        }
         return Err(format!("{}: a symbolic link to nothing", path.display()));
     }
     Ok(())

@@ -122,9 +122,9 @@
 > echo $status\r
 < \r\n1
 ^ \r\n~>
-> grep milk notes.txt\r
-< \r\nzosh: grep: no such command
-^ \r\n  hint: on Zoraya this is search: search TEXT FILE...
+> more notes.txt\r
+< \r\nzosh: more: no such command
+^ \r\n  hint: to print a file: cat FILE (help pages page by themselves)
 ^ \r\n~>
 > man cp\r
 < \r\nzosh: man: no such command
