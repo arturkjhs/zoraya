@@ -345,7 +345,7 @@ jobs:
     # The python steps (test-python, test-python-regr) take 45: under TCG
     # regrtest's CI subset and the TLS clients each need most of 30 (ADR-0320
     # item 9; run 43488132441 was cancelled at 30 with both in one job).
-    timeout-minutes: ${{ (contains(matrix.cmd, 'test-python') || contains(matrix.cmd, 'test-cxx-')) && 45 || (contains(matrix.cmd, 'test-cxx') || contains(matrix.cmd, 'tour') || (contains(matrix.cmd, 'test-posix') && contains(matrix.cmd, 'tcg')) || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'test-apps') || contains(matrix.cmd, 'test-netsurf') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
+    timeout-minutes: ${{ contains(matrix.cmd, 'test-cxx-libcxx') && 50 || (contains(matrix.cmd, 'test-python') || contains(matrix.cmd, 'test-cxx-')) && 45 || (contains(matrix.cmd, 'test-cxx') || contains(matrix.cmd, 'tour') || (contains(matrix.cmd, 'test-posix') && contains(matrix.cmd, 'tcg')) || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'test-apps') || contains(matrix.cmd, 'test-netsurf') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:

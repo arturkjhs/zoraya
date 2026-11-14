@@ -138,6 +138,13 @@ The first CI failure (run 43557360750, before the fix) had its line cut. Under t
 the condition variable before `notify_all` returned, which is what the test's byte check (`sum == 0xcd * sizeof`) detects;
 the skip counter is the other candidate on a slow host. Neither fired in the 400 local runs with the fix.
 
+**The libc++ subset under CI's TCG** (candidate run 43573201005): the run reached `thread.semaphore/lost_wakeup.pass.cpp`
+(20 rounds of 9 threads, 10,000 barrier phases each) and then the runner's 1500 s budget ended. Measured alone: 11.5 s under
+HVF, 121 s under the Mac's TCG, `exit 0` both. Not a hang: libc++'s atomic wait (and so `counting_semaphore` and `barrier`)
+polls with a timed backoff on a system other than Linux, where it would use the futex; Zoraya has a futex (ADR-0301), and
+wiring libc++'s `__libcpp_platform_wait_on_address` to it is a follow-up (open items). On a host without HVF the subset now
+runs once (`auto` is TCG there), with the TCG script, the runner's limit 2700 s and the job's 50 minutes.
+
 ## Open items for the architect
 
 - The ADRs above are proposed; none changes an accepted ADR. ADR-0366's change of `malloc`'s header touches every program
@@ -148,4 +155,5 @@ the skip counter is the other candidate on a slow host. Neither fired in the 400
   the candidate run (review finding 11).
 - TCG times of the three C++ steps are unmeasured; CI runs both accelerators in one job of 45 (subset, GoogleTest) or 30
   (`test-cxx`) minutes.
+- libc++'s atomic wait polls with a backoff (no futex path for Zoraya): slow under TCG; wire it to ADR-0301's futex.
 - The libc++ version follows CI's clang: with Ubuntu's `clang-19` (or later) installed in the CI image, LLVM 21 or later could be pinned.

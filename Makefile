@@ -974,7 +974,15 @@ test-cxx: $(KERNEL) $(RUNNER) tools-storage
 CXX_LIBCXX := $(BUILD)/cxx-libcxx
 CXX_LIBCXX_STAMP := $(CXX_LIBCXX)/lct/.stamp
 LLVM_TREE := $(BUILD)/ports/work/llvm-20.1.8
-CXX_LIBCXX_TIMEOUT ?= 1500
+# Under TCG the subset is slow: libc++'s atomic wait polls with a backoff here
+# (its futex path is Linux's), and thread.semaphore/lost_wakeup alone took
+# 121 s under the Mac's TCG and more than CI's 1500 s budget left (run
+# 43573201005). The runner's limit stays below the job's 50 minutes
+# (.github/workflows/test.yml). On a host without HVF (CI), `auto` is TCG,
+# so the subset runs once there, with the TCG script.
+CXX_LIBCXX_TIMEOUT ?= 2700
+CXX_LIBCXX_ACCELS ?= $(if $(filter Darwin,$(shell uname -s)),$(LOCAL_ACCELS),auto)
+CXX_LIBCXX_TCG = { [ $$accel = tcg ] || [ "$$(uname -s)" != Darwin ]; }
 # The runtime first, then the tests, judged against the archives it left
 # (a changed patch, shim or libc.a rebuilds them).
 cxx-libcxx-tests:
@@ -991,9 +999,9 @@ test-cxx-libcxx: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
 	cp $(CXX_LIBCXX)/lct/bin/* $(CXX_LIBCXX)/root/bin/lc/
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(CXX_LIBCXX)/root/bin/lc
-	@for accel in $(LOCAL_ACCELS); do \
+	@for accel in $(CXX_LIBCXX_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 256M --from $(CXX_LIBCXX)/root $(CXX_LIBCXX)/disk.img && \
-	  $(RUNNER) --timeout $(CXX_LIBCXX_TIMEOUT) --script $(CXX_LIBCXX)/lct/script$$([ $$accel = tcg ] && echo -tcg) --label cxx-libcxx-$$accel -- \
+	  $(RUNNER) --timeout $(CXX_LIBCXX_TIMEOUT) --script $(CXX_LIBCXX)/lct/script$$($(CXX_LIBCXX_TCG) && echo -tcg) --label cxx-libcxx-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(CXX_LIBCXX)/disk.img --mem 512M --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(CXX_LIBCXX)/disk.img || exit 1; done
 
