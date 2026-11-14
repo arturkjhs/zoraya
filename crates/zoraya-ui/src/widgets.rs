@@ -11,7 +11,10 @@ use alloc::vec::Vec;
 use zoraya_paint::{Canvas, rounded_outline, rounded_rect};
 use zoraya_tokens::{Color, Logical, shape, space, text};
 
-use crate::{Event, LRect, Painter, Response, Value, Widget, focus_ring, keys};
+use crate::{
+    Event, LRect, Painter, Response, Scrolled, Value, WheelSteps, Widget, focus_ring, keys,
+    scrolled_by,
+};
 
 /// Fills `r` with `color` in a rounded shape of `radius`.
 fn shape_fill(p: &Painter, c: &mut Canvas<'_>, r: LRect, radius: Logical, color: Color) {
@@ -563,6 +566,7 @@ pub struct ListView {
     pub selected: Option<usize>,
     /// The first row shown.
     pub top: usize,
+    wheel: WheelSteps,
     rect: LRect,
 }
 
@@ -574,8 +578,14 @@ impl ListView {
             details: Vec::new(),
             selected: None,
             top: 0,
+            wheel: WheelSteps::default(),
             rect: LRect::default(),
         }
+    }
+
+    /// The last first row: the last row at the bottom.
+    fn last_top(&self) -> usize {
+        self.rows.len().saturating_sub(self.visible())
     }
 
     fn visible(&self) -> usize {
@@ -618,6 +628,8 @@ impl Widget for ListView {
     fn paint(&mut self, p: &mut Painter, c: &mut Canvas<'_>, focused: bool) {
         c.fill(self.rect.physical(p.scale), p.palette.bg_view);
         let v = self.visible();
+        // No blank past the last row, also after the frame grew.
+        self.top = self.top.min(self.last_top());
         for (k, i) in (self.top..self.rows.len()).take(v).enumerate() {
             let row = LRect::new(
                 self.rect.x,
@@ -682,6 +694,12 @@ impl Widget for ListView {
                     Response::None
                 }
             }
+            // The wheel moves the rows shown, not the selection; the next
+            // arrow key brings the selection back into view (`select`).
+            Event::Wheel { dy, .. } => {
+                let last = self.last_top();
+                wheel_rows(&mut self.wheel, &mut self.top, *dy, last)
+            }
             _ => Response::None,
         }
     }
@@ -694,35 +712,104 @@ impl Widget for ListView {
     fn value(&self) -> Value<'_> {
         Value::Index(self.selected)
     }
+    fn scrolled(&self) -> Option<Scrolled> {
+        Some(Scrolled {
+            kind: "list",
+            at: self.top,
+            free: false,
+            cursor: 0,
+        })
+    }
+    fn set_scrolled(&mut self, s: Scrolled) {
+        self.top = s.at;
+    }
 }
 
-/// A child larger than its frame, shifted by a scroll offset; the child
-/// paints only inside the frame.
+/// A turn of `dy` on a view whose first row is `*at`, at most `last`
+/// (proposed ADR-0329): `Repaint` when it moved, or when it gathered part
+/// of a row toward a side it can still go; `None` when it is at its end
+/// that way, so that the turn goes to the widget around it.
+pub fn wheel_rows(wheel: &mut WheelSteps, at: &mut usize, dy: i32, last: usize) -> Response {
+    let can = if dy > 0 {
+        *at < last
+    } else {
+        dy < 0 && *at > 0
+    };
+    if !can {
+        wheel.stop();
+        return Response::None;
+    }
+    let rows = wheel.turn(dy);
+    let to = scrolled_by(*at, rows, last);
+    // At the end it went toward: the rest of a row there does not count.
+    if (dy > 0 && to == last) || (dy < 0 && to == 0) {
+        wheel.stop();
+    }
+    *at = to;
+    Response::Repaint
+}
+
+/// A column of children taller than its frame (proposed ADR-0329): it shows
+/// them from its `first` on, as a `Column` lays them out (an inset of
+/// `padding.window`, gaps of `gap.controls`), and the wheel moves `first`
+/// by [`crate::ROWS_PER_NOTCH`] children a notch, never past the point
+/// where the last child is at the bottom. A child before `first` gets an
+/// empty rectangle: it paints nothing and takes no pointer. The keyboard's
+/// focus on a child out of view scrolls it into view.
 pub struct ScrollView {
-    pub child: Vec<Box<dyn Widget>>,
-    /// How far down the child is scrolled, in logical pixels.
-    pub offset: Logical,
+    pub children: Vec<Box<dyn Widget>>,
+    /// The first child shown.
+    pub first: usize,
+    wheel: WheelSteps,
+    /// Each child's height at the last layout.
+    heights: Vec<Logical>,
+    /// `first` changed after the last layout: laid out again at paint.
+    stale: bool,
     rect: LRect,
 }
 
 impl ScrollView {
-    pub fn new(child: Box<dyn Widget>) -> ScrollView {
+    pub fn new(children: Vec<Box<dyn Widget>>) -> ScrollView {
         ScrollView {
-            child: alloc::vec![child],
-            offset: Logical::ZERO,
+            children,
+            first: 0,
+            wheel: WheelSteps::default(),
+            heights: Vec::new(),
+            stale: false,
             rect: LRect::default(),
         }
     }
 
-    /// Scrolls by `lines` control heights (negative: up), within the child.
-    pub fn scroll(&mut self, down: bool, p: &mut Painter) {
-        let step = space::CONTROL_HEIGHT;
-        // `layout` keeps the offset within the content.
-        self.offset = if down {
-            self.offset + step
-        } else {
-            self.offset - step
-        };
+    /// The height children `from..=to` take with their gaps.
+    fn span(&self, from: usize, to: usize) -> Logical {
+        let mut h = Logical::ZERO;
+        for (i, ch) in self.heights.iter().enumerate().take(to + 1).skip(from) {
+            if i > from {
+                h = h + space::GAP_CONTROLS;
+            }
+            h = h + *ch;
+        }
+        h
+    }
+
+    /// The frame's height inside its padding.
+    fn inner(&self) -> Logical {
+        self.rect.h - space::PADDING_WINDOW.times(2)
+    }
+
+    /// The largest `first`: the least one from which the rest fit.
+    pub fn last_first(&self) -> usize {
+        let n = self.heights.len();
+        let mut first = n.saturating_sub(1);
+        while first > 0 && self.span(first - 1, n - 1) <= self.inner() {
+            first -= 1;
+        }
+        first
+    }
+
+    /// Scrolls by `rows` children (negative: up), within the content.
+    pub fn scroll_by(&mut self, rows: i32, p: &mut Painter) {
+        self.first = scrolled_by(self.first, rows, self.last_first());
         let r = self.rect;
         self.layout(r, p);
     }
@@ -730,34 +817,95 @@ impl ScrollView {
 
 impl Widget for ScrollView {
     fn measure(&mut self, p: &mut Painter) -> (Logical, Logical) {
-        let (w, _) = self.child[0].measure(p);
-        (w, space::CONTROL_HEIGHT.times(4))
+        let mut w = Logical::ZERO;
+        for c in self.children.iter_mut() {
+            w = w.max(c.measure(p).0);
+        }
+        (
+            w + space::PADDING_WINDOW.times(2),
+            space::CONTROL_HEIGHT.times(4),
+        )
     }
     fn layout(&mut self, r: LRect, p: &mut Painter) {
         self.rect = r;
-        let (_, h) = self.child[0].measure(p);
-        // At most the content less the frame, also after the frame grows:
-        // a frame of a new size shows no blank past the content.
-        if self.offset > h - r.h {
-            self.offset = h - r.h;
+        self.stale = false;
+        self.heights = self.children.iter_mut().map(|c| c.measure(p).1).collect();
+        // At most the last first, also after the frame grows: a frame of a
+        // new size shows no blank past the content.
+        self.first = self.first.min(self.last_first());
+        let inner = r.inset(space::PADDING_WINDOW);
+        let mut y = inner.y;
+        for (i, c) in self.children.iter_mut().enumerate() {
+            if i < self.first {
+                c.layout(
+                    LRect::new(inner.x, inner.y, Logical::ZERO, Logical::ZERO),
+                    p,
+                );
+                continue;
+            }
+            let ch = self.heights[i];
+            let h = if ch <= inner.bottom() - y {
+                ch
+            } else {
+                inner.bottom() - y
+            };
+            c.layout(LRect::new(inner.x, y, inner.w, h), p);
+            y = y + h + space::GAP_CONTROLS;
         }
-        // The child's top is above the frame by the offset: its rectangle
-        // starts at the frame's top with its height cut by the offset, so
-        // that nothing is placed above the frame in logical units.
-        let shown = h - self.offset;
-        self.child[0].layout(
-            LRect::new(r.x, r.y, r.w, if shown > r.h { r.h } else { shown }),
-            p,
-        );
     }
     fn rect(&self) -> LRect {
         self.rect
     }
     fn paint(&mut self, p: &mut Painter, c: &mut Canvas<'_>, _focused: bool) {
+        // The children are painted after this: laid out where `first` is.
+        if self.stale {
+            let r = self.rect;
+            self.layout(r, p);
+        }
         c.fill(self.rect.physical(p.scale), p.palette.bg_view);
     }
+    fn event(&mut self, e: &Event) -> Response {
+        let Event::Wheel { dy, .. } = *e else {
+            return Response::None;
+        };
+        let last = self.last_first();
+        let was = self.first;
+        let r = wheel_rows(&mut self.wheel, &mut self.first, dy, last);
+        if self.first != was {
+            self.stale = true;
+        }
+        r
+    }
     fn children(&mut self) -> &mut [Box<dyn Widget>] {
-        &mut self.child
+        &mut self.children
+    }
+    fn scrolled(&self) -> Option<Scrolled> {
+        Some(Scrolled {
+            kind: "scroll",
+            at: self.first,
+            free: false,
+            cursor: 0,
+        })
+    }
+    fn set_scrolled(&mut self, s: Scrolled) {
+        self.first = s.at;
+        self.stale = true;
+    }
+    fn reveal(&mut self, child: usize) -> bool {
+        if child >= self.heights.len() {
+            return false;
+        }
+        let was = self.first;
+        if child < self.first {
+            self.first = child;
+        }
+        while self.first < child && self.span(self.first, child) > self.inner() {
+            self.first += 1;
+        }
+        if self.first != was {
+            self.stale = true;
+        }
+        self.first != was
     }
 }
 
