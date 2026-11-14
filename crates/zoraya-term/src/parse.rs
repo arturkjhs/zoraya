@@ -99,6 +99,7 @@ impl Term {
         self.state = State::Ground;
         self.string_escape = false;
         self.osc.clear();
+        self.osc_over = false;
     }
 
     /// The controls that act wherever they come, a sequence's middle
@@ -191,6 +192,7 @@ impl Term {
                 return;
             }
             self.osc.clear();
+            self.osc_over = false;
         }
         match b {
             // A second `ESC` is a control that does nothing: the state stays.
@@ -380,15 +382,13 @@ impl Term {
         }
     }
 
-    /// A byte of an `OSC` (collected) or of a `DCS`, `SOS`, `PM` or `APC`
-    /// (skipped). Both end at `ST`, `ESC \`; an `OSC` also at BEL.
+    /// A byte of an `OSC` (collected, up to [`MAX_STRING`] bytes) or of a
+    /// `DCS`, `SOS`, `PM` or `APC` (skipped). All end at `ST` (`ESC \`), `CAN`
+    /// or `SUB`, or at an `ESC` that starts something else; an `OSC` also at
+    /// BEL. A string longer than the bound is swallowed whole: what is past
+    /// the bound is dropped, an `OSC` that overran is not run, and nothing is
+    /// printed (a sixel or a graphics payload is tens of KiB).
     fn string(&mut self, b: u8) {
-        self.seq_len += 1;
-        if self.seq_len >= MAX_STRING {
-            // Cut at the bound: nothing is run, the rest is text again.
-            self.abort();
-            return;
-        }
         match b {
             0x1b => {
                 self.string_escape = true;
@@ -401,7 +401,11 @@ impl Term {
             0x00..=0x1f | 0x7f => {}
             _ => {
                 if self.state == State::Osc {
-                    self.osc.push(b);
+                    if self.osc.len() < MAX_STRING {
+                        self.osc.push(b);
+                    } else {
+                        self.osc_over = true;
+                    }
                 }
             }
         }
@@ -411,9 +415,12 @@ impl Term {
     /// `APC` collected nothing and so runs nothing.
     fn finish_string(&mut self) {
         let osc = core::mem::take(&mut self.osc);
-        self.run_osc(&osc);
+        if !self.osc_over {
+            self.run_osc(&osc);
+        }
         self.osc = osc;
         self.osc.clear();
+        self.osc_over = false;
     }
 
     /// `OSC 4` and `OSC 104`: the palette (ADR-0332 item 3). Every other
@@ -561,7 +568,9 @@ impl Term {
             }
             b'b' => {
                 if let Some(c) = self.last {
-                    for _ in 0..n.min(usize::from(u16::MAX)) {
+                    // The work is bounded by the screen: past a screenful only
+                    // the scrollback differs (proposed ADR-0380 item 9).
+                    for _ in 0..n.min(self.rows * self.columns) {
                         self.put(c);
                     }
                 }

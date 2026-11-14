@@ -43,6 +43,54 @@ pub const WHEEL_LINES: i32 = 3;
 /// most, before it is shown anyway `[assumption]` (ADR-0332 item 3).
 pub const SYNC_HOLD_MS: u32 = 150;
 
+/// What `term` does when it could draw (ADR-0332 item 3, mode 2026).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hold {
+    /// Draw now.
+    pub draw: bool,
+    /// When the hold on the drawing began (nanoseconds), if it is held.
+    pub since: Option<u64>,
+    /// When to wake to draw anyway; none when nothing is waiting for time.
+    pub deadline: Option<u64>,
+}
+
+/// Whether to draw at `now` (nanoseconds), given when a synchronized update
+/// began to hold the drawing (`since`), whether the program has the mode set,
+/// and whether a commit still waits for its reply. A synchronized update is
+/// held for at most [`SYNC_HOLD_MS`] and then shown; the end of the update
+/// shows it at once. While a commit is outstanding nothing is drawn and there
+/// is no deadline to wake for: the reply is what comes next. A program that
+/// sets the mode and never ends it has each later update held for the
+/// whole time (known limit, until `Restore`).
+pub fn sync_hold(now: u64, since: Option<u64>, synchronized: bool, outstanding: bool) -> Hold {
+    let hold = u64::from(SYNC_HOLD_MS) * 1_000_000;
+    let begun = synchronized.then(|| since.unwrap_or(now));
+    if outstanding {
+        return Hold {
+            draw: false,
+            since: begun,
+            deadline: None,
+        };
+    }
+    match begun {
+        None => Hold {
+            draw: true,
+            since: None,
+            deadline: None,
+        },
+        Some(start) if now >= start.saturating_add(hold) => Hold {
+            draw: true,
+            since: None,
+            deadline: None,
+        },
+        Some(start) => Hold {
+            draw: false,
+            since: Some(start),
+            deadline: Some(start.saturating_add(hold)),
+        },
+    }
+}
+
 /// A wheel's turns as lines of the view (proposed ADR-0322): 120ths of a
 /// notch are gathered until they make a line, so a high-resolution wheel
 /// scrolls as far as one with notches.

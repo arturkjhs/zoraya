@@ -306,7 +306,7 @@ list is also what a remote `vi` gets; a remote program that queries gets no answ
   the conformance tool fails on an exception whose capability a test covers, so part 10b removes each line as it
   adds the test. INV-0332-2 is checked for the parser and the grid, which have no output path; the emission points of
   `term` itself (keys, the pointer, a paste, a size) are part 10b's. INV-0332-5 and INV-0332-7 cannot be checked yet:
-  paste and selection are part 10b.
+  paste and selection are part 10b. The first-comparison recordings of item 10 lack `vttest`'s cursor and screen menus: it is not pinned in `ports/sources.lock` and needs the architect's pin (`docs/backlog.md`); `vi`, `less` and four ncurses sessions stand in.
 
 ## Revisit triggers
 

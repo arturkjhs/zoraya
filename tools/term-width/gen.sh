@@ -49,7 +49,8 @@ check)
         cmp -s "$tmp" "$TABLE" || { echo "term-width: $TABLE differs from musl's wcwidth: tools/term-width/gen.sh write" >&2; exit 1; }
         echo "term-width: the table is musl's wcwidth for every code point"
     else
-        echo "term-width: pin matches the lock; $CACHE/$file absent, the table itself is not recompared (make fetch-ports)"
+        echo "term-width: pin matches the lock, but $CACHE/$file is absent: the table itself was NOT recompared (make fetch-ports)" >&2
+        exit 2
     fi ;;
 *) echo "usage: gen.sh write|check" >&2; exit 2 ;;
 esac

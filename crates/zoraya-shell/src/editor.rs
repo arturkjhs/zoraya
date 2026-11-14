@@ -151,7 +151,8 @@ fn width_of(s: &str) -> usize {
 fn advance(start: usize, chars: impl IntoIterator<Item = char>, width: usize) -> usize {
     let mut at = start;
     for c in chars {
-        let w = zoraya_width::columns(c);
+        // A character wider than the row takes the row (the grid puts it in one cell).
+        let w = zoraya_width::columns(c).min(width);
         if w == 2 && width > 1 && at % width == width - 1 {
             at += 1;
         }
@@ -1031,7 +1032,11 @@ mod width_tests {
         assert_eq!(advance(0, "e\u{301}".chars(), 5), 1);
         assert_eq!(take_columns("中中中", 5), "中中");
         // In rows one cell wide nothing fits twice: no padding is added.
-        assert_eq!(advance(0, "中中".chars(), 1), 4);
+        assert_eq!(
+            advance(0, "中中".chars(), 1),
+            2,
+            "the grid puts it in one cell"
+        );
         assert_eq!(advance(0, "ab".chars(), 1), 2);
         assert_eq!(visible("\x1b[1m~\x1b[0m> "), 3);
     }

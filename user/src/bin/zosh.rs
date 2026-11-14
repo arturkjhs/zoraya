@@ -5049,6 +5049,7 @@ fn main() -> i32 {
     }
     show(GREETING);
     let mut out = String::new();
+    let mut after_command = false;
     loop {
         // Ends read since the last prompt, before it (ADR-0158 rule 6).
         show(&shell.host.jobs.take_notices());
@@ -5061,8 +5062,15 @@ fn main() -> i32 {
         }
         let prompt = shell.host.prompt();
         out.clear();
+        // Stop-gap until part 10c's `Restore`: put the terminal back before a
+        // prompt that follows a command (`zoraya_shell::reset`).
+        out.push_str(zoraya_shell::reset::before_prompt(
+            after_command,
+            terminal().is_some(),
+        ));
         editor.start(&prompt, &mut out);
         show(&out);
+        after_command = true;
         shell.host.at_prompt = true;
         let entry = 'read: loop {
             // Keys typed ahead of this prompt come first.

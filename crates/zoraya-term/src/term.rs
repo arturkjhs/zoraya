@@ -195,6 +195,8 @@ pub struct Term {
     /// An `ESC` came inside a string: `\` ends it, anything else abandons it.
     pub(crate) string_escape: bool,
     pub(crate) osc: Vec<u8>,
+    /// The `OSC` being collected overran its bound: it is swallowed, not run.
+    pub(crate) osc_over: bool,
     /// UTF-8 being decoded: the value so far and the bytes still needed.
     pub(crate) utf8: u32,
     pub(crate) needed: u8,
@@ -260,6 +262,7 @@ impl Term {
             seq_len: 0,
             string_escape: false,
             osc: Vec::new(),
+            osc_over: false,
             utf8: 0,
             needed: 0,
             utf8_min: 0,
@@ -448,11 +451,12 @@ impl Term {
 
     /// The most [`Term::memory`] can reach for this size and scrollback.
     pub fn memory_bound(&self) -> usize {
-        // History is a `Vec` that doubles, so up to twice its lines.
-        (2 * self.columns * self.rows + 2 * self.columns * self.capacity) * size_of::<Cell>()
+        // Both screens and the scrollback's lines (reserved exactly, not grown
+        // by doubling), the flags and stops, and the longest string held.
+        (2 * self.columns * self.rows + self.columns * self.capacity) * size_of::<Cell>()
             + self.rows
             + self.columns
-            + 2 * crate::MAX_STRING
+            + crate::MAX_STRING
     }
 
     /// Whether `self` and `other` are in the same state as far as a person
@@ -477,6 +481,8 @@ impl Term {
             && self.saved == other.saved
             && self.overrides == other.overrides
             && self.shape == other.shape
+            && self.last == other.last
+            && self.alt_saved_cursor == other.alt_saved_cursor
     }
 
     pub(crate) fn touch(&mut self, y: usize) {

@@ -1,7 +1,10 @@
 # vim (the host's vi) editing a small file: the alternate screen, the status line,
-# insert mode, a scroll, a search, and the shell's screen coming back.
+# insert mode, a scroll, a search, and the shell's screen coming back. Recorded with the
+# pinned terminfo entry (TERM as ADR-0333 says) and with Vim's own queries (version and
+# cursor position) left in, so that the replayed stream holds queries nothing answers.
 size 80 24
-run vi -u NONE -N -n -i NONE --cmd "set nocp ruler showcmd laststatus=2 t_RV= t_u7=" -c "syntax on" -c "set background=dark" notes.txt
+env TERMINFO=@terminfo@
+run vi -u NONE -N -n -i NONE --cmd "set nocp ruler showcmd laststatus=2" -c "syntax on" -c "set background=dark" notes.txt
 file notes.txt # Notes\nThe quick brown fox jumps over the lazy dog.\nA second line, with a tab:\there.\nTODO: write the terminal.\n\n    indented line\nlast line\n
 mark start
 send G

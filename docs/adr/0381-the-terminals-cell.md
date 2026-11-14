@@ -26,7 +26,8 @@ rare in text a person types (`stage-10/survey.md#utf-8-and-character-width`).
 1. **One cell, one machine word pair**: sixteen bytes keep a row aligned and a copy cheap.
 2. **Direct colour per cell** (ADR-0332 item 6) without a table that a hostile program could fill.
 3. **Combining marks bounded** (ADR-0332 item 9).
-4. **A change of layout is local**: the cell is private to `zoraya-term` behind accessors.
+4. **A change of layout is local**: the marks, the attribute word and the colours are private to `zoraya-term` behind
+   accessors (the character is a public field).
 
 ## Considered options
 

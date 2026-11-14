@@ -189,8 +189,14 @@ fn memory_is_bounded() {
     t.write(b"after");
     let shown: String = (0..24).map(|y| t.line(y)).collect();
     assert!(
-        shown.ends_with("xxxafter"),
-        "the string was cut and the rest printed"
+        !shown.contains("xxx") && !shown.contains("after"),
+        "a string past its bound is swallowed whole, and nothing is printed"
+    );
+    t.write(b"\x18after");
+    let shown: String = (0..24).map(|y| t.line(y)).collect();
+    assert!(
+        shown.ends_with("after") && !shown.contains("xxx"),
+        "CAN ends it"
     );
     assert!(t.memory() <= bound, "{} > {bound}", t.memory());
     // An escape inside a string still counts (review R2), and so does a
@@ -648,5 +654,53 @@ fn text_in_any_colour_reads_back() {
         assert_eq!(rows[2], reader.canonical("bold orange faint_grey"));
         assert_eq!(rows[3], reader.canonical("dim red reverse grey_ramp"));
         assert_eq!(rows[4], reader.canonical("xy"));
+    }
+}
+
+/// The hold of a synchronized update (ADR-0332 item 3): held, shown after at
+/// most 150 ms, shown at once when it ends, and no deadline to wake for while
+/// a commit waits (review of 10a: `term` once spun on a deadline in the past).
+#[test]
+fn a_synchronized_update_is_held_for_at_most_150_ms() {
+    const MS: u64 = 1_000_000;
+    let t0 = 1_000 * MS;
+    // Not synchronized: draw.
+    let h = sync_hold(t0, None, false, false);
+    assert_eq!((h.draw, h.since, h.deadline), (true, None, None));
+    // The first look at a set mode starts the hold.
+    let h = sync_hold(t0, None, true, false);
+    assert_eq!(
+        (h.draw, h.since, h.deadline),
+        (false, Some(t0), Some(t0 + 150 * MS))
+    );
+    // Still held at 149 ms, shown at 150 and the hold is over.
+    let h = sync_hold(t0 + 149 * MS, Some(t0), true, false);
+    assert_eq!(
+        (h.draw, h.since, h.deadline),
+        (false, Some(t0), Some(t0 + 150 * MS))
+    );
+    let h = sync_hold(t0 + 150 * MS, Some(t0), true, false);
+    assert_eq!((h.draw, h.since, h.deadline), (true, None, None));
+    // The end of the update shows it at once, whatever the time.
+    let h = sync_hold(t0 + MS, Some(t0), false, false);
+    assert_eq!((h.draw, h.since, h.deadline), (true, None, None));
+    // A commit outstanding: nothing is drawn and nothing is waited for by time,
+    // after the deadline as before it; the hold keeps its start.
+    for now in [t0 + MS, t0 + 150 * MS, t0 + 10_000 * MS] {
+        let h = sync_hold(now, Some(t0), true, true);
+        assert_eq!(
+            (h.draw, h.since, h.deadline),
+            (false, Some(t0), None),
+            "{now}"
+        );
+    }
+    let h = sync_hold(t0, None, false, true);
+    assert_eq!((h.draw, h.since, h.deadline), (false, None, None));
+    // The deadline is never in the past when it is given.
+    for now in (0..400).map(|i| t0 + i * MS) {
+        let h = sync_hold(now, Some(t0), true, false);
+        if let Some(d) = h.deadline {
+            assert!(d > now && !h.draw);
+        }
     }
 }

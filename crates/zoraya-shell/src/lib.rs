@@ -17,6 +17,7 @@ pub mod grants;
 pub mod jobs;
 pub mod netgrant;
 pub mod record;
+pub mod reset;
 pub mod syntax;
 
 #[cfg(test)]

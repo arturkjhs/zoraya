@@ -1587,6 +1587,7 @@ check-test-caps:
 	    grep -rqs -e 'cap_memory!' -e 'Capped::new' "$$d/src" || bad="$$bad $$d/src"; fi; done; \
 	if [ -n "$$bad" ]; then echo "no heap cap in:$$bad"; exit 1; fi
 	@# INV-0332-1: every capability of the pinned entry has a host test of zoraya-term or a reason (offline).
+	@tools/term-conformance/check.sh selftest
 	@tools/term-conformance/check.sh
 	@# The recorded full-screen session the terminal GUI script plays is cut from the committed recording.
 	@tools/term-record/gui-files.sh check

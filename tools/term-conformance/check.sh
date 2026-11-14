@@ -9,6 +9,7 @@
 #                     compiles from the pinned terminfo.src (needs
 #                     `make check-terminfo`'s host tools; run by check-ports)
 #   check.sh dump     writes the dump from the pinned tools
+#   check.sh selftest a fixture with commented calls that must not count
 #
 # A test covers a capability by calling `cap("name", &[args])`, `flag("name")`
 # or `num("name")` of crates/zoraya-term/src/entry.rs, which fail for a name
@@ -42,8 +43,22 @@ esac
 
 # Names in the dump: the part before = or #, or the whole line (a flag).
 sed -e 's/[=#].*//' "$DUMP" | LC_ALL=C sort -u > "$TMP/entry"
-# Names the tests cover.
-grep -rhoE '\b(cap|flag|num)\("[A-Za-z0-9]+"' "$SRC" --include='tests*.rs' | sed -e 's/.*("//; s/"$//' | LC_ALL=C sort -u > "$TMP/covered"
+# Names the tests cover: calls in code, never in a comment (a comment is not a cover).
+covered_in() {
+    for f in "$1"/tests*.rs; do
+        [ -f "$f" ] || continue
+        sed -e 's://.*$::' "$f"
+    done | grep -oE '\b(cap|flag|num)\("[A-Za-z0-9]+"' | sed -e 's/.*("//; s/"$//' | LC_ALL=C sort -u
+}
+if [ "${1:-}" = selftest ]; then
+    mkdir -p "$TMP/fixture"
+    printf '%s\n' '// cap("commented", &[]);' '/// flag("doc");' 'let _ = cap("real", &[]); // num("trailing")' > "$TMP/fixture/tests_x.rs"
+    got=$(covered_in "$TMP/fixture" | tr '\n' ' ')
+    [ "$got" = "real " ] || { echo "term-conformance: selftest failed: counted '$got'" >&2; exit 1; }
+    echo "term-conformance: selftest ok (comments are not covers)"
+    exit 0
+fi
+covered_in "$SRC" > "$TMP/covered"
 grep -v -e '^#' -e '^[[:space:]]*$' "$EXC" | awk '{print $1}' | LC_ALL=C sort > "$TMP/exc_all"
 LC_ALL=C sort -u "$TMP/exc_all" > "$TMP/excepted"
 fail=0
@@ -58,4 +73,5 @@ for n in $(comm -13 "$TMP/entry" "$TMP/excepted"); do note "the exceptions name 
 awk '!/^#/ && NF && NF < 2 { print $1 }' "$EXC" | while read -r n; do echo "term-conformance: exception $n has no reason" >&2; done
 [ -z "$(awk '!/^#/ && NF && NF < 2' "$EXC")" ] || fail=1
 [ "$fail" = 0 ] || exit 1
-echo "term-conformance: $(wc -l < "$TMP/entry" | tr -d ' ') capabilities: $(wc -l < "$TMP/covered" | tr -d ' ') covered by tests, $(wc -l < "$TMP/excepted" | tr -d ' ') excepted with a reason"
+deferred=$(grep -v "^#" "$EXC" | grep -c "deferred (10b)" || true)
+echo "term-conformance: $(wc -l < "$TMP/entry" | tr -d ' ') capabilities: $(wc -l < "$TMP/covered" | tr -d ' ') covered by tests, $(wc -l < "$TMP/excepted" | tr -d ' ') excepted with a reason ($deferred of them deferred to part 10b, the rest by ADR-0332 item 4)"

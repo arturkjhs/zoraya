@@ -128,7 +128,9 @@ impl Term {
     /// of the row when a wrap is pending; at the start of a row it is
     /// dropped, as is a mark that does not fit.
     fn attach(&mut self, mark: char) {
-        let x = if self.wrap {
+        // With autowrap off a character in the last column leaves the cursor on
+        // it and no wrap pending: a mark then joins that cell.
+        let x = if self.wrap || (!self.modes.autowrap && self.x == self.columns - 1) {
             self.x
         } else if self.x > 0 {
             self.x - 1
@@ -189,6 +191,11 @@ impl Term {
         }
         let line = &self.screen[row * c..(row + 1) * c];
         if self.kept < self.capacity {
+            let want = self.capacity * c;
+            if self.history.capacity() < want {
+                // The bound is the nominal one, not a doubling vector's.
+                self.history.reserve_exact(want - self.history.len());
+            }
             self.history.extend_from_slice(line);
             self.kept += 1;
             self.next = self.kept % self.capacity;

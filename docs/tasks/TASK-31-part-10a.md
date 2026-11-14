@@ -16,7 +16,7 @@ the independent review is `opus-review`'s, afterwards. Nothing here is merged, t
 | Synchronized output held for 150 ms | `user/src/bin/term.rs` |
 | ncurses 6.6 pinned; `tic` and `infocmp` built for the host; the four entries and their manifest | `ports/sources.lock`, `tools/term-terminfo/terminfo.sh`, `ports/terminfo.manifest` |
 | The conformance tool, the dump of the entry and the exceptions file | `tools/term-conformance/check.sh`, `crates/zoraya-term/entry/` |
-| Recorded sessions (`vi` and `less` of the host, four ncurses test programs of the pinned release), their frozen grids and the replay | `tools/term-record/`, `crates/zoraya-term/recordings/`, `crates/zoraya-term/tests/replay.rs` |
+| Recorded sessions (`vi` and `less` of the host, five sessions of three ncurses test programs of the pinned release: `ncurses` three ways, `hanoi`, `view`), their frozen grids and the replay | `tools/term-record/`, `crates/zoraya-term/recordings/`, `crates/zoraya-term/tests/replay.rs` |
 | The GUI script plays a recorded full-screen session | `tests/gui/terminal.script`, `tests/gui/terminal.root/recordings/` |
 | Three proposed ADRs | `docs/adr/0380-*.md`, `0381-*.md`, `0382-*.md` |
 
@@ -27,7 +27,7 @@ the task forbids (`make test`, `make test-par`, the candidate CI).
 
 | Command | Result |
 |---|---|
-| `cargo test -p zoraya-term` | 123 unit tests and 2 replay tests pass (the capability tests, the parser tests, the fuzz of totality, the sweep of every unknown `CSI`, `ESC`, `OSC` and string sequence (more than 5,000 a screen), the replay of five recordings) |
+| `cargo test -p zoraya-term` | 123 unit tests and 2 replay tests pass (the capability tests, the parser tests, the fuzz of totality, the sweep of every unknown `CSI`, `ESC`, `OSC` and string sequence (more than 5,000 a screen), the replay of seven recordings) |
 | `cargo test -p zoraya-width` | 5 pass (the width of every code point against the runs, the ASCII shortcut against the table) |
 | `cargo test -p zoraya-shell` | 155 pass (`crlf`: the three cases of INV-0331-7 and chunk boundaries; the editor's wide characters) |
 | `make check` | all 22 steps pass (fmt, clippy `-D warnings`, adr-check with 0 errors, `check-test-caps` now also running the conformance tool and the check of the GUI recordings, `check-test-lanes`, ...) |
@@ -166,3 +166,34 @@ ADR-0333 and new statuses in `invariants.md` (INV-0331-7, INV-0332-1, -2, -3, -4
 About two hours of wall time on the Mac mini (one Sonnet session): reading and the width table, the parser and grid,
 the terminfo and conformance tools, the recordings and the GUI script (three runs of the script to get it passing),
 the mutation runs (about 40 minutes of the two hours) and this report.
+
+## Fix pass after the review (`TASK-31-review-10a.md`)
+
+Each fix has a test that fails without it; each was broken by hand and the failure seen (the break in brackets).
+
+| Finding | Fix | Test (shown failing) |
+|---|---|---|
+| 1 | `zoraya_shell::reset::BEFORE_PROMPT` is written by `zosh` before a prompt that follows a command, when there is a window; remove when 10c sends `Restore` (design.md, backlog) | `reset::the_prompt_after_a_hostile_program_is_normal` (constant emptied) |
+| 2 | `check.sh` strips `//` comments before it counts calls; `check.sh selftest` (in `make check`) | the commented `cap("mc0"` with the exception removed fails `check.sh` (seen) and the fixture selftest |
+| 3 | The sweep uses `ADR_CSI` and `ADR_ESC`, tables written from ADR-0332 items 2 and 3; `the_parsers_lists_are_the_adr_s` makes `csi_known` and `escape_known` agree with them; `same_state` also compares `last` and `alt_saved_cursor` | `CSI y` added to `csi_known` fails it (seen); `tools/mutants/term-10a.toml` repeats it |
+| 4 | `REP` repeats at most rows x columns times (ADR-0380 item 9) | `rep_is_bounded_by_the_screen` (clamp removed) |
+| 5 | `zoraya_term::sync_hold`, a pure function, used by `term`; while a commit is outstanding no deadline is given (no spin) | `a_synchronized_update_is_held_for_at_most_150_ms` (a deadline given with a commit outstanding). A program that never ends 2026 still delays every update 150 ms until a reset: in the limits |
+| 6 | `vttest` recorded as open in ADR-0332's note and the backlog; `vi-edit` and `less-page` re-recorded with `env TERMINFO=@terminfo@` (the pinned entry), `vi-edit` with Vim's own queries left in (`ESC [ > c`, `ESC [ 6 n` are in the stream and unanswered); grids re-frozen (only the offsets moved) and the GUI recordings re-cut | `tests/replay.rs`. tmux answers Vim's queries, and its echo of the answers is the only difference `compare-tmux.py` finds in `vi-edit` (5 of 11 marks "agree" by that tool's strict compare; the text is otherwise equal) |
+| 7 | A `DCS`, `APC`, `PM`, `SOS` or `OSC` is swallowed whole, 4 KiB kept, nothing printed (ADR-0380 item 5) | `a_long_string_of_any_kind_is_swallowed_whole` (the cut put back); `memory_is_bounded` and `memory_stays_within_its_bound` now say a string is swallowed and `CAN` ends it |
+| 8 | INV-0331-7 and INV-0332-2 say "partly"; ADR-0333's note says CI is still to confirm | `make adr-check` |
+| 9 | The 165 deferrals to 10b begin `deferred (10b):` in `exceptions.txt`; the tool prints their count | `check.sh` |
+| 10 | design.md says the GUI script reads text and the colours are the replay's | |
+| 11 | A mark after a character in the last column with autowrap off joins that cell | `a_mark_after_a_character_in_the_last_column_without_autowrap` (fix removed) |
+| 12 | The editor counts a wide character in a row one cell wide as one | `width_tests` |
+| 13 | `gen.sh check` exits 2 when the archive is absent. The conformance tool stays inside `check-test-caps` (a `check-*` target of its own needs a CI job): in the backlog | |
+| 14 | Facts corrected here (seven recordings from `vi`, `less` and `ncurses`, `hanoi`, `view`); the GUI script plays `less` because its end is a full screen with the cursor on the last row, which the prompt after `cat` leaves intact, where a `vi` screen would be cut at the cursor's row; ADR-0381's wording; `term.scrollback` is 10c's (backlog); the history `Vec` reserves its bound exactly | `memory_is_what_the_cells_and_registers_take_and_its_bound_is_stated` |
+
+The mutation lists gained `tools/mutants/term-10a.toml` (five hand mutants; `make check-mutant-lists` passes). The comment
+mutant of finding 2 is a test of the tool itself (`check.sh selftest`) and not a `.toml` entry (it mutates no source line).
+
+**GUI script after the fix pass.** The stop-gap reset leaves the alternate screen before the prompt, so a recorded `less`
+screen cannot be read after `cat` returns. `tests/gui/terminal.script` now runs `cat /recordings/less-end.rec; sleep 12`,
+reads the full-screen text while the command runs, and then the shell's own screen and a clean prompt (`less-quit.rec` is
+gone). Run at the final commit: `GUI_RUNS="terminal:auto:1 terminal:auto:2 windows:auto:1" make test-gui` PASS (99, 99, 63
+steps) and `make test-qemu` PASS (119 passed, 9 expected failures). Also: `cargo test -p zoraya-term` 128 + 2, `-p zoraya-shell`
+157, `make check`, `make adr-check` (0 errors). Not re-run: the mutation passes (the new code has the tests above).

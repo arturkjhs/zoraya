@@ -20,7 +20,7 @@ use zoraya_abi::{
 use zoraya_proto_gui::{self as gui, modifiers};
 use zoraya_proto_term::{Input, MAX_INPUT, Output, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{Look, SYNC_HOLD_MS, Term, Waited, await_reply, key_bytes};
+use zoraya_term::{Look, Term, Waited, await_reply, key_bytes, sync_hold};
 use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, memory_create,
@@ -68,6 +68,8 @@ struct Window {
     message: Vec<u8>,
     /// When a synchronized update (mode 2026) began to hold the drawing.
     sync_since: Option<u64>,
+    /// When to wake to draw a held update anyway.
+    sync_deadline: Option<u64>,
 }
 
 fn slot(n: u64) -> Handle {
@@ -229,28 +231,21 @@ impl Window {
         self.commit(0, self.height);
     }
 
-    /// When a held synchronized update must be shown anyway, if one is held
-    /// (ADR-0332 item 3: at most `SYNC_HOLD_MS`).
-    fn sync_deadline(&self) -> Option<u64> {
-        self.sync_since
-            .filter(|_| self.term.modes().synchronized)
-            .map(|since| since + u64::from(SYNC_HOLD_MS) * 1_000_000)
-    }
-
     fn show(&mut self) {
-        if self.outstanding {
+        // A program that began a synchronized update gets the screen held
+        // until it ends the update, or for `SYNC_HOLD_MS`; a commit that waits
+        // for its reply is waited for (`zoraya_term::sync_hold`).
+        let h = sync_hold(
+            clock_monotonic(),
+            self.sync_since,
+            self.term.modes().synchronized,
+            self.outstanding,
+        );
+        self.sync_since = h.since;
+        self.sync_deadline = h.deadline;
+        if !h.draw {
             return;
         }
-        // A program that began a synchronized update gets the screen held
-        // until it ends the update, or for `SYNC_HOLD_MS`, whichever is first.
-        if self.term.modes().synchronized {
-            let now = clock_monotonic();
-            let since = *self.sync_since.get_or_insert(now);
-            if now < since + u64::from(SYNC_HOLD_MS) * 1_000_000 {
-                return;
-            }
-        }
-        self.sync_since = None;
         if let Some((first, last)) =
             self.term
                 .render(&mut self.look, self.pixels, self.stride, true)
@@ -511,6 +506,7 @@ fn main() -> i32 {
         wheel: zoraya_term::WheelLines::default(),
         waiting: false,
         sync_since: None,
+        sync_deadline: None,
         // As large as any message: a `Paste` carries up to 32 KiB, and a
         // read into less is an error (review 7f's check).
         message: alloc::vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE],
@@ -529,7 +525,7 @@ fn main() -> i32 {
     }
     let mut packets = [Packet::default(); 3];
     loop {
-        let deadline = window.sync_deadline().unwrap_or(DEADLINE_INFINITE);
+        let deadline = window.sync_deadline.unwrap_or(DEADLINE_INFINITE);
         // A held synchronized update's deadline passing is no packet, and no
         // error: the screen is shown below.
         let count = match port_wait(port, deadline, &mut packets) {

@@ -7,7 +7,7 @@ use std::string::{String, ToString};
 use std::vec::Vec;
 
 use crate::cell::{TAIL, WIDE};
-use crate::parse::{csi_known, escape_known};
+use crate::tests_parser::{ADR_CSI, ADR_ESC};
 use crate::{Look, MAX_STRING, Term};
 use zoraya_tokens::{Appearance, Scale};
 
@@ -266,7 +266,7 @@ fn an_unknown_control_sequence_changes_nothing() {
             for inter in intermediates {
                 for fin in 0x40u8..=0x7e {
                     let first = inter.first().copied().unwrap_or(0);
-                    if inter.len() < 2 && csi_known(marker.unwrap_or(0), first, fin) {
+                    if inter.len() < 2 && ADR_CSI.contains(&(marker.unwrap_or(0), first, fin)) {
                         continue;
                     }
                     for p in params {
@@ -294,7 +294,7 @@ fn an_unknown_control_sequence_changes_nothing() {
                     continue;
                 }
                 let first = inter.first().copied().unwrap_or(0);
-                if inter.len() < 2 && escape_known(first, fin) {
+                if inter.len() < 2 && ADR_ESC.contains(&(first, fin)) {
                     continue;
                 }
                 let mut t = base.clone();
@@ -393,7 +393,15 @@ fn memory_stays_within_its_bound() {
         }
         assert!(t.memory() <= t.memory_bound());
         t.write(b"\r\nafter");
-        assert!((0..24).any(|y| t.line(y).ends_with("after")));
+        let swallowed = !(0..24).any(|y| t.line(y).ends_with("after"));
+        // A string is swallowed whole (a sixel is tens of KiB); a sequence that is
+        // not a string is cut at its bound and what follows is text.
+        assert_eq!(swallowed, !opener.starts_with(b"\x1b["), "{opener:?}");
+        t.write(b"\x18\r\nafter");
+        assert!(
+            (0..24).any(|y| t.line(y).ends_with("after")),
+            "CAN ends it: {opener:?}"
+        );
     }
 }
 

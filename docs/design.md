@@ -476,10 +476,10 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
 - **`term`** (`zoraya-term`, `zoraya-width`, `zoraya-text`, ADR-0096, ADR-0162, ADR-0332). A compositor client with
   an 80 × 24 grid of 8 × 18 cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14),
   668 × 460 pixels, and up to 2,000 lines of scrollback (`Term::with_scrollback`, at most 10,000; the setting
-  `term.scrollback` is declared and read by a later part, so the default stands; Shift with Page Up or Page Down, or the
+  `term.scrollback` is declared and read by part 10c (with `console.term`), so the default stands; Shift with Page Up or Page Down, or the
   wheel, three lines a notch). *The parser* (since 10a) is a state machine of the DEC kind: `CSI` with up to 32
-  parameters and sub-parameters (colon form), `OSC`, `DCS`, `APC`, `PM` and `SOS` skipped or run and cut at 4,096
-  bytes, `CAN` and `SUB` ending any sequence. It acts on the string capabilities of the pinned `xterm-256color`
+  parameters and sub-parameters (colon form), `OSC` (run) and `DCS`, `APC`, `PM` and `SOS` (skipped), each swallowed
+  whole with at most 4,096 bytes kept and nothing printed, `REP` bounded by the screen's cells, `CAN` and `SUB` ending any sequence. It acts on the string capabilities of the pinned `xterm-256color`
   entry less the list in `crates/zoraya-term/entry/exceptions.txt`, and on bracketed paste (2004), the mouse modes (1000,
   1002, 1006), focus (1004), synchronized output (2026: `term` holds its drawing for at most 150 ms), the cursor shape,
   `OSC 4` and `OSC 104`; every other well-formed sequence is consumed and changes nothing (INV-0332-3), and no query
@@ -497,6 +497,13 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   and commits again only after the last commit's reply. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
+  *Known limits until part 10c:* nothing sends `Restore`, so what a program leaves set (the alternate screen, a hidden
+  cursor, a region, a character set) would stay for the shell; as a stop-gap `zosh` writes a fixed reset
+  (`zoraya_shell::reset::BEFORE_PROMPT`) before a prompt that follows a command, **to be removed when 10c sends `Restore`**
+  (`docs/backlog.md`). A program that sets synchronized output (2026) and never ends it has every later update held
+  150 ms until the next reset. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
+  script reads the text of a replayed session (any colour fits a glyph), and colours are checked by the frozen grids of
+  `tests/replay.rs`.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
   is full; a carriage return is written before every line feed, ADR-0331 item 8), input from `Input` messages, and its
   width from `Size`. Without one it uses the console, which adds its own carriage return. Its line editor counts

@@ -53,8 +53,11 @@ that probes and to a test that compares two emulators.
      cursor. `IL` and `DL` outside the region do nothing and inside move the cursor to column 0.
   4. A wide character that does not fit in the last cell leaves it blank and wraps (with autowrap) or is dropped
      (without); in a grid one cell wide it takes the one cell. A code point that musl gives no width takes one.
-  5. A sequence with more than 32 parameters is consumed and ignored whole; a `CSI` or a string longer than 4,096 bytes
-     is cut there and what follows is text again; an `OSC` cut is not run.
+  5. A sequence with more than 32 parameters is consumed and ignored whole; a `CSI` longer than 4,096 bytes is cut there
+     and what follows is text again. A `DCS`, `APC`, `PM`, `SOS` or `OSC` is swallowed whole up to its end (`ST`, an
+     `OSC`'s BEL, `CAN`, `SUB` or an `ESC` that starts something else): at most 4,096 bytes of it are kept, the rest is
+     dropped, an `OSC` that overran is not run, and nothing of it is printed (a sixel or graphics payload is tens of
+     KiB). An unterminated string therefore holds the parser until `CAN`, `SUB`, `ESC` or `Restore`.
   6. `ESC` inside a string ends it: `ESC \` ends it properly (an `OSC` runs), any other byte abandons it and is read as
      the byte after an `ESC`. `CAN` and `SUB` end any sequence. A byte of UTF-8 inside a sequence ends it and is text.
   7. `SGR 21` is a single underline; `4:N` is an underline whatever `N` but 0; `58` (the underline colour) is
@@ -63,7 +66,8 @@ that probes and to a test that compares two emulators.
   8. Reverse video is an attribute of the cell, swapped when it is drawn; the screen's reverse mode (5) swaps the
      whole screen when it is drawn and stores nothing. Erased cells take the pen's background, never its attributes
      (`bce`).
-  9. `REP` repeats the last printed character at most 65,535 times; `ESC 7` and `ESC 8` are one slot a screen, 1048 and
+  9. `REP` repeats the last printed character at most as many times as the screen has cells (rows times columns),
+     so that `CSI 65535 b` costs a screenful and not 800 (measured: 84 ms of CPU per KiB of sequences otherwise); `ESC 7` and `ESC 8` are one slot a screen, 1048 and
      1049 a third; `RIS` clears both screens and every mode.
   10. `Restore` clears the modes, the region, the sets, the pen, the palette and the shape and leaves the alternate
       screen (restoring the cursor if 1049 had saved it); `reinstate` gives the modes back and enters a blank alternate

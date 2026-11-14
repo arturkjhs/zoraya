@@ -1354,14 +1354,14 @@ fn memory_is_what_the_cells_and_registers_take_and_its_bound_is_stated() {
     let t = Term::new(80, 24);
     // Two screens of 80 x 24 cells of 16 bytes, 24 dirty flags and 80 tab stops.
     assert_eq!(t.memory(), 2 * 80 * 24 * 16 + 24 + 80);
-    // At most: two screens and the full scrollback, each with a doubling vector's
-    // slack, the flags and stops, and the longest string.
+    // At most: two screens and the full scrollback, the flags and stops, and the
+    // longest string.
     assert_eq!(
         t.memory_bound(),
-        (2 * 80 * 24 + 2 * 80 * 2000) * 16 + 24 + 80 + 2 * 4096
+        (2 * 80 * 24 + 80 * 2000) * 16 + 24 + 80 + 4096
     );
     let t = Term::with_scrollback(3, 2, 0);
-    assert_eq!(t.memory_bound(), 2 * 3 * 2 * 16 + 2 + 3 + 2 * 4096);
+    assert_eq!(t.memory_bound(), 2 * 3 * 2 * 16 + 2 + 3 + 4096);
     let mut t = Term::new(2, 2);
     t.write(b"\x1b]4;1;#000000");
     assert!(
@@ -1530,4 +1530,179 @@ fn the_cursor_block_covers_its_own_cell_alone() {
     t.render(&mut look, &mut pixels, w, true);
     let (px, py) = look.cell_origin(3, 0);
     assert_eq!(pixels[py * w + px], look.bg.pixel());
+}
+
+/// Review of 10a: `CSI 65535 b` must not cost 65,535 characters of work.
+#[test]
+fn rep_is_bounded_by_the_screen() {
+    let mut t = Term::with_scrollback(80, 24, 5000);
+    t.write(b"a\x1b[65535b");
+    // A screenful is 1,920 cells: one scroll at most, not 800 rows.
+    assert!(t.history_len() <= 1, "{}", t.history_len());
+    assert_eq!(t.line(22).len(), 80, "a screenful was written");
+    assert_eq!(t.line(23), "a");
+    // A thousand of them, a 1 MiB file's worth of sequences, still add up to little.
+    let mut t = Term::with_scrollback(80, 24, 5000);
+    for _ in 0..100 {
+        t.write(b"\x1b[65535b");
+    }
+    assert!(t.history_len() <= 100 * 25);
+    // A repeat inside a screenful is exact.
+    let t = run(10, 3, b"x\x1b[29b");
+    assert_eq!(rows(&t), ["xxxxxxxxxx"; 3]);
+}
+
+/// Review of 10a: a `DCS`, `APC`, `PM` or `SOS` longer than the bound is
+/// swallowed whole and nothing of it is printed.
+#[test]
+fn a_long_string_of_any_kind_is_swallowed_whole() {
+    for opener in [
+        &b"\x1bP"[..],
+        b"\x1b_G",
+        b"\x1b^",
+        b"\x1bX",
+        b"\x1bP1;2|",
+        b"\x1b]8;;",
+    ] {
+        let mut t = term(80, 4);
+        t.write(b"top\r\n");
+        t.write(opener);
+        for _ in 0..40 {
+            t.write(&[b'Q'; 4096]);
+        }
+        t.write(b"\x1b\\after");
+        assert_eq!(rows(&t), ["top", "after", "", ""], "{opener:?}");
+        assert!(t.cursor() == (5, 1));
+    }
+    // An OSC that overran is not run, even when it ends properly.
+    let mut t = term(10, 1);
+    let mut s = std::vec![0x1b, b']'];
+    s.extend_from_slice(b"4;1;rgb:12/34/56;");
+    s.extend(std::iter::repeat_n(b'1', 5000));
+    s.push(7);
+    t.write(&s);
+    t.write(b"\x1b]4;2;#010203\x07");
+    assert_eq!(t.palette_override(1), None);
+    assert_eq!(t.palette_override(2), Some((1, 2, 3)), "the next one runs");
+    // An OSC at exactly the bound runs; the string's own bytes count, not its end.
+    let mut t = term(10, 1);
+    let mut body = std::vec![b'4', b';', b'1', b';'];
+    body.extend_from_slice(b"#010203");
+    body.extend(std::iter::repeat_n(b' ', crate::MAX_STRING - body.len()));
+    assert_eq!(body.len(), crate::MAX_STRING);
+    t.write(b"\x1b]");
+    t.write(&body);
+    t.write(b"\x07");
+    assert_eq!(
+        t.palette_override(1),
+        None,
+        "spaces after the spec make it no colour"
+    );
+    let mut t = term(10, 1);
+    let mut body = std::vec![b'4', b';', b'1', b';'];
+    body.extend(std::iter::repeat_n(b'0', 7));
+    t.write(b"\x1b]");
+    t.write(&body);
+    t.write(b"\x07");
+    assert_eq!(t.palette_override(1), None);
+}
+
+/// Review of 10a: with autowrap off a combining mark joins the character in
+/// the last column, not the one before it.
+#[test]
+fn a_mark_after_a_character_in_the_last_column_without_autowrap() {
+    let t = run(4, 1, "\x1b[?7labcd\u{301}".as_bytes());
+    assert_eq!(t.cell(3, 0).marks().count(), 1);
+    assert_eq!(t.cell(2, 0).marks().count(), 0);
+    assert_eq!(t.line(0), "abcd\u{301}");
+}
+
+/// Review of 10a (finding 3): the lists of ADR-0332 items 2 and 3, written out
+/// here and not taken from the code. The parser acts on exactly these, and the
+/// sweep of unknown sequences uses this table to say which are unknown.
+pub(crate) const ADR_CSI: &[(u8, u8, u8)] = &[
+    // (private marker, intermediate, final); 0 for none.
+    // CUU CUD CUF CUB CNL CPL CHA CUP VPA HVP, CHT CBT, ED EL, ECH ICH DCH IL DL REP,
+    // SU SD, TBC, SM RM, SGR, DECSTBM.
+    (0, 0, b'A'),
+    (0, 0, b'B'),
+    (0, 0, b'C'),
+    (0, 0, b'D'),
+    (0, 0, b'E'),
+    (0, 0, b'F'),
+    (0, 0, b'G'),
+    (0, 0, b'H'),
+    (0, 0, b'd'),
+    (0, 0, b'f'),
+    (0, 0, b'I'),
+    (0, 0, b'Z'),
+    (0, 0, b'J'),
+    (0, 0, b'K'),
+    (0, 0, b'X'),
+    (0, 0, b'@'),
+    (0, 0, b'P'),
+    (0, 0, b'L'),
+    (0, 0, b'M'),
+    (0, 0, b'b'),
+    (0, 0, b'S'),
+    (0, 0, b'T'),
+    (0, 0, b'g'),
+    (0, 0, b'h'),
+    (0, 0, b'l'),
+    (0, 0, b'm'),
+    (0, 0, b'r'),
+    // The modes: DECSET and DECRST.
+    (b'?', 0, b'h'),
+    (b'?', 0, b'l'),
+    // The cursor shape, and the soft reset.
+    (0, b' ', b'q'),
+    (0, b'!', b'p'),
+];
+
+pub(crate) const ADR_ESC: &[(u8, u8)] = &[
+    // DECSC DECRC IND NEL HTS RI RIS, the keypad modes.
+    (0, b'7'),
+    (0, b'8'),
+    (0, b'D'),
+    (0, b'E'),
+    (0, b'H'),
+    (0, b'M'),
+    (0, b'c'),
+    (0, b'='),
+    (0, b'>'),
+    // G0 and G1: ASCII and the line-drawing set.
+    (b'(', b'B'),
+    (b'(', b'0'),
+    (b')', b'B'),
+    (b')', b'0'),
+];
+
+#[test]
+fn the_parsers_lists_are_the_adr_s() {
+    for marker in [0u8, b'?', b'>', b'=', b'<'] {
+        for inter in [0u8, b' ', b'!', b'$', b'"', b'\'', b'#'] {
+            for fin in 0x40u8..=0x7e {
+                let listed = ADR_CSI.contains(&(marker, inter, fin));
+                assert_eq!(
+                    crate::parse::csi_known(marker, inter, fin),
+                    listed,
+                    "CSI {} {} {}",
+                    marker as char,
+                    inter as char,
+                    fin as char
+                );
+            }
+        }
+    }
+    for inter in [0u8, b' ', b'#', b'(', b')', b'*', b'+', b'%', b'$'] {
+        for fin in 0x30u8..=0x7e {
+            assert_eq!(
+                crate::parse::escape_known(inter, fin),
+                ADR_ESC.contains(&(inter, fin)),
+                "ESC {} {}",
+                inter as char,
+                fin as char
+            );
+        }
+    }
 }

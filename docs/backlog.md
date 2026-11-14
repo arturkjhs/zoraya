@@ -266,3 +266,15 @@ states, to be taken up later:
   parallel load on the Mac (work/test-fixes, 2026-11-14): a timing-sensitive CPU-ceiling check when three QEMU guests and host jobs
   share the machine. Not a regression of that part. Decide whether the check needs a deterministic form like `t_cpu`'s `MAX_UNITS`
   fix (ADR-0270), or a lane of its own that does not share the machine.
+
+- Part 10a (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10a.md`):
+  - **`vttest`'s cursor and screen menus** (ADR-0332 item 10) are not recorded: `vttest` needs a pin (version, URL and SHA-256) in
+    `ports/sources.lock`, the architect's; then `tools/term-record/record.py` records it like the other sessions.
+  - **Stop-gap to remove in 10c:** `zoraya_shell::reset::BEFORE_PROMPT`, written before a prompt that follows a command, until the
+    shell sends `Restore` (ADR-0331 item 9). Also in `docs/design.md`.
+  - **`term.scrollback`** and `console.term` (ADR-0157 settings) are declared by `zosh` and read by `term` in part 10c.
+  - **Deferred to 10b:** 165 capabilities of `crates/zoraya-term/entry/exceptions.txt` whose reason begins `deferred (10b):` (the keys,
+    the mouse strings, the paste marks, `km`, `xm`); part 10b is not done while any is left. Nothing fails if one is, yet: make 10b's plan
+    row check `tools/term-conformance/check.sh`'s count of them.
+  - **A program that sets 2026 and never ends it** has each later update held 150 ms; `Restore` (10c) ends it.
+  - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
