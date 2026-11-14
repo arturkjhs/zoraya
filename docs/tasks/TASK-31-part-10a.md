@@ -210,3 +210,48 @@ steps) and `make test-qemu` PASS (119 passed, 9 expected failures). Also: `cargo
   (nightly-2026-11-12, `--locked`) built and ran 30 s each, no finding.
 - `origin/main` (914cf12) merged: one conflict in `docs/backlog.md`, both sides kept; `make adr-check` passes the new
   `checked:` rule (0 errors).
+
+## Check of the fix pass: fixes and the last mutation passes
+
+- **C1 (REP).** The clamp dropped `n` modulo the period. `rep_count` now repeats `full + (n - full) % period` (`full` a
+  screen and two rows; the period a row of narrow characters, half a row of wide ones, one without autowrap), so the
+  screen, the cursor and the modes are those of the full repeat and only the scrollback gets fewer lines (ADR-0380 item 9
+  reworded). On 80 x 24, `a ESC[65535b` leaves 16 `a`s on the bottom row, the cursor at column 16
+  (`rep_is_bounded_by_the_screen_and_gives_the_full_result`); `rep_equals_plain_prints_at_every_count` compares `CSI n b` with
+  `n` plain prints, for every `n` up to four times the bound, on eight small grids, narrow and wide, with autowrap off,
+  insert mode, a region with origin mode and a colour. Both fail with the old clamp (seen) and with the period dropped (seen).
+- **C2.** `set_scrollback` reserves exactly; `set_scrollback_keeps_memory_within_the_bound` (2000 to 1500 and 3, 1500 to 2000,
+  10 to 0, 0 to 10, with the OSC buffer full) fails without it (seen); the fuzz now changes the scrollback up to 3,000 lines.
+- **C3, stated truthfully.** `less-page` was not re-recorded with the pinned entry because it cannot be on this host:
+  the host's `less` links the system ncurses 5.4 and ignores the pinned file (its output has no `ESC [ 22 ; 0 ; 0 t`), and
+  Vim uses its built-in xterm table. Both session files say so; only the ncurses sessions (from the pinned archive) read the
+  pinned entry. The report's earlier row 6 was wrong on this.
+- **Stop-gap.** `ESC ] 104 BEL` is added (the palette a file set does not outlive the command); its edges (C4) are in `reset.rs`,
+  `docs/design.md` and the backlog. C5 (block comments in `check.sh`) is left: a call in `/* */` still counts, a `//` in a
+  string fails safe. C6 text fixed.
+
+### Mutation passes of this round (`make mutants-host`, `--in-diff`, about 40 minutes)
+
+| Run | Mutants | Caught / missed / timed out / unviable |
+|---|---|---|
+| the changed code since the first pass (`parse.rs`, `screen.rs`, `term.rs`) | 96 | 87 / 5 / 2 / 2 |
+| `zoraya-width` | 31 | 30 / 1 / 0 / 0 |
+| `lib.rs`, `read.rs`, `cell.rs`, `colour.rs` | 314 | 240 / 61 / 0 / 13 |
+| the survivors' functions again, after tests for the holes | 200 | 181 / 16 / 0 / 3 |
+
+Holes killed by tests: the cube and grey palette values and `draw_cell`'s colours (`the_palette_is_xterms_cube_and_greys`,
+`draw_cell_draws_in_the_palettes_colours`), `reader_colours`, the rows of the underline and the strike, the slant of
+italic (exact shift per row), the two-pixel underline and bar cursors, a cell with one pixel wrong not reading
+(strictness of the reader), the rounding and the length bounds of `OSC 4` colour specifications, `Cell::bold` and
+the colour kinds replacing each other, where a mark joins with and without autowrap, and the last code points of every
+plane having no width.
+
+**Equivalent survivors** (each reasoned): `|` read as `^` on disjoint bit fields (the palette's and `draw_cell`'s colour
+packing, the layout bits in `SGR_ATTRS`, `with_fg` and `with_bg` after their field was cleared, `hex_channel`'s shift, the
+three attribute tests of `draw_cell_coloured`); `BOLD = 1 >> 0`; `rep_count`'s `full` as a smaller threshold or `>=`
+(the period argument holds from any threshold above a screen; the property test passes with each); `push_history`'s
+`reserve_exact` guard at `<=` (a no-op reserve); `unwide` and `attach`'s `x > 0` as `>=`; the underline's `min(height - 1)`
+(never reached: baseline plus thickness is below the cell's height at both scales); `px + col < stride` as `<=` (the cell
+is never past the surface); `Reader::fit`'s `hi` bound and `lo > hi` (the foreground is `lo`, and the exact blend check
+that follows is the real test); the generated table's `-1` at U+1FFFE (killed by the new plane test, which the tool
+counted before it existed).

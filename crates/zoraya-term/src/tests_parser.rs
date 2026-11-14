@@ -1791,3 +1791,17 @@ fn set_scrollback_keeps_memory_within_the_bound() {
         assert_eq!(t.history_len(), to.min(t.history_len()));
     }
 }
+
+/// Mutation testing (10a): where a mark joins, with and without autowrap.
+#[test]
+fn a_mark_joins_the_character_before_the_cursor_in_every_mode() {
+    // Autowrap off, in the middle of the row: the character just written.
+    let t = run(6, 1, "\x1b[?7lab\u{301}".as_bytes());
+    assert_eq!(t.cell(1, 0).marks().count(), 1);
+    assert_eq!(t.cell(0, 0).marks().count(), 0);
+    // Autowrap on, the cursor moved to the last column without a pending wrap:
+    // the character before the cursor, not the one under it.
+    let t = run(4, 1, "abcd\x1b[1;4H\u{301}".as_bytes());
+    assert_eq!(t.cell(2, 0).marks().count(), 1);
+    assert_eq!(t.cell(3, 0).marks().count(), 0);
+}

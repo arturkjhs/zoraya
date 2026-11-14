@@ -704,3 +704,245 @@ fn a_synchronized_update_is_held_for_at_most_150_ms() {
         }
     }
 }
+
+// Tests for what the mutation run over lib.rs, read.rs, cell.rs and colour.rs
+// found missing (TASK-31 10a).
+
+fn surface(look: &Look, columns: usize, rows: usize) -> (Vec<u32>, usize) {
+    let (w, h) = look.surface_size(columns, rows);
+    let mut pixels = vec![0u32; w * h];
+    look.clear(&mut pixels);
+    (pixels, w)
+}
+
+#[test]
+fn the_palette_is_xterms_cube_and_greys() {
+    let p = palette(Appearance::Light);
+    assert_eq!(p[16].pixel(), 0x000000);
+    assert_eq!(p[21].pixel(), 0x0000ff);
+    assert_eq!(p[46].pixel(), 0x00ff00);
+    assert_eq!(p[196].pixel(), 0xff0000);
+    assert_eq!(p[231].pixel(), 0xffffff);
+    assert_eq!(p[67].pixel(), (95 << 16) | (135 << 8) | 175);
+    assert_eq!(p[232].pixel(), 0x080808);
+    assert_eq!(p[255].pixel(), 0xeeeeee);
+}
+
+#[test]
+fn the_reader_tries_the_defaults_the_palette_and_the_faint_forms() {
+    let look = look();
+    let colours = look.reader_colours();
+    assert_eq!(colours.len(), 2 + 16 + 8 + 1);
+    assert_eq!(colours[0], look.fg);
+    assert_eq!(colours[1], look.bg);
+    assert_eq!(&colours[2..18], &look.palette[..16]);
+    assert_eq!(colours[18], look.palette[0].blend(look.bg, 128));
+    assert_eq!(colours[26], look.fg.blend(look.bg, 128));
+}
+
+#[test]
+fn draw_cell_draws_in_the_palettes_colours() {
+    let mut look = look();
+    let (mut pixels, w) = surface(&look, 2, 1);
+    look.draw_cell(&mut pixels, w, 0, 0, Cell::new('l'));
+    let (px, py) = look.cell_origin(0, 0);
+    let cell: Vec<u32> = (0..look.cell_height())
+        .flat_map(|dy| (0..look.cell_width()).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| pixels[(py + dy) * w + px + dx])
+        .collect();
+    assert_eq!(cell[0], look.bg.pixel(), "the default background");
+    assert!(cell.contains(&look.fg.pixel()), "the default foreground");
+    // Palette entries and direct colours.
+    let (mut pixels, w) = surface(&look, 2, 1);
+    let c = Cell::new(' ').with_bg(Colour::Index(21));
+    look.draw_cell(&mut pixels, w, 0, 0, c);
+    assert_eq!(pixels[py * w + px], 0x0000_00ff);
+    let c = Cell::new(' ').with_bg(Colour::Rgb(1, 2, 3));
+    look.draw_cell(&mut pixels, w, 1, 0, c);
+    let (qx, qy) = look.cell_origin(1, 0);
+    assert_eq!(pixels[qy * w + qx], (1 << 16) | (2 << 8) | 3);
+    let c = Cell::new('x')
+        .with_fg(Colour::Rgb(10, 20, 30))
+        .with_bg(Colour::Index(21));
+    look.draw_cell(&mut pixels, w, 0, 0, c);
+    // The glyph is blended from the direct colour (10, 20, 30) over the blue: some of its
+    // pixels are far darker in blue than the background.
+    let darkest = (0..look.cell_height())
+        .flat_map(|dy| (0..look.cell_width()).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| pixels[(py + dy) * w + px + dx] & 0xff)
+        .min()
+        .unwrap();
+    assert!(darkest < 0xe0, "{darkest:x}");
+}
+
+/// The rows of a cell, `true` where a pixel is the foreground's colour alone.
+fn ink_rows(look: &mut Look, cell: Cell) -> Vec<Vec<bool>> {
+    let (mut pixels, w) = surface(look, 1, 1);
+    look.draw_cell(&mut pixels, w, 0, 0, cell);
+    let (px, py) = look.cell_origin(0, 0);
+    (0..look.cell_height())
+        .map(|dy| {
+            (0..look.cell_width())
+                .map(|dx| pixels[(py + dy) * w + px + dx] == look.fg.pixel())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn underline_and_strike_are_lines_at_their_rows() {
+    for scale in [Scale::ONE, Scale::TWO] {
+        let mut look = Look::new(scale, Appearance::Light);
+        let thick = (look.px / 14).max(1) as usize;
+        let baseline = look.cell.baseline as usize;
+        let h = look.cell_height();
+        let full = |rows: &[Vec<bool>]| {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, r)| r.iter().all(|p| *p))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
+        let under = full(&ink_rows(
+            &mut look,
+            Cell::new(' ').with_attrs(cell::UNDERLINE),
+        ));
+        let top = (baseline + thick).min(h - 1);
+        let want: Vec<usize> = (top..(top + thick).min(h)).collect();
+        assert_eq!(under, want, "underline at scale {}", scale.factor());
+        let strike = full(&ink_rows(
+            &mut look,
+            Cell::new(' ').with_attrs(cell::STRIKE),
+        ));
+        let at = baseline * 6 / 10;
+        let want: Vec<usize> = (at..(at + thick).min(h)).collect();
+        assert_eq!(strike, want, "strike at scale {}", scale.factor());
+    }
+}
+
+#[test]
+fn italic_leans_the_top_right_and_the_bottom_left() {
+    let mut look = look();
+    let h = look.cell_height();
+    let ink_x = |rows: &[Vec<bool>], row: usize| rows[row].iter().position(|p| *p);
+    // A vertical bar; its ink on the top and bottom rows, plain and slanted.
+    let plain = ink_rows(&mut look, Cell::new('l'));
+    let slanted = ink_rows(&mut look, Cell::new('l').with_attrs(cell::ITALIC));
+    let row = |rows: &[Vec<bool>]| {
+        (0..h)
+            .filter(|r| rows[*r].iter().any(|p| *p))
+            .collect::<Vec<_>>()
+    };
+    let (first, last) = (row(&plain)[0], *row(&plain).last().unwrap());
+    let lean = |r: usize| (h as i32 / 2 - r as i32) / 4;
+    for r in [first, (first + last) / 2, last] {
+        // The leftmost inked pixel moves by the lean of its row.
+        let a = ink_x(&plain, r);
+        let b = ink_x(&slanted, r);
+        if let (Some(a), Some(b)) = (a, b) {
+            assert_eq!(b as i32 - a as i32, lean(r), "row {r}");
+        } else {
+            panic!("no ink on row {r}");
+        }
+    }
+    assert!(lean(first) > 0 && lean(last) < 0);
+}
+
+#[test]
+fn the_underline_and_the_bar_cursors_are_two_pixels_at_scale_one() {
+    let mut look = look();
+    let mut t = Term::new(3, 1);
+    for (shape, bottom_rows, left_cols) in [(4u8, 2usize, 0usize), (6, 0, 2)] {
+        t.write(std::format!("\x1b[{shape} q").as_bytes());
+        let (mut pixels, w) = surface(&look, 3, 1);
+        t.redraw();
+        t.render(&mut look, &mut pixels, w, true);
+        let (px, py) = look.cell_origin(0, 0);
+        let (cw, ch) = (look.cell_width(), look.cell_height());
+        let fg = look.fg.pixel();
+        let rows_full = (0..ch)
+            .filter(|dy| (0..cw).all(|dx| pixels[(py + dy) * w + px + dx] == fg))
+            .count();
+        let cols_full = (0..cw)
+            .filter(|dx| (0..ch).all(|dy| pixels[(py + dy) * w + px + dx] == fg))
+            .count();
+        if bottom_rows > 0 {
+            assert_eq!(rows_full, bottom_rows, "underline");
+            assert_eq!(pixels[(py + ch - 1) * w + px], fg);
+            assert_ne!(
+                pixels[(py + ch - 3) * w + px + cw - 1],
+                fg,
+                "only the bottom two rows"
+            );
+        } else {
+            assert_eq!(cols_full, left_cols, "bar");
+            assert_eq!(pixels[py * w + px], fg);
+            assert_ne!(pixels[py * w + px + 2], fg, "only the left two columns");
+        }
+    }
+}
+
+#[test]
+fn a_cell_with_one_pixel_wrong_does_not_read() {
+    let look = look();
+    let mut reader = Reader::new(Look::new(Scale::ONE, Appearance::Light));
+    let (w, h) = (look.cell_width(), look.cell_height());
+    let mut pixels = vec![0u32; w * h];
+    let mut l = Look::new(Scale::ONE, Appearance::Light);
+    let (mut surf, sw) = surface(&l, 1, 1);
+    l.draw_cell(&mut surf, sw, 0, 0, Cell::new('A'));
+    let (px, py) = l.cell_origin(0, 0);
+    for dy in 0..h {
+        for dx in 0..w {
+            pixels[dy * w + dx] = surf[(py + dy) * sw + px + dx];
+        }
+    }
+    assert_eq!(reader.read(|x, y| pixels[y * w + x]), 'A');
+    // One pixel of the glyph off by a little: proportional enough, but not the glyph.
+    let at = pixels.iter().position(|p| *p != l.bg.pixel()).unwrap();
+    pixels[at] = pixels[at].wrapping_add(3);
+    assert_eq!(reader.read(|x, y| pixels[y * w + x]), crate::read::NO_MATCH);
+}
+
+#[test]
+fn colour_specifications_round_and_are_bounded() {
+    use crate::colour::parse_spec;
+    // Three digits: 0x009 of 0xfff is 9 * 255 / 4095 = 0.56, which rounds to 1.
+    assert_eq!(parse_spec(b"rgb:009/000/fff"), Some((1, 0, 255)));
+    assert_eq!(
+        parse_spec(b"#ffff00000000"),
+        Some((255, 0, 0)),
+        "twelve digits are four a channel"
+    );
+    assert_eq!(
+        parse_spec(b"#fffff0000000000"),
+        None,
+        "fifteen are too many"
+    );
+    assert_eq!(parse_spec(b"#"), None);
+    assert_eq!(parse_spec(b"#12"), None);
+    assert_eq!(parse_spec(b"#1234"), None, "not a multiple of three");
+    assert_eq!(parse_spec(b"#000000000"), Some((0, 0, 0)));
+}
+
+#[test]
+fn cell_accessors_and_colour_kinds() {
+    use crate::cell::{BOLD, ITALIC};
+    assert!(Cell::new('x').with_attrs(BOLD).bold());
+    assert!(!Cell::new('x').with_attrs(ITALIC).bold());
+    assert!(!Cell::new('x').bold());
+    // Each colour kind replaces the one before it.
+    let mut c = Cell::new('x');
+    for kind in [
+        Colour::Rgb(9, 8, 7),
+        Colour::Index(5),
+        Colour::Default,
+        Colour::Rgb(1, 2, 3),
+    ] {
+        c = c.with_bg(kind);
+        assert_eq!(c.bg(), kind);
+        c = c.with_fg(kind);
+        assert_eq!(c.fg(), kind);
+        assert_eq!(c.bg(), kind);
+    }
+}

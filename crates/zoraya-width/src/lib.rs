@@ -77,6 +77,19 @@ mod tests {
     }
 
     #[test]
+    fn the_last_two_code_points_of_every_plane_have_no_width() {
+        for plane in 0..=16u32 {
+            for low in [0xfffe, 0xffff] {
+                assert_eq!(
+                    wcwidth(plane * 0x10000 + low),
+                    -1,
+                    "plane {plane} U+{low:04X}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn columns_map_no_width_to_one() {
         assert_eq!(columns('\x01'), 1);
         assert_eq!(columns('\u{fffe}'), 1);
