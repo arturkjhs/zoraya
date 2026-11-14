@@ -16,7 +16,7 @@
 # together run every run of GUI_RUNS_ALL, each in exactly one job, and that FULL=1 gives the plan the whole list.
 #
 # CI's runners resolve `auto` to TCG (tools/run-qemu.sh), so there an `auto`
-# run and its `tcg` twin are one run (proposed ADR-0350, INV-0350-1): a script
+# run and its `tcg` twin are one run (ADR-0350, INV-0350-1): a script
 # under `tcg` stands for the script under `auto`, a GUI run `S:tcg:N` for
 # `S:auto:N`, and a configuration of QEMU_AUTO_TWINS (auto-X:tcg-Y) may be
 # left out when its twin is run. The list must not hold both of a pair: that

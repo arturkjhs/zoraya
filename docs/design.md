@@ -1044,7 +1044,7 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 
 On a Mac the three `auto` lines run under HVF, so they cover GICv3 only. GICv2 under HVF is not run, because QEMU
 cannot start it. Where `auto` is TCG (CI's runners), `auto-default` and `auto-el2` are the machines of `tcg-default`
-and `tcg-el2`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (proposed ADR-0350).
+and `tcg-el2`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
 
 How the in-QEMU tests run and report:
 - The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A
@@ -2474,7 +2474,7 @@ ADR-0221 items 5, 6 and 8).
   Decision): one build job (`make fetch-ports`, `make ci-build`) hands `build/` and `target/` to the others, and every
   step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there, and
-  where `auto` is TCG a run and its `tcg` twin are run once: CI's list holds the `tcg` one (proposed ADR-0350);
+  where `auto` is TCG a run and its `tcg` twin are run once: CI's list holds the `tcg` one (ADR-0350);
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
   What a run contains is `tools/ci-plan.sh`'s plan: a merge candidate (tag `candidate/NAME`, a pull request) runs the steps its
   change touches (`tools/test-map.txt`) plus a smoke set; a push to `main` whose changes are all under `docs/` (except the docs a

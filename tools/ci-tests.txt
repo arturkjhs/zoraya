@@ -4,7 +4,7 @@
 # test-gui is split into groups of runs of about 5 minutes each (make
 # check-ci-jobs: every run of GUI_RUNS_ALL in exactly one group).
 # CI's runners have no HVF and no KVM, so `auto` is TCG there and an `auto`
-# run is its `tcg` twin's run again (proposed ADR-0350): where both exist the
+# run is its `tcg` twin's run again (ADR-0350): where both exist the
 # list holds the `tcg` one only (make check-ci-jobs: never both), and the
 # `auto` configurations of test-qemu that have a `tcg` twin are left out
 # (QEMU_AUTO_TWINS). On a Mac `make test` and `make test-changed` keep `auto`.

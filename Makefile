@@ -45,7 +45,7 @@ BUILD := build
 FULL ?= $(if $(CI),1,0)
 # What `auto` is on this host (tools/run-qemu.sh): hvf on an Apple Silicon Mac,
 # tcg elsewhere, CI's runners among them. Where it is tcg an `auto` run and its
-# `tcg` twin are the same run, so FULL=1 runs one of them (proposed ADR-0350):
+# `tcg` twin are the same run, so FULL=1 runs one of them (ADR-0350):
 # the `tcg` one where both are listed, and no second run where a recipe adds
 # one. On a Mac nothing changes: FULL=1 runs HVF and TCG.
 # `--accel auto` is given, as the runs give it: ZORAYA_ACCEL does not change
@@ -245,7 +245,7 @@ EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
 # test disk, with zoraya-fsck after each.
 QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2 tcg-el2 tcg-smp4-gicv3
 # The `auto` configurations that are a `tcg` one's machine where `auto` is TCG
-# (the same options but the accelerator; proposed ADR-0350): FULL=1 leaves them
+# (the same options but the accelerator; ADR-0350): FULL=1 leaves them
 # out there, and the `tcg` twin expects their lines too.
 QEMU_AUTO_TWINS := auto-default:tcg-default auto-el2:tcg-el2
 # The lines an `auto` twin expects, in one place for both targets of the
@@ -1271,7 +1271,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 GUI_TIMEOUT_2 ?= 540
 GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 spinners:auto:1 spinners:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 wheel:auto:1 wheel:tcg:1 wheel:auto:2 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
 # FULL=1 where `auto` is TCG: not the `auto` run of a script and scale whose
-# `tcg` run is in the list (the same run; proposed ADR-0350).
+# `tcg` run is in the list (the same run; ADR-0350).
 GUI_RUNS_ONCE = $(foreach r,$(GUI_RUNS_ALL),$(if $(and $(findstring :auto:,$(r)),$(filter $(subst :auto:,:tcg:,$(r)),$(GUI_RUNS_ALL))),,$(r)))
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(if $(filter 1,$(AUTO_IS_TCG)),$(GUI_RUNS_ONCE),$(GUI_RUNS_ALL)),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage

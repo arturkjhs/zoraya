@@ -1,6 +1,6 @@
 # ADR-0350: Where `auto` is TCG, a run and its `tcg` twin are run once
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0110, ADR-0212, ADR-0213
 - **Evidence:** test-audit/report.md#2-duplicates, test-audit/report.md#5-time
@@ -117,4 +117,4 @@ This changes INV-0213-3's "under every accelerator" for CI to "under TCG", which
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
