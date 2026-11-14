@@ -181,17 +181,23 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
 
     /// The group of the line in front that reads (ADR-0331 item 6): the host
     /// calls it for the line's first group and after a `tcsetpgrp` it has
-    /// vetted. `job` receives the signal characters.
+    /// vetted. `job` receives the signal characters; the host keeps its
+    /// handle (nothing is closed here).
     pub fn set_foreground(&mut self, group: u32, job: H) -> Vec<Action<H>> {
+        self.replace_foreground(group, job);
         let mut actions = Vec::new();
-        if let Some((_, old)) = self.foreground.replace((group, job))
-            && old != job
-        {
-            actions.push(Action::Close(old));
-        }
         self.background_reads(&mut actions);
         self.answer_reads(&mut actions);
         actions
+    }
+
+    fn replace_foreground(&mut self, group: u32, job: H) -> Option<H> {
+        self.foreground.replace((group, job)).map(|f| f.1)
+    }
+
+    /// No group reads: the line in front ended or stopped.
+    pub fn clear_foreground_group(&mut self) {
+        self.foreground = None;
     }
 
     /// The line ended or stopped: the attributes go back to the defaults
@@ -486,7 +492,11 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                         status: Below(status::OK),
                     };
                     self.reply(id, &ok, t, &mut actions);
-                    actions.extend(self.set_foreground(m.group, job));
+                    if let Some(old) = self.replace_foreground(m.group, job) {
+                        actions.push(Action::Close(old));
+                    }
+                    self.background_reads(&mut actions);
+                    self.answer_reads(&mut actions);
                 }
             }
             o if o == Session::ORDINAL => {
@@ -687,6 +697,26 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     /// What `ttyd` writes for program output: `ONLCR`.
     pub fn output(&self, bytes: &[u8], out: &mut Vec<u8>) {
         self.discipline.output(bytes, out);
+    }
+}
+
+/// A `SetAttr` request for `attr`, for clients and for tests of hosts that
+/// must not name the flags (INV-0331-8).
+pub fn set_attr_request(attr: &Termios, transaction: u32) -> Vec<u8> {
+    let m = SetAttr {
+        iflag: attr.iflag,
+        oflag: attr.oflag,
+        cflag: attr.cflag,
+        lflag: attr.lflag,
+        cc: Data(&attr.cc),
+    };
+    let mut out = vec![0; MAX_WIRE_MESSAGE];
+    match encode(&m, transaction, &mut out) {
+        Ok(n) => {
+            out.truncate(n);
+            out
+        }
+        Err(_) => Vec::new(),
     }
 }
 

@@ -1510,6 +1510,10 @@ check-argv:
 # (ADR-0060), and the line discipline is ttyd's.
 check-kernel-tty:
 	@! grep -rnE 'ICANON|ECHO|ISIG|VINTR|VQUIT|VSUSP|VERASE|VKILL|VEOF|ONLCR|TOSTOP|termios|winsize' kernel/src
+	@# INV-0331-8: zoraya-tty is the only implementation of the discipline; ttyd, zosh
+	@# and the shell crate name no termios flag outside comments (tests use Termios::raw()).
+	@hits="$$(grep -rnE 'ICANON|ECHO[EKNC]|ISIG|VINTR|VQUIT|VSUSP|VERASE|VKILL|VEOF|VMIN|VTIME|ONLCR|OPOST|ICRNL|IXON|TOSTOP|IEXTEN|[ilc]flag' user/src/bin/ttyd.rs user/src/bin/zosh.rs crates/zoraya-shell/src | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)"; \
+	if [ -n "$$hits" ]; then echo "INV-0331-8: a termios flag outside zoraya-tty:"; printf "%s\n" "$$hits"; exit 1; fi
 
 # No host paths or email addresses in tracked files (CLAUDE.md, Conventions), apart from
 # the configured git identity's address. docs/research/ and tools/posix-surface/results/

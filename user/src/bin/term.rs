@@ -23,9 +23,9 @@ use zoraya_abi::{
     channel_signals,
 };
 use zoraya_proto_gui as gui;
-use zoraya_proto_term::{Input, Output, Paste, Size, Title};
+use zoraya_proto_term::{Input, Output, Paste, Reinstate, Restore, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{Look, Next, SendQueue, Session, Term, Waited, await_reply, sync_hold};
+use zoraya_term::{Look, Next, Restored, SendQueue, Session, Term, Waited, await_reply, sync_hold};
 use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, memory_create,
@@ -42,6 +42,8 @@ const KEY_WRITABLE: u64 = 3;
 const BATCH: usize = 16;
 
 struct Window {
+    /// What the last `Restore` with `keep` cleared (a stopped line's modes).
+    kept: Option<Restored>,
     compositor: Handle,
     shell: Handle,
     session: Session,
@@ -456,6 +458,17 @@ impl Window {
             let bytes = &self.message[..length];
             if let Ok((_, m)) = decode::<Output<'_>>(bytes, 0) {
                 self.session.output(m.bytes.0);
+            } else if let Ok((_, r)) = decode::<Restore>(bytes, 0) {
+                // ADR-0331 item 9: a working screen for the shell; a stop
+                // keeps what it cleared for `fg`.
+                let was = self.session.term.restore();
+                self.kept = r.keep.then_some(was);
+                self.show();
+            } else if decode::<Reinstate>(bytes, 0).is_ok() {
+                if let Some(was) = self.kept.take() {
+                    self.session.term.reinstate(was);
+                    self.show();
+                }
             } else if let Ok((_, t)) = decode::<Title<'_>>(bytes, 0) {
                 // `zosh — <directory>` (ADR-0168), never from output.
                 let mut title = alloc::vec::Vec::with_capacity(t.text.0.len() + 9);
@@ -541,6 +554,7 @@ fn main() -> i32 {
     let mut window = Window {
         compositor,
         shell,
+        kept: None,
         session: Session::new(Term::new(columns, rows)),
         look,
         id,

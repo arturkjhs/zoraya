@@ -57,6 +57,21 @@ protocol! {
         last: bool,
         bytes: Data<'a, MAX_PASTE>,
     }
+
+    /// Shell to terminal, out of band, no reply (ADR-0331 item 9): the line
+    /// in front ended, stopped or went to the background. The terminal drops
+    /// an unfinished sequence, leaves the alternate screen, shows the cursor
+    /// and clears the modes of ADR-0332 without erasing the primary screen.
+    /// With `keep` (a stop) it holds what it cleared for `Reinstate`. A new
+    /// ordinal under ADR-0052; `ttyd` ignores it.
+    message Restore = 6, handles 0 {
+        keep: bool,
+    }
+
+    /// Shell to terminal, no reply: a stopped line is back in front (`fg`);
+    /// the terminal sets again what the last `Restore` with `keep` cleared.
+    /// With nothing kept it does nothing.
+    message Reinstate = 7, handles 0 {}
 }
 
 #[cfg(test)]
@@ -98,6 +113,14 @@ mod tests {
         };
         let length = encode(&size, 0, &mut out).unwrap();
         assert_eq!(decode::<Size>(&out[..length], 0).unwrap().1, size);
+        let r = Restore { keep: true };
+        let length = encode(&r, 0, &mut out).unwrap();
+        assert_eq!(decode::<Restore>(&out[..length], 0).unwrap().1, r);
+        exercise(&out[..length], |b| {
+            let _ = decode::<Restore>(b, 0);
+        });
+        let length = encode(&Reinstate {}, 0, &mut out).unwrap();
+        decode::<Reinstate>(&out[..length], 0).unwrap();
     }
 
     #[test]

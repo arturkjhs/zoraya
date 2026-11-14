@@ -472,7 +472,9 @@ dependencies = [
  "zoraya-http",
  "zoraya-proto-file",
  "zoraya-proto-term",
+ "zoraya-proto-tty",
  "zoraya-resolve",
+ "zoraya-tty",
  "zoraya-width",
 ]
 

@@ -88,6 +88,19 @@ impl Default for Termios {
     }
 }
 
+impl Termios {
+    /// What `cfmakeraw` leaves: no line editing, echo, signal characters or
+    /// output processing; a read waits for one byte. For hosts and tests that
+    /// must not name the flags themselves (INV-0331-8).
+    pub fn raw() -> Termios {
+        let mut a = Termios::default();
+        a.iflag &= !(ICRNL | INLCR | IGNCR | IXON);
+        a.oflag &= !OPOST;
+        a.lflag &= !(ISIG | ICANON | ECHO | ECHONL | IEXTEN);
+        a
+    }
+}
+
 /// A signal character (ADR-0105 item 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
@@ -204,7 +217,8 @@ impl Discipline {
         self.ready.drain(..n).collect()
     }
 
-    fn canonical(&self) -> bool {
+    /// True in canonical (line) mode.
+    pub fn canonical(&self) -> bool {
         self.attr.lflag & ICANON != 0
     }
 
@@ -345,9 +359,15 @@ impl Discipline {
         }
     }
 
+    /// True when output processing turns a line feed into a carriage return
+    /// and a line feed (`OPOST` and `ONLCR`).
+    pub fn onlcr(&self) -> bool {
+        self.attr.oflag & OPOST != 0 && self.attr.oflag & ONLCR != 0
+    }
+
     /// Output processing: `ONLCR` under `OPOST`.
     pub fn output(&self, bytes: &[u8], out: &mut Vec<u8>) {
-        if self.attr.oflag & OPOST != 0 && self.attr.oflag & ONLCR != 0 {
+        if self.onlcr() {
             for &b in bytes {
                 if b == b'\n' {
                     out.push(b'\r');
