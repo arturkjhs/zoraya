@@ -528,6 +528,8 @@ Stage 7a (TASK-24), on the accepted [ADR-0161](adr/0161-design-system.md) and
 - **Fonts** (`fonts/`, `zoraya-fonts`): Inter 4.1 Regular and Medium, JetBrains Mono 2.304 Regular and Bold, unmodified,
   with their licences, in a fonts table of `docs/dependencies.md` checked by hash (INV-0162-5). Until the launcher of
   7d hands out `/system/fonts`, the programs that draw text embed them (ADR-0240): `term` grows by about 0.96 MB.
+  Since 9f-text the disk of `make run`/`run-gui` (`tools/run-disk.sh`) and NetSurf's test root carry the same files in
+  `/system/fonts`, which a POSIX program with a `window` line reads (ADR-0326, "NetSurf's text" below).
 - **Reading screens back.** `zoraya_term::read` draws every character a cell may hold (printable ASCII, Latin-1,
   Latin Extended-A, Cyrillic with Ґ ґ) with the terminal's fonts, size and colours, and a cell reads as the character
   whose pixels are identical. Twenty Cyrillic and Latin letters are drawn alike by any font (А and A, і and i, ...):
@@ -2115,6 +2117,34 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
 
+## NetSurf's text (stage 9, 9f-text)
+
+[ADR-0326](adr/0326-netsurf-text-through-zoraya-text.md) (accepted; it supersedes ADR-0318's fonts item) replaces NetSurf's
+internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readable, in the desktop's fonts, at the window's scale.
+
+- **The library.** `crates/zoraya-fontset` (`no_std`, no `unsafe`): four faces, each a fallback list of the system's fonts (sans:
+  Inter Regular then JetBrains Mono; sans bold: Inter Medium, Inter Regular, JetBrains Mono Bold; monospace and monospace bold
+  from JetBrains Mono, then Inter); NetSurf's serif, cursive and fantasy take sans, weight 600 and up the bold face, italic is
+  upright. Width, position and split keep NetSurf's meaning; U+200B to U+200F draw nothing; bytes that are not UTF-8 count one
+  U+FFFD each. It reads the fonts only as `/system/fonts/NAME` for its four names (INV-0326-1).
+- **The C side.** `libc.a` exports `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` and
+  `zoraya_window_scale` (`crates/zoraya-posix/src/ffi/text.rs`, ADR-0326's block; `ports/netsurf/zoraya_text.h`).
+  `ports/netsurf/font_zoraya.c` is NetSurf's font library (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`, patch
+  `0008`); glyphs are plotted with `nsfb_plot_glyph8`, which clips. At start it sets NetSurf's dpi to 90 times the window's
+  scale, so a page in points or CSS pixels is twice the pixels at scale 2 and the same in logical pixels; the toolbar keeps its
+  pixel size (its field's text converts at the same dpi).
+- **The grant and the image.** A POSIX program whose description has `window` gets `/system/fonts` read only, "with the
+  window" (`zoraya_shell::grants::with_window`), shown by `grants` and as a pill; `tools/run-disk.sh` copies `fonts/` into the
+  disk's `/system/fonts` (in the disk's key: a person's disk from before 9f-text is kept as `.old` and a new one made).
+- **Tests.** `cargo test -p zoraya-fontset` (the paths read, every Russian and Ukrainian letter a non-blank glyph that is not
+  the box at the sizes of scale 1 and 2, widths, position, split, any bytes); `cargo test -p zoraya-shell` (the grant);
+  `make test-netsurf`: the page `/ns/cyrillic` of `tools/test-httpd` at scale 1 (`tests/gui/netsurf.script`) and in a second
+  boot at scale 2 (`tests/gui/netsurf-text.script`), with the runner's `ink` step (at least N pixels not the background) and a
+  line of ten і that ends where a line of ten ж goes on (`docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`).
+- **Limits.** No italic face; no kerning (Inter's is in GPOS, ADR-0162); the toolbar is not scaled; the time text measuring
+  takes per page is not measured (ADR-0318's 5% trigger); the native GUI programs still embed their fonts (ADR-0240).
+  Whether `CLAUDE.md`'s licence rule names OFL-1.1 for unmodified font files is proposed ADR-0327.
+
 ## The network on the desktop, and when it fails (stage 8, N6)
 
 `--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of
@@ -2430,6 +2460,7 @@ crates/                   no_std, host-tested
   zoraya-tokens/          the design tokens from tokens.txt, read at compile time (ADR-0161)
   zoraya-text/            TrueType reader, fixed-point rasteriser, glyph cache, simple shaper (ADR-0162)
   zoraya-fonts/           the system fonts of fonts/ as bytes (ADR-0162, ADR-0240)
+  zoraya-fontset/         the system's fonts for NetSurf: faces from /system/fonts, width, position, split, glyphs (ADR-0326)
   zoraya-paint/           the compositor's drawing in integers: corners, shadows, blur, wallpaper, the material
   zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering and the exact
                           reader of its cells (ADR-0096, ADR-0162)

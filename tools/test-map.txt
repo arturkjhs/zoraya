@@ -177,6 +177,7 @@ tests/shell/                  test-boot test-files
 crates/zoraya-fs/             test-files test-crash test-qemu test-posix test-hand-run
 crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix
 tools/zoraya-mkfs/            test-files test-posix test-hand-run
+tools/zoraya-ar/              check test-libposix test-posix test-apps test-netsurf test-python
 crates/zoraya-proto-file/     test-files test-crash test-gui test-posix
 user/src/bin/fsd.rs           test-files test-crash test-hand-run
 user/src/bin/blkd.rs          test-files test-crash
