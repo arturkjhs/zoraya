@@ -20,6 +20,7 @@ pub mod colour;
 pub mod keys;
 pub mod mouse;
 pub mod parse;
+pub mod queue;
 pub mod read;
 mod screen;
 pub mod select;
@@ -35,6 +36,7 @@ use zoraya_tokens::{Appearance, Color, Scale, space, text};
 pub use cell::{Cell, Colour};
 pub use keys::{KeyModes, MAX_KEY_BYTES, Mods, key_bytes};
 pub use mouse::{Pointer, PointerEvent, focus_bytes};
+pub use queue::{Next, SendQueue};
 pub use session::{Outgoing, Session};
 pub use term::{Modes, Restored, Term};
 

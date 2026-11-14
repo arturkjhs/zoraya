@@ -15,7 +15,6 @@
 //! the grid a new size and the window a new buffer, and the close button
 //! (`CloseRequested`) ends it, as `exit` in the shell does.
 
-use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use zoraya_abi::spawn::Transfer;
@@ -24,9 +23,9 @@ use zoraya_abi::{
     channel_signals,
 };
 use zoraya_proto_gui as gui;
-use zoraya_proto_term::{Input, MAX_INPUT, Output, Paste, Size, Title};
+use zoraya_proto_term::{Input, Output, Paste, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{Look, Outgoing, Session, Term, Waited, await_reply, sync_hold};
+use zoraya_term::{Look, Next, SendQueue, Session, Term, Waited, await_reply, sync_hold};
 use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, memory_create,
@@ -39,12 +38,6 @@ const KEY_COMPOSITOR: u64 = 1;
 const KEY_SHELL: u64 = 2;
 /// The shell's end has room again, subscribed only while keys wait.
 const KEY_WRITABLE: u64 = 3;
-/// Key bytes held for a shell that is slow to read them. A person cannot
-/// type this far ahead; past it keys are dropped and counted.
-const PENDING_MAX: usize = 4096;
-/// Paste bytes held for a slow shell: two of the largest pastes. A paste that
-/// does not fit whole is dropped whole, so the shell never gets half of one.
-const PASTE_PENDING_MAX: usize = 2 * zoraya_proto_term::paste::MAX_PASTE_BYTES;
 /// Shell messages taken per wake, so that keys and frames stay prompt.
 const BATCH: usize = 16;
 
@@ -66,12 +59,7 @@ struct Window {
     /// What is not yet sent: the shell's queue was full. It goes out in
     /// order, input up to `MAX_INPUT` a message, when the shell has room (the
     /// TCG key-burst loss, docs/backlog.md).
-    pending: VecDeque<Outgoing>,
-    /// The bytes of input and of paste in `pending`.
-    pending_input: usize,
-    pending_paste: usize,
-    /// Input that did not fit in `pending`.
-    dropped: u32,
+    queue: SendQueue,
     port: Handle,
     /// `KEY_WRITABLE` is subscribed.
     waiting: bool,
@@ -269,104 +257,42 @@ impl Window {
         }
     }
 
-    /// Takes what the session has to send into the queue for `flush`.
-    /// Input goes whole or not at all, so that the shell never gets half an
-    /// escape sequence or half a UTF-8 letter; a paste goes whole or not
-    /// at all, for the same reason.
-    fn collect(&mut self) {
-        let mut paste: Vec<Outgoing> = Vec::new();
-        for item in self.session.take_outbox() {
-            match item {
-                Outgoing::Input(bytes) => {
-                    if self.pending_input + bytes.len() <= PENDING_MAX {
-                        self.pending_input += bytes.len();
-                        self.pending.push_back(Outgoing::Input(bytes));
-                    } else {
-                        self.dropped = self.dropped.saturating_add(bytes.len() as u32);
-                    }
-                }
-                Outgoing::Paste { bytes, last } => {
-                    paste.push(Outgoing::Paste { bytes, last });
-                    if last {
-                        let size: usize = paste
-                            .iter()
-                            .map(|p| match p {
-                                Outgoing::Paste { bytes, .. } => bytes.len(),
-                                Outgoing::Input(_) => 0,
-                            })
-                            .sum();
-                        if self.pending_paste + size <= PASTE_PENDING_MAX {
-                            self.pending_paste += size;
-                            self.pending.extend(paste.drain(..));
-                        } else {
-                            println!("term: a paste of {size} bytes dropped: the shell is slow");
-                            paste.clear();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Sends what waits, in order and in as few messages as fit, and stops
-    /// at the first the shell's queue has no room for: the rest waits for
-    /// `WRITABLE`.
+    /// Sends what the session made and what waits, in order and in as few
+    /// messages as fit, and stops at the first the shell's queue has no room
+    /// for: the rest waits for `WRITABLE` (`zoraya_term::SendQueue`).
     fn flush(&mut self) {
-        self.collect();
-        while let Some(front) = self.pending.front_mut() {
+        let lost = self.queue.push(self.session.take_outbox());
+        if lost > 0 {
+            println!("term: a paste of {lost} bytes dropped: the shell is slow");
+        }
+        while let Some(next) = self.queue.next() {
             let mut out = [0u8; 64 + zoraya_proto_term::MAX_PASTE];
-            let result = match front {
-                Outgoing::Input(bytes) => {
-                    let n = bytes.len().min(MAX_INPUT);
-                    let m = Input {
-                        dropped: self.dropped,
-                        bytes: Data(&bytes[..n]),
-                    };
-                    match encode(&m, NO_REPLY, &mut out) {
-                        Ok(length) => channel_write(self.shell, &out[..length], &[]).map(|()| n),
-                        // Cannot happen for n <= MAX_INPUT; counted if it does.
-                        Err(_) => Ok(usize::MAX),
-                    }
-                }
-                Outgoing::Paste { bytes, last } => {
-                    let m = Paste {
-                        last: *last,
-                        bytes: Data(&bytes[..]),
-                    };
-                    match encode(&m, NO_REPLY, &mut out) {
-                        Ok(length) => {
-                            channel_write(self.shell, &out[..length], &[]).map(|()| bytes.len())
-                        }
-                        Err(_) => Ok(usize::MAX),
-                    }
-                }
+            let encoded = match next {
+                Next::Input { dropped, bytes } => encode(
+                    &Input {
+                        dropped,
+                        bytes: Data(bytes),
+                    },
+                    NO_REPLY,
+                    &mut out,
+                ),
+                Next::Paste { last, bytes } => encode(
+                    &Paste {
+                        last,
+                        bytes: Data(bytes),
+                    },
+                    NO_REPLY,
+                    &mut out,
+                ),
             };
-            match result {
-                Ok(usize::MAX) => match self.pending.pop_front() {
-                    // Not encodable (it cannot happen: the parts are bounded
-                    // by what the messages carry): dropped, and counted.
-                    Some(Outgoing::Input(bytes)) => {
-                        self.pending_input -= bytes.len();
-                        self.dropped = self.dropped.saturating_add(bytes.len() as u32);
-                    }
-                    Some(Outgoing::Paste { bytes, .. }) => self.pending_paste -= bytes.len(),
-                    None => {}
-                },
-                Ok(n) => match front {
-                    Outgoing::Input(bytes) => {
-                        self.dropped = 0;
-                        self.pending_input -= n;
-                        if n == bytes.len() {
-                            self.pending.pop_front();
-                        } else {
-                            bytes.drain(..n);
-                        }
-                    }
-                    Outgoing::Paste { .. } => {
-                        self.pending_paste -= n;
-                        self.pending.pop_front();
-                    }
-                },
+            // Not encodable cannot happen (every part is bounded by what its
+            // message carries); if it does, what waits is dropped and counted.
+            let Ok(length) = encoded else {
+                self.queue.fail();
+                break;
+            };
+            match channel_write(self.shell, &out[..length], &[]) {
+                Ok(()) => self.queue.sent(),
                 // The shell is slow: the terminal does not wait for it, and
                 // WRITABLE says when its queue has room.
                 Err(Status::WouldBlock) => break,
@@ -374,15 +300,12 @@ impl Window {
                 // asserted: waiting for it would spin, so what waits is
                 // dropped and counted (review finding 8).
                 Err(_) => {
-                    self.dropped = self.dropped.saturating_add(self.pending_input as u32);
-                    self.pending.clear();
-                    self.pending_input = 0;
-                    self.pending_paste = 0;
+                    self.queue.fail();
                     break;
                 }
             }
         }
-        let want = !self.pending.is_empty();
+        let want = !self.queue.is_empty();
         if want && !self.waiting {
             self.waiting = port_subscribe(
                 self.port,
@@ -626,10 +549,7 @@ fn main() -> i32 {
         stride: width,
         height,
         outstanding: false,
-        pending: VecDeque::new(),
-        pending_input: 0,
-        pending_paste: 0,
-        dropped: 0,
+        queue: SendQueue::default(),
         port,
         waiting: false,
         sync_since: None,
