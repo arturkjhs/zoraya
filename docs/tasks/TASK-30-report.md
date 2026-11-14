@@ -87,6 +87,51 @@ its multi-process model, and `fork`-free process creation (`posix_spawn`).
 6. The independent review (`docs/tasks/TASK-30-review.md`): 11 findings, 10 fixed or documented, one (the artifact's size)
    open for the first CI run.
 
+## libc++'s `notify_all_at_thread_exit_lwg3343` and the order of a thread's exit (after candidate run 43557360750)
+
+CI's `make test-cxx-libcxx` (TCG) failed on `std/thread/thread.condition/notify_all_at_thread_exit_lwg3343.pass.cpp` with
+`Assertion failed:` and nothing after it: the runner's pattern on that text stopped the run before the line was whole (now
+fixed: the run fails on posixrun's end line instead, so a failing test's whole message is in the log).
+
+**What was wrong, and the fix.** C++ requires the notification of `notify_all_at_thread_exit` (and the ready state of
+`set_value_at_thread_exit`) after every `thread_local` of the thread has been destroyed. libc++ keeps that work in a pthread key
+destructor; libc++abi, without `__cxa_thread_atexit_impl` in the C library, kept the `thread_local` destructors in a key of its
+own, made later; musl runs key destructors in key order, so the notification came first. A deterministic test shows it
+(`tests/cxx/cxxtest.cpp`, mode `exit-order`: a `thread_local` whose destructor sleeps 2 ms, so that the waiter would run if the
+mutex were already released; 200 rounds with `notify_all_at_thread_exit`, 200 with `set_value_at_thread_exit`): before the fix,
+**200 of 200 rounds wrong under HVF**. The fix is `__cxa_thread_atexit_impl` in `libc.a` (`ports/musl/zoraya/thread_atexit.c`),
+run first by `__pthread_exit` and `exit` (musl patch `0003`), as glibc does, and libc++abi built to use it (ADR-0366,
+INV-0366-4). After it, `exit-order` passes (5 runs of 200 + 200 rounds each under HVF and under TCG, below). The upstream test is
+therefore **not excluded**.
+
+**Loop data** (Mac mini M4, 2026-11-14, load average 2.2 at the start, QEMU 11.1.2, one guest CPU, through the test runner;
+image `build/cxx-dbg`; the script ran the upstream test 200 times, a copy that prints its skip counter 20 times, and
+`cxxtest exit-order` 5 times):
+
+| | upstream test (1000 rounds a run) | assertion fired | skip counter per run (limit 250) | `exit-order` | time |
+|---|---|---|---|---|---|
+| HVF, with the fix | 200 of 200 passed | none | 0 in all 20 | 5 of 5 | 356 s |
+| TCG, not throttled, with the fix | 200 of 200 passed | none | 0 to 3 | 5 of 5 | 1258 s |
+| TCG throttled (`taskpolicy -b`), before the fix | 3 of 3 passed | none | 764, 792, 768 (a copy without the counter check) | not yet written | |
+
+Command: `target/debug/zoraya-test-runner --timeout N --script LOOP --label cxx-loop-MODE -- tools/run-qemu.sh --test --keys
+--disk build/cxx-dbg/disk.img --accel auto|tcg build/zoraya-kernel.elf`. The throttled run with the fix is in the next row once
+measured.
+
+**What upstream says.** The test's own comment: "Due to OS scheduling the workers might have terminated when this code is
+reached. In that case the wait will not sleep and the call to notify_all_at_thread_exit has no effect ... Keep track of how
+often that happens, if too often the test needs to be improved", and `assert(condition_variable_lock_skipped_counter < 250)`
+("The threshold is arbitrary"). The counter came with [D143816](https://reviews.llvm.org/D143816) (commit 261d21f, February 2023),
+which made the test unsupported on Apple's back-deployment dylibs that lack the LWG 3343 fix, dropped `ALLOW_RETRIES: 3`, and
+added the counter so that the test fails when it stops exercising the notification. The libc++ fix itself is 64fc3cd ("Hold mutex
+lock while notify_all is called at notify_all_at_thread_exit",
+[libcxx-commits](https://lists.llvm.org/pipermail/libcxx-commits/2023-January/049068.html)); the issue is
+[LWG 3343](https://wg21.link/lwg3343). No report of the test being flaky on slow targets since was found.
+
+**Which assertion fired in CI** is not known (the line was cut). Under the wrong order the waiter could take the mutex and destroy
+the condition variable before `notify_all` returned, which is what the test's byte check (`sum == 0xcd * sizeof`) detects;
+the skip counter is the other candidate on a slow host. Neither fired in the 400 local runs with the fix.
+
 ## Open items for the architect
 
 - The ADRs above are proposed; none changes an accepted ADR. ADR-0366's change of `malloc`'s header touches every program

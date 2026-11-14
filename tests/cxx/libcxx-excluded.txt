@@ -36,11 +36,3 @@ std/input.output/filesystems/fs.op.funcs/fs.op.remove_all/remove_all.pass.cpp  e
 std/input.output/filesystems/fs.op.funcs/fs.op.space/space.pass.cpp  std::filesystem::space: statvfs is ENOTSUP (ADR-0366)
 std/input.output/filesystems/fs.op.funcs/fs.op.temp_dir_path/temp_directory_path.pass.cpp  expects a directory without search permission to refuse access: mode bits are not enforced here (ADR-0014, "modes look like security ... but are not"); access is by grant
 std/input.output/filesystems/fs.op.funcs/fs.op.weakly_canonical/weakly_canonical.pass.cpp  weakly_canonical of a path with missing components ends in ENOENT (lexical .., ADR-0013, against realpath's walk; not analysed further, recorded in the TASK-30 report)
-# Its own last check is a timing heuristic, not a property of the library: it counts the rounds in
-# which the three workers (each sleeping 1 ms, a whole 10 ms tick here) finish before the main
-# thread waits, and requires fewer than 250 of 1000. Measured with a copy that prints the count
-# (TASK-30, 2026-11-14): 0 of 1000 under HVF, 764, 792 and 768 under TCG slowed by
-# taskpolicy -b, and CI's TCG failed it (run 43557360750). The check the test exists for (the
-# condition variable's bytes are not written after the waiter could destroy it, LWG 3343)
-# passed in every one of those runs.
-std/thread/thread.condition/notify_all_at_thread_exit_lwg3343.pass.cpp  the skip-count heuristic fails under TCG (above)
