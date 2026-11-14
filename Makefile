@@ -751,6 +751,13 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 			echo "[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one, or not exactly one refused handshake before the Proceed mark ($$before) and one or more after it ($$after): a retry of its own, or a click on Proceed that missed)"; cat $$log; rc=1; \
 		else echo '[netsurf] ok: NetSurf sent no request byte to the expired-certificate server, also after Proceed'; fi; \
 	fi; \
+	if [ $$rc = 0 ]; then \
+		log=target/test-logs/test-httpd-netsurf.log; \
+		if grep -q 'must-not-reach' $$log || ! grep -q '^http: GET /ns/web-redirect ' $$log \
+		   || [ "$$(grep -c '^http: GET /ns/web-b ' $$log)" -lt 2 ]; then \
+			echo "[netsurf] FAIL: INV-0324-1: a host the web grant refuses was reached, or the link or the redirect to the second host was not fetched"; cat $$log; rc=1; \
+		else echo '[netsurf] ok: the web grant reached the second host by a link and a redirect, and none of the refused hosts'; fi; \
+	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
 	exit $$rc
 

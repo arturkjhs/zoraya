@@ -77,3 +77,10 @@ find = 'if d.net_web && line.base_system {'
 replace = 'if d.net_web {'
 note = "a description outside the image takes the web"
 tests = ["cargo test -q -p zoraya-shell --lib web"]
+
+[[mutant]]
+id = "W-connect-public-local"
+file = "crates/zoraya-net/src/service.rs"
+find = '                    verdict = Verdict::NotGranted;'
+replace = '                    verdict = Verdict::Allowed;'
+note = "a public gateway or DNS server by address under the web rule: a failed connection, not the grant's refusal"

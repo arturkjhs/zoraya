@@ -2115,6 +2115,56 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
 
+## NetSurf on the web: the `web` grant and the refusal page (stage 9, 9f-net)
+
+NetSurf (9d: a POSIX program with a window, ADR-0317, ADR-0318) reaches any public host on ports 80 and 443 (ADR-0324),
+and a host the grant refuses gets a page that names it and the line that would allow it (ADR-0325). Both were decided by
+the architect (2026-11-14).
+
+- **The rule** (`zoraya_abi::net::Target::Public`, reach target kind 5, nothing after the kind byte). It covers every
+  address `is_public` accepts, that is outside `NOT_PUBLIC`: 0.0.0.0/8, 10.0.0.0/8 (QEMU's 10.0.2.0/24), 100.64.0.0/10,
+  127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4
+  (the documentation blocks are public: the test uses 203.0.113.0/24). A name it covers only through the name's answers:
+  `Scope::name_grant` and `resolve_grant` say `Named` (a name, wildcard or `any` rule), `PublicOnly` (only a web rule) or
+  `No`. `names_address`/`reaches_address` never count a web rule, so a local address (this machine, the gateway, a DNS
+  server: `is_local`, ADR-0223 item 4) still needs a rule that names it, also when it is public. Only a web rule is
+  within a web rule, and a web rule is within only a web rule or `any` (INV-0324-2).
+- **`netd`.** `decide` lets a `connect` by name through on a web rule's ports and a `resolve` of any name; `Conns` marks a
+  connection `public_only` when only a web rule admits its name and then tries only public, non-local answers,
+  `net.hosts` included (the exemption is for a name the person granted); none left is `Failed { Local }`. A `resolve`
+  that only a web rule admits answers the public, non-local addresses, and with none left `NotGranted` (so `getaddrinfo`
+  says `EAI_SYSTEM`/`EACCES`, which NetSurf's page reads). A connection by address goes through `allows_address`
+  (a public address on 80 or 443); one that is local (a public gateway or DNS server) and that no rule names is answered
+  `NotGranted` at once (`connect` gives `EACCES`), so it reads as the grant's refusal, not as a failed connection.
+- **The shell.** A description line `net web` (`zoraya-describe`, commands only, once) gives the image's own
+  descriptions the rule `Public`, ports 80 and 443, TCP, beside the line's `+net` words and the URL operand's rule (a URL
+  from a value still needs a `+net` word). `grants netsurf` prints `net: web  reach public hosts, ports 80 and 443; not
+  this machine or its network (description)`; the window's pills come from `netgrant::pills`: `web` for the rule, `+net
+  HOST:PORT` for the others. In an untrusted room the line is refused by the network refusal of the gate (ADR-0268 point
+  7) and by the web rule's own, `netgrant::web_refused` (markers `untrusted-gate: web-refusal` and two
+  `web-refusal-call` in `zosh`, counted by `make check-untrusted-gate`; it stays after the gate's second stage). NetSurf's
+  description has `net web`; curl's and wget's do not.
+- **The refusal page** (`ports/patches/netsurf/0008`, `ports/netsurf/zoraya_refusal.c`). NetSurf's curl fetcher reads
+  `CURLINFO_OS_ERRNO` when a fetch ends; `CURLE_COULDNT_CONNECT` with `EACCES`, or `CURLE_COULDNT_RESOLVE_HOST` when a
+  second `getaddrinfo` of the host fails with `EAI_SYSTEM`/`EACCES`, is a refusal of the grant: the fetcher answers with
+  status 403 and its own page (title `Not granted: HOST:PORT`, background `#ffe4b5`) naming the host and port and the
+  line `+net HOST:PORT netsurf URL` (the URL quoted when it holds a character outside `A-Za-z0-9._~:/%+,=@-`, a `'` as
+  `%27`, other bytes as `%XX`; everything HTML-escaped). Every other failure keeps NetSurf's error page.
+- **Tests.** `cargo test -p zoraya-abi` (the blocks at both edges, the rule, the subset property with web rules),
+  `-p zoraya-net` (connect by name to public, private, local, `net.hosts` and named answers; `resolve` and `connect`
+  through the service; `narrow`), `-p zoraya-shell` (the rule, the pills, the `grants` line, the untrusted refusal),
+  `-p zoraya-describe`; mutants in `tools/mutants/net-web.toml` (10, all killed by hand); `make check-netsurf-refusal`
+  (the page's text, the line, quoting and escaping, on the host's C compiler, part of `make check`). `make test-netsurf`
+  now runs QEMU's network on 203.0.113.0/24 (`tools/run-qemu.sh --net-subnet`) with the test server at 203.0.113.2 and
+  two "public" hosts, `one.web.test` (203.0.113.10) and `two.web.test` (203.0.113.11), on port 80 through SLIRP's
+  `guestfwd ... cmd:` (`--net-guestfwd`, each connection a `zoraya-test-httpd --relay` process to the one server): the
+  `web` pill, `grants netsurf`, a link and a redirect to the second host, and links to 10.0.2.2, 127.0.0.1, the gateway
+  203.0.113.2 and `two.web.test:8080` answered with the refusal page, the server's log showing no request for them.
+- **Limits.** IPv4 only. A name the web rule alone admits cannot use a `net.hosts` entry for a local address. A refusal
+  of a name rule's local answer (`Local`, `EAI_NONAME`) gets NetSurf's error page, not the refusal page (ADR-0325's open
+  question). The page is drawn in the window's body, which a site also draws; it grants nothing and has nothing to click.
+  curl and wget still give only their own messages (ADR-0224 item 5's `REPORT` hint is not built).
+
 ## The network on the desktop, and when it fails (stage 8, N6)
 
 `--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of

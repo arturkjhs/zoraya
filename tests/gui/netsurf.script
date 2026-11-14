@@ -9,18 +9,22 @@ screen ~> _
 pause 3000
 # The window shows the grants of its line as pills (ADR-0317): the roots to read
 # and the one host and port it may reach.
-type netsurf http://10.0.2.2:@PORT@/ns/page\r
+type netsurf http://@HOST@:@PORT@/ns/page\r
 pause 15000
 region 110 175 150 40 0000ff
 region 110 235 80 40 00ff00
 region 400 300 100 40 ffffff
 shot netsurf-http
-# The pills on the window's title bar (INV-0317-1): two pills, the network's
-# first (left) and +r /system/tls (right, ending at the frame's edge), with the
-# title bar's own colour between them; the right one's last padding column is
-# the pill fill.
+# The pills on the window's title bar (INV-0317-1): three pills, the URL's
+# `+net HOST:PORT`, `web` (ADR-0324, INV-0324-4) and +r /system/tls (right,
+# ending at the frame's edge), with the title bar's own colour between them;
+# the right one's last padding column is the pill fill. `web` is the short
+# pill between the gaps at 748..753 and 786..791.
 region 893 117 1 6 fcfcfc
 region 788 116 4 8 f1f1f3
+region 749 116 4 8 f1f1f3
+region 757 117 2 6 fcfcfc
+region 780 117 2 6 fcfcfc
 # The form: type into the field, submit with Return; the result page is yellow.
 click 160 302
 type zoraya\r
@@ -38,7 +42,7 @@ screen closed
 # The wheel scrolls the page under the pointer, 100 pixels a notch (proposed
 # ADR-0322): /ns/tall is blue for 1200 pixels, then magenta. Fifteen notches
 # toward the person put magenta at the top of the page; fifteen away, blue.
-type netsurf http://10.0.2.2:@PORT@/ns/tall\r
+type netsurf http://@HOST@:@PORT@/ns/tall\r
 pause 15000
 region 110 175 150 40 0000ff
 wheel 400 400 down 15
@@ -93,5 +97,73 @@ click 300 87
 pause 500
 type echo closed3\r
 screen closed3
+# ADR-0324: the web grant. `grants` says it in words.
+type grants netsurf\r
+prefix net: web 
+# A page on one public host (one.web.test, 203.0.113.10 of the test network,
+# relayed to the test server) links to a second (two.web.test, .11), to a
+# redirect to the second, and to hosts the web rule refuses: 10.0.2.2 (QEMU's
+# usual host, private), 127.0.0.1, the gateway 203.0.113.2 on port 80 (public
+# by range, but this side of the network) and two.web.test:8080 (not 80 or
+# 443). Each link is a block of 40 pixels, one under the other: cyan, orange,
+# maroon, green, navy, olive.
+type netsurf 'http://one.web.test/ns/web-a?port=@PORT@'\r
+pause 15000
+region 110 175 150 20 00ffff
+region 110 215 150 20 ff8000
+region 110 375 150 20 808000
+region 749 116 4 8 f1f1f3
+region 757 117 2 6 fcfcfc
+region 780 117 2 6 fcfcfc
+shot netsurf-web
+# The second host by a link: its page is magenta.
+click 150 188
+pause 8000
+region 400 300 200 200 ff00ff
+shot netsurf-web-link
+# Back (the toolbar's arrow), then the redirect to the second host.
+click 118 152
+pause 5000
+region 110 175 150 20 00ffff
+click 150 228
+pause 8000
+region 400 300 200 200 ff00ff
+shot netsurf-web-redirect
+# The refused hosts: each gets the page that names it and the line that would
+# allow it (ADR-0325), whose background is #ffe4b5.
+click 118 152
+pause 5000
+region 110 255 150 20 800000
+click 150 268
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-private
+click 118 152
+pause 5000
+region 110 295 150 20 008000
+click 150 308
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-loopback
+click 118 152
+pause 5000
+region 110 335 150 20 000080
+click 150 348
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-gateway
+click 118 152
+pause 5000
+region 110 375 150 20 808000
+click 150 388
+pause 8000
+region 110 175 20 20 ffe4b5
+shot netsurf-web-refused-port
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-web\r
+screen closed-web
 type poweroff\r
 exit

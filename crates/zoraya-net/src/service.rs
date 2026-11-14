@@ -326,10 +326,22 @@ impl Service {
                     };
                     (ConnectTarget::Name(n), Target::Name(n.into()))
                 };
-                let verdict = connection.decide(Request::Connect {
+                let mut verdict = connection.decide(Request::Connect {
                     target: target.0,
                     port,
                 });
+                // ADR-0324, ADR-0325: an address a web rule admits by its range
+                // but that is this side of the network (a public gateway or DNS
+                // server) is refused here as not granted, the grant's refusal
+                // it is, rather than later as a failed connection.
+                if let (Verdict::Allowed, ConnectTarget::Address(a)) = (verdict, target.0)
+                    && is_local(stack, a, now_us)
+                    && !connection
+                        .scope()
+                        .names_address(a, port, zoraya_abi::net::Protocols::TCP)
+                {
+                    verdict = Verdict::NotGranted;
+                }
                 let account = connection.account();
                 match verdict {
                     Verdict::Allowed => {

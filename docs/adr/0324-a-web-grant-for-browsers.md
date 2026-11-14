@@ -81,7 +81,7 @@ for the Internet, the host and the LAN always closed).
    public and not local in ADR-0223 item 4's sense (this machine, the gateway, the DNS servers), `net.hosts` answers
    included (their exemption is for a name the person granted by name). A web rule never *names* an address
    (`Scope::names_address`, `reaches_address`): an address it admits by range is still refused when it is local (a
-   public gateway). `+net HOST` words and the URL operand's rule sit beside it on the line, as any rules do: a host
+   public gateway), as `NotGranted` at `connect`. `+net HOST` words and the URL operand's rule sit beside it on the line, as any rules do: a host
    they name is reached under their rule.
 3. **The shell's rule.** `Public`, ports 80 and 443, TCP only: no UDP, no ICMP echo, no listen. It joins the line's
    other rules (ADR-0220 item 7: one connection, the union). It does not make a value designate: a URL from a variable

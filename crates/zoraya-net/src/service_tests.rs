@@ -855,3 +855,44 @@ fn a_web_connection_narrows_only_to_a_web_rule() {
         assert_eq!(ask(&outside), status::NOT_GRANTED);
     }
 }
+
+/// ADR-0324 and ADR-0325: a public address that is this side of the network
+/// (here a DNS server) is refused at `connect` as not granted under a web
+/// rule, and allowed with a rule that names it.
+#[test]
+fn a_web_rule_refuses_a_public_local_address_as_not_granted() {
+    use zoraya_proto_net::Connecting;
+    let mut net = Net::new(Config {
+        dns: vec![[1, 1, 1, 1]],
+        ..static_config()
+    });
+    let mut service = Service::new();
+    let web = service
+        .add(Connection::new(rights::REACH, &web_scope(&[])).unwrap())
+        .unwrap();
+    let named = ReachRule {
+        target: Target::Address([1, 1, 1, 1]),
+        ports: Ports::one(80),
+        protocols: Protocols::TCP,
+    };
+    let with_address = service
+        .add(Connection::new(rights::REACH, &web_scope(&[named])).unwrap())
+        .unwrap();
+    let mut code = |id, message: &[u8]| match service.handle(id, message, 3, &mut net.client, 0) {
+        Action::Reply(r) => decode::<Connecting>(&r, 0).unwrap().1.status.0,
+        Action::Connect { .. } => status::OK,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        code(web, &connect_message("", [1, 1, 1, 1], 80)),
+        status::NOT_GRANTED
+    );
+    assert_eq!(
+        code(web, &connect_message("", [1, 0, 0, 1], 80)),
+        status::OK
+    );
+    assert_eq!(
+        code(with_address, &connect_message("", [1, 1, 1, 1], 80)),
+        status::OK
+    );
+}

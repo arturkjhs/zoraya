@@ -207,7 +207,7 @@ fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
             body += &block("http://one.web.test/ns/web-redirect", "ff8000");
             body += &block(&format!("http://10.0.2.2:{port}/ns/must-not-reach"), "800000");
             body += &block("http://127.0.0.1/ns/must-not-reach", "008000");
-            body += &block(&format!("http://203.0.113.2:{port}/ns/must-not-reach"), "000080");
+            body += &block("http://203.0.113.2/ns/must-not-reach", "000080");
             body += &block("http://two.web.test:8080/ns/must-not-reach", "808000");
             body += "</body></html>\n";
             Some(("text/html", body.into_bytes()))
