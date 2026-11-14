@@ -941,6 +941,7 @@ dependencies = [
  "zoraya-proto-file",
  "zoraya-resolve",
  "zoraya-test-alloc",
+ "zoraya-width",
 ]
 
 [[package]]
@@ -1154,4 +1155,11 @@ dependencies = [
  "zoraya-protocol",
  "zoraya-test-alloc",
  "zoraya-virtio",
+]
+
+[[package]]
+name = "zoraya-width"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
 ]

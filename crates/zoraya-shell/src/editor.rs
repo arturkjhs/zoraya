@@ -138,8 +138,41 @@ pub struct Editor {
     row: usize,
 }
 
+/// The columns of `s` in the terminal's grid (ADR-0332 item 9: the width
+/// table of `zoraya-width`, musl's own, so editor and terminal agree).
 fn width_of(s: &str) -> usize {
-    s.chars().count()
+    zoraya_width::str_columns(s)
+}
+
+/// Where the cursor is, in cells from the line's first, after `chars`
+/// written from cell `start` in rows of `width`: a wide character that does
+/// not fit in what is left of a row goes whole to the next (the terminal
+/// wraps it so, ADR-0332 item 9).
+fn advance(start: usize, chars: impl IntoIterator<Item = char>, width: usize) -> usize {
+    let mut at = start;
+    for c in chars {
+        let w = zoraya_width::columns(c);
+        if w == 2 && width > 1 && at % width == width - 1 {
+            at += 1;
+        }
+        at += w;
+    }
+    at
+}
+
+/// The longest prefix of `s` that takes at most `room` columns.
+fn take_columns(s: &str, room: usize) -> String {
+    let mut used = 0;
+    let mut out = String::new();
+    for c in s.chars() {
+        let w = zoraya_width::columns(c);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out
 }
 
 /// The prompt's visible width: SGR sequences in it take no columns.
@@ -154,7 +187,7 @@ fn visible(s: &str) -> usize {
         } else if c == '\x1b' {
             in_escape = true;
         } else {
-            n += 1;
+            n += zoraya_width::columns(c);
         }
     }
     n
@@ -412,7 +445,7 @@ impl Editor {
                 .cloned()
                 .unwrap_or_default();
             let line = format!("search: {}  {}", search.query, printable(&found));
-            let line: String = line.chars().take(width.saturating_sub(1)).collect();
+            let line = take_columns(&line, width.saturating_sub(1));
             out.push('\r');
             out.push_str(&line);
             out.push_str("\x1b[K");
@@ -426,12 +459,12 @@ impl Editor {
             Some(a) => out.push_str(&self.highlighted(a)),
             None => out.push_str(&printable(&self.text())),
         }
-        let mut cells = prompt + self.line.len();
+        let mut cells = advance(prompt, self.line.iter().copied(), width);
         self.shown_suggestion = false;
         if let Some(s) = self.suggestion().filter(|_| !at_end) {
             // On the row the line ends on only, so it never wraps.
             let room = width - 1 - cells % width;
-            let s: String = printable(&s).chars().take(room).collect();
+            let s = take_columns(&printable(&s), room);
             if !s.is_empty() {
                 cells += width_of(&s);
                 if self.options.colour {
@@ -449,7 +482,8 @@ impl Editor {
             out.push('\n');
         }
         let (end_row, end_col) = (cells / width, cells % width);
-        let target = prompt + if at_end { self.line.len() } else { self.cursor };
+        let upto = if at_end { self.line.len() } else { self.cursor };
+        let target = advance(prompt, self.line[..upto].iter().copied(), width);
         let (row, col) = (target / width, target % width);
         if end_row > row {
             out.push_str(&format!("\x1b[{}A", end_row - row));
@@ -497,7 +531,11 @@ impl Editor {
             if after.strip_prefix(before.as_str()) == Some(typed.as_str()) {
                 out.push_str(&typed);
                 let width = self.options.width.max(1);
-                let cells = visible(self.current_prompt()) + self.line.len();
+                let cells = advance(
+                    visible(self.current_prompt()),
+                    self.line.iter().copied(),
+                    width,
+                );
                 if cells.is_multiple_of(width) {
                     out.push('\n');
                 }
@@ -975,4 +1013,23 @@ pub fn parse_error(src: &str, at: usize, problem: &str, hint: Option<&str>) -> S
         s.push('\n');
     }
     s
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    /// A wide character that does not fit in the last cell of a row goes
+    /// whole to the next, as the terminal's grid wraps it (ADR-0332 item 9).
+    #[test]
+    fn a_wide_character_wraps_whole() {
+        // Rows of 6; "~> ab" fills 5, so the ideograph starts the next row.
+        assert_eq!(advance(3, "ab".chars(), 6), 5);
+        assert_eq!(advance(3, "ab中".chars(), 6), 8);
+        assert_eq!(advance(3, "a中".chars(), 6), 6);
+        assert_eq!(advance(0, "中中中".chars(), 5), 7);
+        assert_eq!(advance(0, "e\u{301}".chars(), 5), 1);
+        assert_eq!(take_columns("中中中", 5), "中中");
+        assert_eq!(visible("\x1b[1m~\x1b[0m> "), 3);
+    }
 }

@@ -990,3 +990,25 @@ fn an_entry_takes_at_most_256_continuation_lines() {
     let (_, k) = feed(&mut e, &mut a, b"\r");
     assert!(matches!(k, Key::Line(_)));
 }
+
+/// ADR-0332 item 9: the editor counts columns with the terminal's width
+/// table, so a wide character takes two cells, a combining mark none, and
+/// the cursor is put where the terminal has it.
+#[test]
+fn the_cursor_follows_the_width_table() {
+    let (mut e, _) = editor();
+    let mut a = fake();
+    // "~> " is 3 cells; the ideograph takes 2, the combining acute none.
+    feed(&mut e, &mut a, "中e\u{301}".as_bytes());
+    assert_eq!(e.text(), "中e\u{301}");
+    // Left once: the cursor goes before the acute.
+    let (out2, _) = feed(&mut e, &mut a, b"\x1b[D");
+    // Before the acute is the same cell as after `e` (it takes none): the
+    // cursor stays where the text ended, at column 6.
+    assert!(!out2.contains('C'), "{out2:?}");
+    // Left again, before `e`: column 5; left again, before the ideograph: 3.
+    let (out3, _) = feed(&mut e, &mut a, b"\x1b[D");
+    assert!(out3.ends_with("\x1b[5C"), "{out3:?}");
+    let (out4, _) = feed(&mut e, &mut a, b"\x1b[D");
+    assert!(out4.ends_with("\x1b[3C"), "{out4:?}");
+}

@@ -1449,6 +1449,12 @@ mutants-host:
 fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 
+# INV-0332-4: the terminal's width table is musl's wcwidth for every code point
+# (needs the pinned archive in the ports' cache; part of check-ports).
+.PHONY: check-term-width
+check-term-width:
+	tools/term-width/gen.sh check
+
 # INV-0109-3 and INV-0109-4: the fetch step and the cache, offline.
 check-fetch-ports:
 	ports/test-fetch.sh

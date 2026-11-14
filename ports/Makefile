@@ -1119,6 +1119,8 @@ check-libc: | tools
 	@$(SURFACE_CHECK) check $(TIER_SPEC) $(LIBC) --allow-svc $(SVC_MEMBER)
 
 check-ports: | tools
+	@echo "== the terminal's width table is musl's wcwidth (INV-0332-4)"
+	tools/term-width/gen.sh check
 	@echo "== the tier list is the one ADR-0100 item 7's rule gives"
 	$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
 	@echo "== libc.a against the tier list (INV-0100-1, INV-0100-2, INV-0005-1, INV-0005-2)"

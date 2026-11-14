@@ -65,6 +65,8 @@ crates/zoraya-elf/            test-qemu test-boot
 # driver): their crates map to test-qemu too.
 crates/zoraya-compositor/     test-gui test-qemu
 crates/zoraya-term/           test-gui test-tour-gui
+crates/zoraya-width/          test-gui test-tour-gui
+tools/term-width/             check
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
 crates/zoraya-surface/        check test-netsurf
