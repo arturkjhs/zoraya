@@ -4,6 +4,9 @@
 #include <stdexcept>
 #include <string>
 
+// Built without -std=: zc++'s default is C++23 (ADR-0364, INV-0364-1).
+static_assert(__cplusplus == 202302L, "zc++'s default standard is C++23");
+
 int main() {
     try {
         throw std::runtime_error("caught");

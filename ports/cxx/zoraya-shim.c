@@ -5,7 +5,10 @@
  * pathconf's two limits) or fails with an error the caller reports (link and
  * statvfs: std::filesystem::create_hard_link and space throw a
  * filesystem_error); none reports a success that did not happen. They are
- * weak, so that libc.a's own definition wins the day libc.a exports the name. */
+ * weak, so that a strong definition already linked wins without a clash; a
+ * linker does not pull an archive member to replace a weak definition, so
+ * the day libposix exports one of these names, it is removed here (ADR-0366's
+ * revisit trigger). */
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>

@@ -31,7 +31,7 @@ and the review (`docs/tasks/TASK-30-review.md`).
 `libc++.a` 2.5 MB, `libc++abi.a` 0.6 MB, `libunwind.a` 0.1 MB (no debug information); headers 12 MB in the sysroot.
 
 **Build times** (Mac mini, `CARGO_BUILD_JOBS=3`, `-j3`): the runtime about a minute (`ports/cxx/cxx.mk`, after `libc.a`);
-GoogleTest with its tests under a minute; the libc++ subset's 481 programs 142 s (`make cxx-libcxx-tests`). CI's times: not yet
+GoogleTest with its tests under a minute; the libc++ subset's 450 programs about 140 s (`make cxx-libcxx-tests`). CI's times: not yet
 measured (no candidate run yet).
 
 **What libc++ needed from `libc.a`** (ADR-0366): 46 names of musl's code found by linking the whole of the three archives
@@ -39,11 +39,15 @@ measured (no candidate run yet).
 `getentropy`, `dl_iterate_phdr`), three for GoogleTest (`execv`, `wcsstr`, `towlower`), `aligned_alloc` and `posix_memalign`
 (new in libposix: `malloc`'s header now holds the block's offset and alignment), and five shims (`sched_yield`, `truncate`,
 `pathconf`, `link`, `statvfs`). One behaviour: musl's `pthread_join` of the calling thread waits for ever; libc++ now throws
-first (patch `llvm/0003`).
+first (patch `llvm/0003`). The libc++ tests' filesystem helper uses `std::system` (no shell in the image): patch `llvm/0004`,
+test support only.
 
-**Tests run in this session (HVF):** `make test-cxx` passed (73 steps before the `alloc` mode was added; see the part section
-for the last run); `make test-cxx-gtest` passed (166 steps: GoogleTest's 27 test programs, 4 of their tests filtered out because
-they change to `/`); `make test-cxx-libcxx`: see the part section. TCG and CI: not run here (CI runs them).
+**Tests run in this session (HVF, after the review's fixes):** `make test-cxx` passed (76 steps); `make test-cxx-gtest` passed
+(166 steps: GoogleTest's 27 test programs, 4 of their tests filtered out because they change to `/`); `make test-cxx-libcxx`
+passed (1358 steps: 450 of libc++'s run tests of the exception, RTTI, new/delete, thread and filesystem groups, in 99 s; 40 left
+out: 7 by lit's directives, 2 that need `AF_UNIX`, 31 filesystem tests that failed on properties of the platform, listed with
+their reasons in `tests/cxx/libcxx-excluded.txt`). `make check` passed. TCG was not run locally (CLAUDE.md: CI runs it); its
+times are not measured, and CI's candidate run is the first.
 
 **Known limits** (what C++ programs cannot do here): no C++ compiler inside Zoraya; no unwinding through `libc.a`'s callbacks
 (`qsort` with a throwing comparator terminates); no names in libunwind's backtraces; named locales are the C locale; no time
@@ -75,10 +79,22 @@ its multi-process model, and `fork`-free process creation (`posix_spawn`).
    wait for each program's last line.
 5. libc++'s subset: `tests/cxx/libcxx-build.sh` reads lit's directives the simple way; one test hung on musl's self-join
    (patch `llvm/0003`); two need `AF_UNIX` (excluded); the support code needs `aligned_alloc`, which moved the aligned
-   allocation from a libc++ patch into libposix.
+   allocation from a libc++ patch into libposix; the filesystem helper's `std::system` became `std::filesystem` (patch
+   `llvm/0004`). A lenient run (every test, status recorded) passed 450 of 481; the 31 that failed are filesystem tests
+   that rely on enforced mode bits, FIFOs outside `/tmp`, hard links, non-lexical `..`, file times before now or `statvfs`,
+   known properties of the filesystem service (ADR-0013, ADR-0014), excluded with their reasons; `weakly_canonical` and
+   `relative` of a path with missing components end in `ENOENT`, not analysed further (an open item).
+6. The independent review (`docs/tasks/TASK-30-review.md`): 11 findings, 10 fixed or documented, one (the artifact's size)
+   open for the first CI run.
 
 ## Open items for the architect
 
 - The ADRs above are proposed; none changes an accepted ADR. ADR-0366's change of `malloc`'s header touches every program
   (reviewed in `docs/tasks/TASK-30-review.md`).
+- `std::filesystem::weakly_canonical` and `relative` of a path with missing components fail with `ENOENT`; lexical `..` in
+  libposix is the likely cause, not confirmed.
+- The build artifact grows by the libc++ test binaries (about 240 MB before compression) and the LLVM tree; to be measured on
+  the candidate run (review finding 11).
+- TCG times of the three C++ steps are unmeasured; CI runs both accelerators in one job of 45 (subset, GoogleTest) or 30
+  (`test-cxx`) minutes.
 - The libc++ version follows CI's clang: with Ubuntu's `clang-19` (or later) installed in the CI image, LLVM 21 or later could be pinned.

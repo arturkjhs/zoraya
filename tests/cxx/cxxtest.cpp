@@ -541,6 +541,26 @@ void alloc() {
         check(reinterpret_cast<std::uintptr_t>(ws.back().get()) % 256 == 0, "new of an alignas(256) type");
     }
     ws.clear();
+    // Many rounds: free must give each block back with the layout it was
+    // allocated with (ADR-0366's header), or the heap runs out or breaks.
+    for (int i = 0; i < 4000; ++i) {
+        void* a = std::aligned_alloc(4096, 8192);
+        void* b = nullptr;
+        check(a != nullptr && posix_memalign(&b, 256, 1000) == 0, "aligned blocks, round " + std::to_string(i));
+        std::memset(a, i & 0xff, 8192);
+        std::free(a);
+        std::free(b);
+    }
+    // realloc keeps an aligned block's bytes.
+    void* r = std::aligned_alloc(512, 512);
+    for (int i = 0; i < 512; ++i)
+        static_cast<unsigned char*>(r)[i] = static_cast<unsigned char>(i * 7);
+    r = std::realloc(r, 100000);
+    bool same = r != nullptr;
+    for (int i = 0; same && i < 512; ++i)
+        same = static_cast<unsigned char*>(r)[i] == static_cast<unsigned char>(i * 7);
+    check(same, "realloc of an aligned block keeps its bytes");
+    std::free(r);
     // A plain malloc after the aligned ones still works and frees.
     void* m = std::malloc(40);
     check(m != nullptr && reinterpret_cast<std::uintptr_t>(m) % 16 == 0, "malloc after aligned blocks");

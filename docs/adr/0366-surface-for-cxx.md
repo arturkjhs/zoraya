@@ -39,14 +39,16 @@ leaves it undefined, and allows `EDEADLK`), while C++ requires `std::thread::joi
   second, which is also the block's alignment (16 for `malloc`); `free` reads both and gives the block back with the layout it
   was allocated with. `ports/cxx/zoraya-shim.c`, a member of `libc++.a`, defines `sched_yield` (libposix's own), `truncate`
   (`open` and `ftruncate`), `pathconf` (`PATH_MAX` and `NAME_MAX` of `<limits.h>`, `EINVAL` for the others), `link` and
-  `statvfs` (`ENOTSUP`), each weak so that a later `libc.a` definition wins. Patch `llvm/0002` makes `copy_file` take
+  `statvfs` (`ENOTSUP`), each weak, so that a strong definition already in the link wins without a clash (a linker does not
+  pull an archive member to replace a weak one, so a name libposix comes to export is removed from the shim). Patch `llvm/0002` makes `copy_file` take
   libc++'s `fstream` copy instead of `sendfile`; patch `llvm/0003` makes `std::thread::join` of the calling thread throw
   `resource_deadlock_would_occur` before it calls `pthread_join`.
 - **Evidence for:** drivers 1 to 4; every name has a user (libc++'s locale, `iostream`, `filesystem`, `random_device`, libunwind,
   aligned `new`, GoogleTest); C programs gain aligned allocation too.
 - **Evidence against:** two places a name can live; `std::filesystem::create_hard_link` and `space` always fail; `malloc`'s header
   changed for every program (unsafe code in the allocator, reviewed with this part).
-- **Cost:** *(measured)* 70 lines of C, 60 lines of Rust in libposix, two patches of 13 and 22 lines, 51 names.
+- **Cost:** *(measured)* 70 lines of C, 60 lines of Rust in libposix, two patches of 13 and 22 lines (of the port's four:
+  `llvm/0001` is ADR-0360's `random_device`, `llvm/0004` a test-only one), 51 names (49 of musl's, 2 of libposix's).
 - **Precedent:** ADR-0310 (a block of musl's names for ports) and ADR-0320 (a shim beside the block).
 ### Option B: everything in `libc.a`
 - **Description:** also `link`, `statvfs`, `pathconf`, `truncate` and `sched_yield` exported by libposix.

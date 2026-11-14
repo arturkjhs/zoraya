@@ -528,11 +528,14 @@ $(GTEST_STAMP): $(GTEST_SRC) $(CXX_STAMP) ports/cmake/zoraya.cmake ports/cmake/P
 	@$(call logged,$(CMAKE) -S $(GTEST_SRC) -B $(GTEST_BUILD) -G "Unix Makefiles" \
 	  -DCMAKE_TOOLCHAIN_FILE=$(ROOT)/ports/cmake/zoraya.cmake -DCMAKE_BUILD_TYPE=Release \
 	  -DCMAKE_EXE_LINKER_FLAGS=-Wl$(comma)--strip-debug -DBUILD_GMOCK=OFF -Dgtest_build_tests=ON -Dgtest_build_samples=ON,gtest-configure)
-	@$(call logged,$(MAKE) -C $(GTEST_BUILD) -j3,gtest)
+	@$(call logged,$(MAKE) -C $(GTEST_BUILD) -j3 VERBOSE=1,gtest)
 	for t in $(GTEST_TESTS) sample1_unittest sample10_unittest; do \
 	  cp $(GTEST_BUILD)/googletest/$$t $(GTEST_OUT)/bin/ || exit 1; done
 	printf '%s\n' $(GTEST_TESTS) > $(GTEST_OUT)/list
 	$(ELF_CHECK) $(GTEST_OUT)/bin
+	@# INV-0109-2, INV-0143-1: CMake's compile lines ran zc++ and named no Linux macro.
+	@grep -q -e '$(ROOT)/tools/zc++' $(LOGS)/gtest.log || { echo "gtest.log shows no zc++ compile"; exit 1; }
+	@if grep -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/gtest.log $(LOGS)/cxx.log; then exit 1; fi
 	@touch $@
 
 # ---------------------------------------------------------------- TLS for C programs, curl, wget (TASK-27 9a)

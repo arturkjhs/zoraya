@@ -245,6 +245,7 @@ jobs:
             !build/ports/work/Python-*
             !build/ports/work/hostpython-build
             !build/ports/work/python-build
+            !build/ports/work/googletest-build
           key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0317-*.md', 'docs/adr/0320-*.md', 'docs/adr/0366-*.md') }}
       - name: make ci-build
         run: make ci-build

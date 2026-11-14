@@ -80,6 +80,14 @@ $(OBJ)/whole.check: $(LIB)/libunwind.a $(LIB)/libc++abi.a $(LIB)/libc++.a
 	nm $(SHIM_OBJ) | awk 'NF == 3 { print $$2, $$3 }' | sort > $(OBJ)/shim.nm
 	@[ "$$(tr '\n' ' ' < $(OBJ)/shim.nm)" = "$(SHIM_NAMES) " ] || \
 	  { echo "INV-0366-2: the shim defines other names, or not weakly:"; cat $(OBJ)/shim.nm; exit 1; }
+	@# INV-0109-2 for zc++: it refuses -D__linux__ and defines nothing of
+	@# Linux in C++ (the g++ driver mode, _GNU_SOURCE).
+	@if $(ZCXX) -D__linux__ -E -x c++ /dev/null > /dev/null 2>&1; then echo "zc++ accepted -D__linux__"; exit 1; fi
+	@if $(ZCXX) -dM -E -x c++ /dev/null | grep -E '__linux|__gnu_linux'; then echo "zc++ defines a Linux macro"; exit 1; fi
+	@# INV-0361-1: a -nodefaultlibs link that names the runtime itself still
+	@# gets --eh-frame-hdr.
+	@$(ZCXX) -nodefaultlibs -### -o $(OBJ)/whole-ndl.elf $(OBJ)/whole-main.o 2>&1 | grep -q -e '--eh-frame-hdr' || \
+	  { echo "INV-0361-1: a -nodefaultlibs link of zc++ has no --eh-frame-hdr"; exit 1; }
 	@touch $@
 
 $(OBJ)/unwind/%.o: $(LIBUNWIND)/src/%.cpp

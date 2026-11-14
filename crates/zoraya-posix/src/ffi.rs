@@ -625,9 +625,11 @@ fn layout_at(n: usize, offset: usize) -> Option<Layout> {
     Layout::from_size_align(n.checked_add(offset)?, offset).ok()
 }
 
-/// `n` bytes aligned to `align`, a power of two of at least 16; null if the
-/// heap has no room or the sizes overflow (the caller sets `errno`).
+/// `n` bytes aligned to `align` (a power of two; less than `HEADER` is taken
+/// as `HEADER`, so that the header always fits before the pointer); null if
+/// the heap has no room or the sizes overflow (the caller sets `errno`).
 fn alloc_aligned(n: usize, align: usize) -> *mut u8 {
+    let align = align.max(HEADER);
     let Some(l) = layout_at(n, align) else {
         return ptr::null_mut();
     };
@@ -664,7 +666,7 @@ extern "C" fn aligned_alloc(align: usize, n: usize) -> *mut u8 {
         set_errno(EINVAL);
         return ptr::null_mut();
     }
-    let p = alloc_aligned(n, align.max(HEADER));
+    let p = alloc_aligned(n, align);
     if p.is_null() {
         set_errno(ENOMEM);
     }
@@ -683,7 +685,7 @@ unsafe extern "C" fn posix_memalign(out: *mut *mut u8, align: usize, n: usize) -
     if !align.is_power_of_two() || !align.is_multiple_of(size_of::<usize>()) {
         return EINVAL;
     }
-    let p = alloc_aligned(n, align.max(HEADER));
+    let p = alloc_aligned(n, align);
     if p.is_null() {
         return ENOMEM;
     }

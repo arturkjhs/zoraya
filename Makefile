@@ -968,11 +968,13 @@ CXX_LIBCXX := $(BUILD)/cxx-libcxx
 CXX_LIBCXX_STAMP := $(CXX_LIBCXX)/lct/.stamp
 LLVM_TREE := $(BUILD)/ports/work/llvm-20.1.8
 CXX_LIBCXX_TIMEOUT ?= 1500
-cxx-libcxx-tests: $(CXX_LIBCXX_STAMP)
-$(BUILD)/ports/obj/cxx.stamp:
+# The runtime first, then the tests, judged against the archives it left
+# (a changed patch, shim or libc.a rebuilds them).
+cxx-libcxx-tests:
 	@$(MAKE) -s -f ports/Makefile cxx
-$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt $(BUILD)/ports/obj/cxx.stamp
-	@$(MAKE) -s -f ports/Makefile cxx
+	@$(MAKE) --no-print-directory $(CXX_LIBCXX_STAMP)
+$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt \
+	  $(BUILD)/sysroot/usr/lib/libc++.a $(BUILD)/sysroot/usr/lib/libc++abi.a $(BUILD)/sysroot/usr/lib/libunwind.a $(BUILD)/sysroot/usr/lib/libc.a
 	rm -rf $(CXX_LIBCXX)/lct && mkdir -p $(CXX_LIBCXX)/lct
 	tests/cxx/libcxx-build.sh $(LLVM_TREE)/libcxx $(CXX_LIBCXX)/lct
 	@touch $@

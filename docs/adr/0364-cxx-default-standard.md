@@ -46,7 +46,7 @@ targets for this reason; the bare-metal target `zcc` uses defines nothing.
 
 ## Invariants
 - **INV-0364-1.** `zc++` without `-std=` compiles as C++23 (`__cplusplus` is `202302L`). *Check:* `make test-cxx`
-  (`tests/cxx/hello.cpp` is built without `-std=`; `cxxtest` too, and uses C++23's `std::atomic::wait`, which needs C++20).
+  (`tests/cxx/hello.cpp` is built without `-std=` and has `static_assert(__cplusplus == 202302L)`).
 
 ## Open questions
 - None.

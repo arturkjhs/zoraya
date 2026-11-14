@@ -2125,7 +2125,8 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   `ports/cxx/cxx.mk` compiles LLVM CMake's file lists with `zc++`, `ports/cxx/__config_site` is the configuration (exceptions,
   RTTI, threads over libposix's pthreads, localization with the C locale, `std::filesystem`, `random_device`, no time zone
   database, no `libc++experimental`, hardening `fast`). Patches `ports/patches/llvm/`: `0001` `random_device` over
-  `getentropy` (no `/dev/urandom`), `0002` `copy_file` without `sendfile`. Into `build/sysroot`: `usr/include/c++/v1`,
+  `getentropy` (no `/dev/urandom`), `0002` `copy_file` without `sendfile`, `0003` `std::thread::join` of the calling thread
+  throws `resource_deadlock_would_occur` (musl's `pthread_join` would wait for ever), `0004` (test support only) no shell. Into `build/sysroot`: `usr/include/c++/v1`,
   libunwind's headers in `usr/include`, `usr/lib/libc++.a` (2.5 MB), `libc++abi.a` (0.6 MB), `libunwind.a` (0.1 MB); about a
   minute to build with three jobs on the Mac mini. Not in `build/rootfs-posix` (ADR-0365, INV-0365-1): no compiler there builds C++.
 - **`zc++`** (`tools/zc++`, a link to `tools/zcc`, which takes C++ from its name): libc++'s headers before musl's,
@@ -2157,8 +2158,12 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   grants (`+r /work/granted`) listed and one it does not refused (`ENOENT` and the shell's hint), and the three ends of an uncaught
   exception; `tests/cxx/hello.cpp` by `posixrun`. `make test-cxx-libcxx`: libc++'s own run tests of
   `tests/cxx/libcxx-groups.txt` (`support.exception`, `support.rtti`, `support.dynamic`, `std/thread`,
-  `std/input.output/filesystems`: 481 programs, 9 left out by their lit directives or `tests/cxx/libcxx-excluded.txt`), built
-  by `tests/cxx/libcxx-build.sh` (a test that does not compile is an error) and run each by `posixrun` in `/work`. `make
+  `std/input.output/filesystems`: 450 programs run; 40 left out, 7 by their lit directives and 33 by
+  `tests/cxx/libcxx-excluded.txt`: two need `AF_UNIX`, and 31 filesystem tests failed on properties of the platform (mode bits
+  not enforced, FIFOs only in `/tmp`, no hard links, lexical `..`, times that never go back, no `statvfs`; one, `weakly_canonical`
+  of missing components, not analysed further)), built by `tests/cxx/libcxx-build.sh` (a test that does not compile is an
+  error; patch `llvm/0004` makes the filesystem tests' helper work without a shell) and run each by `posixrun` in `/work`
+  (99 s under HVF on the Mac mini). `make
   test-cxx-gtest`: GoogleTest's 27 self-checking test programs, death tests included (they `fork`, and the threadsafe style
   executes the program again), each through `gtrun` (`tests/cxx/gtrun.c`, `user/describe/posix/gtrun.cmd`), with the
   expectations of `tests/cxx/gtest-expect.txt`. `make ci-build` builds the runtime, GoogleTest and the libc++ subset, so that the
