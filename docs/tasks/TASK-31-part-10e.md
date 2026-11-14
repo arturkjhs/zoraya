@@ -164,9 +164,32 @@ steps (HVF); `make check` passed. Not run: `make check-ports` (its `__linux__` s
 backlog), `make test-apps`, NetSurf and Python builds (neither detects `sigsetjmp`: Python's source has none,
 NetSurf's is Duktape's compile-time option).
 
+### Third round: the gate review of tr, expr and diff, and the check of open_or_link
+
+**The gate (ADR-0336 item 2) is now met.** `toys/pending/{tr,expr,diff}.c` of the pinned 0.8.15 were read by a
+reviewer who did not port them (`docs/tasks/TASK-31-review-10e.md`, "Gate review of tr, expr and diff", branch
+`docs/review-10e`, commit `ea6f85b`), with a host build under ASan and UBSan. Verdict: enable `expr` and `diff`;
+enable `tr` only with a patch for G1. What changed:
+
+| Item | Result |
+|---|---|
+| G1 (error: tr's set buffer overflowed on a range or class), G2 (read past SET2, a NUL in SET2), G3 (a read error spun), G7 (`diff -F` read below its table) | **Fixed** by `ports/patches/toybox/0003-zoraya-bounds-in-tr-diff-expr.patch` (one or two lines each). On a host ASan build of the pinned source: G1's two sets and G7's `diff -F zzz` report `heap-buffer-overflow` before the patch and nothing after; `tr abc 'x\000y'` gives `xxx` before, `x`, NUL, `y` after; `tr a b < /tmp` spins before, `tr: read: Is a directory` (exit 1) after. toybox's own tests still pass on the patched build (tr 6/6, expr 44/44, diff 19/19). |
+| G4 (expr comparisons and arithmetic overflowed) | **Fixed** in the same patch: comparisons do not subtract, `+ - * / %` fail with `expr: overflow`, exit 2. Host: `expr 9223372036854775807 \> -1` printed `0` (UBSan: signed overflow), now `1`. |
+| G8 (the workloads barely touch the three) | `tests/posix/invariants.script` runs on the image: G1's two sets, G2, G3, G4, `expr 7 / 0` and `expr 1 + a` (exit 2), `tr -d '\r'`, `tr -s`, `tr -c`, `diff -u` with its hunk (exit 1), `diff -r` with `Only in` (exit 1). Shown by hand with the old toybox on the image: G2 gave `xxx`; G3's `tr` was still spinning after 5 s and was killed. G1 overflows silently on the image (no crash), so its step guards against a crash only; the ASan run above is G1's evidence. |
+| G5, G6, G9, G10 | Known limits on the pages (`diff.cmd`, `tr.cmd`, `expr.cmd`) and in `docs/design.md`. |
+| C1 | `Held::open_followed`'s doc comment says what the table walk does. |
+| C2 | The table walk is `zoraya_resolve::walk_table`, which `zosh` calls, with host tests: an absolute link outside the table refused, `../..` out of it refused, a link from one entry into another opened through that entry (its rights), a loop of links ended. Shown by hand: with a fallback to the first entry when no entry covers the path, two of the five tests fail. |
+| C3 | `open_or_link` and `link_target` refuse a reply whose `remaining` is longer than the path asked (`INVALID_ARGUMENT`), instead of panicking. |
+
+Run in the third round: `cargo test -q -p zoraya-resolve` 14 passed; the host ASan/UBSan builds and toybox's tests
+above; `make test-posix POSIX_SCRIPTS="tests/posix/invariants.script tests/posix/zosh.script
+tests/posix/zosh-userland.script tests/posix/w5.script tests/posix/w10.script" POSIX_ACCELS=auto`: `PASS: 121`, `94`,
+`228`, `45`, `17` steps; `make test-tour-gui POSIX_ACCELS=auto`: tour-gui 922 and room-gui 29 steps passed;
+`make check` passed.
+
 ### For the architect (fix pass)
 
-- ADR-0336 item 2's independent review of `tr`, `expr` and `diff` is still open (finding 3): waive it or have it done.
+- ADR-0336 item 2's independent review of `tr`, `expr` and `diff` is done (third round above): verdict met with patch 0003.
 - The image cache of ADR-0212 (item 10(a), ordered first on 2026-11-04) is not built; deferring it needs your word.
 - Refusing undescribed options (finding 4) makes `/bin/find`, `/bin/test`, `/bin/env` and `/bin/xargs` with `-` words
   unusable from `zosh` until a rule exists (ADR-0344 open question); the native `find` and scripts run by `sh` are
