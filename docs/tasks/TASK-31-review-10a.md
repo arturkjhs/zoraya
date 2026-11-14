@@ -21,7 +21,7 @@ All in the worktree of `work/10a` (and a detached scratch copy of `67b35e5` for 
 | `cargo test -p zoraya-term -p zoraya-width -p zoraya-shell` | 123 + 2 (replay) + 5 + 155 pass, 2 ignored |
 | `make test-gui GUI_RUNS="terminal:auto:1"` (HVF) | `PASS: 100 steps` |
 | `make check-host-paths` | passes |
-| A scan of every file in `crates/zoraya-term/recordings/`, `tests/gui/terminal.root/recordings/` and `tools/term-record/` for `/Users/`, `/home/`, `/private/`, `/var/folders`, the host's user and host name and e-mail addresses | nothing found |
+| A scan of every file in `crates/zoraya-term/recordings/`, `tests/gui/terminal.root/recordings/` and `tools/term-record/` for home-directory and temporary-directory paths, the host user and host name and e-mail addresses | nothing found |
 
 Hand breaks, each applied alone in the scratch copy and reverted (the test that fails is named):
 
