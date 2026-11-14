@@ -69,5 +69,20 @@
 < interrupts=0
 < background-ended
 < PSURF>
+# dash's builtin read from a here-document and from a pipe, and a script
+# piped into sh (dash's input from a pipe; ports/Makefile, --disable-tee),
+# then GNU config.sub's alias table, which reads its argument that way.
+> printf 'IFS=- read a b <<EOF\\nx-y\\nEOF\\necho "HEREDOC[$a/$b]"\\n' > /tmp/rd.sh; sh /tmp/rd.sh\r
+< HEREDOC[x/y]
+< PSURF>
+> echo x-y | (IFS=- read a b; echo "PIPE[$a/$b]")\r
+< PIPE[x/y]
+< PSURF>
+> echo 'echo PIPED-$((40 + 2))' | sh\r
+< PIPED-42
+< PSURF>
+> sh /work/w4-g/build-aux/config.sub sun4\r
+< sparc-sun-sunos4.1.1
+< PSURF>
 > exit\r
 < BROKER-STATS

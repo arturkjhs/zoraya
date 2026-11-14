@@ -273,9 +273,14 @@ $(DASH): $(LOCK) $(wildcard ports/patches/dash/*.patch)
 
 # dash's helpers (mksignames and the others) run on the host, with Zoraya's
 # signal numbers; configure needs no config.sub (it does not canonicalise
-# the host).
+# the host). --disable-tee: libposix's tee fails with ENOSYS (ADR-0100 item
+# 6), and dash falls back to reading a pipe a byte at a time only on EINVAL,
+# so with tee every read from a pipe that is not a terminal (the builtin read
+# from a here-document or a pipeline, a script piped into sh) ended at once
+# as end of file: GNU config.sub's `IFS=- read field1 ... <<EOF` read
+# nothing (TASK-31 10e, review finding 15).
 $(DASH_BIN): $(DASH) $(SYSROOT_STAMP) $(TARGET_SIGNALS) ports/config.site
-	@cd $(DASH) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-zoraya \
+	@cd $(DASH) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-zoraya --disable-tee \
 	  $(CROSS_TOOLS) CFLAGS="$(CROSS_CFLAGS)" \
 	  CC_FOR_BUILD="$(HOSTCC) -include $(TARGET_SIGNALS)",dash-configure)
 	rm -f $(DASH_BIN)
