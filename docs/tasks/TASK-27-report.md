@@ -829,3 +829,27 @@ Limits: IPv4 only; a name the web rule alone admits cannot use a `net.hosts` ent
 (`Local`, `EAI_NONAME`) gets NetSurf's error page, not the refusal page (ADR-0325's open question); the page is in the window's
 body, which a site can imitate (it grants nothing); curl and wget have no such page (ADR-0224 item 5's `REPORT` hint is not built);
 the web rule cannot be written as a `+net` or room word (a word `web` on a line is a host named `web`).
+
+### 9f-net: the review's findings (`docs/tasks/TASK-27-review-9f-net.md` on `docs/review-9f-net`)
+
+- **1 (must-fix), fixed.** The page no longer offers `+net any:PORT`: `zoraya_refusal_plain_host` mirrors the shell's
+  `parse_word`/`valid_name` and refuses `any`, `web` and a host whose last label is all digits but which is no dotted
+  address; such a host gets the page without a line. `make check-netsurf-refusal` tests hosts named `any`, `ANY`, `web`.
+- **2, not changed: proposed ADR-0328.** A URL typed on the line under `net web` still gets its own name rule, which
+  accepts private answers, so its name could rebind to 192.168.1.1:80 on later fetches. ADR-0324 item 2 says so; the
+  options (keep; public-only like the web rule, recommended; no rule) are in ADR-0328 for the architect.
+- **3, fixed.** SLIRP relays `two.web.test:8080` to the test server, so a leak through the port check is logged and fails
+  the recipe; mutant `W-web-name-any-port-gui` (tests: `make test-netsurf`).
+- **4, fixed.** The shown URL is cut at 1024 bytes with a mark, the host at 253; a URL too long to repeat gets the line
+  of the host's first page (`+net HOST:PORT netsurf SCHEME://HOST/`); the page always fits 16 KiB (tested at the worst
+  bytes). That line is not the refused URL: ADR-0325 item 3 does not foresee it, for the architect to note.
+- **5, fixed.** Patch 0008 reads curl's own lookup through `--wrap=getaddrinfo` and asks no second time. ADR-0325 item 1
+  and its Consequences still say "a second `getaddrinfo`": the mechanism changed, the rule (`EAI_SYSTEM`/`EACCES`) did
+  not.
+- **6, fixed.** The decoder refuses a web rule with any protocol but TCP, so `netd` does (host tests in `zoraya-abi` and
+  `zoraya-net`, mutant `W-web-rule-any-protocol`).
+- **8, 9, 10, fixed.** `grants` of a native command calls the untrusted-room web refusal (a third `web-refusal-call`);
+  `grants` shows every port range of a web rule and `any port`; tests for a redirect to a refused host and a refused
+  lookup (`make test-netsurf`), and hosts named `web` and `any` (shell and page host tests).
+- **7, not changed.** Other hosts of a public on-link subnet are reachable under `web` (ADR-0324 item 2 defines local as
+  ADR-0223 does); recorded in `docs/design.md`'s limits, an open question for ADR-0324.
