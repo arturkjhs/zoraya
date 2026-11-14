@@ -46,10 +46,15 @@
 < Stopped
 < PSURF> 
 > fg\r
-# "\nfirst" is the job's own line: fg echoes the command line, which holds
-# the words but not at the start of a line (TASK-29, V6).
-< \nfirst
-< \nsecond
+# Ctrl-C half a second after fg, while the continued `sleep 5` runs. That
+# the job goes on to its next child after fg is the next two runs' check
+# (end1, a word the echoed line does not hold). This step used to wait for
+# "first" and "second" before the Ctrl-C, which the line fg echoes gave at
+# once (TASK-29, V6), so it has always been this timing. Waiting for the
+# job's own two lines first, and so sending Ctrl-C during `sleep 30`, does
+# not end the job: it ran its 30 s and gave status 0 (candidate run
+# 43575482537). That is recorded as a defect in docs/backlog.md; this step
+# does not cover it.
 ~ 500 PSURF>
 > \x03
 < PSURF> 
