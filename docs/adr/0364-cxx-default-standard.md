@@ -18,6 +18,7 @@ targets for this reason; the bare-metal target `zcc` uses defines nothing.
 2. A build that names its own standard (`-std=c++17`, CMake's `CXX_STANDARD`) gets it.
 3. libc++'s headers must compile under every standard (driver 2), so the feature macro cannot depend on the standard.
 4. Nothing Linux is defined (INV-0109-2): `_GNU_SOURCE` is a feature-test macro of the C library, not a system's name.
+5. No patch of libc++'s headers to avoid the macro (CP-27).
 
 ## Considered options
 ### Option A: `-std=c++23` unless `-std=` or `-x` is on the line, and `-D_GNU_SOURCE` always (the recommendation)

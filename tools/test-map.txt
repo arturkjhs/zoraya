@@ -142,7 +142,7 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-regr
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
@@ -155,7 +155,18 @@ user/describe/posix/python3.cmd test-python test-files
 tests/python/                test-python test-python-regr
 tests/shell/python.script    test-python
 tests/shell/python-regr.script test-python-regr
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
+ports/cmake/                  test-cxx-gtest
+ports/patches/llvm/           test-cxx test-cxx-libcxx test-cxx-gtest
+ports/patches/googletest/     test-cxx-gtest
+tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+tools/zc++                    test-cxx test-cxx-libcxx test-cxx-gtest
+tests/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
+tests/cxx/libcxx-             test-cxx-libcxx
+tests/cxx/gtest               test-cxx-gtest
+user/describe/posix/cxxtest.cmd test-cxx test-files
+docs/adr/0366-surface-for-cxx.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-cxx test-cxx-libcxx test-cxx-gtest
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
@@ -224,3 +235,4 @@ user/describe/tests/diskfill.cmd test-files
 user/src/roomsclient.rs       test-files test-gui test-qemu test-keeper
 user/describe/tests/memhog.cmd test-files
 tests/shell/rooms.script      test-files
+user/describe/posix/gtrun.cmd  test-cxx-gtest test-files

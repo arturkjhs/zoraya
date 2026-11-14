@@ -145,6 +145,8 @@ measured T1 workloads).
 | NetSurf (netsurf-all) | 3.11 | GPL-2.0-only with the additional permission to link with OpenSSL (COPYING lines 8-15) (the browser), MIT (its libraries `libnsfb`, `libcss`, `libdom`, `libhubbub`, `libparserutils`, `libwapcaplet`, `libnsbmp`, `libnsgif`, `libnslog`, `libnspsl`, `libnsutils`, `libutf8proc`), as ADR-0109 shipped GPL ports | `/bin/netsurf` (TASK-27 9d, proposed ADR-0317, ADR-0318); built by `make netsurf` (no JavaScript, no SVG) |
 | libpng | 1.6.50 | libpng licence (permissive) | PNG images for NetSurf (9d) |
 | IJG libjpeg | 9f | IJG licence (permissive) | JPEG images for NetSurf (9d) |
+| LLVM (libc++, libc++abi, libunwind; LLVM libc's `shared/` headers) | 20.1.8 | Apache-2.0 WITH LLVM-exception | the C++ runtime every C++ program links, static, built by `zc++` into `build/sysroot` (TASK-30, proposed ADR-0360, ADR-0361); libc++'s test suite is a test input (`make test-cxx-libcxx`). Why not in-house: a C++ standard library and unwinder are not small; libc++ is clang's own and runs on musl |
+| GoogleTest | 1.18.0 | BSD-3-Clause | a test input only: built by CMake with `ports/cmake/zoraya.cmake`, its own tests run by `make test-cxx-gtest` (TASK-30, proposed ADR-0367); never in the image |
 | pkg-config | 0.29.2 | GPL-2.0 | host tool only, built into `build/ports/host` when the host has none; never linked (9d) |
 | GNU bison | 3.8.2 | GPL-3.0-or-later (with the Bison exception) | host tool only, built into `build/ports/host` when the host's is older than 3 (macOS ships 2.3; libnslog's grammar); never linked (9d). The host also needs perl, gperf and flex (CI image: `.github/ci/Dockerfile`) |
 

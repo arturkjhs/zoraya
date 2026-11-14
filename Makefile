@@ -975,7 +975,7 @@ $(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests
 	tests/cxx/libcxx-build.sh $(LLVM_TREE)/libcxx $(CXX_LIBCXX)/lct
 	@touch $@
 test-cxx-libcxx: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
-	rm -rf $(CXX_LIBCXX)/root && mkdir -p $(CXX_LIBCXX)/root/bin/lc $(CXX_LIBCXX)/root/work
+	rm -rf $(CXX_LIBCXX)/root && mkdir -p $(CXX_LIBCXX)/root/bin/lc $(CXX_LIBCXX)/root/work $(CXX_LIBCXX)/root/tmp
 	cp -R rootfs/. $(CXX_LIBCXX)/root/
 	cp $(CXX_LIBCXX)/lct/bin/* $(CXX_LIBCXX)/root/bin/lc/
 	$(CARGO) build -q -p zoraya-elf-check
@@ -988,7 +988,8 @@ test-cxx-libcxx: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
 
 # GoogleTest's own tests (make -f ports/Makefile gtest: CMake with
 # ports/cmake/zoraya.cmake), death tests among them (they fork, and the
-# threadsafe style executes the program again), each by posixrun in /work.
+# threadsafe style executes the program again), each by tests/cxx/gtrun.c
+# through the shell (user/describe/posix/gtrun.cmd).
 # tests/cxx/gtest.sh writes the script from the list the build left.
 CXX_GTEST := $(BUILD)/cxx-gtest
 CXX_GTEST_TIMEOUT ?= 1500
@@ -997,6 +998,7 @@ test-cxx-gtest: $(KERNEL) $(RUNNER) tools-storage
 	rm -rf $(CXX_GTEST) && mkdir -p $(CXX_GTEST)/root/bin/gt $(CXX_GTEST)/root/work
 	cp -R rootfs/. $(CXX_GTEST)/root/
 	cp $(BUILD)/gtest-tests/bin/* $(CXX_GTEST)/root/bin/gt/
+	tools/zcc -O2 -Wall -Werror -Wl,--strip-debug -o $(CXX_GTEST)/root/bin/gtrun tests/cxx/gtrun.c
 	tests/cxx/gtest.sh $(BUILD)/gtest-tests/list > $(CXX_GTEST)/script
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 128M --from $(CXX_GTEST)/root $(CXX_GTEST)/disk.img && \
@@ -1485,7 +1487,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python test-python-regr
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and

@@ -444,7 +444,12 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX
 	cp $(BUSYBOX_BIN) $(ROOTFS)/bin/busybox
 	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
+	@# Not the C++ runtime (ADR-0365): no compiler in the image builds C++.
+	rm -rf $(ROOTFS)/usr/include/c++ $(addprefix $(ROOTFS)/usr/,$(CXX_IMAGE_LEFT_OUT))
 	@touch $@
+# The C++ runtime's files outside usr/include/c++ (ADR-0365, INV-0365-1).
+CXX_IMAGE_LEFT_OUT := include/unwind.h include/libunwind.h include/__libunwind_config.h include/unwind_itanium.h \
+	include/unwind_arm_ehabi.h lib/libc++.a lib/libc++abi.a lib/libunwind.a
 
 # ---------------------------------------------------------------- C++ (TASK-30)
 
@@ -1114,6 +1119,9 @@ check-ports: | tools
 	  $(SVC_MEMBER)
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
+	@echo "== the POSIX image holds no C++ header or archive (INV-0365-1)"
+	@for f in include/c++ $(CXX_IMAGE_LEFT_OUT); do \
+	  if [ -e $(ROOTFS)/usr/$$f ]; then echo "build/rootfs-posix/usr/$$f is in the image"; exit 1; fi; done
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
 	@for l in dash make pdpmake busybox toybox tcc libtcc1 musl; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \

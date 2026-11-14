@@ -17,6 +17,7 @@ on the volume. Measured (`make test-cxx`): `std::locale()` is `"C"`, `std::local
 1. `iostream` is required (TASK-30), so localization is on.
 2. No locale data or service exists; adding one is a design of its own.
 3. Honesty about what a name gives (ADR-0320's driver 4 for the CPython port).
+4. No change to musl's code where its behaviour can be stated (CP-27).
 
 ## Considered options
 ### Option A: localization on, the C locale only, musl's behaviour for other names (the recommendation)
