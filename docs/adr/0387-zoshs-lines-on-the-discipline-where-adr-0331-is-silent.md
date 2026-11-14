@@ -53,9 +53,11 @@ by a channel to another program, which the line's end closes from the shell's si
   4. *Ctrl-C.* With the terminal in front, the signal characters are the discipline's (ISIG and the attributes) and
      the shell offers no kill: the program decides what Ctrl-C does, as on Unix. The offer stays for lines without
      the terminal.
-  5. *Every line in front is a line of the host.* A native line is started with no terminal: its end sends
-     `Restore { keep: false }`, a stop `Restore { keep: true }` and `fg` `Reinstate`, but it is never sent
-     `SIGWINCH`. This replaces `zoraya_shell::reset::BEFORE_PROMPT`.
+  5. *Every line in front is a line of the host.* A native line is started with no terminal: a stop sends
+     `Restore { keep: true }` and `fg` `Reinstate`, but it is never sent `SIGWINCH`, and its end sends
+     `Restore { keep: false }` before the next prompt, not at once, so that what it drew stays for the next command
+     of the same entry (`cat x.rec; sleep 9`) as it did with the stop-gap. A line with the terminal is restored when
+     it ends. This replaces `zoraya_shell::reset::BEFORE_PROMPT`.
   6. *Drain and the carriage return.* Before the shell takes any request of a line's connection, it relays what the
      line has written; `Drain` is then answered at once, and a `SetAttr` never changes the carriage returns of
      output written before it.
@@ -106,8 +108,8 @@ not outlive its line. Target 3: nothing here is per-machine.
   another line may; after it, only the chosen group. *Check:* `cargo test -p zoraya-tty`
   (`the_whole_line_in_front_reads_until_a_group_is_chosen`) and `cargo test -p zoraya-shell`
   (`every_program_of_the_line_in_front_reads_until_tcsetpgrp_chooses`).
-- **INV-0387-2.** A line in front sends `Restore` when it ends or stops, native or POSIX, and only a line with the
-  terminal is sent `SIGWINCH`. *Check:* `cargo test -p zoraya-shell`
+- **INV-0387-2.** A line in front sends `Restore` when it ends or stops, native or POSIX (a native line's end before
+  the next prompt), and only a line with the terminal is sent `SIGWINCH`. *Check:* `cargo test -p zoraya-shell`
   (`a_native_line_is_restored_but_never_told_a_size`).
 
 ## Open questions

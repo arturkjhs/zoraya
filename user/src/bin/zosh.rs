@@ -729,6 +729,9 @@ struct Z {
     tty_ends: BTreeMap<usize, (Handle, u32)>,
     /// The broker's notice channel (`HostTerminal`, proposed ADR-0388).
     host: Option<Handle>,
+    /// A line without the terminal ended in front: `Restore` before the
+    /// next prompt.
+    restore_at_prompt: bool,
     /// A line is being edited: background output goes above it.
     at_prompt: bool,
     /// The line typed to a foreground job so far, and an escape sequence
@@ -2174,7 +2177,16 @@ impl Z {
     /// and the attributes come back, and every connection made for it is
     /// closed, so that none outlives it into a later line of the same number.
     fn end_tty_line(&mut self, number: u32) {
-        let effects = self.tty.end_line(number);
+        let with_terminal = self.tty.front() == Some(number) && self.tty.takes_keys();
+        let mut effects = self.tty.end_line(number);
+        if !with_terminal && effects.contains(&Effect::Restore { keep: false }) {
+            // A line without the terminal (a native `cat` of a recording, in
+            // `cat x; sleep 9`) leaves its screen to the next command of the
+            // entry: the screen comes back before the next prompt (ADR-0387
+            // item 5).
+            effects.retain(|e| *e != Effect::Restore { keep: false });
+            self.restore_at_prompt = true;
+        }
         self.carry(effects, None);
         let ids: Vec<usize> = self
             .tty_ends
@@ -5487,6 +5499,7 @@ fn main() -> i32 {
         tty: tty_host::Host::new(),
         tty_ends: BTreeMap::new(),
         host: None,
+        restore_at_prompt: false,
         at_prompt: false,
         typed: Vec::new(),
         escape: Escape::No,
@@ -5604,8 +5617,12 @@ fn main() -> i32 {
         }
         let prompt = shell.host.prompt();
         out.clear();
-        // The screen is the shell's again: the line in front sent `Restore`
-        // when it ended or stopped (ADR-0331 item 9).
+        // The screen is the shell's again: a line with the terminal sent
+        // `Restore` when it ended or stopped (ADR-0331 item 9), one without
+        // it now (ADR-0387 item 5).
+        if core::mem::take(&mut shell.host.restore_at_prompt) {
+            term_message(&TermRestore { keep: false });
+        }
         editor.start(&prompt, &mut out);
         show(&out);
         shell.host.at_prompt = true;

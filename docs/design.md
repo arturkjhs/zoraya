@@ -515,7 +515,8 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
-  *Restore (10c):* `zosh` sends `Restore { keep: false }` when any line in front ends, `Restore { keep: true }` when it
+  *Restore (10c):* `zosh` sends `Restore { keep: false }` when a line with the terminal ends in front (a native line's
+  before the next prompt), `Restore { keep: true }` when it
   stops, and `Reinstate` at `fg` of a stopped one (ADR-0331 item 9, proposed ADR-0386 and ADR-0387); the stop-gap reset of
   10a is gone. A program that sets synchronized output (2026) and never ends it has every later update held 150 ms until
   its line ends, whose `Restore` ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
@@ -1357,7 +1358,8 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   tty description on each of fds 0 to 2 that is the terminal (neither redirected nor piped; a background line's fd 0
   stays empty) and `/dev/tty` in its table, its connections are served on the shell's port and closed at the line's
   end, keys of a line with the terminal go through the discipline, `Size` is one `SIGWINCH`, the output of such a
-  line is relayed with the carriage return its attributes say, and every line in front ends with `Restore`. The
+  line is relayed with the carriage return its attributes say, and a line in front ends with `Restore` (a native
+  line's before the next prompt). The
   whole line in front reads until a `tcsetpgrp` chooses a group (`Terminal::set_foreground_line`); there is no kill
   offer for a line with the terminal (ADR-0387). The broker beside `zosh` gives it a notice channel
   (`HostTerminal`): `GroupMade` and `ForegroundAsked`, with no reply, and a group made inside a line stays inside its

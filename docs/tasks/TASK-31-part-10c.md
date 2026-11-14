@@ -41,7 +41,7 @@ the "Remains" list. ADR numbers reserved: 0386 to 0389; 0386 to 0388 are written
    (`posix_child::Launch::tty`). Keys of a line with the terminal go through the discipline, `Size` calls
    `Host::size`, such a line's output is relayed by `Host::relay`, a paste goes to `Host::paste`; the effects are
    carried out in `Z::carry` (replies, echo, `job_signal`, the shell's own stop for `Suspend`, `Restore`,
-   `Reinstate`, the title). Every line in front, native ones too, ends with `Restore`; `zoraya_shell::reset` and its
+   `Reinstate`, the title). A line with the terminal ends with `Restore`, a native line before the next prompt (so `cat x.rec; sleep 9` keeps its screen for the `sleep`, as `tests/gui/terminal.script` reads it); `zoraya_shell::reset` and its
    notes in `docs/design.md` and `docs/backlog.md` are gone. The time is set before each call and `deadline()` is in
    the wait. Before taking a request the shell relays what the line wrote (so `Drain` is answered when the output is
    shown). A line's connections are closed at its end. `zoraya-tty` gains `set_foreground_line` (the whole line
@@ -58,6 +58,11 @@ the "Remains" list. ADR numbers reserved: 0386 to 0389; 0386 to 0388 are written
    without a pipe (`t_posix rawkeys`), Ctrl-C reaches the line in front only, a background program's read of the
    terminal is refused and it stops (`t_posix readerr`), raw mode survives Ctrl-Z and `fg`, and `sh` typed at the
    prompt gives `$ `, runs a command and exits. `sh` has no job control yet (it needs `open("/dev/tty")`).
+   Run in this session: `make test-posix` with `zosh`, `zosh-userland`, `tour` and `scenarios` (PASS, HVF), `make
+   test-gui GUI_RUNS="terminal:auto:1 terminal:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
+   selection:auto:1"` (PASS), `cargo test -p zoraya-tty -p zoraya-shell -p zoraya-broker`, `make check`. Not run:
+   the rest of `make test-changed`'s steps (boot, files, tour-gui, net, keeper, hand-run, apps, netsurf, posix-gui)
+   and every TCG run.
 11. A defect found on the way: a job-end packet of a job whose number a new job took was taken for the new job's end
    (a running background job was once reported `done`); `take_ended` now takes only a job whose `TERMINATED` is set.
 
