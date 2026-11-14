@@ -2213,6 +2213,26 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   `tests/python/regr.py`, CPython's regrtest over the CI subset `tests/python/regr-modules.txt`; `make test-python-long` (by hand,
   not in `make test`): the modules too slow for a CI job under TCG, `tests/python/regr-long.txt` (`test_queue`, `test_threading`;
   ADR-0320 item 9). Each step makes its own volume.
+- **The build hook for built-in modules** (backlog, "Three requests from outside work", item 1).
+  `make -f ports/Makefile python PYTHON_EXTRA_MODULES=DIR` builds a second python3, `build/rootfs-python-ext`, with the
+  modules of DIR linked in. DIR holds a `Setup` file (the lines of CPython's `Modules/Setup.local`: `NAME SOURCES -I... -L...
+  -l...`; the hook puts `*static*` before them and replaces `@EXTRA@` with DIR's absolute path, for `-I` and `-L`, and `@EXTRASRC@` with `zoraya-ext`, a link to DIR
+  in the unpacked source tree's `Modules/`, for the source files: `makesetup` looks a relative source up there and cannot take an
+  absolute one), the sources and prebuilt static libraries (for Zoraya, built with `tools/zcc`). Without
+  the variable the build is the one above, unchanged: same paths, same recipe. With it, the build, stage and root directories
+  have the suffix `-ext`, so that the default python3 is never touched, and the stamp depends on a hash of DIR's files
+  (names and content, `build/ports/obj/python-ext.hash`, rewritten only when it changes), so that a changed module or library
+  rebuilds it. Test: `make test-python-ext` (`tests/shell/python-ext.script`; the sample is `tests/python-ext/sample`, a C module
+  `zsample` over a static library `libzhelper.a`, built by `make -f ports/Makefile python-ext-sample`); it costs a second
+  CPython build and is in the `test-python` lane, run only with `PAR_LONG=1` locally. The value is given on the command line only (an environment value is refused, and the top-level Makefile refuses it
+  altogether: it would build `-ext` and leave the tests on the default python3); its path may hold only `A-Za-z0-9._/+-` (it is
+  put into shell and `sed` commands; anything else is refused with a message), while names inside it may hold blanks and links
+  (the hash follows links). The `-ext` build's logs are `python-ext*.log`. `tools/test-par.sh` builds it before the lanes when
+  `test-python-ext` runs. Limits: the whole CPython is built again
+  (the default build's objects are not reused); the CI ports cache (key: `ports/**`...) holds the default python3 only, so a
+  CI job that wanted a cached `-ext` build would add DIR's hash to its key; a library built from an `ar` that stamps times changes
+  the hash at each rebuild; modules are built in, never shared (no `dlopen`), and C++ modules need their runtime library named in
+  the `Setup` line.
 - **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
   `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
   `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them

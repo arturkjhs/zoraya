@@ -751,8 +751,21 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 PYVER := $(call lock_ver,python)
 PYMM := $(basename $(PYVER))
 PYTHON_SRC := $(WORK)/Python-$(PYVER)
-PYTHON_ROOT := $(ROOT)/build/rootfs-python
-PYTHON_BUILD := $(WORK)/python-build
+# PYTHON_EXTRA_MODULES=DIR (the build hook, docs/design.md): the directory's Setup
+# fragment, sources and static libraries are linked into python3 as built-in
+# modules. With it set, every path of the build gets the suffix -ext, so that the
+# default python3 (build/rootfs-python) is never touched; without it nothing here
+# changes. The stamp also depends on a hash of the directory's content.
+# Only on the command line (make -f ports/Makefile python PYTHON_EXTRA_MODULES=DIR): a value
+# left in the environment must not switch the build to -ext without being asked.
+ifeq ($(origin PYTHON_EXTRA_MODULES),environment)
+$(error PYTHON_EXTRA_MODULES is set in the environment: give it on the command line, make -f ports/Makefile python PYTHON_EXTRA_MODULES=DIR)
+endif
+PYEXT := $(strip $(PYTHON_EXTRA_MODULES))
+export PYEXT
+PYEXT_SUFFIX := $(if $(PYEXT),-ext)
+PYTHON_ROOT := $(ROOT)/build/rootfs-python$(PYEXT_SUFFIX)
+PYTHON_BUILD := $(WORK)/python-build$(PYEXT_SUFFIX)
 HOSTPY_PREFIX := $(PORTS)/hostpython
 HOSTPY := $(HOSTPY_PREFIX)/bin/python$(PYMM)
 $(PYTHON_SRC): $(LOCK) $(wildcard ports/patches/python/*.patch)
@@ -837,7 +850,30 @@ PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dump
 	--with-openssl=$(DEPS) --without-system-ffi --without-readline --without-mimalloc \
 	--without-doc-strings --disable-test-modules
 python: $(PYTHON_ROOT)/.stamp
-PYTHON_STAGE := $(PORTS)/python-stage
+# The hook's sample (tests/python-ext/sample): the directory copied to
+# build/python-ext-sample, with lib/libzhelper.a built by zcc, the prebuilt static
+# library its Setup line links. Rebuilt when a source changes.
+PYEXT_SAMPLE := $(ROOT)/build/python-ext-sample
+python-ext-sample: $(DEPS)/lib/libpyshim.a
+	rm -rf $(PYEXT_SAMPLE) && mkdir -p $(PYEXT_SAMPLE)/lib $(OBJ)/apps
+	cp tests/python-ext/sample/* $(PYEXT_SAMPLE)/
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/zhelper.o tests/python-ext/sample/zhelper.c
+	$(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $(PYEXT_SAMPLE)/lib/libzhelper.a $(OBJ)/apps/zhelper.o
+.PHONY: python-ext-sample
+PYTHON_STAGE := $(PORTS)/python-stage$(PYEXT_SUFFIX)
+# The hook's content hash: every file of the directory, by name and content. The
+# file is written only when the hash changes, so that the stamp is rebuilt only then.
+PYEXT_HASH := $(OBJ)/python-ext.hash
+ifneq ($(PYEXT),)
+PYEXT_DEP := $(PYEXT_HASH)
+$(PYEXT_HASH): FORCE
+	@# DIR goes into shell and sed commands: only [A-Za-z0-9._/+-] (a space, a quote, |, & or $$ would break them).
+	@[ -z "$$(printf %s "$$PYEXT" | tr -d 'A-Za-z0-9._/+-')" ] || { echo "python: PYTHON_EXTRA_MODULES=$$PYEXT has a character outside A-Za-z0-9._/+-: use another path"; exit 1; }
+	@test -f "$(PYEXT)/Setup" || { echo "python: PYTHON_EXTRA_MODULES=$(PYEXT) has no Setup file"; exit 1; }
+	@# Every file, links followed, names with blanks too (-print0); a failing shasum fails the recipe.
+	@mkdir -p $(dir $@) && cd "$(PYEXT)" && find -L . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > $@.list && shasum -a 256 < $@.list > $@.new
+	@if cmp -s $@ $@.new; then rm -f $@.new; else mv $@.new $@; fi
+endif
 # What the volume does not need: the test suite (make test-python takes its
 # own subset from the stage), IDLE, tkinter and turtle, ensurepip, the
 # embedding's configuration and the documentation topics. Sizes: docs/design.md.
@@ -878,7 +914,7 @@ check-python-cache:
 	  echo "check-python-cache: trees there, yet make would make them again:"; cat $(PYCACHE_CHECK)/present.txt; exit 1; fi
 	@rm -rf $(PYCACHE_CHECK)
 	@echo "check-python-cache: a cache hit unpacks the source and builds the host python again; with both there, nothing"
-$(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a $(DEPS)/lib/libsqlite3.a $(DEPS)/lib/libpyshim.a $(DEPS)/lib/libzshim.a ports/config.site
+$(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a $(DEPS)/lib/libsqlite3.a $(DEPS)/lib/libpyshim.a $(DEPS)/lib/libzshim.a ports/config.site $(PYEXT_DEP)
 	@$(PYTHON_SRC_TREE)
 	@$(HOSTPY_TREE)
 	rm -rf $(PYTHON_BUILD) $(PYTHON_STAGE) $(PYTHON_ROOT) && mkdir -p $(PYTHON_BUILD)
@@ -886,14 +922,24 @@ $(PYTHON_ROOT)/.stamp: $(PYTHON_SRC_STAMP) $(HOSTPY_STAMP) $(DEPS)/lib/libssl.a 
 	  $(PYTHON_SRC)/configure $(PYTHON_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include -D_PYTHREAD_NAME_MAXLEN=15" \
 	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lpyshim -lzshim" \
 	  ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz" \
-	  LIBSQLITE3_CFLAGS="-I$(DEPS)/include" LIBSQLITE3_LIBS="-L$(DEPS)/lib -lsqlite3",python-configure)
-	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(PYTHON_BUILD) -j3,python)
-	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(PYTHON_BUILD) install DESTDIR=$(PYTHON_STAGE),python-install)
+	  LIBSQLITE3_CFLAGS="-I$(DEPS)/include" LIBSQLITE3_LIBS="-L$(DEPS)/lib -lsqlite3",python-configure$(PYEXT_SUFFIX))
+	@# The hook: a Setup.local that makesetup reads; @EXTRA@ is the directory's absolute
+	@# path (a relative source name would be looked up in CPython's Modules/). *static*:
+	@# built in, never a shared object (no dlopen).
+	@# configure made Makefile and Modules/config.c a moment ago: make them older than Setup.local,
+	@# so that make runs makesetup again (a same-second timestamp would keep them).
+	@# makesetup looks a relative source up in CPython's Modules/ and makes an absolute one's object
+	@# name from its whole path, so the sources are named through a link there (@EXTRASRC@).
+	@if [ -n "$(PYEXT)" ]; then touch -t 200001010000 $(PYTHON_BUILD)/Makefile $(PYTHON_BUILD)/Modules/config.c && \
+	  ln -sfn "$(abspath $(PYEXT))" $(PYTHON_SRC)/Modules/zoraya-ext && mkdir -p $(PYTHON_BUILD)/Modules/zoraya-ext && \
+	  { echo '*static*'; sed -e 's|@EXTRASRC@|zoraya-ext|g' -e 's|@EXTRA@|$(abspath $(PYEXT))|g' "$(PYEXT)/Setup"; } > $(PYTHON_BUILD)/Modules/Setup.local; fi
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(PYTHON_BUILD) -j3,python$(PYEXT_SUFFIX))
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(PYTHON_BUILD) install DESTDIR=$(PYTHON_STAGE),python-install$(PYEXT_SUFFIX))
 	@# The byte code is compiled once, by the host's python of the same version, and
 	@# is never checked against the source (unchecked-hash): a volume keeps no
 	@# modification time the check could rely on, and nothing here writes a .pyc.
 	find $(PYTHON_STAGE)/usr/lib/python$(PYMM) -name __pycache__ -type d -prune -exec rm -rf {} +
-	@$(call logged,$(HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python$(PYMM) $(PYTHON_STAGE)/usr/lib/python$(PYMM),python-compileall)
+	@$(call logged,$(HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python$(PYMM) $(PYTHON_STAGE)/usr/lib/python$(PYMM),python-compileall$(PYEXT_SUFFIX))
 	mkdir -p $(PYTHON_ROOT)/bin $(PYTHON_ROOT)/usr/lib
 	cp $(PYTHON_STAGE)/usr/bin/python$(PYMM) $(PYTHON_ROOT)/bin/python3
 	cp -R $(PYTHON_STAGE)/usr/lib/python$(PYMM) $(PYTHON_ROOT)/usr/lib/

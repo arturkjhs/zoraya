@@ -306,6 +306,11 @@ For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.
    kept (network, a writable directory, their own directory per ADR-0341), and how a person sees and revokes them.
    Design first, as proposed ADRs (numbers from 0380 to 0399 if TASK-31's parts leave them, otherwise ask the architect).
 
+**Left over from the python3 build hook (review of work/py-hook, TASK-31-review-py-hook):** write `Setup.local` and the link before
+`configure` (configure's own makesetup then reads it, and the time trick on `Makefile` and `config.c` goes); sources in a
+subdirectory of DIR need their output directory made in the build tree; a `*shared*` line in DIR's `Setup` builds a module that
+cannot be loaded (no `dlopen`), so the hook should refuse it; the `-ext` build is not in the build artifact or the ports cache.
+
 ## Decisions on `work/test-fixes-2` and 10e (the architect, 2026-11-14)
 
 - **`work/test-fixes-2` starts with** the `libc.a` relink that makes the build job rebuild every port (audit T1), **then**

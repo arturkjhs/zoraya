@@ -1,0 +1,7 @@
+# A Setup fragment for the python3 build hook (PYTHON_EXTRA_MODULES, docs/design.md):
+# the lines of CPython's Modules/Setup.local. In a line, the word EXTRA between
+# at-signs stands for this directory's absolute path (for -I and -L), and EXTRASRC
+# between at-signs for the name of a source file's directory (CPython's makesetup
+# wants it relative). lib/libzhelper.a is a prebuilt static library the test
+# builds (make -f ports/Makefile python-ext-sample).
+zsample @EXTRASRC@/zsample.c -I@EXTRA@ -L@EXTRA@/lib -lzhelper

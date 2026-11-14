@@ -48,6 +48,7 @@ make test-hand-run
 make test-apps
 make test-netsurf
 make test-python
+make test-python-ext
 make test-python-regr
 make test-cxx
 make test-cxx-libcxx
