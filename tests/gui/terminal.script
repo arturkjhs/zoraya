@@ -105,13 +105,13 @@ screen ~> _
 # A recorded full-screen program (ADR-0332 item 10, TASK-31 10a): the bytes
 # `less` wrote to a terminal on the host (crates/zoraya-term/recordings,
 # cut by tools/term-record/gui-files.sh), played by cat, and held on the
-# screen by a `sleep` (the shell resets the terminal before the next prompt,
+# screen by a `sleep` that Ctrl-C ends (the shell resets the terminal before the next prompt,
 # as it must until part 10c's Restore: the program's screen is read while the
 # command still runs). The screen is the alternate one, the text is 256-colour
 # and direct-colour (the last text row), and the program leaves the cursor on
 # its last row. When the command ends the shell's own screen is back, and the
 # prompt is clean.
-type cat /recordings/less-end.rec; sleep 12\r
+type cat /recordings/less-end.rec; sleep 300\r
 window
 screen line 49: the quick brown fox jumps over the lazy dog
 screen line 50: the quick brown fox jumps over the lazy dog
@@ -120,8 +120,9 @@ screen line 70: the quick brown fox jumps over the lazy dog
 screen red bold blue_background,_yellow_text orange
 screen (END)_
 shot terminal-fullscreen
+# Ctrl-C ends the sleep (and so the wait: a large display or TCG reads slowly).
+chord ctrl c
 window
-screen ~> cat /recordings/less-end.rec; sleep 12
 screen ~> _
 type echo clean\r
 # The screen was full and scrolled: look again from the top.

@@ -1673,7 +1673,8 @@ mod tests {
         let mut look = Look::new(Scale::ONE, Appearance::Light);
         let (columns, rows) = look.grid_for(w as u32, h as u32);
         let mut term = zoraya_term::Term::new(columns, rows);
-        term.write("zosh$ cat a.txt\nhi звіт-2026.txt příklad.txt\nzosh$ ".as_bytes());
+        // A line feed keeps the column (ADR-0332 item 2): the shell writes the carriage return.
+        term.write("zosh$ cat a.txt\r\nhi звіт-2026.txt příklad.txt\r\nzosh$ ".as_bytes());
         let (sw, sh) = look.surface_size(columns, rows);
         let mut surface = vec![0u32; sw * sh];
         look.clear(&mut surface);
