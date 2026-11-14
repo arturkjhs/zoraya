@@ -34,6 +34,7 @@ pub const CTRL_K: u8 = 11;
 pub const CTRL_L: u8 = 12;
 pub const CTRL_R: u8 = 18;
 pub const CTRL_U: u8 = 21;
+pub const CTRL_V: u8 = 22;
 pub const CTRL_W: u8 = 23;
 pub const CTRL_Z: u8 = 26;
 pub const ESC: u8 = 27;
@@ -77,6 +78,31 @@ pub enum Key {
     Line(String),
     /// Ctrl-C at the prompt: the entry was dropped.
     Interrupt,
+}
+
+/// A key being quoted: how far its bytes have come.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quote {
+    /// The first byte.
+    First,
+    /// After `ESC`.
+    Escape,
+    /// In `ESC [`, up to its final byte.
+    Csi,
+    /// After `ESC O`: one byte more.
+    Ss3,
+}
+
+/// What a paste did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pasted {
+    /// Characters put in the line.
+    pub chars: usize,
+    /// Line ends in the paste: each made a continuation line.
+    pub breaks: usize,
+    /// The line, or its continuation, was full: the rest of the paste was
+    /// dropped.
+    pub cut: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -130,6 +156,8 @@ pub struct Editor {
     utf8: Vec<u8>,
     search: Option<Search>,
     tabbed: bool,
+    /// Ctrl+V was pressed: the next key is shown as it is sent (ADR-0383).
+    quote: Option<Quote>,
     pub options: Options,
     /// The terminal's state: the line shown, the cursor's column, and
     /// whether the editor still knows where the line starts.
@@ -222,6 +250,7 @@ impl Editor {
             utf8: Vec::new(),
             search: None,
             tabbed: false,
+            quote: None,
             options,
             shown_suggestion: false,
             row: 0,
@@ -283,6 +312,7 @@ impl Editor {
         self.typed = None;
         self.search = None;
         self.tabbed = false;
+        self.quote = None;
         self.row = 0;
         self.shown_suggestion = false;
         out.push_str(&self.prompt);
@@ -623,6 +653,62 @@ impl Editor {
         i
     }
 
+    /// Where the next word ends: past spaces, then past the word.
+    fn word_end(&self) -> usize {
+        let mut i = self.cursor;
+        while i < self.line.len() && self.line[i] == ' ' {
+            i += 1;
+        }
+        while i < self.line.len() && self.line[i] != ' ' {
+            i += 1;
+        }
+        i
+    }
+
+    fn move_to(&mut self, at: usize, out: &mut String, assist: &mut dyn Assist) {
+        if self.search.is_some() {
+            self.end_search(true, out, assist);
+        }
+        if at != self.cursor {
+            self.cursor = at;
+            self.refresh_with(out, Some(assist));
+        }
+    }
+
+    fn delete_word(&mut self, out: &mut String, assist: &mut dyn Assist) {
+        let start = self.word_start();
+        self.line.drain(start..self.cursor);
+        self.cursor = start;
+        self.refresh_with(out, Some(assist));
+    }
+
+    /// One byte of a key being quoted (Ctrl+V): its bytes go into the line as
+    /// text, `ESC` as `^[` and a control character as `^` and its letter, so
+    /// that a person sees what a key sends. A letter that is not ASCII is
+    /// typed as it is.
+    fn quoted(&mut self, stage: Quote, byte: u8, out: &mut String, assist: &mut dyn Assist) -> Key {
+        let shown = match byte {
+            0x7f => "^?".to_string(),
+            b if b < 0x20 => format!("^{}", char::from(b + 0x40)),
+            b if b < 0x7f => char::from(b).to_string(),
+            _ => {
+                self.quote = None;
+                return self.key(byte, out, assist);
+            }
+        };
+        self.quote = match (stage, byte) {
+            (Quote::First, 0x1b) => Some(Quote::Escape),
+            (Quote::Escape, b'[') => Some(Quote::Csi),
+            (Quote::Escape, b'O') => Some(Quote::Ss3),
+            (Quote::Csi, 0x20..=0x3f) => Some(Quote::Csi),
+            _ => None,
+        };
+        for c in shown.chars() {
+            self.typed_char(c, out, assist);
+        }
+        Key::Edited
+    }
+
     fn complete(&mut self, out: &mut String, assist: &mut dyn Assist) {
         let text = self.text();
         let cursor_byte: usize = self.line[..self.cursor].iter().map(|c| c.len_utf8()).sum();
@@ -728,6 +814,10 @@ impl Editor {
         if byte == CTRL_C {
             self.escape = Escape::None;
             self.utf8.clear();
+            self.quote = None;
+        }
+        if let Some(stage) = self.quote {
+            return self.quoted(stage, byte, out, assist);
         }
         match self.escape {
             Escape::Started => {
@@ -737,6 +827,19 @@ impl Editor {
                         Escape::Csi
                     }
                     b'O' => Escape::Single,
+                    // Alt+b, Alt+f and Alt+Backspace: a word back, a word
+                    // on, delete a word back (ADR-0383).
+                    b'b' | b'f' | DELETE | BACKSPACE => {
+                        if self.search.is_some() {
+                            self.end_search(true, out, assist);
+                        }
+                        match byte {
+                            b'b' => self.move_to(self.word_start(), out, assist),
+                            b'f' => self.move_to(self.word_end(), out, assist),
+                            _ => self.delete_word(out, assist),
+                        }
+                        Escape::None
+                    }
                     _ => {
                         // Esc alone ends a search.
                         if self.search.is_some() {
@@ -831,10 +934,12 @@ impl Editor {
                 Key::Edited
             }
             CTRL_W => {
-                let start = self.word_start();
-                self.line.drain(start..self.cursor);
-                self.cursor = start;
-                self.refresh_with(out, Some(assist));
+                self.delete_word(out, assist);
+                Key::Edited
+            }
+            CTRL_V => {
+                // The next key is shown as it is sent: `^[[1;5C` for Ctrl+Right.
+                self.quote = Some(Quote::First);
                 Key::Edited
             }
             CTRL_L => {
@@ -939,6 +1044,10 @@ impl Editor {
         match (final_byte, params.as_str()) {
             (b'A', _) => self.older(out, assist),
             (b'B', _) => self.newer(out, assist),
+            // Ctrl+Left, Ctrl+Right, Alt+Left and Alt+Right: a word (`CSI 1 ; 5 D`
+            // and `CSI 1 ; 3 D`, ADR-0332 item 7).
+            (b'D', "1;5" | "1;3") => self.move_to(self.word_start(), out, assist),
+            (b'C', "1;5" | "1;3") => self.move_to(self.word_end(), out, assist),
             (b'C', _) => {
                 if self.cursor < self.line.len() {
                     self.cursor += 1;
@@ -971,6 +1080,72 @@ impl Editor {
             _ => {}
         }
         Key::Edited
+    }
+
+    /// Whether the entry holds as much as it may (`MAX_CHARS`, 256 lines).
+    fn full(&self) -> bool {
+        self.lines.iter().map(|l| width_of(l) + 1).sum::<usize>() + self.line.len() >= MAX_CHARS
+    }
+
+    /// Takes a paste (ADR-0332 item 8, ADR-0384, INV-0332-5): `text` is what
+    /// the shell cleaned, so it holds no control character but a tab (a space
+    /// here) and a newline. It goes in at the cursor and never runs: a
+    /// newline ends a line of the entry, as a continuation line, and the
+    /// person's Enter on the last line is what sends the entry. The part of
+    /// the line after the cursor stays after the pasted text.
+    pub fn paste(&mut self, text: &str, out: &mut String, assist: &mut dyn Assist) -> Pasted {
+        if self.search.is_some() {
+            self.end_search(true, out, assist);
+        }
+        self.back = 0;
+        self.typed = None;
+        self.tabbed = false;
+        self.shown_suggestion = false;
+        let tail = self.line.split_off(self.cursor);
+        let mut done = Pasted {
+            chars: 0,
+            breaks: 0,
+            cut: false,
+        };
+        for c in text.chars() {
+            match c {
+                '\n' => {
+                    if self.lines.len() >= 256 || self.full() {
+                        done.cut = true;
+                        break;
+                    }
+                    self.settle(out, assist);
+                    out.push('\n');
+                    let line = self.text();
+                    self.lines.push(line);
+                    self.line.clear();
+                    self.row = 0;
+                    out.push_str(CONTINUATION);
+                    done.breaks += 1;
+                }
+                c if c.is_control() && c != '\t' => {}
+                c => {
+                    if self.full() {
+                        done.cut = true;
+                        break;
+                    }
+                    self.line.push(if c == '\t' { ' ' } else { c });
+                    done.chars += 1;
+                }
+            }
+        }
+        self.cursor = self.line.len();
+        self.line.extend(tail);
+        self.refresh_with(out, Some(assist));
+        if done.cut {
+            self.settle(out, assist);
+            out.push_str(&format!(
+                "\nzosh: paste: only the first {} characters fit\n",
+                done.chars
+            ));
+            self.redraw(out);
+        }
+        done
     }
 
     fn enter(&mut self, out: &mut String, assist: &mut dyn Assist) -> Key {

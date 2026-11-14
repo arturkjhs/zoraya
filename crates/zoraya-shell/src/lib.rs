@@ -16,6 +16,7 @@ pub mod glob;
 pub mod grants;
 pub mod jobs;
 pub mod netgrant;
+pub mod paste;
 pub mod record;
 pub mod reset;
 pub mod syntax;

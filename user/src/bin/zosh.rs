@@ -40,8 +40,8 @@ use zoraya_command::Parsed;
 use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
 use zoraya_proto_term::{
-    Input as TermInput, MAX_OUTPUT, MAX_TITLE, Output as TermOutput, Size as TermSize,
-    Title as TermTitle,
+    Input as TermInput, MAX_OUTPUT, MAX_PASTE, MAX_TITLE, Output as TermOutput, Paste as TermPaste,
+    Size as TermSize, Title as TermTitle,
 };
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_shell::crlf::Crlf;
@@ -638,6 +638,10 @@ struct Z {
     columns: usize,
     /// Keys read but not yet used: typed after an Enter, for the next prompt.
     pending: Vec<u8>,
+    /// The parts of a paste not yet whole, and the pastes whole and waiting
+    /// for their place in the key stream (`zoraya_shell::paste`).
+    paste: zoraya_shell::paste::Assembler,
+    pastes: zoraya_shell::paste::Store,
     relays: Vec<Relay>,
     feeds: Vec<Feed>,
     next_stream: u64,
@@ -2527,7 +2531,9 @@ impl Z {
     fn read_keys(&mut self) -> Vec<u8> {
         let mut keys = core::mem::take(&mut self.pending);
         if let Some(end) = terminal() {
-            let mut message = [0u8; 512];
+            // Large enough for any message of the terminal: a read into less
+            // is an error, and a `Paste` carries `MAX_PASTE` bytes.
+            let mut message = [0u8; 512 + MAX_PASTE];
             let mut handles = [end; 1];
             loop {
                 let length = match channel_read(end, &mut message, &mut handles) {
@@ -2548,7 +2554,23 @@ impl Z {
                                 self.jobs
                                     .queue(format!("[input: {} bytes dropped]\n", m.dropped));
                             }
-                            keys.extend_from_slice(m.bytes.0);
+                            // No key is a paste's place (`zoraya_shell::paste`).
+                            keys.extend(
+                                m.bytes
+                                    .0
+                                    .iter()
+                                    .filter(|b| !zoraya_shell::paste::is_mark(**b)),
+                            );
+                        }
+                    }
+                    // A part of a paste (ADR-0332 item 8): kept until the last,
+                    // cleaned, and put in the key stream at its place.
+                    Ok(5) => {
+                        if let Ok((_, m)) = decode::<TermPaste<'_>>(bytes, 0)
+                            && let Some(text) = self.paste.part(m.bytes.0, m.last)
+                            && !text.is_empty()
+                        {
+                            keys.push(self.pastes.put(text));
                         }
                     }
                     Ok(3) => {
@@ -2654,6 +2676,14 @@ impl Z {
                             // ADR-0158 rule 4: it stays in front.
                             show(&format!("[{number}] did not stop: {}\n", e.line));
                         }
+                    }
+                    // A paste while a program runs: it is not sent to the
+                    // program (the paste path to a program is part 10c's).
+                    k if zoraya_shell::paste::is_mark(k) => {
+                        let _ = self.pastes.take(k);
+                        show_bytes(&echo);
+                        echo.clear();
+                        show("zosh: paste: not sent: a program is running\n");
                     }
                     k => self.type_key(number, k, &mut echo),
                 }
@@ -2922,7 +2952,12 @@ impl Z {
             };
             for packet in &packets[..count] {
                 if packet.key == CONSOLE_KEY {
-                    if let Some(k) = self.read_keys().first() {
+                    // A paste is no key here: it is dropped.
+                    let keys = self.read_keys();
+                    for k in &keys {
+                        let _ = self.pastes.take(*k);
+                    }
+                    if let Some(k) = keys.iter().find(|k| !zoraya_shell::paste::is_mark(**k)) {
                         return *k;
                     }
                 } else {
@@ -4950,6 +4985,8 @@ fn main() -> i32 {
         rows: 24,
         columns: 80,
         pending: Vec::new(),
+        paste: zoraya_shell::paste::Assembler::default(),
+        pastes: zoraya_shell::paste::Store::default(),
         relays: Vec::new(),
         feeds: Vec::new(),
         next_stream: 0,
@@ -5099,6 +5136,14 @@ fn main() -> i32 {
             let mut screen = Screen::default();
             for (i, k) in keys.iter().enumerate() {
                 out.clear();
+                // A paste goes into the line and never runs it.
+                if zoraya_shell::paste::is_mark(*k) {
+                    if let Some(text) = shell.host.pastes.take(*k) {
+                        editor.paste(&text, &mut out, &mut Helper { shell: &mut shell });
+                        screen.add(&out);
+                    }
+                    continue;
+                }
                 let key = editor.key(*k, &mut out, &mut Helper { shell: &mut shell });
                 screen.add(&out);
                 match key {

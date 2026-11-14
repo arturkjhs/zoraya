@@ -12,6 +12,7 @@ zoraya-abi = { path = "../zoraya-abi" }
 zoraya-describe = { path = "../zoraya-describe" }
 zoraya-command = { path = "../zoraya-command" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }
+zoraya-proto-term = { path = "../zoraya-proto-term" }
 zoraya-resolve = { path = "../zoraya-resolve" }
 zoraya-http = { path = "../zoraya-http" }
 zoraya-width = { path = "../zoraya-width" }
