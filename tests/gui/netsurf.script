@@ -93,7 +93,12 @@ screen zosh: netsurf: the arguments are not ones its description gives
 type netsurf --ca_path=/tmp\r
 screen zosh: netsurf: the arguments are not ones its description gives
 # HTTPS against the test PKI's root (the same pages, a trusted certificate).
-type netsurf https://test.zoraya:@TLSVALID@/ns/page\r
+# test.zoraya is the test server, 203.0.113.2 in net.hosts: the gateway, which
+# a URL's name on another port than 80 and 443 does not reach under `net web`
+# (its rule takes public, non-local answers only, ADR-0328); the `+net` word
+# names the host, local answers included (ADR-0223), as the refusal page
+# offers.
+type +net test.zoraya:@TLSVALID@ netsurf https://test.zoraya:@TLSVALID@/ns/page\r
 pause 20000
 region 110 175 150 40 0000ff
 region 110 235 80 40 00ff00
@@ -105,7 +110,7 @@ pause 500
 type echo closed2\r
 screen closed2
 # An expired certificate is refused by the roots, as for curl: no page.
-type netsurf https://expired.zoraya:@TLSEXPIRED@/ns/page\r
+type +net expired.zoraya:@TLSEXPIRED@ netsurf https://expired.zoraya:@TLSEXPIRED@/ns/page\r
 pause 15000
 shot netsurf-refused
 region 110 175 40 20 9e9e9e
@@ -146,10 +151,14 @@ region 110 175 150 20 00ffff
 region 110 215 150 20 ff8000
 region 110 375 150 20 808000
 # `web` between the gaps at 624..629 and 662..667 (the fonts and tls pills
-# keep their places; the net pill is this URL's).
+# keep their places). The URL's name on port 80 has no pill of its own
+# (ADR-0328, INV-0328-1: the web rule admits it through its public answers),
+# so left of the gap is the title bar, where a `+net one.web.test:80` pill
+# would end.
 region 625 116 4 8 f1f1f3
 region 633 117 2 6 fcfcfc
 region 656 117 2 6 fcfcfc
+region 560 116 60 8 f1f1f3
 shot netsurf-web
 # The second host by a link: its page is magenta.
 click 150 188
@@ -219,5 +228,36 @@ click 300 87
 pause 500
 type echo closed-web\r
 screen closed-web
+# ADR-0328 (INV-0328-1): a URL on another port than 80 and 443. Its name's
+# answer is public (two.web.test, relayed on 8080 to the server): the
+# public-only name rule reaches it, and the page is lime; the window's pill
+# is `+net two.web.test:8080 public` beside `web`.
+type netsurf http://two.web.test:8080/ns/web-port\r
+pause 15000
+region 400 300 200 200 80ff00
+region 625 116 4 8 f1f1f3
+region 633 117 2 6 fcfcfc
+shot netsurf-url-port
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-port\r
+screen closed-port
+# A name whose only answer is private (lan.web.test, 10.0.2.2 in net.hosts)
+# on port 8080: the same rule refuses its lookup, and the page names the host
+# and the `+net lan.web.test:8080` word (ADR-0325). Under the old name rule
+# the answer was used, the connection failed and NetSurf's own error page
+# came instead.
+type netsurf http://lan.web.test:8080/ns/must-not-reach\r
+pause 15000
+region 110 175 20 20 ffe4b5
+shot netsurf-url-refused-private
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed-lan\r
+screen closed-lan
 type poweroff\r
 exit

@@ -222,7 +222,7 @@ tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
 [[mutant]]
 id = "U-shell-public-name-pill"
 file = "crates/zoraya-shell/src/netgrant.rs"
-find = 'return Some(alloc::format!("{WEB_PILL} {target}"));'
+find = 'return Some(alloc::format!("+net {target} {PUBLIC_MARK}"));'
 replace = 'return Some(alloc::format!("+net {target}"));'
 note = "the pill reads as a +net word, which would take local answers"
 tests = ["cargo test -q -p zoraya-shell --lib netgrant"]

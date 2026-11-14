@@ -313,10 +313,12 @@ pub fn pills(scope: &[u8]) -> Vec<String> {
                 return Some(String::from(WEB_PILL));
             }
             let target = line.trim_start_matches("net: ").split_whitespace().next()?;
-            // A public-only name (ADR-0328) is the web's check on one more
-            // port: not `+net HOST:PORT`, which would take local answers.
+            // A public-only name (ADR-0328) carries the mark `public`: a
+            // bare `+net HOST:PORT` would read as the word that takes local
+            // answers. The panel takes a pill that starts with `+net ` and
+            // `web` alone (ADR-0324 item 6), so the mark follows the target.
             if matches!(rule.target, Target::PublicName(_)) {
-                return Some(alloc::format!("{WEB_PILL} {target}"));
+                return Some(alloc::format!("+net {target} {PUBLIC_MARK}"));
             }
             Some(alloc::format!("+net {target}"))
         })
@@ -325,6 +327,9 @@ pub fn pills(scope: &[u8]) -> Vec<String> {
 
 /// The pill of the web rule.
 pub const WEB_PILL: &str = "web";
+
+/// The mark after a public-only name's pill (ADR-0328).
+pub const PUBLIC_MARK: &str = "public";
 
 /// The ports of the web rule (ADR-0324 item 3).
 pub const WEB_PORTS: [(u16, u16); 2] = [(80, 80), (443, 443)];

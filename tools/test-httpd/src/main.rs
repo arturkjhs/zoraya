@@ -26,6 +26,7 @@
 //! /ns/...            the NetSurf test's pages (`ns_page`), /ns/web-redirect, 302 to
 //!                    http://two.web.test/ns/web-b (ADR-0324), and
 //!                    /ns/web-redirect-refused, 302 to http://two.web.test:8080/... (ADR-0325)
+//!                    /ns/web-port, a page for a URL on port 8080 (ADR-0328)
 //! ```
 //!
 //! `--relay ADDRESS:PORT` is one connection of QEMU's `guestfwd=...-cmd:`
@@ -219,6 +220,16 @@ fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
             body += "</body></html>\n";
             Some(("text/html", body.into_bytes()))
         }
+        // ADR-0328: a URL on another port than 80 and 443 whose name has a
+        // public answer (two.web.test:8080), reached through the URL's
+        // public-only name rule: lime.
+        "/ns/web-port" => Some((
+            "text/html",
+            br#"<html><head><title>NS web port</title></head>
+<body style="margin:0;background:#80ff00"></body></html>
+"#
+            .to_vec(),
+        )),
         "/ns/web-b" => Some((
             "text/html",
             br#"<html><head><title>NS web B</title></head>

@@ -649,7 +649,7 @@ fn under_web_a_url_name_on_80_or_443_adds_no_rule() {
 }
 
 /// ADR-0328 (INV-0328-1): on another port, a public-only name rule for the
-/// URL's name on that port alone, TCP; its pill is `web HOST:PORT` and
+/// URL's name on that port alone, TCP; its pill is `+net HOST:PORT public` and
 /// `grants` says the answers are public only.
 #[test]
 fn under_web_a_url_name_on_another_port_adds_a_public_only_rule() {
@@ -691,7 +691,10 @@ fn under_web_a_url_name_on_another_port_adds_a_public_only_rule() {
     }
     assert_eq!(
         crate::netgrant::pills(&ok.1),
-        vec![String::from("web two.web.test:8080"), String::from("web")]
+        vec![
+            String::from("+net two.web.test:8080 public"),
+            String::from("web")
+        ]
     );
     assert_eq!(
         crate::netgrant::describe(&ok.1)[0],
