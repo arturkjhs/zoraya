@@ -424,6 +424,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-term"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-proto-tty"
 version = "0.1.0"
 dependencies = [
@@ -464,6 +471,7 @@ dependencies = [
  "zoraya-describe",
  "zoraya-http",
  "zoraya-proto-file",
+ "zoraya-proto-term",
  "zoraya-resolve",
  "zoraya-width",
 ]

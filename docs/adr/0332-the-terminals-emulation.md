@@ -308,6 +308,16 @@ list is also what a remote `vi` gets; a remote program that queries gets no answ
   `term` itself (keys, the pointer, a paste, a size) are part 10b's. INV-0332-5 and INV-0332-7 cannot be checked yet:
   paste and selection are part 10b. The first-comparison recordings of item 10 lack `vttest`'s cursor and screen menus: it is not pinned in `ports/sources.lock` and needs the architect's pin (`docs/backlog.md`); `vi`, `less` and five ncurses sessions stand in.
 
+- *Note, 2026-11-14 (ADR-0001 rule 6; TASK-31 part 10b, by an agent):* INV-0332-1's key half is checked: every key
+  capability of the entry that the terminal sends is a test (`crates/zoraya-term/src/tests_keys.rs`, the mouse, focus
+  and paste capabilities in `tests_session.rs`), and the exceptions file has 31 lines, none deferred, among them `kbs`
+  (Backspace stays `0x7f`, ADR-0096), `kPRV` and `kNXT` (Shift+Page keys scroll), `kbeg` and `kp5` (no NumLock), `km`,
+  `smm` and `rmm` (meta mode): proposed ADR-0383. INV-0332-2's emission points are `zoraya_term::Session` (proposed
+  ADR-0385). INV-0332-5 is checked for the prompt's half (`cargo test -p zoraya-shell`); the paste to a program in front,
+  the bracket marks and the confirmation are part 10c's. INV-0332-7 is checked (`cargo test -p zoraya-term`). A selection
+  is gone when a cell under it changes (proposed ADR-0384); at the prompt a pasted newline makes a continuation line
+  and runs nothing, so `paste N lines?` is for a program.
+
 ## Revisit triggers
 
 - A ported program that needs a sequence outside the lists: add it here by name, with the program.

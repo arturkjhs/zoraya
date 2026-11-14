@@ -491,10 +491,29 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   column: the shell adds the carriage return (`zoraya_shell::crlf`). Bold is a weight and does not brighten; italic is
   drawn slanted, faint is half way to the background, underline and strike are lines; blink is stored. `Term::restore`
   gives the shell a working screen (the primary screen, cursor shown, modes, region, sets, pen and palette cleared)
-  and `Term::reinstate` sets it all again for a stopped line; nothing sends them yet (part 10c). It sends the shell
-  the bytes keys make (`zoraya-proto-term`; the F-keys, the mouse and paste are part 10b): it holds up to 4 KiB of keys
-  the shell has not read yet and sends them as soon as the shell's queue has room. It draws only the rows that changed,
-  and commits again only after the last commit's reply. *Known limits (10a):* a combining mark outside the Basic
+  and `Term::reinstate` sets it all again for a stopped line; nothing sends them yet (part 10c). *Keys, the pointer,
+  selection and paste (10b, ADR-0383 to ADR-0385).* `zoraya_term::Session` is the terminal as the window runs it, and the
+  only code that makes anything to send: its gesture methods (`key`, `pointer`, `wheel`, `focus`, `paste`) fill an outbox,
+  `output` cannot (INV-0332-2); `term` sends the outbox as `Input` (keys, mouse and focus reports) and `Paste`. The key
+  table (`keys.rs`) is the entry's `k*` strings: F1 to F12, Alt as an `ESC` prefix, xterm's modifier parameter on cursor
+  keys, Home, End, Insert, Delete, Page keys and F-keys, `SS3` forms while DECCKM is set, the keypad as characters or, in
+  keypad application mode, `SS3` letters, Ctrl+Space and Ctrl+@ as NUL, Ctrl+^ and Ctrl+_ as their codes in every
+  layout, Shift+Tab as `CSI Z`; Backspace stays `0x7f` (ADR-0096, the entry's `kbs=^H` is an exception) and Shift+Page
+  Up and Down scroll the view. A drag selects text (linear, in reading order, ended by any change to a row it covers, a
+  scroll of the view or a resize); with a program holding the mouse (1000, 1002) Shift+drag selects and the pointer is
+  reported in the SGR form, the wheel as buttons 64 and 65 (at most 8 a turn), focus as `CSI I` and `CSI O` (1004).
+  System+C answers `Copy` with `Offer` of the selected text (a cell drawn invisible, or with its foreground the
+  background, is a space; a row's trailing blanks are dropped; nothing is offered when nothing is selected, INV-0332-7);
+  System+V sends the compositor's text to the shell as `Paste` parts (ordinal 5, at most 4 KiB each, 64 KiB in all,
+  whole characters). `term` holds up to 4 KiB of input and 128 KiB of paste the shell has not read yet and sends them,
+  in order, as soon as the shell's queue has room; a paste that does not fit is dropped whole. It draws only the rows
+  that changed, and commits again only after the last commit's reply. *Known limits (10b):* a selection ends when
+  output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
+  lines (no wrap flag); no word or line selection and no primary selection; a paste to a program in front is dropped
+  until 10c, and in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
+  whole stretch between its ends), and a button released outside the window is seen at the next event;
+  no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
+  NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
   *Known limits until part 10c:* nothing sends `Restore`, so what a program leaves set (the alternate screen, a hidden
@@ -508,7 +527,13 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
   is full; a carriage return is written before every line feed, ADR-0331 item 8), input from `Input` messages, and its
   width from `Size`. Without one it uses the console, which adds its own carriage return. Its line editor counts
-  columns with the same width table as the grid.
+  columns with the same width table as the grid. `Paste` messages are joined and cleaned (`zoraya_shell::paste`: no
+  `ESC` or other control character but tab and newline, carriage returns as line ends, INV-0332-5) and put in the key
+  stream at their place as one of the bytes 0xF8 to 0xFF, which no key makes; the line editor (`Editor::paste`) inserts
+  the text at the cursor without running it (a newline makes a continuation line; Enter, the person's, sends the
+  entry), and while a program is in front a paste is dropped with a line saying so (the paste to a program is part
+  10c's). Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
+  Alt+f move by a word, Alt+Backspace deletes one.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
   page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A
   dead driver is restarted alone, at most three times each, and handed to the compositor over the manager channel. A
@@ -1076,7 +1101,9 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   reads Ukrainian and Czech names and text back (from `rootfs/texts/`, completed with Tab until 7c's layouts), plays
   a recorded full-screen session of `less` with `cat` (`tests/gui/terminal.root/recordings/`, made by
   `tools/term-record/gui-files.sh`: the 256-colour and direct-colour text is read by glyph, and after the program's end
-  the shell's screen is back and its prompt clean), measures key latency, and powers off. The serial line's input is
+  the shell's screen is back and its prompt clean), measures key latency, and powers off. `tests/gui/selection.script` (10b) drags over text, copies it with System+C,
+  pastes it with System+V and sees that it waits for Enter (one line, then two with a continuation line), and shows
+  F5, F1, Alt+x and Ctrl+Right as the sequences the entry names with Ctrl+V. The serial line's input is
   closed, so keys reach `zosh` only through the window;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
@@ -1483,7 +1510,8 @@ scale is 2, from 1280 on a Retina screen, ADR-0247), and Command is the system k
   System+Right close, minimise and tile; System+Enter opens a terminal. A new window takes the keyboard when you
   click it.
 - **Terminal.** `zosh`, with the commands of `make run` (Using the shell, below); Shift with Page Up or Page Down
-  scrolls back. `exit` closes it; in the first terminal `init` opens a new one; `poweroff` turns the machine off.
+  scrolls back. Drag with the mouse to select text, System+C to copy it, System+V to paste it at the prompt, where it
+  waits for Enter. `exit` closes it; in the first terminal `init` opens a new one; `poweroff` turns the machine off.
 - **Files.** Your home folder (in a room, its places), as the 7h mockups draw it: double-click a folder to enter it
   or a file to open it with its application (`.txt` and `.md` in Edit), read only; click, Shift-click and
   Command-click select; the headers sort; arrows, Enter, Command+Up, F2 to rename in place, Delete (asked first),
