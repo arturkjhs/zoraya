@@ -1,6 +1,6 @@
 # ADR-0341: A program's own files: a directory per program and room, given by its description and shown where the program looks
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0107, ADR-0153, ADR-0156, ADR-0167, ADR-0172, ADR-0245, ADR-0265, ADR-0310
 - **Evidence:** CP-01, CP-21, CP-23, DM-010, DM-085, DM-086, DM-087, alternatives-postmortem.md#genode, network/survey.md#plan-9s-tls-filters-and-key-agent, stage-10/survey.md#files-an-editor-or-pager-touches-unasked, stage-10/survey.md#files-git-touches-unasked, stage-10/survey.md#files-the-ssh-client-touches-unasked, stage-10/survey.md#pattern-a-grants-fixed-at-start, stage-10/survey.md#what-a-posix-program-is-given-today, stage-10/survey.md#what-the-ssh-client-needs
@@ -283,3 +283,6 @@ shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340).
 - People cannot find their files under `/data`.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

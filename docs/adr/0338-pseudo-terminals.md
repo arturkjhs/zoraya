@@ -1,6 +1,6 @@
 # ADR-0338: Pseudo-terminals: none in stage 10; when one is needed, it is a pair of handles from the broker, with no name
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0104, ADR-0105, ADR-0107, ADR-0260, ADR-0331, ADR-0340
 - **Evidence:** CP-01, CP-25, CP-27, DM-069, DM-070, DM-072, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#redox, stage-10/survey.md#a-pty-pair-as-capabilities, stage-10/survey.md#pty-security-history, stage-10/survey.md#ptys-without-a-global-name, stage-10/survey.md#the-name-devtty, stage-10/survey.md#the-tty-service-as-built, stage-10/survey.md#what-a-pty-is-on-unix, stage-10/survey.md#which-programs-need-a-pty
@@ -172,3 +172,6 @@ object. Networking: an ssh server is the second likely user (ADR-0340). Threads:
 - A terminal that is not a window is wanted for a supervisor of agents.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

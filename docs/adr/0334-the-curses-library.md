@@ -1,6 +1,6 @@
 # ADR-0334: The curses library is ncurses, wide-character and static, reading the one terminfo directory
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0100, ADR-0109, ADR-0141, ADR-0331, ADR-0333, ADR-0342
 - **Evidence:** CP-27, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#curses-libraries-compared, stage-10/survey.md#editors-and-pagers-compared, stage-10/survey.md#how-ncurses-finds-a-terminal-description, stage-10/survey.md#ncurses, stage-10/survey.md#netbsd-curses, stage-10/survey.md#programs-and-libraries-without-curses, stage-10/survey.md#python-curses-readline-and-the-repl, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#what-ncurses-needs-from-libc
@@ -194,3 +194,6 @@ the sequences ADR-0332 bounds. Target 3: the usual full-screen programs become p
 - A program in scope cannot be built against ncurses.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

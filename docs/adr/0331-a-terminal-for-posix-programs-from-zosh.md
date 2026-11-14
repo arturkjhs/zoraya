@@ -1,6 +1,6 @@
 # ADR-0331: A terminal for POSIX programs that `zosh` starts: the shell hosts the line discipline
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0005, ADR-0060, ADR-0096, ADR-0101, ADR-0104, ADR-0105, ADR-0106, ADR-0107, ADR-0152, ADR-0153, ADR-0154, ADR-0158, ADR-0200
 - **Evidence:** CP-25, CP-27, DM-069, DM-070, DM-072, DM-073, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#qnx, stage-10/survey.md#a-pty-pair-as-capabilities, stage-10/survey.md#ptys-without-a-global-name, stage-10/survey.md#ssh-and-the-terminal, stage-10/survey.md#the-name-devtty, stage-10/survey.md#the-terminal-as-built, stage-10/survey.md#the-tty-service-as-built, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#what-ncurses-needs-from-libc, stage-10/survey.md#which-programs-need-a-pty, stage-10/survey.md#window-size
@@ -354,3 +354,6 @@ read is a wait point of the thread that makes it (ADR-0304).
 - A program in scope needs to set the window size, or needs a terminal that is not a window (ADR-0338).
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

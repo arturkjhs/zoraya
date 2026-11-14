@@ -1,6 +1,6 @@
 # ADR-0332: What the terminal emulates: the sequences of the entry it claims and a short list beside it, and still no replies
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0052, ADR-0096, ADR-0100, ADR-0154, ADR-0157, ADR-0160, ADR-0161, ADR-0162, ADR-0163, ADR-0168, ADR-0170, ADR-0331, ADR-0333, ADR-0337
 - **Evidence:** CP-22, CP-25, DM-071, DM-072, DM-073, GR-015, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#how-the-terminal-ecosystem-is-layered, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks, stage-10/survey.md#programs-and-libraries-without-curses, stage-10/survey.md#terminfo-entries-compared, stage-10/survey.md#testing-a-terminal, stage-10/survey.md#the-terminal-as-built, stage-10/survey.md#utf-8-and-character-width, stage-10/survey.md#what-a-small-terminal-implements, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#which-term-to-claim
@@ -309,3 +309,6 @@ list is also what a remote `vi` gets; a remote program that queries gets no answ
 - A measured cost of the larger cell or of direct colour in the terminal's redraw.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

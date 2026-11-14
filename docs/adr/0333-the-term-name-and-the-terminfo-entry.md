@@ -1,6 +1,6 @@
 # ADR-0333: `TERM` is `xterm-256color`, and its entry is a pinned file in `/usr/share/terminfo`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0107, ADR-0109, ADR-0153, ADR-0157, ADR-0331, ADR-0332
 - **Evidence:** CP-21, DM-085, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#how-ncurses-finds-a-terminal-description, stage-10/survey.md#netbsd-curses, stage-10/survey.md#programs-and-libraries-without-curses, stage-10/survey.md#python-curses-readline-and-the-repl, stage-10/survey.md#ssh-and-the-terminal, stage-10/survey.md#terminfo-entries-compared, stage-10/survey.md#the-tty-service-as-built, stage-10/survey.md#what-a-posix-program-is-given-today, stage-10/survey.md#what-a-small-terminal-implements, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal, stage-10/survey.md#which-term-to-claim
@@ -224,3 +224,6 @@ the one they know. Networking: the choice is made for ssh (driver 1). Threads: n
 - ncurses changes the entry in a way the terminal should not follow.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

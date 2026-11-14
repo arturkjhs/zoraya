@@ -1,6 +1,6 @@
 # ADR-0337: Files a program needs while it runs: the refusal is shown at once, and the person gives more on a grant line that only a reserved key opens
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0052, ADR-0055, ADR-0096, ADR-0107, ADR-0150, ADR-0153, ADR-0154, ADR-0158, ADR-0160, ADR-0167, ADR-0172, ADR-0224, ADR-0245, ADR-0248, ADR-0268, ADR-0331, ADR-0332, ADR-0335, ADR-0341
 - **Evidence:** CP-01, CP-02, CP-05, CP-24, DM-009, DM-014, DM-039, DM-071, DM-072, GR-008, alternatives-postmortem.md#genode, alternatives-postmortem.md#plan-9--inferno, desktop/survey.md#spoofing-and-the-trusted-path, shell/survey.md#capability-shells-and-grant-syntax, stage-10/survey.md#pattern-a-grants-fixed-at-start, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks, stage-10/survey.md#pattern-c-a-trusted-helper-with-a-fixed-policy, stage-10/survey.md#pattern-d-the-session-holds-the-grant, stage-10/survey.md#pattern-e-refusal-and-what-the-person-sees, stage-10/survey.md#what-a-posix-program-is-given-today, stage-10/survey.md#write-by-rename-and-derived-files
@@ -412,3 +412,6 @@ same line gives a host. Threads: the runtime's re-read is under the library's lo
 - The agent-isolation direction is chosen: a supervisor's programmatic holder of `GRANTS`.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, with the grant line (System+G), not the fallback (the status line alone).

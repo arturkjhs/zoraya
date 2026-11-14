@@ -1,6 +1,6 @@
 # ADR-0342: The POSIX surface stage 10 adds: names enter by a link probe of each port, under meanings fixed here
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0005, ADR-0013, ADR-0100, ADR-0106, ADR-0141, ADR-0180, ADR-0225, ADR-0308, ADR-0310, ADR-0319, ADR-0331, ADR-0332, ADR-0338
 - **Evidence:** CP-22, CP-27, DM-036, DM-072, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#ports-as-built, stage-10/survey.md#the-network-as-built, stage-10/survey.md#the-tty-service-as-built, stage-10/survey.md#the-userland-today, stage-10/survey.md#what-a-posix-program-is-given-today, stage-10/survey.md#what-git-needs, stage-10/survey.md#what-ncurses-needs-from-libc, stage-10/survey.md#what-the-missing-tools-need-from-libc, stage-10/survey.md#what-the-ssh-client-needs, stage-10/survey.md#window-size
@@ -244,3 +244,6 @@ the calling thread (ADR-0304).
 - A port needs `iconv`.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

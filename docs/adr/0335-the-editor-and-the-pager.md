@@ -1,6 +1,6 @@
 # ADR-0335: `vi` is nvi2 and the pager is `less`, each given its operands and nothing of the current directory; `edit` stays the desktop's editor
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0107, ADR-0109, ADR-0153, ADR-0156, ADR-0168, ADR-0311, ADR-0331, ADR-0333, ADR-0334, ADR-0337, ADR-0338, ADR-0341, ADR-0342
 - **Evidence:** CP-27, DM-087, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#bsd-and-other-permissive-sources, stage-10/survey.md#editors-and-pagers-compared, stage-10/survey.md#files-an-editor-or-pager-touches-unasked, stage-10/survey.md#less-and-more, stage-10/survey.md#nvi, stage-10/survey.md#pattern-c-a-trusted-helper-with-a-fixed-policy, stage-10/survey.md#small-editors, stage-10/survey.md#the-name-devtty, stage-10/survey.md#toybox-upstream, stage-10/survey.md#vim, stage-10/survey.md#write-by-rename-and-derived-files
@@ -277,3 +277,6 @@ Networking, threads: none.
 - A native full-screen interface exists (ADR-0331's open question): Option D becomes buildable.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

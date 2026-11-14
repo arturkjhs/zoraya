@@ -1,6 +1,6 @@
 # ADR-0336: The userland is toybox's finished commands, each with a description; the gaps are filled by name, and busybox leaves
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0005, ADR-0107, ADR-0109, ADR-0153, ADR-0154, ADR-0155, ADR-0156, ADR-0200, ADR-0212, ADR-0311, ADR-0335, ADR-0337, ADR-0342
 - **Evidence:** CP-01, CP-05, CP-27, DM-010, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#awk, stage-10/survey.md#bsd-and-other-permissive-sources, stage-10/survey.md#busybox, stage-10/survey.md#everyday-tools-compared, stage-10/survey.md#ports-as-built, stage-10/survey.md#the-userland-today, stage-10/survey.md#toybox-upstream, stage-10/survey.md#what-posix-has-and-what-people-rely-on, stage-10/survey.md#what-the-missing-tools-need-from-libc
@@ -281,3 +281,6 @@ the network. Threads: none.
 - toybox finishes `awk`, `diff` or `tr` upstream: the list follows.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.
