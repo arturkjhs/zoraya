@@ -1,6 +1,6 @@
 # ADR-0366: The names `libc.a` adds for C++, and the gaps libc++ fills in its own archive
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0005, ADR-0013, ADR-0100, ADR-0141, ADR-0227, ADR-0308, ADR-0310, ADR-0320, ADR-0360, ADR-0361
 - **Evidence:** CP-27
@@ -157,3 +157,6 @@ wctob
 - A libc++ release that names more of libc.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

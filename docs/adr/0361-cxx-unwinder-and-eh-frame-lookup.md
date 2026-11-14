@@ -1,6 +1,6 @@
 # ADR-0361: The unwinder and how a static program finds its `.eh_frame`: libunwind over `dl_iterate_phdr` and `PT_GNU_EH_FRAME`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0033, ADR-0100, ADR-0180, ADR-0303, ADR-0360, ADR-0366
 - **Evidence:** CP-27
@@ -68,3 +68,6 @@ comparator that throws) ends in `std::terminate`, because musl's objects have no
 - A port that throws through C callbacks.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

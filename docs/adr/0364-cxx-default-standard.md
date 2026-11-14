@@ -1,6 +1,6 @@
 # ADR-0364: The default C++ standard of `zc++`: `-std=c++23`, with `_GNU_SOURCE` for every standard
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0109, ADR-0143, ADR-0360
 - **Evidence:** CP-27
@@ -55,3 +55,6 @@ targets for this reason; the bare-metal target `zcc` uses defines nothing.
 - C++26 is the norm in the ports' upstreams.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

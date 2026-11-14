@@ -1,6 +1,6 @@
 # ADR-0365: Where the C++ runtime and headers live: the sysroot now, `/usr/include/c++/v1` and `/usr/lib` when Zoraya builds C++
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0108, ADR-0109, ADR-0310, ADR-0320, ADR-0360
 - **Evidence:** CP-27
@@ -53,3 +53,6 @@
 - A C++ compiler inside Zoraya.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

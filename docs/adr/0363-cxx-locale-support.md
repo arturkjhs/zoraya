@@ -1,6 +1,6 @@
 # ADR-0363: Locale support for C++: the C locale only; musl's names accepted with the C rules
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0100, ADR-0360, ADR-0366
 - **Evidence:** CP-27
@@ -55,3 +55,6 @@ as `C` (with UTF-8 multibyte functions). Option C is the follow-up if a port rel
 - Locale data on the volume, or a port that needs a refused name.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

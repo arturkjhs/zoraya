@@ -1,6 +1,6 @@
 # ADR-0367: A CMake toolchain file for Zoraya: `CMAKE_SYSTEM_NAME Zoraya` with a platform module of its own
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0033, ADR-0109, ADR-0360, ADR-0364
 - **Evidence:** CP-27
@@ -55,3 +55,6 @@ whose `try_run` checks need answers gets them in the cache from the port (as `PY
 - A CMake port that needs shared libraries, or `try_run` answers in bulk.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

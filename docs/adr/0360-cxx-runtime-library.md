@@ -1,6 +1,6 @@
 # ADR-0360: The C++ runtime: LLVM's libc++, libc++abi and libunwind 20.1.8, static, built by `zc++` into the sysroot
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0033, ADR-0100, ADR-0109, ADR-0141, ADR-0302, ADR-0303, ADR-0320, ADR-0361, ADR-0364, ADR-0366
 - **Evidence:** CP-27
@@ -76,3 +76,6 @@ with `-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE` turns it off.
 - A port needs `libc++experimental` or the time zone database.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

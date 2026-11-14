@@ -1,6 +1,6 @@
 # ADR-0362: What `std::terminate` and an uncaught exception print and return: libc++abi's message on standard error, then `abort()`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0035, ADR-0106, ADR-0153, ADR-0360
 - **Evidence:** CP-27
@@ -53,3 +53,6 @@ through `posixrun`, `posixrun: ended Terminated detail 6`.
 - A crash service that can print a backtrace of a POSIX program.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.
