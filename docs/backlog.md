@@ -165,15 +165,17 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs.
 
 
-## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`)
+## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`) - done (9f-ci, 2026-11-14)
 
-`make fetch-ports` (`tools/fetch-ports.sh`) downloads every source of `ports/sources.lock` from the Internet when CI's ports cache
-misses. On `main`'s run 43511821485 (attempt 1) the `build` job failed there: `https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz` timed
-out five times (curl exit 28, connect timeout after 30 s) and so did its `ftpmirror.gnu.org` fallback; the re-run of the job passed.
-The change was not at fault, but `main`'s run was red until the job was re-run by hand. Fix: keep the pinned archives where an upstream outage cannot reach
-them, for example a GitHub release or an Actions cache of `build/ports/src` keyed by each archive's SHA-256 (`ports/sources.lock`),
-filled once and read before any upstream URL; `fetch-ports.sh` then tries the mirror first and the upstream URLs only for an archive
-the mirror lacks. The SHA-256 check stays as it is, so the mirror is not trusted more than the upstream.
+`make fetch-ports` downloaded every source of `ports/sources.lock` when CI's ports cache missed, and the cache key was the hash of the
+lock, so any change of the lock missed and every archive came from the Internet (`main`'s run 43511821485: `ftp.gnu.org` timed out for
+`make-4.4.1.tar.gz`). Done, with no new ADR (the cache is a CI detail under ADR-0109, whose SHA-256 check is unchanged): the build job
+restores `build/ports/src` with `actions/cache/restore` (key `ports-src-` plus the lock's hash, restore key `ports-src-`, so a changed
+lock starts from the newest older entry and downloads only the new archives) and saves it with `actions/cache/save` after the fetch even
+if a later step fails. `tools/fetch-ports.sh` verifies every archive against the lock and downloads again one that fails, so a corrupted
+entry is never trusted (`ports/test-fetch.sh`). `tools/check-fetch-cache.sh` (run by `make check-fetch-ports`, so by `make check`)
+fails if a job fetches without those steps. Left: a first run on an empty cache still reaches the upstream servers, and a GitHub release as
+a mirror in `sources.lock` is not built; a fetch outside `build` (the nightly's, if one is added) must follow the same steps.
 
 ## Stage 9 parts: what the reports left (TASK-27, 2026-11-13)
 

@@ -1282,6 +1282,7 @@ fetch-ports ports check-ports clean-ports check-python-cache:
 # INV-0109-3 and INV-0109-4: the fetch step and the cache, offline.
 check-fetch-ports:
 	ports/test-fetch.sh
+	tools/check-fetch-cache.sh
 
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
