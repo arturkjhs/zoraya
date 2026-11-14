@@ -3914,8 +3914,12 @@ impl Host for Z {
         let scope = if code != 0 {
             None
         } else if let Some((d, base)) = self.program_description(exec.name) {
-            Self::net_grant_with(exec, &d, base, &self.cwd)
+            // Never the web rule a run would refuse (9f-net review, note 8),
+            // as `posix_net_scope` below does for a POSIX program.
+            // untrusted-gate: web-refusal-call (`grants`, a native command)
+            self.refuse_web_in_untrusted_room(&d)
                 .ok()
+                .and_then(|()| Self::net_grant_with(exec, &d, base, &self.cwd).ok())
                 .flatten()
         } else if self.lookup(exec.name) == Found::Program
             && let Some(path) = self.on_volume.get(exec.name).cloned()

@@ -531,3 +531,75 @@ fn the_web_rule_is_refused_in_an_untrusted_room() {
     assert!(!curl.net_web);
     assert!(web_refused(&curl, true).is_ok());
 }
+
+/// `grants` of a web rule says every range whole, and `any port` (9f-net
+/// review, note 9): `describe` is total over scopes, and a narrowed or
+/// hand-made web scope is a valid input.
+#[test]
+fn grants_says_every_port_of_a_web_rule() {
+    use zoraya_abi::net::{Ports, ReachRule, Target, encode};
+    let line = |ports: Ports| {
+        let rule = ReachRule {
+            target: Target::Public,
+            ports,
+            protocols: Protocols::TCP,
+        };
+        let mut out = vec![0u8; 128];
+        let n = encode(&[rule], &[], &mut out).unwrap();
+        crate::netgrant::describe(&out[..n]).concat()
+    };
+    let tail = "; not this machine or its network (description)";
+    assert_eq!(
+        line(Ports::one(443)),
+        alloc::format!("net: web                     reach public hosts, port 443{tail}")
+    );
+    assert_eq!(
+        line(Ports::ranges(&[(80, 80), (443, 443)]).unwrap()),
+        alloc::format!("net: web                     reach public hosts, ports 80 and 443{tail}")
+    );
+    assert_eq!(
+        line(Ports::ranges(&[(80, 90), (443, 443), (8000, 8080)]).unwrap()),
+        alloc::format!(
+            "net: web                     reach public hosts, ports 80-90, 443 and 8000-8080{tail}"
+        )
+    );
+    assert_eq!(
+        line(Ports::ranges(&[(1, 1023)]).unwrap()),
+        alloc::format!("net: web                     reach public hosts, ports 1-1023{tail}")
+    );
+    assert_eq!(
+        line(Ports::ANY),
+        alloc::format!("net: web                     reach public hosts, any port{tail}")
+    );
+}
+
+/// A host literally named `web` (`+net web`) is a host, beside the web rule:
+/// its pill is `+net web` and its `grants` line says `any port (grant
+/// +net)`, so the two `net: web` lines differ in what follows (9f-net review,
+/// note 10).
+#[test]
+fn a_host_named_web_is_a_host_beside_the_web_rule() {
+    use zoraya_abi::net::Target;
+    let ok = go_nets(NETSURF, &[], &["web"], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&ok.1).unwrap();
+    let targets: Vec<_> = s.reach_rules().map(|r| r.target).collect();
+    assert_eq!(targets, vec![Target::Name("web"), Target::Public]);
+    assert_eq!(
+        crate::netgrant::pills(&ok.1),
+        vec![String::from("+net web"), String::from("web")]
+    );
+    let lines = crate::netgrant::describe(&ok.1);
+    assert_eq!(
+        lines[0],
+        "net: web                     reach, any port (grant +net)"
+    );
+    assert!(lines[1].starts_with("net: web                     reach public hosts"));
+    // `+net any` is every host, never a host named any.
+    let any = go_nets(NETSURF, &[], &["any:80"], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&any.1).unwrap();
+    assert_eq!(s.reach_rules().next().unwrap().target, Target::Any);
+}

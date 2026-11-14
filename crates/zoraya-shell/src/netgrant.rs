@@ -339,12 +339,39 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
                 Target::Prefix(a, l) => alloc::format!("{}.{}.{}.{}/{l}", a[0], a[1], a[2], a[3]),
                 Target::Any => String::from("any"),
                 Target::Public => {
-                    let ports: Vec<String> =
-                        rule.ports.list().iter().map(|&(l, _)| alloc::format!("{l}")).collect();
+                    // Every range whole, and `any port` (9f-net review,
+                    // note 9): a narrowed web scope is a valid input.
+                    let ports = if rule.ports.is_any() {
+                        String::from("any port")
+                    } else {
+                        let list: Vec<String> = rule
+                            .ports
+                            .list()
+                            .iter()
+                            .map(|&(l, h)| {
+                                if l == h {
+                                    alloc::format!("{l}")
+                                } else {
+                                    alloc::format!("{l}-{h}")
+                                }
+                            })
+                            .collect();
+                        let word = if list.len() == 1 && !list[0].contains('-') {
+                            "port"
+                        } else {
+                            "ports"
+                        };
+                        let joined = match list.split_last() {
+                            Some((last, rest)) if !rest.is_empty() => {
+                                alloc::format!("{} and {last}", rest.join(", "))
+                            }
+                            _ => list.concat(),
+                        };
+                        alloc::format!("{word} {joined}")
+                    };
                     return alloc::format!(
-                        "net: {:<24}reach public hosts, ports {}; not this machine or its network (description)",
+                        "net: {:<24}reach public hosts, {ports}; not this machine or its network (description)",
                         "web",
-                        ports.join(" and ")
                     );
                 }
             };
