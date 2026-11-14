@@ -70,10 +70,21 @@ fn random_protocols(rng: &mut Rng) -> Protocols {
 
 fn random_scope(rng: &mut Rng) -> Vec<u8> {
     let reach: Vec<ReachRule<'static>> = (0..rng.below(4))
-        .map(|_| ReachRule {
-            target: random_target(rng),
-            ports: random_ports(rng),
-            protocols: random_protocols(rng),
+        .map(|_| {
+            let target = random_target(rng);
+            let ports = random_ports(rng);
+            let protocols = random_protocols(rng);
+            // A web rule is TCP alone (INV-0324-1); the decoder refuses others.
+            let protocols = if target == Target::Public {
+                Protocols::TCP
+            } else {
+                protocols
+            };
+            ReachRule {
+                target,
+                ports,
+                protocols,
+            }
         })
         .collect();
     let listen: Vec<ListenRule> = (0..rng.below(3))
@@ -589,8 +600,6 @@ fn only_a_web_rule_narrows_from_a_web_rule() {
         one(Target::Wildcard("org"), Ports::one(443), Protocols::TCP),
         one(Target::Any, Ports::one(443), Protocols::TCP),
         one(Target::Public, Ports::one(8080), Protocols::TCP),
-        one(Target::Public, Ports::one(443), Protocols::BOTH),
-        one(Target::Public, Ports::one(443), Protocols::ECHO),
     ] {
         assert!(!Scope::decode(&outside).unwrap().within(&parent));
     }
@@ -602,4 +611,29 @@ fn only_a_web_rule_narrows_from_a_web_rule() {
     ] {
         assert!(!parent.within(&Scope::decode(&not_outer).unwrap()));
     }
+}
+
+/// INV-0324-1: a web rule admits no protocol but TCP, and the decoder (so
+/// `netd`) refuses one with UDP or echo whoever made the scope; `encode`,
+/// which checks its output with the decoder, makes none.
+#[test]
+fn a_web_rule_with_udp_or_echo_does_not_decode() {
+    for raw in [2u8, 3, 4, 5, 6, 7] {
+        let protocols = Protocols::from_raw(raw).unwrap();
+        let rule = ReachRule {
+            target: Target::Public,
+            ports: Ports::one(443),
+            protocols,
+        };
+        let mut out = vec![0u8; 64];
+        assert_eq!(encode(&[rule], &[], &mut out), None, "{raw}");
+        // The bytes by hand: version, one reach rule, kind 5, one port, the
+        // protocols.
+        let bytes = [VERSION, 1, 0, 0, 5, 1, 0xbb, 0x01, 0xbb, 0x01, raw];
+        assert!(Scope::decode(&bytes).is_none(), "{raw}");
+    }
+    let tcp = [VERSION, 1, 0, 0, 5, 1, 0xbb, 0x01, 0xbb, 0x01, 1];
+    let s = Scope::decode(&tcp).expect("a web rule over TCP decodes");
+    assert!(!s.allows_echo_address([93, 184, 215, 14]));
+    assert!(s.allows_address([93, 184, 215, 14], 443, Protocols::TCP));
 }

@@ -84,3 +84,10 @@ file = "crates/zoraya-net/src/service.rs"
 find = '                    verdict = Verdict::NotGranted;'
 replace = '                    verdict = Verdict::Allowed;'
 note = "a public gateway or DNS server by address under the web rule: a failed connection, not the grant's refusal"
+
+[[mutant]]
+id = "W-web-rule-any-protocol"
+file = "crates/zoraya-abi/src/net.rs"
+find = 'if target == Target::Public && protocols != Protocols::TCP {'
+replace = 'if false {'
+note = "a web rule over UDP or echo decodes, so netd takes one (INV-0324-1, 9f-net review finding 6)"

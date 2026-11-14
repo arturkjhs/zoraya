@@ -896,3 +896,45 @@ fn a_web_rule_refuses_a_public_local_address_as_not_granted() {
         status::OK
     );
 }
+
+/// INV-0324-1: `netd` holds a web rule to TCP itself. A scope with a web
+/// rule over UDP or echo (made by hand: `encode` makes none) is refused as a
+/// connection's scope and as `narrow`'s, even from `any`, so a ping by
+/// address or by name can never pass through a web rule.
+#[test]
+fn netd_refuses_a_web_rule_over_udp_or_echo() {
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let any = service
+        .add(
+            Connection::new(
+                rights::REACH | rights::NARROW,
+                &scope_for(Target::Any, Protocols::ALL),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    for raw in [2u8, 4, 5, 7] {
+        // Version, one reach rule, kind 5 (Public), any port, the protocols.
+        let scope = [1u8, 1, 0, 0, 5, 0xff, raw];
+        assert!(Connection::new(rights::REACH, &scope).is_none(), "{raw}");
+        let m = bytes(
+            &Narrow {
+                rights: rights::REACH,
+                scope: Data(&scope),
+            },
+            6,
+        );
+        match service.handle(any, &m, 1, &mut net.client, 0) {
+            Action::Reply(r) => assert_eq!(
+                decode::<Narrowed>(&r, 0).unwrap().1.status.0,
+                status::INVALID,
+                "{raw}"
+            ),
+            other => panic!("{raw}: {other:?}"),
+        }
+    }
+    // The same bytes over TCP are a web rule `narrow` gives.
+    let scope = [1u8, 1, 0, 0, 5, 0xff, 1];
+    assert!(Connection::new(rights::REACH, &scope).is_some());
+}

@@ -23,7 +23,8 @@
 //! ports    0xFF for any port, or a count 1..=8 and that many (low, high)
 //!          pairs of u16, little endian, 1 <= low <= high
 //! protocols u8, a set of bits: 1 (TCP), 2 (UDP), 4 (echo, ADR-0330); 1 to 7
-//!          in a reach rule, 1 to 3 in a listen rule
+//!          in a reach rule (1 alone in a Public rule, INV-0324-1), 1 to 3 in
+//!          a listen rule
 //! ```
 //!
 //! Decisions where the ADR is silent (docs/adr/0281): addresses are IPv4 (the
@@ -443,6 +444,11 @@ impl<'a> Reader<'a> {
         }
         let ports = self.ports()?;
         let protocols = Protocols::from_raw(self.u8()?)?;
+        // A web rule admits no protocol but TCP (INV-0324-1): the decoder,
+        // and so `netd`, holds it to that whoever made the scope.
+        if target == Target::Public && protocols != Protocols::TCP {
+            return None;
+        }
         Some(ReachRule {
             target,
             ports,
