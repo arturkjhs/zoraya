@@ -830,8 +830,11 @@ Done:
 
 Ran on the Mac (HVF, this session): `make check`; `cargo test` in `zoraya-ui`, `-app`, `-files`, `-editor`,
 `-settings-window`, `-chooser` (all pass); `make test-gui GUI_RUNS="wheel:auto:1"` and `"wheel:auto:2"` (74 steps
-each, PASS); `make mutants MUTANTS_ARGS=tools/mutants/wheel-9f.toml` (7 caught, 0 survived); `make test-changed`
-(below). Not run locally: `wheel:tcg:1` (CI runs it), `make test`.
+each, PASS); `make mutants MUTANTS_ARGS=tools/mutants/wheel-9f.toml` (7 caught, 0 survived). `make test-changed`:
+the checks and the host tests of the 13 affected test binaries passed; since the `Makefile` changed it chose every step,
+and its build stopped at the ports (`build/ports/src/dash-0.5.13.5.tar.gz is missing`: this fresh worktree never ran
+`make fetch-ports`), so no QEMU step of it ran. Not run locally: `wheel:tcg:1`, the other GUI scripts, `make test`; the
+candidate run on CI covers them.
 
 Limits (also `docs/backlog.md`): settings scrolls by whole children, not pixels (`Logical` is unsigned; ADR-0329 Option A
 not taken); no scroll bar; `dx` scrolls nothing; no Page Up or Page Down in the file manager and the editor.
