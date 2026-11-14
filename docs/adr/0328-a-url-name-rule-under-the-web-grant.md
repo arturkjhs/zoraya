@@ -1,6 +1,6 @@
 # ADR-0328: The rule of a URL's host name under the `web` grant
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0220, ADR-0223, ADR-0224, ADR-0324, ADR-0325
 - **Evidence:** CP-01, alternatives-postmortem.md#genode, network/survey.md#container-and-agent-sandboxes, network/survey.md#name-resolution-as-authority, network/survey.md#the-unix-baseline
@@ -106,3 +106,6 @@ of the same name).
 - IPv6 (ADR-0229 item 5): the public check gains the IPv6 blocks.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option B: under `net web`, a URL's name rule is public-only. Implementation is a part of its own.

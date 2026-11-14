@@ -56,8 +56,8 @@ data, finished) as its `about:` fetchers do.
 **Option C**, as the architect decided:
 
 1. **When.** A fetch that ends with `CURLE_COULDNT_CONNECT` and `CURLINFO_OS_ERRNO` `EACCES` (`netd` answered
-   `NotGranted` to the `connect`), or with `CURLE_COULDNT_RESOLVE_HOST` when a second `getaddrinfo` of the host fails with
-   `EAI_SYSTEM` and `errno` `EACCES` (the lookup was refused: under the web grant of ADR-0324, a name whose answers are
+   `NotGranted` to the `connect`), or with `CURLE_COULDNT_RESOLVE_HOST` when curl's own lookup of the host (the one NetSurf's patch reads through
+   a wrapped `getaddrinfo`, not a second lookup) failed with `EAI_SYSTEM` and `errno` `EACCES` (the lookup was refused: under the web grant of ADR-0324, a name whose answers are
    all local or private). Any other failure keeps NetSurf's error page (driver 3).
 2. **What.** The fetcher sends status 403 and `Content-Type: text/html; charset=utf-8`, then a page with the title
    `Not granted: HOST:PORT`, a heading `NetSurf may not reach HOST:PORT`, a sentence that the window's network grant does
@@ -67,7 +67,10 @@ data, finished) as its `about:` fetchers do.
    address), PORT the URL's or the scheme's (80, 443), and URL the refused one, in single quotes when it holds a
    character outside `A-Za-z0-9` and `. _ ~ : / % + , = @ -` (a `'` in it written `%27`, which names the same resource).
    It is the smallest grant (ADR-0224 item 5's architect's fix: the host and the port, never `any`). A host the shell
-   cannot take as a `+net` word (not a valid name or dotted address) gets the page without a line.
+   cannot take as a `+net` word (not a valid name or dotted address, or a word the shell reads as more than one host:
+   `any`, `web`, a name that ends in a number) gets the page without a line. The page shows at most 1024 bytes of the URL
+   and 253 of the host, cut with a mark; a URL too long to repeat gets the line `+net HOST:PORT netsurf SCHEME://HOST/`
+   (the host's first page), so the page always fits its 16 KiB buffer.
 4. **Escaping.** Every part of the URL and host put into the page is HTML-escaped (`& < > " '`); the page is made by
    `zoraya_refusal_page` in `ports/netsurf/zoraya_refusal.c`, a function of its own with a host test
    (`make check-netsurf-refusal`, part of `make check`) for the line, the quoting and the escaping.
@@ -78,8 +81,8 @@ data, finished) as its `about:` fetchers do.
 ## Consequences
 - **Positive.** A refused link or redirect says which host and port and what to type; the network's own failures still
   read as failures.
-- **Negative.** A seventh NetSurf patch; a refused lookup is asked twice (the second answer comes from `netd`'s refusal
-  at once, or its cache).
+- **Negative.** A NetSurf patch (0009); a refused lookup is asked once (the patch reads the result of curl's own
+  lookup).
 - **Follow-up.** The same for curl and wget is ADR-0224 item 5's hint (the `REPORT` channel), not built.
 
 ## Invariants
