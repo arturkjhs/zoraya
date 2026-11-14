@@ -453,7 +453,7 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
             } else {
                 "grant +net"
             };
-            alloc::format!("net: {shown:<24}{access} ({source})")
+            alloc::format!("net: {shown:<23} {access} ({source})")
         })
         .collect()
 }

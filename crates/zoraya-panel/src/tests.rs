@@ -643,6 +643,15 @@ fn a_window_is_for_a_trusted_rooms_shell_only() {
     // A public-only name's pill (ADR-0328) is a `+net` pill with its mark.
     let public = "web\n+net two.web.test:8080 public\n+r /share/netsurf";
     assert!(window_record(trusted.as_ref(), "netsurf", "NetSurf", public).is_ok());
+    // A pill past 200 bytes (a public-only name of 196 bytes on a five-digit
+    // port, as `zoraya-shell` makes it) is refused: no window, never a cut.
+    let label = "a".repeat(62);
+    let long = format!("+net {label}.{label}.{label}.example:65535 public");
+    assert!(long.len() > 200);
+    assert_eq!(
+        window_record(trusted.as_ref(), "netsurf", "NetSurf", &long),
+        Err(why::INVALID)
+    );
     // `web` is a pill only as that one word (ADR-0324 item 6).
     for bad in ["webs", "web x", "Web", " web"] {
         assert_eq!(

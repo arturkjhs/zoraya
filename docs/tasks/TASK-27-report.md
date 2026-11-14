@@ -1034,3 +1034,32 @@ name rule that took a later answer of 192.168.1.1, a GET to the router).
 - **Not done / limits.** curl and wget keep a URL's name rule (ADR-0328's open question). The refusal page says "does not
   cover HOST on port PORT" also when the rule covers the name but not its private answer. `W-web-name-any-port-gui` (a
   `make test-netsurf` mutant) was not rerun.
+
+### 9g-url: the review's findings (`docs/tasks/TASK-27-review-9g-url.md` on `docs/review-9g-url`)
+
+- **1 (should-fix), fixed.** One reply with a public and a private answer, in both orders: at the connection
+  (`a_public_name_rule_with_mixed_answers_tries_the_public_one_only`: the public answer is tried, the private one, the
+  reachable test server, is never connected; private answers alone are `Local` with no socket) and at the lookup
+  (`a_public_name_lookup_with_mixed_answers_gives_the_public_ones_only`, through `found_reply`, now `pub(crate)`).
+  Mutants `U-conn-stop-at-refused-answer` (`continue` to `break`), `U-conn-first-answer-only` and
+  `U-lookup-stop-at-refused-answer` (`filter` to `take_while`), each applied by hand: all three fail the new tests and
+  passed every test before them.
+- **3, 4, 5 (notes), done.** A pill past the panel's 200 bytes (a public-only name of 196 bytes on port 65535) is
+  refused by the panel, no window (tests in `zoraya-shell` and `zoraya-panel`; a known limit in `docs/design.md`).
+  Writing that test found a bug older than 9g-url: a `grants` target of 24 bytes or more ran into the word after it
+  (`{shown:<24}{access}`), so its pill read `+net HOST:PORTreach`; the column is now 23 and a space, the same text for
+  every shorter target (`a_long_host_keeps_its_pill_and_its_grants_line_apart`). The comment of the outside-the-image
+  case says what it checks. The `any port, public answers only` line of `describe` has a test.
+- **6 (note).** The wildcard and `any` parents of a public-only name are this branch's decision (above).
+
+### 9g-url: for the architect
+
+- **INV-0324-2's text is false since 9g-url** (review finding 2). It reads "No rule but a web rule is within a web rule,
+  and a web rule is within no rule but a web rule or `any`", and `Target::PublicName` is within a web rule on its ports,
+  as ADR-0328's accepted recommendation decides. Proposed wording: "No rule but a web rule or a public-only name rule
+  (ADR-0328) is within a web rule, and a web rule is within no rule but a web rule or `any`." Its check
+  (`only_a_web_rule_narrows_from_a_web_rule`, the random subset property) checks the proposed wording, not the old one:
+  it never asserts that a public-only name is outside a web rule (`a_public_name_rule_narrows_from_a_web_rule_or_its_name_rule_only`
+  asserts the opposite). The table row (`checked: make test-unit`) is left as it is, as told; it is true of the
+  proposed text only.
+

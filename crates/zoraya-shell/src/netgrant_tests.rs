@@ -757,8 +757,70 @@ fn under_web_an_address_a_net_word_and_programs_without_web_keep_their_rules() {
             assert!(t[0].starts_with("Name(\"example.org\")"), "{t:?}");
         }
     }
-    // A description outside the image has no web rule, so the URL keeps its
-    // name rule there.
+    // Outside the image (`base_system` false) a `url` operand gives no rule
+    // at all: `net_for` reads operands only for the image's descriptions.
     let outside = go(NETSURF, &[("http://example.org:8080/", true)], false).unwrap();
     assert_eq!(outside, None);
+}
+
+/// `grants` of a public-only name on any port (a scope narrowed by hand;
+/// `net_for` always gives the URL's one port) says so (9g-url review, note 5).
+#[test]
+fn grants_says_a_public_only_name_on_any_port() {
+    use zoraya_abi::net::{Ports, ReachRule, Target, encode};
+    let rule = ReachRule {
+        target: Target::PublicName("example.org"),
+        ports: Ports::ANY,
+        protocols: Protocols::TCP,
+    };
+    let mut out = vec![0u8; 128];
+    let n = encode(&[rule], &[], &mut out).unwrap();
+    assert_eq!(
+        crate::netgrant::describe(&out[..n]),
+        vec![String::from(
+            "net: example.org             reach, any port, public answers only (operand URL)"
+        )]
+    );
+    assert_eq!(
+        crate::netgrant::pills(&out[..n]),
+        vec![String::from("+net example.org public")]
+    );
+}
+
+/// The pill of a public-only name is 7 bytes longer than a `+net` word's:
+/// for a host of 196 bytes on a five-digit port it passes the panel's
+/// 200-byte limit, and the panel refuses the window (no window, never a cut
+/// pill: 9g-url review, note 3; `zoraya-panel`'s test of the same line).
+#[test]
+fn a_public_only_pill_past_the_panels_limit_is_long() {
+    let label = "a".repeat(62);
+    let host = alloc::format!("{label}.{label}.{label}.example");
+    assert_eq!(host.len(), 196);
+    let url = alloc::format!("http://{host}:65535/");
+    let ok = go(NETSURF, &[(&url, true)], true)
+        .unwrap()
+        .expect("a scope");
+    let pills = crate::netgrant::pills(&ok.1);
+    assert_eq!(pills[0], alloc::format!("+net {host}:65535 public"));
+    assert!(pills[0].len() > 200, "{}", pills[0].len());
+}
+
+/// A host longer than the `grants` column keeps a space before what
+/// follows, so its pill is the host alone (`pills` takes the first word of
+/// the line); before 9g-url a 24-byte or longer target ran into "reach".
+#[test]
+fn a_long_host_keeps_its_pill_and_its_grants_line_apart() {
+    let ok = go_nets(NET, &[], &["a-very-long-host-name.example.org:8080"], true)
+        .unwrap()
+        .expect("a scope");
+    assert_eq!(
+        crate::netgrant::pills(&ok.1),
+        vec![String::from("+net a-very-long-host-name.example.org:8080")]
+    );
+    assert_eq!(
+        crate::netgrant::describe(&ok.1),
+        vec![String::from(
+            "net: a-very-long-host-name.example.org:8080 reach (grant +net)"
+        )]
+    );
 }

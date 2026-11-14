@@ -2027,3 +2027,78 @@ fn a_name_only_a_public_name_rule_admits_uses_public_answers_that_are_not_local(
     w.connect(&fake, Target::Name("lan.web.test".into()), 80);
     assert!(w.run_until(5_000_000, |_| fake.message(16).is_some()));
 }
+
+/// A reply of A records, one per address, in order.
+fn a_records_reply(query: &[u8], addresses: &[[u8; 4]], ttl: u32) -> Vec<u8> {
+    let mut m = query.to_vec();
+    m[2] = 0x81;
+    m[3] = 0x80;
+    m[7] = addresses.len() as u8;
+    for a in addresses {
+        m.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1]);
+        m.extend_from_slice(&ttl.to_be_bytes());
+        m.extend_from_slice(&[0, 4]);
+        m.extend_from_slice(a);
+    }
+    m
+}
+
+/// INV-0328-1 with the reply a rebinding gives (9g-url review, finding 1):
+/// one reply with a public and a private answer, in both orders. Each answer
+/// is checked: the public one is tried, the private one (here the reachable
+/// server, so that a connection to it would succeed) never is.
+#[test]
+fn a_public_name_rule_with_mixed_answers_tries_the_public_one_only() {
+    const PUBLIC: [u8; 4] = [93, 184, 215, 14];
+    // Private first: skipped, and the public one is tried (it stays trying,
+    // nobody answers for an off-link address here).
+    let mut w = World::new(Script::Sink, &[]);
+    w.scope = public_name_only("evil.example", 80);
+    w.peer.dns_script = Box::new(|q| vec![a_records_reply(q, &[WEB, PUBLIC], 0)]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("evil.example".into()), 80);
+    w.run_until(2_000_000, |_| false);
+    assert_eq!(
+        fake.failed(),
+        None,
+        "the public answer after the private one"
+    );
+    assert!(
+        fake.message(16).is_none(),
+        "connected to the private answer"
+    );
+    assert_eq!(w.client.tcp_count(), 1);
+    // Public first: tried until its attempt ends, then the private one is
+    // refused, not connected.
+    let mut w = World::new(Script::Sink, &[]);
+    w.scope = public_name_only("evil.example", 80);
+    w.peer.dns_script = Box::new(|q| vec![a_records_reply(q, &[PUBLIC, WEB], 0)]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("evil.example".into()), 80);
+    w.run_until(2_000_000, |_| false);
+    assert_eq!(w.client.tcp_count(), 1, "the public answer first");
+    assert!(
+        w.run_until(4 * CONNECT_US + 10_000_000, |_| fake.failed().is_some()
+            || fake.message(16).is_some())
+    );
+    assert!(
+        fake.message(16).is_none(),
+        "connected to the private answer"
+    );
+    assert!(fake.failed().is_some());
+    // Only private answers: refused, no socket.
+    let mut w = World::new(Script::Sink, &[]);
+    w.scope = public_name_only("evil.example", 80);
+    w.peer.dns_script = Box::new(|q| {
+        vec![a_records_reply(
+            q,
+            &[WEB, [192, 168, 1, 1], [127, 0, 0, 1]],
+            0,
+        )]
+    });
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("evil.example".into()), 80);
+    assert!(w.run_until(5_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::LOCAL));
+    assert_eq!(w.client.tcp_count(), 0);
+}

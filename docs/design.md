@@ -2306,6 +2306,8 @@ the architect (2026-11-14).
   curl and wget still give only their own messages (ADR-0224 item 5's `REPORT` hint is not built). Under NetSurf an
   intranet URL (a name with private answers) needs `+net HOST` or `+net HOST:PORT`, which the refusal page offers;
   curl and wget keep the URL's name rule, which can rebind into the LAN on the URL's port (ADR-0328's open question).
+  A public-only name's pill (`+net HOST:PORT public`) is 7 bytes longer than a `+net` word's, so a host of about 190
+  bytes on a long port gives a pill past the panel's 200 bytes, and the window is refused (fails closed).
   Other hosts of a public on-link subnet are not local.
 
 ## The network on the desktop, and when it fails (stage 8, N6)

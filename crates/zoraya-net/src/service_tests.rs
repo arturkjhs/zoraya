@@ -1027,3 +1027,50 @@ fn a_public_name_rule_resolves_its_name_to_public_answers_only() {
         status::NOT_GRANTED
     );
 }
+
+/// INV-0328-1 at the lookup (9g-url review, finding 1): one answer with a
+/// public and a private address, in both orders, gives the public address
+/// alone; private and local addresses alone are `NOT_GRANTED`. Each address
+/// is checked, not the first or the last.
+#[test]
+fn a_public_name_lookup_with_mixed_answers_gives_the_public_ones_only() {
+    use crate::dns::Found;
+    use crate::service::found_reply;
+    use zoraya_proto_net::Resolved;
+    const PUBLIC: [u8; 4] = [93, 184, 215, 14];
+    const OTHER: [u8; 4] = [203, 0, 113, 11];
+    let net = Net::new(static_config());
+    let mut out = vec![0u8; 256];
+    let rule = ReachRule {
+        target: Target::PublicName("evil.example"),
+        ports: Ports::one(8080),
+        protocols: Protocols::TCP,
+    };
+    let n = encode_scope(&[rule], &[], &mut out).unwrap();
+    let scope = &out[..n];
+    let ask = |addresses: &[[u8; 4]]| {
+        let found = Found {
+            addresses: addresses.to_vec(),
+            from_hosts: false,
+        };
+        let r = found_reply(&found, scope, true, &net.client, net.now, 5);
+        let (_, reply) = decode::<Resolved>(&r, 0).unwrap();
+        let list: Vec<[u8; 4]> = reply
+            .addresses
+            .iter()
+            .map(|a| a.address.to_be_bytes())
+            .collect();
+        (reply.status.0, list)
+    };
+    let private = [192, 168, 1, 1];
+    assert_eq!(ask(&[private, PUBLIC]), (status::OK, vec![PUBLIC]));
+    assert_eq!(ask(&[PUBLIC, private]), (status::OK, vec![PUBLIC]));
+    assert_eq!(
+        ask(&[PUBLIC, [10, 1, 2, 3], OTHER, SERVER_IP]),
+        (status::OK, vec![PUBLIC, OTHER])
+    );
+    assert_eq!(
+        ask(&[private, [10, 1, 2, 3], [127, 0, 0, 1], SERVER_IP]),
+        (status::NOT_GRANTED, vec![])
+    );
+}
