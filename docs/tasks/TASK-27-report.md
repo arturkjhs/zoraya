@@ -795,3 +795,47 @@ patches `ports/patches/curl/0003-refuse-tls-weakening-options.patch` (curl's `ge
 `tools/mutants/tls-options.toml`. Merged `f90d29f` (head `5b52463`, candidate run 43497477629 green). ADR-0321 is `proposed`. Open
 (ADR-0321's open questions, `docs/backlog.md`): no check diffs the refused lists against a new curl or wget release; wget's
 `https` to `http` redirect rule; `--cert-status` by default.
+
+## 9f-text: NetSurf's text through `zoraya-text` (branch `work/9f-text`, 2026-11-14)
+
+The architect's decision of 2026-11-14 is recorded as ADR-0326 (accepted, "Decided by the architect; recorded by an agent at the
+architect's request"); it supersedes ADR-0318's fonts item only (ADR-0318's note and index row say so). Model: Opus 5.5, one
+session, 01:15 to about 02:30.
+
+Done:
+- `crates/zoraya-fontset` (`no_std`, no `unsafe`): four faces of the system's fonts with fallback lists, width, position and split as
+  NetSurf documents them, glyphs from `zoraya-text`'s cache; the fonts are asked for only as `/system/fonts/NAME` (14 host tests:
+  the paths read, missing and broken fonts, every Russian and Ukrainian letter a non-blank glyph that is not the box at 16 and 32
+  pixels (12.8 pt at scale 1 and 2), widths, position, split, invalid UTF-8, zero-width characters, random bytes).
+- `libc.a`: `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` (`crates/zoraya-posix/src/ffi/text.rs`) and
+  `zoraya_window_scale` (`ffi/window.rs`), ADR-0326's `posix-surface-added` block, added to `ADDED_ADRS`.
+- NetSurf: `ports/netsurf/font_zoraya.c` (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`), patch `0008` (font.h, the text
+  plotter, the toolkit's text fields; their pixel-to-point conversion uses the page's dpi, else the URL field's text was twice its
+  field at scale 2); dpi 90 times the window's scale.
+- The grant: `/system/fonts` read only with a `window` line (`zoraya_shell::grants::with_window`, `zosh` run and `grants`); the
+  window shows a third pill. `tools/run-disk.sh` copies `fonts/` into the disk's `/system/fonts` (in the key; `tools/test-run-disk.sh`
+  extended); `make test-netsurf`'s root too.
+- Tests: the runner's `ink X Y W H RGB N` step; `/ns/cyrillic` in `tools/test-httpd`; `tests/gui/netsurf.script` checks it at scale 1
+  and the new pill gap; `tests/gui/netsurf-text.script` at scale 2 in a second boot of `make test-netsurf`. Screens:
+  `docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`.
+- Found on the way: `zoraya-ar` dropped every symbol of an object whose `.bss` is larger than the file; with seven more names the
+  call log's `zoraya-calls.o` (a 648-byte `.bss` in a 704-byte object) lost `__zoraya_calls*` from `libc.a`'s index and
+  `make check-ports` failed. Fixed (`SHT_NOBITS` takes no file bytes) with a test.
+- Proposed ADR-0327: OFL-1.1 for unmodified font files as data in `CLAUDE.md`'s licence rule (Option A recommended). Until the
+  architect rules, no font was added: NetSurf reads the files ADR-0162 already ships, at run time.
+
+Run on the Mac (HVF): `make check`; `cargo test -p zoraya-fontset -p zoraya-ar`, the new `zoraya-shell` and runner tests;
+`tools/test-run-disk.sh`; `make netsurf`; `make -f ports/Makefile check-ports` up to its rootfs part (libc.a against the lists
+passed; the `rootfs-posix` check needs `make ports`, not built here); `make test-netsurf` (`netsurf-auto` PASS 86 steps,
+`netsurf-text-2` PASS 19 steps, the INV-0228-1 log check, fsck clean). One earlier exploratory run lost QMP (broken pipe at a
+screendump) once; the rerun and the real run did not.
+Also run after `libc.a` changed: `make test-libposix` (PASS 53 steps), `make test-posix` (every script PASS), `make test-apps`
+(`apps-auto` and `apps-refusals-auto` PASS 302 steps each, `apps-launches` 12); the host tests of `zoraya-ar`, `zoraya-fontset`,
+`zoraya-posix`, `zoraya-shell`, `zoraya-test-httpd` and `zoraya-test-runner` (18 test binaries, all ok). Not run: `make test-changed`
+(the change touches `Makefile`, `Cargo.toml` and the runner, so it maps to every step, which an agent session does not run), TCG,
+`test-python`, `test-gui`; the candidate CI runs them.
+
+Open for the architect: ADR-0327 (the licence rule); CI's `ports-build` cache key (`.github/workflows/test.yml`) does not name
+`docs/adr/0326-*.md` (left to 9f-ci: the task kept CI caching out of this part; `libc.a` is rebuilt on every build anyway, since
+`zoraya-posix` is `FORCE`); a person's disk from before 9f-text is replaced once (kept as `.old`), since the fonts are in its key.
+Limits: no italic, toolbar not scaled, text cost per page not measured, native GUI programs still embed their fonts.

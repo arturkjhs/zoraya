@@ -182,6 +182,26 @@ fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
 "#
             .to_vec(),
         )),
+        // Russian and Ukrainian text in the system's fonts (ADR-0326,
+        // 9f-text): sizes in points, so that the page is twice the pixels at
+        // scale 2 (24 pt is 30 pixels at NetSurf's 90 dpi). Line 1 is ten і,
+        // line 2 ten ж (і is a third as wide in a proportional font; the box
+        // and the old 8-pixel cells are one width for both), line 3 the
+        // Ukrainian letters, line 4 a Russian phrase.
+        "/ns/cyrillic" => Some((
+            "text/html; charset=utf-8",
+            "<html><head><meta charset=\"utf-8\"><title>NS cyrillic</title></head>
+<body style=\"margin:0;background:#ffffff;color:#000000\">
+<div style=\"font-family:sans-serif;font-size:24pt;line-height:36pt;white-space:nowrap;margin:0\">
+<div>\u{0456}\u{0456}\u{0456}\u{0456}\u{0456}\u{0456}\u{0456}\u{0456}\u{0456}\u{0456}</div>
+<div>\u{0436}\u{0436}\u{0436}\u{0436}\u{0436}\u{0436}\u{0436}\u{0436}\u{0436}\u{0436}</div>
+<div>\u{0490}\u{0491} \u{0404}\u{0454} \u{0406}\u{0456} \u{0407}\u{0457}</div>
+<div>\u{0421}\u{044a}\u{0435}\u{0448}\u{044c} \u{0436}\u{0435} \u{0435}\u{0449}\u{0451}</div>
+</div></body></html>
+"
+            .as_bytes()
+            .to_vec(),
+        )),
         "/ns/style.css" => Some((
             "text/css",
             b".blue{width:200px;height:60px;background:#0000ff}\n".to_vec(),

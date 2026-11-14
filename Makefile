@@ -713,16 +713,21 @@ test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tool
 NS_ROOT := $(BUILD)/netsurf-root
 NS_DISK := $(BUILD)/netsurf-disk.img
 NS_TEMPLATE := tests/gui/netsurf.script
-# The test server outlives the runner's timeout (review N6).
-NS_LIFETIME := $(shell expr $(QEMU_SLOW_TIMEOUT) + 60)
+# ADR-0326 (9f-text): the Cyrillic page again at scale 2, in a second boot (the
+# first run is at scale 1); the system's fonts are in the root's /system/fonts.
+NS_TEXT_TEMPLATE := tests/gui/netsurf-text.script
+NS_TEXT_SCRIPT := $(BUILD)/netsurf-text.script
+# The test server outlives both runs' timeouts (review N6).
+NS_LIFETIME := $(shell expr 2 \* $(QEMU_SLOW_TIMEOUT) + 60)
 NS_SCRIPT := $(BUILD)/netsurf.script
 NS_HTTP_READY := $(BUILD)/netsurf-httpd.port
 NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
-NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(NS_SCRIPT) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --net --net-open --mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
+NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --gui-scale $(5) --net --net-open --mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
 test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
+	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
@@ -736,7 +741,9 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[netsurf] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-netsurf.log; exit 1; fi; \
 	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
-	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
+	sed -e "s/@PORT@/$$port/g" $(NS_TEXT_TEMPLATE) > $(NS_TEXT_SCRIPT); \
+	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto,$(NS_SCRIPT),1); rc=$$?; \
+	if [ $$rc = 0 ]; then $(call NS_RUN,$(QEMU_SLOW_TIMEOUT),text-2,auto,$(NS_TEXT_SCRIPT),2); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
 		log=target/test-logs/test-httpd-netsurf.log; mark='^http: GET /ns/mark-before-proceed '; \

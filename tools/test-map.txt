@@ -55,12 +55,14 @@ crates/zoraya-term/           test-gui test-tour-gui
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
 crates/zoraya-surface/        check test-netsurf
+crates/zoraya-fontset/        check test-netsurf
 crates/zoraya-platform/       check test-netsurf test-gui
 ports/netsurf/                check test-netsurf
 ports/patches/netsurf/        check test-netsurf
 ports/apps/nsshim.c           check test-netsurf test-apps
 user/describe/posix/netsurf.cmd  test-netsurf test-files
 tests/gui/netsurf.script      test-netsurf
+tests/gui/netsurf-text.script test-netsurf
 user/src/windowclient.rs      test-netsurf
 user/src/bin/panel.rs         test-gui test-netsurf
 crates/zoraya-text/           test-gui test-qemu
@@ -175,6 +177,7 @@ tests/shell/                  test-boot test-files
 crates/zoraya-fs/             test-files test-crash test-qemu test-posix test-hand-run
 crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix
 tools/zoraya-mkfs/            test-files test-posix test-hand-run
+tools/zoraya-ar/              check test-libposix test-posix test-apps test-netsurf test-python
 crates/zoraya-proto-file/     test-files test-crash test-gui test-posix
 user/src/bin/fsd.rs           test-files test-crash test-hand-run
 user/src/bin/blkd.rs          test-files test-crash
