@@ -290,3 +290,31 @@ For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.
 - **10e:** GNU hello's `configure` stopping at `config.sub sun4` is a compatibility defect, not a leftover. Find the cause
   before 10e merges (`sh -x config.sub sun4` in the guest; compare each step with the same toybox command's POSIX
   behaviour); fix it or record it with a test.
+
+## Open questions from the review of `work/test-fixes-2` (2026-11-14)
+
+For the architect.
+
+- **What may `--net-open` reach (INV-0230-1, audit C3)?** The network steps of `make test` run QEMU without `restrict=on`
+  (`NET_FETCH_RUN`, `test-net-fetch`'s DNS leg, `test-net-lookup`, `NET_POSIX_RUN`, `APPS_RUN`, `test-python`, `NS_RUN`;
+  `test-hand-run` and `make run-net` use person mode), which ADR-0230 item 2 does not describe: a script that fetches a public
+  address connects out. Decide: move them to `restrict=on` with `guestfwd`, or accept `--net-open` against the host test servers
+  and say so in a proposed ADR. INV-0230-1 stays `not yet applicable` until then; `make check-net-open` is a partial guard.
+- **INV-0042-1 and ADR-0001 rule 6:** rule 6 lists "an `abi` type" as a check, but `adr-check` now requires a `checked:` status to
+  name a command. Is an `abi` type a valid check (then its file may be named), or should a `check-*` script assert that
+  `kernel/src` has one user-copy read of the spawn buffer and that `SpawnRequest::decode` takes `&[u8]`? The row is
+  `not yet applicable` meanwhile (ADR-0042's open questions).
+- **No CI job runs libc++'s `thread.semaphore`, `thread.barrier` and `thread.latch` tests** (left out under TCG; CI is Linux, so
+  the `-tcg` script is used whatever the accelerator). Recorded in INV-0360-2 and `docs/design.md`. A separate nightly step with
+  its own timeout needs a third script and a step in `TEST_STEPS`, `ci-tests.txt` and the lanes; or libc++'s atomic wait over the
+  futex removes the polling.
+- **Not mapped before this part, still:** `test-cxx-libcxx` now follows `kernel/` and `crates/zoraya-rt/` (the futex libc++ waits
+  on), `tools/zcc` (`zc++` is a link to it), `ports/Makefile`, `ports/sources.lock`, `ports/crt/` and `ports/include/`.
+- **`t_quota` handshake:** `channel_read(...).is_ok()` retries when the peer closed, so a child that dies early costs 10 s and
+  says "no message"; wait for `READABLE | PEER_CLOSED` instead.
+- **INV-0172-4:** the console's shell creating a wider room from inside an entered room follows ADR-0172 point 3 (the shell
+  keeps the volume root; the room's grants are added to each line it launches). The refusal guards a shell that holds a table.
+  Test: launch `zosh` as a line inside an entered room (it starts with the room's table through `namespace::take`) and type
+  `room new wide +w /etc`, expecting `outside what this shell holds`, in `tests/shell/rooms.script` under `make test-files`.
+  Not done yet. Whether entering a room should narrow the person's own `room new` is a UX question (ADR-0172 point 3).
+- **The `libc.a` stamp on CI:** the first run after merge that hits the new ports cache key should have no `libc.a: hid` line.

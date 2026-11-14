@@ -52,3 +52,19 @@ after it did not run). Not run: `make test-changed`, CI.
 
 The 55 stale `not yet applicable` rows (C1; not touched, to keep clear of the other lane's rows), a check for INV-0172-4
 (above), the remaining vacuous-test findings, V4, libc++'s atomic wait over the futex (ADR-0301), 10e's `config.sub sun4`.
+
+## Fix pass after the review (docs/tasks/TASK-31-review-test-fixes-2.md)
+
+- **Finding 1:** INV-0230-1 is `not yet applicable (until the network steps run under restrict=on ...)`; the rule-6 note is in
+  ADR-0230's open questions; `check-net-open` is kept as a partial guard and now also covers person-mode `--net` runs
+  (`RUN_NET_CMD`, used by test-hand-run) and `tools/test-dns`, with `0.0.0.0`, `[::]`, `INADDR_ANY` and `UNSPECIFIED`
+  patterns; allow-list line 8 corrected. Shown by hand: removing the `RUN_NET_CMD` line from the list fails the check.
+- **Finding 2:** a `tools/` or `.github/` word counts only if it is an executable file (or a workflow); a bare `cargo test`
+  never counts. The four cases of the review are in `checked_names_a_command_that_exists` (13 tests pass).
+- **Finding 3:** INV-0042-1 stays `not yet applicable`; the note is in ADR-0042's open questions; the question is in the backlog.
+- **Finding 4:** `test-cxx-libcxx` follows `tools/zcc`, `ports/Makefile`, `ports/sources.lock`, `ports/crt/`, `ports/include/`,
+  `kernel/` and `crates/zoraya-rt/`. `check-test-lanes` and `check-ci-plan` pass.
+- **Finding 5, chosen: record.** A nightly step for the three groups needs a third script and a step in `TEST_STEPS`,
+  `ci-tests.txt` and the lanes; not done. INV-0360-2, `docs/design.md` and the backlog say that no CI job runs them.
+- Notes 6 to 9 are in the backlog ("Open questions from the review"). The INV-0172-4 test (launch `zosh` inside an entered
+  room) is not done: not cheap enough for this pass.

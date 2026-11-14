@@ -423,6 +423,17 @@ fn collect_packages(dir: &Path, depth: usize, out: &mut BTreeSet<String>) {
     }
 }
 
+/// An executable regular file, or a workflow file under `.github/workflows/`.
+fn is_command_file(path: &Path, word: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    meta.is_file()
+        && (meta.permissions().mode() & 0o111 != 0
+            || (word.starts_with(".github/workflows/") && word.ends_with(".yml")))
+}
+
 impl Commands {
     fn load(docs: &Path) -> Option<Commands> {
         let root = docs.parent()?;
@@ -500,14 +511,15 @@ impl Commands {
                             break;
                         }
                     }
-                    if j == i + 2 {
-                        found += 1;
-                    }
                 }
                 w if (w.starts_with("tools/") || w.starts_with(".github/")) && !w.contains('*') => {
-                    found += 1;
-                    if !self.root.join(w.trim_end_matches('.')).exists() {
+                    let path = self.root.join(w.trim_end_matches('.'));
+                    if !path.exists() {
                         return Some(format!("`{w}` does not exist"));
+                    }
+                    // A directory or a data file named in prose is not a command.
+                    if is_command_file(&path, w) {
+                        found += 1;
                     }
                 }
                 _ => {}
@@ -999,6 +1011,13 @@ mod tests {
         .unwrap();
         fs::write(base.join("ports/Makefile"), "libc:\n\ttrue\n").unwrap();
         fs::write(base.join("tools/s.sh"), "").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(base.join("tools/s.sh"), fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        fs::write(base.join("tools/data.txt"), "").unwrap();
+        fs::write(base.join("tools/s.sh.data"), "").unwrap();
         fs::write(
             base.join("crates/x/Cargo.toml"),
             "[package]\nname = \"zoraya-x\"\n",
@@ -1021,6 +1040,10 @@ mod tests {
             "`make -f ports/Makefile test-one`",
             "`cargo test -p zoraya-gone`",
             "`tools/gone.sh`",
+            "`tools/`",
+            "`tools/data.txt`",
+            "checked by review, see tools/s.sh.data",
+            "`cargo test`",
             "`make test-one`, `make test-gone`",
         ] {
             assert!(c.problem(bad).is_some(), "{bad}");

@@ -61,6 +61,11 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 ## Open questions
 - Whether 64 KiB is enough: measure argv at stage 6 with the toolchain's real command lines.
 - Whether the limit should rise if the copy cost is acceptable (ADR-0031's open question).
+- *Note, 2026-11-14 (work/test-fixes-2, ADR-0001 rule 6):* INV-0042-1 has no command that fails when it breaks: it holds
+  by the type of `SpawnRequest::decode` (`&[u8]`) and by review of `spawn`. `adr-check` now requires a `checked:` status
+  to name a command, so the row says `not yet applicable`. A check would be a `check-*` script asserting that
+  `kernel/src` has one user-copy read of the spawn buffer and that `decode` takes `&[u8]`; whether an `abi` type
+  (ADR-0001 rule 6) may count as a check without a command is the architect's question (docs/backlog.md).
 
 ## Revisit triggers
 - A real command line that does not fit.

@@ -165,6 +165,12 @@ GUI test can fetch through a desktop program the same way. Threads: none.
   needs the runner to answer through SLIRP's forwarder (host-dependent) or a Zoraya DNS test server in a second guest
   (Option C).
 - Where the test root's key lives and how it is rotated (it is a test secret, not a system one).
+- *Note, 2026-11-14 (work/test-fixes-2, ADR-0001 rule 6):* INV-0230-1 cannot be checked yet. The network steps of
+  `make test` run QEMU with `--net-open` (no `restrict=on`): `NET_FETCH_RUN`, `test-net-fetch` (the DNS leg),
+  `test-net-lookup`, `NET_POSIX_RUN`, `APPS_RUN`, `test-python`, `NS_RUN`; `test-hand-run` uses person mode (`RUN_NET_CMD`).
+  A script in them could reach outside `127.0.0.1`. What `--net-open` may reach (or moving these runs to `restrict=on`
+  with `guestfwd`, item 2) is the architect's decision. `make check-net-open` is a partial guard (each open run is
+  listed in `tools/net-open-allowed.txt`; the servers bind `127.0.0.1`).
 
 ## Revisit triggers
 - A network server program in scope: Option C, or `hostfwd` into a Zoraya listener from the runner.
