@@ -23,7 +23,7 @@ Branch `work/poll`, from `origin/main` e4891a3. ADR-0398 (proposed) is the numbe
   invariants INV-0398-1 to -3 (rows in `invariants.md`; a row in `index.md`). `ports/Makefile` (`ADDED_ADRS`) and `.github/workflows/test.yml`
   (the two ports-cache lists) name the ADR. `docs/design.md` says what exists.
 
-## What was run (all in `/Users/svitlana/workspace/zoraya-poll`, `PATH` with `~/.cargo/bin`, `CARGO_BUILD_JOBS=3`)
+## What was run (all in the worktree, `PATH` with `~/.cargo/bin`, `CARGO_BUILD_JOBS=3`)
 
 | Command | Result |
 |---|---|
