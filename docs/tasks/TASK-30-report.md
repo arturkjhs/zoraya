@@ -130,7 +130,11 @@ lock while notify_all is called at notify_all_at_thread_exit",
 [libcxx-commits](https://lists.llvm.org/pipermail/libcxx-commits/2023-January/049068.html)); the issue is
 [LWG 3343](https://wg21.link/lwg3343). No report of the test being flaky on slow targets since was found.
 
-**Which assertion fired in CI** is not known (the line was cut). Under the wrong order the waiter could take the mutex and destroy
+**Which assertion fires.** With the runner fixed, CI's TCG (candidate run 43568887269, with the fix) shows it: `Assertion
+failed: condition_variable_lock_skipped_counter < 250 (.../notify_all_at_thread_exit_lwg3343.pass.cpp: main: 120)`, the skip
+heuristic, not the LWG 3343 byte check; the same run's `make test-cxx` (HVF and TCG) passed `cxxtest exit-order`. The test
+therefore runs under HVF and is left out of the TCG run only (`tests/cxx/libcxx-tcg-excluded.txt`, with this evidence).
+The first CI failure (run 43557360750, before the fix) had its line cut. Under the wrong order the waiter could take the mutex and destroy
 the condition variable before `notify_all` returned, which is what the test's byte check (`sum == 0xcd * sizeof`) detects;
 the skip counter is the other candidate on a slow host. Neither fired in the 400 local runs with the fix.
 

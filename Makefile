@@ -980,7 +980,7 @@ CXX_LIBCXX_TIMEOUT ?= 1500
 cxx-libcxx-tests:
 	@$(MAKE) -s -f ports/Makefile cxx
 	@$(MAKE) --no-print-directory $(CXX_LIBCXX_STAMP)
-$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt \
+$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt tests/cxx/libcxx-tcg-excluded.txt \
 	  $(BUILD)/sysroot/usr/lib/libc++.a $(BUILD)/sysroot/usr/lib/libc++abi.a $(BUILD)/sysroot/usr/lib/libunwind.a $(BUILD)/sysroot/usr/lib/libc.a
 	rm -rf $(CXX_LIBCXX)/lct && mkdir -p $(CXX_LIBCXX)/lct
 	tests/cxx/libcxx-build.sh $(LLVM_TREE)/libcxx $(CXX_LIBCXX)/lct
@@ -993,7 +993,7 @@ test-cxx-libcxx: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
 	target/debug/zoraya-elf-check $(CXX_LIBCXX)/root/bin/lc
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 256M --from $(CXX_LIBCXX)/root $(CXX_LIBCXX)/disk.img && \
-	  $(RUNNER) --timeout $(CXX_LIBCXX_TIMEOUT) --script $(CXX_LIBCXX)/lct/script --label cxx-libcxx-$$accel -- \
+	  $(RUNNER) --timeout $(CXX_LIBCXX_TIMEOUT) --script $(CXX_LIBCXX)/lct/script$$([ $$accel = tcg ] && echo -tcg) --label cxx-libcxx-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(CXX_LIBCXX)/disk.img --mem 512M --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(CXX_LIBCXX)/disk.img || exit 1; done
 
