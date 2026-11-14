@@ -997,3 +997,37 @@ which decide whether Wikipedia looks like itself; (3) a CJK-capable font, if the
 the line under `net web` gets its own name rule), since a real redirect from the typed host to another one now happens in the field.
 Untrusted code never ran, the gate stays closed, and no code of the kernel or the shell changed in this step (a Makefile target and two
 scripts).
+
+## 9g-url: a URL's name rule under `net web` is public-only (branch `work/9g-url`, 2026-11-14)
+
+ADR-0328 Option B, accepted by the architect (closes the 9f-net review's finding 2: `netsurf http://evil.example/` kept a
+name rule that took a later answer of 192.168.1.1, a GET to the router).
+
+- **The rule.** `zoraya_abi::net::Target::PublicName` (encoding kind 6: a length byte and the name), TCP only in the
+  decoder. It admits its one name on its ports through the public, non-local answers (`name_grant`/`resolve_grant` give
+  `PublicOnly`, `Target::admits_public_answers`), so `netd`'s checks of a web rule's answers apply with no change in
+  `netd`; it covers and names no address. Subset: within a web rule on its ports, the same public-only name, a name or
+  wildcard rule that names the name, and `any`; only the same public-only name is within it.
+- **The shell.** Under the description's `net web` a literal URL whose host is a name adds no rule on 80 and 443 and a
+  public-only name rule on another port; a dotted address keeps its address rule; a `+net` word that covers the URL keeps
+  ADR-0223's rule; curl and wget (no `net web`) are unchanged. Pill `+net HOST:PORT public` (the panel takes `web` only
+  alone, ADR-0324 item 6, so the mark follows the target; a panel test admits it), `grants` line `reach, public answers
+  only (operand URL)`.
+- **Decisions taken without asking.** A new kind, not a flag bit (a decoder that ignored a flag would read a name rule,
+  which takes every answer); a wildcard rule over the name counts as a parent; the pill's form above. Recorded in
+  ADR-0328's open questions (rule-6 note); notes in ADR-0324 (item 2's words "and the URL operand's rule", INV-0324-2
+  with the new kind) and ADR-0325 (a private-only URL name now gets the page). INV-0328-1: `checked: make test-unit,
+  make test-netsurf`.
+- **`make test-netsurf`.** The `one.web.test` window has no pill for its URL; `netsurf http://two.web.test:8080/ns/web-port`
+  (public answer, relayed) shows the server's lime page; `netsurf http://lan.web.test:8080/...` (10.0.2.2 in
+  `net.hosts`) gets ADR-0325's page with `+net lan.web.test:8080`. The HTTPS steps on `test.zoraya` and `expired.zoraya`
+  (the gateway 203.0.113.2 in `net.hosts`, on ports that are not 80 or 443) now type `+net HOST:PORT` first, as a person
+  would: without it their rule refuses the gateway's answer, which is ADR-0328's point.
+- **Ran (HVF, this session).** `make check`; `cargo test -p zoraya-abi`, `-p zoraya-net`, `-p zoraya-shell`, `-p
+  zoraya-panel`; `make mutants` with the new `U-*` mutants of `tools/mutants/net-web.toml` and `W-web-rule-any-protocol`
+  (11 caught, 0 survived), and `U-public-name-names-the-name` by hand against `zoraya-net` alone (both netd tests fail);
+  `make test-netsurf` (186 and 19 steps, both server-log checks ok). Two earlier runs failed on this branch's own script
+  until fixed: the pill `web HOST:PORT` was refused by the panel (no window), and the HTTPS steps needed their `+net` words.
+- **Not done / limits.** curl and wget keep a URL's name rule (ADR-0328's open question). The refusal page says "does not
+  cover HOST on port PORT" also when the rule covers the name but not its private answer. `W-web-name-any-port-gui` (a
+  `make test-netsurf` mutant) was not rerun.
