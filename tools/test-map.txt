@@ -11,9 +11,9 @@
 # does not run print SKIPPED, e.g. test-python without PAR_LONG=1.
 #
 # PREFIX                      STEPS
-Makefile                      check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-fuzz test-fuzz-net
-tools/run-qemu.sh             check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-fuzz test-fuzz-net
-tools/test-runner/            check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-fuzz test-fuzz-net
+Makefile                      check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest test-fuzz test-fuzz-net
+tools/run-qemu.sh             check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest test-fuzz test-fuzz-net
+tools/test-runner/            check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest test-fuzz test-fuzz-net
 tools/test-par.sh             check
 tools/test-lanes.txt          check
 tools/check-test-lanes.sh     check
