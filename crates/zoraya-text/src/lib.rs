@@ -529,20 +529,51 @@ impl<S: Shaper> Text<'_, S> {
         target.clip = intersect(saved, r);
         target.fill(r, bg);
         if c != ' ' {
-            let (source, glyph) = self.fonts.lookup(c);
-            let pen = if source == Source::Font(0) {
-                x
-            } else {
-                let advance = self
-                    .fonts
-                    .advance(source, glyph, px)
-                    .div_euclid(raster::ONE);
-                x.saturating_add((cell.width as i32 - advance) / 2)
-            };
-            let b = self.cache.get(&self.fonts, source, glyph, px);
-            target.draw(b, pen, y.saturating_add(cell.baseline as i32), fg);
+            self.glyph_in_cell(target, cell, (x, y), c, px, fg);
         }
         target.clip = saved;
+    }
+
+    /// Draws `c` in `fg` over what the cell already holds, with no
+    /// background of its own: a combining mark over its base character.
+    /// Placed and clipped as [`Text::draw_cell`] does.
+    pub fn draw_glyph_over(
+        &mut self,
+        target: &mut Target<'_>,
+        cell: CellMetrics,
+        (x, y): (i32, i32),
+        c: char,
+        px: u32,
+        fg: Color,
+    ) {
+        let r = Rect::new(x, y, cell.width, cell.height);
+        let saved = target.clip;
+        target.clip = intersect(saved, r);
+        self.glyph_in_cell(target, cell, (x, y), c, px, fg);
+        target.clip = saved;
+    }
+
+    fn glyph_in_cell(
+        &mut self,
+        target: &mut Target<'_>,
+        cell: CellMetrics,
+        (x, y): (i32, i32),
+        c: char,
+        px: u32,
+        fg: Color,
+    ) {
+        let (source, glyph) = self.fonts.lookup(c);
+        let pen = if source == Source::Font(0) {
+            x
+        } else {
+            let advance = self
+                .fonts
+                .advance(source, glyph, px)
+                .div_euclid(raster::ONE);
+            x.saturating_add((cell.width as i32 - advance) / 2)
+        };
+        let b = self.cache.get(&self.fonts, source, glyph, px);
+        target.draw(b, pen, y.saturating_add(cell.baseline as i32), fg);
     }
 }
 

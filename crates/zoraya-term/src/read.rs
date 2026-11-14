@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use zoraya_text::{Rect, Target};
 use zoraya_tokens::Color;
 
-use crate::{COLORS, DEFAULT_BG, DEFAULT_FG, Look};
+use crate::Look;
 
 /// The characters a cell is matched against, in the order that decides a
 /// class of look-alikes: printable ASCII, Latin-1, Latin Extended-A, and
@@ -155,12 +155,26 @@ impl Reader {
             .map(|(p, _)| *p)
             .unwrap_or(0);
         if counts.len() == 1 {
-            let default_bg = self.look.colors[DEFAULT_BG as usize].pixel();
+            let default_bg = self.look.bg.pixel();
             return if bg == default_bg { ' ' } else { '_' };
         }
         let bg = Color::of_pixel(bg);
-        let mut fgs: Vec<Color> = Vec::with_capacity(COLORS);
-        for c in self.look.colors {
+        // The foreground of a cell drawn in any colour: the pixel farthest
+        // from the background first (a glyph's full-coverage pixels are the
+        // foreground), then the terminal's own colours.
+        let far = |c: Color| {
+            let d = |a: u8, b: u8| i32::from(a.abs_diff(b));
+            d(c.r(), bg.r()) + d(c.g(), bg.g()) + d(c.b(), bg.b())
+        };
+        let mut fgs: Vec<Color> = Vec::new();
+        if let Some(p) = counts
+            .keys()
+            .map(|p| Color::of_pixel(*p))
+            .max_by_key(|c| (far(*c), c.pixel()))
+        {
+            fgs.push(p);
+        }
+        for c in self.look.reader_colours() {
             if c != bg && !fgs.contains(&c) {
                 fgs.push(c);
             }
@@ -179,8 +193,7 @@ impl Reader {
     /// `text` as the reader would read it back from the terminal's default
     /// colours: each look-alike replaced by the first of its class.
     pub fn canonical(&mut self, text: &str) -> String {
-        let p = &self.look.colors;
-        let (fg, bg) = (p[DEFAULT_FG as usize], p[DEFAULT_BG as usize]);
+        let (fg, bg) = (self.look.fg, self.look.bg);
         text.chars()
             .map(|c| {
                 if c == ' ' || c == '_' {

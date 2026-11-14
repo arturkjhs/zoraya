@@ -29,7 +29,7 @@ fn screen(t: &Term) -> Vec<String> {
 
 #[test]
 fn text_newlines_and_the_shell_s_erase() {
-    let t = term(b"zosh$ lx\x08 \x08s\nREADME\n");
+    let t = term(b"zosh$ lx\x08 \x08s\r\nREADME\r\n");
     assert_eq!(screen(&t), ["zosh$ ls", "README", "", "", ""]);
     assert_eq!(t.cursor(), (0, 2));
 }
@@ -49,7 +49,7 @@ fn long_lines_wrap_and_the_bottom_scrolls() {
     assert_eq!(t.line(0), "x".repeat(20));
     assert_eq!(t.line(1), "x".repeat(5));
     for i in 0..10 {
-        t.write(format!("line {i}\n").as_bytes());
+        t.write(format!("line {i}\r\n").as_bytes());
     }
     assert_eq!(t.line(3), "line 9");
     assert_eq!(t.cursor(), (0, 4));
@@ -61,7 +61,7 @@ fn a_full_last_column_wraps_only_when_more_comes() {
     let mut t = term(b"");
     t.write(&[b'a'; 20]);
     assert_eq!(t.cursor(), (19, 0));
-    t.write(b"\n");
+    t.write(b"\r\n");
     assert_eq!(t.cursor(), (0, 1), "no blank line from the pending wrap");
 }
 
@@ -83,36 +83,33 @@ fn cursor_movement_and_erasing() {
     assert_eq!(t.cursor(), (0, 0));
 }
 
-/// ADR-0154's addition to the subset: SGR 2 is faint, 22 ends bold and faint.
+/// ADR-0154's addition to the subset: SGR 2 is faint, 22 ends bold and
+/// faint; ADR-0332: bold is a weight and does not brighten.
 #[test]
 fn faint_and_normal_intensity() {
     let t = term(b"a\x1b[2mb\x1b[22mc\x1b[1;2md\x1b[22me\x1b[31;2mf\x1b[0mg");
-    let fg = |x| t.cell(x, 0).fg;
-    assert_eq!(fg(0), DEFAULT_FG);
-    assert_eq!(fg(1), FAINT_DEFAULT);
-    assert_eq!(fg(2), DEFAULT_FG);
-    assert_eq!(fg(3), FAINT_DEFAULT, "faint wins over bold");
-    assert!(!t.cell(3, 0).bold);
-    assert_eq!(fg(4), DEFAULT_FG);
-    assert_eq!(fg(5), FAINT + 1);
-    assert_eq!(fg(6), DEFAULT_FG);
-    let p = palette(Appearance::Light);
+    let has = |x, flag| t.cell(x, 0).has(flag);
+    assert!(!has(0, cell::FAINT));
+    assert!(has(1, cell::FAINT));
+    assert!(!has(2, cell::FAINT));
+    assert!(has(3, cell::FAINT) && has(3, cell::BOLD));
+    assert!(!has(4, cell::FAINT) && !has(4, cell::BOLD));
+    assert!(has(5, cell::FAINT));
+    assert_eq!(t.cell(5, 0).fg(), Colour::Index(1));
+    assert_eq!(t.cell(6, 0).attrs(), 0);
+    let look = look();
     let tokens = Appearance::Light.palette();
+    let (fg, bg) = t.colours_of(&look, &t.cell(1, 0));
+    assert_eq!(fg, tokens.term_fg.blend(tokens.term_bg, 128));
+    assert_eq!(bg, tokens.term_bg);
+    let (fg, _) = t.colours_of(&look, &t.cell(5, 0));
+    assert_eq!(fg, tokens.term_red.blend(tokens.term_bg, 128));
+    let p = palette(Appearance::Light);
+    assert_eq!(p[1], tokens.term_red);
+    assert_eq!(p[9], tokens.term_red.blend(tokens.term_fg, 64));
+    assert_eq!(look.bg, tokens.term_bg);
     assert_eq!(
-        p[usize::from(FAINT_DEFAULT)],
-        tokens.term_fg.blend(tokens.term_bg, 128)
-    );
-    assert_eq!(
-        p[usize::from(FAINT + 1)],
-        tokens.term_red.blend(tokens.term_bg, 128)
-    );
-    assert_eq!(
-        p[usize::from(BRIGHT + 1)],
-        tokens.term_red.blend(tokens.term_fg, 64)
-    );
-    assert_eq!(p[usize::from(DEFAULT_BG)], tokens.term_bg);
-    assert_eq!(
-        palette(Appearance::Dark)[usize::from(DEFAULT_FG)],
+        Look::new(Scale::ONE, Appearance::Dark).fg,
         Appearance::Dark.palette().term_fg
     );
 }
@@ -120,42 +117,26 @@ fn faint_and_normal_intensity() {
 #[test]
 fn colours_and_reverse() {
     let t = term(b"\x1b[31;44mA\x1b[1mB\x1b[0;7mC\x1b[mD");
+    let a = t.cell(0, 0);
     assert_eq!(
-        t.cell(0, 0),
-        Cell {
-            ch: 'A',
-            fg: 1,
-            bg: 4,
-            bold: false
-        }
+        (a.ch, a.fg(), a.bg(), a.attrs()),
+        ('A', Colour::Index(1), Colour::Index(4), 0)
     );
+    let b = t.cell(1, 0);
     assert_eq!(
-        t.cell(1, 0),
-        Cell {
-            ch: 'B',
-            fg: 9,
-            bg: 4,
-            bold: true
-        }
+        (b.fg(), b.bg(), b.attrs()),
+        (Colour::Index(1), Colour::Index(4), cell::BOLD),
+        "bold is a weight: the colour is not brightened"
     );
+    let c = t.cell(2, 0);
     assert_eq!(
-        t.cell(2, 0),
-        Cell {
-            ch: 'C',
-            fg: DEFAULT_BG,
-            bg: DEFAULT_FG,
-            bold: false
-        }
+        (c.fg(), c.bg(), c.attrs()),
+        (Colour::Default, Colour::Default, cell::REVERSE)
     );
-    assert_eq!(
-        t.cell(3, 0),
-        Cell {
-            ch: 'D',
-            fg: DEFAULT_FG,
-            bg: DEFAULT_BG,
-            bold: false
-        }
-    );
+    let look = look();
+    let (fg, bg) = t.colours_of(&look, &c);
+    assert_eq!((fg, bg), (look.bg, look.fg), "reverse swaps what is drawn");
+    assert_eq!(t.cell(3, 0), Cell::new('D'));
 }
 
 #[test]
@@ -196,9 +177,9 @@ fn queries_get_no_answer() {
 #[test]
 fn memory_is_bounded() {
     let mut t = Term::new(80, 24);
-    let before = t.memory();
+    let bound = t.memory_bound();
     for i in 0..5000 {
-        t.write(format!("line {i}\n").as_bytes());
+        t.write(format!("line {i}\r\n").as_bytes());
     }
     assert_eq!(t.history_len(), SCROLLBACK);
     let mut osc = vec![b'x'; 64 * 1024];
@@ -211,7 +192,7 @@ fn memory_is_bounded() {
         shown.ends_with("xxxafter"),
         "the string was cut and the rest printed"
     );
-    assert_eq!(t.memory(), before);
+    assert!(t.memory() <= bound, "{} > {bound}", t.memory());
     // An escape inside a string still counts (review R2), and so does a
     // control sequence that never ends.
     for opening in [&b"\x1b]"[..], b"\x1b["] {
@@ -286,7 +267,7 @@ fn the_parser_is_total() {
 fn the_view_scrolls_back_and_output_returns_it() {
     let mut t = Term::new(10, 3);
     for i in 0..6 {
-        t.write(format!("{i}\n").as_bytes());
+        t.write(format!("{i}\r\n").as_bytes());
     }
     assert_eq!(t.history_len(), 4);
     t.scroll_view(2);
@@ -317,7 +298,7 @@ fn rendering_draws_changed_rows_and_the_cursor() {
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 0)));
     // The cursor, after "hi", is a reversed blank: all text colour.
     assert_eq!(read_rows(&pixels, w, h, 10, 1), ["hi_"]);
-    let fg = look.colors[usize::from(DEFAULT_FG)].pixel();
+    let fg = look.fg.pixel();
     let (cx, cy) = look.cell_origin(2, 0);
     assert!(
         (0..look.cell_height())
@@ -337,7 +318,7 @@ fn ukrainian_czech_colours_and_bold_read_back() {
     let (w, h) = look.surface_size(30, 3);
     let mut pixels = vec![0u32; w * h];
     look.clear(&mut pixels);
-    t.write("звіт-2026.txt příklad.txt\n\x1b[31mґанок\x1b[m \x1b[1mЖ\x1b[22m \x1b[2mfaint\x1b[m\n\x1b[7mrev".as_bytes());
+    t.write("звіт-2026.txt příklad.txt\r\n\x1b[31mґанок\x1b[m \x1b[1mЖ\x1b[22m \x1b[2mfaint\x1b[m\r\n\x1b[7mrev".as_bytes());
     t.render(&mut look, &mut pixels, w, false);
     let mut reader = Reader::new(Look::new(Scale::ONE, Appearance::Light));
     let rows = reader.rows(30, 3, (0, 0), (w, h), |x, y| pixels[y * w + x]);
@@ -407,16 +388,21 @@ fn sizes_are_pinned_to_the_padding() {
 
 #[test]
 fn cells_are_addressed_by_row() {
-    let t = term(b"a\nb");
+    let t = term(b"a\r\nb");
     assert_eq!(t.cell(0, 1).ch, 'b');
 }
 
 #[test]
 fn memory_is_what_the_terminal_holds() {
     let t = Term::new(80, 24);
-    let expected =
-        (t.screen.capacity() + t.history.capacity()) * size_of::<Cell>() + t.dirty.capacity();
+    let expected = (t.screen.capacity() + t.other.capacity() + t.history.capacity())
+        * size_of::<Cell>()
+        + t.dirty.capacity()
+        + t.tabs.capacity()
+        + t.osc.capacity();
     assert_eq!(t.memory(), expected);
+    assert!(t.memory() <= t.memory_bound());
+    assert_eq!(size_of::<Cell>(), 16, "ADR-0332 item 6");
 }
 
 #[test]
@@ -425,18 +411,18 @@ fn scrolling_and_cursor_moves_redraw_their_rows() {
     let mut look = look();
     let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0u32; w * h];
-    t.write(b"a\nb\nc");
+    t.write(b"a\r\nb\r\nc");
     t.render(&mut look, &mut pixels, w, true);
-    t.write(b"\n");
+    t.write(b"\r\n");
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     t.write(b"\x1b[2;1H");
-    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((1, 2)));
     assert_eq!(t.render(&mut look, &mut pixels, w, true), None);
     t.redraw();
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     // A row below the first is drawn from its own row.
     let mut t = Term::new(10, 3);
-    t.write(b"h\nZ");
+    t.write(b"h\r\nZ");
     look.clear(&mut pixels);
     t.render(&mut look, &mut pixels, w, false);
     assert_eq!(read_rows(&pixels, w, h, 10, 2), ["h", "Z"]);
@@ -470,7 +456,7 @@ fn samples() {
     ] {
         let mut look = Look::new(Scale::ONE, appearance);
         let mut t = Term::new(80, 24);
-        t.write(session.as_bytes());
+        t.write(session.replace('\n', "\r\n").as_bytes());
         let (w, h) = look.surface_size(80, 24);
         let mut pixels = vec![0u32; w * h];
         look.clear(&mut pixels);
@@ -486,7 +472,7 @@ fn samples() {
 #[test]
 fn a_resize_keeps_what_fits_and_the_cursor_on_screen() {
     let mut t = Term::new(10, 4);
-    t.write(b"abcdefghij\n12\nxyz\nlast");
+    t.write(b"abcdefghij\r\n12\r\nxyz\r\nlast");
     assert_eq!(t.cursor(), (4, 3));
     t.resize(5, 2);
     assert_eq!(t.size(), (5, 2));
@@ -496,7 +482,7 @@ fn a_resize_keeps_what_fits_and_the_cursor_on_screen() {
     assert_eq!(t.history_len(), 2);
     t.resize(12, 3);
     assert_eq!(screen(&t), ["xyz", "last", ""]);
-    t.write(b"!\nmore");
+    t.write(b"!\r\nmore");
     assert_eq!(screen(&t), ["xyz", "last!", "more"]);
     t.resize(0, 0);
     assert_eq!(t.size(), (1, 1));
@@ -516,7 +502,7 @@ fn clear_fills_the_whole_surface_with_the_background() {
     let look = look();
     let mut pixels = vec![0x00ab_cdefu32; 50 * 40];
     look.clear(&mut pixels);
-    let bg = look.colors[usize::from(DEFAULT_BG)].pixel();
+    let bg = look.bg.pixel();
     assert!(pixels.iter().all(|p| *p == bg));
 }
 
@@ -525,7 +511,7 @@ fn cells_at_the_pictures_edge_read_only_when_whole() {
     // Mutation testing (7a): the reader's bound on the picture's edge.
     let mut look = look();
     let mut t = Term::new(10, 3);
-    t.write(b"xxxxxxxxxx\nxxxxxxxxxx\nxxxxxxxxxx");
+    t.write(b"xxxxxxxxxx\r\nxxxxxxxxxx\r\nxxxxxxxxxx");
     let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0u32; w * h];
     look.clear(&mut pixels);
@@ -616,11 +602,11 @@ fn wheel_turns_become_lines() {
     assert_eq!(w.turn(-40), 1);
     assert_eq!(w.turn(0), 0);
     let mut w = WheelLines::default();
-    assert_eq!(w.turn(i32::MIN), SCROLLBACK as isize);
-    assert_eq!(w.turn(i32::MAX), -(SCROLLBACK as isize));
+    assert_eq!(w.turn(i32::MIN), MAX_SCROLLBACK as isize);
+    assert_eq!(w.turn(i32::MAX), -(MAX_SCROLLBACK as isize));
     let mut t = Term::new(10, 4);
     for _ in 0..20 {
-        t.write(b"x\n");
+        t.write(b"x\r\n");
     }
     let mut w = WheelLines::default();
     t.scroll_view(w.turn(-120));

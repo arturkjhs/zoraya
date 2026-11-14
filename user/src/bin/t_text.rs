@@ -14,7 +14,7 @@ extern crate alloc;
 
 use alloc::vec;
 
-use zoraya_term::{Cell, DEFAULT_BG, DEFAULT_FG, Look};
+use zoraya_term::{Cell, Look};
 use zoraya_text::reference::{CASES, REFERENCE, SAMPLE, Which, digest};
 use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::{clock_monotonic, println};
@@ -35,13 +35,7 @@ fn grid(look: &mut Look, pixels: &mut [u32], stride: usize, shift: usize) -> u64
         for x in 0..80 {
             // А to я: 64 letters, each on many cells.
             let c = char::from_u32(0x410 + ((y * 80 + x + shift) % 64) as u32).unwrap_or('?');
-            let cell = Cell {
-                ch: c,
-                fg: DEFAULT_FG,
-                bg: DEFAULT_BG,
-                bold: false,
-            };
-            look.draw_cell(pixels, stride, x, y, cell);
+            look.draw_cell(pixels, stride, x, y, Cell::new(c));
         }
     }
     (clock_monotonic() - start) / 1000
