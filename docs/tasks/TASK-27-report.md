@@ -1028,6 +1028,9 @@ name rule that took a later answer of 192.168.1.1, a GET to the router).
   (11 caught, 0 survived), and `U-public-name-names-the-name` by hand against `zoraya-net` alone (both netd tests fail);
   `make test-netsurf` (186 and 19 steps, both server-log checks ok). Two earlier runs failed on this branch's own script
   until fixed: the pill `web HOST:PORT` was refused by the panel (no window), and the HTTPS steps needed their `+net` words.
+  `make test-changed`: `make check`, host tests (51 binaries), build, test-boot, test-qemu, test-files, test-posix,
+  test-tour-gui, test-gui, test-net all ok; its plan also named test-apps, test-netsurf, test-python and
+  test-python-regr, which its lanes did not run (test-netsurf ran on its own, above; the others are left to CI).
 - **Not done / limits.** curl and wget keep a URL's name rule (ADR-0328's open question). The refusal page says "does not
   cover HOST on port PORT" also when the rule covers the name but not its private answer. `W-web-name-any-port-gui` (a
   `make test-netsurf` mutant) was not rerun.
