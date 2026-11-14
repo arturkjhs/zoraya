@@ -269,13 +269,13 @@ screen 1
 screen ~> _
 chord ctrl l
 top ~> _
-type grep milk notes.txt
+type more notes.txt
 window
-prefix ~> grep milk notes.txt
+prefix ~> more notes.txt
 type \r
 window
-screen zosh: grep: no such command
-screen   hint: on Zoraya this is search: search TEXT FILE...
+screen zosh: more: no such command
+screen   hint: to print a file: cat FILE (help pages page by themselves)
 screen ~> _
 chord ctrl l
 top ~> _

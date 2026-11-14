@@ -5,6 +5,7 @@ operand  [FILE...]  read  the files to print, in order; the input if none is giv
 exit     0  printed
 exit     1  a file could not be printed
 ---
+cat is a native command; /bin/cat is toybox's, for scripts, with its own options (help /bin/cat).
 Prints each FILE in turn. A file that is not UTF-8 text is described by its size instead.
 
 EXAMPLES

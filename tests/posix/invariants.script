@@ -69,5 +69,74 @@
 < interrupts=0
 < background-ended
 < PSURF>
+# dash's builtin read from a here-document and from a pipe, and a script
+# piped into sh (dash's input from a pipe; ports/Makefile, --disable-tee),
+# then GNU config.sub's alias table, which reads its argument that way.
+> printf 'IFS=- read a b <<EOF\\nx-y\\nEOF\\necho "HEREDOC[$a/$b]"\\n' > /tmp/rd.sh; sh /tmp/rd.sh\r
+< HEREDOC[x/y]
+< PSURF>
+> echo x-y | (IFS=- read a b; echo "PIPE[$a/$b]")\r
+< PIPE[x/y]
+< PSURF>
+> echo 'echo PIPED-$((40 + 2))' | sh\r
+< PIPED-42
+< PSURF>
+> sh /work/w4-g/build-aux/config.sub sun4\r
+< sparc-sun-sunos4.1.1
+< PSURF>
+# toybox's expr (ADR-0336 item 2; it has no stage 6 workload): arithmetic,
+# a match, a comparison, and the exit status of a zero result, as
+# configure scripts use them.
+> echo "E[$(expr 6 \\* 7)][$(expr 17 % 5 - 1)][$(expr foo.c : '.*\\.c')][$(expr abc \\< abd)]"; expr 3 - 3; echo "Z$?"\r
+< E[42][1][5][1]
+< \n0
+< Z1
+< PSURF>
+# sed -i whose copy back fails (the 64K limit of /limited) keeps the edited
+# text in /tmp and says where (toybox patch 0002; review of 10e, finding 17).
+> yes abcdefghij | head -n 3700 > /limited/big; sed -i 's/.*/&&/' /limited/big; echo "SED=$?"; cat /tmp/toybox-* | wc -c; rm -f /tmp/toybox-* /limited/big\r
+< the edited text is kept in /tmp/toybox-
+< SED=1
+< 77700
+< PSURF>
+# tr, expr and diff of toys/pending past W5 and W10 (the gate review of 10e,
+# G1 to G4 and G8; toybox patch 0003). G1: a range and a class that pass the
+# end of tr's set buffer. G2: a NUL in SET2. G3: a read error on standard
+# input ends tr. G4: expr fails on overflow.
+> s=$(printf 'ab\\001-\\377'); echo hi | tr "$s" y; echo "G1A=$?"; z=$(printf '%0250d' 0); echo hi | tr "$z[:punct:]" y; echo "G1B=$?"\r
+< yyyG1A=0
+< hi
+< G1B=0
+< PSURF>
+> echo abc | tr abc 'x\\000y' | tr '\\000' N; echo "G2=$?"\r
+< \nxNy
+< G2=0
+< PSURF>
+> tr a b < /tmp; echo "G3=$?"\r
+< tr: read
+< G3=1
+< PSURF>
+> expr 9223372036854775807 \\> -1; expr 9223372036854775807 + 1; echo "G4=$?"; expr 7 / 0; echo "E1=$?"; expr 1 + a; echo "E2=$?"\r
+< \n1
+< expr: overflow
+< G4=2
+< expr: division by zero
+< E1=2
+< expr: non-integer argument
+< E2=2
+< PSURF>
+> printf 'a\\r\\nbb  b\\n' | tr -d '\\r' | tr -s ' b' | tr -c 'ab\\n' _\r
+< b_b
+< PSURF>
+> printf 'a\\nb\\nc\\n' > /tmp/d1; printf 'a\\nB\\nc\\n' > /tmp/d2; diff -u /tmp/d1 /tmp/d2; echo "D=$?"\r
+< @@ -1,3 +1,3 @@
+< -b
+< +B
+< D=1
+< PSURF>
+> mkdir -p /tmp/r1 /tmp/r2; echo x > /tmp/r1/f; echo x > /tmp/r2/f; echo y > /tmp/r1/only; diff -r /tmp/r1 /tmp/r2; echo "R=$?"\r
+< Only in /tmp/r1: only
+< R=1
+< PSURF>
 > exit\r
 < BROKER-STATS

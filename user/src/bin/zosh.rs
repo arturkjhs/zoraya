@@ -528,22 +528,32 @@ impl Held {
         }
     }
 
-    /// As `open`, following links. A table follows them inside the
-    /// covering entry only, through its own connection: a relative link
-    /// (the toolchain's `tr -> busybox`) resolves as on the volume; an
-    /// absolute one resolves from the entry, so it may not be found, and
-    /// never leads out of the entry.
+    /// As `open`, following links. A table follows them through the table
+    /// (`zoraya_resolve::walk_table`): each hop is opened through the entry
+    /// that covers it, with that entry's rights (a link from a `+w`
+    /// directory into a read one opens read only), a target is normalised
+    /// so `..` cannot leave `/`, a path no entry covers is refused by
+    /// `open`, and the walk ends after 40 links.
     fn open_followed(&self, rel: &str, flags: u32, wanted: u32) -> FsResult<File> {
         match self {
             Held::Root(f) => f.open_followed(rel, flags, wanted),
-            Held::Table(_) => {
-                let abs = format!("/{}", rel.trim_start_matches('/'));
-                match self.covering(&abs) {
-                    Some((e, rest)) if e.dir && !rest.is_empty() => {
-                        e.file.open_followed(&rest, flags, wanted & e.rights)
-                    }
-                    _ => self.open(rel, flags, wanted),
-                }
+            Held::Table(entries) => {
+                let prefixes: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+                let directories: Vec<bool> = entries.iter().map(|e| e.dir).collect();
+                zoraya_resolve::walk_table(
+                    &prefixes,
+                    &directories,
+                    rel,
+                    |i, rest| {
+                        let e = &entries[i];
+                        Ok(match e.file.open_or_link(rest, flags, wanted & e.rights)? {
+                            Ok(file) => zoraya_resolve::Hop::Opened(file),
+                            Err(next) => zoraya_resolve::Hop::Link(next),
+                        })
+                    },
+                    |abs| self.open(abs, flags, wanted),
+                    zoraya_proto_file::status::IS_LINK,
+                )
             }
         }
     }
@@ -1627,6 +1637,7 @@ impl Z {
         match grants::trusted_description(&trusted, path) {
             Some(d) => {
                 let d = d.clone();
+                Self::userland_options(exec, &d)?;
                 self.plan_with(exec, &d, true)
             }
             None => {
@@ -1635,6 +1646,61 @@ impl Z {
                 self.plan_with(exec, &undescribed, false)
             }
         }
+    }
+
+    /// ADR-0336 item 5: the options a userland command's description lists
+    /// are the options the shell lets through. A line with an option its
+    /// description does not list (or a value an option does not take) is
+    /// refused here, before anything runs, rather than run with no
+    /// designations (review of 10e, finding 4). A mistake about operands is
+    /// not refused: `gzip -c < f`, `xargs` without a command and `find`
+    /// without a path read standard input or have a default, and run as
+    /// before, the program saying what it lacks (check of the fix pass, N3).
+    /// `--help` anywhere before `--` makes the parse `Help` and is let
+    /// through: the line runs with no designations, so it is no widening,
+    /// though its other words are not checked (N4).
+    fn userland_options(exec: &Exec<'_>, d: &Description) -> Result<(), String> {
+        if !descriptions::USERLAND.contains(&d.name.as_str()) {
+            return Ok(());
+        }
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let Err(why) = zoraya_command::parse(d, &texts) else {
+            return Ok(());
+        };
+        if !why.is_option_error() {
+            return Ok(());
+        }
+        // `-name` fails as `-n`: name the word the person wrote.
+        let unknown = |t: &str| {
+            t.starts_with('-')
+                && t.len() > 1
+                && matches!(zoraya_command::parse(d, &[t]), Err(e) if e.0.ends_with("no such option"))
+        };
+        let word = texts
+            .iter()
+            .copied()
+            .take_while(|t| *t != "--")
+            .find(|t| unknown(t));
+        let problem = match word {
+            Some(w) => format!("{w}: not an option its description lets through"),
+            None => format!("{}, which its description does not let through", why.0),
+        };
+        let help = format!("help {} lists what its description lets through", d.name);
+        let toybox = format!(
+            "to run it undescribed (the current directory and the line's grants only): \
+             /usr/libexec/toybox {} ...",
+            d.name
+        );
+        let mut hints = alloc::vec![help.as_str()];
+        if d.name != "awk" {
+            hints.push(toybox.as_str());
+        }
+        Err(zoraya_command::error(
+            "zosh",
+            Some(exec.name),
+            &problem,
+            &hints,
+        ))
     }
 
     /// The table of a POSIX program's bootstrap record (ADR-0153 rule 10):
@@ -1751,7 +1817,14 @@ impl Z {
         let covered = entries
             .iter()
             .any(|e| e.kind == P::Directory && zoraya_resolve::covers(&e.prefix, &self.cwd));
-        if below && !covered {
+        // So also for a file the line designates outside it (`sed -i x
+        // ../d/f`, a `cwd none` program): without the placeholder the
+        // program would start in `/bin` and resolve `../d/f` from there
+        // (review of 10e, finding 8).
+        let designated = plan
+            .iter()
+            .any(|e| e.reason.starts_with("operand") || e.reason.starts_with("option"));
+        if (below || designated) && !covered {
             // The record wants a directory connection at the current
             // directory's entry (`Bootstrap::decode`), so the placeholder is
             // a connection whose other end is closed: every request on it
@@ -2720,6 +2793,20 @@ impl Z {
         i32::from(code)
     }
 
+    /// The trusted description of the POSIX program `name` (`sed`, or
+    /// `/bin/ls`), for `help`.
+    fn posix_page(name: &str) -> Option<Description> {
+        let path = if name.starts_with('/') {
+            name.to_string()
+        } else {
+            format!("/bin/{name}")
+        };
+        descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .find(|d| d.program.as_deref() == Some(path.as_str()))
+    }
+
     fn help(&mut self, state: &State, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
         if let Some(word) = p.value(d, "search") {
             let mut found = Vec::new();
@@ -2789,6 +2876,16 @@ impl Z {
                 What::Command => format!("{name} is a program, /zoraya/bin/{name}"),
             };
             (d, first)
+        } else if let Some(d) = Self::posix_page(name) {
+            // A POSIX program of the image (ADR-0336 item 5): its page is the
+            // description's body; `/bin/NAME` names the toybox one where a
+            // native command has the same name.
+            let first = format!(
+                "{} is a POSIX program, {}",
+                d.name,
+                d.program.clone().unwrap_or_default()
+            );
+            (Rc::new(d), first)
         } else {
             let mut hints = Vec::new();
             let mut names: Vec<String> = self.commands(state).into_iter().map(|(n, _)| n).collect();

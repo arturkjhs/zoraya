@@ -117,6 +117,7 @@ prints the clang it uses.
 | the host's C compiler (`cc`): dash's helpers, tcc's `c2str` and the host tcc of the link check | Apple clang 21.0.0 on the M4 | Xcode Command Line Tools / distribution |
 | `curl`, `shasum` or `sha256sum` (`make fetch-ports`) | curl 8.7.1 | macOS / distribution |
 | `patch`, `tar` with gzip and bzip2, `unzip` (SQLite's archive), `awk`, `sed` | the host's | macOS / distribution |
+| bison (host only) | the pinned GNU Bison 3.8.2 of `ports/sources.lock`, built into `build/ports/host` (the GNU bison row below) | `make awk` (ADR-0336 item 3): generates one-true-awk's parser from `awkgram.y`, the same on every host (its version is the first line of `awk-grammar.log`); not part of the image or any crate |
 | GNU sed, as `gsed` or `sed` (toybox's build scripts) | GNU sed 4.10 (Homebrew `gnu-sed`) on the M4 | `brew install gnu-sed` on macOS; the default `sed` on Linux |
 
 `rust-objcopy`, which ADR-0109 item 10 lists, is not used: it needs the `llvm-tools` component, which the minimal
@@ -134,8 +135,8 @@ measured T1 workloads).
 | musl | 1.2.5 | MIT (a few files public domain or under other permissive terms, its `COPYRIGHT`) | the retained C of `libc.a` and the sysroot's headers (ADR-0100) |
 | dash | 0.5.13.5 | BSD-3-Clause | `/bin/sh` |
 | GNU make | 4.4.1 | GPL-3.0-or-later | `/bin/make` |
-| toybox | 0.8.15 | 0BSD | `cat head ls mv rm sleep touch true uname sort wc yes` |
-| busybox | 1.38.0 | GPL-2.0-only | `tr`, `diff` |
+| toybox | 0.8.15 | 0BSD | the commands of `ports/toybox-applets.txt` (ADR-0336), in `/usr/libexec/toybox` with links in `/bin` |
+| one-true-awk | `72e9b56caddb4a6f8d1405315a5183c26b8650a4` (second edition) | Lucent Technologies permission notice (permissive; ADR-0336 item 3, the architect is asked to confirm) | `/bin/awk`; no other awk is permissive and complete (stage-10/survey.md#awk) |
 | TinyCC | `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (`COPYING` 2.1, the LGPL files version 2 or later; some files permissive) | `/bin/tcc`, `libtcc1.a` |
 | pdpmake | `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` (2.0.4) | public domain (the Unlicense) | `/bin/pdpmake`, TASK-02's comparison make for W2 and W4 (ADR-0110) |
 | Lua | 5.5.1 | MIT | W2's source, in the image only, built inside Zoraya |
@@ -153,7 +154,7 @@ measured T1 workloads).
 | LLVM (libc++, libc++abi, libunwind; LLVM libc's `shared/` headers) | 20.1.8 | Apache-2.0 WITH LLVM-exception | the C++ runtime every C++ program links, static, built by `zc++` into `build/sysroot` (TASK-30, proposed ADR-0360, ADR-0361); libc++'s test suite is a test input (`make test-cxx-libcxx`). Why not in-house: a C++ standard library and unwinder are not small; libc++ is clang's own and runs on musl |
 | GoogleTest | 1.18.0 | BSD-3-Clause | a test input only: built by CMake with `ports/cmake/zoraya.cmake`, its own tests run by `make test-cxx-gtest` (TASK-30, proposed ADR-0367); never in the image |
 | pkg-config | 0.29.2 | GPL-2.0 | host tool only, built into `build/ports/host` when the host has none; never linked (9d) |
-| GNU bison | 3.8.2 | GPL-3.0-or-later (with the Bison exception) | host tool only, built into `build/ports/host` when the host's is older than 3 (macOS ships 2.3; libnslog's grammar); never linked (9d). The host also needs perl, gperf and flex (CI image: `.github/ci/Dockerfile`) |
+| GNU bison | 3.8.2 | GPL-3.0-or-later (with the Bison exception) | host tool only, built into `build/ports/host`: for NetSurf when the host's is older than 3 (macOS ships 2.3; libnslog's grammar; 9d), and always for one-true-awk's grammar (10e); never linked. The host also needs perl, gperf and flex (CI image: `.github/ci/Dockerfile`) |
 
 ### Mutation testing
 

@@ -120,6 +120,18 @@ impl<'a> Parsed<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageError(pub String);
 
+impl UsageError {
+    /// Whether the mistake is about an option (one the description does not
+    /// list, or its value), not about the operands: what a description
+    /// refuses to let through (ADR-0336 item 5). A missing or extra operand
+    /// is not: a program may read standard input or have a default.
+    pub fn is_option_error(&self) -> bool {
+        ["no such option", "takes no value", "needs a value"]
+            .iter()
+            .any(|m| self.0.ends_with(m))
+    }
+}
+
 fn is_option_word(d: &Description, arg: &str) -> bool {
     let Some(rest) = arg.strip_prefix('-') else {
         return false;

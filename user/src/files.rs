@@ -194,12 +194,36 @@ impl File {
     pub fn open_followed(&self, path: &str, flags: u32, wanted: u32) -> FsResult<File> {
         let mut path = alloc::string::String::from(path.trim_start_matches('/'));
         for _ in 0..40 {
+            match self.open_or_link(&path, flags, wanted)? {
+                Ok(file) => return Ok(file),
+                // An absolute target is taken from this connection's root,
+                // as before.
+                Err(next) => path = alloc::string::String::from(next.trim_start_matches('/')),
+            }
+        }
+        Err(status::IS_LINK)
+    }
+
+    /// One open of `path`: the file, or where a link on the way leads, as
+    /// the path to open next: absolute (starting with `/`) when the link's
+    /// target is, else relative to this connection, with the rest of the
+    /// path after it. A shell holding a table of connections follows an
+    /// absolute target through its table, not this connection (10e: the
+    /// links `/bin/NAME -> /usr/libexec/toybox` in a room).
+    pub fn open_or_link(
+        &self,
+        path: &str,
+        flags: u32,
+        wanted: u32,
+    ) -> FsResult<Result<File, alloc::string::String>> {
+        let path = path.trim_start_matches('/');
+        {
             let (client, server) = channel_create().map_err(|_| GONE)?;
             let client = File { end: client };
             let m = proto::Open {
                 flags: Flags(flags),
                 rights: Flags(wanted),
-                path: Path(&path),
+                path: Path(path),
             };
             let mut reply = Vec::new();
             let (length, _) = call(
@@ -214,16 +238,23 @@ impl File {
                     .unwrap_or(status::INVALID_ARGUMENT));
             };
             if r.status.0 != status::IS_LINK {
-                return check(r.status.0).map(|()| client);
+                return check(r.status.0).map(|()| Ok(client));
             }
             let remaining = r.remaining.0;
-            let consumed = &path[..path.len() - remaining.len()];
+            // The server's `remaining` is a suffix of what was asked; one
+            // that is not is refused, not trusted (check of open_or_link, C3).
+            let Some(cut) = path
+                .len()
+                .checked_sub(remaining.len())
+                .filter(|c| path.is_char_boundary(*c))
+            else {
+                return Err(status::INVALID_ARGUMENT);
+            };
+            let consumed = &path[..cut];
             let consumed = consumed.trim_end_matches('/');
             let dir = consumed.rsplit_once('/').map_or("", |(d, _)| d);
             let target = r.target.0;
-            let mut next = if let Some(absolute) = target.strip_prefix('/') {
-                alloc::string::String::from(absolute)
-            } else if dir.is_empty() {
+            let mut next = if target.starts_with('/') || dir.is_empty() {
                 alloc::string::String::from(target)
             } else {
                 alloc::format!("{dir}/{target}")
@@ -232,9 +263,8 @@ impl File {
                 next.push('/');
                 next.push_str(remaining.trim_start_matches('/'));
             }
-            path = next;
+            Ok(Err(next))
         }
-        Err(status::IS_LINK)
     }
 
     /// Where the absolute normal `path`, read from this directory as `/`,
@@ -272,7 +302,14 @@ impl File {
             }
             followed = true;
             let remaining = r.remaining.0.trim_start_matches('/');
-            let consumed = rel[..rel.len() - r.remaining.0.len()].trim_end_matches('/');
+            let Some(cut) = rel
+                .len()
+                .checked_sub(r.remaining.0.len())
+                .filter(|c| rel.is_char_boundary(*c))
+            else {
+                return Err(status::INVALID_ARGUMENT);
+            };
+            let consumed = rel[..cut].trim_end_matches('/');
             let dir = consumed.rsplit_once('/').map_or("", |(d, _)| d);
             let at = zoraya_resolve::join("/", 0, dir);
             let next = zoraya_resolve::join(&at, 0, r.target.0);

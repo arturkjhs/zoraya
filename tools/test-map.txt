@@ -259,3 +259,4 @@ user/src/roomsclient.rs       test-files test-gui test-qemu test-keeper
 user/describe/tests/memhog.cmd test-files
 tests/shell/rooms.script      test-files
 user/describe/posix/gtrun.cmd  test-cxx-gtest test-files
+docs/adr/0343-surface-for-the-userland.md check test-libposix test-posix test-apps test-files

@@ -1,0 +1,87 @@
+Zoraya (ADR-0336 item 2, the gate review of TASK-31 10e, G1 G2 G3 G4 G7): bounds
+and errors in three commands of toys/pending. tr: grow the set before an item
+that adds up to 256 bytes (a heap overflow), stop at SET2's length rather than
+at a NUL byte, and end on a read error instead of spinning. diff -F: the loop
+tests its own index. expr: compare without subtracting, and fail on overflow
+(exit 2) where the result would wrap.
+
+diff -ru a/toys/pending/tr.c b/toys/pending/tr.c
+--- a/toys/pending/tr.c
++++ b/toys/pending/tr.c
+@@ -51,7 +51,7 @@
+   i = k = 0;
+   while (!FLAG(d) && set2 && TT.len1--) { //ignore set2 if -d present
+     TT.map[set1[i]] = ((TT.map[set1[i]] & 0xFF00) | set2[k]);
+-    if (set2[k + 1]) k++;
++    if (k + 1 < TT.len2) k++; // set2 is counted, not terminated
+     i++;
+   }
+ }
+@@ -115,7 +115,7 @@
+ 
+   while (*arg) {
+     if (arg-orig >= until) break;
+-    if (i >= size) {
++    if (i > size - 256) { // one item adds up to 256 bytes
+       size += 256;
+       set = xrealloc(set, size);
+     }
+@@ -189,7 +189,7 @@
+ {
+   int n, ch, src, dst, prev = -1;
+ 
+-  while ((n = read(0, toybuf, sizeof(toybuf)))) {
++  while ((n = read(0, toybuf, sizeof(toybuf))) > 0) {
+     if (!FLAG(d) && !FLAG(s))
+       for (dst = 0; dst < n; dst++) toybuf[dst] = TT.map[toybuf[dst]];
+     else for (src = dst = 0; src < n; src++) {
+@@ -200,6 +200,7 @@
+     }
+     xwrite(1, toybuf, dst);
+   }
++  if (n < 0) perror_exit("read");
+ }
+ 
+ static void do_complement(char **set)
+diff -ru a/toys/pending/diff.c b/toys/pending/diff.c
+--- a/toys/pending/diff.c
++++ b/toys/pending/diff.c
+@@ -400,7 +400,7 @@
+ static void print_line_matching_regex(int a, regex_t *reg, int *off_set, FILE *fp) {
+   int i = 0, j = 0, line_buf_size = 100, cc = 0;
+   char* line = xzalloc(line_buf_size * sizeof(char));
+-  for (i = a; a > 0; --i) {
++  for (i = a; i > 0; --i) {
+     int line_len = 0;
+     if (fseek(fp, off_set[i - 1], SEEK_SET)) perror_exit("fseek failed");
+     for (j = 0; j < (off_set[i] - off_set[i - 1]); j++) {
+diff -ru a/toys/pending/expr.c b/toys/pending/expr.c
+--- a/toys/pending/expr.c
++++ b/toys/pending/expr.c
+@@ -160,7 +160,7 @@
+ 
+   case SI_TO_I:
+     if (get_int(ret, &a) && get_int(rhs, &b)) { // both are ints
+-      cmp = a - b;
++      cmp = (a > b) - (a < b);
+     } else { // otherwise compare both as strings
+       cmp = strcmp(s = get_str(ret), t = get_str(rhs));
+       if (ret->s != s) free(s);
+@@ -181,11 +181,12 @@
+     if (!get_int(ret, &a) || !get_int(rhs, &b))
+       error_exit("non-integer argument");
+     switch (o->op) {
+-    case ADD: x = a + b; break;
+-    case SUB: x = a - b; break;
+-    case MUL: x = a * b; break;
+-    case DIVI: if (b == 0) error_exit("division by zero"); x = a / b; break;
+-    case MOD:  if (b == 0) error_exit("division by zero"); x = a % b; break;
++    case ADD: if (__builtin_add_overflow(a, b, &x)) error_exit("overflow"); break;
++    case SUB: if (__builtin_sub_overflow(a, b, &x)) error_exit("overflow"); break;
++    case MUL: if (__builtin_mul_overflow(a, b, &x)) error_exit("overflow"); break;
++    case DIVI: if (b == 0) error_exit("division by zero");
++      if (b == -1 && a == LLONG_MIN) error_exit("overflow"); x = a / b; break;
++    case MOD:  if (b == 0) error_exit("division by zero"); x = b == -1 ? 0 : a % b; break;
+     }
+     assign_int(ret, x);
+     break;

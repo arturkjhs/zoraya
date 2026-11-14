@@ -5,6 +5,7 @@ operand  [PATH]  read  the directory to list, the current one if none is given, 
 exit     0  listed
 exit     1  not listed
 ---
+ls is a native command; /bin/ls is toybox's, for scripts, with its own options (help /bin/ls).
 Prints the names in PATH, one per line, sorted byte by byte. A directory's name ends in /.
 An empty directory prints nothing. A file is printed by the name it was given as.
 

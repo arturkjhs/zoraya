@@ -1,0 +1,121 @@
+diff -ru a/lib/lib.c b/lib/lib.c
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -773,12 +773,30 @@
+ {
+   if (1 < (long)tempfile2zap) unlink(tempfile2zap);
+ }
++
++#ifdef __zoraya__
++// Zoraya (ADR-0336 item 6, ADR-0344): a file is changed in place. The result
++// is written to a temporary file in /tmp (the line's own, always given) and,
++// when the work is done, copied back into the original, which the line
++// designated as the one file to change; no sibling is created or renamed over
++// it, so the directory's other names are never needed. The price is that the
++// change is not atomic: a change interrupted after the copy-back starts can
++// leave the file short.
++static char *zoraya_original;
++#endif
+ 
+ // Open a temporary file to copy an existing file into.
+ int copy_tempfile(int fdin, char *name, char **tempname)
+ {
+   struct stat statbuf;
++#ifdef __zoraya__
++  int fd = xtempfile("/tmp/toybox-", tempname), ignored __attribute__((__unused__));
++
++  free(zoraya_original);
++  zoraya_original = xstrdup(name);
++#else
+   int fd = xtempfile(name, tempname), ignored __attribute__((__unused__));
++#endif
+ 
+   // Record tempfile for exit cleanup if interrupted
+   if (!tempfile2zap) sigatexit(tempfile_handler);
+@@ -807,7 +825,36 @@
+   free(*tempname);
+   *tempname = NULL;
+ }
++
++#ifdef __zoraya__
++// Copy the rest of the data, then the whole copy back into the original.
++void replace_tempfile(int fdin, int fdout, char **tempname)
++{
++  struct stat st;
++  int out;
+ 
++  if (fdin != -1) {
++    xsendfile(fdin, fdout);
++    xclose(fdin);
++  }
++  xlseek(fdout, 0, SEEK_SET);
++  // From the truncation on, the copy in /tmp is the only whole one: the exit
++  // handler must not remove it, and a failed copy back says where it is.
++  tempfile2zap = (char *)1;
++  // sendfile_len stops at a failed read with the bytes so far, so the copy
++  // back is whole only if it moved the copy's size.
++  out = open(zoraya_original, O_WRONLY|O_TRUNC);
++  if (out == -1 || fstat(fdout, &st) || sendfile_len(fdout, out, -1, 0) != st.st_size
++      || close(out))
++    perror_exit("%s: the edited text is kept in %s", zoraya_original, *tempname);
++  xclose(fdout);
++  unlink(*tempname);
++  free(*tempname);
++  free(zoraya_original);
++  zoraya_original = NULL;
++  *tempname = NULL;
++}
++#else
+ // Copy the rest of the data and replace the original with the copy.
+ void replace_tempfile(int fdin, int fdout, char **tempname)
+ {
+@@ -825,6 +872,7 @@
+   free(temp);
+   *tempname = NULL;
+ }
++#endif
+ 
+ // Create a 256 entry CRC32 lookup table.
+ 
+diff -ru a/lib/lib.h b/lib/lib.h
+--- a/lib/lib.h	2026-10-02 23:31:14
++++ b/lib/lib.h	2026-11-14 14:41:41
+@@ -436,3 +436,12 @@
+ 
+ #define minof(a, b) ({typeof(a) aa = (a); typeof(b) bb = (b); aa<bb ? aa : bb;})
+ #define maxof(a, b) ({typeof(a) aa = (a); typeof(b) bb = (b); aa>bb ? aa : bb;})
++
++#ifdef __zoraya__
++// Zoraya (ADR-0343): no file system status and no per-file limits, and no
++// fchdir (find's -execdir): the calls fail the way an absent feature does.
++#include <errno.h>
++#define statfs(path, buf) (errno = ENOSYS, -1)
++#define pathconf(path, name) (errno = ENOSYS, -1L)
++#define fchdir(fd) (errno = ENOSYS, -1)
++#endif
+diff -ru a/lib/portability.h b/lib/portability.h
+--- a/lib/portability.h	2026-11-14 14:38:19
++++ b/lib/portability.h	2026-11-14 14:41:41
+@@ -394,4 +394,5 @@
+ int timer_settime_wrap(timer_t t, int flags, struct itimerspec *val,
+   struct itimerspec *old);
+ #define timer_settime(...) timer_settime_wrap(__VA_ARGS__)
++
+ #endif
+diff -ru a/toys/posix/find.c b/toys/posix/find.c
+--- a/toys/posix/find.c	2026-10-02 23:31:14
++++ b/toys/posix/find.c	2026-11-14 15:12:21
+@@ -548,7 +548,13 @@
+           ss += len;
+           aa->arglen = len;
+           aa->dir = !!strchr(s, 'd');
++#ifdef __zoraya__
++          // Zoraya (ADR-0343): no fchdir, so no -execdir or -okdir; a plain
++          // -exec runs in the directory find was started in, as POSIX says.
++          if (aa->dir) error_exit("-execdir is not supported on Zoraya");
++#else
+           if (TT.topdir == -1) TT.topdir = xopenro(".");
++#endif
+ 
+         // collect names and execute commands
+         } else {

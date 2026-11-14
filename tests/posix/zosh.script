@@ -35,39 +35,41 @@ x \nafter\r
 < exit status 7
 < \r\n~>
 # INV-0153-7, libposix's half from zosh: a path outside the table twice
-# and a missing one inside; one report, and none for the missing one.
-> toybox cat ../hello.txt ../hello.txt missing.txt\r
+# and a missing one inside; one report, and none for the missing one. The
+# program is toybox by its own path, which has no description (ADR-0336 item
+# 8): /bin/cat's description would refuse the line before it runs.
+> /usr/libexec/toybox cat ../hello.txt ../hello.txt missing.txt\r
 < cat: missing.txt: No such file or directory
-<   hint: toybox tried to read /hello.txt, which it was not given\r\n  to allow it: +r / toybox cat
+<   hint: /usr/libexec/toybox tried to read /hello.txt, which it was not given\r\n  to allow it: +r / /usr/libexec/toybox cat
 x tried to read ~/missing.txt
 < \r\n~>
 # The processes of one line share its /tmp; the next line's is new.
-> echo 'echo x > /tmp/f; toybox ls /tmp; echo dash says $1' > t.sh\r
+> echo 'echo x > /tmp/f; /bin/ls /tmp; echo dash says $1' > t.sh\r
 < \r\n~>
 > dash t.sh hi\r
 < \r\nf\r\ndash says hi
 x hint
 < \r\n~>
-> toybox ls /tmp; echo listed\r
+> /bin/ls /tmp; echo listed\r
 < \r\nlisted
 x \nf\r
 < \r\n~>
 # Ctrl-Z of a POSIX job goes through the broker (ADR-0158 rule 4); jobs
 # reads the stop from its process job; fg continues it and Ctrl-C ends it.
-> toybox sleep 30\r
+> /bin/sleep 30\r
 ~ 1500 zzz
 > \x1a
 < ^Z
-< [1] stopped: toybox sleep 30
+< [1] stopped: /bin/sleep 30
 < \r\n~>
 > jobs\r
-< [1]  stopped   toybox sleep 30
+< [1]  stopped   /bin/sleep 30
 < \r\n~>
 > fg\r
-< toybox sleep 30
+< /bin/sleep 30
 ~ 500 zzz
 > \x03
-< toybox sleep 30: interrupted (Ctrl-C)
+< /bin/sleep 30: interrupted (Ctrl-C)
 < \r\n~>
 # INV-0200-2 (ADR-0200 item 2): a line mixing a native program and a POSIX
 # program that catches SIGTSTP. Ctrl-Z suspends the native element's own

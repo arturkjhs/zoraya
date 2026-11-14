@@ -853,3 +853,20 @@ fn an_adr_adds_the_names_of_its_block() {
     assert!(surface::added_names("- **Status:** accepted\n").is_err());
     assert!(surface::added_names("```posix-surface-added\natoll\n").is_err());
 }
+
+#[test]
+fn a_block_line_may_name_its_program() {
+    let adr = "- **Status:** proposed\n\n```posix-surface-added\natoll\ngetline toybox\n```\n";
+    assert_eq!(
+        surface::added_names(adr).unwrap().0,
+        vec!["atoll".to_string(), "getline".to_string()]
+    );
+    assert_eq!(
+        surface::block_lines(adr).unwrap(),
+        vec![
+            ("atoll".to_string(), None),
+            ("getline".to_string(), Some("toybox".to_string()))
+        ]
+    );
+    assert!(surface::block_lines("text").is_err());
+}

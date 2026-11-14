@@ -10,6 +10,10 @@
 //!
 //! LIST may be followed by `+ADR` parts: ADR files whose `posix-surface-added`
 //! blocks add names to the list (ADR-0142, ADR-0144).
+//! - `imports ADR PROGRAM=DIR...` is INV-0342-1's second half: every line of
+//!   ADR's `posix-surface-added` block names a program, and the objects (`*.o`
+//!   files) of the directory given for that program have the name among their
+//!   undefined symbols.
 //! - `hide LIST OUTDIR OBJECT...` hides every defined name outside the list
 //!   (ADR-0141): it writes each object, renamed, into OUTDIR under its base
 //!   name and prints the renames, one `old new` pair per line.
@@ -138,6 +142,57 @@ fn check(args: &[String]) -> Result<bool, String> {
     Ok(report.passed())
 }
 
+/// INV-0342-1, second half. A program mapped to a directory of objects; a
+/// block line's name must be undefined in them (the link probe's list).
+fn imports(args: &[String]) -> Result<bool, String> {
+    let [adr, programs @ ..] = args else {
+        return Err("usage: imports ADR PROGRAM=DIR...".into());
+    };
+    let mut undefined: std::collections::BTreeMap<String, BTreeSet<String>> = Default::default();
+    for p in programs {
+        let (program, dir) = p
+            .split_once('=')
+            .ok_or_else(|| format!("{p}: expected PROGRAM=DIR"))?;
+        let set = undefined.entry(program.to_string()).or_default();
+        for entry in std::fs::read_dir(dir).map_err(|e| format!("{dir}: {e}"))? {
+            let path = entry.map_err(|e| format!("{dir}: {e}"))?.path();
+            if path.extension().is_none_or(|e| e != "o") {
+                continue;
+            }
+            let bytes = read(&path.to_string_lossy())?;
+            let object = elf::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            set.extend(
+                object
+                    .symbols
+                    .iter()
+                    .filter(|s| s.is_strong_undefined())
+                    .map(|s| s.name.clone()),
+            );
+        }
+    }
+    let mut ok = true;
+    for (name, program) in
+        surface::block_lines(&read_text(adr)?).map_err(|e| format!("{adr}: {e}"))?
+    {
+        let problem = match program {
+            None => Some("names no program".to_string()),
+            Some(p) => match undefined.get(&p) {
+                None => Some(format!("{p} was not probed (no {p}=DIR given)")),
+                Some(set) if !set.contains(&name) => {
+                    Some(format!("{p}'s objects do not import it"))
+                }
+                Some(_) => None,
+            },
+        };
+        if let Some(problem) = problem {
+            println!("{adr}: {name}: {problem}");
+            ok = false;
+        }
+    }
+    println!("{adr}: {}", if ok { "passed" } else { "FAILED" });
+    Ok(ok)
+}
+
 fn hide(args: &[String]) -> Result<(), String> {
     let [list, outdir, paths @ ..] = args else {
         return Err("usage: hide LIST OUTDIR OBJECT...".into());
@@ -221,9 +276,10 @@ fn main() -> ExitCode {
     let result = match args.split_first() {
         Some((cmd, rest)) if cmd == "list" => list(rest).map(|()| true),
         Some((cmd, rest)) if cmd == "check" => check(rest),
+        Some((cmd, rest)) if cmd == "imports" => imports(rest),
         Some((cmd, rest)) if cmd == "hide" => hide(rest).map(|()| true),
         Some((cmd, rest)) if cmd == "calllog" => calllog(rest).map(|()| true),
-        _ => Err("usage: posix-surface-check {list|check|hide|calllog} ...".into()),
+        _ => Err("usage: posix-surface-check {list|check|imports|hide|calllog} ...".into()),
     };
     match result {
         Ok(true) => ExitCode::SUCCESS,

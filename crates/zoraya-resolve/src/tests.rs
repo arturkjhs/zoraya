@@ -286,3 +286,126 @@ fn dot_dot_at_an_entry_root_stays_there() {
         }
     }
 }
+
+// A shell's walk of links through its table (check of open_or_link, C2): a
+// model volume of files and links, the table's entries, and which entry
+// each final open went through (its rights are that entry's).
+mod table_walk {
+    use super::super::*;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Failed {
+        Outside(String),
+        NotFound,
+        Looped,
+    }
+
+    fn walk(
+        prefixes: &[&str],
+        links: &[(&str, &str)],
+        files: &[&str],
+        abs: &str,
+    ) -> Result<(usize, String), Failed> {
+        let directories = alloc::vec![true; prefixes.len()];
+        walk_table(
+            prefixes,
+            &directories,
+            abs,
+            |entry, rest| {
+                let full = join(prefixes[entry], 0, rest);
+                if let Some((_, t)) = links.iter().find(|(l, _)| *l == full) {
+                    // As open_or_link: a relative target gets the link's
+                    // directory, relative to the entry, in front.
+                    let dir = rest.rsplit_once('/').map_or("", |(d, _)| d);
+                    return Ok(Hop::Link(if t.starts_with('/') || dir.is_empty() {
+                        String::from(*t)
+                    } else {
+                        alloc::format!("{dir}/{t}")
+                    }));
+                }
+                if files.contains(&full.as_str()) {
+                    Ok(Hop::Opened((entry, full)))
+                } else {
+                    Err(Failed::NotFound)
+                }
+            },
+            |abs| Err(Failed::Outside(String::from(abs))),
+            Failed::Looped,
+        )
+    }
+
+    const TABLE: [&str; 3] = ["/bin", "/usr", "/home/w"];
+
+    #[test]
+    fn an_absolute_link_is_followed_to_another_entry() {
+        let r = walk(
+            &TABLE,
+            &[("/bin/tr", "/usr/libexec/toybox")],
+            &["/usr/libexec/toybox"],
+            "/bin/tr",
+        );
+        assert_eq!(r, Ok((1, String::from("/usr/libexec/toybox"))));
+    }
+
+    #[test]
+    fn a_link_out_of_the_table_is_refused() {
+        let r = walk(
+            &TABLE,
+            &[("/home/w/x", "/etc/secret")],
+            &["/etc/secret"],
+            "/home/w/x",
+        );
+        assert_eq!(r, Err(Failed::Outside(String::from("/etc/secret"))));
+        // `..` climbs lexically, never past `/`, and lands outside.
+        let r = walk(
+            &TABLE,
+            &[("/home/w/x", "../../etc/secret")],
+            &["/etc/secret"],
+            "/home/w/x",
+        );
+        assert_eq!(r, Err(Failed::Outside(String::from("/etc/secret"))));
+        let r = walk(
+            &TABLE,
+            &[("/home/w/x", "../../../../../etc/secret")],
+            &[],
+            "/home/w/x",
+        );
+        assert_eq!(r, Err(Failed::Outside(String::from("/etc/secret"))));
+    }
+
+    #[test]
+    fn a_link_from_one_entry_into_another_opens_with_that_entrys_rights() {
+        // `/home/w` stands for `+w`, `/usr` for read: the final open is the
+        // read entry's, whose rights `open` applies.
+        let r = walk(
+            &TABLE,
+            &[("/home/w/lib", "/usr/lib/libc.a")],
+            &["/usr/lib/libc.a"],
+            "/home/w/lib",
+        );
+        assert_eq!(r, Ok((1, String::from("/usr/lib/libc.a"))));
+    }
+
+    #[test]
+    fn a_loop_of_links_ends() {
+        let r = walk(
+            &TABLE,
+            &[("/home/w/a", "b"), ("/home/w/b", "/home/w/a")],
+            &[],
+            "/home/w/a",
+        );
+        assert_eq!(r, Err(Failed::Looped));
+    }
+
+    #[test]
+    fn an_entry_root_or_a_path_outside_goes_to_the_direct_open() {
+        assert_eq!(
+            walk(&TABLE, &[], &[], "/usr"),
+            Err(Failed::Outside(String::from("/usr")))
+        );
+        assert_eq!(
+            walk(&TABLE, &[], &[], "/etc/x"),
+            Err(Failed::Outside(String::from("/etc/x")))
+        );
+    }
+}

@@ -1245,7 +1245,7 @@ endef
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
 	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/threads.script \
-	tests/posix/zosh.script tests/posix/tour.script
+	tests/posix/zosh.script tests/posix/zosh-userland.script tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
@@ -1489,6 +1489,9 @@ check-user-access:
 check-argv:
 	@hits="$$(grep -l 'describe!(' user/src/bin/*.rs | xargs grep -n 'argv' || true)"; \
 	if [ -n "$$hits" ]; then echo "described programs that read argv themselves (INV-0155-2):"; echo "$$hits"; exit 1; fi
+	@# INV-0336-2 rides on this step: every name in the image's /bin has a
+	@# trusted description naming its path (crates/zoraya-describe/tests/posix_names.rs).
+	@cargo test -q -p zoraya-describe --test posix_names > /dev/null || { cargo test -p zoraya-describe --test posix_names 2>&1 | tail -30; exit 1; }
 
 # INV-0105-4: no terminal policy in the kernel; the console stays a raw ring
 # (ADR-0060), and the line discipline is ttyd's.
