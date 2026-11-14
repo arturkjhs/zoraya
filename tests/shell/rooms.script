@@ -73,7 +73,9 @@
 < limits --mem 68M --cpu 25% --procs 16  (room agent-1)
 < agent-1 /t/w> 
 > room --leave\r
-< /t/w> 
+# The prompt outside the room starts its line; "agent-1 /t/w> " would also
+# hold "/t/w> " (TASK-29, V14).
+< \r\n/t/w> 
 > room remove agent-1 --kill\r
 < /t/w> 
 > room\r

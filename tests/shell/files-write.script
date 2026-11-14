@@ -129,7 +129,8 @@
 > cat notes.txt | head --lines 1\r
 < \r\nfirst line\r\n/> 
 > echo hi there | cat\r
-< hi there
+# cat's line, not the echo of the command (TASK-29, V8).
+< \r\nhi there
 < \r\n/> 
 > set n $(ls | search .txt); count $n\r
 < \r\n3

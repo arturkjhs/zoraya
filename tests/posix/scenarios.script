@@ -6,7 +6,9 @@
 ! panicked
 ! ZORAYA-PANIC
 ! ZORAYA-FAULT
-! t_posix: FAIL
+# t_posix prints "t_posix: NAME: FAIL line N: ..." (the text here was
+# "t_posix: FAIL", which no failure prints: TASK-29, V20).
+! : FAIL line
 < PSURF>
 # A writer killed by SIGPIPE on PeerClosed.
 > yes | head -n 1; echo "statuses ${?}"\r
@@ -44,8 +46,10 @@
 < Stopped
 < PSURF> 
 > fg\r
-< first
-< second
+# "\nfirst" is the job's own line: fg echoes the command line, which holds
+# the words but not at the start of a line (TASK-29, V6).
+< \nfirst
+< \nsecond
 ~ 500 PSURF>
 > \x03
 < PSURF> 
@@ -88,7 +92,7 @@
 < t_posix: forkbomb passed
 < PSURF>
 > echo still-here\r
-< still-here
+< \nstill-here
 # A disk filler in a limited directory (ADR-0265, Q5; the ports have no dd):
 # its writes stop at the limit with EDQUOT, rm still works at the limit, a
 # directory does not cross the limit's boundary (EXDEV), and a write outside
@@ -98,8 +102,9 @@
 < t_posix: diskfill passed
 < PSURF>
 > echo outside > /home/outside && cat /home/outside && ls /limited; echo done\r
-< outside
-< done
+# The lines the commands print, not the words of the echoed command (V7).
+< \noutside
+< \ndone
 < PSURF>
 > exit\r
 < BROKER-STATS
