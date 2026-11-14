@@ -14,7 +14,9 @@
 //!   an ADR. A status is `checked: ...`, `replaced by INV-...`,
 //!   `not yet applicable (stage N)` or `not yet applicable (until ...)`. An
 //!   accepted ADR's invariant whose status is not `checked` is a warning
-//!   (ADR-0001 rule 6).
+//!   (ADR-0001 rule 6). A `checked:` status names at least one command that
+//!   exists: a `make` target of `Makefile` (or `ports/Makefile` with `-f`), a
+//!   `cargo test -p` package, or a file under `tools/` or `.github/`.
 //! - INV-0001-5: `index.md` lists every ADR file with its status.
 //!
 //! Exits 1 if any check fails, 0 otherwise (warnings do not fail).
@@ -370,6 +372,167 @@ fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The things a repository's commands can name, found once per run: the
+/// targets of `Makefile` and `ports/Makefile`, and the package names of every
+/// `Cargo.toml`. `None` where the repository's root has no `Makefile` (the
+/// unit tests' trees), so that nothing is checked there.
+struct Commands {
+    make: BTreeSet<String>,
+    ports: BTreeSet<String>,
+    packages: BTreeSet<String>,
+    root: PathBuf,
+}
+
+fn make_targets(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for line in text.lines() {
+        let head = if let Some(rest) = line.strip_prefix(".PHONY:") {
+            rest
+        } else if line.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+            match line.split_once(':') {
+                Some((t, rest)) if !rest.starts_with('=') && !t.contains('=') => t,
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        out.extend(head.split_whitespace().map(str::to_string));
+    }
+    out
+}
+
+fn collect_packages(dir: &Path, depth: usize, out: &mut BTreeSet<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if depth < 4 && !matches!(&*name, "target" | "build" | ".git" | "ports" | "docs") {
+                collect_packages(&path, depth + 1, out);
+            }
+        } else if name == "Cargo.toml"
+            && let Ok(text) = fs::read_to_string(&path)
+            && let Some(line) = text.lines().find(|l| l.trim_start().starts_with("name"))
+            && let Some(n) = line.split('"').nth(1)
+        {
+            out.insert(n.to_string());
+        }
+    }
+}
+
+/// An executable regular file, or a workflow file under `.github/workflows/`.
+fn is_command_file(path: &Path, word: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    meta.is_file()
+        && (meta.permissions().mode() & 0o111 != 0
+            || (word.starts_with(".github/workflows/") && word.ends_with(".yml")))
+}
+
+impl Commands {
+    fn load(docs: &Path) -> Option<Commands> {
+        let root = docs.parent()?;
+        let root = if root.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            root
+        };
+        let make = make_targets(&fs::read_to_string(root.join("Makefile")).ok()?);
+        let ports = fs::read_to_string(root.join("ports/Makefile"))
+            .map(|t| make_targets(&t))
+            .unwrap_or_default();
+        let mut packages = BTreeSet::new();
+        collect_packages(root, 0, &mut packages);
+        Some(Commands {
+            make,
+            ports,
+            packages,
+            root: root.to_path_buf(),
+        })
+    }
+
+    /// What is wrong with a `checked:` status, if anything (V40): it must name
+    /// at least one command that exists, and every `make TARGET`,
+    /// `cargo test -p PACKAGE` and `tools/` or `.github/` path it names must.
+    fn problem(&self, cmd: &str) -> Option<String> {
+        // Commands are in backticks; prose around them may say "make" too.
+        let spans: Vec<&str> = if cmd.contains('`') {
+            cmd.split('`').skip(1).step_by(2).collect()
+        } else {
+            vec![cmd]
+        };
+        let words: Vec<&str> = spans
+            .iter()
+            .flat_map(|span| span.split(|c: char| c.is_whitespace() || ";,()".contains(c)))
+            .filter(|w| !w.is_empty())
+            .collect();
+        let mut found = 0;
+        let mut i = 0;
+        while i < words.len() {
+            match words[i] {
+                "make" => {
+                    let mut ports = false;
+                    let mut j = i + 1;
+                    while j < words.len() && words[j].starts_with('-') {
+                        if words[j] == "-f" && words.get(j + 1) == Some(&"ports/Makefile") {
+                            ports = true;
+                            j += 1;
+                        }
+                        j += 1;
+                    }
+                    if let Some(t) = words.get(j).filter(|t| {
+                        t.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                    }) {
+                        found += 1;
+                        let set = if ports { &self.ports } else { &self.make };
+                        if !set.contains(*t) {
+                            return Some(format!("`make {t}` is not a target"));
+                        }
+                    }
+                }
+                "cargo" if words.get(i + 1) == Some(&"test") => {
+                    let mut j = i + 2;
+                    while j < words.len() {
+                        if words[j] == "-p" && j + 1 < words.len() {
+                            found += 1;
+                            if !self.packages.contains(words[j + 1]) {
+                                return Some(format!("`{}` is not a package", words[j + 1]));
+                            }
+                            j += 2;
+                        } else if words[j].starts_with('-') || words[j] == "usage" {
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                w if (w.starts_with("tools/") || w.starts_with(".github/")) && !w.contains('*') => {
+                    let path = self.root.join(w.trim_end_matches('.'));
+                    if !path.exists() {
+                        return Some(format!("`{w}` does not exist"));
+                    }
+                    // A directory or a data file named in prose is not a command.
+                    if is_command_file(&path, w) {
+                        found += 1;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        (found == 0).then(|| {
+            "it names no command (make TARGET, cargo test -p PACKAGE, tools/ or .github/ path)"
+                .to_string()
+        })
+    }
+}
+
 fn status_is_known(s: &str) -> bool {
     if let Some(cmd) = s.strip_prefix("checked: ") {
         return !cmd.trim().is_empty();
@@ -389,6 +552,7 @@ fn status_is_known(s: &str) -> bool {
 
 /// INV-0001-4.
 fn check_invariants(adrs: &[Adr], adr_dir: &Path, out: &mut Outcome) -> Result<(), String> {
+    let commands = adr_dir.parent().and_then(Commands::load);
     let text = read(&adr_dir.join("invariants.md"))?;
     let mut rows: BTreeMap<String, (String, String, String)> = BTreeMap::new();
     for line in text.lines().filter(|l| l.starts_with("| INV-")) {
@@ -452,6 +616,15 @@ fn check_invariants(adrs: &[Adr], adr_dir: &Path, out: &mut Outcome) -> Result<(
                     "INV-0001-4",
                     "invariants.md",
                     format!("{id}: status {r_status:?} is not \"checked: ...\", \"replaced by INV-...\", \"not yet applicable (stage N)\" or \"not yet applicable (until ...)\""),
+                );
+            } else if let Some(problem) = r_status
+                .strip_prefix("checked: ")
+                .and_then(|cmd| commands.as_ref()?.problem(cmd))
+            {
+                out.error(
+                    "INV-0001-4",
+                    "invariants.md",
+                    format!("{id}: \"checked:\" must name a command that exists: {problem}"),
                 );
             } else if accepted
                 && !r_status.starts_with("checked")
@@ -820,6 +993,62 @@ mod tests {
             out.unchecked["not yet applicable (stage 2)"],
             ["INV-0001-1"]
         );
+    }
+
+    /// V40: a `checked:` status names a command that exists.
+    #[test]
+    fn checked_names_a_command_that_exists() {
+        let base = std::env::temp_dir().join(format!("adr-check-cmd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("docs")).unwrap();
+        fs::create_dir_all(base.join("ports")).unwrap();
+        fs::create_dir_all(base.join("tools")).unwrap();
+        fs::create_dir_all(base.join("crates/x")).unwrap();
+        fs::write(
+            base.join("Makefile"),
+            ".PHONY: a-target b\nOPT := 1\ntest-one: a-target\n\ttrue\n",
+        )
+        .unwrap();
+        fs::write(base.join("ports/Makefile"), "libc:\n\ttrue\n").unwrap();
+        fs::write(base.join("tools/s.sh"), "").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(base.join("tools/s.sh"), fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        fs::write(base.join("tools/data.txt"), "").unwrap();
+        fs::write(base.join("tools/s.sh.data"), "").unwrap();
+        fs::write(
+            base.join("crates/x/Cargo.toml"),
+            "[package]\nname = \"zoraya-x\"\n",
+        )
+        .unwrap();
+        let c = Commands::load(&base.join("docs")).unwrap();
+        for ok in [
+            "`make test-one`",
+            "make a-target (the log); make b",
+            "`make -f ports/Makefile libc`",
+            "`cargo test -p zoraya-x --test t`",
+            "`tools/s.sh`",
+            "`make test-one` (prose: make on it, `make -j8`)",
+        ] {
+            assert_eq!(c.problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "by type and review; no command fails if it is broken",
+            "`make test-gone`",
+            "`make -f ports/Makefile test-one`",
+            "`cargo test -p zoraya-gone`",
+            "`tools/gone.sh`",
+            "`tools/`",
+            "`tools/data.txt`",
+            "checked by review, see tools/s.sh.data",
+            "`cargo test`",
+            "`make test-one`, `make test-gone`",
+        ] {
+            assert!(c.problem(bad).is_some(), "{bad}");
+        }
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

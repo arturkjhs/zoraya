@@ -266,6 +266,11 @@ states, to be taken up later:
   parallel load on the Mac (work/test-fixes, 2026-11-14): a timing-sensitive CPU-ceiling check when three QEMU guests and host jobs
   share the machine. Not a regression of that part. Decide whether the check needs a deterministic form like `t_cpu`'s `MAX_UNITS`
   fix (ADR-0270), or a lane of its own that does not share the machine.
+
+## Left by part 10e and its reviews (TASK-31)
+
+| Id | Where | What |
+|---|---|---|
 | - | Userland (10e) | Left by part 10e (`docs/tasks/TASK-31-part-10e.md`): the image cache of ADR-0212 is still not built; `narrow` with a list of names (ADR-0336 item 6) is not built, so several file operands of a `cwd none` command in one directory give the directory whole; W4's `configure` of GNU hello got past `config.sub` once dash was built with `--disable-tee` (its reads from a pipe or here-document had failed on libposix's `ENOSYS` `tee`: fix pass of 10e) and now stops at `configure: error: cannot guess build type` (GNU `config.guess` does not know Zoraya's `uname`; `--build=` or a `config.guess` case is T2's); `tar` prints a hint that it tried to read `/` though it works; `find -execdir`, `stat -f`, `date -s` fail by design (ADR-0343); one-true-awk's licence needs the architect's confirmation (ADR-0336 open question). |
 | - | `ports/check-broken-archives.sh` (seen in candidate run 43609007070) | `"$ar" t missing.a \| grep -qx zw-puts.o`: `grep -q` closes the pipe at the first match and `zoraya-ar` panics ("failed printing to stdout: Broken pipe"); the check is unaffected (no `pipefail`), the panic is noise. Since 10e libc.a has more members after `zw-puts.o`. Make `zoraya-ar` end quietly on `EPIPE`, or list to a file first. |
 | - | `zosh` `userland_options` (check of the 10e fix pass, N4) | `--help` anywhere before `--` makes `zoraya_command::parse` give `Help`, so `/bin/find . --help -delete` passes the refusal of undescribed options and runs with no designations: no widening, but its other words are not checked. Treat `--help` as help only as the first word for the userland's commands. |
@@ -274,3 +279,70 @@ states, to be taken up later:
 | - | Ports, `make check-ports` (review of 10e, finding 10) | On an incremental tree the check "no port was compiled with `__linux__`" fails: a recipe re-run by a changed `SYSROOT_STAMP` overwrites its log with a no-op make, so `dash.log`, `pdpmake.log`, `tcc.log` and `libtcc1.log` hold no compile commands; it also shows those recipes do not relink against a new `libc.a`. Keep the compile log apart from the relink (as `logged_append` does for musl), or make the check read the newest log that has compile lines. |
 | - | `zoraya-fs-service` `set_attributes` (review of 10e, finding 13) | A connection with `WRITE` narrowed to one name (`Create`, `ChangeName`) acts on its own object, the parent directory, for `SetAttributes` and `set_limit`: refuse both on a connection with `only` set, with a host test. Not reachable today (libposix's `chmod` opens by name; the programs given such entries are the image's), but 10e gives `WRITE` narrowed entries to every `cwd none` file operand. |
 | - | `tools/zoraya-elf-check` (review of 10e, finding 14) | Resolving an absolute link walks `path.ancestors()` up to the host's own `/`, so a link to a path that exists on the build host passes as found in the image. Take the image root as an argument. Also: `zosh`'s lookup did not follow the relative link `/bin/NAME -> ../usr/libexec/toybox` (why the links are absolute); find and fix that lookup. |
+
+## Three requests from outside work (2026-11-14, from the architect)
+
+For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.
+
+1. **A python3 build hook for built-in modules.** A way to add built-in C/C++ modules to `python3` from a directory given
+   at build time (`Setup` lines and static libraries), with a test that uses a small sample module. Small; first.
+2. **`poll` and `ppoll` in `libposix`** over the deferred-wait protocol (ADR-0315), with tests. The browser-engine design
+   will also ask for it.
+3. **Programs installed on the volume, not in the image.** Where their descriptions live, how their saved grants are
+   kept (network, a writable directory, their own directory per ADR-0341), and how a person sees and revokes them.
+   Design first, as proposed ADRs (numbers from 0380 to 0399 if TASK-31's parts leave them, otherwise ask the architect).
+
+## Decisions on `work/test-fixes-2` and 10e (the architect, 2026-11-14)
+
+- **`work/test-fixes-2` starts with** the `libc.a` relink that makes the build job rebuild every port (audit T1), **then**
+  `make test-cxx-libcxx` under TCG: leave out the `thread.semaphore`, barrier and atomic-wait groups under TCG only (they
+  poll with backoff; 121 s measured for one test), keep them under HVF, and map the libcxx job only to changes in
+  `ports/cxx`, `ports/musl`, `libposix` and `tests/cxx`. (`main`'s run 43598033280 started its tests an hour after it was
+  created; `test-cxx-libcxx` under TCG is its long tail, over 25 minutes.)
+- **libc++'s atomic wait over Zoraya's futex (ADR-0301)** fixes the cause of that polling; do it after the exclusion.
+- **10e:** GNU hello's `configure` stopping at `config.sub sun4` is a compatibility defect, not a leftover. Find the cause
+  before 10e merges (`sh -x config.sub sun4` in the guest; compare each step with the same toybox command's POSIX
+  behaviour); fix it or record it with a test.
+
+## Decisions on the browser-engine design (TASK-33; the architect, 2026-11-14)
+
+- **The next design task: a Rust `std` for POSIX programs on the stable toolchain.** The `aarch64-unknown-linux-musl`
+  target linked against Zoraya's `libc.a`, with `libposix` answering the Linux calls `std` makes through `syscall()`
+  (futex, `statx`, `getrandom` and the others a probe finds). It must say how this squares with INV-0109-2 (`zcc`
+  refuses `__linux__`) and the no-nightly rule (`docs/design.md`, Platform). Its answer, with the foundations, decides
+  ADR-0410 (WPE, the default, or Ladybird); proposed ADRs, numbers from the architect.
+- **The foundation parts F1 to F8** of `docs/research/browser-engine/plan.md` come after TASK-31's parts, F1 (`poll`,
+  `ppoll` and `eventfd`, ADR-0414) first; F1 is the second of the three requests above. The invariant rows of ADR-0411
+  to ADR-0421 name the part that builds each check (`not yet applicable (until browser-engine plan part ...)`).
+- **The changes to accepted ADRs** that ADR-0411 to ADR-0415 decided (ADR-0103 item 12, ADR-0108, ADR-0225 items 1 and
+  10, ADR-0287 item 3, ADR-0310 item 3, ADR-0315 item 1, ADR-0341 item 7, ADR-0342 item 11, ADR-0051's assumed limit)
+  are each recorded in the changed ADR by the foundation part that implements it, with an Opus review.
+- **The 2 GiB guest** is for the browser's test steps only (ADR-0415, Decision).
+
+## Open questions from the review of `work/test-fixes-2` (2026-11-14)
+
+For the architect.
+
+- **What may `--net-open` reach (INV-0230-1, audit C3)?** The network steps of `make test` run QEMU without `restrict=on`
+  (`NET_FETCH_RUN`, `test-net-fetch`'s DNS leg, `test-net-lookup`, `NET_POSIX_RUN`, `APPS_RUN`, `test-python`, `NS_RUN`;
+  `test-hand-run` and `make run-net` use person mode), which ADR-0230 item 2 does not describe: a script that fetches a public
+  address connects out. Decide: move them to `restrict=on` with `guestfwd`, or accept `--net-open` against the host test servers
+  and say so in a proposed ADR. INV-0230-1 stays `not yet applicable` until then; `make check-net-open` is a partial guard.
+- **INV-0042-1 and ADR-0001 rule 6:** rule 6 lists "an `abi` type" as a check, but `adr-check` now requires a `checked:` status to
+  name a command. Is an `abi` type a valid check (then its file may be named), or should a `check-*` script assert that
+  `kernel/src` has one user-copy read of the spawn buffer and that `SpawnRequest::decode` takes `&[u8]`? The row is
+  `not yet applicable` meanwhile (ADR-0042's open questions).
+- **No CI job runs libc++'s `thread.semaphore`, `thread.barrier` and `thread.latch` tests** (left out under TCG; CI is Linux, so
+  the `-tcg` script is used whatever the accelerator). Recorded in INV-0360-2 and `docs/design.md`. A separate nightly step with
+  its own timeout needs a third script and a step in `TEST_STEPS`, `ci-tests.txt` and the lanes; or libc++'s atomic wait over the
+  futex removes the polling.
+- **Not mapped before this part, still:** `test-cxx-libcxx` now follows `kernel/` and `crates/zoraya-rt/` (the futex libc++ waits
+  on), `tools/zcc` (`zc++` is a link to it), `ports/Makefile`, `ports/sources.lock`, `ports/crt/` and `ports/include/`.
+- **`t_quota` handshake:** `channel_read(...).is_ok()` retries when the peer closed, so a child that dies early costs 10 s and
+  says "no message"; wait for `READABLE | PEER_CLOSED` instead.
+- **INV-0172-4:** the console's shell creating a wider room from inside an entered room follows ADR-0172 point 3 (the shell
+  keeps the volume root; the room's grants are added to each line it launches). The refusal guards a shell that holds a table.
+  Test: launch `zosh` as a line inside an entered room (it starts with the room's table through `namespace::take`) and type
+  `room new wide +w /etc`, expecting `outside what this shell holds`, in `tests/shell/rooms.script` under `make test-files`.
+  Not done yet. Whether entering a room should narrow the person's own `room new` is a UX question (ADR-0172 point 3).
+- **The `libc.a` stamp on CI:** the first run after merge that hits the new ports cache key should have no `libc.a: hid` line.

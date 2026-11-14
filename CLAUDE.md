@@ -127,6 +127,10 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
   version, license, purpose, and the reason it is not written in-house. Adding one is a decision (see above).
 - Only permissively licensed (MIT, Apache-2.0, BSD, ISC or Zlib) `no_std` crates. Prefer writing small things yourself.
   A data file that is not code (the TLS root store, ADR-0228) may also be `CDLA-Permissive-2.0`, and an unmodified font file may be `OFL-1.1` with its licence text (ADR-0327; a subset or a changed font is not allowed); code never. `wget` is GPL-3.0-or-later as a separate program, like GNU make (architect, 2026-11-14); SQLite is public domain, as a test input and inside `python3`.
+- An LGPL library (LGPL-2.0, -2.1 or -3.0, any "or later") may be linked statically into a program `ports/Makefile`
+  builds, if the library and the program are built from sources pinned in `ports/sources.lock`, the library's patches
+  are in `ports/patches/` under its licence, and `docs/dependencies.md` lists it with its licence and the programs that
+  link it; never in the kernel, a native program or a `no_std` crate (ADR-0421).
 - Host-side tools use `std` only unless a dependency is recorded the same way.
 
 ## Kernel code
