@@ -190,7 +190,7 @@ tests = ["cargo test -q -p zoraya-abi --lib net"]
 [[mutant]]
 id = "U-shell-url-name-rule-kept"
 file = "crates/zoraya-shell/src/netgrant.rs"
-find = 'Named::Name(name) if web => {'
+find = 'Named::Name(name) if web || posix => {'
 replace = 'Named::Name(name) if false => {'
 note = "Option A again: the URL's name rule beside the web rule (9f-net review, finding 2)"
 tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
@@ -206,7 +206,7 @@ tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
 [[mutant]]
 id = "U-shell-rule-on-web-ports"
 file = "crates/zoraya-shell/src/netgrant.rs"
-find = 'if !web_port(url.port) {'
+find = 'if !(web && web_port(url.port)) {'
 replace = 'if true {'
 note = "a rule of its own on 80 and 443 (a second pill, a second grants line)"
 tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
@@ -214,7 +214,7 @@ tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
 [[mutant]]
 id = "U-shell-no-rule-on-other-port"
 file = "crates/zoraya-shell/src/netgrant.rs"
-find = 'if !web_port(url.port) {'
+find = 'if !(web && web_port(url.port)) {'
 replace = 'if false {'
 note = "Option C: no rule on another port, so the URL is refused"
 tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
