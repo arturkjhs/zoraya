@@ -84,5 +84,13 @@
 > sh /work/w4-g/build-aux/config.sub sun4\r
 < sparc-sun-sunos4.1.1
 < PSURF>
+# toybox's expr (ADR-0336 item 2; it has no stage 6 workload): arithmetic,
+# a match, a comparison, and the exit status of a zero result, as
+# configure scripts use them.
+> echo "E[$(expr 6 \\* 7)][$(expr 17 % 5 - 1)][$(expr foo.c : '.*\\.c')][$(expr abc \\< abd)]"; expr 3 - 3; echo "Z$?"\r
+< E[42][1][5][1]
+< \n0
+< Z1
+< PSURF>
 > exit\r
 < BROKER-STATS

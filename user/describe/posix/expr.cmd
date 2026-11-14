@@ -2,7 +2,7 @@ name     expr
 summary  evaluate an expression
 usage    expr EXPRESSION...
 program  /bin/expr
-operand  EXPRESSION...  text  the words: 1 + 2, STR : PATTERN, length STR
+operand  EXPRESSION...  text  the words: 1 + 2, STR : PATTERN, A \< B (toybox has no length, substr, index or match)
 exit     0  the value is not 0 or empty
 exit     1  the value is 0 or empty
 exit     2  an error
