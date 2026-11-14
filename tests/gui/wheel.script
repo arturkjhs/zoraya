@@ -33,12 +33,21 @@ shot wheel-files
 wheel 600 400 up 1
 region 500 368 150 8 dfe4ec
 region 500 284 150 8 ffffff
-# Far down and a key: the cursor's row comes back into view (Down selects
-# f06, which the list brings back as its first row shown).
+# Far down and a key: the cursor's row comes back into view. f14, the last
+# row shown, selected; ten notches take the list to its end (first row
+# f15), and only there is f14 in no row: its bg.selection is in row 14,
+# 11, 8, 5 or 2 on the way. The keyboard and the tablet are two devices
+# that a slow guest reads in no fixed order (TCG on CI), so the key waits
+# for the last notch: else a notch after it scrolls the cursor away again.
+click 409 624
+then files: status 30 items · f14.txt selected (2 B)
+region 500 620 150 8 dfe4ec
 wheel 600 400 down 10
-region 500 368 150 8 ffffff
-key down
-then files: status 30 items · f06.txt selected (2 B)
+# Rows 2 to 14, left of the pointer's arrow at (600, 400).
+region 420 284 60 345 ffffff
+# Up selects f13, which the list brings back as its first row shown.
+key up
+then files: status 30 items · f13.txt selected (2 B)
 region 500 228 150 8 dfe4ec
 # Closed by its frame's close button.
 click 121 119
@@ -90,7 +99,11 @@ click 400 300
 type \r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r
 type x\rx\rx\rx\rx\rx\rx\rx\rx\rx
 chord ctrl a
-pause 500
+# Every key drawn before the wheel turns (a slow guest reads the keyboard
+# and the tablet in no fixed order, and a key after the turn brings the
+# view back to the cursor): the first row shows a line of x, its line end
+# in bg.selection, only with the view at the end and everything selected.
+region 142 204 6 14 dfe4ec
 shot wheel-edit-before
 # A notch away from the person: three lines down, the three empty lines
 # before the x's now in the first three rows.
