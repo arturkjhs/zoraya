@@ -37,7 +37,7 @@ information, 1.0 MB without (`-Wl,--strip-debug`).
   musl (it has a `_LIBCPP_HAS_MUSL_LIBC` configuration); Fuchsia and Android ship it.
 - **Evidence against:** the 147 MB archive for four directories; the version is held back by CI's clang (a newer clang in
   CI would allow a newer libc++).
-- **Cost:** *(measured)* `cxx.mk` 100 lines, `__config_site` 40, two patches of 13 and 25 lines, a shim of 70 (ADR-0366).
+- **Cost:** *(measured)* `cxx.mk` 100 lines, `__config_site` 40, three patches of 25, 13 and 22 lines, a shim of 70 (ADR-0366).
 - **Precedent:** Fuchsia, Android (NDK), FreeBSD, macOS, Chimera Linux (musl and libc++).
 ### Option B: GCC's libstdc++ and libgcc_s's unwinder (the Linux baseline)
 - **Evidence against:** GPL-3.0 with the runtime exception, which the dependency rule does not list (driver 1); built by GCC,

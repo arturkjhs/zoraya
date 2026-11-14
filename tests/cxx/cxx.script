@@ -33,6 +33,10 @@
 < cxxtest: destroyed b
 < cxxtest: destroyed a
 < \r\n~> 
+# aligned_alloc, posix_memalign and aligned new (libposix's, ADR-0366).
+> cxxtest alloc\r
+< cxxtest: alloc passed
+< \r\n~> 
 > cxxtest threads\r
 < cxxtest: threads passed
 < \r\n~> 

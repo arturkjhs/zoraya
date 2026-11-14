@@ -578,6 +578,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0365-1 | [ADR-0365](0365-cxx-runtime-and-headers-in-the-image.md) | `build/rootfs-posix/usr` holds no C++ header or archive. | `make -f ports/Makefile check-ports`. | checked: make -f ports/Makefile check-ports |
 | INV-0366-1 | [ADR-0366](0366-surface-for-cxx.md) | A program linked with the whole of `libc++.a`, `libc++abi.a` and `libunwind.a` has no undefined name. | `make -f ports/Makefile cxx` (the `--whole-archive` link of `ports/cxx/cxx.mk`). | checked: make -f ports/Makefile cxx |
 | INV-0366-2 | [ADR-0366](0366-surface-for-cxx.md) | The shim's names are weak and are only `sched_yield`, `truncate`, `pathconf`, `link`, `statvfs`. | `make -f ports/Makefile cxx` (`nm` of the shim's member). | checked: make -f ports/Makefile cxx |
+| INV-0366-3 | [ADR-0366](0366-surface-for-cxx.md) | `aligned_alloc` and `posix_memalign` give blocks of the alignment asked that `free` takes back. | `make test-cxx` (`cxxtest alloc`) and `make test-cxx-libcxx` (`support.dynamic`'s aligned `new` and `delete`, through `count_new.h`'s `aligned_alloc`). | checked: make test-cxx |
 | INV-0367-1 | [ADR-0367](0367-cmake-toolchain-file.md) | A CMake project builds with the toolchain file and its programs run inside Zoraya. | `make test-cxx-gtest` (GoogleTest built by `make -f ports/Makefile gtest` with the file). | checked: make test-cxx-gtest |
 | INV-0300-1 | [ADR-0300](0300-threads-in-a-process.md) | `thread_create` is the only call in the `abi` crate that takes an `EntryPoint`, and a thread's handle has neither `DUPLICATE` nor `TRANSFER`. | INV-0004-1's lint over the `abi` table (it already names `thread_create` as the one allowed call) and a test over `OBJECT_TYPES` for the thread row. | checked: `cargo test -p zoraya-abi` |
 | INV-0300-2 | [ADR-0300](0300-threads-in-a-process.md) | A refused `thread_create` changes nothing: the handle table, the job's usage and the process's thread list are as before, whichever of the checks refused. | an in-QEMU test per refusing check (process bound, system bound, handle table full, `threads` limit, memory limit), comparing `job_get_usage` and the frame count before and after. | not yet applicable (stage 9) |
@@ -824,7 +825,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0363](0363-cxx-locale-support.md) Locale support for C++: the C locale only; musl's names accepted with the C rules | 1 |
 | [ADR-0364](0364-cxx-default-standard.md) The default C++ standard of `zc++`: `-std=c++23`, with `_GNU_SOURCE` for every standard | 1 |
 | [ADR-0365](0365-cxx-runtime-and-headers-in-the-image.md) Where the C++ runtime and headers live: the sysroot now, `/usr/include/c++/v1` and `/usr/lib` when Zoraya builds C++ | 1 |
-| [ADR-0366](0366-surface-for-cxx.md) The names `libc.a` adds for C++, and the gaps libc++ fills in its own archive | 2 |
+| [ADR-0366](0366-surface-for-cxx.md) The names `libc.a` adds for C++, and the gaps libc++ fills in its own archive | 3 |
 | [ADR-0367](0367-cmake-toolchain-file.md) A CMake toolchain file for Zoraya: `CMAKE_SYSTEM_NAME Zoraya` with a platform module of its own | 1 |
 | [ADR-0300](0300-threads-in-a-process.md) Threads in a process: the kernel's thread object and its four calls | 7 |
 | [ADR-0301](0301-wait-and-wake-on-an-address.md) Waiting on an address: `futex_wait` and `futex_wake`, without requeue, private to a process | 7 |
@@ -839,4 +840,4 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0313](0313-thread-kernel-as-built.md) Threads in the kernel as built: the owner is the last to leave, lazy thread lists, parked threads woken by one | 3 |
 | [ADR-0314](0314-pthreads-first-slice-as-built.md) `pthread_*` as built in the first slice of part 9b step 2: what is in, what waits for signals and cancellation | 2 |
 | [ADR-0315](0315-pthreads-waits-signals-cancel-as-built.md) `pthread_*` second slice as built: the `Pending` split, the thread table, signals per thread, deferred cancellation | 8 |
-| **Total** | **644** |
+| **Total** | **645** |

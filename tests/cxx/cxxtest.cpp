@@ -3,6 +3,8 @@
 // `cxxtest MODE [ARG...]` runs one group and prints "cxxtest: MODE passed", or
 // "cxxtest: FAIL: ..." and exits 1. tests/cxx/cxx.script runs every mode.
 #include <algorithm>
+#include <cstdint>
+#include <cerrno>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -337,6 +339,27 @@ void threads() {
     flag.wait(0);
     waker.join();
     check(flag.load() == 1, "atomic wait and notify");
+    // A thread that joins itself is told so (patch llvm/0003: musl would
+    // wait for ever).
+    std::thread* self_ptr = nullptr;
+    std::atomic<bool> go{false};
+    std::atomic<int> joined{0};
+    std::thread self([&] {
+        go.wait(false);
+        try {
+            self_ptr->join();
+        } catch (const std::system_error& e) {
+            joined.store(e.code().value());
+        }
+    });
+    self_ptr = &self;
+    go.store(true);
+    go.notify_one();
+    // Wait for the attempt without joining (joining would race with it).
+    for (int i = 0; i < 1000 && joined.load() == 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(joined.load() == EDEADLK, "a thread joining itself: resource_deadlock_would_occur");
+    self.join();
 }
 
 // ---------------------------------------------------------------- thread_local
@@ -487,6 +510,43 @@ void fsops(const char* dir) {
     check(fs::remove_all(base) == 5, "remove_all removed five");
 }
 
+// ---------------------------------------------------------------- aligned allocation
+
+struct alignas(256) Wide {
+    char bytes[256];
+};
+
+void alloc() {
+    // libposix's aligned_alloc and posix_memalign (ADR-0366), through C and
+    // through aligned new.
+    for (std::size_t align : {16u, 32u, 64u, 256u, 4096u}) {
+        void* p = std::aligned_alloc(align, align * 3);
+        check(p != nullptr && reinterpret_cast<std::uintptr_t>(p) % align == 0, "aligned_alloc " + std::to_string(align));
+        std::memset(p, 0x5a, align * 3);
+        std::free(p);
+        void* q = nullptr;
+        check(posix_memalign(&q, align, 100) == 0 && reinterpret_cast<std::uintptr_t>(q) % align == 0,
+              "posix_memalign " + std::to_string(align));
+        q = std::realloc(q, 5000);
+        check(q != nullptr, "realloc of an aligned block");
+        std::free(q);
+    }
+    void* none = nullptr;
+    check(posix_memalign(&none, 24, 8) == EINVAL, "posix_memalign of 24: EINVAL");
+    volatile std::size_t three = 3; // not a constant: clang warns of a constant that is no power of two
+    check(std::aligned_alloc(three, 8) == nullptr && errno == EINVAL, "aligned_alloc of 3: EINVAL");
+    std::vector<std::unique_ptr<Wide>> ws;
+    for (int i = 0; i < 100; ++i) {
+        ws.push_back(std::make_unique<Wide>());
+        check(reinterpret_cast<std::uintptr_t>(ws.back().get()) % 256 == 0, "new of an alignas(256) type");
+    }
+    ws.clear();
+    // A plain malloc after the aligned ones still works and frees.
+    void* m = std::malloc(40);
+    check(m != nullptr && reinterpret_cast<std::uintptr_t>(m) % 16 == 0, "malloc after aligned blocks");
+    std::free(m);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -505,6 +565,8 @@ int main(int argc, char** argv) {
         threads();
     else if (mode == "tls")
         tls();
+    else if (mode == "alloc")
+        alloc();
     else if (mode == "iostream" && argc == 3)
         iostreams(argv[2]);
     else if (mode == "fsops" && argc == 3)
