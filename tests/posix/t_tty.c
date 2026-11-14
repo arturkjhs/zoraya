@@ -18,6 +18,9 @@
  *                 on the window's border that follows its size (SIGWINCH,
  *                 TIOCGWINSZ), the bytes of each key read, bracketed paste;
  *                 Ctrl-Z and Ctrl-C are the shell's (ISIG stays on); q ends
+ *   t_tty bench bytes MIB | repaint N | latency N
+ *                 what the shell's copy of the output costs (ADR-0331 item
+ *                 14); the result goes to fd 2
  *   t_tty lines   canonical reads, each line printed with its length, until
  *                 end of file or "q": what a paste to a program without
  *                 mode 2004 shows
@@ -408,6 +411,97 @@ static int lines(void)
 	return 0;
 }
 
+
+/* ------------------------------------------------------------ bench
+ * What the shell's copy of a program's output costs (ADR-0331 item 14). The
+ * result goes to fd 2, the program's output to fd 1: with fd 1 a pipe that
+ * `cat` empties into /dev/null there is no terminal and no relay in the path
+ * (the baseline); with fd 1 the terminal, every byte is read from the
+ * program's stream by the shell and written on (to the window's terminal, or
+ * to the serial console). */
+static long cpu_ms(void)
+{
+	struct timespec ts;
+	if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) != 0)
+		return -1;
+	return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static void report(const char *what, long bytes, long ms, long cpu)
+{
+	long rate = ms > 0 ? (long)((long long)bytes * 1000 / ms) : 0;
+	fprintf(stderr, "bench: %s %ld bytes %ld ms %ld bytes/s cpu %ld ms\n",
+		what, bytes, ms, rate, cpu);
+}
+
+/* MiB of 79-column lines, in writes of 4096 bytes. */
+static int bench_bytes(long mib)
+{
+	static char line[4096];
+	size_t n = 0;
+	long total = mib * 1024 * 1024, done = 0;
+	while (n + 80 <= sizeof line) {
+		memset(line + n, 'a' + (int)(n / 80) % 26, 79);
+		line[n + 79] = '\n';
+		n += 80;
+	}
+	long t0 = now_ms(), c0 = cpu_ms();
+	while (done < total) {
+		ssize_t w = write(1, line, n);
+		if (w <= 0)
+			return 1;
+		done += w;
+	}
+	report("bytes", done, now_ms() - t0, cpu_ms() - c0);
+	return 0;
+}
+
+/* Full repaints of an 80 by 24 screen: home, then each row placed and
+ * written, as curses does without its optimiser. */
+static int bench_repaint(long count)
+{
+	static char screen[24 * 96 + 16];
+	size_t n = 0;
+	long t0, c0;
+	for (int r = 1; r <= 24; r++) {
+		n += (size_t)snprintf(screen + n, sizeof screen - n, "\x1b[%d;1H", r);
+		memset(screen + n, 'A' + r, 80);
+		n += 80;
+	}
+	t0 = now_ms();
+	c0 = cpu_ms();
+	for (long i = 0; i < count; i++)
+		if (write(1, screen, n) != (ssize_t)n)
+			return 1;
+	report("repaint", (long)n * count, now_ms() - t0, cpu_ms() - c0);
+	return 0;
+}
+
+/* One byte written and `tcdrain`ed: the time until the shell has shown it
+ * (a terminal only); the mean and the worst in microseconds. */
+static int bench_latency(long count)
+{
+	struct timespec a, b;
+	long long sum = 0, worst = 0;
+	if (!isatty(1)) {
+		fprintf(stderr, "bench: latency needs the terminal on fd 1\n");
+		return 1;
+	}
+	for (long i = 0; i < count; i++) {
+		clock_gettime(CLOCK_MONOTONIC, &a);
+		if (write(1, " ", 1) != 1 || tcdrain(1) != 0)
+			return 1;
+		clock_gettime(CLOCK_MONOTONIC, &b);
+		long long us = (long long)(b.tv_sec - a.tv_sec) * 1000000 + (b.tv_nsec - a.tv_nsec) / 1000;
+		sum += us;
+		if (us > worst)
+			worst = us;
+	}
+	fprintf(stderr, "bench: latency %ld writes mean %lld us worst %lld us\n", count,
+		sum / count, worst);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -420,5 +514,14 @@ int main(int argc, char **argv)
 		return box();
 	if (!strcmp(argv[1], "lines"))
 		return lines();
+	if (!strcmp(argv[1], "bench") && argc > 3) {
+		long n = atol(argv[3]);
+		if (!strcmp(argv[2], "bytes"))
+			return bench_bytes(n);
+		if (!strcmp(argv[2], "repaint"))
+			return bench_repaint(n);
+		if (!strcmp(argv[2], "latency"))
+			return bench_latency(n);
+	}
 	return 2;
 }

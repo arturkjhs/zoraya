@@ -172,6 +172,26 @@ w notstp: ready
 > q
 < rawkeys: done
 < \r\n~> 
+# ADR-0333 (INV-0333-2): TERM is set exactly for a program with the terminal
+# on one of fds 0 to 2: here the serial console, where console.term is dumb.
+> sh -c 'echo term=[$TERM]' | cat\r
+< term=[dumb]
+< \r\n~> 
+> echo x > in.txt\r
+< \r\n~> 
+> sh -c 'echo term=[$TERM]' < in.txt > out.txt 2> err.txt\r
+< \r\n~> 
+> cat out.txt\r
+< term=[]
+< \r\n~> 
+# ADR-0331 item 3 (INV-0331-1): grants says `keys` exactly when one of the
+# three is the terminal.
+> grants sh\r
+< keys                 the terminal, while this line is in front
+< \r\n~> 
+# A line whose three streams are elsewhere has no keys: the host test of
+# `grants` (the_keys_line_is_there_exactly_when_a_stream_is_the_terminal), since
+# `grants` is a builtin and takes no redirection.
 # The terminal's names and calls through libposix (ADR-0342 item 4, ADR-0389):
 # /dev/tty, ttyname, the three tcsetattr actions, tcflush, tcdrain, and the
 # refusals (TIOCSWINSZ is EPERM, TIOCSTI ENOTTY).
@@ -214,6 +234,11 @@ w notstp: ready
 < Stopped
 < $ 
 > kill -9 %1\r
+< $ 
+~ 700 zzz
+# sh reports the end of the job it killed before it lets itself be left.
+> jobs\r
+< Killed
 < $ 
 > exit\r
 < \r\n~> 
