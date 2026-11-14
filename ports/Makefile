@@ -44,7 +44,8 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # names the same files (.github/workflows/test.yml, its build job).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
-	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md
+	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
+	docs/adr/0366-surface-for-cxx.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -60,7 +61,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: cxx python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -457,7 +458,7 @@ ZCXX := $(ROOT)/tools/zc++
 # Four directories of the archive, not its 1.6 GB: the three runtimes and
 # LLVM libc, whose shared/ headers libc++'s from_chars includes.
 LLVM_DIRS := libcxx libcxxabi libunwind libc
-$(LLVM_SRC): $(LOCK) $(wildcard ports/patches/llvm/*.patch)
+$(LLVM_SRC): $(LOCK) ports/patches/llvm $(wildcard ports/patches/llvm/*.patch)
 	@f=$(CACHE)/$(call lock_file,llvm); \
 	if [ ! -f "$$f" ]; then \
 	  echo "ports: $$f is missing: run 'make fetch-ports' first (it is the only step that downloads)"; \
@@ -486,10 +487,47 @@ $(CXX_HEADERS_STAMP): $(LLVM_SRC) ports/cxx/__config_site $(HEADERS_STAMP)
 	@mkdir -p $(dir $@) && touch $@
 CXX_STAMP := $(OBJ)/cxx.stamp
 cxx: $(CXX_STAMP)
+# The objects are made again whenever the stamp is: the unpacked sources keep
+# the archive's old times, and cxx.mk's rules do not list the headers.
 $(CXX_STAMP): $(CXX_HEADERS_STAMP) $(SYSROOT_STAMP) ports/cxx/cxx.mk ports/cxx/zoraya-shim.c tools/zcc
+	rm -rf $(OBJ)/cxx
 	@$(call logged,$(MAKE) -j3 -f ports/cxx/cxx.mk SRC=$(LLVM_SRC) OBJ=$(OBJ)/cxx ZCXX=$(ZCXX) ZAR=$(ZAR) SYSROOT=$(SYSROOT),cxx)
 	@ls -l $(SYSROOT)/usr/lib/libc++.a $(SYSROOT)/usr/lib/libc++abi.a $(SYSROOT)/usr/lib/libunwind.a
 	ln -sf $(ZCXX) $(TOOLBIN)/aarch64-unknown-zoraya-c++
+	@touch $@
+
+# GoogleTest (TASK-30): built by CMake with ports/cmake/zoraya.cmake, as any
+# CMake project would be, with its own tests (gtest_build_tests); patch 0001
+# names Zoraya among the systems with pthreads and death tests. The test
+# programs that check themselves (cxx_test in googletest/CMakeLists.txt, not
+# the ones a Python driver reads) go to $(GTEST_OUT)/bin; make test-cxx-gtest
+# runs them inside Zoraya. Not gmock (BUILD_GMOCK=OFF): GoogleTest's own tests
+# are what TASK-30 asks for.
+CMAKE ?= cmake
+GTEST_SRC := $(WORK)/googletest-$(call lock_ver,googletest)
+GTEST_BUILD := $(WORK)/googletest-build
+GTEST_OUT := $(ROOT)/build/gtest-tests
+GTEST_STAMP := $(OBJ)/gtest.stamp
+GTEST_TESTS := googletest-death-test-test gtest_environment_test googletest-filepath-test googletest-listener-test \
+	gtest_main_unittest googletest-message-test gtest_no_test_unittest googletest-options-test googletest-param-test-test \
+	googletest-port-test gtest_pred_impl_unittest gtest_premature_exit_test googletest-printers-test gtest_prod_test \
+	gtest_repeat_test gtest_sole_header_test gtest_stress_test googletest-test-part-test gtest_throw_on_failure_ex_test \
+	gtest-typed-test_test gtest_unittest gtest-unittest-api_test gtest_skip_in_environment_setup_test gtest_skip_test \
+	gtest-death-test_ex_nocatch_test gtest-death-test_ex_catch_test gtest_no_rtti_unittest
+gtest: $(GTEST_STAMP)
+$(GTEST_SRC): $(LOCK) $(wildcard ports/patches/googletest/*.patch)
+	$(call unpack,googletest,ports/patches/googletest)
+	@touch $@
+$(GTEST_STAMP): $(GTEST_SRC) $(CXX_STAMP) ports/cmake/zoraya.cmake ports/cmake/Platform/Zoraya.cmake
+	rm -rf $(GTEST_BUILD) $(GTEST_OUT) && mkdir -p $(GTEST_BUILD) $(GTEST_OUT)/bin
+	@$(call logged,$(CMAKE) -S $(GTEST_SRC) -B $(GTEST_BUILD) -G "Unix Makefiles" \
+	  -DCMAKE_TOOLCHAIN_FILE=$(ROOT)/ports/cmake/zoraya.cmake -DCMAKE_BUILD_TYPE=Release \
+	  -DCMAKE_EXE_LINKER_FLAGS=-Wl$(comma)--strip-debug -DBUILD_GMOCK=OFF -Dgtest_build_tests=ON -Dgtest_build_samples=ON,gtest-configure)
+	@$(call logged,$(MAKE) -C $(GTEST_BUILD) -j3,gtest)
+	for t in $(GTEST_TESTS) sample1_unittest sample10_unittest; do \
+	  cp $(GTEST_BUILD)/googletest/$$t $(GTEST_OUT)/bin/ || exit 1; done
+	printf '%s\n' $(GTEST_TESTS) > $(GTEST_OUT)/list
+	$(ELF_CHECK) $(GTEST_OUT)/bin
 	@touch $@
 
 # ---------------------------------------------------------------- TLS for C programs, curl, wget (TASK-27 9a)

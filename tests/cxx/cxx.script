@@ -1,0 +1,93 @@
+# C++ programs inside Zoraya (TASK-30, proposed ADR-0360 to ADR-0366; `make
+# test-cxx`): tests/cxx/'s programs built by zc++ against libc++, libc++abi and
+# libunwind, on rootfs/ with /bin/cxxtest, /bin/hello, /work/granted and
+# /work/secret. cxxtest runs through the broker with its description
+# (user/describe/posix/cxxtest.cmd), hello through posixrun.
+! panicked
+! ZORAYA-PANIC
+! cxxtest: FAIL
+< \r\n~> 
+# iostream, a static constructor, a caught exception.
+> posixrun /bin/hello\r
+< hello from C++: caught
+< posixrun: exit 0
+< \r\n~> 
+# Thrown 20 frames down and caught with every destructor run; rethrow; a
+# constructor that throws; bad_alloc, out_of_range, system_error from the
+# library; exception_ptr out of a std::thread; a future's exception.
+> cxxtest exceptions\r
+< cxxtest: exceptions passed
+< \r\n~> 
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~> 
+> cxxtest rtti\r
+< cxxtest: rtti passed
+< \r\n~> 
+# Static constructors in definition order (checked inside), destructors in
+# reverse order after main and atexit's handler.
+> cxxtest statics\r
+< cxxtest: statics passed
+< cxxtest: atexit ran
+< cxxtest: destroyed c
+< cxxtest: destroyed b
+< cxxtest: destroyed a
+< \r\n~> 
+> cxxtest threads\r
+< cxxtest: threads passed
+< \r\n~> 
+# thread_local destructors at each thread's exit (__cxa_thread_atexit).
+> cxxtest tls\r
+< cxxtest: tls passed
+< \r\n~> 
+# cout and cerr, string streams, a file of the program's own /tmp, the C
+# locale (musl takes a name and keeps the C rules under it: ADR-0363), regex,
+# random_device.
+> cxxtest iostream /tmp\r
+< cxxtest: cout 42 2.5 ff
+< cxxtest: cerr line
+< cxxtest: locale de_DE.UTF-8 named de_DE.UTF-8, decimal point .
+< cxxtest: iostream passed
+< \r\n~> 
+> cxxtest fsops /tmp\r
+< cxxtest: fsops passed
+< \r\n~> 
+# std::filesystem lists the directory the line grants and is refused the one
+# it does not (a path outside the table is ENOENT, ADR-0107); the shell says
+# which grant was missing.
+> +r /work/granted cxxtest fs /work/granted /work/secret\r
+< cxxtest: /work/granted: one.txt sub/ two.txt
+< cxxtest: /work/secret: No such file or directory
+< hint: cxxtest tried to read /work/secret, which it was not given
+< \r\n~> 
+> status\r
+< \r\nexit status 1
+< \r\n~> 
+> cxxtest fs /work/granted\r
+< cxxtest: /work/granted: No such file or directory
+< \r\n~> 
+# An exception nobody catches, one out of a noexcept function, and
+# std::terminate: libc++abi's message, abort(), SIGABRT (ADR-0362).
+> cxxtest uncaught\r
+< libc++abi: terminating due to uncaught exception of type std::runtime_error: nobody catches this
+< cxxtest: ended by signal 6
+< \r\n~> 
+> status\r
+< \r\nended by signal 6
+< \r\n~> 
+> cxxtest noexcept\r
+< libc++abi: terminating due to uncaught exception of type std::logic_error: out of a noexcept function
+< cxxtest: ended by signal 6
+< \r\n~> 
+> cxxtest terminate\r
+< libc++abi: terminating
+< cxxtest: ended by signal 6
+< \r\n~> 
+# The fast hardening mode (ADR-0360): an index past the end traps.
+> cxxtest hardening\r
+< cxxtest: about to read v[2]
+< cxxtest: crashed (breakpoint, class 0x3c)
+< \r\n~> 
+> status\r
+< \r\ncrashed (breakpoint, class 0x3c)
+< \r\n~> 

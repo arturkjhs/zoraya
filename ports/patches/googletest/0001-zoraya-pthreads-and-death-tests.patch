@@ -1,0 +1,32 @@
+--- a/googletest/include/gtest/internal/gtest-port-arch.h	2026-11-14 03:23:08
++++ b/googletest/include/gtest/internal/gtest-port-arch.h	2026-11-14 03:23:08
+@@ -121,6 +121,9 @@
+ #define GTEST_OS_NRF52 1
+ #elif defined(__EMSCRIPTEN__)
+ #define GTEST_OS_EMSCRIPTEN 1
++#elif defined(__zoraya__)
++// Zoraya (TASK-30): POSIX programs through libposix, with pthreads and fork.
++#define GTEST_OS_ZORAYA 1
+ #endif  // __CYGWIN__
+ 
+ #endif  // GOOGLETEST_INCLUDE_GTEST_INTERNAL_GTEST_PORT_ARCH_H_
+--- a/googletest/include/gtest/internal/gtest-port.h	2026-11-14 03:23:08
++++ b/googletest/include/gtest/internal/gtest-port.h	2026-11-14 03:23:08
+@@ -601,6 +601,7 @@
+      defined(GTEST_OS_OPENBSD) || defined(GTEST_OS_HAIKU) ||          \
+      defined(GTEST_OS_GNU_HURD) || defined(GTEST_OS_SOLARIS) ||       \
+      defined(GTEST_OS_AIX) || defined(GTEST_OS_ZOS) ||                \
++     defined(GTEST_OS_ZORAYA) ||                                      \
+      (defined(GTEST_OS_EMSCRIPTEN) && defined(__EMSCRIPTEN_PTHREADS__)))
+ #define GTEST_HAS_PTHREAD 1
+ #else
+@@ -671,7 +672,8 @@
+      defined(GTEST_OS_QNX) || defined(GTEST_OS_FREEBSD) ||            \
+      defined(GTEST_OS_NETBSD) || defined(GTEST_OS_FUCHSIA) ||         \
+      defined(GTEST_OS_DRAGONFLY) || defined(GTEST_OS_GNU_KFREEBSD) || \
+-     defined(GTEST_OS_HAIKU) || defined(GTEST_OS_GNU_HURD))
++     defined(GTEST_OS_HAIKU) || defined(GTEST_OS_GNU_HURD) ||         \
++     defined(GTEST_OS_ZORAYA))
+ 
+ // Death tests require a file system to work properly.
+ #if GTEST_HAS_FILE_SYSTEM

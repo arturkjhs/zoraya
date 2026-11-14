@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE test-cxx test-cxx-libcxx test-cxx-gtest apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -932,6 +932,33 @@ test-posix-threads: $(KERNEL) $(RUNNER) tools-storage
 	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_THREADS)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_THREADS)/disk.img || exit 1; done
+
+# TASK-30 (proposed ADR-0360 to ADR-0366): C++ programs built by zc++ against
+# libc++, libc++abi and libunwind (make -f ports/Makefile cxx, which needs
+# `make fetch-ports` once), run from the volume through the broker as a POSIX
+# program with a description (user/describe/posix/cxxtest.cmd): tests/cxx/'s
+# programs, a granted and a refused directory for std::filesystem. Under HVF
+# here and HVF and TCG in CI (LOCAL_ACCELS). The libc++ test subset and
+# GoogleTest are test-cxx-libcxx and test-cxx-gtest.
+CXX_TEST := $(BUILD)/cxx-test
+CXX_SCRIPT := tests/cxx/cxx.script
+# No debug information: the programs are 3.9 MB with libc.a's, 1 MB without.
+CXX_TEST_FLAGS := -O2 -Wall -Wextra -Werror -Wl,--strip-debug
+test-cxx: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile cxx
+	rm -rf $(CXX_TEST) && mkdir -p $(CXX_TEST)/root/bin $(CXX_TEST)/root/work/granted/sub $(CXX_TEST)/root/work/secret
+	cp -R rootfs/. $(CXX_TEST)/root/
+	printf 'one\n' > $(CXX_TEST)/root/work/granted/one.txt && printf 'two\n' > $(CXX_TEST)/root/work/granted/two.txt
+	printf 'not for cxxtest\n' > $(CXX_TEST)/root/work/secret/key.txt
+	tools/zc++ $(CXX_TEST_FLAGS) -o $(CXX_TEST)/root/bin/cxxtest tests/cxx/cxxtest.cpp
+	tools/zc++ $(CXX_TEST_FLAGS) -o $(CXX_TEST)/root/bin/hello tests/cxx/hello.cpp
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(CXX_TEST)/root/bin
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(CXX_TEST)/root $(CXX_TEST)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(CXX_SCRIPT) --label cxx-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(CXX_TEST)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(CXX_TEST)/disk.img || exit 1; done
 
 # Part 9b's thread suites (ADR-0309 items 1 and 2): musl's libc-test thread
 # tests (tests/libc-test/threads-excluded.txt names what is left out and why),

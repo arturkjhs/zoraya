@@ -1,0 +1,13 @@
+# The groups of libc++'s test suite that make test-cxx-libcxx builds and runs
+# inside Zoraya (TASK-30): directories under libcxx/test/, one a line. Chosen
+# for what this port adds that no C test covers: exceptions and the ABI
+# (support.exception, support.rtti, support.dynamic: new and delete, aligned
+# new over patch llvm/0003), threads (std/thread: thread, mutex, condition
+# variables, futures, latches, barriers, semaphores, stop tokens, jthread)
+# and std::filesystem over libposix. tests/cxx/libcxx-excluded.txt names
+# the tests left out of these groups and why.
+std/language.support/support.exception
+std/language.support/support.rtti
+std/language.support/support.dynamic
+std/thread
+std/input.output/filesystems

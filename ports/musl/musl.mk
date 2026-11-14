@@ -16,8 +16,11 @@ RETAINED_DIRS := string ctype multibyte locale stdlib math regex search prng \
 # (ADR-0100 item 2).
 EXCEPTIONS := src/thread/aarch64/__set_thread_area.s
 # Single files of directories that are otherwise replaced: system.c calls
-# only functions libc.a has (ADR-0210).
-EXCEPTIONS_BASE := src/process/system.c
+# only functions libc.a has (ADR-0210); dl_iterate_phdr.c's static version
+# reads the auxiliary vector libposix lays out (AT_PHDR, AT_PHNUM), which is
+# how libunwind finds a C++ program's .eh_frame_hdr (TASK-30, ADR-0361);
+# execv.c is execve with environ (GoogleTest's death tests, ADR-0366).
+EXCEPTIONS_BASE := src/process/system.c src/process/execv.c src/ldso/dl_iterate_phdr.c
 
 # src/thread is retained (ADR-0302 item 1, which supersedes ADR-0100 item 5)
 # except the files that this port replaces by Rust (zoraya-posix: __clone,

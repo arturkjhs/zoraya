@@ -62,10 +62,25 @@ CXX_FLAGS := $(COMMON) -std=c++23 -nostdinc++ -isystem $(CXXINC) -I$(LIBCXX)/src
 CXX_OBJS := $(addprefix $(OBJ)/cxx/,$(CXX_SRCS:.cpp=.o))
 
 # The names libc.a does not export that libc++ needs, defined in libc++.a
-# itself (ADR-0366): each fails as the call would where it has no meaning.
+# itself (ADR-0366): each does what the call says through libposix, or fails
+# as the call would where it has no meaning.
 SHIM_OBJ := $(OBJ)/cxx/zoraya-shim.o
 
-all: $(LIB)/libunwind.a $(LIB)/libc++abi.a $(LIB)/libc++.a
+all: $(LIB)/libunwind.a $(LIB)/libc++abi.a $(LIB)/libc++.a $(OBJ)/whole.check
+
+# INV-0366-1: every member of the three archives links against libc.a with no
+# undefined name (a program that links all of them, not only what one program
+# reaches). INV-0366-2: the shim defines only its five names, each weak.
+SHIM_NAMES := W link W pathconf W sched_yield W statvfs W truncate
+$(OBJ)/whole.check: $(LIB)/libunwind.a $(LIB)/libc++abi.a $(LIB)/libc++.a
+	printf 'int main(void) { return 0; }\n' > $(OBJ)/whole-main.c
+	$(ZCXX) -x c -c -o $(OBJ)/whole-main.o $(OBJ)/whole-main.c
+	$(ZCXX) -nostdlib++ -o $(OBJ)/whole.elf $(OBJ)/whole-main.o -Wl,--error-limit=0 \
+	  -Wl,--whole-archive $(LIB)/libc++.a $(LIB)/libc++abi.a $(LIB)/libunwind.a -Wl,--no-whole-archive
+	nm $(SHIM_OBJ) | awk 'NF == 3 { print $$2, $$3 }' | sort > $(OBJ)/shim.nm
+	@[ "$$(tr '\n' ' ' < $(OBJ)/shim.nm)" = "$(SHIM_NAMES) " ] || \
+	  { echo "INV-0366-2: the shim defines other names, or not weakly:"; cat $(OBJ)/shim.nm; exit 1; }
+	@touch $@
 
 $(OBJ)/unwind/%.o: $(LIBUNWIND)/src/%.cpp
 	@mkdir -p $(dir $@)
