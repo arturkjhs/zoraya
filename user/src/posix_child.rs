@@ -226,6 +226,12 @@ pub struct Launch<'a> {
     pub env: &'a [&'a [u8]],
     /// fd 0's read end, fd 1's and fd 2's write ends; duplicated.
     pub streams: [Handle; 3],
+    /// Which of fds 0, 1 and 2 are the terminal (ADR-0331 item 2), and the
+    /// write end of the line's output to the terminal (duplicated): each is
+    /// a tty description, its slot that write end and its connection one
+    /// that `launch`'s `connect` makes for the child's group; the table then
+    /// has `/dev/tty` (ADR-0105 items 4 and 6).
+    pub tty: Option<([bool; 3], Handle)>,
     /// The refused-path channel's write end (ADR-0153 rule 11); moved.
     pub report: Handle,
     /// A connection to `netd` for the program (ADR-0225 item 2), moved in
@@ -265,7 +271,16 @@ fn close_entries(entries: &[Entry]) {
 
 /// Starts the program: prepare, record, spawn, commit. Every handle of
 /// `l` that is moved is gone afterwards, also on failure.
-pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
+///
+/// `connect(group)` gives the client end of a new terminal connection for a
+/// program of `group`, tagged by the caller with its line (ADR-0331 item 4);
+/// it is called only for the fds of `l.tty`, once each and once for
+/// `/dev/tty`. A fd whose connection cannot be made is its plain stream.
+pub fn launch(
+    broker: &Broker,
+    l: Launch<'_>,
+    connect: &mut dyn FnMut(u32) -> Option<Handle>,
+) -> Result<Child, Status> {
     let sub = match job_create(l.line_job, JobFlags::POSIX) {
         Ok(j) => j,
         Err(s) => {
@@ -331,7 +346,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             handle,
         });
     }
-    let fds = [
+    let mut fds = [
         abi::Fd {
             fd: 0,
             kind: FdKind::StreamRead,
@@ -351,6 +366,66 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             tty: NO_HANDLE,
         },
     ];
+    // The terminal's fds: a connection each, in the record's message after
+    // the entries' (ADR-0107 item 3), and `/dev/tty` with one more.
+    let mut cwd_entry = l.cwd_entry;
+    let mut is_tty = [false; 3];
+    let (wanted, tty_output) = match l.tty {
+        Some((fds, output)) => (fds, Some(output)),
+        None => ([false; 3], None),
+    };
+    for fd in 0..3 {
+        if !wanted[fd] || moved.len() + 1 >= abi::MAX_MESSAGE_HANDLES {
+            continue;
+        }
+        if let Some(conn) = connect(p.pgid) {
+            moved.push(ChannelEntry {
+                handle: conn,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            fds[fd].kind = FdKind::Tty;
+            fds[fd].tty = (moved.len() - 1) as u8;
+            is_tty[fd] = true;
+        }
+    }
+    if is_tty.contains(&true)
+        && moved.len() < abi::MAX_MESSAGE_HANDLES
+        && let Some(conn) = connect(p.pgid)
+    {
+        moved.push(ChannelEntry {
+            handle: conn,
+            rights: ChannelObject::RIGHTS,
+            transfer: Transfer::Move,
+        });
+        // The table is longest prefix first (`Bootstrap::decode`).
+        let tty_prefix = "/dev/tty";
+        let at = record_entries
+            .iter()
+            .position(|e| e.prefix.len() < tty_prefix.len())
+            .unwrap_or(record_entries.len());
+        record_entries.insert(
+            at,
+            abi::Entry {
+                prefix: tty_prefix,
+                kind: EntryKind::Terminal,
+                handle: (moved.len() - 1) as u8,
+            },
+        );
+        if cwd_entry as usize >= at {
+            cwd_entry += 1;
+        }
+    }
+    let close_ttys = |moved: &[ChannelEntry]| {
+        // The entries' handles are closed by `close_entries`; the rest are
+        // the terminal's connections.
+        for e in moved
+            .iter()
+            .skip(l.entries.iter().filter(|e| e.handle.is_some()).count())
+        {
+            let _ = handle_close(e.handle);
+        }
+    };
     let facts = abi::Facts {
         pid: p.pid,
         ppid: 0,
@@ -368,7 +443,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         &facts,
         abi::ABSOLUTE,
         l.exe,
-        l.cwd_entry,
+        cwd_entry,
         l.cwd,
         &fds,
         &record_entries,
@@ -376,6 +451,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         &mut record,
     ) else {
         close_entries(&l.entries);
+        close_ttys(&moved);
         let _ = handle_close(l.report);
         for h in [p.child_job, p.broker_end]
             .into_iter()
@@ -391,6 +467,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Ok(b) => b,
         Err(s) => {
             close_entries(&l.entries);
+            close_ttys(&moved);
             let _ = handle_close(l.report);
             for h in [p.child_job, p.broker_end]
                 .into_iter()
@@ -417,9 +494,22 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             e.disposition(kind, d);
         }
     }
-    let [input, output, error] = l.streams;
+    let mut slots = l.streams;
+    if let Some(out) = tty_output {
+        for fd in 0..3 {
+            if is_tty[fd] {
+                slots[fd] = out;
+            }
+        }
+    }
+    let [input, output, error] = slots;
+    let input_rights = if is_tty[0] {
+        StreamWriteObject::RIGHTS
+    } else {
+        StreamReadObject::RIGHTS
+    };
     for (fd, h, rights) in [
-        (0, input, StreamReadObject::RIGHTS),
+        (0, input, input_rights),
         (1, output, StreamWriteObject::RIGHTS),
         (2, error, StreamWriteObject::RIGHTS),
     ] {
@@ -457,6 +547,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Ok(process) => process,
         Err(s) => {
             close_entries(&l.entries);
+            close_ttys(&moved);
             for h in [boot, boot_child, p.broker_end, l.report, p.child_job]
                 .into_iter()
                 .chain(l.net)
@@ -478,6 +569,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     };
     if let Err(s) = channel_write(boot, &record[..n], &moved) {
         close_entries(&l.entries);
+        close_ttys(&moved);
         let _ = handle_close(boot);
         if let Some(n) = l.net {
             let _ = handle_close(n);

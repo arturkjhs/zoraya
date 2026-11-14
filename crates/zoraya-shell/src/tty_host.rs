@@ -120,6 +120,9 @@ struct Line<H> {
     terminal: bool,
     /// The groups the broker says were created inside it.
     groups: Vec<u32>,
+    /// The group a `tcsetpgrp` chose; until one does the whole line reads
+    /// (`Terminal::set_foreground_line`).
+    chosen: Option<u32>,
     /// A stopped line's attributes, for `fg`.
     saved: Option<Termios>,
     bracket: Bracket,
@@ -191,9 +194,15 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             job,
             terminal,
             groups: alloc::vec![group],
+            chosen: None,
             saved: None,
             bracket: Bracket::default(),
         });
+    }
+
+    /// Whether line `id` has a record.
+    pub fn has_line(&self, id: u32) -> bool {
+        self.line(id).is_some()
     }
 
     /// The broker says a process was created in `group` inside line `id`
@@ -224,19 +233,24 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         let Some(l) = self.line(id) else {
             return out;
         };
-        let (job, group, saved, terminal) = (l.job, l.groups[0], l.saved, l.terminal);
+        let (job, chosen, saved, terminal) = (l.job, l.chosen, l.saved, l.terminal);
         self.drop_held(&mut out);
         self.tty.discipline.flush();
         self.front = Some(id);
         effects(self.tty.set_front_line(Some(id)), &mut out);
-        effects(self.tty.set_foreground(group, job), &mut out);
+        match chosen {
+            Some(group) => effects(self.tty.set_foreground(group, job), &mut out),
+            None => effects(self.tty.set_foreground_line(job), &mut out),
+        }
         if let Some(attr) = saved {
             effects(self.tty.continue_line(attr), &mut out);
             if let Some(l) = self.line_mut(id) {
                 l.saved = None;
             }
             out.push(Effect::Reinstate);
-            out.extend(self.winch(job));
+            if terminal {
+                out.extend(self.winch(job));
+            }
         } else if terminal {
             // A new line starts from the defaults the end of the last gave.
             self.tty.discipline.flush();
@@ -309,7 +323,12 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
     /// cannot set the size; no request does.
     pub fn size(&mut self, rows: u32, columns: u32) -> Vec<Effect<H>> {
         let mut out = Vec::new();
-        effects(self.tty.resize(rows, columns), &mut out);
+        let signals = self.tty.resize(rows, columns);
+        // A native line has no handler for the request: only a line with
+        // the terminal is told (ADR-0331 item 7 is about POSIX programs).
+        if self.takes_keys() {
+            effects(signals, &mut out);
+        }
         out
     }
 
@@ -322,6 +341,9 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             return Err(Refused::NotInFront);
         }
         let job = l.job;
+        if let Some(l) = self.line_mut(front) {
+            l.chosen = Some(group);
+        }
         let mut out = Vec::new();
         effects(self.tty.set_foreground(group, job), &mut out);
         Ok(out)
@@ -760,5 +782,67 @@ mod tests {
         let mut out = Vec::new();
         assert!(!h.paste("x", &mut out));
         assert!(out.is_empty());
+    }
+    #[test]
+    fn a_native_line_is_restored_but_never_told_a_size() {
+        // ADR-0331 item 9 for every line in front; item 7 only for a line
+        // with the terminal (a native program has no handler for it).
+        let mut h: Host<u32> = Host::new();
+        h.start_line(1, 101, 0, false);
+        h.bring_front(1);
+        assert!(h.size(30, 90).is_empty());
+        let es = h.stop_front();
+        assert!(es.contains(&Effect::Restore { keep: true }));
+        let es = h.bring_front(1);
+        assert!(es.contains(&Effect::Reinstate));
+        assert!(
+            !es.iter()
+                .any(|e| matches!(e, Effect::Tty(Action::Signal { .. }))),
+            "no SIGWINCH to a native line"
+        );
+        assert_eq!(h.end_line(1), [Effect::Restore { keep: false }]);
+    }
+
+    #[test]
+    fn every_program_of_the_line_in_front_reads_until_tcsetpgrp_chooses() {
+        // `less` at the end of `ls | less` has a group of its own.
+        let mut h: Host<u32> = Host::new();
+        h.start_line(1, 101, 11, true);
+        let first = h.connect(1, 11).unwrap();
+        let last = h.connect(1, 12).unwrap();
+        h.group_created(1, 12);
+        h.bring_front(1);
+        h.keys(b"q\n");
+        assert_eq!(read(&mut h, last, 1).unwrap(), b"q\n");
+        h.keys(b"r\n");
+        assert_eq!(read(&mut h, first, 2).unwrap(), b"r\n");
+        assert!(h.tcsetpgrp(12).is_ok());
+        assert_eq!(read(&mut h, first, 3), Err(status::NOT_FOREGROUND));
+        // The choice outlives a stop.
+        h.stop_front();
+        h.bring_front(1);
+        assert_eq!(h.tty.foreground(), Some(12));
+    }
+
+    #[test]
+    fn a_paste_to_a_program_is_cleaned_as_at_the_prompt() {
+        // The 10b review's finding 2: what cannot be seen does not reach a
+        // program either (zero-width and bidirectional format characters),
+        // through the shell's one paste path (`paste::Feed`).
+        let (mut h, a, _) = two();
+        set_raw(&mut h, a);
+        h.relay(1, b"\x1b[?2004h", &mut Crlf::new(), &mut Vec::new());
+        let mut feed = crate::paste::Feed::default();
+        let mut keys = Vec::new();
+        let text = "ls \u{200b}\u{202e}\u{2066}\u{feff}ok\x1b\x03";
+        assert!(feed.part(text.as_bytes(), true, true, &mut keys));
+        let crate::paste::Routed::Insert(clean) =
+            feed.route(keys[0], crate::paste::Reading::Program)
+        else {
+            panic!("a paste for the program");
+        };
+        let mut out = Vec::new();
+        assert!(h.paste(&clean, &mut out));
+        assert_eq!(typed(&mut h, a), b"\x1b[200~ls ok\x1b[201~");
     }
 }

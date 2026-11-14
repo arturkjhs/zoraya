@@ -172,10 +172,11 @@ user/describe/posix/zfetch.cmd test-net test-files
 crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
+crates/zoraya-tty/            test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
 user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix
-user/src/posix_child.rs       test-posix test-net test-apps test-netsurf test-python test-python-regr
+user/src/posix_child.rs       test-posix test-gui test-net test-apps test-netsurf test-python test-python-regr
 ports/patches/python/         test-python test-python-regr
 ports/apps/pyshim.c          test-python test-python-regr
 user/describe/posix/python3.cmd test-python test-files
@@ -205,8 +206,8 @@ tests/libc-test/             test-posix-suites test-posix-threadtest3
 
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps test-netsurf
-crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps test-python test-python-regr
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps test-netsurf test-posix test-gui
+crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps test-python test-python-regr test-posix test-gui
 crates/zoraya-command/        test-boot test-files test-tour-gui
 crates/zoraya-describe/       test-files test-tour-gui test-apps test-netsurf test-python test-python-regr
 crates/zoraya-settings/       test-files test-tour-gui test-gui

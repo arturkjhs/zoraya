@@ -88,6 +88,9 @@ pub struct Terminal<H> {
     connections: Vec<Option<Connection>>,
     /// The foreground group and the job its signals go to.
     foreground: Option<(u32, H)>,
+    /// The foreground is the whole line in front, not one group of it
+    /// ([`Terminal::set_foreground_line`]): every group of that line reads.
+    any_group: bool,
     /// Whether lines are told apart (`zosh`: set by the first
     /// [`Terminal::set_front_line`]; `ttyd` never sets it) and the line in
     /// front; with lines told apart and none in front nobody reads.
@@ -114,6 +117,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
             discipline: Discipline::new(),
             connections: Vec::new(),
             foreground: None,
+            any_group: false,
             lines: false,
             front_line: None,
             output_pending: false,
@@ -184,7 +188,22 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     /// vetted. `job` receives the signal characters; the host keeps its
     /// handle (nothing is closed here).
     pub fn set_foreground(&mut self, group: u32, job: H) -> Vec<Action<H>> {
+        self.any_group = false;
         self.replace_foreground(group, job);
+        let mut actions = Vec::new();
+        self.background_reads(&mut actions);
+        self.answer_reads(&mut actions);
+        actions
+    }
+
+    /// The whole line in front reads, whatever group a program of it is in,
+    /// until a [`Terminal::set_foreground`] chooses one (`zosh`, ADR-0331
+    /// item 6: a pipeline's programs are in groups of their own, and a line
+    /// in which no program asked for the terminal is one job). `job`
+    /// receives the signal characters; [`Terminal::foreground`] is `None`.
+    pub fn set_foreground_line(&mut self, job: H) -> Vec<Action<H>> {
+        self.replace_foreground(0, job);
+        self.any_group = true;
         let mut actions = Vec::new();
         self.background_reads(&mut actions);
         self.answer_reads(&mut actions);
@@ -198,6 +217,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     /// No group reads: the line in front ended or stopped.
     pub fn clear_foreground_group(&mut self) {
         self.foreground = None;
+        self.any_group = false;
     }
 
     /// The line ended or stopped: the attributes go back to the defaults
@@ -283,7 +303,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     }
 
     pub fn foreground(&self) -> Option<u32> {
-        self.foreground.map(|f| f.0)
+        self.foreground.filter(|_| !self.any_group).map(|f| f.0)
     }
 
     /// The group of a connection, for the tests.
@@ -328,7 +348,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     fn may_read(&self, line: u32, group: u32) -> bool {
         self.line_ok(line)
             && match self.foreground {
-                Some((fg, _)) => fg == group,
+                Some((fg, _)) => self.any_group || fg == group,
                 None => true,
             }
     }
@@ -492,6 +512,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                         status: Below(status::OK),
                     };
                     self.reply(id, &ok, t, &mut actions);
+                    self.any_group = false;
                     if let Some(old) = self.replace_foreground(m.group, job) {
                         actions.push(Action::Close(old));
                     }
@@ -520,6 +541,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                 if !control {
                     self.refuse(id, status::NOT_ALLOWED, t, &mut actions);
                 } else {
+                    self.any_group = false;
                     if let Some((_, old)) = self.foreground.take() {
                         actions.push(Action::Close(old));
                     }

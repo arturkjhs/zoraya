@@ -284,21 +284,15 @@ states, to be taken up later:
 - Part 10a (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10a.md`):
   - **`vttest`'s cursor and screen menus** (ADR-0332 item 10) are not recorded: `vttest` needs a pin (version, URL and SHA-256) in
     `ports/sources.lock`, the architect's; then `tools/term-record/record.py` records it like the other sessions.
-  - **Stop-gap to remove in 10c:** `zoraya_shell::reset::BEFORE_PROMPT`, written before a prompt that follows a command, until the
-    shell sends `Restore` (ADR-0331 item 9). Also in `docs/design.md`.
   - **`term.scrollback`** and `console.term` (ADR-0157 settings) are declared by `zosh` and read by `term` in part 10c.
   - **Deferred to 10b:** done: the 165 are implemented or excepted with a reason, and `tools/term-conformance/check.sh` fails if a
     reason begins `deferred (10b)` again.
-  - **A program that sets 2026 and never ends it** has each later update held 150 ms until the next prompt, whose stop-gap reset ends it.
-  - **The stop-gap's edges** (`zoraya_shell::reset`): it fires before every prompt after the first, clears a pending wrap, resets the palette and
-    the cursor shape, and `fg` of a stopped full-screen job is not restored (modes are lost): 10c's `Restore` and `reinstate`.
+  - **A program that sets 2026 and never ends it** has each later update held 150 ms until its line ends, whose `Restore` ends it.
   - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
 - Part 10b (TASK-31) leftovers (`docs/tasks/TASK-31-part-10b.md`):
   - **`kbs`, to settle before part 10d (the architect):** build the entry with `kbs=^?` (ADR-0383 Option C) or accept the exception, and
     have 10d's curses test program press Backspace; whether ncurses maps the erase character to `KEY_BACKSPACE` was not checked. The pinned entry says Backspace is `^H`; the terminal sends `0x7f` (ADR-0096). Proposed ADR-0383 lists it as an exception;
     the fix at the source is building the entry with `kbs=^?` (ADR-0333, the architect's).
-  - **A paste to a program in front** (brackets for 2004, the confirmation of a newline, `paste N lines?`) is part 10c's; until then `zosh`
-    drops it with a line, and the session's `ttyd` ignores `Paste`.
   - **A raw-mode test program** that prints the keys it reads (the F-keys and Ctrl+arrows from a program, not the prompt's Ctrl+V) is 10c's.
   - **Selection** is gone when its rows change or the view scrolls; no word or line selection, no wrap flag (a wrapped line copies as
     two), no selection across a scroll (proposed ADR-0384, Option B).

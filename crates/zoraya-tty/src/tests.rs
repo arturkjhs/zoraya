@@ -941,3 +941,57 @@ fn read_ready_and_deadline_in_canonical_mode_follow_lines_only() {
     assert!(d.read_ready(10, 0));
     assert_eq!(d.read_deadline(10, 0), None);
 }
+
+#[test]
+fn the_whole_line_in_front_reads_until_a_group_is_chosen() {
+    // `zosh`: a pipeline's programs are in groups of their own; all of the
+    // line in front read until a `tcsetpgrp` chooses one (ADR-0331 item 6).
+    let mut t: Terminal<H> = Terminal::new();
+    let a = t.add_terminal_in(5, 3).unwrap();
+    let b = t.add_terminal_in(6, 3).unwrap();
+    let other = t.add_terminal_in(5, 4).unwrap();
+    t.set_front_line(Some(3));
+    t.set_foreground_line(100);
+    assert_eq!(t.foreground(), None, "no group is chosen");
+    t.keys(b"x\ny\n");
+    let r = replies(&t.request(a, &message(&Read { max: 9 }, 1), vec![]));
+    assert_eq!(read_reply(&r[0].1).unwrap(), b"x\n");
+    let r = replies(&t.request(b, &message(&Read { max: 9 }, 2), vec![]));
+    assert_eq!(read_reply(&r[0].1).unwrap(), b"y\n");
+    let r = replies(&t.request(other, &message(&Read { max: 9 }, 3), vec![]));
+    assert_eq!(read_reply(&r[0].1), Err(status::NOT_FOREGROUND));
+    // The signal characters go to the line's job.
+    let s: Vec<_> = t
+        .keys(&[0x03])
+        .into_iter()
+        .filter(|a| matches!(a, Action::Signal { .. }))
+        .collect();
+    assert_eq!(
+        s,
+        [Action::Signal {
+            job: 100,
+            kind: RequestKind::Interrupt,
+            detail: 2
+        }]
+    );
+    // A chosen group ends it: the other group of the line is refused.
+    t.request(b, &message(&Read { max: 9 }, 4), vec![]);
+    let r = replies(&t.set_foreground(5, 100));
+    assert_eq!(
+        read_reply(&r[0].1),
+        Err(status::NOT_FOREGROUND),
+        "b's held read"
+    );
+    assert_eq!(t.foreground(), Some(5));
+    t.set_foreground_line(100);
+    t.clear_foreground_group();
+    t.keys(b"z\n");
+    let r = replies(&t.request(b, &message(&Read { max: 9 }, 5), vec![]));
+    assert_eq!(r.len(), 1, "no foreground group: anyone of the line reads");
+    assert!(
+        !t.keys(&[0x03])
+            .iter()
+            .any(|a| matches!(a, Action::Signal { .. })),
+        "and no signal goes anywhere"
+    );
+}

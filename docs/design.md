@@ -509,19 +509,16 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   in order, as soon as the shell's queue has room; a paste that does not fit is dropped whole. It draws only the rows
   that changed, and commits again only after the last commit's reply. *Known limits (10b):* a selection ends when
   output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
-  lines (no wrap flag); no word or line selection and no primary selection; a paste to a program in front is dropped
-  until 10c, and in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
+  lines (no wrap flag); no word or line selection and no primary selection; in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
   whole stretch between its ends), and a button released outside the window is seen at the next event;
   no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
-  *Known limits until part 10c:* nothing sends `Restore`, so what a program leaves set (the alternate screen, a hidden
-  cursor, a region, a character set) would stay for the shell; as a stop-gap `zosh` writes a fixed reset
-  (`zoraya_shell::reset::BEFORE_PROMPT`) before every prompt after the first (it is idempotent), **to be removed when 10c
-  sends `Restore`** (`docs/backlog.md`); its edges: it clears a pending wrap, resets the palette and the cursor shape, and a job
-  stopped with Ctrl-Z loses its modes, which `fg` does not give back until 10c. A program that sets synchronized output (2026) and never ends it has every later update held
-  150 ms until the next prompt, whose reset ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
+  *Restore (10c):* `zosh` sends `Restore { keep: false }` when any line in front ends, `Restore { keep: true }` when it
+  stops, and `Reinstate` at `fg` of a stopped one (ADR-0331 item 9, proposed ADR-0386 and ADR-0387); the stop-gap reset of
+  10a is gone. A program that sets synchronized output (2026) and never ends it has every later update held 150 ms until
+  its line ends, whose `Restore` ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
   script reads the text of a replayed session (any colour fits a glyph), and colours are checked by the frozen grids of
   `tests/replay.rs`.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
@@ -531,8 +528,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   `ESC` or other control character but tab and newline, carriage returns as line ends, INV-0332-5) and put in the key
   stream at their place as one of the bytes 0xF8 to 0xFF, which no key makes; the line editor (`Editor::paste`) inserts
   the text at the cursor without running it (a newline makes a continuation line; Enter, the person's, sends the
-  entry), and while a program is in front a paste is dropped with a line saying so (the paste to a program is part
-  10c's). Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
+  entry), and while a program is in front a paste goes to it through the discipline when it has the terminal
+  (`tty_host::Host::paste`: brackets for 2004, otherwise a question in the title for a newline) and is dropped with a
+  line saying so when it has not. Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
   Alt+f move by a word, Alt+Backspace deletes one.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
   page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A

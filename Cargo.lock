@@ -943,7 +943,6 @@ dependencies = [
  "zoraya-proto-tty",
  "zoraya-protocol",
  "zoraya-resolve",
- "zoraya-term",
  "zoraya-test-alloc",
  "zoraya-tty",
  "zoraya-width",

@@ -6,8 +6,9 @@
 //! the keys of `Input` are UTF-8 and the bytes 0xF8 to 0xFF are never in UTF-8,
 //! so a paste is one of those bytes between the keys typed before it and the
 //! keys typed after it. The prompt inserts the text into its line and does
-//! not run it; a program in front gets nothing in 10b (a paste to a program
-//! is part 10c's).
+//! not run it; a POSIX program in front with the terminal gets it through
+//! `tty_host::Host::paste` (part 10c), cleaned the same way; any other
+//! program in front gets nothing.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -86,7 +87,11 @@ impl Store {
 pub enum Reading {
     /// At the prompt: a paste is inserted into the line.
     Prompt,
-    /// While a program runs, or a builtin waits for a key: a paste is dropped.
+    /// A program with the terminal is in front: a paste is given to it
+    /// (`tty_host::Host::paste`).
+    Program,
+    /// While a program without the terminal runs, or a builtin waits for a
+    /// key: a paste is dropped.
     Elsewhere,
 }
 
@@ -95,7 +100,7 @@ pub enum Reading {
 pub enum Routed {
     /// A key, for the editor or the program in front.
     Key(u8),
-    /// A paste, to insert into the line (cleaned).
+    /// A paste, to insert into the line or give to the program (cleaned).
     Insert(String),
     /// A paste that is not used (it was read where it cannot be, or it is
     /// gone): the shell says so.
@@ -142,7 +147,7 @@ impl Feed {
             return Routed::Key(key);
         }
         match (self.store.take(key), at) {
-            (Some(text), Reading::Prompt) => Routed::Insert(text),
+            (Some(text), Reading::Prompt | Reading::Program) => Routed::Insert(text),
             _ => Routed::Dropped,
         }
     }

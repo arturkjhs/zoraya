@@ -18,7 +18,6 @@ pub mod jobs;
 pub mod netgrant;
 pub mod paste;
 pub mod record;
-pub mod reset;
 pub mod syntax;
 pub mod tty_host;
 

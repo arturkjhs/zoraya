@@ -23,6 +23,5 @@ zoraya-width = { path = "../zoraya-width" }
 workspace = true
 
 [dev-dependencies]
-zoraya-term = { path = "../zoraya-term" }
 zoraya-protocol = { path = "../zoraya-protocol" }
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }
