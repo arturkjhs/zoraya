@@ -278,3 +278,15 @@ For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.
 3. **Programs installed on the volume, not in the image.** Where their descriptions live, how their saved grants are
    kept (network, a writable directory, their own directory per ADR-0341), and how a person sees and revokes them.
    Design first, as proposed ADRs (numbers from 0380 to 0399 if TASK-31's parts leave them, otherwise ask the architect).
+
+## Decisions on `work/test-fixes-2` and 10e (the architect, 2026-11-14)
+
+- **`work/test-fixes-2` starts with** the `libc.a` relink that makes the build job rebuild every port (audit T1), **then**
+  `make test-cxx-libcxx` under TCG: leave out the `thread.semaphore`, barrier and atomic-wait groups under TCG only (they
+  poll with backoff; 121 s measured for one test), keep them under HVF, and map the libcxx job only to changes in
+  `ports/cxx`, `ports/musl`, `libposix` and `tests/cxx`. (`main`'s run 43598033280 started its tests an hour after it was
+  created; `test-cxx-libcxx` under TCG is its long tail, over 25 minutes.)
+- **libc++'s atomic wait over Zoraya's futex (ADR-0301)** fixes the cause of that polling; do it after the exclusion.
+- **10e:** GNU hello's `configure` stopping at `config.sub sun4` is a compatibility defect, not a leftover. Find the cause
+  before 10e merges (`sh -x config.sub sun4` in the guest; compare each step with the same toybox command's POSIX
+  behaviour); fix it or record it with a test.
