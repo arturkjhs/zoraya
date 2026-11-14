@@ -214,6 +214,11 @@ From the "Not done" and limits lists of `docs/tasks/TASK-27-report.md` that no r
   `build` job with NetSurf and CPython is not measured (the job has 60 minutes).
 - **Compositor (9e).** The session's 20 clients are not carved per room; a client with no window keeps its slot (ADR-0323's open
   questions). The scale-2 and TCG GUI runs of 9e's scripts ran only in CI.
+- **NetSurf on the real web (9f final step, `docs/tasks/TASK-27-report.md`, "9f: a usable browser").** Wikipedia (ru, uk) loads over
+  TLS with the production roots and its Cyrillic text is right, but the layout is flattened and an article's prose below the lead was
+  not seen (cause not diagnosed: CSS support or a layout bug); SVG and WebP images are not drawn (empty frames); CJK and other scripts
+  are boxes (no font); no JavaScript, so no search box. `make hand-netsurf-wikipedia` and `-2` rerun the screens by hand (real Internet,
+  no CI).
 
 ## Follow-ups from the architect's decisions on stage 10's design (2026-11-14)
 
