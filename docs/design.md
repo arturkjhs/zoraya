@@ -528,6 +528,8 @@ Stage 7a (TASK-24), on the accepted [ADR-0161](adr/0161-design-system.md) and
 - **Fonts** (`fonts/`, `zoraya-fonts`): Inter 4.1 Regular and Medium, JetBrains Mono 2.304 Regular and Bold, unmodified,
   with their licences, in a fonts table of `docs/dependencies.md` checked by hash (INV-0162-5). Until the launcher of
   7d hands out `/system/fonts`, the programs that draw text embed them (ADR-0240): `term` grows by about 0.96 MB.
+  Since 9f-text the disk of `make run`/`run-gui` (`tools/run-disk.sh`) and NetSurf's test root carry the same files in
+  `/system/fonts`, which a POSIX program with a `window` line reads (ADR-0326, "NetSurf's text" below).
 - **Reading screens back.** `zoraya_term::read` draws every character a cell may hold (printable ASCII, Latin-1,
   Latin Extended-A, Cyrillic with Ґ ґ) with the terminal's fonts, size and colours, and a cell reads as the character
   whose pixels are identical. Twenty Cyrillic and Latin letters are drawn alike by any font (А and A, і and i, ...):
@@ -655,7 +657,8 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   view, separator, menu, dialog, progress bar; rows, columns and grids with `gap.controls` and `padding.window`;
   painting through `zoraya-paint` and `zoraya-text` from the tokens, every widget clipped to its rectangle
   (INV-0165-1); Tab and Shift+Tab over the focusable widgets, arrows in lists and radio groups, Enter, Escape closing a
-  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244).
+  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244),
+  and since 9f-wheel a third, the wheel (proposed ADR-0329, "The wheel in the applications" below).
 - **`zoraya-app`**: an application's loop over a `Platform` (the compositor's channel and memory objects): it opens
   toplevels of widget trees, paints and commits one frame at a time, answers `Configure` with a new buffer, and turns
   keys, the pointer, focus and `CloseRequested` into widget events or into what the application acts on. It sends
@@ -896,8 +899,46 @@ Not built in 7h, or known: a trash (`docs/backlog.md`); a copy or delete that fa
 folder, no space, past 4096 entries) leaves what was done and says only "Cannot copy NAME"; a forwarded System chord's
 release carries no `SYSTEM`; `OpenTerminal` is not rate-limited (one request at a time per launcher channel, as
 `OpenWith`); moving or copying several files by a drag to another window (a drop
-carries one file, ADR-0170); a scroll wheel (the list follows the keyboard's cursor); the window's title stays
-"Files".
+carries one file, ADR-0170); the window's title stays "Files". (The scroll wheel came in 9f-wheel, "The wheel in the
+applications" below.)
+
+## The wheel in the applications (as built)
+
+Part 9f-wheel (TASK-27), on the accepted [ADR-0322](adr/0322-a-wheel-event-in-the-compositor-protocol.md) and the
+proposed [ADR-0329](adr/0329-the-wheel-in-the-toolkit.md).
+
+- **The toolkit.** `zoraya-app` turns `Wheel` (ordinal 46, logical pixels of the body, 120ths of a notch) into
+  `zoraya_ui::Event::Wheel`; the window gives it to the widget under the pointer, then to each ancestor until one
+  takes it (a widget at its end that way answers `None`, so a list at its end hands the turn to the page around it).
+  It moves no focus. A notch is `ROWS_PER_NOTCH` (3) rows, lines or children, the terminal's three lines;
+  `WheelSteps` keeps the part of a row a turn leaves (40 of 120 is a row), so a high-resolution wheel scrolls a row
+  at a time, and forgets it at an end. A turn is bounded at 64 notches either way.
+- **Lists.** `ListView` (the chooser's list), the file manager's list and the editor move their first row or line
+  shown, clamped so that the last one is no higher than the bottom, and leave the selection and the cursor; a key,
+  a press, or a cursor the program moves (a find, a new folder, a search) brings the cursor back into view. The file
+  manager takes a turn only over its list, and none while its menu or card is open; a drop's row (ADR-0248) follows
+  the rows shown.
+- **`ScrollView`** is a column of children shown from its `first`: a child before it is laid out empty (it paints
+  nothing and takes no press), `first` never passes the point where the last child is at the bottom, and the
+  keyboard's focus on a child out of view (Tab, or a key to it) scrolls it into view. The settings page is one
+  always; with the Rooms section it is taller than its window and the wheel reaches Apply. Settings scrolls by whole
+  children (a row of controls, a label), not by pixels: `Logical` is unsigned and an `LRect` cannot start above its
+  parent (ADR-0329, Option A not taken).
+- **Rebuilt windows.** `App::replace_keeping_scroll` (settings, the editor) carries each scrolling widget's place
+  (`Scrolled`: the first shown, whether the wheel left it away from the cursor, and the cursor then) across a tree
+  built again, by its path; `App::replace` keeps only the focus, as before. The chooser keeps where the wheel left
+  its list across its sheet's rebuilds.
+- **Tests.** Host tests: `zoraya-ui` (`tests_wheel.rs`: rows from turns, parts of a notch, direction, clamping,
+  routing to the innermost widget that can go that way, focus scrolled into view, rebuilt trees), `zoraya-app` (the
+  wheel scrolls the body under the pointer and the next press lands on what it brought), `zoraya-files`,
+  `zoraya-editor`, `zoraya-settings-window`, `zoraya-chooser`. `tests/gui/wheel.script` (HVF and TCG) turns QEMU's
+  wheel over each application and reads the pixels that only the turn puts there: the file manager's selected row
+  three rows higher and back, a key bringing the cursor back; settings' controls 135 pixels higher (three children)
+  and Apply at the end answering; the editor's empty lines in rows that showed `x` lines.
+
+Not built in 9f-wheel, or known: pixel-smooth scrolling (settings moves by children); a scroll bar; a horizontal
+turn (`dx`) scrolls nothing; Page Up and Page Down in the file manager and the editor; the sidebar of places and the
+editor's find field do not scroll.
 
 ## Cross toolchain and ports (as built)
 
@@ -2207,6 +2248,45 @@ A POSIX program can have one window (ADR-0317), and NetSurf 3.11 is the first (A
   window channel until the panel restarts; the shell-side refusal of an untrusted room is unreachable in QEMU while such a
   room cannot be entered (the panel's is tested on the host).
 
+## NetSurf's text (stage 9, 9f-text)
+
+[ADR-0326](adr/0326-netsurf-text-through-zoraya-text.md) (accepted; it supersedes ADR-0318's fonts item) replaces NetSurf's
+internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readable, in the desktop's fonts, at the window's scale.
+
+- **The library.** `crates/zoraya-fontset` (`no_std`, no `unsafe`): four faces, each a fallback list of the system's fonts (sans:
+  Inter Regular then JetBrains Mono; sans bold: Inter Medium, Inter Regular, JetBrains Mono Bold; monospace and monospace bold
+  from JetBrains Mono, then Inter); NetSurf's serif, cursive and fantasy take sans, weight 600 and up the bold face, italic is
+  upright. Width, position and split keep NetSurf's meaning; U+200B to U+200F draw nothing; bytes that are not UTF-8 count one
+  U+FFFD each. It reads the fonts only as `/system/fonts/NAME` for its four names (INV-0326-1).
+- **Bounds a page cannot raise** (T3, T4 of the 9f-text review). A page chooses the size, up to `zoraya-text`'s 512 pixels,
+  where one glyph holds about 100 KB of coverage. Glyphs above `CACHE_MAX_PX` (128 pixels) are not kept: each face has
+  `LARGE_SLOTS` (2) slots for them. Below that, a face's cache that passes `CACHE_BYTES` (4 MiB of coverage) is emptied and
+  starts again. The four faces' caches therefore stay under about 4 × (4 MiB + one 128-pixel glyph) plus 8 large glyphs, about
+  17 MiB, whatever a page draws (`the_glyph_caches_stay_bounded_whatever_the_size`). Width shapes the text once, with no
+  memory per character. Position and split shape only up to the first boundary past `x` (split also up to the next space), so
+  NetSurf's layout, which calls `split` on the rest of a box for every line, is linear in the text: 20,000 Cyrillic words
+  break into lines with about twice their characters shaped (`breaking_a_long_paragraph_into_lines_is_linear`), where shaping
+  the whole rest on every call was quadratic (1.1 s for 300 lines on the host).
+- **The C side.** `libc.a` exports `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` and
+  `zoraya_window_scale` (`crates/zoraya-posix/src/ffi/text.rs`, ADR-0326's block; `ports/netsurf/zoraya_text.h`).
+  `ports/netsurf/font_zoraya.c` is NetSurf's font library (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`, patch
+  `0008`); glyphs are plotted with `nsfb_plot_glyph8`, which clips. At start it sets NetSurf's dpi to 90 times the window's
+  scale, so a page in points or CSS pixels is twice the pixels at scale 2 and the same in logical pixels; the toolbar keeps its
+  pixel size (its field's text converts at the same dpi).
+- **The grant and the image.** A POSIX program whose description has `window` gets `/system/fonts` read only, "with the
+  window" (`zoraya_shell::grants::with_window`), shown by `grants` and as a pill; a line's own `+r /system/fonts` and a room
+  grant also give it, as they give any path (INV-0326-1's check covers only the implicit grant); `tools/run-disk.sh` copies `fonts/` into the
+  disk's `/system/fonts` (in the disk's key: a person's disk from before 9f-text is kept as `.old` and a new one made).
+- **Tests.** `cargo test -p zoraya-fontset` (the paths read, every Russian and Ukrainian letter a non-blank glyph that is not
+  the box at the sizes of scale 1 and 2, widths, position, split, any bytes); `cargo test -p zoraya-shell` (the grant);
+  `make test-netsurf`: the page `/ns/cyrillic` of `tools/test-httpd` at scale 1 (`tests/gui/netsurf.script`) and in a second
+  boot at scale 2 (`tests/gui/netsurf-text.script`), with the runner's `ink` step (at least N pixels not the background) and a
+  line of ten і that ends where a line of ten ж goes on (`docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`).
+- **Limits.** No italic face; no kerning (Inter's is in GPOS, ADR-0162); the toolbar is not scaled; at scale 3 the dpi is
+  clamped to NetSurf's 250, so the page is 2.78 times, not 3 (the review's T8); the time text measuring
+  takes per page is not measured (ADR-0318's 5% trigger); the native GUI programs still embed their fonts (ADR-0240).
+  Whether `CLAUDE.md`'s licence rule names OFL-1.1 for unmodified font files is proposed ADR-0327.
+
 ## The network on the desktop, and when it fails (stage 8, N6)
 
 `--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of
@@ -2522,6 +2602,7 @@ crates/                   no_std, host-tested
   zoraya-tokens/          the design tokens from tokens.txt, read at compile time (ADR-0161)
   zoraya-text/            TrueType reader, fixed-point rasteriser, glyph cache, simple shaper (ADR-0162)
   zoraya-fonts/           the system fonts of fonts/ as bytes (ADR-0162, ADR-0240)
+  zoraya-fontset/         the system's fonts for NetSurf: faces from /system/fonts, width, position, split, glyphs (ADR-0326)
   zoraya-paint/           the compositor's drawing in integers: corners, shadows, blur, wallpaper, the material
   zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering and the exact
                           reader of its cells (ADR-0096, ADR-0162)

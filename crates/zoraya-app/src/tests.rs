@@ -627,3 +627,113 @@ fn a_drag_ended_over_its_own_window_says_where() {
     assert_eq!(app.poll(), Some(Happened::Commands(true)));
     assert!(app.commands);
 }
+
+fn ten_buttons() -> Box<dyn Widget> {
+    Box::new(zoraya_ui::ScrollView::new(
+        (1..=10)
+            .map(|i| Box::new(Button::new(i, "b")) as Box<dyn Widget>)
+            .collect(),
+    ))
+}
+
+fn press_at(window: u32, x: u32, y: u32) -> gui::WindowPointerMods {
+    gui::WindowPointerMods {
+        dropped: 0,
+        window,
+        x,
+        y,
+        buttons: zoraya_protocol::Flags(gui::buttons::LEFT),
+        serial: 1,
+        modifiers: zoraya_protocol::Flags(0),
+    }
+}
+
+fn turn(window: u32, dy: i32) -> gui::Wheel {
+    gui::Wheel {
+        dropped: 0,
+        window,
+        x: 100,
+        y: 70,
+        dx: 0,
+        dy,
+        modifiers: zoraya_protocol::Flags(0),
+    }
+}
+
+/// Proposed ADR-0329: a `Wheel` scrolls the widget under the pointer, is
+/// painted, and the next press lands on what the turn brought into view;
+/// a turn past the content and one to another window change nothing.
+#[test]
+fn the_wheel_scrolls_the_body_under_the_pointer() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    // Room for three buttons: 20 + 3 × 28 + 2 × 8 + 20.
+    let id = app.open("t", ten_buttons(), 200, 140).unwrap();
+    app.platform.frame();
+    let commits = |app: &App<Fake>| app.platform.sent.iter().filter(|o| **o == 7).count();
+    app.platform.event(&turn(id, 120));
+    app.platform.event(&turn(id + 7, 120));
+    app.platform.event(&press_at(id, 100, 30));
+    assert_eq!(
+        app.wait(),
+        Happened::Ui {
+            window: id,
+            response: Response::Activated(4)
+        }
+    );
+    assert_eq!(commits(&app), 2, "the turn was painted");
+    // The extreme: clamped to the content, the last button at the bottom.
+    app.platform.event(&turn(id, i32::MAX));
+    app.platform.event(&press_at(id, 100, 110));
+    assert_eq!(
+        app.wait(),
+        Happened::Ui {
+            window: id,
+            response: Response::Activated(10)
+        }
+    );
+    // Back up a notch and a third, in parts of a notch.
+    for _ in 0..4 {
+        app.platform.event(&turn(id, -40));
+    }
+    app.platform.event(&press_at(id, 100, 30));
+    assert_eq!(
+        app.wait(),
+        Happened::Ui {
+            window: id,
+            response: Response::Activated(4)
+        }
+    );
+    // The wheel moved no focus and sent nothing but commits.
+    for o in &app.platform.sent {
+        assert!(gui::CLIENT_REQUESTS.contains(o), "ordinal {o}");
+    }
+}
+
+/// A tree built again keeps where it was scrolled with
+/// `replace_keeping_scroll`, not with `replace`.
+#[test]
+fn a_replaced_tree_keeps_its_scroll_only_when_asked() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("t", ten_buttons(), 200, 140).unwrap();
+    app.platform.event(&turn(id, 240));
+    app.platform.event(&gui::CloseRequested { window: id });
+    assert_eq!(app.wait(), Happened::CloseRequested(id));
+    app.replace_keeping_scroll(id, ten_buttons());
+    app.platform.event(&press_at(id, 100, 30));
+    assert_eq!(
+        app.wait(),
+        Happened::Ui {
+            window: id,
+            response: Response::Activated(7)
+        }
+    );
+    app.replace(id, ten_buttons());
+    app.platform.event(&press_at(id, 100, 30));
+    assert_eq!(
+        app.wait(),
+        Happened::Ui {
+            window: id,
+            response: Response::Activated(1)
+        }
+    );
+}

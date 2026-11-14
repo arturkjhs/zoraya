@@ -48,6 +48,10 @@ pub struct Sheet {
     pub window: u32,
     /// The list's first shown row.
     top: usize,
+    /// The selection the list last followed: a selection that moved is
+    /// brought into view, one the wheel left out of view stays there
+    /// (proposed ADR-0329).
+    followed: Option<usize>,
     /// Where the name field's cursor is, kept across the sheet's rebuilds
     /// while the person types (review 7e, check of 7).
     name_cursor: Option<usize>,
@@ -70,6 +74,7 @@ impl Sheet {
             browser,
             window: 0,
             top: 0,
+            followed: None,
             name_cursor: None,
             commands: app.commands,
         };
@@ -114,6 +119,7 @@ impl Sheet {
         }
         self.browser.show(entries);
         self.top = 0;
+        self.followed = None;
     }
 
     /// The line under the sentence: the grant as the sheet says it, or in
@@ -195,8 +201,11 @@ impl Sheet {
     }
 
     fn refresh<P: Platform>(&mut self, app: &mut App<P>) {
-        // Keep the selection in view, as the list itself does.
-        if let Some(i) = self.browser.selected {
+        // Keep a selection that moved in view, as the list itself does.
+        if let Some(i) = self.browser.selected
+            && self.followed != Some(i)
+        {
+            self.followed = Some(i);
             let rows = ROWS as usize;
             if i < self.top {
                 self.top = i;
@@ -216,6 +225,10 @@ impl Sheet {
         root: L::Handle,
         happened: Happened,
     ) -> Option<Outcome<L::Handle>> {
+        // Where the wheel left the list, for the sheet built again.
+        if let Some(s) = app.window(self.window).and_then(|w| w.scrolled(LIST)) {
+            self.top = s.at;
+        }
         let response = match happened {
             Happened::Gone => return Some(Outcome::Cancelled(answer::CANCELLED)),
             Happened::CloseRequested(w) if w == self.window => {

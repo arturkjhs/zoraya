@@ -471,3 +471,125 @@ fn a_drop_below_the_rows_shown_names_none() {
         "the status line"
     );
 }
+
+impl Rig {
+    fn wheel(&mut self, x: i32, y: i32, dy: i32) -> Response {
+        self.view.event(&Event::Wheel {
+            x: l(x),
+            y: l(y),
+            dx: 0,
+            dy,
+        })
+    }
+
+    /// A folder of 40 files.
+    fn forty(&mut self) {
+        let items = (0..40)
+            .map(|i| item(&alloc::format!("f{i:02}.txt"), false, 10))
+            .collect();
+        self.model.borrow_mut().show("/home/ann/project", items);
+    }
+}
+
+/// Proposed ADR-0329: the wheel over the list moves its rows three a
+/// notch, clamped to the folder, parts of a notch kept; the selection and
+/// the cursor stay, and the next key brings the cursor back into view.
+#[test]
+fn the_wheel_scrolls_the_list_and_keeps_the_selection() {
+    let mut r = rig(1);
+    r.forty();
+    r.paint();
+    let rows = r.view.rows();
+    later(DOUBLE_NS * 2);
+    r.click(Rig::row(1).0, Rig::row(1).1, 0);
+    assert_eq!(r.model.borrow().selected_names(), ["f01.txt"]);
+    let (x, y) = Rig::row(2);
+    assert_eq!(r.wheel(x, y, -120), Response::None, "at the top");
+    assert_eq!(r.wheel(x, y, 120), Response::Repaint);
+    r.paint();
+    assert_eq!(r.model.borrow().top, 3, "the cursor does not pull it back");
+    assert_eq!(r.view.hit(x, Rig::row(0).1), Hit::Row(3));
+    assert_eq!(r.model.borrow().selected_names(), ["f01.txt"]);
+    assert_eq!(r.model.borrow().cursor, Some(1));
+    // A drop's place follows the rows shown (ADR-0248).
+    assert_eq!(
+        crate::view::row_at(&r.model.borrow(), x as u32, y as u32),
+        Some(5)
+    );
+    // Parts of a notch: 40 is a row.
+    r.wheel(x, y, 20);
+    assert_eq!(r.model.borrow().top, 3);
+    r.wheel(x, y, 20);
+    assert_eq!(r.model.borrow().top, 4);
+    // To the end, no further.
+    r.wheel(x, y, i32::MAX);
+    r.paint();
+    assert_eq!(r.model.borrow().top, 40 - rows);
+    assert_eq!(r.wheel(x, y, 120), Response::None);
+    // A press on a row shown picks that row.
+    later(DOUBLE_NS * 2);
+    r.click(x, Rig::row(0).1, 0);
+    assert_eq!(
+        r.model.borrow().selected_names(),
+        [alloc::format!("f{:02}.txt", 40 - rows)]
+    );
+    // Back up, then a key: the cursor's row comes back into view.
+    r.wheel(x, y, -64 * 120);
+    r.paint();
+    assert_eq!(r.model.borrow().top, 0);
+    r.view.event(&Event::Key {
+        code: crate::model::keys::DOWN,
+        text: None,
+        modifiers: 0,
+    });
+    r.paint();
+    let cursor = 40 - rows + 1;
+    assert_eq!(r.model.borrow().cursor, Some(cursor));
+    assert_eq!(r.model.borrow().top, cursor + 1 - rows);
+}
+
+/// The wheel over the sidebar, the toolbar, or with the menu or the card
+/// open moves nothing.
+#[test]
+fn the_wheel_elsewhere_or_under_the_menu_moves_nothing() {
+    let mut r = rig(1);
+    r.forty();
+    r.paint();
+    assert_eq!(r.wheel(60, TOOLBAR_H + 60, 120), Response::None);
+    assert_eq!(r.wheel(400, 20, 120), Response::None);
+    let (x, y) = Rig::row(2);
+    r.at(x, y, 2, 0);
+    r.at(x, y, 0, 0);
+    assert!(r.model.borrow().menu.is_some());
+    assert_eq!(r.wheel(x, y + 200, 120), Response::None);
+    assert_eq!(r.model.borrow().top, 0);
+}
+
+/// At scale 2 the pointer is logical and the list's rows physical.
+#[test]
+fn the_wheel_at_scale_two() {
+    let mut r = rig(2);
+    r.forty();
+    r.paint();
+    let (x, y) = Rig::row(2);
+    assert_eq!(r.wheel(x, y, 240), Response::Repaint);
+    r.paint();
+    assert_eq!(r.model.borrow().top, 6);
+    assert_eq!(r.view.hit(2 * x, 2 * Rig::row(0).1), Hit::Row(6));
+}
+
+/// A cursor the model moves (a new folder, a search) is followed again
+/// after the wheel.
+#[test]
+fn a_cursor_the_model_moves_is_followed_after_the_wheel() {
+    let mut r = rig(1);
+    r.forty();
+    r.paint();
+    let (x, y) = Rig::row(2);
+    r.wheel(x, y, 120 * 4);
+    r.paint();
+    assert_eq!(r.model.borrow().top, 12);
+    r.model.borrow_mut().cursor = Some(0);
+    r.paint();
+    assert_eq!(r.model.borrow().top, 0);
+}

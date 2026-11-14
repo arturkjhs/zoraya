@@ -58,6 +58,11 @@ downloads and checks (Inter 4.1, SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa4
 JetBrains Mono 2.304, `6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf`), from which the files below
 were extracted on 2026-11-08 (TASK-24, 7a).
 
+Since TASK-27 9f-text (ADR-0326) the same files, unmodified and with their licence texts, are also copied into the
+volume's `/system/fonts` by `tools/run-disk.sh` and by `make test-netsurf`, and NetSurf (GPL-2.0) reads them there at run
+time; nothing of a font is compiled or linked into `netsurf` or `libc.a`. No font was added. Whether the licence rule of
+`CLAUDE.md` names OFL-1.1 for such unmodified data files is proposed ADR-0327.
+
 | File | Release | Licence | Used by | Purpose | SHA-256 |
 |---|---|---|---|---|---|
 | `fonts/Inter-Regular.ttf` | Inter 4.1, `extras/ttf/` | OFL-1.1 | `zoraya-fonts` | the UI font (`font.ui`) | `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82` |
