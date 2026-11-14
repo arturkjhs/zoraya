@@ -261,3 +261,8 @@ states, to be taken up later:
   (no ports cache in the worktree); see the part's report.
 - A URL operand's name rule is public-only for curl and wget too, not only for NetSurf (ADR-0328, extended by the architect on
   2026-11-14): done in `work/9g-url` when it merges; until then curl and wget keep ADR-0223's name rule.
+
+- `cpu_ceiling_from_a_process` (`user/src/bin/t_cpu.rs:181`, step `test-qemu-auto-default`) failed once under `make test-changed`'s
+  parallel load on the Mac (work/test-fixes, 2026-11-14): a timing-sensitive CPU-ceiling check when three QEMU guests and host jobs
+  share the machine. Not a regression of that part. Decide whether the check needs a deterministic form like `t_cpu`'s `MAX_UNITS`
+  fix (ADR-0270), or a lane of its own that does not share the machine.
