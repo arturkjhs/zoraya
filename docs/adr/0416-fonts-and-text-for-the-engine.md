@@ -1,6 +1,6 @@
 # ADR-0416: Fonts and text for the engine: FreeType and HarfBuzz as ports, fontconfig with one fixed configuration over `/system/fonts`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0162, ADR-0163, ADR-0320, ADR-0326, ADR-0327, ADR-0410, ADR-0411, ADR-0421
 - **Evidence:** CP-21, CP-22, DM-097, X-15, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#measurements, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#wpe-webkit-in-detail
@@ -74,6 +74,12 @@ HarfBuzz 15.1.0 238,050, fontconfig 2.18.3 31,886 (browser-engine/survey.md#meas
 
 ## Recommendation
 
+### Decision
+
+Accepted as recommended, with the second renderer limited to the engine: FreeType through Skia draws text inside the
+browser engine's processes only, as an exception to ADR-0326 driver 2; every other program, and the browser's own
+chrome (item 4), keeps `zoraya-text` (the architect, 2026-11-14).
+
 **Recommendation (not a decision): Option B.** It does not change ADR-0326, which stays NetSurf's; it accepts a second
 renderer inside the browser's processes, against ADR-0326 driver 2 ("one renderer for the whole desktop"), which is a
 tension for the architect to decide.
@@ -130,3 +136,5 @@ file is added); a Japanese page shows boxes for its CJK text until a CJK font fi
 - WebKit gains a font interface below its cache that a platform can implement.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. Accepted with one precision: the second text renderer (FreeType through Skia) is allowed inside the engine only, as an exception to ADR-0326's "one renderer for the whole desktop"; see the Decision at the top of the Recommendation.

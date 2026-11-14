@@ -1,6 +1,6 @@
 # ADR-0414: `poll` and event loops: `poll` and `ppoll` over every descriptor kind, an in-process `eventfd`, no `epoll`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0006, ADR-0101, ADR-0225, ADR-0300, ADR-0302, ADR-0315, ADR-0342, ADR-0410, ADR-0412, ADR-0413
 - **Evidence:** CP-08, CP-10, DM-023, DM-026, DM-130, X-4, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#measurements, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#wpe-webkit-in-detail
@@ -142,3 +142,5 @@ POLLIN}], 2, 16)` where 7 is the IPC socket and 9 GLib's `eventfd`; a page's `se
 - The GPU process or WebKit's stream connections are wanted: a cross-process event (a kernel object), its own ADR.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended. The change to ADR-0315 item 1 (a wait that includes an `eventfd` records its port before the lock is released) is accepted and recorded by the foundation part that implements it (plan F1), with an Opus review.

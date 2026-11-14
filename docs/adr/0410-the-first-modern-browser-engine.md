@@ -202,6 +202,12 @@ link to another site opens in the same window. `top home` shows `browser` with i
   single file in `ports/` (not set elsewhere). *Check:* `make check-fetch-ports` (the lock) and the configuration script
   above comparing the cache with the file.
 
+- **INV-0410-3.** The `dlopen` shim is linked only into the engine's programs, never into `libc.a`, and never loads
+  code: its `dlopen` always returns NULL (with a `dlerror` message) and its `dlsym` always NULL, whatever it is asked.
+  *Check:* a `make check-dlopen-shim` script that fails if `libc.a` or any program outside the engine's defines
+  `dlopen` (by `zoraya-ar`'s index and the programs' symbol tables) and if the shim's source calls anything but the
+  call counter; a host test of the shim (every argument gives NULL, `dlerror` a message).
+
 ## Open questions
 
 - Whether the assembly LLInt with the JIT off works on AArch64 with Zoraya's toolchain; if not, whether the C loop
@@ -220,3 +226,10 @@ link to another site opens in the same window. `top home` shows `browser` with i
 - A JIT is wanted for speed: a new ADR on executable mappings (ADR-0051's follow-up), not a silent change.
 
 ## Architect's decision
+
+Kept proposed, 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. WPE WebKit is the
+default, but the choice of engine waits until the foundation parts F1 to F8 are built and a design question is
+answered: a Rust `std` for POSIX programs on the stable toolchain (the `aarch64-unknown-linux-musl` target linked
+against Zoraya's `libc.a`, with `libposix` answering the Linux calls `std` makes through `syscall()`); the question is
+the next design task (`docs/backlog.md`). Accepted now: the always-failing `dlopen` shim of item 3, local to the
+engine and never loading code, with an invariant and its check (INV-0410-3).

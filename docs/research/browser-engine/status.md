@@ -17,5 +17,6 @@ clone (`target/debug/zoraya-adr-check docs`, built 2026-11-03, not rebuilt) repo
 is not listed` errors for ADR-0410 to ADR-0421 and nothing else; the first session with a toolchain should run
 `make adr-check` after adding the index rows.
 
-The branch was not pushed: the push was refused by this session's permission settings; the person running the
-session pushes `adr/browser-engine`.
+- 2026-11-14: the branch was pushed by the person running the session. The architect's decisions were recorded
+  (ADR-0411 to ADR-0421 accepted, ADR-0410 kept proposed), the rows applied, `CLAUDE.md`'s LGPL line and the backlog's
+  next design task added, and the branch merged into `main`.

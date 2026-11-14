@@ -1,6 +1,6 @@
 # ADR-0418: Toolchain for the engine: stay on clang 18 and libc++ 20 while the pinned WPE supports them; no Rust `std` and no Swift for now
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0109, ADR-0141, ADR-0360, ADR-0364, ADR-0365, ADR-0367, ADR-0410
 - **Evidence:** CP-13, CP-27, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#servo, browser-engine/survey.md#the-engines-compared, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#why-blink-and-gecko-are-out-of-reach, browser-engine/survey.md#wpe-webkit-in-detail
@@ -123,3 +123,5 @@ $ make -f ports/Makefile wpewebkit     # on the M4: configures with ports/cmake/
 - Ladybird or another Rust-heavy port is chosen.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended.

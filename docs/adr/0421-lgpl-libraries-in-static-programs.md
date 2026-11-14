@@ -1,6 +1,6 @@
 # ADR-0421: LGPL libraries in a ported program: allowed when the program's whole build is in `ports/` and can be relinked from it
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0109, ADR-0410, ADR-0420
 - **Evidence:** browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#wpe-webkit-in-detail
@@ -98,3 +98,5 @@ none. Threads: none.
 - A request to ship a built image without the repository.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended; the rule is added to `CLAUDE.md` (Dependencies).

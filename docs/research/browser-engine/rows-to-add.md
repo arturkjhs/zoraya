@@ -9,6 +9,10 @@ ADRs. The invariant rows' first four columns are copied from each ADR's `## Inva
 
 ADR numbers 0422 to 0429 are unused.
 
+**Applied** to `index.md` and `invariants.md` at the merge into `main` on 2026-11-14, after the architect's decisions
+(ADR-0411 to ADR-0421 accepted, ADR-0410 kept proposed with INV-0410-3 added; the statuses name the plan part that builds
+each check).
+
 ## `index.md`
 
 | [ADR-0410](0410-the-first-modern-browser-engine.md) | The first modern browser engine is WPE WebKit, built without a JIT | proposed | WPE WebKit's stable line (2.54.x), pinned as a port, with its OS layer ported; Ladybird (Option C) instead if the architect accepts a Rust `std` target for POSIX programs, the choice turning on the Rust policy and release stability, not on the JIT (both build without one); `ENABLE_JIT=OFF` with the assembly LLInt (the C loop as fallback); no WebAssembly, GPU process, WebGL, media, Bubblewrap, Wayland or DRM platform at first; `USE_SYSTEM_MALLOC`; GModule without a loader and a failing `dlopen` shim for libepoxy; `PROT_EXEC` refused; one multi-call `browser` executable beside NetSurf. | ADR-0005, ADR-0051, ADR-0100, ADR-0108, ADR-0109, ADR-0317, ADR-0318, ADR-0324, ADR-0342, ADR-0360, ADR-0364, ADR-0367 |

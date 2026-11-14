@@ -1,6 +1,6 @@
 # ADR-0415: Memory for big programs: 4096 mappings, read-only segments shared between processes, reservations, a 2 GiB browser guest
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0020, ADR-0021, ADR-0031, ADR-0033, ADR-0051, ADR-0100, ADR-0108, ADR-0260, ADR-0261, ADR-0266, ADR-0300, ADR-0320, ADR-0410, ADR-0413
 - **Evidence:** CP-14, CP-16, DM-030, DM-034, GR-007, X-6, alternatives-postmortem.md#genode, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#memory, browser-engine/survey.md#the-engines-compared
@@ -73,6 +73,11 @@ stopper for its browser (alternatives-postmortem.md#genode, browser-engine/surve
 - **Precedent:** none.
 
 ## Recommendation
+
+### Decision
+
+Accepted as recommended, except item 5: the 2 GiB guest is used by the browser's test steps only; `tools/run-qemu.sh`'s
+default and `make run` are unchanged, and there is no `make run-browser` default of 2 GiB (the architect, 2026-11-14).
 
 **Recommendation (not a decision): Option B.** It changes ADR-0108's rule that every segment is copied (read-only
 segments are shared), ADR-0051's assumed limit of 256 mappings, and, if item 3 is built, ADR-0100 item 6 (`mprotect` is
@@ -175,3 +180,5 @@ home  browser                412M     3
 - A memory-pressure protocol (DM-034) becomes a decision: the engine's handler is wired to it.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. Accepted with one change: the 2 GiB guest is for the browser's test steps only (no `make run-browser` default); see the Decision at the top of the Recommendation. The changes to ADR-0108 (shared read-only segments), ADR-0051's assumed limit and, if reservations are built, ADR-0100 item 6 are accepted; each is recorded by the foundation part that implements it (plan F5, F6), with an Opus review.

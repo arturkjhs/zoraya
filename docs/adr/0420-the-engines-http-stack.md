@@ -1,6 +1,6 @@
 # ADR-0420: The engine's HTTP stack: libsoup 3 over GIO with glib-networking's OpenSSL backend linked in
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0228, ADR-0310, ADR-0311, ADR-0312, ADR-0324, ADR-0328, ADR-0410, ADR-0411, ADR-0421
 - **Evidence:** CP-28, DM-007, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#wpe-webkit-in-detail
@@ -112,3 +112,5 @@ Networking: as ADR-0324. Threads: libsoup runs in the network process's threads.
 - WPE gains an upstream curl option, or drops libsoup.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended.

@@ -1,6 +1,6 @@
 # ADR-0412: Unix sockets in `libposix` over channels: `socketpair`, `SCM_RIGHTS` as handle transfer, no socket file outside a program's own places
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0050, ADR-0101, ADR-0103, ADR-0107, ADR-0225, ADR-0261, ADR-0287, ADR-0315, ADR-0341, ADR-0342, ADR-0410, ADR-0411
 - **Evidence:** CP-01, CP-02, DM-019, DM-022, DM-074, GR-001, GR-008, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#measurements, browser-engine/survey.md#processes-handles-and-channels, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#why-blink-and-gecko-are-out-of-reach
@@ -185,3 +185,5 @@ A program that tries `bind("/home/me/sock")` gets `EACCES` and the shell shows
 - Channel endpoints become duplicable: the move of item 3 becomes a copy.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended. The changes to ADR-0225 (items 1 and 10) and ADR-0342 item 11, and the file service's transient socket object (ADR-0055's protocol), are accepted; each is recorded by the foundation part that implements it (plan F2, F7), with an Opus review.

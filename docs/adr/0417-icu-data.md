@@ -1,6 +1,6 @@
 # ADR-0417: ICU with its data linked in statically, filtered to the image's languages after a full first build
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0100, ADR-0163, ADR-0342, ADR-0363, ADR-0410, ADR-0413, ADR-0415
 - **Evidence:** CP-21, CP-22, DM-007, DM-097, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#measurements, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#wpe-webkit-in-detail
@@ -115,3 +115,5 @@ thread-safe upstream.
 - A locale asked for by the person: a line in the filter.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended.

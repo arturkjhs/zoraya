@@ -1,6 +1,6 @@
 # ADR-0411: The engine's processes and what each is given: `posix_spawn` with a grant list, nothing by default
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0003, ADR-0102, ADR-0103, ADR-0104, ADR-0107, ADR-0153, ADR-0172, ADR-0261, ADR-0267, ADR-0287, ADR-0310, ADR-0317, ADR-0324, ADR-0341, ADR-0410
 - **Evidence:** CP-01, CP-05, DM-001, DM-002, DM-009, DM-014, GR-005, GR-008, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#genode, browser-engine/survey.md#ladybird, browser-engine/survey.md#processes-handles-and-channels, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#wpe-webkit-in-detail
@@ -180,3 +180,5 @@ and the network process refuses `file:` URLs from a page.
   engine needs a descriptor in the Web process, the grant list gains one entry per upload.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended. The changes to ADR-0287 item 3, ADR-0310 item 3 and ADR-0341 item 7 are accepted; each is recorded in the changed ADR by the foundation part that implements it (plan F4), with an Opus review.

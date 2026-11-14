@@ -1,6 +1,6 @@
 # ADR-0413: Shared memory for POSIX programs: anonymous memory descriptors over memory objects, `MAP_SHARED`, seals by rights
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0051, ADR-0103, ADR-0108, ADR-0261, ADR-0262, ADR-0342, ADR-0410, ADR-0412
 - **Evidence:** CP-01, CP-14, CP-16, DM-019, DM-031, DM-032, GR-007, X-6, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#libraries-and-interfaces, browser-engine/survey.md#memory, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#wpe-webkit-in-detail
@@ -143,3 +143,5 @@ process maps the same frames read-only and copies them into its window (ADR-0419
 - Memory objects that can grow (ADR-0051's follow-up): item 2's `EBUSY` can become a resize.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended. The change to ADR-0103 item 12 is accepted and recorded by the foundation part that implements it (plan F3), with an Opus review.

@@ -1,6 +1,6 @@
 # ADR-0419: The engine's window: a WPEPlatform backend over the window channel, chrome drawn by the browser, the clipboard and files only by gesture
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0093, ADR-0164, ADR-0167, ADR-0170, ADR-0172, ADR-0245, ADR-0317, ADR-0322, ADR-0326, ADR-0410, ADR-0411, ADR-0413
 - **Evidence:** CP-24, DM-079, X-11, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#the-window-text-and-the-network, browser-engine/survey.md#wpe-webkit-in-detail
@@ -138,3 +138,5 @@ string.
 - A second POSIX program with several windows.
 
 ## Architect's decision
+
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request. As recommended.
