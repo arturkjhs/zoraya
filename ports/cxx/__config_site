@@ -1,0 +1,39 @@
+// libc++'s site configuration for aarch64-unknown-zoraya (TASK-30, proposed
+// ADR-0360): what LLVM's CMake would generate from include/__config_site.in
+// for this target. Static libraries, threads over libposix's pthreads (musl's
+// src/thread, ADR-0302), the C locale only (ADR-0363), std::filesystem over
+// libposix, no time zone database, no C++ modules, the "fast" hardening mode.
+
+#ifndef _LIBCPP___CONFIG_SITE
+#define _LIBCPP___CONFIG_SITE
+
+#define _LIBCPP_ABI_VERSION 1
+#define _LIBCPP_ABI_NAMESPACE __1
+#define _LIBCPP_ABI_FORCE_ITANIUM 0
+#define _LIBCPP_ABI_FORCE_MICROSOFT 0
+#define _LIBCPP_HAS_THREADS 1
+#define _LIBCPP_HAS_MONOTONIC_CLOCK 1
+#define _LIBCPP_HAS_TERMINAL 1
+#define _LIBCPP_HAS_MUSL_LIBC 1
+#define _LIBCPP_HAS_THREAD_API_PTHREAD 1
+#define _LIBCPP_HAS_THREAD_API_EXTERNAL 0
+#define _LIBCPP_HAS_THREAD_API_WIN32 0
+#define _LIBCPP_HAS_THREAD_API_C11 0
+#define _LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS 0
+#define _LIBCPP_HAS_FILESYSTEM 1
+#define _LIBCPP_HAS_RANDOM_DEVICE 1
+#define _LIBCPP_HAS_LOCALIZATION 1
+#define _LIBCPP_HAS_UNICODE 1
+#define _LIBCPP_HAS_WIDE_CHARACTERS 1
+#define _LIBCPP_HAS_NO_STD_MODULES
+#define _LIBCPP_HAS_TIME_ZONE_DATABASE 0
+#define _LIBCPP_INSTRUMENTED_WITH_ASAN 0
+
+// PSTL backends
+#define _LIBCPP_PSTL_BACKEND_SERIAL
+
+// Hardening: the checks that are cheap (bounds of containers and views, null
+// dereferences of optional and the like) trap; ADR-0360.
+#define _LIBCPP_HARDENING_MODE_DEFAULT _LIBCPP_HARDENING_MODE_FAST
+
+#endif // _LIBCPP___CONFIG_SITE

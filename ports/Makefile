@@ -60,7 +60,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: cxx python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -443,6 +443,53 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX
 	cp $(BUSYBOX_BIN) $(ROOTFS)/bin/busybox
 	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
+	@touch $@
+
+# ---------------------------------------------------------------- C++ (TASK-30)
+
+# LLVM's C++ runtime (proposed ADR-0360): libunwind, libc++abi and libc++,
+# static, by tools/zc++ into the sysroot (ports/cxx/cxx.mk), with the headers
+# in usr/include/c++/v1 and libunwind's in usr/include, from LLVM's tree
+# (libc++abi includes libc++'s src/, libc++ LLVM libc's shared/). `make cxx` builds it; zc++ links every C++ program with it.
+LLVMVER := $(call lock_ver,llvm)
+LLVM_SRC := $(WORK)/llvm-$(LLVMVER)
+ZCXX := $(ROOT)/tools/zc++
+# Four directories of the archive, not its 1.6 GB: the three runtimes and
+# LLVM libc, whose shared/ headers libc++'s from_chars includes.
+LLVM_DIRS := libcxx libcxxabi libunwind libc
+$(LLVM_SRC): $(LOCK) $(wildcard ports/patches/llvm/*.patch)
+	@f=$(CACHE)/$(call lock_file,llvm); \
+	if [ ! -f "$$f" ]; then \
+	  echo "ports: $$f is missing: run 'make fetch-ports' first (it is the only step that downloads)"; \
+	  exit 1; fi
+	@tools/fetch-ports.sh --verify $(LOCK) $(CACHE) llvm
+	rm -rf $@.tmp && mkdir -p $@.tmp
+	cd $@.tmp && tar xf $(CACHE)/$(call lock_file,llvm) $(addprefix llvm-project-$(LLVMVER).src/,$(LLVM_DIRS))
+	rm -rf $@ && mv $@.tmp/llvm-project-$(LLVMVER).src $@ && rmdir $@.tmp
+	@for p in $(sort $(wildcard ports/patches/llvm/*.patch)); do \
+	  echo "patch $$p"; patch -s -p1 -d $@ < $$p || exit 1; done
+	@touch $@
+# The headers: libc++'s include/ without its build files, the site
+# configuration (ports/cxx/__config_site) and LLVM's default assertion
+# handler, libc++abi's two, libunwind's four.
+CXX_HEADERS_STAMP := $(OBJ)/cxx-headers.stamp
+$(CXX_HEADERS_STAMP): $(LLVM_SRC) ports/cxx/__config_site $(HEADERS_STAMP)
+	rm -rf $(SYSROOT)/usr/include/c++ && mkdir -p $(SYSROOT)/usr/include/c++/v1
+	cp -R $(LLVM_SRC)/libcxx/include/. $(SYSROOT)/usr/include/c++/v1/
+	rm -f $(SYSROOT)/usr/include/c++/v1/CMakeLists.txt $(SYSROOT)/usr/include/c++/v1/__config_site.in \
+	  $(SYSROOT)/usr/include/c++/v1/module.modulemap.in
+	cp ports/cxx/__config_site $(SYSROOT)/usr/include/c++/v1/__config_site
+	cp $(LLVM_SRC)/libcxx/vendor/llvm/default_assertion_handler.in $(SYSROOT)/usr/include/c++/v1/__assertion_handler
+	cp $(LLVM_SRC)/libcxxabi/include/cxxabi.h $(LLVM_SRC)/libcxxabi/include/__cxxabi_config.h $(SYSROOT)/usr/include/c++/v1/
+	cp $(addprefix $(LLVM_SRC)/libunwind/include/,unwind.h libunwind.h __libunwind_config.h unwind_itanium.h unwind_arm_ehabi.h) \
+	  $(SYSROOT)/usr/include/
+	@mkdir -p $(dir $@) && touch $@
+CXX_STAMP := $(OBJ)/cxx.stamp
+cxx: $(CXX_STAMP)
+$(CXX_STAMP): $(CXX_HEADERS_STAMP) $(SYSROOT_STAMP) ports/cxx/cxx.mk ports/cxx/zoraya-shim.c tools/zcc
+	@$(call logged,$(MAKE) -j3 -f ports/cxx/cxx.mk SRC=$(LLVM_SRC) OBJ=$(OBJ)/cxx ZCXX=$(ZCXX) ZAR=$(ZAR) SYSROOT=$(SYSROOT),cxx)
+	@ls -l $(SYSROOT)/usr/lib/libc++.a $(SYSROOT)/usr/lib/libc++abi.a $(SYSROOT)/usr/lib/libunwind.a
+	ln -sf $(ZCXX) $(TOOLBIN)/aarch64-unknown-zoraya-c++
 	@touch $@
 
 # ---------------------------------------------------------------- TLS for C programs, curl, wget (TASK-27 9a)

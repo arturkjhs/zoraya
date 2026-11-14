@@ -16,10 +16,12 @@
 # python (TASK-27 9c, ADR-0320): the SHA-256 is the one python.org publishes for Python-3.15.2.tar.xz
 # (checked against it); the Sigstore bundle python.org also publishes is not verified here (optional).
 #
-# libcxx, libcxxabi, libunwind (TASK-30, proposed ADR-0360): LLVM 20.1.8's runtime archives, the
-# newest release whose libc++ supports the Clang 18 that CI's Ubuntu 24.04 gives zcc (libc++ 21 and
-# later warn "only supports Clang 19 and later"); the SHA-256 is the digest GitHub's release lists for
-# each asset (checked against it). googletest (TASK-30): v1.18.0's release asset, the same check.
+# llvm (TASK-30, proposed ADR-0360): LLVM 20.1.8's whole source, of which ports/Makefile unpacks
+# libcxx, libcxxabi, libunwind and libc (libc++'s from_chars includes LLVM libc's shared headers,
+# which no smaller archive of the release holds). 20.1.8 is the newest release whose libc++ supports
+# the Clang 18 that CI's Ubuntu 24.04 gives zcc (libc++ 21 and later warn "only supports Clang 19 and
+# later"); the SHA-256 is the digest GitHub's release lists for the asset (checked against it).
+# googletest (TASK-30): v1.18.0's release asset, the same check.
 #
 # name    version                                    sha256                                                            file                                                   url
 musl      1.2.5                                      a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  musl-1.2.5.tar.gz                                      https://musl.libc.org/releases/musl-1.2.5.tar.gz https://sources.buildroot.net/musl/musl-1.2.5.tar.gz
@@ -44,7 +46,5 @@ libpng    1.6.50                                     4df396518620a7aa3651443e87d
 libjpeg   9f                                         04705c110cb2469caa79fb71fba3d7bf834914706e9641a4589485c1f832565b jpegsrc.v9f.tar.gz                                     https://www.ijg.org/files/jpegsrc.v9f.tar.gz
 pkgconfig 0.29.2                                     6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591 pkg-config-0.29.2.tar.gz                               https://pkgconfig.freedesktop.org/releases/pkg-config-0.29.2.tar.gz
 bison     3.8.2                                      9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2 bison-3.8.2.tar.xz                                    https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz https://ftpmirror.gnu.org/bison/bison-3.8.2.tar.xz
-libcxx    20.1.8                                     3e12992e3d1a0e648dc2e1c8c6b1dd31717ac8e684a25a302773667f47f75546 libcxx-20.1.8.src.tar.xz                               https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/libcxx-20.1.8.src.tar.xz
-libcxxabi 20.1.8                                     b4f6d3f9c802ea9e5db260e3e13177f63e8f8feef48618a8d53d4f7d4fcbb07f libcxxabi-20.1.8.src.tar.xz                            https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/libcxxabi-20.1.8.src.tar.xz
-libunwind 20.1.8                                     0bced9d701e300f8fe6599523367e214c1f928ac559afceece58f47018e9c4a7 libunwind-20.1.8.src.tar.xz                            https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/libunwind-20.1.8.src.tar.xz
+llvm      20.1.8                                     6898f963c8e938981e6c4a302e83ec5beb4630147c7311183cf61069af16333d llvm-project-20.1.8.src.tar.xz                         https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/llvm-project-20.1.8.src.tar.xz
 googletest 1.18.0                                    6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5 googletest-1.18.0.tar.gz                               https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
