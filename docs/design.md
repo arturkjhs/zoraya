@@ -499,9 +499,10 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
   *Known limits until part 10c:* nothing sends `Restore`, so what a program leaves set (the alternate screen, a hidden
   cursor, a region, a character set) would stay for the shell; as a stop-gap `zosh` writes a fixed reset
-  (`zoraya_shell::reset::BEFORE_PROMPT`) before a prompt that follows a command, **to be removed when 10c sends `Restore`**
-  (`docs/backlog.md`). A program that sets synchronized output (2026) and never ends it has every later update held
-  150 ms until the next reset. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
+  (`zoraya_shell::reset::BEFORE_PROMPT`) before every prompt after the first (it is idempotent), **to be removed when 10c
+  sends `Restore`** (`docs/backlog.md`); its edges: it clears a pending wrap, resets the palette and the cursor shape, and a job
+  stopped with Ctrl-Z loses its modes, which `fg` does not give back until 10c. A program that sets synchronized output (2026) and never ends it has every later update held
+  150 ms until the next prompt, whose reset ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
   script reads the text of a replayed session (any colour fits a glyph), and colours are checked by the frozen grids of
   `tests/replay.rs`.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue

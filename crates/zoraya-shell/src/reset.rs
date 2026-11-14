@@ -9,9 +9,20 @@
 //! 10c sends `Restore`** (`docs/design.md`, `docs/backlog.md`).
 
 /// Leave the alternate screen (and restore the cursor 1049 saved), soft reset
-/// (modes, region, sets, pen, saved cursors), show the cursor, ASCII in G0,
-/// shift in, default attributes.
-pub const BEFORE_PROMPT: &str = "\x1b[?1049l\x1b[!p\x1b[?25h\x1b(B\x0f\x1b[m";
+/// (modes, region, sets, pen, saved cursors, the cursor shape), show the cursor,
+/// ASCII in G0, shift in, default attributes, and reset the `OSC 4` palette (a
+/// file that sets entries to the background colour would leave coloured output
+/// invisible; the price is that a palette set from the shell does not last).
+///
+/// Its edges, until `Restore` replaces it: it comes before every prompt after the
+/// first (an empty line, a builtin and a Ctrl-C included; it is idempotent and
+/// keeps the screen); it clears a pending wrap (output that fills the last
+/// column without a line feed no longer wraps the prompt); it undoes a cursor
+/// shape a person set at the prompt; a job stopped with Ctrl-Z loses its modes
+/// and `fg` does not give them back (INV-0331-4's second half, `reinstate`, is
+/// 10c's); output from a background job while the editor is active is not
+/// followed by a reset.
+pub const BEFORE_PROMPT: &str = "\x1b[?1049l\x1b[!p\x1b[?25h\x1b(B\x0f\x1b[m\x1b]104\x07";
 
 /// What goes before the prompt: nothing before the first of a shell, and the
 /// reset after a command, when there is a terminal window (the console's
@@ -73,8 +84,8 @@ mod tests {
         assert_eq!(t.cell(19, 4), Cell::BLANK);
         assert_eq!(
             t.palette_override(3),
-            Some((0x11, 0x22, 0x33)),
-            "OSC 4 is a palette, not a screen mode"
+            None,
+            "a palette set by a file does not outlive the command"
         );
     }
 

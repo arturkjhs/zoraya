@@ -210,7 +210,11 @@ fn the_parser_is_total_over_random_and_structured_bytes() {
                     t.resize(c, r);
                     pixels = std::vec![0u32; look.surface_size(c, r).0 * look.surface_size(c, r).1];
                 }
-                3 => t.set_scrollback(rng.below(12) as usize),
+                3 => t.set_scrollback(if rng.below(4) == 0 {
+                    rng.below(3000) as usize
+                } else {
+                    rng.below(12) as usize
+                }),
                 _ => {}
             }
             check(&t);

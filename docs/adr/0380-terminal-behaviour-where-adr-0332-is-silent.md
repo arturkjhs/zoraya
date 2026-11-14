@@ -66,8 +66,10 @@ that probes and to a test that compares two emulators.
   8. Reverse video is an attribute of the cell, swapped when it is drawn; the screen's reverse mode (5) swaps the
      whole screen when it is drawn and stores nothing. Erased cells take the pen's background, never its attributes
      (`bce`).
-  9. `REP` repeats the last printed character at most as many times as the screen has cells (rows times columns),
-     so that `CSI 65535 b` costs a screenful and not 800 (measured: 84 ms of CPU per KiB of sequences otherwise); `ESC 7` and `ESC 8` are one slot a screen, 1048 and
+  9. `REP` repeats the last printed character, its work bounded by a screenful: past a screen and a row the screen, the
+     cursor and the modes are those of the full repeat (only `n` modulo the period matters) and only the scrollback gets
+     fewer lines, so that `CSI 65535 b` costs a screenful and not 800 rows (measured: 84 ms of CPU per KiB of sequences
+     otherwise); `ESC 7` and `ESC 8` are one slot a screen, 1048 and
      1049 a third; `RIS` clears both screens and every mode.
   10. `Restore` clears the modes, the region, the sets, the pen, the palette and the shape and leaves the alternate
       screen (restoring the cursor if 1049 had saved it); `reinstate` gives the modes back and enters a blank alternate

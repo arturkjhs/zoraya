@@ -568,9 +568,7 @@ impl Term {
             }
             b'b' => {
                 if let Some(c) = self.last {
-                    // The work is bounded by the screen: past a screenful only
-                    // the scrollback differs (proposed ADR-0380 item 9).
-                    for _ in 0..n.min(self.rows * self.columns) {
+                    for _ in 0..self.rep_count(c, n) {
                         self.put(c);
                     }
                 }
@@ -590,6 +588,32 @@ impl Term {
                 self.set_region(top, bottom);
             }
             _ => {}
+        }
+    }
+
+    /// How many characters a `REP` of `n` prints (proposed ADR-0380 item 9). The
+    /// work is bounded by a screenful: once more than a screen and a row have
+    /// been written, each further `period` characters (a row of narrow ones,
+    /// half a row of wide ones, one without autowrap) scroll one row of the same
+    /// cells, so only `n` modulo the period matters to the screen, the cursor
+    /// and the modes; the scrollback alone gets fewer lines.
+    fn rep_count(&self, c: char, n: usize) -> usize {
+        let wide = zoraya_width::columns(c) == 2 && self.columns >= 2;
+        if zoraya_width::columns(c) == 0 {
+            return n; // a mark joins a cell and scrolls nothing
+        }
+        let period = if !self.modes.autowrap {
+            1
+        } else if wide {
+            (self.columns / 2).max(1)
+        } else {
+            self.columns
+        };
+        let full = self.rows * self.columns + 2 * self.columns;
+        if n > full {
+            full + (n - full) % period
+        } else {
+            n
         }
     }
 

@@ -1532,24 +1532,73 @@ fn the_cursor_block_covers_its_own_cell_alone() {
     assert_eq!(pixels[py * w + px], look.bg.pixel());
 }
 
-/// Review of 10a: `CSI 65535 b` must not cost 65,535 characters of work.
+/// Review of 10a: `CSI 65535 b` must not cost 65,535 characters of work, and
+/// its result is that of the full repeat but for the scrollback.
 #[test]
-fn rep_is_bounded_by_the_screen() {
+fn rep_is_bounded_by_the_screen_and_gives_the_full_result() {
     let mut t = Term::with_scrollback(80, 24, 5000);
     t.write(b"a\x1b[65535b");
-    // A screenful is 1,920 cells: one scroll at most, not 800 rows.
-    assert!(t.history_len() <= 1, "{}", t.history_len());
-    assert_eq!(t.line(22).len(), 80, "a screenful was written");
-    assert_eq!(t.line(23), "a");
-    // A thousand of them, a 1 MiB file's worth of sequences, still add up to little.
+    // 65,536 characters end at column 16 of the bottom row; the work was a
+    // screenful and a row or two (a few scrolls, not 800).
+    assert!(t.history_len() <= 3, "{}", t.history_len());
+    assert_eq!(t.line(22).len(), 80);
+    assert_eq!(t.line(23), "a".repeat(16));
+    assert_eq!(t.cursor(), (16, 23));
     let mut t = Term::with_scrollback(80, 24, 5000);
     for _ in 0..100 {
         t.write(b"\x1b[65535b");
     }
-    assert!(t.history_len() <= 100 * 25);
+    assert!(t.history_len() <= 100 * 3);
     // A repeat inside a screenful is exact.
     let t = run(10, 3, b"x\x1b[29b");
     assert_eq!(rows(&t), ["xxxxxxxxxx"; 3]);
+}
+
+/// `CSI n b` equals `n` plain prints for every count past the bound too, on
+/// small grids, for narrow and wide characters, with and without autowrap and
+/// insert mode, with and without a region (the scrollback is left out: it is
+/// the one thing the bound changes).
+#[test]
+fn rep_equals_plain_prints_at_every_count() {
+    for (columns, rows) in [
+        (1usize, 1usize),
+        (1, 3),
+        (2, 2),
+        (3, 2),
+        (4, 3),
+        (5, 2),
+        (7, 3),
+        (8, 2),
+    ] {
+        for text in ["a", "中"] {
+            for modes in ["", "\x1b[?7l", "\x1b[4h", "\x1b[2;3r\x1b[?6h", "\x1b[1;31m"] {
+                let full = rows * columns + 2 * columns;
+                for n in 1..4 * full + 3 {
+                    let setup = std::format!("{modes}\x1b[1;2H{text}");
+                    let mut by_rep = Term::with_scrollback(columns, rows, 0);
+                    by_rep.write(setup.as_bytes());
+                    by_rep.write(std::format!("\x1b[{n}b").as_bytes());
+                    let mut plain = Term::with_scrollback(columns, rows, 0);
+                    plain.write(setup.as_bytes());
+                    for _ in 0..n {
+                        plain.write(text.as_bytes());
+                    }
+                    assert!(
+                        by_rep.same_state(&plain),
+                        "{columns}x{rows} {text:?} {modes:?} n={n}: {:?} vs {:?}, cursor {:?} vs {:?}",
+                        rows_of(&by_rep),
+                        rows_of(&plain),
+                        by_rep.cursor(),
+                        plain.cursor()
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn rows_of(t: &Term) -> Vec<String> {
+    (0..t.size().1).map(|y| t.line(y)).collect()
 }
 
 /// Review of 10a: a `DCS`, `APC`, `PM` or `SOS` longer than the bound is
@@ -1704,5 +1753,41 @@ fn the_parsers_lists_are_the_adr_s() {
                 fin as char
             );
         }
+    }
+}
+
+/// Review of 10a (C2): shrinking the scrollback keeps the memory within its bound.
+#[test]
+fn set_scrollback_keeps_memory_within_the_bound() {
+    for (from, to) in [
+        (2000usize, 1500usize),
+        (2000, 3),
+        (1500, 2000),
+        (10, 0),
+        (0, 10),
+    ] {
+        let mut t = Term::with_scrollback(80, 24, from);
+        for i in 0..from + 100 {
+            t.write(std::format!("line {i}\r\n").as_bytes());
+        }
+        // The `OSC` buffer full, the other part of the bound.
+        t.write(b"\x1b]");
+        t.write(&std::vec![b'x'; crate::MAX_STRING]);
+        t.write(b"\x18");
+        t.set_scrollback(to);
+        assert!(
+            t.memory() <= t.memory_bound(),
+            "{from} to {to}: {} > {}",
+            t.memory(),
+            t.memory_bound()
+        );
+        for i in 0..to + 50 {
+            t.write(std::format!("more {i}\r\n").as_bytes());
+        }
+        assert!(
+            t.memory() <= t.memory_bound(),
+            "{from} to {to} after more output"
+        );
+        assert_eq!(t.history_len(), to.min(t.history_len()));
     }
 }

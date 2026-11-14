@@ -284,7 +284,10 @@ impl Term {
         }
         let old = self.lines_oldest_first();
         self.capacity = lines;
+        // Reserved exactly, as `resize` and the pushes do: the bound is nominal.
         self.history = Vec::new();
+        self.history
+            .reserve_exact(old.len().min(lines) * self.columns);
         self.kept = 0;
         self.next = 0;
         let skip = old.len().saturating_sub(lines);

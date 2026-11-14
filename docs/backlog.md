@@ -276,7 +276,9 @@ states, to be taken up later:
   - **Deferred to 10b:** 165 capabilities of `crates/zoraya-term/entry/exceptions.txt` whose reason begins `deferred (10b):` (the keys,
     the mouse strings, the paste marks, `km`, `xm`); part 10b is not done while any is left. Nothing fails if one is, yet: make 10b's plan
     row check `tools/term-conformance/check.sh`'s count of them.
-  - **A program that sets 2026 and never ends it** has each later update held 150 ms; `Restore` (10c) ends it.
+  - **A program that sets 2026 and never ends it** has each later update held 150 ms until the next prompt, whose stop-gap reset ends it.
+  - **The stop-gap's edges** (`zoraya_shell::reset`): it fires before every prompt after the first, clears a pending wrap, resets the palette and
+    the cursor shape, and `fg` of a stopped full-screen job is not restored (modes are lost): 10c's `Restore` and `reinstate`.
   - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
 ## Three requests from outside work (2026-11-14, from the architect)
 

@@ -2,6 +2,8 @@
 # insert mode, a scroll, a search, and the shell's screen coming back. Recorded with the
 # pinned terminfo entry (TERM as ADR-0333 says) and with Vim's own queries (version and
 # cursor position) left in, so that the replayed stream holds queries nothing answers.
+# NOTE: `env TERMINFO` is set, but Vim uses its own built-in table for an xterm name (its output has no
+# `ESC [ 22 ; 0 ; 0 t`): this recording is of Vim's xterm, not of the pinned entry.
 size 80 24
 env TERMINFO=@terminfo@
 run vi -u NONE -N -n -i NONE --cmd "set nocp ruler showcmd laststatus=2" -c "syntax on" -c "set background=dark" notes.txt
