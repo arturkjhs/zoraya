@@ -55,6 +55,7 @@ crates/zoraya-term/           test-gui test-tour-gui
 crates/zoraya-ui/             test-gui
 crates/zoraya-app/            test-gui
 crates/zoraya-surface/        check test-netsurf
+crates/zoraya-fontset/        check test-netsurf
 crates/zoraya-platform/       check test-netsurf test-gui
 ports/netsurf/                check test-netsurf
 ports/patches/netsurf/        check test-netsurf

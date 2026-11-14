@@ -547,6 +547,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-fontset"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fonts",
+ "zoraya-test-alloc",
+ "zoraya-text",
+]
+
+[[package]]
 name = "zoraya-footprint"
 version = "0.1.0"
 
