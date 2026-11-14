@@ -365,3 +365,14 @@ For the architect.
   `room new wide +w /etc`, expecting `outside what this shell holds`, in `tests/shell/rooms.script` under `make test-files`.
   Not done yet. Whether entering a room should narrow the person's own `room new` is a UX question (ADR-0172 point 3).
 - **The `libc.a` stamp on CI:** the first run after merge that hits the new ports cache key should have no `libc.a: hid` line.
+
+## Open items from the review of `work/poll` (2026-11-14)
+
+- No local check that `.github/workflows/*.yml` parses (a missing comma in a `hashFiles` list made a whole run start no job and `make check`
+  passed): add a parse check (actionlint, or an expression check in `check-ci-jobs`).
+- `poll` and `pselect` keep two looks until F1 (`select` and `poll` one code); a terminal is ready at once until 10c (starvation of a socket polled
+  with it, spin of a non-blocking terminal): stage 10 part 10c removes `Desc::Stream { tty: true }`'s arm of `Posix::probes`; its readiness request
+  must be idempotent (the deferred boundary runs the look again after every wait).
+- No host test for a descriptor closed by a sibling between the look and the wait (`EBADF` becomes another look); no `posix-surface-check imports`
+  line checks that `t_poll` imports `poll` and `ppoll` (ADR-0343 has one for toybox): add when the first port's block takes the names over.
+- A socket at FIN reports `POLLIN | POLLHUP` (Linux: `POLLIN | POLLRDHUP`): revisit if a port half-closes and goes on writing.

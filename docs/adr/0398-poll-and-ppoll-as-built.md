@@ -12,7 +12,7 @@ ADR-0342 item 5 admitted `poll`, `ppoll` and `select` as "the same wait as `psel
 `libposix` over the deferred-wait protocol (ADR-0315), with tests") builds the two functions only. This ADR records what the code
 does where ADR-0342 and ADR-0414 leave a choice open, so that none is silent, and carries the `posix-surface-added` block for the two
 names (ADR-0342 item 1: a part that builds a function before a port imports it names its committed test program; the first port's
-block takes the name over). It decides nothing the two accepted ADRs decided.
+block takes the name over). It decides nothing the two accepted ADRs decided, with one exception: item 2's terminal is an **interim deviation** from ADR-0342 item 5 (a terminal waits by the readiness request), its driver 2 and INV-0414-1, which the architect accepts or refuses; stage 10 part 10c removes it.
 
 What this part does not build, and what plan part F1 and stage 10 part 10c still do, is listed under "Not in this part".
 
@@ -57,21 +57,21 @@ What this part does not build, and what plan part F1 and stage 10 part 10c still
 **Recommendation (not a decision): Option A.** What it does:
 
 1. **Readiness by kind.** A pipe or FIFO end and a connected socket are read from the handle's signals (`READABLE`, `WRITABLE`,
-   `PEER_CLOSED`). Read side: readable, or the peer closed, is the requested `POLLIN`/`POLLRDNORM`; a closed peer also adds `POLLHUP`
+   `PEER_CLOSED`). Read side: readable, or the peer closed, is the requested `POLLIN`/`POLLRDNORM`; a closed peer also adds `POLLHUP` (on a socket after a FIN too, where Linux gives `POLLIN | POLLRDHUP` and `POLLHUP` only when both directions are shut: a program that half-closes and goes on writing would see `POLLHUP` early)
    (end of file reads as 0, so it is "ready", INV-0414-1). Write side: writable is `POLLOUT`/`POLLWRNORM`; a closed reader is `POLLERR` and
    the requested write bits (a write fails with `EPIPE` at once). A connecting socket's control channel is the source for both
-   directions, as `select` has it, with `POLLERR` for a channel that closes. `POLLHUP` and `POLLERR` are reported whether or not asked
-   for; with `events` 0 the hang-up of the read end (else the write end) is watched. `POLLPRI` and the `*BAND` bits are never ready.
+   directions, as `select` has it, with `POLLERR` for a channel that closes on the write request (a read-only request for a closing channel gets `POLLHUP` from its read probe); a refused connect reports `POLLOUT` without `POLLERR` (programs read `SO_ERROR` next). `POLLHUP` and `POLLERR` are reported whether or not asked
+   for, but only from an end the call looks at (a write end polled for `POLLIN` alone, or a read end for `POLLOUT` alone, has no probe and is ready at once with that bit only); with `events` 0 the hang-up of the read end (else the write end) is watched. `POLLPRI` and the `*BAND` bits are never ready.
    Only the bits asked for are reported (`POLLRDNORM` is a request of its own).
-2. **Ready at once.** Files, directories, `/dev/null`, a socket with no connection, a **terminal** (until the readiness request of
-   ADR-0331 item 5, stage 10 part 10c, exists: this is `select`'s behaviour today, so INV-0342-2 holds for it by sameness, not by
-   truth) and a direction a descriptor has no end for (a read of a write end: `EBADF` at once, which does not block). A request for
+2. **Ready at once.** Files, directories, `/dev/null`, a socket with no connection, a **terminal** (an interim deviation, see Context: until the readiness request of
+   ADR-0331 item 5, stage 10 part 10c, exists this is `select`'s behaviour, so INV-0342-2 holds by sameness, not by truth, and
+   INV-0414-1 does not hold for it) and a direction a descriptor has no end for (a read of a write end: `EBADF` at once, which does not block). A request for
    `POLLOUT` on a read end therefore reports `POLLOUT`: `select` does the same.
 3. **`POLLNVAL`** for an open-less descriptor, which counts in the return value and is not an error of the call and not a wait; a
    negative `fd` is skipped with `revents` 0 (POSIX).
 4. **Limits.** `nfds` above `OPEN_MAX` (512, the table's size) is `EINVAL` (Linux: above `RLIMIT_NOFILE`), checked before the array is
    read (no allocation for a hostile count; `(nfds_t)1 << 32` is not truncated); `nfds` above 0 with a NULL array is `EFAULT`; a
-   non-NULL pointer that is not mapped faults the process, as `pselect`'s sets do. `poll(NULL, 0, ms)` is a sleep.
+   non-NULL pointer that is not mapped faults the process, as `pselect`'s sets do. `poll(NULL, 0, ms)` is a sleep, and with no source at all and no timeout (`poll(NULL, 0, -1)`, only negative fds) the call blocks until a signal (it waits with the clock's end for a deadline) instead of failing as `pselect` does. A descriptor that a sibling thread closes between the look and the wait makes the wait fail with `EBADF`; the call looks again and reports `POLLNVAL` (not covered by a host test: the fake kernel cannot make that interleaving).
 5. **Timeouts.** `poll`: milliseconds, negative for none, 0 looks once, saturating at the clock's end. `ppoll`: a `struct timespec`
    with the checks `pselect` has (`EINVAL` for a negative field or `tv_nsec` out of range), NULL for none; the timeout is **not written
    back** (as `pselect`). A wait that ends by its deadline returns 0 with every `revents` 0.
@@ -98,7 +98,7 @@ process) is not made here.
 
 - **Positive.** A program that calls `poll` or `ppoll` links and waits like `pselect`, in a process with threads too; the readiness logic
   is host-tested for pipes, files, `/dev/null` and sockets.
-- **Negative.** Two looks (this and `pselect`'s) until F1; a terminal reports ready at once, so a program that polls the terminal for
+- **Negative.** A terminal reports ready at once: a program that polls a terminal set non-blocking (asyncio on stdin, curses `nodelay`) spins on its own core (no CPU quota exists; a program can spin anyway, and `pselect` does the same), and a program that polls a terminal and a socket together (an `nc`-like relay, OpenSSH's client in 10g) is told the terminal is readable, blocks in `read(0)`, and does not serve the socket until a key is typed. Linking `poll` changes what the ports' `configure` finds: ports built before this part now get it (CPython's `select.poll` and `PollSelector`, `subprocess` and asyncio over it; toybox, curl, git later), so the candidate run must include `test-python`, `test-python-regr` and `test-apps`. Two looks (this and `pselect`'s) until F1; a terminal reports ready at once, so a program that polls the terminal for
   input busy-loops until part 10c; `poll` is linear per call, as ADR-0414 says.
 - **Follow-up.** F1 (`select`, `eventfd`, the deny list), part 10c (terminal), F2 (Unix sockets).
 
@@ -123,6 +123,7 @@ process) is not made here.
 ## Revisit triggers
 
 - A port that depends on `POLLHUP` without `POLLIN` at end of file (none known).
+- Part 10c: the terminal's readiness is a request (`PollReadable`), a message, not a handle signal; `poll_once` is run again from its start after every deferred wait, so that request must be idempotent or sent once per call outside the look. This is more than "replacing a branch".
 - Part F1 unifies `select` and `poll`: this ADR's item 2 is then restated there.
 
 ## Architect's decision

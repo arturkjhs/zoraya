@@ -155,9 +155,21 @@ impl<S: Sys> Posix<S> {
         if deadline.is_some_and(|d| self.sys.now() >= d) {
             return Ok(Some(0));
         }
-        match self.wait_for(&sources, deadline)? {
-            (None, None) => Ok(Some(0)),
-            _ => Ok(None),
+        // Nothing to wait for and no timeout (`poll(NULL, 0, -1)`, only
+        // negative fds): POSIX blocks until a signal, so wait with the
+        // clock's end for a deadline instead of `wait_for`'s `EINVAL`.
+        let deadline = if sources.is_empty() && deadline.is_none() {
+            Some(u64::MAX)
+        } else {
+            deadline
+        };
+        match self.wait_for(&sources, deadline) {
+            Ok((None, None)) => Ok(Some(0)),
+            Ok(_) => Ok(None),
+            // A sibling thread closed a polled descriptor between the look
+            // and the wait: look again, which reports it as `POLLNVAL`.
+            Err(crate::errno::EBADF) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 

@@ -676,3 +676,25 @@ fn poll_on_a_connected_socket_with_a_page_and_a_fin() {
     assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (1, POLLIN | POLLHUP));
     assert_eq!(recv(&mut t.r, fd, 10).unwrap(), b"");
 }
+
+#[test]
+fn poll_wakes_a_socket_asked_for_both_directions_by_either_one() {
+    use zoraya_posix::poll::{POLLIN, POLLOUT};
+    let mut t = rigged(Script {
+        fin: false,
+        ..Script::default()
+    });
+    let fd = t.r.p.socket(sock::AF_INET, sock::SOCK_STREAM, 0).unwrap();
+    t.r.p.connect(fd, &addr(EXAMPLE, 80)).unwrap();
+    let held = t.log.borrow().held[0];
+    // Fill the send stream: not writable, nothing to read.
+    t.r.net
+        .borrow_mut()
+        .feed(held.outbound, &vec![0u8; kernel::STREAM_CAPACITY]);
+    assert_eq!(polled(&mut t.r, fd, POLLIN | POLLOUT, Some(0)), (0, 0));
+    // Only the second probe (the write side) can end the wait.
+    t.r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| {
+        n.pulled(held.outbound);
+    }));
+    assert_eq!(polled(&mut t.r, fd, POLLIN | POLLOUT, None), (1, POLLOUT));
+}

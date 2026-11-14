@@ -63,3 +63,15 @@ instead. CI's candidate run (not started by this part) covers the rest.
 - Stage 10 part 10c ("the readiness request" for terminals) builds the terminal side of `probes`; what this part leaves for it is the
   `Desc::Stream { tty: true }` arm (today ready at once, host test `a_terminal_is_ready_at_once_until_it_has_a_readiness_request` to be
   replaced) and, in the library, a source for the terminal's readiness in `wait_for`.
+
+## After the review (opus-review, `docs/tasks/TASK-31-review-poll.md` on `docs/review-poll`)
+
+Fixed on the branch: the host path in this report and the missing comma in `test.yml` (findings 1, 2); tests for the write probe's
+`PEER_CLOSED` (a full pipe whose reader goes) and for a descriptor with two probes woken by the second (socket `POLLIN | POLLOUT`); `poll`
+with nothing to wait for and no timeout now blocks until a signal instead of `EINVAL` (test `nothing_to_wait_for_and_no_timeout_...`); a
+failed wait on a closed source becomes another look; ADR-0398 says the terminal arm is an interim deviation from ADR-0342 item 5 and
+INV-0414-1 for the architect, records the spin and the socket-starvation effects, the item-1 sentences as built, FIN as `POLLHUP`, the change
+of what the ports' `configure` finds, and the 10c idempotence note; the map line of ADR-0398 now also runs `test-posix-suites`,
+`test-posix-threadtest3`, `test-posix`, `test-apps`, `test-python`, `test-python-regr`; the rest is in `docs/backlog.md`.
+Hand breaks that now fail the host tests: `PEER_CLOSED` dropped from the write mask, `take(1)` on a descriptor's probes, the empty-wait
+fix reverted (each run with `cargo test -p zoraya-posix --test poll --test net`).

@@ -365,3 +365,31 @@ fn one_look_after_a_deadline_wait_is_the_answer() {
         Ok(Some(0))
     );
 }
+
+#[test]
+fn a_full_pipe_poll_ends_when_the_reader_goes() {
+    // The write probe's PEER_CLOSED is the only thing that ends this wait on
+    // the real kernel (zoraya-stream clears WRITABLE when the reader is gone).
+    let mut r = rig();
+    let (rd, wr) = r.p.pipe(o::NONBLOCK).unwrap();
+    assert_eq!(
+        r.write(wr, &vec![1u8; STREAM_CAPACITY]),
+        Ok(STREAM_CAPACITY)
+    );
+    let end = read_end(&r, rd);
+    r.p.sys.meanwhile = Some(Box::new(move |net: &mut Net| net.close(end)));
+    let mut f = [pf(wr, POLLOUT)];
+    assert_eq!(poll(&mut r, &mut f, None), Ok(1));
+    assert_eq!(f[0].revents, POLLOUT | POLLERR);
+}
+
+#[test]
+fn nothing_to_wait_for_and_no_timeout_blocks_instead_of_einval() {
+    let mut r = rig();
+    let waits = r.p.sys.waits;
+    // The fake ends a wait nothing could end as a deadline.
+    assert_eq!(r.p.poll_once(&mut [], None), Ok(Some(0)));
+    assert!(r.p.sys.waits > waits, "it waited");
+    let mut f = [pf(-1, POLLIN), pf(-2, 0)];
+    assert_eq!(r.p.poll_once(&mut f, None), Ok(Some(0)));
+}
