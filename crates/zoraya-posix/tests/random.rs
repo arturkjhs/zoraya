@@ -155,3 +155,62 @@ fn a_signal_after_the_first_chunk_returns_the_bytes_written_and_before_it_eintr(
     assert!(got[..2048].iter().any(|&b| b != 0xAA));
     assert_eq!(got[2048..], vec![0xAA; 5000 - 2048]);
 }
+
+/// What the C boundary's `state` does (ADR-0302 item 9): runs `f`; a wait it
+/// asks for (`Err(PENDING)`) is made between two runs, and `f` runs again
+/// with the outcome. Gives the result and the number of runs.
+fn deferred<R>(
+    r: &mut Rig,
+    mut f: impl FnMut(&mut Rig) -> Result<R, i32>,
+) -> (Result<R, i32>, usize) {
+    use zoraya_posix::jobs::Resume;
+    let mut resume = None;
+    let mut runs = 0;
+    loop {
+        runs += 1;
+        assert!(runs < 100, "a deferred call that never ends");
+        r.p.set_resume(resume.take());
+        let out = f(r);
+        let Some(w) = r.p.end_run(&out) else {
+            return (out, runs);
+        };
+        let result = match w.sources.first() {
+            Some(&(h, wanted)) => r.p.sys.wait(h, wanted).map(|s| (0, s)),
+            None => Err(zoraya_abi::Status::DeadlineExceeded),
+        };
+        resume = Some(Resume {
+            sources: w.sources,
+            own_len: w.own_len,
+            result,
+            progress: w.progress,
+        });
+    }
+}
+
+/// A process with threads (`defer_waits`, every python3: patch 0004 runs the
+/// interpreter on a thread of its own) whose request finds no reply at the
+/// first read: the fake service answers only inside a wait, the timing in which
+/// `rngd` has not run between the request's write and its read. The wait for
+/// the reply is a service's, made inside the lock (ADR-0302 item 9), so the call
+/// is one run with every byte the service's and no request asked twice. Before
+/// the fix the deferral (`Err(PENDING)`) became `ENETDOWN` and then `EIO`, and
+/// OpenSSL, unable to seed, refused `SSL_CTX_new` with `ERR_R_RAND_LIB`
+/// (0xa080024, `make test-python` on main, run 43565853069).
+#[test]
+fn a_process_with_threads_gets_the_bytes_when_the_reply_comes_late() {
+    let (mut r, asked) = rigged(Mode::Honest);
+    r.p.defer_waits = true;
+    r.poke(0, &[0xAA; 5000]);
+    let u = r.arena.user(0, 5000);
+    let (got, runs) = deferred(&mut r, |r| r.p.getrandom(u, 0));
+    assert_eq!(got, Ok(5000));
+    assert_eq!(runs, 1);
+    assert_eq!(*asked.borrow(), vec![2048, 2048, 904]);
+    let want: Vec<u8> = (1..=5000u32).map(|i| (i % 256) as u8).collect();
+    assert_eq!(r.peek(0, 5000), want);
+    // A service that is gone is still EIO, not a deferred wait.
+    let (mut r, _) = rigged(Mode::Gone);
+    r.p.defer_waits = true;
+    let u = r.arena.user(0, 16);
+    assert_eq!(deferred(&mut r, |r| r.p.getrandom(u, 0)), (Err(EIO), 1));
+}

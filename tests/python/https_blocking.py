@@ -3,12 +3,23 @@
 # patch 0001 (asyncio uses a memory BIO). argv: HOST PORT http.client|urllib.
 # The context has no cafile: the roots are OpenSSL's default (/system/tls/roots).
 # A refused certificate ends before any request byte (INV-0320-3).
-import faulthandler, http.client, ssl, sys, urllib.error, urllib.request
+import faulthandler, http.client, os, ssl, sys, urllib.error, urllib.request
 
 faulthandler.dump_traceback_later(40, exit=True)
 
 host, port, how = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-ctx = ssl.create_default_context()
+try:
+    ctx = ssl.create_default_context()
+except ssl.SSLError as e:
+    # As https_client.py: the entry Python shows, and whether getrandom answers now.
+    try:
+        os.urandom(16)
+        now = "answers"
+    except OSError as o:
+        now = "fails with errno %d" % o.errno
+    print("context refused: library", e.library, "reason", e.reason, "args", e.args,
+          "; getrandom now", now, flush=True)
+    raise
 # The test PKI has no Authority Key Identifier (see https_client.py).
 ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
 

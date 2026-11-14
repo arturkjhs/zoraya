@@ -48,7 +48,10 @@ impl<S: Sys> Posix<S> {
         while done < into.length {
             let part = CHUNK.min(into.length - done);
             // A signal to deliver ends the wait with `EINTR`, which the C
-            // boundary restarts or reports; the service being gone or
+            // boundary restarts or reports (without threads; in a process
+            // with threads the wait for the reply stays inside the library
+            // lock, ADR-0302 item 9, see `net_call_with`); the service being
+            // gone or
             // sending nonsense is `EIO`, a request that cannot be built
             // `EINVAL`.
             // After a first chunk has been copied out, a failure is not an
