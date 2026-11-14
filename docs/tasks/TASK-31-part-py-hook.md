@@ -35,7 +35,7 @@ Backlog, "Three requests from outside work", item 1. Branch `work/py-hook` from 
   object name; third built).
 - `make test-python-ext`: `PASS: 17 steps`, `zoraya-fsck` clean, rc 0 (zsample imported, `mul_add(6,7,0)` = 42, TypeError on
   wrong arguments, `"zsample" in sys.builtin_module_names`). `build/rootfs-python` (default) does not exist after it.
-- `KEEP_GOING=1 make check`: all passed. `make test-changed`: see the end of this file.
+- `KEEP_GOING=1 make check`: all passed (23 of 23).
 - Not run: `make test-python`, `test-python-regr` (not needed; the default python3 is unchanged), the CI candidate, `make test`.
 
 ## Limits
@@ -46,3 +46,10 @@ Backlog, "Three requests from outside work", item 1. Branch `work/py-hook` from 
 - The sample's `libzhelper.a` is rebuilt by `ar` at each run; if `ar` stamps times, the hash changes at each run.
 - The link `Modules/zoraya-ext` stays in the shared source tree (re-pointed at each hook build, ignored by the default build).
 - Modules are built in only (no `dlopen`); C++ modules must name their runtime library in the `Setup` line.
+
+## make test-changed
+
+`make test-changed` (after the commit) passed its check part and then failed in its `apps netsurf` build step, before any QEMU
+step: libcurl's compile stopped with `Missing definition of macro swrite` (`build/ports/logs/curl.log`: `curl_setup.h:944`;
+curl's configure in this fresh worktree). That is the curl port, not the python hook (no python path is involved); not
+investigated here, so the QEMU steps of `test-changed` did not run. `make test-python-ext` was run alone (above).
