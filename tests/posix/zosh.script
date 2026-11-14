@@ -35,10 +35,12 @@ x \nafter\r
 < exit status 7
 < \r\n~>
 # INV-0153-7, libposix's half from zosh: a path outside the table twice
-# and a missing one inside; one report, and none for the missing one.
-> /bin/cat ../hello.txt ../hello.txt missing.txt\r
+# and a missing one inside; one report, and none for the missing one. The
+# program is toybox by its own path, which has no description (ADR-0336 item
+# 8): /bin/cat's description would refuse the line before it runs.
+> /usr/libexec/toybox cat ../hello.txt ../hello.txt missing.txt\r
 < cat: missing.txt: No such file or directory
-<   hint: /bin/cat tried to read /hello.txt, which it was not given\r\n  to allow it: +r / /bin/cat
+<   hint: /usr/libexec/toybox tried to read /hello.txt, which it was not given\r\n  to allow it: +r / /usr/libexec/toybox cat
 x tried to read ~/missing.txt
 < \r\n~>
 # The processes of one line share its /tmp; the next line's is new.
