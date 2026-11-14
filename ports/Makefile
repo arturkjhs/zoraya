@@ -163,6 +163,16 @@ $(POSIX_LIB): FORCE
 
 # ---------------------------------------------------------------- libc.a
 
+# libc.a depends on the library's content, not its time (audit T1): cargo
+# writes libzoraya_posix.a anew in every job, so its time is always newer than
+# a libc.a restored from the ports cache, and every port relinked. The stamp
+# changes only when the checksum of the content does.
+POSIX_SUM := $(OBJ)/libzoraya_posix.sum
+$(POSIX_SUM): $(POSIX_LIB)
+	@mkdir -p $(dir $@)
+	@new=$$(cksum < $(POSIX_LIB)); \
+	  if [ "$$(cat $@ 2>/dev/null)" != "$$new" ]; then echo "$$new" > $@; echo "libzoraya_posix.a changed: $$new"; fi
+
 # musl's objects first, then zoraya-posix's members, each with the names outside
 # the tier list hidden (ADR-0141): posix-surface-check renames them in every
 # object and writes the list of renames.
@@ -171,7 +181,7 @@ LIBC_DIR := $(OBJ)/libc
 # The call log's order: function i of the bitmap is line i (ADR-0110 item 7);
 # tools/posix-stats decodes POSIX-CALLS with it.
 LIBC_CALLS := $(SYSROOT)/usr/lib/zoraya-calls.txt
-$(LIBC): $(MUSL_LIST) $(POSIX_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
+$(LIBC): $(MUSL_LIST) $(POSIX_SUM) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
 	rm -rf $(LIBC_DIR) && mkdir -p $(LIBC_DIR)/stub $(LIBC_DIR)/out
 	cd $(LIBC_DIR)/stub && $(ZAR) x $(POSIX_LIB)
 	$(SURFACE_CHECK) hide $(TIER_SPEC) $(LIBC_DIR)/out $$(cat $(MUSL_LIST)) \

@@ -100,7 +100,8 @@ done
 # emulated CPU (each named there with the measurement).
 tcg_excluded=$here/libcxx-tcg-excluded.txt
 for n in $(sed -e 's/#.*//' "$tcg_excluded" | awk 'NF { print $1 }'); do
-    awk -v n="$n" '$2 == n { f = 1 } END { exit !f }' "$out/list" ||
+    # A name ending in "/" is a directory of tests: at least one built test is in it.
+    awk -v n="$n" '$2 == n || (substr(n, length(n)) == "/" && index($2, n) == 1) { f = 1 } END { exit !f }' "$out/list" ||
         { echo "libcxx-build: $n is in libcxx-tcg-excluded.txt but not built" >&2; exit 1; }
 done
 script() {
@@ -111,7 +112,7 @@ script() {
     # of that line came).
     printf '%s\n' "! panicked" "! ZORAYA-PANIC" "! posixrun: exit 1" "! posixrun: exit 2" "! posixrun: ended" '< \r\n~> '
     while read -r name rel; do
-        if [ "$1" = tcg ] && awk -v n="$rel" '$1 == n { f = 1 } END { exit !f }' "$tcg_excluded"; then
+        if [ "$1" = tcg ] && awk -v n="$rel" '$1 == n || (substr($1, length($1)) == "/" && index(n, $1) == 1) { f = 1 } END { exit !f }' "$tcg_excluded"; then
             continue
         fi
         printf '# %s\n> posixrun -C /work /bin/lc/%s\\r\n< posixrun: exit 0\n< \\r\\n~> \n' "$rel" "$name"

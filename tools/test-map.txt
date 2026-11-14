@@ -34,6 +34,8 @@ tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
+tools/check-net-open.sh       check
+tools/net-open-allowed.txt    check
 tools/check-tls-roots.sh      check
 tools/test-run-disk.sh        check
 tools/run-disk.sh             check test-hand-run test-apps test-python test-python-regr
@@ -42,9 +44,9 @@ tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
-kernel/                       test-qemu test-boot test-net test-posix-threads test-posix-suites test-posix-threadtest3
+kernel/                       test-qemu test-boot test-net test-posix-threads test-posix-suites test-posix-threadtest3 test-cxx-libcxx
 crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
-crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-gui test-net
+crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-gui test-net test-cxx-libcxx
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
@@ -170,12 +172,17 @@ user/describe/posix/python3.cmd test-python test-files
 tests/python/                test-python test-python-regr
 tests/shell/python.script    test-python
 tests/shell/python-regr.script test-python-regr
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-gtest
+ports/musl/                   test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/include/                test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/crt/                    test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/sources.lock            test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+ports/Makefile                test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
 ports/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
 ports/cmake/                  test-cxx-gtest
 ports/patches/llvm/           test-cxx test-cxx-libcxx test-cxx-gtest
 ports/patches/googletest/     test-cxx-gtest
-tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest
+tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-regr test-hand-run test-cxx test-cxx-gtest test-cxx-libcxx
 tools/zc++                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/cxx/libcxx-             test-cxx-libcxx

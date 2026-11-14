@@ -13,3 +13,15 @@
 # under HVF and TCG, in CI too (make test-cxx). Local loops: HVF 200 of 200, TCG 200 of 200 (skip
 # counter 0 to 3), TCG throttled 30 of 30 (0 to 79); docs/tasks/TASK-30-report.md.
 std/thread/thread.condition/notify_all_at_thread_exit_lwg3343.pass.cpp  its skip-count heuristic fails on CI's TCG (above); run under HVF
+#
+# The groups that wait through libc++'s atomic wait. Its futex path is Linux's, so here it polls
+# with a backoff, and under the emulated CPU the polling takes minutes: thread.semaphore/lost_wakeup
+# alone took 121 s under the Mac's TCG, and the subset's whole time was the long tail of CI's run
+# 43598033280 (over 25 minutes). Under HVF they pass in seconds and stay. A name ending in "/" is a
+# directory: every test built from it. latch is in the list because std::latch waits through the
+# same atomic wait as the barrier and the semaphore (std/atomics, the atomic wait's own tests, is
+# not among tests/cxx/libcxx-groups.txt). The cause (libc++'s wait over Zoraya's futex, ADR-0301)
+# is a separate item of docs/backlog.md; this list goes when it is done.
+std/thread/thread.semaphore/  polls with a backoff under TCG; run under HVF
+std/thread/thread.barrier/    the same
+std/thread/thread.latch/      the same
