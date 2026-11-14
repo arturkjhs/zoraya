@@ -99,5 +99,44 @@
 < SED=1
 < 77700
 < PSURF>
+# tr, expr and diff of toys/pending past W5 and W10 (the gate review of 10e,
+# G1 to G4 and G8; toybox patch 0003). G1: a range and a class that pass the
+# end of tr's set buffer. G2: a NUL in SET2. G3: a read error on standard
+# input ends tr. G4: expr fails on overflow.
+> s=$(printf 'ab\\001-\\377'); echo hi | tr "$s" y; echo "G1A=$?"; z=$(printf '%0250d' 0); echo hi | tr "$z[:punct:]" y; echo "G1B=$?"\r
+< yyyG1A=0
+< hi
+< G1B=0
+< PSURF>
+> echo abc | tr abc 'x\\000y' | tr '\\000' N; echo "G2=$?"\r
+< \nxNy
+< G2=0
+< PSURF>
+> tr a b < /tmp; echo "G3=$?"\r
+< tr: read
+< G3=1
+< PSURF>
+> expr 9223372036854775807 \\> -1; expr 9223372036854775807 + 1; echo "G4=$?"; expr 7 / 0; echo "E1=$?"; expr 1 + a; echo "E2=$?"\r
+< \n1
+< expr: overflow
+< G4=2
+< expr: division by zero
+< E1=2
+< expr: non-integer argument
+< E2=2
+< PSURF>
+> printf 'a\\r\\nbb  b\\n' | tr -d '\\r' | tr -s ' b' | tr -c 'ab\\n' _\r
+< b_b
+< PSURF>
+> printf 'a\\nb\\nc\\n' > /tmp/d1; printf 'a\\nB\\nc\\n' > /tmp/d2; diff -u /tmp/d1 /tmp/d2; echo "D=$?"\r
+< @@ -1,3 +1,3 @@
+< -b
+< +B
+< D=1
+< PSURF>
+> mkdir -p /tmp/r1 /tmp/r2; echo x > /tmp/r1/f; echo x > /tmp/r2/f; echo y > /tmp/r1/only; diff -r /tmp/r1 /tmp/r2; echo "R=$?"\r
+< Only in /tmp/r1: only
+< R=1
+< PSURF>
 > exit\r
 < BROKER-STATS

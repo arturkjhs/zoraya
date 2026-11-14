@@ -2786,4 +2786,9 @@ only", ADR-0153 rule 10); the parser takes every word starting with `-` for an o
 affected; ADR-0344 open question); `tar -f ARCHIVE` is read in every mode (make an archive through standard output)
 and `-x` needs `+w` where it extracts; `cp -r`, `mkdir -p` and `gzip` without `-c` need `+w` on the directory they
 write in, except in the current directory for `cp -r`, whose entry merges with the current directory's; `find
--execdir`, `stat -f` and `date -s` do not work (ADR-0343); the image cache of ADR-0212 is not built.
+-execdir`, `stat -f` and `date -s` do not work (ADR-0343); the image cache of ADR-0212 is not built. `tr`, `expr`
+and `diff` come from toybox's `pending` directory, admitted after a review by a reader who did not port them
+(ADR-0336 item 2; `docs/tasks/TASK-31-review-10e.md`) with toybox patch 0003 (tr's set buffer, a NUL in SET2 and
+a read error; `diff -F`; expr's overflow). Left as known limits, on their pages: `diff` is quadratic on files
+with many equal lines and `diff -r` follows links with no loop check (it ends at the descriptor limit); `tr` has no
+`[c*n]`; `expr` reads numbers leniently (`''` is 0, out-of-range clamped); `diff`'s offsets are 32-bit.

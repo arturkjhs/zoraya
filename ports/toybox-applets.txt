@@ -4,10 +4,10 @@
 # directory each command's source lies in (INV-0336-1).
 #
 # `finished` commands come from toys/posix, toys/lsb and toys/other. The three
-# of toys/pending (tr, expr, diff) are ADR-0336 item 2's: toybox's own tests
-# for them pass (a host build, docs/tasks/TASK-31-part-10e.md) and so do W5
-# and W10, but the review by a reader who did not port them is not done; the
-# gate is open for the architect (the part report). No other pending command
+# of toys/pending (tr, expr, diff) are ADR-0336 item 2's: read by a reviewer
+# who did not port them (docs/tasks/TASK-31-review-10e.md, "Gate review"),
+# fixed by toybox patch 0003, and passing toybox's own tests, W5, W10 and the
+# regressions of tests/posix/invariants.script. No other pending command
 # may be listed. `df` is left out (it reads the mount table). toybox's
 # .config also enables egrep, fgrep and [ (OLDTOY names of grep and test):
 # they have no link in /bin, but /usr/libexec/toybox runs them.

@@ -20,7 +20,10 @@ exit     1  differences
 exit     2  an error
 ---
 Compare files: toybox 0.8.15 (0BSD) as a POSIX program with the toolchain set (ADR-0336).
-toybox's diff is from its pending directory, admitted by ADR-0336 item 2.
+toybox's diff is from its pending directory, admitted by ADR-0336 item 2 after a review. Known limits: it is slow
+(quadratic) on files with many equal lines (20000 equal lines take seconds); -r follows symbolic links, and a loop
+of links ends with "Too many open files" after some hundred levels; offsets are 32-bit, so a file over 2 GiB is
+compared wrongly or fails to seek.
 Write the short options: the long names belong to the description.
 
 EXAMPLES
