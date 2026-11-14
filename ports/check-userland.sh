@@ -11,6 +11,7 @@ set -eu
 tree=$1
 rootfs=$2
 surface_check=$3
+awk_tree=${4:-}
 fail=0
 say() { echo "check-userland: $*"; fail=1; }
 
@@ -68,7 +69,7 @@ done
 # --- INV-0342-1, second half
 if [ -d "$tree/generated/unstripped/obj" ]; then
   "$surface_check" imports docs/adr/0343-surface-for-the-userland.md \
-    "toybox=$tree/generated/unstripped/obj" || fail=1
+    "toybox=$tree/generated/unstripped/obj" ${awk_tree:+"awk=$awk_tree"} || fail=1
 fi
 [ $fail = 0 ] && echo "check-userland: passed"
 exit $fail

@@ -1,4 +1,4 @@
-# ADR-0343: The names toybox's finished commands add to libc.a, and what each means
+# ADR-0343: The names toybox's finished commands and one-true-awk add to libc.a, and what each means
 
 - **Status:** proposed
 - **Date:** 2026-11-14
@@ -25,7 +25,7 @@ import it:
 | `sigsetjmp` | `gzip` (toybox's `toys.rebound`) |
 | `statfs`, `pathconf` | `stat` |
 
-The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need-from-libc, stage-10/survey.md#the-userland-today), and CP-27 is the rule that a name needs a program behind it. ADR-0342 items 7, 8 and 10 decide the meaning of the first nine rows; `fchdir`, `readv`, `settimeofday`, `sigsetjmp`,
+The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need-from-libc, stage-10/survey.md#the-userland-today), and CP-27 is the rule that a name needs a program behind it. one-true-awk (part 10e, ADR-0336 item 3) leaves twelve more, found the same way (`build/ports/logs/awk.log`): `feclearexcept`, `fetestexcept` (math.c), the ctype functions `isalpha`, `isdigit`, `isgraph`, `islower`, `isprint`, `isupper`, `random`, `srandom`, `towupper` and `wctomb`, all musl's own code. ADR-0342 items 7, 8 and 10 decide the meaning of the first nine rows; `fchdir`, `readv`, `settimeofday`, `sigsetjmp`,
 `statfs` and `pathconf` are not covered. This ADR records the block and the meanings the accepted ADRs leave open.
 
 ## Decision drivers
@@ -72,6 +72,18 @@ The measured gap is the survey's (stage-10/survey.md#what-the-missing-tools-need
    `sigprocmask`, which is exported.
 
 ```posix-surface-added
+feclearexcept awk
+fetestexcept awk
+isalpha awk
+isdigit awk
+isgraph awk
+islower awk
+isprint awk
+isupper awk
+random awk
+srandom awk
+towupper awk
+wctomb awk
 dirname toybox
 dprintf toybox
 fscanf toybox

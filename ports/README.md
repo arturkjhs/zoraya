@@ -36,6 +36,7 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | dash | 0.5.13.5 | BSD-3-Clause (`COPYING`; it also lists `mksignames.c` as GPL, which no patch touches) | `patches/dash/0001-vforkexec-to-posix_spawn.patch` (TASK-02's M4 patch unchanged), `0002-fork-group-hint.patch`, `0003-vforkexec-setpgroup-tcsetpgrp.patch` (ADR-0142) |
 | GNU make | 4.4.1 | GPL-3.0-or-later (`COPYING`); `build-aux/config.sub` GPL-3.0-or-later with the Autoconf exception | `patches/make/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
 | toybox | 0.8.15 | 0BSD (`LICENSE`) | `patches/toybox/0001-zoraya-portability.patch`, `0002-zoraya-in-place-and-absent-calls.patch` (ADR-0336 item 6, ADR-0343); the commands are the lines of `toybox-applets.txt` (ADR-0336 item 1) |
+| one-true-awk | `72e9b56caddb4a6f8d1405315a5183c26b8650a4` (second edition, `version 20261106`) | the Lucent Technologies permission notice (`LICENSE`: use, copy, modify and distribute for any purpose and without fee; the notice kept; the Lucent name not used in advertising); permissive, not on CLAUDE.md's list for crates, admitted for a ported program by ADR-0336 item 3, which the architect is asked to confirm | none; its grammar is generated on the host by bison (ADR-0336 item 3) |
 | TinyCC | mob, commit `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (`COPYING` is version 2.1; the LGPL-licensed files say version 2 or any later; some files, such as `arm64-gen.c`, carry a permissive notice) | `patches/tcc/0001-zoraya-target.patch`, `patches/tcc/0002-skip-shf-exclude-sections.patch` |
 | pdpmake | 2.0.4, commit `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` | public domain (`LICENSE`, the Unlicense) | none |
 | Lua | 5.5.1 | MIT (`doc/readme.html`) | none; W2's source, built inside Zoraya |
@@ -95,6 +96,7 @@ ADR-0109 revisit.
   --disable-nls`.
 - **toybox**: `make allnoconfig`, then the commands of `toybox-applets.txt`; on a macOS host it needs GNU sed (`brew install gnu-sed`). Its link
   needs ADR-0144's two names.
+- **one-true-awk**: bison on the host makes `awkgram.tab.c` and `.h`, a host-built `maketab` makes `proctab.c`, zcc builds `awk` (`/bin/awk`).
 - **pdpmake**: its own `Makefile` with `CC=zcc`, unpatched; `/bin/pdpmake`. It runs
   each recipe through `system()` (ADR-0210).
 - **tcc**: `./configure --cpu=aarch64 --targetos=Zoraya ...` (ADR-0143), `tcc` and

@@ -94,3 +94,20 @@ diff -ru a/lib/portability.h b/lib/portability.h
  #define timer_settime(...) timer_settime_wrap(__VA_ARGS__)
 +
  #endif
+diff -ru a/toys/posix/find.c b/toys/posix/find.c
+--- a/toys/posix/find.c	2026-10-02 23:31:14
++++ b/toys/posix/find.c	2026-11-14 15:12:21
+@@ -548,7 +548,13 @@
+           ss += len;
+           aa->arglen = len;
+           aa->dir = !!strchr(s, 'd');
++#ifdef __zoraya__
++          // Zoraya (ADR-0343): no fchdir, so no -execdir or -okdir; a plain
++          // -exec runs in the directory find was started in, as POSIX says.
++          if (aa->dir) error_exit("-execdir is not supported on Zoraya");
++#else
+           if (TT.topdir == -1) TT.topdir = xopenro(".");
++#endif
+ 
+         // collect names and execute commands
+         } else {

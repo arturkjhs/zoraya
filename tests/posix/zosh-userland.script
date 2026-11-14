@@ -1,0 +1,128 @@
+# The userland of stage 10e from zosh (TASK-31, ADR-0336): toybox's commands as
+# POSIX programs with descriptions. `grep -n TODO *.c`, `sed -i` through its one
+# narrowed name (INV-0336-6), `tar -c -z -f`, two names for `ls`
+# (INV-0336-4), a command run by `find -exec` (INV-0336-5), and the C test of
+# ADR-0342's items 8 and 9 (INV-0342-4, INV-0342-5).
+! panicked
+! ZORAYA-FAULT
+! -FAIL
+< Type help to begin
+< \r\n~>
+> echo 'int a;' > t.c\r
+< \r\n~>
+> echo '/* TODO: check */' >> t.c\r
+< \r\n~>
+> echo 'int b;' >> t.c\r
+< \r\n~>
+> echo 'int c;' > u.c\r
+< \r\n~>
+> grep -n TODO *.c\r
+< \r\nt.c:2:/* TODO: check */
+< \r\n~>
+> grants grep -n TODO t.c\r
+< grep gets (a POSIX program):
+< ~/t.c
+< read (operand FILE)
+< \r\n~>
+# sed -i: the one file is given to change, and no other name of the directory.
+> echo colour > notes.txt\r
+< \r\n~>
+> echo secret > other.txt\r
+< \r\n~>
+> grants sed -i s/colour/color/ notes.txt\r
+< sed gets (a POSIX program):
+< change notes.txt (operand FILE)
+< \r\n~>
+> sed -i s/colour/color/ notes.txt\r
+< \r\n~>
+> cat notes.txt\r
+< \r\ncolor
+< \r\n~>
+> ls\r
+< other.txt
+x toybox
+< \r\n~>
+> sed -i 'r other.txt' notes.txt\r
+x secret
+< \r\n~>
+> cat notes.txt\r
+x secret
+< \r\n~>
+# tar -c -z -f, and listing it again.
+> tar -c -z -f out.tgz notes.txt t.c\r
+< \r\n~>
+> tar -t -z -f out.tgz\r
+< \r\nnotes.txt\r\nt.c
+< \r\n~>
+# awk (one-true-awk), over a file the line names.
+> awk 'BEGIN { print 1 + 2 }'\r
+< \r\n3
+< \r\n~>
+> awk '{ print NR":"$0 }' t.c\r
+< \r\n1:int a;\r\n2:/* TODO: check */\r\n3:int b;
+< \r\n~>
+# INV-0336-4: the name is two commands, one for the person, one for scripts.
+> ls --help\r
+< usage: ls [PATH]
+< \r\n~>
+> echo 'ls --help' > h.sh\r
+< \r\n~>
+> dash h.sh\r
+< ls: Unknown option 'help'
+< \r\n~>
+# INV-0336-5: a command that find runs holds find's entries and no more.
+> /bin/find . -name t.c -exec /bin/cat /tests/w9-check.sh {} +\r
+< cat: /tests/w9-check.sh: No such file or directory
+x #!/bin/sh
+< \r\n~>
+> +r /tests /bin/find . -name t.c -exec /bin/cat /tests/w9-check.sh {} +\r
+< #!/bin/sh
+< \r\n~>
+# INV-0342-5: getpwuid, and link and mknod refused (a C program from tcc).
+> echo '#include <pwd.h>' > pw.c\r
+< \r\n~>
+> echo '#include <unistd.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <errno.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <stdio.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <stdlib.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <locale.h>' >> pw.c\r
+< \r\n~>
+> echo '#include <sys/stat.h>' >> pw.c\r
+< \r\n~>
+> echo 'int main(void) {' >> pw.c\r
+< \r\n~>
+> echo 'struct passwd *p = getpwuid(getuid());' >> pw.c\r
+< \r\n~>
+> echo 'char s[4] = { 0xe2, 0x82, 0xac, 0 };' >> pw.c\r
+< \r\n~>
+> echo 'wchar_t w = 0;' >> pw.c\r
+< \r\n~>
+> echo 'int l, m, n;' >> pw.c\r
+< \r\n~>
+> echo 'errno = 0; l = link("t.c", "u.c"); printf("link %d %d ", l, errno == EPERM);' >> pw.c\r
+< \r\n~>
+> echo 'errno = 0; m = mknod("n", S_IFCHR | 0600, 0); printf("mknod %d %d ", m, errno == EPERM);' >> pw.c\r
+< \r\n~>
+> echo 'setlocale(LC_ALL, "");' >> pw.c\r
+< \r\n~>
+> echo 'n = mbtowc(&w, s, 3);' >> pw.c\r
+< \r\n~>
+> echo 'printf("pw %d utf8 %d %d %lx", p != 0, (int)MB_CUR_MAX, n, (long)w);' >> pw.c\r
+< \r\n~>
+> echo 'puts("");' >> pw.c\r
+< \r\n~>
+> echo 'return 0;' >> pw.c\r
+< \r\n~>
+> echo '}' >> pw.c\r
+< \r\n~>
+> tcc pw.c -o pw\r
+< \r\n~>
+> ./pw\r
+< link -1 1 mknod -1 1 pw 1 utf8 4 3 20ac
+< \r\n~>
+x power off
+> poweroff\r

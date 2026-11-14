@@ -62,7 +62,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make pdpmake toybox tcc tcc-host workloads t2-probe clean-ports FORCE
+	dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -349,6 +349,25 @@ $(TOYBOX_BIN): $(TOYBOX) $(SYSROOT_STAMP) $(TOYBOX_APPLET_FILE)
 	@touch $@
 comma := ,
 
+# ---------------------------------------------------------------- awk
+
+# one-true-awk, the second edition (UTF-8; ADR-0336 item 3), unpatched. Its
+# grammar is turned into C on the host by bison (a host tool, docs/dependencies.md)
+# and its table of token names by maketab, built and run on the host; the
+# program itself is compiled by zcc. The Lucent notice is the licence.
+AWK := $(WORK)/awk-$(call lock_ver,awk)
+AWK_BIN := $(AWK)/awk
+awk: $(AWK_BIN)
+$(AWK): $(LOCK) $(wildcard ports/patches/awk/*.patch)
+	$(call unpack,awk,ports/patches/awk)
+	@touch $@
+AWK_SRCS := b.c main.c parse.c tran.c lib.c run.c lex.c math.c
+$(AWK_BIN): $(AWK) $(SYSROOT_STAMP)
+	@cd $(AWK) && $(call logged,sh -c 'bison -d -b awkgram awkgram.y && $(HOSTCC) -O1 -o maketab maketab.c && ./maketab awkgram.tab.h > proctab.c',awk-grammar)
+	rm -f $(AWK_BIN)
+	@cd $(AWK) && $(call logged,sh -c 'mkdir -p objs && for f in awkgram.tab.c proctab.c $(AWK_SRCS); do $(ZCC) $(CROSS_CFLAGS) -c -o objs/$$(basename $$f .c).o $$f || exit 1; done && $(ZCC) $(CROSS_CFLAGS) -o awk objs/*.o -lm',awk)
+	@touch $@
+
 # ---------------------------------------------------------------- tcc
 
 # tcc for Zoraya (ADR-0109 items 6 and 7): its paths in Zoraya, static links
@@ -412,7 +431,7 @@ libc: $(SYSROOT_STAMP)
 # ADR-0336 item 8), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP)
+$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP)
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh
 	cp $(GMAKE_BIN) $(ROOTFS)/bin/make
@@ -420,8 +439,9 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(TCC_STA
 	cp $(TCC_BIN) $(ROOTFS)/bin/tcc && ln -s tcc $(ROOTFS)/bin/cc
 	@# The multi-call binary is not in /bin (ADR-0336 item 8): `toybox sed ...`
 	@# is not found by name; the links in /bin point at it.
+	cp $(AWK_BIN) $(ROOTFS)/bin/awk
 	mkdir -p $(ROOTFS)/usr/libexec && cp $(TOYBOX_BIN) $(ROOTFS)/usr/libexec/toybox
-	for a in $(TOYBOX_APPLETS); do ln -s ../usr/libexec/toybox $(ROOTFS)/bin/$$a; done
+	for a in $(TOYBOX_APPLETS); do ln -s /usr/libexec/toybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
 	@# Not the C++ runtime (ADR-0365): no compiler in the image builds C++.
 	rm -rf $(ROOTFS)/usr/include/c++ $(addprefix $(ROOTFS)/usr/,$(CXX_IMAGE_LEFT_OUT))
@@ -1114,5 +1134,5 @@ check-ports: | tools
 	@echo "== tcc for Zoraya has no -run: it calls itself a cross compiler (INV-0143-2)"
 	LC_ALL=C grep -a -q 'run is not available in a cross compiler' $(TCC_BIN)
 	@echo "== the userland: list, sources, busybox, surface block (INV-0336-1, -3, INV-0342-1)"
-	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK)
+	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK) $(AWK)/objs
 	@echo "check-ports: all passed"

@@ -1245,7 +1245,7 @@ endef
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
 	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/threads.script \
-	tests/posix/zosh.script tests/posix/tour.script
+	tests/posix/zosh.script tests/posix/zosh-userland.script tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
