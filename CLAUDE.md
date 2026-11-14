@@ -33,6 +33,9 @@ Read `docs/design.md` first. It says what exists and where it lives.
 - Work on the branch named in the task. Never merge, never push and never rewrite published history, unless the task
   explicitly says so.
 - Commit after each step the task lists, with a message that says what changed and why.
+- A command chain that commits or pushes must stop at the first failure: join its commands with `&&` or run it
+  under `set -e`, never with `;`. Never push `main` unless `make check` exited 0 in that same chain (two pushes went
+  out on 2026-11-14 while `make check` failed, because the chain printed the failure and went on).
 - A stage's tag goes on `main` only after CI on `main` is green for that commit. A published tag is moved only with
   the architect's permission.
 
