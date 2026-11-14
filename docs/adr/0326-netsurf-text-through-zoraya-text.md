@@ -124,6 +124,10 @@ OFL 1.1 (`desktop/survey.md#the-ofl-next-to-bsd-code`). The system image has no 
 
 ## Open questions
 - The cost of measuring text per page load against ADR-0318's 5% trigger: not measured in 9f-text.
+- INV-0326-1 (the 9f-text review's T6): its check covers the grant a `window` line adds unasked (`with_window`) and the paths
+  the library reads. A line's own `+r /system/fonts` and a room grant also give the directory, as they give any path; no
+  check refuses them, and the zosh wiring (`posix_fonts`) has no test of its own. The data is the system's read-only font
+  files. Whether the invariant should say "nothing adds it implicitly but a `window` line" is the architect's to decide.
 
 ## Revisit triggers
 - A page the architect names whose letters show the box; a measured text cost above 5% of a page load; an italic

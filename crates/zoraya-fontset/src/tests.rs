@@ -370,3 +370,221 @@ fn any_bytes_and_any_x_are_answered_without_a_panic() {
         });
     }
 }
+
+/// The calls as they were before the walk (9f-text): the whole text shaped
+/// by `zoraya-text`'s `Simple`, every boundary kept. The walk must give the
+/// same answers.
+mod reference {
+    use super::*;
+    use zoraya_text::{Positioned, Shaper, Simple};
+
+    pub struct Line {
+        pub bounds: Vec<(usize, i32)>,
+        pub spaces: Vec<usize>,
+        pub glyphs: Vec<Positioned>,
+        pub advance: i32,
+    }
+
+    pub fn line(f: &Fontset, face: Face, px: u32, bytes: &[u8]) -> Line {
+        let mut shaped = String::new();
+        let mut chars: Vec<(usize, Option<usize>, bool)> = Vec::new();
+        let mut spaces = Vec::new();
+        let mut n = 0usize;
+        for (offset, c) in decode(bytes) {
+            if c == ' ' && offset > 0 {
+                spaces.push(offset);
+            }
+            if is_invisible(c) {
+                chars.push((offset, None, false));
+                continue;
+            }
+            shaped.push(c);
+            chars.push((offset, Some(n), zoraya_text::is_combining(c)));
+            n += 1;
+        }
+        let mut glyphs = Vec::new();
+        let advance = Simple.shape(f.fonts(face), &shaped, px, &mut glyphs);
+        let mut bounds = vec![(bytes.len(), advance); chars.len() + 1];
+        let mut next = advance;
+        for (k, (offset, glyph, mark)) in chars.iter().enumerate().rev() {
+            if let (Some(j), false) = (glyph, mark)
+                && let Some(g) = glyphs.get(*j)
+            {
+                next = g.x.min(next);
+            }
+            bounds[k] = (*offset, next);
+        }
+        Line {
+            bounds,
+            spaces,
+            glyphs,
+            advance,
+        }
+    }
+
+    pub fn position(l: &Line, x: i32) -> (usize, i32) {
+        let mut best = (0usize, 0i32);
+        let mut distance = i64::MAX;
+        for &(o, bx) in &l.bounds {
+            let d = (bx as i64 - x as i64).abs();
+            if d < distance {
+                distance = d;
+                best = (o, bx);
+            }
+        }
+        best
+    }
+
+    pub fn split(l: &Line, len: usize, x: i32) -> (usize, i32) {
+        if l.advance <= x {
+            return (len, l.advance);
+        }
+        let x_of = |offset: usize| {
+            l.bounds
+                .iter()
+                .find(|(o, _)| *o == offset)
+                .map_or(l.advance, |(_, bx)| *bx)
+        };
+        let over = l
+            .bounds
+            .windows(2)
+            .find(|w| w[1].1 > x)
+            .map_or(len, |w| w[0].0);
+        if let Some(&s) = l.spaces.iter().rev().find(|&&s| s <= over) {
+            return (s, x_of(s));
+        }
+        if let Some(&s) = l.spaces.iter().find(|&&s| s > over) {
+            return (s, x_of(s));
+        }
+        (len, l.advance)
+    }
+}
+
+#[test]
+fn the_walk_answers_as_shaping_the_whole_text_did() {
+    let mut f = system();
+    let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let pieces: [&[u8]; 12] = [
+        b"a",
+        b"W",
+        b"V",
+        b" ",
+        "ж".as_bytes(),
+        "Ї".as_bytes(),
+        "\u{0301}".as_bytes(),
+        "\u{200B}".as_bytes(),
+        b"\xff",
+        b"\xe2\x82",
+        "\u{4E2D}".as_bytes(),
+        b"To",
+    ];
+    for _ in 0..600 {
+        let n = (next() % 24) as usize;
+        let mut bytes = Vec::new();
+        for _ in 0..n {
+            bytes.extend_from_slice(pieces[(next() % 12) as usize]);
+        }
+        let face = Face::ALL[(next() % 4) as usize];
+        let px = (next() % 80) as u32;
+        let l = reference::line(&f, face, px, &bytes);
+        assert_eq!(f.width(face, px, &bytes), l.advance, "{bytes:?}");
+        for _ in 0..6 {
+            let x = (next() % (l.advance as u64 + 40)) as i32 - 20;
+            assert_eq!(
+                f.position(face, px, &bytes, x),
+                reference::position(&l, x),
+                "position {bytes:?} {face:?} {px} {x}"
+            );
+            assert_eq!(
+                f.split(face, px, &bytes, x),
+                reference::split(&l, bytes.len(), x),
+                "split {bytes:?} {face:?} {px} {x}"
+            );
+        }
+        let mut xs = Vec::new();
+        f.glyphs(face, px, &bytes, |g| xs.push(g.x));
+        let mut want = Vec::new();
+        let px_c = zoraya_text::clamp_px(px);
+        let fonts = f.fonts(face).clone();
+        let mut cache = zoraya_text::GlyphCache::new(4);
+        for g in &l.glyphs {
+            let b = cache.get(&fonts, g.source, g.glyph, px_c);
+            if b.width != 0 && b.height != 0 {
+                want.push(g.x + b.left);
+            }
+        }
+        assert_eq!(xs, want, "glyphs {bytes:?}");
+    }
+}
+
+/// T4 of the 9f-text review: NetSurf breaks a paragraph by calling `split`
+/// on what is left of the box for every line. Each call shapes only up to
+/// the line's end and one word, so the work is linear in the text; shaping
+/// the whole rest each time, as before, was quadratic (about 1,800 lines
+/// over 120,000 characters here: some 10^8 characters, 1.1 s for 300 lines
+/// in a host release build).
+#[test]
+fn breaking_a_long_paragraph_into_lines_is_linear() {
+    let mut f = system();
+    let text = "слово ".repeat(20_000);
+    let chars = text.chars().count() as u64;
+    let px = px(DEFAULT_SIZE, 90);
+    let before = f.shaped();
+    let whole = f.width(Face::Sans, px, text.as_bytes());
+    assert!(whole > 600);
+    let mut rest = text.as_bytes();
+    let mut lines = 0u64;
+    while !rest.is_empty() {
+        let (o, w) = f.split(Face::Sans, px, rest, 600);
+        assert!(o > 0 && o <= rest.len());
+        assert!(w <= 600 || !rest[..o].contains(&b' '), "line {lines}: {w}");
+        rest = &rest[(o + 1).min(rest.len())..];
+        lines += 1;
+    }
+    assert!(lines > 1_000, "{lines} lines");
+    let work = f.shaped() - before;
+    // The whole once, then each line and one word past it: about twice the
+    // characters. Quadratic would be about 60,000 times them.
+    assert!(work <= 4 * chars, "{work} characters shaped for {chars}");
+}
+
+/// T3 of the 9f-text review: a page chooses the size, and a glyph at 512
+/// pixels holds about 100 KB of coverage. Above `CACHE_MAX_PX` a face keeps
+/// only `LARGE_SLOTS` glyphs, and below it a cache past `CACHE_BYTES` starts
+/// again, so drawing many glyphs at any size stays bounded.
+#[test]
+fn the_glyph_caches_stay_bounded_whatever_the_size() {
+    let mut f = system();
+    let many: String = ('\u{0021}'..='\u{007E}')
+        .chain('\u{0391}'..='\u{03C9}')
+        .chain('\u{0400}'..='\u{045F}')
+        .collect();
+    let mut largest = 0usize;
+    f.glyphs(Face::Sans, zoraya_text::MAX_PX, many.as_bytes(), |g| {
+        largest = largest.max(g.coverage.len());
+    });
+    assert!(largest > 50_000, "a glyph at 512 pixels: {largest} bytes");
+    assert!(
+        f.cache_bytes() <= LARGE_SLOTS * largest,
+        "{} bytes cached at 512 pixels",
+        f.cache_bytes()
+    );
+    // At the largest size kept, the cache empties itself when full.
+    let mut big = 0usize;
+    for face in [Face::Sans, Face::Mono] {
+        f.glyphs(face, CACHE_MAX_PX, many.as_bytes(), |g| {
+            big = big.max(g.coverage.len());
+        });
+    }
+    assert!(
+        f.cache_bytes() <= 4 * (CACHE_BYTES + big) + 4 * LARGE_SLOTS * largest,
+        "{} bytes cached",
+        f.cache_bytes()
+    );
+}

@@ -21,7 +21,9 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use zoraya_text::{FontList, LineMetrics, Positioned, Shaper, Simple, Text};
+#[cfg(doc)]
+use zoraya_text::Simple;
+use zoraya_text::{FontList, GlyphCache, LineMetrics, Source as GlyphSource, Text, raster};
 
 pub use zoraya_text::Font;
 
@@ -148,21 +150,119 @@ pub struct Glyph<'a> {
     pub coverage: &'a [u8],
 }
 
-/// Text laid out on one line: each character's byte offset in the input and
-/// the pen's x before it, and the whole advance.
-struct Line {
-    /// (offset, x) for every character, then (len, advance).
-    bounds: Vec<(usize, i32)>,
-    /// The offsets of the spaces (U+0020).
-    spaces: Vec<usize>,
-    glyphs: Vec<Positioned>,
-    advance: i32,
+/// The largest size whose glyphs stay in a face's cache: a glyph above it is
+/// rendered into [`LARGE_SLOTS`] slots of its own and soon replaced, so a
+/// page that sets a huge `font-size` cannot fill the caches with glyphs of
+/// about 100 KB each (T3 of the 9f-text review). At scale 2, NetSurf's
+/// 2em heading is about 60 pixels, so ordinary text stays cached.
+pub const CACHE_MAX_PX: u32 = 128;
+
+/// The bytes of coverage a face's cache holds before it is emptied and
+/// starts again: with [`CACHE_MAX_PX`], the caches of the four faces stay
+/// under about 4 × (`CACHE_BYTES` + one glyph) whatever a page draws.
+pub const CACHE_BYTES: usize = 4 << 20;
+
+/// Slots for the glyphs above [`CACHE_MAX_PX`], per face.
+pub const LARGE_SLOTS: usize = 2;
+
+/// A glyph as the walk shapes it: its source and id, and its origin's x in
+/// pixels from the text's origin; `mark` for a combining mark, which sits
+/// over the glyph before it.
+#[derive(Clone, Copy)]
+struct Shaped {
+    source: GlyphSource,
+    glyph: u16,
+    x: i64,
+    mark: bool,
+}
+
+/// `zoraya-text`'s [`Simple`] shaper, left to right one character at a
+/// time, so that a call can stop where it has its answer: one glyph per
+/// character, its advance and `kern` format 0 pairs, marks at no advance
+/// over the glyph before. The pen is 26.6 in `i64`, so it does not
+/// saturate as `Simple`'s `i32` does past 33 million pixels; below that the
+/// two agree.
+struct Walk<'f> {
+    fonts: &'f FontList<'static>,
+    px: u32,
+    pen: i64,
+    last_origin: i64,
+    previous: Option<(GlyphSource, u16)>,
+    steps: u64,
+}
+
+impl<'f> Walk<'f> {
+    fn new(fonts: &'f FontList<'static>, px: u32) -> Walk<'f> {
+        Walk {
+            fonts,
+            px: zoraya_text::clamp_px(px),
+            pen: 0,
+            last_origin: 0,
+            previous: None,
+            steps: 0,
+        }
+    }
+
+    /// Shapes `c`, which is not invisible.
+    fn step(&mut self, c: char) -> Shaped {
+        self.steps += 1;
+        let (source, glyph) = self.fonts.lookup(c);
+        if zoraya_text::is_combining(c) {
+            return Shaped {
+                source,
+                glyph,
+                x: self.last_origin,
+                mark: true,
+            };
+        }
+        if let (Some((ps, pg)), GlyphSource::Font(i)) = (self.previous, source)
+            && ps == source
+            && let Some(f) = self.fonts.fonts().get(i as usize)
+        {
+            self.pen += i64::from(raster::scale(
+                f.kerning(pg, glyph) as i32,
+                self.px,
+                f.units_per_em,
+            ));
+        }
+        let x = round(self.pen);
+        self.last_origin = x;
+        self.pen += i64::from(self.fonts.advance(source, glyph, self.px));
+        self.previous = Some((source, glyph));
+        Shaped {
+            source,
+            glyph,
+            x,
+            mark: false,
+        }
+    }
+
+    /// The advance of what was shaped, in pixels.
+    fn advance(&self) -> i64 {
+        round(self.pen)
+    }
+}
+
+/// A 26.6 value to the nearest pixel, halves up, as `Simple` rounds.
+fn round(v: i64) -> i64 {
+    (v + i64::from(raster::ONE / 2)).div_euclid(i64::from(raster::ONE))
+}
+
+fn to_i32(v: i64) -> i32 {
+    v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+/// A face: its text (fonts and cache) and the slots of its large glyphs.
+struct FaceText {
+    text: Text<'static>,
+    large: GlyphCache,
 }
 
 /// The four faces, loaded.
 pub struct Fontset {
-    faces: Vec<Text<'static>>,
+    faces: Vec<FaceText>,
     loaded: [bool; 4],
+    steps: u64,
 }
 
 impl Fontset {
@@ -189,13 +289,18 @@ impl Fontset {
         let loaded = [0, 1, 2, 3].map(|i| fonts[i].is_some());
         let faces = Face::ALL
             .iter()
-            .map(|f| {
-                Text::new(FontList::new(
+            .map(|f| FaceText {
+                text: Text::new(FontList::new(
                     f.files().iter().filter_map(|&i| fonts[i].clone()),
-                ))
+                )),
+                large: GlyphCache::new(LARGE_SLOTS),
             })
             .collect();
-        Fontset { faces, loaded }
+        Fontset {
+            faces,
+            loaded,
+            steps: 0,
+        }
     }
 
     /// How many of [`FILES`] were read and parsed.
@@ -203,13 +308,9 @@ impl Fontset {
         self.loaded.iter().filter(|l| **l).count()
     }
 
-    fn text(&mut self, face: Face) -> &mut Text<'static> {
-        &mut self.faces[face.index()]
-    }
-
     /// The fonts of a face, in fallback order.
     pub fn fonts(&self, face: Face) -> &FontList<'static> {
-        &self.faces[face.index()].fonts
+        &self.faces[face.index()].text.fonts
     }
 
     /// The ascent, descent and gap of a face at `px`.
@@ -217,99 +318,164 @@ impl Fontset {
         self.fonts(face).metrics(px)
     }
 
-    fn line(&mut self, face: Face, px: u32, bytes: &[u8]) -> Line {
-        // The shaped text, without the invisible characters, and for each
-        // input character the index of its glyph in it (or none).
-        let mut shaped = String::new();
-        let mut chars: Vec<(usize, Option<usize>, bool)> = Vec::new();
-        let mut spaces = Vec::new();
-        let mut n = 0usize;
+    /// The characters shaped since the set was made: the work of the calls,
+    /// for tests and measurement.
+    pub fn shaped(&self) -> u64 {
+        self.steps
+    }
+
+    /// The bytes of coverage the glyph caches of the four faces hold.
+    pub fn cache_bytes(&self) -> usize {
+        self.faces
+            .iter()
+            .map(|f| f.text.cache.bytes() + f.large.bytes())
+            .sum()
+    }
+
+    /// Calls `at` with every character boundary of `bytes` in order: its
+    /// byte offset, its x, and whether a space (U+0020, not at offset 0)
+    /// starts there; then with `len` and the advance. The x of a boundary is
+    /// the pen before the character's glyph, or for a mark or an invisible
+    /// character that of the next glyph that is neither (a mark sits over
+    /// the glyph before it, so the boundary before it is after that glyph);
+    /// it never goes back. Stops when `at` gives false. Gives the advance
+    /// of the part shaped.
+    fn boundaries(
+        &mut self,
+        face: Face,
+        px: u32,
+        bytes: &[u8],
+        mut at: impl FnMut(usize, i64, bool) -> bool,
+    ) -> i64 {
+        let mut walk = Walk::new(&self.faces[face.index()].text.fonts, px);
+        let mut pending: Option<usize> = None;
+        let mut last = 0i64;
+        let mut done = false;
         for (offset, c) in decode(bytes) {
-            if c == ' ' && offset > 0 {
-                spaces.push(offset);
-            }
             if is_invisible(c) {
-                chars.push((offset, None, false));
+                pending.get_or_insert(offset);
                 continue;
             }
-            shaped.push(c);
-            chars.push((offset, Some(n), zoraya_text::is_combining(c)));
-            n += 1;
-        }
-        let mut glyphs = Vec::with_capacity(n);
-        let text = self.text(face);
-        let advance = Simple.shape(&text.fonts, &shaped, px, &mut glyphs);
-        // The pen before a character: its glyph's origin, or for a mark or
-        // an invisible character that of the next base (a mark sits over the
-        // glyph before it, so the boundary before it is after that glyph).
-        let mut bounds = Vec::with_capacity(chars.len() + 1);
-        bounds.resize(chars.len() + 1, (bytes.len(), advance));
-        let mut next = advance;
-        for (k, (offset, glyph, mark)) in chars.iter().enumerate().rev() {
-            if let (Some(j), false) = (glyph, mark)
-                && let Some(g) = glyphs.get(*j)
-            {
-                next = g.x.min(next);
+            let g = walk.step(c);
+            if g.mark {
+                pending.get_or_insert(offset);
+                continue;
             }
-            bounds[k] = (*offset, next);
+            last = g.x.max(last);
+            if let Some(p) = pending.take() {
+                // The marks and invisible characters before this glyph,
+                // decoded again: no buffer that grows with them.
+                for (o, _) in decode(&bytes[p..offset]) {
+                    if !at(p + o, last, false) {
+                        done = true;
+                        break;
+                    }
+                }
+                if done {
+                    break;
+                }
+            }
+            if !at(offset, last, c == ' ' && offset > 0) {
+                done = true;
+                break;
+            }
         }
-        Line {
-            bounds,
-            spaces,
-            glyphs,
-            advance,
+        if !done {
+            let end = walk.advance().max(last);
+            if let Some(p) = pending {
+                for (o, _) in decode(&bytes[p..]) {
+                    if !at(p + o, end, false) {
+                        done = true;
+                        break;
+                    }
+                }
+            }
+            if !done {
+                at(bytes.len(), end, false);
+            }
         }
+        let advance = walk.advance();
+        self.steps += walk.steps;
+        advance
     }
 
     /// The advance of `bytes` (UTF-8) in pixels.
     pub fn width(&mut self, face: Face, px: u32, bytes: &[u8]) -> i32 {
-        self.line(face, px, bytes).advance
+        let mut walk = Walk::new(&self.faces[face.index()].text.fonts, px);
+        for (_, c) in decode(bytes) {
+            if !is_invisible(c) {
+                walk.step(c);
+            }
+        }
+        self.steps += walk.steps;
+        to_i32(walk.advance())
     }
 
     /// The character boundary nearest to `x` (the first of two as near):
-    /// its byte offset in `0..=len` and its x.
+    /// its byte offset in `0..=len` and its x. Shapes the text only up to
+    /// the first boundary past `x`.
     pub fn position(&mut self, face: Face, px: u32, bytes: &[u8], x: i32) -> (usize, i32) {
-        let line = self.line(face, px, bytes);
-        let mut best = (0usize, 0i32);
+        let x = i64::from(x);
+        let mut best = (0usize, 0i64);
         let mut distance = i64::MAX;
-        for &(o, bx) in &line.bounds {
-            let d = (bx as i64 - x as i64).abs();
+        self.boundaries(face, px, bytes, |o, bx, _| {
+            let d = (bx - x).abs();
             if d < distance {
                 distance = d;
                 best = (o, bx);
             }
-        }
-        best
+            // The boundaries never go back: past `x`, none is nearer.
+            bx <= x
+        });
+        (best.0, to_i32(best.1))
     }
 
     /// Where to break `bytes` to fit `x` (NetSurf's `split`): the offset of
     /// the last space whose start the text up to the first character that
     /// passes `x` reaches, else of the first space after it, else `len`;
-    /// never 0. With the x of that offset.
+    /// never 0. With the x of that offset. Shapes the text only up to the
+    /// first character past `x`, or to the first space after it.
     pub fn split(&mut self, face: Face, px: u32, bytes: &[u8], x: i32) -> (usize, i32) {
-        let line = self.line(face, px, bytes);
-        if line.advance <= x {
-            return (bytes.len(), line.advance);
+        let x = i64::from(x);
+        let len = bytes.len();
+        // The boundary before; the start of the character that passes x,
+        // once found; the last space before it; the answer.
+        let mut before: Option<usize> = None;
+        let mut over: Option<usize> = None;
+        let mut space: Option<(usize, i64)> = None;
+        let mut answer: Option<(usize, i64)> = None;
+        let advance = self.boundaries(face, px, bytes, |o, bx, is_space| {
+            if over.is_none() {
+                match before {
+                    Some(b) if bx > x => {
+                        over = Some(b);
+                        if space.is_some() {
+                            answer = space;
+                            return false;
+                        }
+                    }
+                    _ => {
+                        if is_space {
+                            space = Some((o, bx));
+                        }
+                        before = Some(o);
+                        return true;
+                    }
+                }
+            }
+            // Past the character that passes x: the first space after it.
+            if is_space {
+                answer = Some((o, bx));
+                return false;
+            }
+            true
+        });
+        // Without an answer the walk went to the end: `advance` is the
+        // whole text's.
+        match answer {
+            Some((o, bx)) => (o, to_i32(bx)),
+            None => (len, to_i32(advance)),
         }
-        let x_of = |offset: usize| {
-            line.bounds
-                .iter()
-                .find(|(o, _)| *o == offset)
-                .map_or(line.advance, |(_, bx)| *bx)
-        };
-        // The first character whose end passes x.
-        let over = line
-            .bounds
-            .windows(2)
-            .find(|w| w[1].1 > x)
-            .map_or(bytes.len(), |w| w[0].0);
-        if let Some(&s) = line.spaces.iter().rev().find(|&&s| s <= over) {
-            return (s, x_of(s));
-        }
-        if let Some(&s) = line.spaces.iter().find(|&&s| s > over) {
-            return (s, x_of(s));
-        }
-        (bytes.len(), line.advance)
     }
 
     /// Calls `plot` with every glyph of `bytes`, placed from the origin on
@@ -322,22 +488,40 @@ impl Fontset {
         bytes: &[u8],
         mut plot: impl FnMut(Glyph<'_>),
     ) -> i32 {
-        let line = self.line(face, px, bytes);
-        let text = self.text(face);
-        for g in &line.glyphs {
-            let b = text.cache.get(&text.fonts, g.source, g.glyph, px);
+        let px = zoraya_text::clamp_px(px);
+        let FaceText { text, large } = &mut self.faces[face.index()];
+        let fonts = &text.fonts;
+        let cache = &mut text.cache;
+        let mut walk = Walk::new(fonts, px);
+        for (_, c) in decode(bytes) {
+            if is_invisible(c) {
+                continue;
+            }
+            let g = walk.step(c);
+            let b = if px > CACHE_MAX_PX {
+                large.get(fonts, g.source, g.glyph, px)
+            } else {
+                let misses = cache.misses;
+                cache.get(fonts, g.source, g.glyph, px);
+                if cache.misses != misses && cache.bytes() > CACHE_BYTES {
+                    // Full: start again with the glyph just drawn.
+                    *cache = GlyphCache::default();
+                }
+                cache.get(fonts, g.source, g.glyph, px)
+            };
             if b.width == 0 || b.height == 0 {
                 continue;
             }
             plot(Glyph {
-                x: g.x.saturating_add(b.left),
-                y: g.y.saturating_add(b.top),
+                x: to_i32(g.x).saturating_add(b.left),
+                y: b.top,
                 width: b.width as u32,
                 height: b.height as u32,
                 coverage: &b.coverage,
             });
         }
-        line.advance
+        self.steps += walk.steps;
+        to_i32(walk.advance())
     }
 }
 

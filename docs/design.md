@@ -2127,6 +2127,15 @@ internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readabl
   from JetBrains Mono, then Inter); NetSurf's serif, cursive and fantasy take sans, weight 600 and up the bold face, italic is
   upright. Width, position and split keep NetSurf's meaning; U+200B to U+200F draw nothing; bytes that are not UTF-8 count one
   U+FFFD each. It reads the fonts only as `/system/fonts/NAME` for its four names (INV-0326-1).
+- **Bounds a page cannot raise** (T3, T4 of the 9f-text review). A page chooses the size, up to `zoraya-text`'s 512 pixels,
+  where one glyph holds about 100 KB of coverage. Glyphs above `CACHE_MAX_PX` (128 pixels) are not kept: each face has
+  `LARGE_SLOTS` (2) slots for them. Below that, a face's cache that passes `CACHE_BYTES` (4 MiB of coverage) is emptied and
+  starts again. The four faces' caches therefore stay under about 4 × (4 MiB + one 128-pixel glyph) plus 8 large glyphs, about
+  17 MiB, whatever a page draws (`the_glyph_caches_stay_bounded_whatever_the_size`). Width shapes the text once, with no
+  memory per character. Position and split shape only up to the first boundary past `x` (split also up to the next space), so
+  NetSurf's layout, which calls `split` on the rest of a box for every line, is linear in the text: 20,000 Cyrillic words
+  break into lines with about twice their characters shaped (`breaking_a_long_paragraph_into_lines_is_linear`), where shaping
+  the whole rest on every call was quadratic (1.1 s for 300 lines on the host).
 - **The C side.** `libc.a` exports `zoraya_text_init`, `_width`, `_position`, `_split`, `_metrics`, `_glyphs` and
   `zoraya_window_scale` (`crates/zoraya-posix/src/ffi/text.rs`, ADR-0326's block; `ports/netsurf/zoraya_text.h`).
   `ports/netsurf/font_zoraya.c` is NetSurf's font library (`NETSURF_FB_FONTLIB := zoraya`, `-DFB_USE_ZORAYA`, patch
@@ -2134,7 +2143,8 @@ internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readabl
   scale, so a page in points or CSS pixels is twice the pixels at scale 2 and the same in logical pixels; the toolbar keeps its
   pixel size (its field's text converts at the same dpi).
 - **The grant and the image.** A POSIX program whose description has `window` gets `/system/fonts` read only, "with the
-  window" (`zoraya_shell::grants::with_window`), shown by `grants` and as a pill; `tools/run-disk.sh` copies `fonts/` into the
+  window" (`zoraya_shell::grants::with_window`), shown by `grants` and as a pill; a line's own `+r /system/fonts` and a room
+  grant also give it, as they give any path (INV-0326-1's check covers only the implicit grant); `tools/run-disk.sh` copies `fonts/` into the
   disk's `/system/fonts` (in the disk's key: a person's disk from before 9f-text is kept as `.old` and a new one made).
 - **Tests.** `cargo test -p zoraya-fontset` (the paths read, every Russian and Ukrainian letter a non-blank glyph that is not
   the box at the sizes of scale 1 and 2, widths, position, split, any bytes); `cargo test -p zoraya-shell` (the grant);
