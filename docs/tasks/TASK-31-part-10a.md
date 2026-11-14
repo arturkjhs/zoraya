@@ -35,7 +35,7 @@ the task forbids (`make test`, `make test-par`, the candidate CI).
 | `make check-terminfo` | the four entries recompiled by the pinned `tic` equal `ports/terminfo.manifest`; the dump equals the pinned entry |
 | `tools/term-conformance/check.sh` | 287 capabilities: 99 covered by tests, 188 excepted with a reason (the keys, the mouse and paste marks are part 10b's) |
 | `python3 -I tools/term-record/compare-tmux.py` | 30 of 31 marks agree with tmux in text; the one that differs shows tmux's own display of the ACS set |
-| `GUI_RUNS=terminal:auto:1 make test-gui` | PASS, 100 steps (HVF, scale 1), after two scripts' faults found by running it: a highlight left on the screen by `less`'s search, and a scroll that moved the rows the script looked below |
+| `GUI_RUNS="terminal:auto:1 terminal:auto:2" make test-gui` (rerun at the final commit, after the mutation tests changed `zoraya-term`) | PASS, 100 and 100 steps (HVF); the first passing run was at scale 1, after two scripts' faults found by running it: a highlight left on the screen by `less`'s search, and a scroll that moved the rows the script looked below |
 | `GUI_RUNS="terminal:auto:2 windows:auto:1 wheel:auto:1" make test-gui` | PASS: 100, 63 and 79 steps |
 | `make test-qemu` | PASS: 119 passed, 9 expected failures (`t_text`, `t_gui` and the rest of the kernel and user tests build and run with the new `zoraya-term` and `zosh`) |
 
