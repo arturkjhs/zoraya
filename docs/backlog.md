@@ -233,3 +233,18 @@ states, to be taken up later:
   are kept from reading it.
 - Pseudo-terminals when `tmux` or an ssh server is wanted: stage 10 has none (ADR-0338: when one is needed it is a pair of handles
   from the broker, with no name; the pty functions stay on ADR-0342's guarded list until then).
+
+## Follow-ups from the architect's decisions of 2026-11-14 (after stage 9f)
+
+- CPython's `random` seeding from the time and the pid in an `os.fork` child (the review of the `getrandom` fix, finding 6), and a
+  nested `python3` that fails (one `python3` started by another), have one cause: a child has no random service connection.
+  TASK-31's part 10h closes both (ADR-0339 item 7: a child gets the random connection). The test belongs there: `os.urandom` works
+  in an `os.fork` child, and a `python3` started by `python3` creates a default SSL context.
+- The Ctrl-C defect on a continued job (the late Ctrl-C after `fg`, recorded by TASK-29's `scenarios.script` step V6) goes to
+  TASK-31's part 10c.
+- `work/test-fixes`, a small part after `stage-cxx`, beside TASK-31's first parts: the open items of the test and CI audit
+  (`docs/research/test-audit/report.md`): the remaining vacuous-test findings; the `test-crash` check and the `t_quota` handshake;
+  `Makefile` in `tools/test-map.txt`; the `libc.a` relink that rebuilds every port in the build job; the stale "not yet
+  applicable" invariant rows and `adr-check` accepting any text after `checked:`; checks for INV-0172-4 and INV-0230-1.
+- A URL operand's name rule is public-only for curl and wget too, not only for NetSurf (ADR-0328, extended by the architect on
+  2026-11-14): done in `work/9g-url` when it merges; until then curl and wget keep ADR-0223's name rule.
