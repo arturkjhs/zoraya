@@ -62,7 +62,7 @@
 > grants curl -O https://x.example/y\r
 < create or replace y (option -O)
 < /system/tls          read (with the network)
-< net: x.example:443           reach (operand URL)
+< net: x.example:443           reach, public answers only (operand URL)
 < \r\n~>
 # `ping` (TASK-26, hand-run): echo requests to the gateway, which SLIRP answers.
 > ping 10.0.2.2\r

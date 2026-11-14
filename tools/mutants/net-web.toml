@@ -260,3 +260,14 @@ replace = '''
             let local = is_local(stack, **a, now_us);'''
 note = "the lookup's answer ends at the first refused address"
 tests = ["cargo test -q -p zoraya-net --lib mixed_answers"]
+
+# The architect's decision of 2026-11-14 on ADR-0328's open question: curl and
+# wget take a URL's name with its public answers only.
+
+[[mutant]]
+id = "U-shell-posix-url-name-rule-kept"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'let posix = line.base_system && d.program.is_some();'
+replace = 'let posix = false;'
+note = "curl and wget keep the URL's name rule, which takes private answers"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]

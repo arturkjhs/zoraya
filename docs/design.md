@@ -2093,7 +2093,8 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   for one round trip. It is not a cancellation point (musl's and glibc's are). A `fork` child's Python seeds `random` from the
   time and pid (CPython's own fallback when `os.urandom` fails); `secrets`, `os.urandom`, `ssl` and the hash seed fail loudly.
 - **The grants.** `user/describe/posix/curl.cmd` and `wget.cmd` are the image's own descriptions: a literal `url` operand
-  gives a connection that reaches that host and port (as for `zfetch`), and with it `/system/tls` read-only (a POSIX program is
+  gives a connection that reaches that host and port (as for `zfetch`; since 9g-url a name only through its public,
+  non-local answers, ADR-0328: `+net NAME` for a host of the local network), and with it `/system/tls` read-only (a POSIX program is
   given directories only, and the directory holds the roots file alone: `make check-tls-roots`). `grants curl -O
   https://x.example/y` shows `create or replace y (option -O)` for the current directory (the descriptions say `cwd none`:
   the program is given that one name, as a directory handle narrowed to it, and nothing else of the directory; a line that
@@ -2262,8 +2263,9 @@ the architect (2026-11-14).
   descriptions the rule `Public`, ports 80 and 443, TCP, beside the line's `+net` words and the URL operand's rule (a URL
   from a value still needs a `+net` word). Under `net web` a literal URL whose host is a name gives no rule on ports 80
   and 443 and a public-only name rule on another port (ADR-0328, INV-0328-1); a dotted address keeps its address rule,
-  and a `+net` word that covers the URL keeps ADR-0223's rule (local answers included); curl and wget, without
-  `net web`, keep the name rule. `grants netsurf` prints `net: web  reach public hosts, ports 80 and 443; not
+  and a `+net` word that covers the URL keeps ADR-0223's rule (local answers included). Every POSIX program of the image
+  without `net web` (curl, wget, `zfetch`, `tlsthreads`) gets the public-only name rule for a URL's name on its port, 80
+  and 443 included (the architect's decision of 2026-11-14); the native `fetch` keeps ADR-0224's name rule. `grants netsurf` prints `net: web  reach public hosts, ports 80 and 443; not
   this machine or its network (description)`; the window's pills come from `netgrant::pills`: `web` for the rule, `+net
   HOST:PORT` for the others, `+net HOST:PORT public` for a public-only name (its `grants` line: `reach, public answers only
   (operand URL)`). In an untrusted room the line is refused by the network refusal of the gate (ADR-0268 point
@@ -2305,7 +2307,10 @@ the architect (2026-11-14).
   question). The page is drawn in the window's body, which a site also draws; it grants nothing and has nothing to click.
   curl and wget still give only their own messages (ADR-0224 item 5's `REPORT` hint is not built). Under NetSurf an
   intranet URL (a name with private answers) needs `+net HOST` or `+net HOST:PORT`, which the refusal page offers;
-  curl and wget keep the URL's name rule, which can rebind into the LAN on the URL's port (ADR-0328's open question).
+  curl and wget likewise: a name whose answers are all private or local fails as a name that does not resolve
+  (`curl: (6) Could not resolve host: NAME`, wget's own message, exit 6 and 4), with no page and no hint of the
+  `+net NAME` word that allows it. The native `fetch` keeps the URL's name rule (it can still rebind into the LAN on the
+  URL's port).
   A public-only name's pill (`+net HOST:PORT public`) is 7 bytes longer than a `+net` word's, so a host of about 190
   bytes on a long port gives a pill past the panel's 200 bytes, and the window is refused (fails closed).
   Other hosts of a public on-link subnet are not local.

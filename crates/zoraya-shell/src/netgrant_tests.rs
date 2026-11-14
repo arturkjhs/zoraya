@@ -705,7 +705,7 @@ fn under_web_a_url_name_on_another_port_adds_a_public_only_rule() {
 /// ADR-0328: a dotted address keeps its own rule (it does not rebind), a
 /// `+net` word that covers the URL keeps ADR-0223's rule (the person named
 /// the host, local answers included), a URL from a value still needs a word,
-/// and curl and wget (no `net web`) keep the URL's name rule.
+/// and the native `fetch` keeps the URL's name rule.
 #[test]
 fn under_web_an_address_a_net_word_and_programs_without_web_keep_their_rules() {
     use zoraya_abi::net::{NameGrant, Target};
@@ -749,13 +749,11 @@ fn under_web_an_address_a_net_word_and_programs_without_web_keep_their_rules() {
         );
     }
     assert!(go(NETSURF, &[("http://example.org:8080/", false)], true).is_err());
-    for d in [CURL, WGET] {
-        for url in ["http://example.org/", "http://example.org:8080/"] {
-            let ok = go(d, &[(url, true)], true).unwrap().expect("a scope");
-            let t = targets(&ok.1);
-            assert_eq!(t.len(), 1, "{t:?}");
-            assert!(t[0].starts_with("Name(\"example.org\")"), "{t:?}");
-        }
+    for url in ["http://example.org/", "http://example.org:8080/"] {
+        let ok = go(FETCH, &[(url, true)], true).unwrap().expect("a scope");
+        let t = targets(&ok.1);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert!(t[0].starts_with("Name(\"example.org\")"), "{t:?}");
     }
     // Outside the image (`base_system` false) a `url` operand gives no rule
     // at all: `net_for` reads operands only for the image's descriptions.
@@ -823,4 +821,64 @@ fn a_long_host_keeps_its_pill_and_its_grants_line_apart() {
             "net: a-very-long-host-name.example.org:8080 reach (grant +net)"
         )]
     );
+}
+
+/// The architect's decision of 2026-11-14 on ADR-0328's open question: curl
+/// and wget (no `net web`) take a literal URL's name with its public answers
+/// only, on its port, 80 and 443 included; a dotted address keeps its rule,
+/// a `+net` word that covers the URL keeps ADR-0223's rule, a URL from a
+/// value still needs a word.
+#[test]
+fn curl_and_wget_take_a_url_name_with_public_answers_only() {
+    use zoraya_abi::net::{NameGrant, Target};
+    for d in [CURL, WGET] {
+        for (url, port) in [
+            ("http://Test.Zoraya/", 80),
+            ("https://test.zoraya/", 443),
+            ("https://test.zoraya:8443/x", 8443),
+        ] {
+            let ok = go(d, &[(url, true)], true).unwrap().expect("a scope");
+            assert_eq!(ok.0, rights::REACH);
+            let s = Scope::decode(&ok.1).unwrap();
+            let rules: Vec<_> = s.reach_rules().collect();
+            assert_eq!(rules.len(), 1, "{url}");
+            assert_eq!(rules[0].target, Target::PublicName("test.zoraya"), "{url}");
+            assert_eq!(rules[0].ports.list(), &[(port, port)], "{url}");
+            assert_eq!(rules[0].protocols, Protocols::TCP);
+            assert_eq!(
+                s.name_grant("test.zoraya", port, Protocols::TCP),
+                NameGrant::PublicOnly,
+                "{url}"
+            );
+            assert!(!s.allows_name("test.zoraya", port, Protocols::TCP));
+            assert_eq!(s.resolve_grant("test.zoraya"), NameGrant::PublicOnly);
+            assert!(!s.reaches_address([10, 0, 2, 2]));
+            assert_eq!(
+                crate::netgrant::pills(&ok.1),
+                vec![alloc::format!("+net test.zoraya:{port} public")]
+            );
+            // A +net word that names the host: ADR-0223's rule, no public-only
+            // rule beside it.
+            let named = go_nets(d, &[(url, true)], &["test.zoraya"], true)
+                .unwrap()
+                .expect("a scope");
+            let s = Scope::decode(&named.1).unwrap();
+            assert_eq!(
+                s.name_grant("test.zoraya", port, Protocols::TCP),
+                NameGrant::Named
+            );
+            assert!(
+                s.reach_rules()
+                    .all(|r| !matches!(r.target, Target::PublicName(_)))
+            );
+        }
+        // A dotted address keeps its own rule, a private one included.
+        let address = go(d, &[("http://10.0.2.2:8080/", true)], true)
+            .unwrap()
+            .expect("a scope");
+        let s = Scope::decode(&address.1).unwrap();
+        assert!(s.names_address([10, 0, 2, 2], 8080, Protocols::TCP));
+        // From a value: refused without a word.
+        assert!(go(d, &[("http://test.zoraya/", false)], true).is_err());
+    }
 }

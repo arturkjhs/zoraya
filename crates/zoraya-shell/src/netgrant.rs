@@ -128,7 +128,9 @@ pub fn parse_word(text: &str) -> Result<NetWord, String> {
 /// whose host is a name gives no rule that names the name: on the web rule's
 /// ports (80, 443) it gives none (the web rule admits the name through its
 /// public answers), on another port a public-only name rule
-/// ([`Target::PublicName`]). A dotted address keeps its own rule (the person
+/// ([`Target::PublicName`]). For a POSIX program of the image without
+/// `net web` (curl, wget) the URL's name gives a public-only name rule on its
+/// port, 80 and 443 included (the architect, 2026-11-14). A dotted address keeps its own rule (the person
 /// typed the address, which does not rebind), and a `+net` word that covers
 /// the URL keeps ADR-0223's rule (the person named the host).
 pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
@@ -191,9 +193,15 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
             }
             if literal && !covered {
                 let web = d.net_web && line.base_system;
+                // A POSIX program of the image (curl, wget, NetSurf, the
+                // test programs) takes a URL's name with its public answers
+                // only, on any port: the architect's decision of 2026-11-14
+                // on ADR-0328's open question. The native `fetch` keeps
+                // ADR-0224's name rule.
+                let posix = line.base_system && d.program.is_some();
                 match word.target {
-                    Named::Name(name) if web => {
-                        if !web_port(url.port) {
+                    Named::Name(name) if web || posix => {
+                        if !(web && web_port(url.port)) {
                             words.push(NetWord {
                                 target: Named::PublicName(name),
                                 ..word

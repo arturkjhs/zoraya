@@ -35,10 +35,31 @@
 < Zoraya test page
 < fetched over HTTP, byte for byte
 < \r\n~>
-> wget -q -O big.bin http://test.zoraya:@PORT@/chunked/300000\r
+> +net test.zoraya:@PORT@ wget -q -O big.bin http://test.zoraya:@PORT@/chunked/300000\r
 < \r\n~>
 > stat big.bin\r
 < file size 300000
+< \r\n~>
+# A URL's name reaches its public answers only (ADR-0328, the architect's
+# decision of 2026-11-14): test.zoraya is 10.0.2.2 in net.hosts, so without a
+# +net word curl and wget may not use its answer (the lookup is refused, and
+# they say the name does not resolve); with the word they reach it.
+> curl http://test.zoraya:@PORT@/\r
+< curl: (6) Could not resolve: test.zoraya
+< \r\n~>
+> status\r
+< \r\nexit status 6
+< \r\n~>
+> +net test.zoraya:@PORT@ curl -s http://test.zoraya:@PORT@/\r
+< Zoraya test page
+< \r\n~>
+> wget -O - http://test.zoraya:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 4
+< \r\n~>
+> +net test.zoraya wget -q -O - http://test.zoraya:@PORT@/\r
+< Zoraya test page
 < \r\n~>
 > wget -q -O more.bin http://10.0.2.2:@PORT@/close/70000\r
 < \r\n~>
@@ -67,20 +88,20 @@
 # HTTPS against the test PKI's root: the handshake draws on getrandom (a
 # program with no random connection cannot start one), the certificate is
 # checked against the system's date, the roots and the name in the address.
-> curl -s https://test.zoraya:@TLSVALID@/\r
+> +net test.zoraya:@TLSVALID@ curl -s https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < fetched over HTTP, byte for byte
 < \r\n~>
-> wget -q -O - https://test.zoraya:@TLSVALID@/\r
+> +net test.zoraya:@TLSVALID@ wget -q -O - https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < fetched over HTTP, byte for byte
 < \r\n~>
-> curl -sO https://test.zoraya:@TLSVALID@/pattern/70000\r
+> +net test.zoraya:@TLSVALID@ curl -sO https://test.zoraya:@TLSVALID@/pattern/70000\r
 < \r\n~>
 > stat 70000\r
 < file size 70000
 < \r\n~>
-> wget -q -O tls.bin https://test.zoraya:@TLSVALID@/pattern/1000000\r
+> +net test.zoraya:@TLSVALID@ wget -q -O tls.bin https://test.zoraya:@TLSVALID@/pattern/1000000\r
 < \r\n~>
 > stat tls.bin\r
 < file size 1000000
@@ -89,19 +110,19 @@
 # one context. Against the valid server every handshake succeeds and returns the
 # page; against the expired and the wrong-name servers all are refused (the
 # Makefile checks that the servers saw no request byte).
-> tlsthreads https://test.zoraya:@TLSVALID@/\r
+> +net test.zoraya:@TLSVALID@ tlsthreads https://test.zoraya:@TLSVALID@/\r
 < 12 handshakes from 4 threads, all verified and served
 < \r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)
 < \r\n~>
-> tlsthreads -r expired https://expired.zoraya:@TLSEXPIRED@/\r
+> +net expired.zoraya:@TLSEXPIRED@ tlsthreads -r expired https://expired.zoraya:@TLSEXPIRED@/\r
 < 12 handshakes from 4 threads, all refused
 < \r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)
 < \r\n~>
-> tlsthreads -r name https://wrong.zoraya:@TLSWRONG@/\r
+> +net wrong.zoraya:@TLSWRONG@ tlsthreads -r name https://wrong.zoraya:@TLSWRONG@/\r
 < 12 handshakes from 4 threads, all refused
 < \r\n~>
 > status\r
@@ -117,32 +138,32 @@
 < \r\n~>
 # Refused before any byte of the request is sent; the Makefile checks the
 # server's log for the same. There is no option to turn the check off.
-> curl https://expired.zoraya:@TLSEXPIRED@/\r
+> +net expired.zoraya:@TLSEXPIRED@ curl https://expired.zoraya:@TLSEXPIRED@/\r
 < certificate has expired
 < \r\n~>
 > status\r
 < \r\nexit status 60
 < \r\n~>
-> wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
+> +net expired.zoraya:@TLSEXPIRED@ wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
 < Issued certificate has expired.
 < \r\n~>
 > status\r
 < \r\nexit status 5
 < \r\n~>
-> curl https://wrong.zoraya:@TLSWRONG@/\r
+> +net wrong.zoraya:@TLSWRONG@ curl https://wrong.zoraya:@TLSWRONG@/\r
 < no alternative certificate subject name matches target hostname 'wrong.zoraya'
 < \r\n~>
 > status\r
 < \r\nexit status 60
 < \r\n~>
-> wget -O - https://wrong.zoraya:@TLSWRONG@/\r
+> +net wrong.zoraya:@TLSWRONG@ wget -O - https://wrong.zoraya:@TLSWRONG@/\r
 < no certificate subject alternative name matches
 < \r\n~>
 > status\r
 < \r\nexit status 5
 < \r\n~>
 # A plain server on an HTTPS address is no TLS server.
-> curl -s https://test.zoraya:@PORT@/\r
+> +net test.zoraya:@PORT@ curl -s https://test.zoraya:@PORT@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 35
@@ -175,7 +196,7 @@
 > grants curl -O https://x.example/y\r
 < curl gets (a POSIX program):
 < the terminal\r\n  ~                    create or replace y (option -O)\r\n  /system/tls          read (with the network)\r\n  /bin /usr /etc       read (system)
-< net: x.example:443           reach (operand URL)
+< net: x.example:443           reach, public answers only (operand URL)
 < \r\n~>
 > grants curl --help\r
 < the terminal\r\n  /bin /usr /etc       read (system)
@@ -186,7 +207,7 @@
 > grants wget -O out.txt https://x.example/y\r
 < wget gets (a POSIX program):
 < the terminal\r\n  ~                    create or replace out.txt (option -O)\r\n  /system/tls          read (with the network)
-< net: x.example:443           reach (operand URL)
+< net: x.example:443           reach, public answers only (operand URL)
 < \r\n~>
 # A name the shell cannot be sure of is refused before the program runs.
 > curl -O https://x.example/\r
@@ -255,15 +276,15 @@
 < \r\n~>
 > echo check_certificate = off > .wgetrc\r
 < \r\n~>
-> +r . curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+> +r . +net expired.zoraya:@TLSEXPIRED@ curl -s https://expired.zoraya:@TLSEXPIRED@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 60
 < \r\n~>
-> +r . curl https://wrong.zoraya:@TLSWRONG@/\r
+> +r . +net wrong.zoraya:@TLSWRONG@ curl https://wrong.zoraya:@TLSWRONG@/\r
 < no alternative certificate subject name matches target hostname 'wrong.zoraya'
 < \r\n~>
-> +r . wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
+> +r . +net expired.zoraya:@TLSEXPIRED@ wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
 < Issued certificate has expired.
 < \r\n~>
 > status\r
@@ -273,7 +294,7 @@
 < \r\n~>
 > export SYSTEM_WGETRC .wgetrc\r
 < \r\n~>
-> +r . wget -O - https://wrong.zoraya:@TLSWRONG@/\r
+> +r . +net wrong.zoraya:@TLSWRONG@ wget -O - https://wrong.zoraya:@TLSWRONG@/\r
 < no certificate subject alternative name matches
 < \r\n~>
 > status\r
@@ -284,10 +305,10 @@
 < \r\n~>
 > echo no_such_command = on > .wgetrc\r
 < \r\n~>
-> +r . curl -s https://test.zoraya:@TLSVALID@/\r
+> +r . +net test.zoraya:@TLSVALID@ curl -s https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
-> +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
+> +r . +net test.zoraya:@TLSVALID@ wget -q -O - https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
 # Variables that name roots or a configuration file that EXISTS and would
@@ -323,23 +344,23 @@
 < \r\n~>
 > export OPENSSL_CONF ossl.cnf\r
 < \r\n~>
-> +r . curl -s https://test.zoraya:@TLSVALID@/\r
+> +r . +net test.zoraya:@TLSVALID@ curl -s https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
-> +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
+> +r . +net test.zoraya:@TLSVALID@ wget -q -O - https://test.zoraya:@TLSVALID@/\r
 < Zoraya test page
 < \r\n~>
-> +r . curl -s https://wrong.zoraya:@TLSWRONG@/\r
+> +r . +net wrong.zoraya:@TLSWRONG@ curl -s https://wrong.zoraya:@TLSWRONG@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 60
 < \r\n~>
-> +r . curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+> +r . +net expired.zoraya:@TLSEXPIRED@ curl -s https://expired.zoraya:@TLSEXPIRED@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 60
 < \r\n~>
-> +r . wget -q -O - https://expired.zoraya:@TLSEXPIRED@/\r
+> +r . +net expired.zoraya:@TLSEXPIRED@ wget -q -O - https://expired.zoraya:@TLSEXPIRED@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 5

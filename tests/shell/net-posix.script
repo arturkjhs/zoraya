@@ -26,7 +26,7 @@
 < \r\n~>
 # By name: getaddrinfo asks netd (net.hosts gives test.zoraya), and connect
 # goes by the name it came from (INV-0225-2).
-> zfetch --sum http://test.zoraya:@PORT@/chunked/300000\r
+> +net test.zoraya:@PORT@ zfetch --sum http://test.zoraya:@PORT@/chunked/300000\r
 < 300000 bytes fnv1a @SUM300K@ in
 < \r\n~>
 # More than the rings and the socket buffers hold.

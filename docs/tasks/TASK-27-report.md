@@ -1063,3 +1063,24 @@ name rule that took a later answer of 192.168.1.1, a GET to the router).
   asserts the opposite). The table row (`checked: make test-unit`) is left as it is, as told; it is true of the
   proposed text only.
 
+
+### 9g-url: curl and wget take a URL's name with its public answers only (the architect, 2026-11-14)
+
+- **What changed.** ADR-0328's open question, decided: a grant derived from a URL operand whose host is a name reaches
+  public addresses only. `net_for` gives every POSIX program of the image without `net web` (curl, wget, and the test
+  programs `zfetch` and `tlsthreads`, which share the per-URL rule) the public-only name rule on the URL's port, 80
+  and 443 included; a dotted address keeps its rule; a covering `+net` word keeps ADR-0223's rule; a URL from a value
+  still needs a word. Their pill would be `+net HOST:PORT public` and `grants` says `reach, public answers only
+  (operand URL)`. The native `fetch` (not a POSIX program) keeps ADR-0224's name rule: **for the architect**, whether it
+  takes the same rule (its tests in `net-fetch`, `net-dns` and `net-lookup` use names of 10.0.2.2).
+- **What a refused name looks like.** curl and wget have no refusal page: the lookup is `NotGranted`
+  (`EAI_SYSTEM`/`EACCES`), so curl prints `curl: (6) Could not resolve: test.zoraya:PORT` (exit 6), and wget
+  `Resolving test.zoraya... failed: Permission denied.` and `wget: unable to resolve host address 'test.zoraya'`
+  (exit 4), with no hint of the `+net` word (ADR-0224 item 5's `REPORT` is not built). wget's run also printed its
+  existing `~/.netrc` hint.
+- **Tests.** `curl_and_wget_take_a_url_name_with_public_answers_only` (`zoraya-shell`); mutant
+  `U-shell-posix-url-name-rule-kept`; `tests/shell/apps.script`: `curl` and `wget` of `http://test.zoraya:PORT/`
+  (10.0.2.2 in `net.hosts`) refused without a word and fetched with `+net test.zoraya[:PORT]`. The script's other
+  lines by name (`test.zoraya`, `expired.zoraya`, `wrong.zoraya`, all 10.0.2.2) now type `+net HOST:PORT`, as do
+  `net-posix.script`'s `zfetch` line; the two lines that do not parse (`curl -k`, `wget --no-check-certificate`) give
+  no network and are unchanged; the `grants curl`/`grants wget` lines read `reach, public answers only`.
