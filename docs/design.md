@@ -2151,7 +2151,8 @@ internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readabl
   `make test-netsurf`: the page `/ns/cyrillic` of `tools/test-httpd` at scale 1 (`tests/gui/netsurf.script`) and in a second
   boot at scale 2 (`tests/gui/netsurf-text.script`), with the runner's `ink` step (at least N pixels not the background) and a
   line of ten і that ends where a line of ten ж goes on (`docs/netsurf/netsurf-cyrillic.png`, `netsurf-cyrillic-2.png`).
-- **Limits.** No italic face; no kerning (Inter's is in GPOS, ADR-0162); the toolbar is not scaled; the time text measuring
+- **Limits.** No italic face; no kerning (Inter's is in GPOS, ADR-0162); the toolbar is not scaled; at scale 3 the dpi is
+  clamped to NetSurf's 250, so the page is 2.78 times, not 3 (the review's T8); the time text measuring
   takes per page is not measured (ADR-0318's 5% trigger); the native GUI programs still embed their fonts (ADR-0240).
   Whether `CLAUDE.md`'s licence rule names OFL-1.1 for unmodified font files is proposed ADR-0327.
 
