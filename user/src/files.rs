@@ -241,7 +241,16 @@ impl File {
                 return check(r.status.0).map(|()| Ok(client));
             }
             let remaining = r.remaining.0;
-            let consumed = &path[..path.len() - remaining.len()];
+            // The server's `remaining` is a suffix of what was asked; one
+            // that is not is refused, not trusted (check of open_or_link, C3).
+            let Some(cut) = path
+                .len()
+                .checked_sub(remaining.len())
+                .filter(|c| path.is_char_boundary(*c))
+            else {
+                return Err(status::INVALID_ARGUMENT);
+            };
+            let consumed = &path[..cut];
             let consumed = consumed.trim_end_matches('/');
             let dir = consumed.rsplit_once('/').map_or("", |(d, _)| d);
             let target = r.target.0;
@@ -293,7 +302,14 @@ impl File {
             }
             followed = true;
             let remaining = r.remaining.0.trim_start_matches('/');
-            let consumed = rel[..rel.len() - r.remaining.0.len()].trim_end_matches('/');
+            let Some(cut) = rel
+                .len()
+                .checked_sub(r.remaining.0.len())
+                .filter(|c| rel.is_char_boundary(*c))
+            else {
+                return Err(status::INVALID_ARGUMENT);
+            };
+            let consumed = rel[..cut].trim_end_matches('/');
             let dir = consumed.rsplit_once('/').map_or("", |(d, _)| d);
             let at = zoraya_resolve::join("/", 0, dir);
             let next = zoraya_resolve::join(&at, 0, r.target.0);

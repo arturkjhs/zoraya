@@ -256,6 +256,49 @@ pub fn follow(
     place(prefixes.iter().copied(), joined, directory)
 }
 
+/// What one open through an entry of a shell's table gave: the object, or
+/// the path a link on the way leads to, absolute (from `/`) or relative to
+/// the entry (the link's directory already in front).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Hop<T> {
+    Opened(T),
+    Link(String),
+}
+
+/// A shell's open of `abs` through its table, following links (10e: the
+/// room's `/bin/tr -> /usr/libexec/toybox`). Each hop goes back through the
+/// table: the directory entry with the longest prefix that covers the path
+/// below its root is opened by `open(entry, rest)`, which applies that
+/// entry's own rights; a path no such entry covers goes to `direct`, which
+/// refuses what the table does not hold. A target is normalised before the
+/// lookup, so `..` cannot leave `/`; the walk ends after [`MAX_LINKS`] hops
+/// with `looped`.
+pub fn walk_table<T, E>(
+    prefixes: &[&str],
+    directories: &[bool],
+    abs: &str,
+    mut open: impl FnMut(usize, &str) -> Result<Hop<T>, E>,
+    mut direct: impl FnMut(&str) -> Result<T, E>,
+    looped: E,
+) -> Result<T, E> {
+    let mut abs = join("/", 0, abs);
+    for _ in 0..MAX_LINKS {
+        let Some((entry, rest)) = longest(prefixes.iter().copied(), &abs) else {
+            return direct(&abs);
+        };
+        if !directories.get(entry).copied().unwrap_or(false) || rest.is_empty() {
+            return direct(&abs);
+        }
+        let rest = String::from(rest);
+        abs = match open(entry, &rest)? {
+            Hop::Opened(t) => return Ok(t),
+            Hop::Link(next) if next.starts_with('/') => join("/", 0, &next),
+            Hop::Link(next) => join(prefixes[entry], 0, &next),
+        };
+    }
+    Err(looped)
+}
+
 /// Counts links in one resolution: [`Error::TooManyLinks`] past `MAX_LINKS`.
 #[derive(Debug, Default)]
 pub struct Links(u32);

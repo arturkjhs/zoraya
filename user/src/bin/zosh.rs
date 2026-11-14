@@ -528,35 +528,32 @@ impl Held {
         }
     }
 
-    /// As `open`, following links. A table follows them inside the
-    /// covering entry only, through its own connection: a relative link
-    /// (the toolchain's `tr -> busybox`) resolves as on the volume; an
-    /// absolute one resolves from the entry, so it may not be found, and
-    /// never leads out of the entry.
+    /// As `open`, following links. A table follows them through the table
+    /// (`zoraya_resolve::walk_table`): each hop is opened through the entry
+    /// that covers it, with that entry's rights (a link from a `+w`
+    /// directory into a read one opens read only), a target is normalised
+    /// so `..` cannot leave `/`, a path no entry covers is refused by
+    /// `open`, and the walk ends after 40 links.
     fn open_followed(&self, rel: &str, flags: u32, wanted: u32) -> FsResult<File> {
         match self {
             Held::Root(f) => f.open_followed(rel, flags, wanted),
-            Held::Table(_) => {
-                // A link is followed through the table: an absolute target
-                // (`/bin/tr -> /usr/libexec/toybox`) lies under another
-                // entry than the link (10e, the room's `tr`).
-                let mut abs = format!("/{}", rel.trim_start_matches('/'));
-                for _ in 0..40 {
-                    let Some((e, rest)) = self.covering(&abs) else {
-                        return self.open(&abs, flags, wanted);
-                    };
-                    if !e.dir || rest.is_empty() {
-                        return self.open(&abs, flags, wanted);
-                    }
-                    match e.file.open_or_link(&rest, flags, wanted & e.rights)? {
-                        Ok(file) => return Ok(file),
-                        Err(next) if next.starts_with('/') => {
-                            abs = zoraya_resolve::join("/", 0, &next)
-                        }
-                        Err(next) => abs = zoraya_resolve::join(&e.path, 0, &next),
-                    }
-                }
-                Err(zoraya_proto_file::status::IS_LINK)
+            Held::Table(entries) => {
+                let prefixes: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+                let directories: Vec<bool> = entries.iter().map(|e| e.dir).collect();
+                zoraya_resolve::walk_table(
+                    &prefixes,
+                    &directories,
+                    rel,
+                    |i, rest| {
+                        let e = &entries[i];
+                        Ok(match e.file.open_or_link(rest, flags, wanted & e.rights)? {
+                            Ok(file) => zoraya_resolve::Hop::Opened(file),
+                            Err(next) => zoraya_resolve::Hop::Link(next),
+                        })
+                    },
+                    |abs| self.open(abs, flags, wanted),
+                    zoraya_proto_file::status::IS_LINK,
+                )
             }
         }
     }
