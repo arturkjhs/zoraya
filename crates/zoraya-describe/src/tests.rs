@@ -806,3 +806,18 @@ fn window_is_a_title_given_once() {
     let ok = "x".repeat(48);
     assert!(header(&format!("window {ok}\n---\n")).window.is_some());
 }
+
+/// ADR-0324: `net web`, once, for commands only.
+#[test]
+fn net_web_is_a_flag_given_once_for_commands() {
+    assert!(header("net web\n---\n").net_web);
+    assert!(!header("---\n").net_web);
+    assert_eq!(problem("net web\nnet web\n---\n"), "net web is given once");
+    assert_eq!(problem("net any\n---\n"), "net takes web");
+    assert_eq!(problem("net\n---\n"), "net takes web");
+    assert_eq!(problem("net web example.org\n---\n"), "net takes web");
+    assert_eq!(
+        refused("topic t\nsummary s\nnet web\n---\n").problem,
+        "a topic has only a summary and a body"
+    );
+}

@@ -18,11 +18,13 @@
 //!
 //! target   Name 0 / Wildcard 1: length u8, the ASCII bytes (a wildcard
 //!          without its "*." prefix); Address 2: 4 bytes; Prefix 3: 4 bytes,
-//!          length u8 (0..=32, the host bits zero); Any 4: nothing
+//!          length u8 (0..=32, the host bits zero); Any 4: nothing;
+//!          Public 5: nothing (ADR-0324, the shell's `web`)
 //! ports    0xFF for any port, or a count 1..=8 and that many (low, high)
 //!          pairs of u16, little endian, 1 <= low <= high
 //! protocols u8, a set of bits: 1 (TCP), 2 (UDP), 4 (echo, ADR-0330); 1 to 7
-//!          in a reach rule, 1 to 3 in a listen rule
+//!          in a reach rule (1 alone in a Public rule, INV-0324-1), 1 to 3 in
+//!          a listen rule
 //! ```
 //!
 //! Decisions where the ADR is silent (docs/adr/0281): addresses are IPv4 (the
@@ -191,6 +193,52 @@ pub enum Target<'a> {
     Prefix([u8; 4], u8),
     /// Every name and every address.
     Any,
+    /// Every public address, and every name through its answer only: an
+    /// address [`is_public`] accepts (ADR-0324, the shell's word `web`). A
+    /// name this rule alone admits may use only the public answers of its
+    /// lookup, which `netd` checks: [`Scope::name_grant`] says so.
+    Public,
+}
+
+/// The blocks a [`Target::Public`] rule never reaches (ADR-0324 item 2): this
+/// network, the private ranges (QEMU's 10.0.2.0/24 is inside 10.0.0.0/8),
+/// shared address space, loopback, link-local, the IETF's protocol block,
+/// benchmarking, multicast, and the reserved block with the broadcast address.
+pub const NOT_PUBLIC: [([u8; 4], u8); 11] = [
+    ([0, 0, 0, 0], 8),
+    ([10, 0, 0, 0], 8),
+    ([100, 64, 0, 0], 10),
+    ([127, 0, 0, 0], 8),
+    ([169, 254, 0, 0], 16),
+    ([172, 16, 0, 0], 12),
+    ([192, 0, 0, 0], 24),
+    ([192, 168, 0, 0], 16),
+    ([198, 18, 0, 0], 15),
+    ([224, 0, 0, 0], 4),
+    ([240, 0, 0, 0], 4),
+];
+
+/// Whether `address` is outside every block of [`NOT_PUBLIC`]: what a web
+/// rule may reach (ADR-0324). The documentation ranges (192.0.2.0/24,
+/// 198.51.100.0/24, 203.0.113.0/24) are public here: no network is one of
+/// them, and the tests use 203.0.113.0/24 as the Internet.
+pub fn is_public(address: [u8; 4]) -> bool {
+    NOT_PUBLIC
+        .iter()
+        .all(|&(block, len)| !prefix_has(block, len, address))
+}
+
+/// How a scope admits a name for a connection or a lookup (ADR-0324).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameGrant {
+    /// No rule covers it.
+    No,
+    /// Only a web rule ([`Target::Public`]): only answers that are public,
+    /// and not local to this machine's network, may be used.
+    PublicOnly,
+    /// A rule names it (a name, a wildcard or `any`): every answer, local
+    /// ones as ADR-0223 item 4 says.
+    Named,
 }
 
 /// A host name as the scope holds it: ASCII, lower case, DNS's limits, and
@@ -241,6 +289,10 @@ impl Target<'_> {
         match (self, outer) {
             (_, Target::Any) => true,
             (Target::Any, _) => false,
+            // Only a web rule is inside a web rule (INV-0324-2): an address or
+            // a name rule would skip the public check of its answers.
+            (Target::Public, Target::Public) => true,
+            (_, Target::Public) | (Target::Public, _) => false,
             (Target::Name(n), Target::Name(p)) => n == p,
             (Target::Name(n), Target::Wildcard(s)) => under(n, s),
             (Target::Wildcard(a), Target::Wildcard(b)) => a == b || under(a, b),
@@ -254,7 +306,9 @@ impl Target<'_> {
     }
 
     /// Whether a request for `name` is covered (not a wildcard's suffix
-    /// itself). Names and addresses never match each other.
+    /// itself). Names and addresses never match each other. A web rule
+    /// covers no name here: it admits names through their answers only
+    /// ([`Scope::name_grant`]).
     pub fn covers_name(&self, name: &str) -> bool {
         match self {
             Target::Any => true,
@@ -269,8 +323,16 @@ impl Target<'_> {
             Target::Any => true,
             Target::Address(a) => *a == address,
             Target::Prefix(p, l) => prefix_has(*p, *l, address),
+            Target::Public => is_public(address),
             _ => false,
         }
+    }
+
+    /// As [`Target::covers_address`], but not through a web rule: an
+    /// address, a prefix or `any` that names the address (what lets a local
+    /// address through, ADR-0223 item 4).
+    pub fn names_address(&self, address: [u8; 4]) -> bool {
+        !matches!(self, Target::Public) && self.covers_address(address)
     }
 
     fn valid(&self) -> bool {
@@ -374,6 +436,7 @@ impl<'a> Reader<'a> {
                 Target::Prefix(address, self.u8()?)
             }
             4 => Target::Any,
+            5 => Target::Public,
             _ => return None,
         };
         if !target.valid() {
@@ -381,6 +444,11 @@ impl<'a> Reader<'a> {
         }
         let ports = self.ports()?;
         let protocols = Protocols::from_raw(self.u8()?)?;
+        // A web rule admits no protocol but TCP (INV-0324-1): the decoder,
+        // and so `netd`, holds it to that whoever made the scope.
+        if target == Target::Public && protocols != Protocols::TCP {
+            return None;
+        }
         Some(ReachRule {
             target,
             ports,
@@ -492,15 +560,54 @@ impl<'a> Scope<'a> {
     }
 
     /// Whether some reach rule covers the name on some port: what `resolve`
-    /// has (it names no port yet).
+    /// has (it names no port yet). A web rule does not count here; see
+    /// [`Scope::resolve_grant`].
     pub fn reaches_name(&self, name: &str) -> bool {
         self.reach_rules().any(|r| r.target.covers_name(name))
     }
 
-    /// As [`Scope::allows_name`] for an address; an address rule only.
+    /// How a connection to `name`:`port` over `protocol` is admitted
+    /// (ADR-0324): by a rule that names it, by a web rule alone (its answers
+    /// must then be public), or not at all.
+    pub fn name_grant(&self, name: &str, port: u16, protocol: Protocols) -> NameGrant {
+        if self.allows_name(name, port, protocol) {
+            NameGrant::Named
+        } else if self.reach_rules().any(|r| {
+            r.target == Target::Public && r.ports.contains(port) && r.protocols.contains(protocol)
+        }) {
+            NameGrant::PublicOnly
+        } else {
+            NameGrant::No
+        }
+    }
+
+    /// As [`Scope::name_grant`] for a lookup, which names no port: any rule
+    /// that covers the name, else any web rule.
+    pub fn resolve_grant(&self, name: &str) -> NameGrant {
+        if self.reaches_name(name) {
+            NameGrant::Named
+        } else if self.reach_rules().any(|r| r.target == Target::Public) {
+            NameGrant::PublicOnly
+        } else {
+            NameGrant::No
+        }
+    }
+
+    /// As [`Scope::allows_name`] for an address: an address rule, or a web
+    /// rule for a public address.
     pub fn allows_address(&self, address: [u8; 4], port: u16, protocol: Protocols) -> bool {
         self.reach_rules().any(|r| {
             r.target.covers_address(address)
+                && r.ports.contains(port)
+                && r.protocols.contains(protocol)
+        })
+    }
+
+    /// As [`Scope::allows_address`], but not through a web rule: what lets
+    /// a local address through (ADR-0223 item 4, ADR-0324 item 2).
+    pub fn names_address(&self, address: [u8; 4], port: u16, protocol: Protocols) -> bool {
+        self.reach_rules().any(|r| {
+            r.target.names_address(address)
                 && r.ports.contains(port)
                 && r.protocols.contains(protocol)
         })
@@ -520,9 +627,10 @@ impl<'a> Scope<'a> {
     }
 
     /// Whether some reach rule of any protocol covers `address` on some port
-    /// (what `resolve` asks of a local answer).
+    /// (what `resolve` asks of a local answer). Not through a web rule: a
+    /// local answer needs a rule that names it.
     pub fn reaches_address(&self, address: [u8; 4]) -> bool {
-        self.reach_rules().any(|r| r.target.covers_address(address))
+        self.reach_rules().any(|r| r.target.names_address(address))
     }
 
     pub fn allows_listen(&self, port: u16, protocol: Protocols) -> bool {
@@ -584,6 +692,7 @@ pub fn encode(reach: &[ReachRule<'_>], listen: &[ListenRule], out: &mut [u8]) ->
                 put(&[l])?;
             }
             Target::Any => put(&[4])?,
+            Target::Public => put(&[5])?,
         }
         put_ports(&mut put, &r.ports)?;
         put(&[r.protocols.raw()])?;

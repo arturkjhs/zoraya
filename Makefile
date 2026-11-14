@@ -79,7 +79,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -722,13 +722,26 @@ NS_LIFETIME := $(shell expr 2 \* $(QEMU_SLOW_TIMEOUT) + 60)
 NS_SCRIPT := $(BUILD)/netsurf.script
 NS_HTTP_READY := $(BUILD)/netsurf-httpd.port
 NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
-NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --gui-scale $(5) --net --net-open --mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
+# QEMU's network is TEST-NET-3 here (ADR-0324): 203.0.113.2 is the host (the test
+# server), and 203.0.113.10 and .11 (one.web.test, two.web.test) are two "public"
+# hosts on port 80, each connection relayed to the same server by SLIRP's guestfwd.
+# 203.0.113.11:8080 is relayed too: the web rule refuses that port, and a
+# connection netd wrongly let through would reach the server and be logged
+# (`must-not-reach`, 9f-net review finding 3). The other refused legs (10.0.2.2,
+# 127.0.0.1, the gateway's port 80, lan.web.test's private answer) cannot be
+# routed to the server by SLIRP: they rest on the refusal page's colour alone.
+NS_NET := 203.0.113
+NS_RELAY = $(CURDIR)/$(HTTPD) --relay 127.0.0.1:$$port
+NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --gui-scale $(5) --net --net-open \
+	--net-subnet $(NS_NET).0/24 --net-guestfwd "$(NS_NET).10:80=$(NS_RELAY)" --net-guestfwd "$(NS_NET).11:80=$(NS_RELAY)" \
+	--net-guestfwd "$(NS_NET).11:8080=$(NS_RELAY)" \
+	--mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
 test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[netsurf] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
 	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
@@ -740,8 +753,8 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	port=$$(cat $(NS_HTTP_READY)); \
 	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[netsurf] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-netsurf.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
-	sed -e "s/@PORT@/$$port/g" $(NS_TEXT_TEMPLATE) > $(NS_TEXT_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).2/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).2/g" $(NS_TEXT_TEMPLATE) > $(NS_TEXT_SCRIPT); \
 	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto,$(NS_SCRIPT),1); rc=$$?; \
 	if [ $$rc = 0 ]; then $(call NS_RUN,$(QEMU_SLOW_TIMEOUT),text-2,auto,$(NS_TEXT_SCRIPT),2); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
@@ -755,8 +768,32 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 			echo "[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one, or not exactly one refused handshake before the Proceed mark ($$before) and one or more after it ($$after): a retry of its own, or a click on Proceed that missed)"; cat $$log; rc=1; \
 		else echo '[netsurf] ok: NetSurf sent no request byte to the expired-certificate server, also after Proceed'; fi; \
 	fi; \
+	if [ $$rc = 0 ]; then \
+		log=target/test-logs/test-httpd-netsurf.log; \
+		if grep -q 'must-not-reach' $$log || ! grep -q '^http: GET /ns/web-redirect ' $$log \
+		   || ! grep -q '^http: GET /ns/web-redirect-refused ' $$log \
+		   || [ "$$(grep -c '^http: GET /ns/web-b ' $$log)" -lt 2 ]; then \
+			echo "[netsurf] FAIL: INV-0324-1: a host the web grant refuses was reached, or the link or the redirect to the second host, or the redirect to a refused one, was not fetched"; cat $$log; rc=1; \
+		else echo '[netsurf] ok: the web grant reached the second host by a link and a redirect, and none of the refused hosts'; fi; \
+	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
 	exit $$rc
+
+# TASK-27 9f (final step): NetSurf on the real Wikipedia, by hand, never in CI. The test
+# image of test-netsurf with no test names and no test PKI: the production roots, the
+# host's real Internet through QEMU's user network. tests/gui/netsurf-wikipedia.script
+# takes the screens into build/shots/.
+WP_ROOT := $(BUILD)/wikipedia-root
+WP_DISK := $(BUILD)/wikipedia-disk.img
+hand-netsurf-wikipedia hand-netsurf-wikipedia-2: $(KERNEL) $(RUNNER) tools-storage netsurf
+	@rm -rf $(WP_ROOT) && mkdir -p $(WP_ROOT) target/test-logs && cp -R rootfs/. $(WP_ROOT)/ && \
+	cp -R $(APPS_ROOT)/. $(WP_ROOT)/ && \
+	mkdir -p $(WP_ROOT)/system/fonts && cp -R fonts/. $(WP_ROOT)/system/fonts/ && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(WP_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 64M --from $(WP_ROOT) $(WP_DISK) && \
+	$(RUNNER) --timeout 900 --gui-script tests/gui/netsurf-wikipedia$(if $(filter %-2,$@),-2).script --qmp $(BUILD)/wikipedia.qmp --label wikipedia -- \
+		$(RUN_QEMU) --test --gui --gui-scale 1 --net --net-open --mem 768M --qmp $(BUILD)/wikipedia.qmp \
+		--disk $(WP_DISK) --accel auto $(KERNEL)
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.
@@ -1464,6 +1501,14 @@ check-ethd-maps:
 check-tls-roots:
 	tools/check-tls-roots.sh
 
+# INV-0325-1 and INV-0325-2: the page NetSurf shows for a refused host, built
+# with the host's C compiler and run (ports/netsurf/test_refusal.c).
+HOST_C ?= cc
+check-netsurf-refusal:
+	@mkdir -p $(BUILD)
+	$(HOST_C) -std=c99 -Wall -Wextra -Werror -o $(BUILD)/test-refusal ports/netsurf/zoraya_refusal.c ports/netsurf/test_refusal.c
+	$(BUILD)/test-refusal
+
 # INV-0310-2: tools/run-disk.sh and EXTRA_ROOT, on a scratch layout.
 check-run-disk:
 	tools/test-run-disk.sh
@@ -1506,7 +1551,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-run-disk check-ci-plan test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-netsurf-refusal check-run-disk check-ci-plan test-apps test-netsurf test-python test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1536,7 +1581,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-mutant-lists check-run-disk check-ci-plan check-python-cache
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps check-tls-roots check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-python-cache
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

@@ -5,7 +5,7 @@
 
 use crate::accounts::SESSION;
 use alloc::vec::Vec;
-use zoraya_abi::net::{Protocols, Scope, rights};
+use zoraya_abi::net::{NameGrant, Protocols, Scope, rights};
 
 /// What a request asks, reduced to what the check needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,13 +128,18 @@ impl Connection {
                 }
                 let scope = self.scope();
                 verdict(match target {
-                    ConnectTarget::Name(n) => scope.allows_name(n, port, Protocols::TCP),
+                    // A web rule admits any name on its ports; the answers
+                    // are checked when they come (ADR-0324).
+                    ConnectTarget::Name(n) => {
+                        scope.name_grant(n, port, Protocols::TCP) != NameGrant::No
+                    }
                     ConnectTarget::Address(a) => scope.allows_address(a, port, Protocols::TCP),
                 })
             }
-            Request::Resolve { name } => {
-                verdict(self.rights & rights::REACH != 0 && self.scope().reaches_name(name))
-            }
+            Request::Resolve { name } => verdict(
+                self.rights & rights::REACH != 0
+                    && self.scope().resolve_grant(name) != NameGrant::No,
+            ),
             Request::Narrow { rights, scope } => {
                 if self.rights & rights::NARROW == 0 {
                     return Verdict::NotGranted;

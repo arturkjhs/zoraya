@@ -23,7 +23,14 @@
 //! /redirect          302 to /
 //! /slow/N            the pattern, 1 KiB per 10 ms (for backpressure)
 //! /reset             closes the connection with a reset after the head
+//! /ns/...            the NetSurf test's pages (`ns_page`), /ns/web-redirect, 302 to
+//!                    http://two.web.test/ns/web-b (ADR-0324), and
+//!                    /ns/web-redirect-refused, 302 to http://two.web.test:8080/... (ADR-0325)
 //! ```
+//!
+//! `--relay ADDRESS:PORT` is one connection of QEMU's `guestfwd=...-cmd:`
+//! (`tools/run-qemu.sh --net-guestfwd`): stdin and stdout are the guest's
+//! connection, copied to and from the server at ADDRESS:PORT.
 //!
 //! With `--tls-dir DIR` (the test PKI of `tests/net/tls`) three more listeners
 //! run in front of the same server, one per certificate: `valid` (for
@@ -181,6 +188,43 @@ fn ns_page(path: &str) -> Option<(&'static str, Vec<u8>)> {
 </body></html>
 "#
             .to_vec(),
+        )),
+        // ADR-0324's test: a page on one public host (one.web.test) with
+        // links to a second (two.web.test), a redirect to it, and links to
+        // hosts the web rule refuses. Each link is a block of its own colour,
+        // 200 by 40 pixels, one under the other from the top of the page.
+        "/ns/web-a" => {
+            let port = query.strip_prefix("port=").unwrap_or("0");
+            let port: String = port.chars().filter(char::is_ascii_digit).collect();
+            let block = |href: &str, colour: &str| {
+                format!(
+                    "<a href=\"{href}\" style=\"display:block;width:200px;height:40px;background:#{colour}\"></a>\n"
+                )
+            };
+            let mut body = String::from(
+                "<html><head><title>NS web A</title></head><body style=\"margin:0;background:#ffffff\">\n",
+            );
+            body += &block("http://two.web.test/ns/web-b", "00ffff");
+            body += &block("http://one.web.test/ns/web-redirect", "ff8000");
+            body += &block(&format!("http://10.0.2.2:{port}/ns/must-not-reach"), "800000");
+            body += &block("http://127.0.0.1/ns/must-not-reach", "008000");
+            body += &block("http://203.0.113.2/ns/must-not-reach", "000080");
+            body += &block("http://two.web.test:8080/ns/must-not-reach", "808000");
+            // A redirect to a refused host (two.web.test:8080, relayed to
+            // this server, so a leak is logged), and a name whose only
+            // answer is private (lan.web.test, 10.0.2.2 in net.hosts): its
+            // lookup is refused.
+            body += &block("http://one.web.test/ns/web-redirect-refused", "ff0080");
+            body += &block("http://lan.web.test/ns/must-not-reach", "0080ff");
+            body += "</body></html>\n";
+            Some(("text/html", body.into_bytes()))
+        }
+        "/ns/web-b" => Some((
+            "text/html",
+            br#"<html><head><title>NS web B</title></head>
+<body style="margin:0;background:#ff00ff"></body></html>
+"#
+.to_vec(),
         )),
         // Russian and Ukrainian text in the system's fonts (ADR-0326,
         // 9f-text): sizes in points, so that the page is twice the pixels at
@@ -352,6 +396,28 @@ fn serve(mut stream: TcpStream) {
             "Found",
             &[("Location", "/".into()), ("Content-Length", "0".into())],
         )),
+        // ADR-0325's test: a redirect to a host the web rule refuses (port
+        // 8080), which SLIRP relays here: a leak would be logged.
+        ["", "ns", "web-redirect-refused"] => stream.write_all(&head(
+            302,
+            "Found",
+            &[
+                (
+                    "Location",
+                    "http://two.web.test:8080/ns/must-not-reach".into(),
+                ),
+                ("Content-Length", "0".into()),
+            ],
+        )),
+        // ADR-0324's test: a redirect from one public host to another.
+        ["", "ns", "web-redirect"] => stream.write_all(&head(
+            302,
+            "Found",
+            &[
+                ("Location", "http://two.web.test/ns/web-b".into()),
+                ("Content-Length", "0".into()),
+            ],
+        )),
         ["", "reset"] => {
             let r = stream.write_all(&head(200, "OK", &[("Content-Length", "100".into())]));
             // Closing with unread input makes the kernel send a reset.
@@ -472,6 +538,31 @@ fn start_tls(dir: &str, backend: u16, deadline: Instant) -> Result<[u16; 3], Str
     Ok(ports)
 }
 
+/// Copies stdin to a connection to `to` and the connection to stdout until
+/// both directions end; the exit status says whether it connected.
+fn relay(to: &str) -> i32 {
+    use std::io::{copy, stdin, stdout};
+    use std::net::Shutdown;
+    let Ok(server) = TcpStream::connect(to) else {
+        return 1;
+    };
+    let Ok(mut up) = server.try_clone() else {
+        return 1;
+    };
+    let _ = server.set_read_timeout(Some(Duration::from_secs(60)));
+    let upward = std::thread::spawn(move || {
+        let _ = copy(&mut stdin().lock(), &mut up);
+        let _ = up.shutdown(Shutdown::Write);
+    });
+    let mut down = server;
+    let _ = copy(&mut down, &mut stdout().lock());
+    let _ = stdout().flush();
+    // The guest may keep its side open after the answer; the server's end
+    // of file ends the relay.
+    drop(upward);
+    0
+}
+
 fn main() {
     let mut port: Option<u16> = None;
     let mut lifetime = 300u64;
@@ -485,6 +576,14 @@ fn main() {
             "--ready-file" => ready = args.next(),
             "--tls-dir" => tls_dir = args.next(),
             "--tls-ready-file" => tls_ready = args.next(),
+            "--relay" => {
+                // One connection of QEMU's `guestfwd=...-cmd:` (ADR-0324's
+                // test): stdin and stdout are the guest's connection; copy
+                // them to and from the test server at ADDRESS:PORT. Nothing
+                // is written to stderr, which is the same socket.
+                let to = args.next().unwrap_or_default();
+                exit(relay(&to));
+            }
             "--checksum" => {
                 // The expected FNV-1a of /pattern/N, for the test script.
                 let n = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);

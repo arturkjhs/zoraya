@@ -1,6 +1,6 @@
 # ADR-0327: Font files under the SIL OFL 1.1 as data next to the system's code and its GPL ports
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0109, ADR-0162, ADR-0326
 - **Evidence:** CP-27, desktop/survey.md#candidate-fonts-and-their-licences, desktop/survey.md#the-ofl-next-to-bsd-code
@@ -75,3 +75,6 @@ fonts.
 - A font that is not unmodified, or a font compiled into a program, is proposed.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A: `CLAUDE.md`'s data clause gains the unmodified font file under OFL-1.1, with its licence text; code never; a subset or a changed font is not allowed.

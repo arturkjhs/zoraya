@@ -1854,3 +1854,100 @@ fn a_ping_by_name_answered_over_the_wire_starts_its_run_without_another_wake_up(
     ));
     assert_eq!(w.peer.dns_queries, 1);
 }
+
+/// A web rule (ADR-0324): any public host on 80 and 443.
+fn web_only(extra: &[ReachRule<'_>]) -> Vec<u8> {
+    let mut rules = vec![ReachRule {
+        target: zoraya_abi::net::Target::Public,
+        ports: Ports::ranges(&[(80, 80), (443, 443)]).unwrap(),
+        protocols: Protocols::TCP,
+    }];
+    rules.extend_from_slice(extra);
+    scope_with(&rules)
+}
+
+/// INV-0324-1: a name only a web rule admits is connected to a public
+/// answer, and never to one that is private, loopback, link-local, this
+/// machine's or its network's (the gateway, a DNS server, public or not),
+/// from the DNS or from `net.hosts`; an address rule beside it names one.
+#[test]
+fn a_name_only_a_web_rule_admits_uses_public_answers_that_are_not_local() {
+    const PUBLIC: [u8; 4] = [93, 184, 215, 14];
+    // A public answer is tried (nobody answers ARP for an off-link address
+    // here, so it stays trying; the point is that it is tried).
+    let mut w = World::new(Script::Sink, &[]);
+    w.scope = web_only(&[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, PUBLIC, 60)]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("example.org".into()), 443);
+    w.run_until(2_000_000, |_| false);
+    assert_eq!(fake.failed(), None);
+    assert_eq!(w.client.tcp_count(), 1);
+    // Every local or private answer is refused as local, with no socket.
+    for (name, refused) in [
+        ("lan.example", WEB),
+        ("gate.example", SERVER_IP),
+        ("resolver.example", DNS),
+        ("self.example", OFFERED),
+        ("loop.example", [127, 0, 0, 1]),
+        ("home.example", [192, 168, 1, 1]),
+        ("link.example", [169, 254, 169, 254]),
+        ("cgnat.example", [100, 64, 0, 1]),
+    ] {
+        let mut w = World::new(Script::Sink, &[]);
+        w.scope = web_only(&[]);
+        w.peer.dns_script = Box::new(move |q| vec![a_record_reply(q, refused, 60)]);
+        let fake = Fake::new(1024);
+        w.connect(&fake, Target::Name(name.into()), 80);
+        assert!(
+            w.run_until(5_000_000, |_| fake.failed().is_some()),
+            "{name}"
+        );
+        assert_eq!(fake.failed(), Some(reason::LOCAL), "{name}");
+        assert_eq!(w.client.tcp_count(), 0, "{name}");
+    }
+    // A public DNS server is this side of the network: refused too.
+    let mut w = World::with_dns(Script::Sink, &[], vec![DNS, [1, 1, 1, 1]]);
+    w.scope = web_only(&[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, [1, 1, 1, 1], 60)]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("dns.example".into()), 80);
+    assert!(w.run_until(5_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::LOCAL));
+    // And as an address: the web rule admits it (it is public), but never
+    // names it, so the local rule still refuses it.
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Address([1, 1, 1, 1]), 80);
+    assert!(w.run_until(1_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::LOCAL));
+    assert_eq!(w.client.tcp_count(), 0);
+    // `net.hosts` gives no exemption to a name only the web rule admits.
+    let mut w = World::new(Script::Sink, &[("lan.zoraya", WEB)]);
+    w.scope = web_only(&[]);
+    w.peer.dns_script = Box::new(|_| panic!("a query for a name in net.hosts"));
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("lan.zoraya".into()), 80);
+    assert!(w.run_until(1_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::LOCAL));
+    // An address rule beside it names the address: connected.
+    let mut w = World::new(Script::Sink, &[("lan.zoraya", WEB)]);
+    w.scope = web_only(&[ReachRule {
+        target: zoraya_abi::net::Target::Address(WEB),
+        ports: Ports::one(80),
+        protocols: Protocols::TCP,
+    }]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("lan.zoraya".into()), 80);
+    assert!(w.run_until(5_000_000, |_| fake.message(16).is_some()));
+    // A rule that names the name keeps ADR-0223's rule: net.hosts may name a
+    // local address.
+    let mut w = World::new(Script::Sink, &[("lan.zoraya", WEB)]);
+    w.scope = web_only(&[ReachRule {
+        target: zoraya_abi::net::Target::Name("lan.zoraya"),
+        ports: Ports::one(80),
+        protocols: Protocols::TCP,
+    }]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("lan.zoraya".into()), 80);
+    assert!(w.run_until(5_000_000, |_| fake.message(16).is_some()));
+}

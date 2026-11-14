@@ -1,6 +1,6 @@
 # ADR-0329: The wheel in the toolkit: a third widget event, three rows a notch, the view moves and the cursor stays
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0164, ADR-0165, ADR-0168, ADR-0244, ADR-0322
 - **Evidence:** desktop/survey.md#focus-and-stacking, desktop/survey.md#own-no_std-widgets
@@ -107,3 +107,6 @@ Recommended: **Option B**, as built in part 9f-wheel. It is a recommendation, no
   hardware whose kinetic turns make row steps feel coarse.
 
 ## Architect's decision
+Accepted 2026-11-14. Decided by the architect; recorded by an agent at the architect's request.
+
+Option B.

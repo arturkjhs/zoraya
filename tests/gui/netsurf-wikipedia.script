@@ -1,0 +1,49 @@
+# TASK-27 9f, the final step: NetSurf on the real Wikipedia (ru and uk), through
+# QEMU's user network to the real Internet. A hand-run script: it is in no CI
+# list; `make hand-netsurf-wikipedia` runs it. It only takes screens (build/shots/);
+# no region is asserted, since the sites change. Each page gets a long wait and two
+# screens (the second one after more time, for the images of upload.wikimedia.org).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+type netsurf https://ru.wikipedia.org/\r
+pause 45000
+shot wp-ru-front-a
+pause 60000
+shot wp-ru-front-b
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type netsurf https://ru.wikipedia.org/wiki/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0\r
+pause 60000
+shot wp-ru-article-a
+pause 90000
+shot wp-ru-article-b
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type netsurf https://uk.wikipedia.org/\r
+pause 45000
+shot wp-uk-front-a
+pause 60000
+shot wp-uk-front-b
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type netsurf https://uk.wikipedia.org/wiki/%D0%9A%D0%B8%D1%97%D0%B2\r
+pause 60000
+shot wp-uk-article-a
+pause 90000
+shot wp-uk-article-b
+click 122 119
+pause 3000
+click 300 87
+pause 500
+type echo closed\r
+screen closed
+type poweroff\r
+exit

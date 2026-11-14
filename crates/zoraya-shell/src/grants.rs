@@ -388,19 +388,20 @@ pub fn with_window(description: &Description) -> Option<Planned> {
 pub const MAX_WINDOW_PILLS: usize = 16;
 
 /// The pills of a POSIX program's window (ADR-0317 item 3, INV-0317-1): the
-/// network's first, `+net TARGET` for each of `net_targets`, then `+r PATH`
+/// network's first, `net_pills` as `netgrant::pills` writes them (`+net
+/// TARGET`, or `web` for the web rule, ADR-0324), then `+r PATH`
 /// or `+w PATH` for each merged entry of the plan. The window must show every
 /// grant, so a line with more than [`MAX_WINDOW_PILLS`] pills is refused
 /// (`Err` with how many it would have), never cut short.
-pub fn window_pills(plan: &[Planned], net_targets: &[String]) -> Result<Vec<String>, usize> {
+pub fn window_pills(plan: &[Planned], net_pills: &[String]) -> Result<Vec<String>, usize> {
     let mut pills: Vec<String> = Vec::new();
     let mut add = |pill: String| {
         if !pills.contains(&pill) {
             pills.push(pill);
         }
     };
-    for t in net_targets {
-        add(alloc::format!("+net {t}"));
+    for p in net_pills {
+        add(p.clone());
     }
     for m in merge(plan) {
         let word = if m.rights & rights::WRITE != 0 {

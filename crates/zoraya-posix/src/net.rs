@@ -85,7 +85,8 @@ impl<S: Sys> Posix<S> {
     /// [`Self::net_call`], and with `interruptible` a signal that is to be
     /// delivered ends the wait with `EINTR` (the reply that comes later is
     /// skipped by its transaction, as for any abandoned call). Only for a
-    /// request that is safe to send again: `getrandom`'s.
+    /// request that is safe to send again: `getrandom`'s. In a process with
+    /// threads the wait is not interruptible: it stays inside the lock.
     pub(crate) fn net_call_with<'m, M: zoraya_protocol::Message<'m>>(
         &mut self,
         net: S::H,
@@ -131,7 +132,16 @@ impl<S: Sys> Posix<S> {
                 }
                 Err(Status::WouldBlock) => {
                     let wanted = signals::READABLE | signals::PEER_CLOSED;
-                    let s = if interruptible {
+                    // A service's reply is a short wait, made inside the
+                    // library lock (ADR-0302 item 9). In a process with
+                    // threads `wait_point` would defer it (`Err(PENDING)`)
+                    // to a second run of the whole call, which this method
+                    // cannot take: its request is already written. So there it
+                    // waits here, as `net_call` does; only a process without
+                    // threads takes the interruptible wait. (The deferral used
+                    // to fall into the `ENETDOWN` arm below: `getrandom` was
+                    // `EIO` whenever `rngd` had not answered by the first read.)
+                    let s = if interruptible && !self.defer_waits {
                         match self.wait_point(net, wanted) {
                             Ok(s) => s,
                             Err(EINTR) => return Err(EINTR),

@@ -2087,7 +2087,11 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   of the buffer or an error; without the connection `ENOSYS`, never a weaker source; a `fork` child has none. The second
   bootstrap message has a form `ZPBX` plus a flag byte (net, random) with the handles in the order SELF, net, random
   (`zoraya_abi::posix`); `zosh` makes one `Share` of its own random connection per POSIX program (`posix_child::Launch::random`).
-  A program a POSIX parent starts has none yet.
+  A program a POSIX parent starts has none yet. Without threads a signal to deliver ends the wait for the reply (`EINTR`, or the
+  count written so far); in a process with threads the wait is made inside the library lock, as for any service's reply
+  (ADR-0302 item 9), and the C boundary takes the lock once per request (`random::in_spans`, INV-0302-2), so a signal waits
+  for one round trip. It is not a cancellation point (musl's and glibc's are). A `fork` child's Python seeds `random` from the
+  time and pid (CPython's own fallback when `os.urandom` fails); `secrets`, `os.urandom`, `ssl` and the hash seed fail loudly.
 - **The grants.** `user/describe/posix/curl.cmd` and `wget.cmd` are the image's own descriptions: a literal `url` operand
   gives a connection that reaches that host and port (as for `zfetch`), and with it `/system/tls` read-only (a POSIX program is
   given directories only, and the directory holds the roots file alone: `make check-tls-roots`). `grants curl -O
@@ -2238,8 +2242,8 @@ A POSIX program can have one window (ADR-0317), and NetSurf 3.11 is the first (A
   internal bitmap font (`zoraya-text` later), curl and the OpenSSL of 9a; `bin/netsurf` is 12.5 MB, its resources are in
   `/usr/share/netsurf` (read with the toolchain set, no extra grant). Patches: no cookies or proxy (libcurl is built without
   them); a file fetcher that reads the file (libposix maps none); the privacy error page's "Proceed" never turns
-  verification off (INV-0312-1). The `+net` words come from the `url` operand as for curl; a page's links to other hosts
-  need `+net HOST` words on the line.
+  verification off (INV-0312-1). The `+net` words come from the `url` operand as for curl; since 9f-net the `web` grant
+  (next section) reaches the links to other public hosts.
 - **Tests.** `make test-netsurf` (`tests/gui/netsurf.script`): a page's CSS and PNG by colour regions, a form result,
   HTTPS to `test.zoraya`, and the expired certificate giving the privacy error page with 0 request bytes at the server even
   after a click on Proceed.
@@ -2286,6 +2290,69 @@ internal bitmap font with `zoraya-text`: Russian and Ukrainian pages are readabl
   clamped to NetSurf's 250, so the page is 2.78 times, not 3 (the review's T8); the time text measuring
   takes per page is not measured (ADR-0318's 5% trigger); the native GUI programs still embed their fonts (ADR-0240).
   Whether `CLAUDE.md`'s licence rule names OFL-1.1 for unmodified font files is proposed ADR-0327.
+
+## NetSurf on the web: the `web` grant and the refusal page (stage 9, 9f-net)
+
+NetSurf (9d: a POSIX program with a window, ADR-0317, ADR-0318) reaches any public host on ports 80 and 443 (ADR-0324),
+and a host the grant refuses gets a page that names it and the line that would allow it (ADR-0325). Both were decided by
+the architect (2026-11-14).
+
+- **The rule** (`zoraya_abi::net::Target::Public`, reach target kind 5, nothing after the kind byte). It covers every
+  address `is_public` accepts, that is outside `NOT_PUBLIC`: 0.0.0.0/8, 10.0.0.0/8 (QEMU's 10.0.2.0/24), 100.64.0.0/10,
+  127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4
+  (the documentation blocks are public: the test uses 203.0.113.0/24). A name it covers only through the name's answers:
+  `Scope::name_grant` and `resolve_grant` say `Named` (a name, wildcard or `any` rule), `PublicOnly` (only a web rule) or
+  `No`. `names_address`/`reaches_address` never count a web rule, so a local address (this machine, the gateway, a DNS
+  server: `is_local`, ADR-0223 item 4) still needs a rule that names it, also when it is public. Only a web rule is
+  within a web rule, and a web rule is within only a web rule or `any` (INV-0324-2). The decoder refuses a web rule
+  with any protocol but TCP (INV-0324-1), so `netd` holds it to TCP whoever made the scope.
+- **`netd`.** `decide` lets a `connect` by name through on a web rule's ports and a `resolve` of any name; `Conns` marks a
+  connection `public_only` when only a web rule admits its name and then tries only public, non-local answers,
+  `net.hosts` included (the exemption is for a name the person granted); none left is `Failed { Local }`. A `resolve`
+  that only a web rule admits answers the public, non-local addresses, and with none left `NotGranted` (so `getaddrinfo`
+  says `EAI_SYSTEM`/`EACCES`, which NetSurf's page reads). A connection by address goes through `allows_address`
+  (a public address on 80 or 443); one that is local (a public gateway or DNS server) and that no rule names is answered
+  `NotGranted` at once (`connect` gives `EACCES`), so it reads as the grant's refusal, not as a failed connection.
+- **The shell.** A description line `net web` (`zoraya-describe`, commands only, once) gives the image's own
+  descriptions the rule `Public`, ports 80 and 443, TCP, beside the line's `+net` words and the URL operand's rule (a URL
+  from a value still needs a `+net` word). `grants netsurf` prints `net: web  reach public hosts, ports 80 and 443; not
+  this machine or its network (description)`; the window's pills come from `netgrant::pills`: `web` for the rule, `+net
+  HOST:PORT` for the others. In an untrusted room the line is refused by the network refusal of the gate (ADR-0268 point
+  7) and by the web rule's own, `netgrant::web_refused` (markers `untrusted-gate: web-refusal` and three
+  `web-refusal-call` in `zosh`: the native and POSIX scopes and `grants` of a native command, counted by `make
+  check-untrusted-gate`; it stays after the gate's second stage). NetSurf's
+  description has `net web`; curl's and wget's do not.
+- **The refusal page** (`ports/patches/netsurf/0009`, `ports/netsurf/zoraya_refusal.c`). NetSurf's curl fetcher reads
+  `CURLINFO_OS_ERRNO` when a fetch ends; `CURLE_COULDNT_CONNECT` with `EACCES`, or `CURLE_COULDNT_RESOLVE_HOST` when
+  curl's own lookup of the host failed with `EAI_SYSTEM`/`EACCES`, is a refusal of the grant. The lookup is not asked a
+  second time: NetSurf is linked with `--wrap=getaddrinfo` (`ports/netsurf/Makefile.config`), and the patch's
+  `__wrap_getaddrinfo` keeps the last lookup's name, result and `errno` (curl resolves on NetSurf's one thread). The
+  fetcher answers with status 403 and its own page (title `Not granted: HOST:PORT`, background `#ffe4b5`) naming the
+  host and port and the line `+net HOST:PORT netsurf URL` (the URL quoted when it holds a character outside
+  `A-Za-z0-9._~:/%+,=@-`, a `'` as `%27`, other bytes as `%XX`; everything HTML-escaped). A host the shell cannot take
+  as that one host's word (`zoraya_refusal_plain_host`: not a lower-case name or dotted address, or `any` or `web`) gets
+  the page without a line. A URL longer than 1024 bytes is cut on the page with a mark, and its line opens the host's
+  first page (`SCHEME://HOST/`), so the page always fits its 16 KiB buffer. Every other failure keeps NetSurf's error
+  page.
+- **Tests.** `cargo test -p zoraya-abi` (the blocks at both edges, the rule, the subset property with web rules),
+  `-p zoraya-net` (connect by name to public, private, local, `net.hosts` and named answers; `resolve` and `connect`
+  through the service; `narrow`), `-p zoraya-shell` (the rule, the pills, the `grants` line, the untrusted refusal),
+  `-p zoraya-describe`; mutants in `tools/mutants/net-web.toml` (all killed by hand); `make check-netsurf-refusal`
+  (the page's text, the line, quoting and escaping, on the host's C compiler, part of `make check`). `make test-netsurf`
+  now runs QEMU's network on 203.0.113.0/24 (`tools/run-qemu.sh --net-subnet`) with the test server at 203.0.113.2 and
+  two "public" hosts, `one.web.test` (203.0.113.10) and `two.web.test` (203.0.113.11), on port 80 through SLIRP's
+  `guestfwd ... cmd:` (`--net-guestfwd`, each connection a `zoraya-test-httpd --relay` process to the one server): the
+  `web` pill, `grants netsurf`, a link and a redirect to the second host, and links to 10.0.2.2, 127.0.0.1, the gateway
+  203.0.113.2 and `two.web.test:8080`, a redirect to `two.web.test:8080` and a name whose only answer is private
+  (`lan.web.test`, 10.0.2.2 in `net.hosts`) answered with the refusal page. `two.web.test:8080` is relayed to the server
+  too, so a leak through the port check would show in the server's log (`must-not-reach`, mutant
+  `W-web-name-any-port-gui`); the other refused legs cannot be routed to the server and rest on the page's colour.
+- **Limits.** IPv4 only. A name the web rule alone admits cannot use a `net.hosts` entry for a local address. A refusal
+  of a name rule's local answer (`Local`, `EAI_NONAME`) gets NetSurf's error page, not the refusal page (ADR-0325's open
+  question). The page is drawn in the window's body, which a site also draws; it grants nothing and has nothing to click.
+  curl and wget still give only their own messages (ADR-0224 item 5's `REPORT` hint is not built). A name given by a
+  URL on the line keeps a name rule beside the web rule, which accepts private answers (ADR-0223), so that name could
+  rebind into the LAN on the URL's port (proposed ADR-0328). Other hosts of a public on-link subnet are not local.
 
 ## The network on the desktop, and when it fails (stage 8, N6)
 
@@ -2524,6 +2591,7 @@ ADR-0221 items 5, 6 and 8).
 | 7 (done) | design system, text rendering, window management, keyboard layouts, scaling, toolkit, chooser, panel, file manager, editor, settings, clipboard, list settings, rooms (ADR-0160 to ADR-0172) | a person opens a file from the file manager in the editor through the chooser, in a window the compositor framed, with Ukrainian and Czech names on screen, at scale 1 and 2 (`make test-gui`) |
 | 8 | networking: the virtio-net driver, `netd` on smoltcp, the scoped network capability and `+net` grants, name resolution, POSIX sockets, the real clock, the random service, TLS, `net.*` settings, tests without the Internet (ADR-0220 to ADR-0230; the network on the desktop waits for ADR-0221 item 8) | `+net test.zoraya:443 curl -O https://test.zoraya/w12.bin` from `zosh` fetches the file from the runner's server over HTTPS with a validated certificate, and `fetch http://other.example/` without a grant prints the `+net` hint (`make test-net`) |
 | Q (quotas) | budgets on jobs (memory, processes), the CPU ceiling, accounts in `fsd`, the broker, `netd` and the compositor, directory limits in `fsd`, the room keeper, the room line's limit words, `top`, bounded kernel work, untrusted rooms enabled (ADR-0260 to ADR-0270) | `room new agent-1 --untrusted +w ~/sandbox/agent-1` creates a room in which `:(){ :|:& };:`, a memory hog, 64 spinners and `dd` into `~/sandbox/agent-1` each stop at the room's limits while a `home` terminal stays responsive (`make test-quotas`, the gate of ADR-0268) |
+| 10 | living in the system: the terminal as an `xterm-256color`, a terminal for POSIX programs from `zosh`, ncurses, `vi` and `less`, toybox's userland with descriptions, files given to a running program, a program's own directory, ssh, git (ADR-0331 to ADR-0342) | in a desktop terminal a person edits a file in `vi`, pages a log in `less`, searches with `grep`, gives `vi` a second file with System+G while it runs, commits with `git` and pushes with `+net`, and logs into the runner's ssh server, with `grants` showing each program's files and hosts (`docs/tour.md`'s chapter, played by the tour scripts) |
 
 ## Where things are
 

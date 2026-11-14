@@ -881,3 +881,119 @@ candidate run on CI covers them.
 
 Limits (also `docs/backlog.md`): settings scrolls by whole children, not pixels (`Logical` is unsigned; ADR-0329 Option A
 not taken); no scroll bar; `dx` scrolls nothing; no Page Up or Page Down in the file manager and the editor.
+
+## 9f-net: the `web` grant for browsers and NetSurf's refusal page (branch `work/9f-net`, 2026-11-14)
+
+Decided by the architect (2026-11-14) and recorded at the architect's request as **ADR-0324** (the web grant) and **ADR-0325**
+(the refusal page), both `accepted`. Six invariants (INV-0324-1 to -4, INV-0325-1, -2); `docs/adr/invariants.md` Total 640.
+
+What exists (details in `docs/design.md`, "NetSurf on the web"):
+- **The rule.** `zoraya_abi::net::Target::Public` (reach kind 5): every address outside `NOT_PUBLIC` (0/8, 10/8 with QEMU's
+  10.0.2.0/24, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.168/16, 198.18/15, 224/4, 240/4), names only through
+  their answers (`name_grant`/`resolve_grant`: `PublicOnly`); it never names an address, so a local one (this machine, the
+  gateway, a DNS server) needs a rule that does; only a web rule is within a web rule.
+- **`netd`.** A name only the web rule admits uses public, non-local answers, `net.hosts` included; a `resolve` with none left is
+  `NotGranted`; a local address the web rule admits by range is `NotGranted` at `connect`.
+- **The shell.** `net web` in a description of the image gives `Public`, ports 80 and 443, TCP; `grants netsurf` prints
+  `net: web  reach public hosts, ports 80 and 443; not this machine or its network (description)`; the window's pill is `web`
+  (the panel accepts that one word); `netgrant::web_refused` refuses it in an untrusted room (markers `untrusted-gate:
+  web-refusal` and two `web-refusal-call`, checked by `make check-untrusted-gate`; `tools/untrusted-gate.txt` unchanged, the
+  gate stays closed). NetSurf's description takes it; curl and wget keep the per-URL rule.
+- **The page.** NetSurf patch 0009 (0008 before the merge with 9f-text, whose patch is 0008) and `ports/netsurf/zoraya_refusal.c`: a fetch that ends with `connect` `EACCES`, or a lookup
+  refused (`EAI_SYSTEM`/`EACCES`, asked a second time), gets a 403 page `Not granted: HOST:PORT` with the line `+net HOST:PORT
+  netsurf URL` (quoted, escaped); other failures keep NetSurf's error page.
+- **The test network.** `tools/run-qemu.sh --net-subnet` and `--net-guestfwd`; `make test-netsurf` runs on 203.0.113.0/24
+  (TEST-NET-3 as the Internet) with two "public" hosts `one.web.test` and `two.web.test` relayed to the test server by
+  `zoraya-test-httpd --relay` (SLIRP's `guestfwd ... cmd:`, a process per connection).
+
+Ran on the Mac (HVF): `make check` (all 21 steps, with the new `check-netsurf-refusal`); `cargo test -p zoraya-abi -p zoraya-net
+-p zoraya-shell -p zoraya-describe -p zoraya-panel`; the 11 mutants of `tools/mutants/net-web.toml` applied by hand, all killed;
+`make netsurf`; `make test-netsurf` (all 131 steps passed, with the server-log checks of INV-0228-1 and INV-0324-1; screens `docs/netsurf/netsurf-web.png` and `netsurf-web-refused.png`). Not run: TCG, `make test-changed`'s other steps beyond those named
+here, the full set.
+
+Limits: IPv4 only; a name the web rule alone admits cannot use a `net.hosts` entry for a local address; a name rule's local answer
+(`Local`, `EAI_NONAME`) gets NetSurf's error page, not the refusal page (ADR-0325's open question); the page is in the window's
+body, which a site can imitate (it grants nothing); curl and wget have no such page (ADR-0224 item 5's `REPORT` hint is not built);
+the web rule cannot be written as a `+net` or room word (a word `web` on a line is a host named `web`).
+
+### 9f-net: the review's findings (`docs/tasks/TASK-27-review-9f-net.md` on `docs/review-9f-net`)
+
+- **1 (must-fix), fixed.** The page no longer offers `+net any:PORT`: `zoraya_refusal_plain_host` mirrors the shell's
+  `parse_word`/`valid_name` and refuses `any`, `web` and a host whose last label is all digits but which is no dotted
+  address; such a host gets the page without a line. `make check-netsurf-refusal` tests hosts named `any`, `ANY`, `web`.
+- **2, not changed: proposed ADR-0328.** A URL typed on the line under `net web` still gets its own name rule, which
+  accepts private answers, so its name could rebind to 192.168.1.1:80 on later fetches. ADR-0324 item 2 says so; the
+  options (keep; public-only like the web rule, recommended; no rule) are in ADR-0328 for the architect.
+- **3, fixed.** SLIRP relays `two.web.test:8080` to the test server, so a leak through the port check is logged and fails
+  the recipe; mutant `W-web-name-any-port-gui` (tests: `make test-netsurf`), run once by hand: the server's log held
+  `GET /ns/must-not-reach` and the recipe failed (the page-colour step 122 first, rc 2).
+- **Ran** after the fixes and the merge of `main`: `make check`; `make check-netsurf-refusal` and the host tests of
+  `zoraya-abi`, `zoraya-net`, `zoraya-shell`; the hand mutants of the fixes, all killed; `make netsurf`; `make
+  test-netsurf` (145 steps passed, both server-log checks ok). `make test-changed` failed in `test-libposix`,
+  `test-posix`, `test-net` (`test-net-posix`) and `test-tour-gui` (`tcc hello.c` gives no `./hello`): the local
+  `libc.a` index lacks `__zoraya_calls`, `__zoraya_calls_count` and `__zoraya_calls_list`, the `zoraya-ar` problem of
+  the review's last section, also on `main`, fixed by `548e8f2` on `work/9f-text`; nothing of this branch.
+- **4, fixed.** The shown URL is cut at 1024 bytes with a mark, the host at 253; a URL too long to repeat gets the line
+  of the host's first page (`+net HOST:PORT netsurf SCHEME://HOST/`); the page always fits 16 KiB (tested at the worst
+  bytes). That line is not the refused URL: ADR-0325 item 3 does not foresee it, for the architect to note.
+- **5, fixed.** Patch 0009 reads curl's own lookup through `--wrap=getaddrinfo` and asks no second time. ADR-0325 item 1
+  and its Consequences still say "a second `getaddrinfo`": the mechanism changed, the rule (`EAI_SYSTEM`/`EACCES`) did
+  not.
+- **6, fixed.** The decoder refuses a web rule with any protocol but TCP, so `netd` does (host tests in `zoraya-abi` and
+  `zoraya-net`, mutant `W-web-rule-any-protocol`).
+- **8, 9, 10, fixed.** `grants` of a native command calls the untrusted-room web refusal (a third `web-refusal-call`);
+  `grants` shows every port range of a web rule and `any port`; tests for a redirect to a refused host and a refused
+  lookup (`make test-netsurf`), and hosts named `web` and `any` (shell and page host tests).
+- **7, not changed.** Other hosts of a public on-link subnet are reachable under `web` (ADR-0324 item 2 defines local as
+  ADR-0223 does); recorded in `docs/design.md`'s limits, an open question for ADR-0324.
+
+## 9f: a usable browser (branch `docs/9f-final`, 2026-11-14)
+
+The final step of part 9f: the real desktop (`main` at `e8bf184`, NetSurf 3.11 with the `web` grant, ADR-0324/0325/0326) on the real
+Wikipedia, through QEMU's user network to the Internet. Nothing is mirrored or faked. Two hand-run scripts, in no CI list:
+`make hand-netsurf-wikipedia` (`tests/gui/netsurf-wikipedia.script`: front page and article of ru and uk) and `make
+hand-netsurf-wikipedia-2` (`tests/gui/netsurf-wikipedia-2.script`: scrolling, a click on a link, a redirect to another host). The image
+is `test-netsurf`'s with no test names and no test PKI: the production roots in `/system/tls/roots`, DNS from QEMU's lease, `--net
+--net-open`, scale 1, 1024x768, under HVF. The script types `netsurf URL` into the terminal, waits and takes screendumps through the
+runner's QMP (`shot`); nothing is asserted (the sites change). Both runs ended `PASS` (44 and 30 steps). Cyrillic URLs are typed
+percent-encoded (the runner types keys, not UTF-8).
+
+Screens (`docs/netsurf/`, 1024x768 PNG, 100 to 150 KB each; the screen 45 s after the start and 105 s after it are identical):
+
+| Screen | What it shows |
+|---|---|
+| `wikipedia-ru-front.png` | `https://ru.wikipedia.org/` redirected (same host) to `/wiki/Заглавная_страница`; pills `+net ru.wikipedia.org:443`, `web`, fonts, tls |
+| `wikipedia-ru-moskva.png` | `/wiki/Москва`, the top of the article ("Done (1.1s)") |
+| `wikipedia-ru-moskva-scrolled.png` | the same after 6 wheel notches: a caption, the infobox rows (Страна, Статус, Субъект Федерации) |
+| `wikipedia-ru-link.png` | a click on a link of the article (a `Файл:` page of the same host): page, back button live |
+| `wikipedia-uk-front.png` | `https://uk.wikipedia.org/` redirected to `/wiki/Головна_сторінка`; the Ukrainian welcome text |
+| `wikipedia-uk-kyiv.png` | `/wiki/Київ` (percent-encoded `%D0%9A%D0%B8%D1%97%D0%B2`) |
+| `wikipedia-redirect-www.png` | `http://wikipedia.org/` (port 80) redirected to `https://www.wikipedia.org/`, a second host and port, which the web grant admits; the title bar keeps the line's `+net wikipedia.org:80` and `web` |
+
+What works: TLS to the real sites with the production roots (no refusal), DNS through the web rule's public-only answers, HTTP to HTTPS
+and cross-host redirects, Russian and Ukrainian text (ґ є і ї included) in the system's fonts, with links in blue, headings, bold, the
+navigation row, a page's logo (PNG), the `web` pill, the wheel, the back button, same-host links. Each page was done in 0.3 to 1.3 s
+after the fetch by the status bar's count, and was complete within 45 s of the command.
+
+What does not, plainly:
+- **Pages are not laid out as a browser would.** The article is a column of left-aligned pieces: the infobox is flattened, and in the
+  article views the prose below the lead did not appear in what I scrolled (21 notches on Москва ended on blank space and the
+  "Москва" captions, `wp2-ru-scroll-2`, not kept): either NetSurf's CSS 2.1 layout loses Wikipedia's current (flex, grid, `:has`,
+  variables) styles, or text is hidden by a rule it does not read. Not diagnosed. Kyiv shows a title, the "other meanings" lines and the
+  flag and coat of arms captions (as text) and then blank space.
+- **Empty frames are images.** The boxes (the search icon, the menu and language buttons, the flag and coat of arms images) are SVG
+  or WebP files, which NetSurf here does not decode (no SVG, ADR-0318); those from `upload.wikimedia.org` are fetched under the web grant
+  (a second host), but are not drawn. The logo, a PNG on the page's own host, is.
+- **CJK and the other scripts show as boxes** (`wikipedia-redirect-www.png`: the Japanese, Chinese and Korean portal entries): the
+  system's fonts have Latin and Cyrillic only (ADR-0326).
+- Text overlaps on `www.wikipedia.org` (the portal's absolutely positioned labels), the Ukrainian title row's "Перевірена версія" sits
+  over the tab row; the search box is missing (it is a form of the page's script and an SVG button). No JavaScript runs, so a page that
+  needs it for content shows what its `noscript` or static HTML gives.
+- The runs take about 12 and 6 minutes because of the waits I chose (45 s and 60 to 90 s per page), not because the pages are slow.
+
+What the architect should look at: (1) the flattened article layout and the missing prose below the lead (is it CSS support, or a
+bug in `zoraya-text` or layout of tall boxes? a `netsurf -v` run of the article would say which style sheet fails); (2) SVG and WebP,
+which decide whether Wikipedia looks like itself; (3) a CJK-capable font, if the world's scripts are in scope; (4) ADR-0328 (a URL on
+the line under `net web` gets its own name rule), since a real redirect from the typed host to another one now happens in the field.
+Untrusted code never ran, the gate stays closed, and no code of the kernel or the shell changed in this step (a Makefile target and two
+scripts).

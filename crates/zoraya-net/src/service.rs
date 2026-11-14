@@ -21,6 +21,7 @@ use crate::connection::{ConnectTarget, Connection, Request, Verdict};
 use crate::dns::{Found, Owner, ResolveFail, Resolved as Answer, Start};
 use crate::link::Link;
 use crate::stack::{PingError, PingResult, Source, Stack};
+use zoraya_abi::net::NameGrant;
 use zoraya_proto_net::{Code, MAX_DNS, NO_LEASE};
 use zoraya_protocol::{Below, Data};
 
@@ -66,6 +67,9 @@ struct Lookup {
     transaction: u32,
     account: usize,
     scope: Vec<u8>,
+    /// Only a web rule admits the name (ADR-0324): only its public answers
+    /// that are not local count.
+    public_only: bool,
     /// Set for a `ping` by name: the run to start with the answer (ADR-0330).
     ping: Option<PingStart>,
 }
@@ -279,6 +283,7 @@ impl Service {
                             transaction: t,
                             account,
                             scope,
+                            public_only: false,
                             ping: Some(start),
                         });
                         Action::Deferred
@@ -321,10 +326,22 @@ impl Service {
                     };
                     (ConnectTarget::Name(n), Target::Name(n.into()))
                 };
-                let verdict = connection.decide(Request::Connect {
+                let mut verdict = connection.decide(Request::Connect {
                     target: target.0,
                     port,
                 });
+                // ADR-0324, ADR-0325: an address a web rule admits by its range
+                // but that is this side of the network (a public gateway or DNS
+                // server) is refused here as not granted, the grant's refusal
+                // it is, rather than later as a failed connection.
+                if let (Verdict::Allowed, ConnectTarget::Address(a)) = (verdict, target.0)
+                    && is_local(stack, a, now_us)
+                    && !connection
+                        .scope()
+                        .names_address(a, port, zoraya_abi::net::Protocols::TCP)
+                {
+                    verdict = Verdict::NotGranted;
+                }
                 let account = connection.account();
                 match verdict {
                     Verdict::Allowed => {
@@ -367,6 +384,7 @@ impl Service {
                 }
                 let account = connection.account();
                 let scope = connection.scope_bytes().to_vec();
+                let public_only = connection.scope().resolve_grant(name) == NameGrant::PublicOnly;
                 if self.accounts.charge(account, Kind::Resolutions).is_err() {
                     return answer(code::OVER_QUOTA);
                 }
@@ -383,13 +401,14 @@ impl Service {
                             transaction: t,
                             account,
                             scope,
+                            public_only,
                             ping: None,
                         });
                         Action::Deferred
                     }
                     Start::Done(found) => {
                         self.accounts.release(account, Kind::Resolutions);
-                        Action::Reply(found_reply(&found, &scope, stack, now_us, t))
+                        Action::Reply(found_reply(&found, &scope, public_only, stack, now_us, t))
                     }
                     Start::Failed(f) => {
                         self.accounts.release(account, Kind::Resolutions);
@@ -532,7 +551,14 @@ impl Service {
             return Some((id, bytes));
         }
         let bytes = match answer.result {
-            Ok(found) => found_reply(&found, &l.scope, stack, now_us, l.transaction),
+            Ok(found) => found_reply(
+                &found,
+                &l.scope,
+                l.public_only,
+                stack,
+                now_us,
+                l.transaction,
+            ),
             Err(f) => resolved_reply(fail_code(f), &[], l.transaction),
         };
         Some((id, bytes))
@@ -671,11 +697,15 @@ fn resolved_reply(status: u32, addresses: &[Address], t: u32) -> Vec<u8> {
 }
 
 /// The answer for the addresses of a name: the ones that are not local, or
-/// that an address rule of the scope covers; none left is `LOCAL`
+/// that an address rule of the scope names; none left is `LOCAL`
 /// (ADR-0223 item 4). `net.hosts` is the person's own word and exempt.
+/// A name only a web rule admits (`public_only`, ADR-0324) keeps only public
+/// answers that are not local, `net.hosts` included, unless a rule names the
+/// address; none left is `NOT_GRANTED`: the grant, not the name, is why.
 fn found_reply<L: Link>(
     found: &Found,
     scope: &[u8],
+    public_only: bool,
     stack: &Stack<L>,
     now_us: i64,
     t: u32,
@@ -684,11 +714,20 @@ fn found_reply<L: Link>(
     let usable: Vec<Address> = found
         .addresses
         .iter()
-        .filter(|a| found.from_hosts || !is_local(stack, **a, now_us) || scope.reaches_address(**a))
+        .filter(|a| {
+            let local = is_local(stack, **a, now_us);
+            if public_only {
+                scope.reaches_address(**a) || (zoraya_abi::net::is_public(**a) && !local)
+            } else {
+                found.from_hosts || !local || scope.reaches_address(**a)
+            }
+        })
         .take(MAX_ADDRESSES)
         .map(|a| Address { address: be(*a) })
         .collect();
-    if usable.is_empty() {
+    if usable.is_empty() && public_only {
+        resolved_reply(code::NOT_GRANTED, &[], t)
+    } else if usable.is_empty() {
         resolved_reply(code::LOCAL, &[], t)
     } else {
         resolved_reply(code::OK, &usable, t)

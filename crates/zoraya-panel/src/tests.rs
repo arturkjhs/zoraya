@@ -638,8 +638,16 @@ fn a_window_is_for_a_trusted_rooms_shell_only() {
     let untrusted = p.rooms.get("agent-1").cloned();
     assert!(trusted.as_ref().is_some_and(|r| !r.untrusted));
     assert!(untrusted.as_ref().is_some_and(|r| r.untrusted));
-    let entries = "+net example.org:443\n+r /share/netsurf";
+    let entries = "web\n+net example.org:443\n+r /share/netsurf";
     let r = window_record(trusted.as_ref(), "netsurf", "NetSurf", entries).unwrap();
+    // `web` is a pill only as that one word (ADR-0324 item 6).
+    for bad in ["webs", "web x", "Web", " web"] {
+        assert_eq!(
+            window_record(trusted.as_ref(), "netsurf", "NetSurf", bad),
+            Err(why::INVALID),
+            "{bad}"
+        );
+    }
     assert_eq!(
         (r.untrusted, r.room.as_str(), r.app.as_str()),
         (false, "project", "netsurf")

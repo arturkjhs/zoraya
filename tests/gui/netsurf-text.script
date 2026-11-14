@@ -9,7 +9,7 @@ serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
 pause 3000
-type netsurf http://10.0.2.2:@PORT@/ns/cyrillic\r
+type netsurf http://@HOST@:@PORT@/ns/cyrillic\r
 pause 15000
 shot netsurf-cyrillic-2
 # Line 1, ten і: ink where they are, and nothing where ten ж reach on line 2;

@@ -37,6 +37,8 @@ enum Named {
     Address([u8; 4]),
     Prefix([u8; 4], u8),
     Any,
+    /// The web rule of a description (ADR-0324), never a `+net` word.
+    Public,
 }
 
 impl NetWord {
@@ -48,6 +50,7 @@ impl NetWord {
                 Named::Address(a) => Target::Address(*a),
                 Named::Prefix(a, l) => Target::Prefix(*a, *l),
                 Named::Any => Target::Any,
+                Named::Public => Target::Public,
             },
             ports: self.ports,
             protocols: self.protocols,
@@ -187,6 +190,16 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
             });
         }
     }
+    // The web rule a description of the image asks for (ADR-0324 items 1
+    // and 3): public hosts on ports 80 and 443, TCP; beside the line's
+    // words, never a word that would let a value designate.
+    if d.net_web && line.base_system {
+        words.push(NetWord {
+            target: Named::Public,
+            ports: Ports::ranges(&WEB_PORTS).unwrap_or(Ports::one(443)),
+            protocols: Protocols::TCP,
+        });
+    }
     let rules: Vec<ReachRule<'_>> = words.iter().map(NetWord::rule).collect();
     if rules.is_empty() {
         if d.needs_net_status && line.base_system {
@@ -261,14 +274,50 @@ pub fn line_may_run(d: &Description, args: &[&str]) -> bool {
     }
 }
 
-/// The targets a scope reaches, as the window's `+net` pills name them: the
-/// first word of each `describe` line after `net: `.
-pub fn targets(scope: &[u8]) -> Vec<String> {
-    describe(scope)
-        .iter()
-        .filter_map(|l| l.trim_start_matches("net: ").split_whitespace().next())
-        .map(String::from)
+/// The window's pills for a scope (ADR-0317 item 3): `+net TARGET` for each
+/// rule, with the target as the first word of its `describe` line after
+/// `net: `, and `web` for the web rule (ADR-0324 item 6; not `+net web`,
+/// which would be a host named `web`).
+pub fn pills(scope: &[u8]) -> Vec<String> {
+    let Some(decoded) = Scope::decode(scope) else {
+        return Vec::new();
+    };
+    decoded
+        .reach_rules()
+        .zip(describe(scope))
+        .filter_map(|(rule, line)| {
+            if rule.target == Target::Public {
+                return Some(String::from(WEB_PILL));
+            }
+            let target = line.trim_start_matches("net: ").split_whitespace().next()?;
+            Some(alloc::format!("+net {target}"))
+        })
         .collect()
+}
+
+/// The pill of the web rule.
+pub const WEB_PILL: &str = "web";
+
+/// The ports of the web rule (ADR-0324 item 3).
+pub const WEB_PORTS: [(u16, u16); 2] = [(80, 80), (443, 443)];
+
+/// Whether a line may have the web rule its description asks for
+/// (ADR-0324 item 7, INV-0324-3): never in an untrusted room. This refusal
+/// is the web rule's own and stays after the gate's second stage opens; the
+/// shell calls it wherever it makes a POSIX program's or a command's network
+/// scope (`untrusted-gate: web-refusal-call`).
+pub fn web_refused(d: &Description, untrusted: bool) -> Result<(), Refused> {
+    if d.net_web && untrusted {
+        // untrusted-gate: web-refusal (ADR-0324 item 7, `make check-untrusted-gate`)
+        return Err(Refused {
+            subject: d.name.clone(),
+            problem: "its description gives it the web (public hosts on ports 80 and 443), which an untrusted room does not give".into(),
+            hint: Some(String::from(
+                "ADR-0324: in an untrusted room a program reaches only the room's own network words",
+            )),
+        });
+    }
+    Ok(())
 }
 
 /// The lines `grants` prints for the scope `net_for` made (ADR-0224 item 3),
@@ -289,6 +338,42 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
                 Target::Address(a) => alloc::format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
                 Target::Prefix(a, l) => alloc::format!("{}.{}.{}.{}/{l}", a[0], a[1], a[2], a[3]),
                 Target::Any => String::from("any"),
+                Target::Public => {
+                    // Every range whole, and `any port` (9f-net review,
+                    // note 9): a narrowed web scope is a valid input.
+                    let ports = if rule.ports.is_any() {
+                        String::from("any port")
+                    } else {
+                        let list: Vec<String> = rule
+                            .ports
+                            .list()
+                            .iter()
+                            .map(|&(l, h)| {
+                                if l == h {
+                                    alloc::format!("{l}")
+                                } else {
+                                    alloc::format!("{l}-{h}")
+                                }
+                            })
+                            .collect();
+                        let word = if list.len() == 1 && !list[0].contains('-') {
+                            "port"
+                        } else {
+                            "ports"
+                        };
+                        let joined = match list.split_last() {
+                            Some((last, rest)) if !rest.is_empty() => {
+                                alloc::format!("{} and {last}", rest.join(", "))
+                            }
+                            _ => list.concat(),
+                        };
+                        alloc::format!("{word} {joined}")
+                    };
+                    return alloc::format!(
+                        "net: {:<24}reach public hosts, {ports}; not this machine or its network (description)",
+                        "web",
+                    );
+                }
             };
             let (shown, access) = if rule.protocols == Protocols::ECHO {
                 (host, "echo only")
