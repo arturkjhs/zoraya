@@ -454,6 +454,49 @@ impl Fake {
 
 impl Fake {
     /// Runs every service until `h` asserts one of `wanted`.
+    /// A wait on several sources, or with a deadline (`poll`): the first
+    /// source that asserts one of its signals, in order. With nothing to
+    /// wake it, a deadline passes (`DeadlineExceeded`); without one, the
+    /// test is wrong (`BadState`).
+    fn wait_many(
+        &mut self,
+        sources: &[(H, u32)],
+        has_deadline: bool,
+    ) -> Result<(usize, u32), Status> {
+        self.waits += 1;
+        loop {
+            for (i, &(h, wanted)) in sources.iter().enumerate() {
+                if self.net.borrow().object(h).is_none() {
+                    return Err(Status::BadHandle);
+                }
+                let s = self.net.borrow().signals(h);
+                if s & wanted != 0 {
+                    return Ok((i, s));
+                }
+            }
+            if let Some(f) = self.meanwhile.as_mut() {
+                f(&mut self.net.borrow_mut());
+                if sources
+                    .iter()
+                    .any(|&(h, w)| self.net.borrow().signals(h) & w != 0)
+                {
+                    continue;
+                }
+            }
+            let mut stepped = false;
+            for service in &self.services {
+                stepped |= service.borrow_mut().step();
+            }
+            if !stepped {
+                return Err(if has_deadline {
+                    Status::DeadlineExceeded
+                } else {
+                    Status::BadState
+                });
+            }
+        }
+    }
+
     fn run_until(&mut self, h: H, wanted: u32) -> Result<u32, Status> {
         loop {
             // As the kernel: a wait on a handle that is not there fails.
@@ -568,7 +611,7 @@ impl Sys for Fake {
     fn wait_any(
         &mut self,
         sources: &[(H, u32)],
-        _deadline: Option<u64>,
+        deadline: Option<u64>,
     ) -> Result<(usize, u32), Status> {
         let pending = zoraya_abi::process_signals::REQUEST_PENDING;
         if let Some(n) = self.signal_after_waits {
@@ -581,8 +624,18 @@ impl Sys for Fake {
                 self.signal_after_waits = Some(n - 1);
             }
         }
+        if sources.len() > 1 || deadline.is_some() {
+            return self.wait_many(sources, deadline.is_some());
+        }
         let &(h, wanted) = sources.first().ok_or(Status::InvalidArgument)?;
         self.wait(h, wanted).map(|s| (0, s))
+    }
+
+    fn signals_of(&mut self, h: H) -> Result<u32, Status> {
+        if self.net.borrow().object(h).is_none() {
+            return Err(Status::BadHandle);
+        }
+        Ok(self.net.borrow().signals(h))
     }
 
     fn stream_create(&mut self) -> Result<(H, H), Status> {

@@ -876,6 +876,102 @@ fn select_once(
     }
 }
 
+/// `poll` (ADR-0342 item 5, ADR-0414 item 1): `timeout` in milliseconds,
+/// negative for none. The same wait as `pselect`, over `Posix::poll_once`.
+#[unsafe(export_name = "poll")]
+extern "C" fn poll_fds(fds: *mut crate::poll::PollFd, nfds: u64, timeout: i32) -> i32 {
+    // A cancellation point, acted on before any buffer is built.
+    testcancel();
+    let deadline = crate::poll::deadline_after_ms(zoraya_rt::clock_monotonic(), timeout);
+    poll_wait(fds, nfds, deadline, ptr::null())
+}
+
+/// `ppoll`: `poll` with a `struct timespec` timeout (NULL for none) and the
+/// signal mask in force for the wait, as `pselect` has it. The timeout is not
+/// written back.
+#[unsafe(no_mangle)]
+extern "C" fn ppoll(
+    fds: *mut crate::poll::PollFd,
+    nfds: u64,
+    timeout: *const [i64; 2],
+    sigmask: *const u64,
+) -> i32 {
+    // A cancellation point, acted on before any buffer is built.
+    testcancel();
+    let deadline = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: C's contract: a `struct timespec`.
+        let [s, ns] = unsafe { timeout.read() };
+        match crate::poll::deadline_after_timespec(zoraya_rt::clock_monotonic(), s, ns) {
+            Ok(d) => Some(d),
+            Err(e) => return int(Err(e)),
+        }
+    };
+    poll_wait(fds, nfds, deadline, sigmask)
+}
+
+/// What `poll` and `ppoll` share: the copy of the caller's array, the mask
+/// for the wait, and the loop of `pselect` (a handler that ran is `EINTR`;
+/// an interrupt with none is another look).
+fn poll_wait(
+    fds: *mut crate::poll::PollFd,
+    nfds: u64,
+    deadline: Option<u64>,
+    sigmask: *const u64,
+) -> i32 {
+    use crate::poll::PollFd;
+    let n = match crate::poll::array_len(nfds, fds.is_null()) {
+        Ok(n) => n,
+        Err(e) => return int(Err(e)),
+    };
+    let mut list: Vec<PollFd> = (0..n)
+        // SAFETY: C's contract: `fds` is an array of `nfds` `struct pollfd`.
+        .map(|i| unsafe { fds.add(i).read_unaligned() })
+        .collect();
+    // SAFETY: C's contract for the mask.
+    let mask = unsafe { read_set(sigmask) };
+    let old = match mask {
+        Some(m) => state(|p| p.signals.mask(SIG_SETMASK, Some(m))).ok(),
+        None => None,
+    };
+    let restore = |old: Option<u64>| {
+        if let Some(o) = old {
+            let _ = state(|p| p.signals.mask(SIG_SETMASK, Some(o)));
+        }
+    };
+    loop {
+        if deliver().ran {
+            restore(old);
+            poll();
+            return int(Err(EINTR));
+        }
+        match state(|p| p.poll_once(&mut list, deadline)) {
+            Ok(Some(count)) => {
+                for (i, f) in list.iter().enumerate() {
+                    // SAFETY: as for the reads above; only `revents` is
+                    // written, as C's `poll` writes only that field.
+                    unsafe {
+                        fds.add(i)
+                            .cast::<u8>()
+                            .add(core::mem::offset_of!(PollFd, revents))
+                            .cast::<i16>()
+                            .write_unaligned(f.revents)
+                    };
+                }
+                restore(old);
+                poll();
+                return count;
+            }
+            Ok(None) | Err(EINTR) => {}
+            Err(e) => {
+                restore(old);
+                return int(Err(e));
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------ kill
 
 #[unsafe(no_mangle)]

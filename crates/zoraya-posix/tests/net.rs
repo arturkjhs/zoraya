@@ -593,3 +593,84 @@ fn a_dead_netd_is_enetdown() {
             .unwrap_err();
     assert_eq!((e.eai, e.errno), (sock::EAI_SYSTEM, ENETDOWN));
 }
+
+/// `poll` (ADR-0342 item 5, ADR-0414 item 1) on sockets: a connecting socket
+/// is ready through its control channel, a connected one by its streams, and
+/// one with no connection at once, as `select` has it.
+fn polled(r: &mut Rig, fd: i32, events: i16, deadline: Option<u64>) -> (i32, i16) {
+    use zoraya_posix::poll::PollFd;
+    let mut f = [PollFd {
+        fd,
+        events,
+        revents: 0,
+    }];
+    let n = loop {
+        if let Some(n) = r.p.poll_once(&mut f, deadline).unwrap() {
+            break n;
+        }
+    };
+    (n, f[0].revents)
+}
+
+#[test]
+fn poll_on_a_connecting_socket_waits_for_the_channel() {
+    use zoraya_posix::poll::{POLLHUP, POLLIN, POLLOUT};
+    let mut t = rigged(Script {
+        hold: true,
+        ..Script::default()
+    });
+    let fd =
+        t.r.p
+            .socket(sock::AF_INET, sock::SOCK_STREAM | sock::SOCK_NONBLOCK, 0)
+            .unwrap();
+    // No connection yet: nothing to wait for, so ready at once.
+    assert_eq!(polled(&mut t.r, fd, POLLOUT, Some(0)), (1, POLLOUT));
+    assert_eq!(t.r.p.connect(fd, &addr(EXAMPLE, 80)), Err(EINPROGRESS));
+    let held = t.log.borrow().held[0];
+    assert_eq!(polled(&mut t.r, fd, POLLOUT, Some(0)), (0, 0), "not yet");
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (0, 0));
+    // The channel says so during the wait: both directions wake.
+    t.log.borrow_mut().pending.push((
+        0,
+        reply(
+            &Connected {
+                address: 0x5db8_d822,
+                port: Below(80),
+            },
+            0,
+        ),
+    ));
+    assert_eq!(polled(&mut t.r, fd, POLLOUT, None), (1, POLLOUT));
+    t.r.p.finish_connect(fd, true).unwrap();
+    assert_eq!(polled(&mut t.r, fd, POLLOUT, Some(0)), (1, POLLOUT));
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (0, 0), "no data yet");
+    t.r.net.borrow_mut().push(held.inbound, b"late");
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (1, POLLIN));
+    assert_eq!(recv(&mut t.r, fd, 10).unwrap(), b"late");
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (0, 0));
+    // The peer's end: what is left to read, then the hang-up.
+    t.r.net.borrow_mut().close(held.inbound);
+    assert_eq!(polled(&mut t.r, fd, POLLIN, None), (1, POLLIN | POLLHUP));
+    assert_eq!(recv(&mut t.r, fd, 10).unwrap(), b"");
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (1, POLLIN | POLLHUP));
+    assert_eq!(polled(&mut t.r, fd, 0, Some(0)), (1, POLLHUP));
+}
+
+#[test]
+fn poll_on_a_connected_socket_with_a_page_and_a_fin() {
+    use zoraya_posix::poll::{POLLHUP, POLLIN, POLLOUT};
+    let mut t = rigged(Script {
+        page: b"abc".to_vec(),
+        fin: true,
+        ..Script::default()
+    });
+    let fd = stream(&mut t.r);
+    t.r.p.connect(fd, &addr(EXAMPLE, 80)).unwrap();
+    assert_eq!(
+        polled(&mut t.r, fd, POLLIN | POLLOUT, Some(0)),
+        (1, POLLIN | POLLOUT | POLLHUP)
+    );
+    assert_eq!(recv(&mut t.r, fd, 10).unwrap(), b"abc");
+    assert_eq!(polled(&mut t.r, fd, POLLIN, Some(0)), (1, POLLIN | POLLHUP));
+    assert_eq!(recv(&mut t.r, fd, 10).unwrap(), b"");
+}
