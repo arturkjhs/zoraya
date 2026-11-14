@@ -309,3 +309,17 @@ fn a_bss_larger_than_the_file_does_not_hide_the_symbols() {
     elf[h + 4..h + 8].copy_from_slice(&1u32.to_le_bytes());
     assert!(elf::defined_globals(&elf).is_empty());
 }
+
+#[test]
+fn a_nobits_string_table_past_the_end_gives_no_symbols_and_no_panic() {
+    let mut elf = object(&[("x", GLOBAL, 1, 1)]);
+    // .strtab is section 3; make it SHT_NOBITS with a size past the file.
+    let shoff = u64::from_le_bytes(elf[40..48].try_into().unwrap()) as usize;
+    let h = shoff + 3 * 64;
+    elf[h + 4..h + 8].copy_from_slice(&8u32.to_le_bytes());
+    elf[h + 32..h + 40].copy_from_slice(&(1u64 << 20).to_le_bytes());
+    assert!(elf::defined_globals(&elf).is_empty());
+    // A NOBITS string table inside the file is refused too: it holds no names.
+    elf[h + 32..h + 40].copy_from_slice(&2u64.to_le_bytes());
+    assert!(elf::defined_globals(&elf).is_empty());
+}

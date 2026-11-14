@@ -70,8 +70,13 @@ fn defined(elf: &[u8]) -> Option<Vec<String>> {
         if kind != SHT_SYMTAB {
             continue;
         }
-        let (_, str_off, str_size, _) = section(elf, link)?;
-        let strtab = &elf[str_off..str_off + str_size];
+        let (str_kind, str_off, str_size, _) = section(elf, link)?;
+        // A NOBITS string table has no bytes in the file, and `section`
+        // does not check its range: refuse it rather than index past the end.
+        if str_kind == SHT_NOBITS {
+            return None;
+        }
+        let strtab = elf.get(str_off..str_off.checked_add(str_size)?)?;
         // Entry 0 is the null symbol.
         for at in (offset..offset + size).step_by(24).skip(1) {
             let sym = elf.get(at..at + 24)?;
