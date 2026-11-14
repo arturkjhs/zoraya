@@ -61,7 +61,14 @@ impl Source for Files {
         let mut c = Vec::with_capacity(path.len() + 1);
         c.extend_from_slice(path.as_bytes());
         c.push(0);
-        let fd = open(c.as_ptr().cast(), o::RDONLY as i32, 0);
+        // A signal during start-up must not lose a font for the whole
+        // process (T7 of the 9f-text review): `EINTR` is tried again.
+        let fd = loop {
+            let fd = open(c.as_ptr().cast(), o::RDONLY as i32, 0);
+            if fd >= 0 || last_errno() != EINTR {
+                break fd;
+            }
+        };
         if fd < 0 {
             return None;
         }
@@ -69,6 +76,9 @@ impl Source for Files {
         let mut chunk = vec![0u8; 64 * 1024];
         let ok = loop {
             let n = read(fd, chunk.as_mut_ptr(), chunk.len());
+            if n < 0 && last_errno() == EINTR {
+                continue;
+            }
             if n < 0 {
                 break false;
             }
@@ -83,6 +93,12 @@ impl Source for Files {
         close(fd);
         ok.then_some(data)
     }
+}
+
+/// This thread's `errno`, as the call before set it.
+fn last_errno() -> i32 {
+    // SAFETY: musl's `__errno_location` gives this thread's errno, always.
+    unsafe { *__errno_location() }
 }
 
 struct Slot(UnsafeCell<Option<Fontset>>);
@@ -106,10 +122,15 @@ fn fonts<R>(busy: R, f: impl FnOnce(&mut Option<Fontset>) -> R) -> R {
 }
 
 /// In a `fork` child: the fonts are the parent's bytes, copied with the
-/// address space, so they stay; the lock, if a thread that is not in the
-/// child held it, is freed.
+/// address space, so they stay when the lock was free. When a thread that is
+/// not in the child held it, that thread may have been in the middle of
+/// changing the set (a glyph cache insert, a `Vec` growing), so the set is
+/// forgotten and the child's `zoraya_text_init` reads the fonts again (T2 of
+/// the 9f-text review). The lock is freed either way.
 pub(super) fn after_fork_in_child() {
-    TEXT.reset();
+    // SAFETY: a fork child has one thread, and no reference into `SLOT`
+    // outlives a call (`plot` may not `fork`: it is called with `TEXT` held).
+    crate::lock::reset_after_fork(&TEXT, unsafe { &mut *SLOT.0.get() });
 }
 
 /// Reads the fonts (once: a second call reads nothing) and gives how many
@@ -192,11 +213,13 @@ pub unsafe extern "C" fn zoraya_text_split(
 }
 
 /// The ascent and descent (positive, below the baseline) of the style's
-/// face in pixels; 0, or -1 before `zoraya_text_init`.
+/// face in pixels; 0, or -1 before `zoraya_text_init`. A NULL `ascent` or
+/// `descent` is not written.
 ///
 /// # Safety
 ///
-/// `style` is NULL or readable; `ascent` and `descent` are writable.
+/// `style` is NULL or readable; `ascent` and `descent` are NULL or
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn zoraya_text_metrics(
     style: *const TextStyle,
@@ -207,10 +230,13 @@ pub unsafe extern "C" fn zoraya_text_metrics(
     let (face, px) = unsafe { face_px(style) };
     let m = fonts(None, |slot| slot.as_ref().map(|f| f.metrics(face, px)));
     let Some(m) = m else { return -1 };
-    // SAFETY: the caller's contract: writable.
-    unsafe {
-        *ascent = m.ascent as i32;
-        *descent = m.descent as i32;
+    if !ascent.is_null() {
+        // SAFETY: the caller's contract: writable when not NULL.
+        unsafe { *ascent = m.ascent as i32 };
+    }
+    if !descent.is_null() {
+        // SAFETY: the caller's contract: writable when not NULL.
+        unsafe { *descent = m.descent as i32 };
     }
     0
 }
@@ -222,7 +248,7 @@ pub type Plot = unsafe extern "C" fn(*mut core::ffi::c_void, i32, i32, u32, u32,
 
 /// Calls `plot` for every glyph of the text and gives its advance. `plot`
 /// must not call the `zoraya_text_*` functions (they would get the busy
-/// answer).
+/// answer), nor `fork` (the child would forget the set under the call).
 ///
 /// # Safety
 ///
