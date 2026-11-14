@@ -45,7 +45,7 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
-	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md
+	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -62,7 +62,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
+	dash make pdpmake toybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -318,9 +318,13 @@ $(PDPMAKE_BIN): $(PDPMAKE) $(SYSROOT_STAMP)
 
 # ---------------------------------------------------------------- toybox
 
-# The T1 applets of applets-by-tier.tsv, plus sort, wc and yes (ADR-0109
-# item 6), from allnoconfig as TASK-02's minimal builds were.
-TOYBOX_APPLETS := cat head ls mv rm sleep touch true uname sort wc yes
+# The commands of ports/toybox-applets.txt (ADR-0336 item 1), from
+# allnoconfig as TASK-02's minimal builds were. The file is the one list: the
+# build, the links in /bin and the checks of `make check-ports` read it.
+TOYBOX_APPLET_FILE := ports/toybox-applets.txt
+# Options of the build that are not commands: seq and others need floating point.
+TOYBOX_OPTIONS := toybox-float
+TOYBOX_APPLETS := $(shell sed -e 's/\#.*//' $(TOYBOX_APPLET_FILE) | tr -s ' \t\n' '   ')
 TOYBOX := $(WORK)/toybox-$(call lock_ver,toybox)
 TOYBOX_BIN := $(TOYBOX)/toybox
 toybox: $(TOYBOX_BIN)
@@ -333,43 +337,17 @@ GSED := $(shell command -v gsed 2>/dev/null || { sed --version 2>/dev/null | gre
 
 # On a macOS host toybox's scripts pick Mach-O link options and strip; they
 # are given the ELF ones, and the binary is not stripped (-g as measured).
-$(TOYBOX_BIN): $(TOYBOX) $(SYSROOT_STAMP)
+$(TOYBOX_BIN): $(TOYBOX) $(SYSROOT_STAMP) $(TOYBOX_APPLET_FILE)
 	@if [ -z "$(GSED)" ]; then echo "ports: toybox's build needs GNU sed, which this host lacks." \
 	  "On macOS: brew install gnu-sed (it installs gsed, which toybox's scripts use)."; exit 1; fi
 	@$(call logged,$(MAKE) -C $(TOYBOX) allnoconfig HOSTCC=$(HOSTCC) SED=$(GSED),toybox-config)
-	@$(call kconfig_on,$(TOYBOX),$(TOYBOX_APPLETS))
+	@$(call kconfig_on,$(TOYBOX),$(TOYBOX_APPLETS) $(TOYBOX_OPTIONS))
 	@yes '' | $(MAKE) -C $(TOYBOX) oldconfig HOSTCC=$(HOSTCC) SED=$(GSED) > /dev/null 2>&1
 	rm -f $(TOYBOX_BIN)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(TOYBOX) toybox V=1 CC=$(ZCC) HOSTCC=$(HOSTCC) \
 	  CFLAGS="$(CROSS_CFLAGS)" SED=$(GSED) LDOPTIMIZE=-Wl$(comma)--gc-sections NOSTRIP=1,toybox)
 	@touch $@
 comma := ,
-
-# ---------------------------------------------------------------- busybox
-
-BUSYBOX_APPLETS := tr diff
-BUSYBOX := $(WORK)/busybox-$(call lock_ver,busybox)
-BUSYBOX_BIN := $(BUSYBOX)/busybox
-busybox: $(BUSYBOX_BIN)
-$(BUSYBOX): $(LOCK) $(wildcard ports/patches/busybox/*.patch)
-	$(call unpack,busybox,ports/patches/busybox)
-	@touch $@
-
-# allnoconfig with the shell choice forced to none, as TASK-02's minimal
-# builds did, then tr and diff. KCONFIG_NOTIMESTAMP keeps the build time out
-# of the binary; SKIP_STRIP keeps the debug information.
-$(BUSYBOX_BIN): $(BUSYBOX) $(SYSROOT_STAMP)
-	@$(call logged,$(MAKE) -C $(BUSYBOX) allnoconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1,busybox-config)
-	@sed -e 's/^CONFIG_SH_IS_ASH=y/# CONFIG_SH_IS_ASH is not set/' \
-	  -e 's/^# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' \
-	  $(BUSYBOX)/.config > $(BUSYBOX)/.config.new && mv $(BUSYBOX)/.config.new $(BUSYBOX)/.config
-	@$(call kconfig_on,$(BUSYBOX),$(BUSYBOX_APPLETS))
-	@yes '' | $(MAKE) -C $(BUSYBOX) oldconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > /dev/null 2>&1
-	rm -f $(BUSYBOX_BIN) $(BUSYBOX)/busybox_unstripped
-	@$(call logged,$(CROSS_ENV) KCONFIG_NOTIMESTAMP=1 $(MAKE) -C $(BUSYBOX) V=1 HOSTCC=$(HOSTCC) \
-	  CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar LD=$(TOOLBIN)/aarch64-unknown-zoraya-ld \
-	  SKIP_STRIP=y,busybox)
-	@touch $@
 
 # ---------------------------------------------------------------- tcc
 
@@ -430,19 +408,20 @@ sysroot: $(SYSROOT_STAMP) $(TCC_SYSROOT)
 libc: $(SYSROOT_STAMP)
 
 # build/rootfs-posix (ADR-0109 item 6): the programs in /bin, toybox and
-# busybox with a link per applet (ADR-0108 item 6), the sysroot as /usr.
+# toybox in /usr/libexec with a link per applet in /bin (ADR-0108 item 6,
+# ADR-0336 item 8), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STAMP) $(TCC_SYSROOT) $(SYSROOT_STAMP)
+$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP)
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh
 	cp $(GMAKE_BIN) $(ROOTFS)/bin/make
 	cp $(PDPMAKE_BIN) $(ROOTFS)/bin/pdpmake
 	cp $(TCC_BIN) $(ROOTFS)/bin/tcc && ln -s tcc $(ROOTFS)/bin/cc
-	cp $(TOYBOX_BIN) $(ROOTFS)/bin/toybox
-	for a in $(TOYBOX_APPLETS); do ln -s toybox $(ROOTFS)/bin/$$a; done
-	cp $(BUSYBOX_BIN) $(ROOTFS)/bin/busybox
-	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
+	@# The multi-call binary is not in /bin (ADR-0336 item 8): `toybox sed ...`
+	@# is not found by name; the links in /bin point at it.
+	mkdir -p $(ROOTFS)/usr/libexec && cp $(TOYBOX_BIN) $(ROOTFS)/usr/libexec/toybox
+	for a in $(TOYBOX_APPLETS); do ln -s ../usr/libexec/toybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
 	@# Not the C++ runtime (ADR-0365): no compiler in the image builds C++.
 	rm -rf $(ROOTFS)/usr/include/c++ $(addprefix $(ROOTFS)/usr/,$(CXX_IMAGE_LEFT_OUT))
@@ -1078,34 +1057,20 @@ $(WORKLOADS_STAMP): $(addprefix $(WORKLOADS)/,tcc lua sqlite hello)
 # installed; T2's rows are not stage 6's.
 T2_TOYBOX_APPLETS := arch basename cat chmod cp cpio dirname echo env find grep head hostname id \
 	install ln ls mkdir mktemp mv rm rmdir sed sleep sort tar touch true uname wc xargs yes
-T2_BUSYBOX_APPLETS := awk diff expr gzip tr
 T2_PROBE := $(LOGS)/t2-probe.txt
 T2_TOYBOX := $(WORK)/toybox-t2
-T2_BUSYBOX := $(WORK)/busybox-t2
 t2-probe: $(T2_PROBE)
 $(T2_TOYBOX): $(LOCK) $(wildcard ports/patches/toybox/*.patch)
 	$(call unpack,toybox,ports/patches/toybox)
 	@touch $@
-$(T2_BUSYBOX): $(LOCK)
-	$(call unpack,busybox,ports/patches/busybox)
-	@touch $@
-$(T2_PROBE): $(T2_TOYBOX) $(T2_BUSYBOX) $(SYSROOT_STAMP)
+$(T2_PROBE): $(T2_TOYBOX) $(SYSROOT_STAMP)
 	@$(MAKE) -C $(T2_TOYBOX) allnoconfig HOSTCC=$(HOSTCC) SED=$(GSED) > $(LOGS)/t2-toybox.log 2>&1
 	@$(call kconfig_on,$(T2_TOYBOX),$(T2_TOYBOX_APPLETS))
 	@yes '' | $(MAKE) -C $(T2_TOYBOX) oldconfig HOSTCC=$(HOSTCC) SED=$(GSED) > /dev/null 2>&1
 	-@$(CROSS_ENV) $(MAKE) -C $(T2_TOYBOX) toybox V=1 CC=$(ZCC) HOSTCC=$(HOSTCC) \
 	  CFLAGS="$(CROSS_CFLAGS)" SED=$(GSED) LDOPTIMIZE=-Wl$(comma)--gc-sections NOSTRIP=1 \
 	  >> $(LOGS)/t2-toybox.log 2>&1
-	@$(MAKE) -C $(T2_BUSYBOX) allnoconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > $(LOGS)/t2-busybox.log 2>&1
-	@sed -e 's/^CONFIG_SH_IS_ASH=y/# CONFIG_SH_IS_ASH is not set/' \
-	  -e 's/^# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' \
-	  $(T2_BUSYBOX)/.config > $(T2_BUSYBOX)/.config.new && mv $(T2_BUSYBOX)/.config.new $(T2_BUSYBOX)/.config
-	@$(call kconfig_on,$(T2_BUSYBOX),$(T2_BUSYBOX_APPLETS))
-	@yes '' | $(MAKE) -C $(T2_BUSYBOX) oldconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > /dev/null 2>&1
-	-@$(CROSS_ENV) KCONFIG_NOTIMESTAMP=1 $(MAKE) -C $(T2_BUSYBOX) V=1 HOSTCC=$(HOSTCC) \
-	  CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar LD=$(TOOLBIN)/aarch64-unknown-zoraya-ld \
-	  SKIP_STRIP=y >> $(LOGS)/t2-busybox.log 2>&1
-	@for p in toybox busybox; do \
+	@for p in toybox; do \
 	  names=$$(sed -n 's/.*undefined symbol: \([A-Za-z0-9_]*\).*/\1/p' $(LOGS)/t2-$$p.log | sort -u); \
 	  echo "$$p: $$(echo $$names | wc -w | tr -d ' ') names: $$(echo $$names)"; done > $@
 	@cat $@
@@ -1135,7 +1100,7 @@ check-ports: | tools
 	@for f in include/c++ $(CXX_IMAGE_LEFT_OUT); do \
 	  if [ -e $(ROOTFS)/usr/$$f ]; then echo "build/rootfs-posix/usr/$$f is in the image"; exit 1; fi; done
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
-	@for l in dash make pdpmake busybox toybox tcc libtcc1 musl; do \
+	@for l in dash make pdpmake toybox tcc libtcc1 musl; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi
@@ -1148,4 +1113,6 @@ check-ports: | tools
 	$(ELF_CHECK) $(HELLO_DIR)/a.out
 	@echo "== tcc for Zoraya has no -run: it calls itself a cross compiler (INV-0143-2)"
 	LC_ALL=C grep -a -q 'run is not available in a cross compiler' $(TCC_BIN)
+	@echo "== the userland: list, sources, busybox, surface block (INV-0336-1, -3, INV-0342-1)"
+	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK)
 	@echo "check-ports: all passed"

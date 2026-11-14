@@ -1751,6 +1751,12 @@ extern "C" fn zoraya_posix_read(fd: i64, buf: i64, n: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn readv(fd: i32, iov: *const [usize; 2], count: i32) -> isize {
+    // SAFETY: C's contract for readv.
+    size(unsafe { vectors(iov, i64::from(count)) }.and_then(|v| readv_all(fd, v)))
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn zoraya_posix_readv(fd: i64, iov: i64, count: i64) -> i64 {
     // SAFETY: musl's stdio passes its own iovec array.
     let r =
@@ -2373,6 +2379,37 @@ extern "C" fn mknodat(dirfd: i32, path: *const c_char, mode: u32, _dev: u64) -> 
 #[unsafe(no_mangle)]
 extern "C" fn mkfifo(path: *const c_char, mode: u32) -> i32 {
     mknodat(AT_FDCWD, path, stat::S_IFIFO | (mode & 0o777), 0)
+}
+
+/// ADR-0342 item 8: a node of any kind but a FIFO is `EPERM`.
+#[unsafe(no_mangle)]
+extern "C" fn mknod(path: *const c_char, mode: u32, dev: u64) -> i32 {
+    mknodat(AT_FDCWD, path, mode, dev)
+}
+
+/// ADR-0342 item 8: there are no hard links (ADR-0013), whatever the names.
+#[unsafe(no_mangle)]
+extern "C" fn link(_old: *const c_char, _new: *const c_char) -> i32 {
+    int(Err(EPERM))
+}
+
+/// ADR-0342 item 8: `chown` to the session's own identity succeeds and changes
+/// nothing, to any other `EPERM` (ADR-0014 rule 5), for the link itself.
+#[unsafe(no_mangle)]
+extern "C" fn lchown(path: *const c_char, uid: u32, gid: u32) -> i32 {
+    fchownat(
+        AT_FDCWD,
+        path,
+        uid,
+        gid,
+        process::AT_SYMLINK_NOFOLLOW as i32,
+    )
+}
+
+/// ADR-0343: the clock is the system's; a program cannot set it.
+#[unsafe(no_mangle)]
+extern "C" fn settimeofday(_tv: *const [i64; 2], _tz: *const u8) -> i32 {
+    int(Err(EPERM))
 }
 
 #[unsafe(no_mangle)]

@@ -6,6 +6,7 @@ operand  TO    rename  its new name
 exit     0  moved
 exit     1  not moved
 ---
+mv is a native command; /bin/mv is toybox's, for scripts, with its own options (help /bin/mv).
 Gives FROM the name TO, in the same directory or another. TO must not exist.
 
 EXAMPLES

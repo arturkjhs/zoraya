@@ -1489,6 +1489,9 @@ check-user-access:
 check-argv:
 	@hits="$$(grep -l 'describe!(' user/src/bin/*.rs | xargs grep -n 'argv' || true)"; \
 	if [ -n "$$hits" ]; then echo "described programs that read argv themselves (INV-0155-2):"; echo "$$hits"; exit 1; fi
+	@# INV-0336-2 rides on this step: every name in the image's /bin has a
+	@# trusted description naming its path (crates/zoraya-describe/tests/posix_names.rs).
+	@cargo test -q -p zoraya-describe --test posix_names > /dev/null || { cargo test -p zoraya-describe --test posix_names 2>&1 | tail -30; exit 1; }
 
 # INV-0105-4: no terminal policy in the kernel; the console stays a raw ring
 # (ADR-0060), and the line discipline is ttyd's.

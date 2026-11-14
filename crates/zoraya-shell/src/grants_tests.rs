@@ -788,3 +788,40 @@ fn the_fonts_come_with_a_window_read_only_and_only_with_it() {
         assert_eq!(crate::grants::with_window(&plain), None, "{}", plain.name);
     }
 }
+
+// ADR-0336 item 6, INV-0336-6: a file operand of a `cwd none` description
+// arrives as its directory narrowed to the name, for `sed -i` (write) and for
+// `sed` without it (read); the directory's other names are not given.
+const SED: &str = "name sed\nsummary edit\nusage sed [-i] SCRIPT [FILE...]\noperand SCRIPT text the script\noperand [FILE...] read the files\noption -i --in-place change the files in place\nwhen -i FILE write\ncwd none\n";
+
+#[test]
+fn a_file_of_a_cwd_none_program_is_given_as_one_narrowed_name() {
+    let p = go(SED, &["-i", "s/a/b/", "notes.txt"], &[], &[], true, "/w").unwrap();
+    let m = merge(&p);
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].path, "/w");
+    assert_eq!(m[0].name.as_deref(), Some("notes.txt"));
+    assert_eq!(m[0].rights & zoraya_proto_file::rights::CREATE, 0);
+    assert_ne!(m[0].rights & zoraya_proto_file::rights::WRITE, 0);
+    assert_eq!(m[0].lines[0].0, "change notes.txt");
+
+    let r = go(SED, &["s/a/b/", "notes.txt"], &[], &[], true, "/w").unwrap();
+    let m = merge(&r);
+    assert_eq!(m[0].name.as_deref(), Some("notes.txt"));
+    assert_eq!(m[0].rights & zoraya_proto_file::rights::WRITE, 0);
+    assert_eq!(m[0].lines[0].0, "read notes.txt");
+    // Not the current directory.
+    assert!(r.iter().all(|e| e.reason != "current directory"));
+}
+
+#[test]
+fn two_files_of_one_directory_fall_back_to_the_directory_in_words() {
+    let p = go(SED, &["-i", "x", "a", "b"], &[], &[], true, "/w").unwrap();
+    let m = merge(&p);
+    assert_eq!(m[0].name, None);
+    assert!(
+        m[0].lines
+            .iter()
+            .all(|(w, _)| w == "read and change files in")
+    );
+}

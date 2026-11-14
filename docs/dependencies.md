@@ -134,8 +134,7 @@ measured T1 workloads).
 | musl | 1.2.5 | MIT (a few files public domain or under other permissive terms, its `COPYRIGHT`) | the retained C of `libc.a` and the sysroot's headers (ADR-0100) |
 | dash | 0.5.13.5 | BSD-3-Clause | `/bin/sh` |
 | GNU make | 4.4.1 | GPL-3.0-or-later | `/bin/make` |
-| toybox | 0.8.15 | 0BSD | `cat head ls mv rm sleep touch true uname sort wc yes` |
-| busybox | 1.38.0 | GPL-2.0-only | `tr`, `diff` |
+| toybox | 0.8.15 | 0BSD | the commands of `ports/toybox-applets.txt` (ADR-0336), in `/usr/libexec/toybox` with links in `/bin` |
 | TinyCC | `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (`COPYING` 2.1, the LGPL files version 2 or later; some files permissive) | `/bin/tcc`, `libtcc1.a` |
 | pdpmake | `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` (2.0.4) | public domain (the Unlicense) | `/bin/pdpmake`, TASK-02's comparison make for W2 and W4 (ADR-0110) |
 | Lua | 5.5.1 | MIT | W2's source, in the image only, built inside Zoraya |

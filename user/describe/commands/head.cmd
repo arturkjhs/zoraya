@@ -6,6 +6,7 @@ option   -n --lines N text  how many lines of each, 10 if not given
 exit     0  printed
 exit     1  a file could not be read
 ---
+head is a native command; /bin/head is toybox's, for scripts, with its own options (help /bin/head).
 Prints the first lines of each FILE. With more than one FILE, each is headed by its name.
 
 EXAMPLES

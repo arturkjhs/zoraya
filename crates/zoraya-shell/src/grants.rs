@@ -34,6 +34,12 @@ pub enum Access {
     Rename(String),
     /// `tree` or `+w`: the directory and everything below it.
     Tree,
+    /// `read` operand of a `cwd none` description (ADR-0336 item 6): the
+    /// parent directory, narrowed to the name, to read it.
+    ReadName(String),
+    /// `write` operand of a `cwd none` description: the parent, narrowed to
+    /// the name, to change the existing file (no create, no remove).
+    ChangeName(String),
 }
 
 impl Access {
@@ -50,13 +56,19 @@ impl Access {
                 rights::READ | rights::RENAME | rights::CREATE | rights::REMOVE | rights::CLONE
             }
             Access::Tree => rights::ALL & !rights::PUBLISH,
+            Access::ReadName(_) => rights::READ | rights::CLONE,
+            Access::ChangeName(_) => rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
         }
     }
 
     /// The one name a narrowed entry may use.
     pub fn name(&self) -> Option<&str> {
         match self {
-            Access::Create(n) | Access::Remove(n) | Access::Rename(n) => Some(n),
+            Access::Create(n)
+            | Access::Remove(n)
+            | Access::Rename(n)
+            | Access::ReadName(n)
+            | Access::ChangeName(n) => Some(n),
             _ => None,
         }
     }
@@ -71,6 +83,8 @@ impl Access {
             Access::Remove(n) => format!("remove {n}"),
             Access::Rename(n) => format!("rename {n}"),
             Access::Tree => "change anything in".into(),
+            Access::ReadName(n) => format!("read {n}"),
+            Access::ChangeName(n) => format!("change {n}"),
         }
     }
 }
@@ -235,6 +249,25 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             if kind != Kind::Read && !line.base_system {
                 return Ok(());
             }
+            // ADR-0336 item 6: a file operand of a `cwd none` description
+            // arrives as its directory narrowed to the name, so the one
+            // file is enough and its siblings are not given.
+            if d.cwd == Cwd::None
+                && matches!(kind, Kind::Read | Kind::Write)
+                && let Some((parent, name)) = parent_and_name(&abs)
+            {
+                let access = if kind == Kind::Read {
+                    Access::ReadName(name)
+                } else {
+                    Access::ChangeName(name)
+                };
+                out.push(Planned {
+                    path: parent,
+                    access,
+                    reason,
+                });
+                return Ok(());
+            }
             entries_for(kind, &abs, &reason, out);
             Ok(())
         };
@@ -306,6 +339,8 @@ fn fallback(access: &Access) -> String {
         Access::Create(_) => "create and change anything in".into(),
         Access::Remove(_) => "remove anything in".into(),
         Access::Rename(_) => "rename, create and remove anything in".into(),
+        Access::ReadName(_) => "read anything in".into(),
+        Access::ChangeName(_) => "read and change files in".into(),
         other => other.words(),
     }
 }

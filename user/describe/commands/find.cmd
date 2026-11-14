@@ -6,6 +6,7 @@ operand  [DIR]    read  where to look; the current directory if none is given
 exit     0  listed
 exit     1  DIR could not be read
 ---
+find is a native command; /bin/find is toybox's, for scripts, with its own options (help /bin/find).
 Prints every file and directory in DIR and below whose name matches PATTERN, as paths from DIR,
 sorted byte by byte. Names starting with . match only a pattern that starts with one.
 
