@@ -4,7 +4,7 @@
 ! panicked
 # Only the shell's own power_off ends this run (INV-0062-3).
 ! first process ended
-! no such command: hello
+! hello: no such command
 < heap check: Box and Vec work
 < timer check: 10 interrupts in
 < first process: init
@@ -210,12 +210,20 @@ x \r\n/>
 < sleep is a program, /zoraya/bin/sleep
 < \r\n/> 
 # A burst larger than the ring, during a job, drops bytes and counts them.
-> spin\r
+# The job is in front when the burst comes: its own line is waited for first.
+# The shell says what was dropped when it next shows a prompt, so the count
+# comes after the job has ended. (The burst used to follow `spin\r` at once
+# and the count was awaited before the Ctrl-C: that passed only when the
+# shell had not yet read the command and so dropped the bytes at its prompt,
+# before the job; when it had, the count waited for a prompt the script never
+# asked for. The test-boot flake of run 43437795275: TASK-29, F5.)
+> fanout 1\r
+< fanout: 1 children spinning
 = 8192
-< bytes dropped]
 # The key itself can be lost in a burst, so it is sent until it lands.
-@ \x03 | spin: interrupted
-< \r\n/> 
+@ \x03 | fanout: interrupted
+< bytes dropped]
+< /> 
 > uptime\r
 < up
 < \r\n/> 
