@@ -537,13 +537,26 @@ impl Held {
         match self {
             Held::Root(f) => f.open_followed(rel, flags, wanted),
             Held::Table(_) => {
-                let abs = format!("/{}", rel.trim_start_matches('/'));
-                match self.covering(&abs) {
-                    Some((e, rest)) if e.dir && !rest.is_empty() => {
-                        e.file.open_followed(&rest, flags, wanted & e.rights)
+                // A link is followed through the table: an absolute target
+                // (`/bin/tr -> /usr/libexec/toybox`) lies under another
+                // entry than the link (10e, the room's `tr`).
+                let mut abs = format!("/{}", rel.trim_start_matches('/'));
+                for _ in 0..40 {
+                    let Some((e, rest)) = self.covering(&abs) else {
+                        return self.open(&abs, flags, wanted);
+                    };
+                    if !e.dir || rest.is_empty() {
+                        return self.open(&abs, flags, wanted);
                     }
-                    _ => self.open(rel, flags, wanted),
+                    match e.file.open_or_link(&rest, flags, wanted & e.rights)? {
+                        Ok(file) => return Ok(file),
+                        Err(next) if next.starts_with('/') => {
+                            abs = zoraya_resolve::join("/", 0, &next)
+                        }
+                        Err(next) => abs = zoraya_resolve::join(&e.path, 0, &next),
+                    }
                 }
+                Err(zoraya_proto_file::status::IS_LINK)
             }
         }
     }
