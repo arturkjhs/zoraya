@@ -50,6 +50,17 @@
 > cxxtest exit-order\r
 < cxxtest: exit-order passed
 < \r\n~> 
+# A thread_local made by a destructor is destroyed too; at exit the main
+# thread's thread_local destructors run before the atexit handler and the
+# static destructors made after them (musl patch 0003 in exit).
+> cxxtest exit-tls\r
+< cxxtest: exit-tls passed
+< cxxtest: exit-tls outer
+< cxxtest: exit-tls inner
+< cxxtest: exit-tls atexit
+< cxxtest: exit-tls static
+< cxxtest: destroyed c
+< \r\n~> 
 # cout and cerr, string streams, a file of the program's own /tmp, the C
 # locale (musl takes a name and keeps the C rules under it: ADR-0363), regex,
 # random_device.

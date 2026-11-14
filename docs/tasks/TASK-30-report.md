@@ -24,7 +24,7 @@ and the review (`docs/tasks/TASK-30-review.md`).
 | [0363](../adr/0363-cxx-locale-support.md) locale | The C locale only; musl accepts other names and keeps the C rules. |
 | [0364](../adr/0364-cxx-default-standard.md) default standard | `-std=c++23` unless the line names a standard or a language; `_GNU_SOURCE` always. |
 | [0365](../adr/0365-cxx-runtime-and-headers-in-the-image.md) where it lives | The sysroot's `usr/include/c++/v1` and `usr/lib`; out of the POSIX image until a C++ compiler is in it. |
-| [0366](../adr/0366-surface-for-cxx.md) the gaps (`posix-surface-added`) | 51 names of musl's code and libposix's new `aligned_alloc`, `posix_memalign` into `libc.a`; five weak shims in `libc++.a`; patches `llvm/0002` (`copy_file` without `sendfile`) and `llvm/0003` (self-join throws). |
+| [0366](../adr/0366-surface-for-cxx.md) the gaps (`posix-surface-added`) | 52 names into `libc.a`: 49 of musl's code, libposix's new `aligned_alloc`, `posix_memalign`, and `__cxa_thread_atexit_impl`; five weak shims in `libc++.a`; patches `llvm/0002` (`copy_file` without `sendfile`) and `llvm/0003` (self-join throws). |
 | [0367](../adr/0367-cmake-toolchain-file.md) CMake | `CMAKE_SYSTEM_NAME Zoraya` with a platform module of its own (`UNIX`, static only, no `-rdynamic`). |
 
 **Sizes.** `hello` in C++ (iostream and one exception): 1.0 MB stripped of `libc.a`'s debug information (3.5 MB with it).

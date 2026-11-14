@@ -1,4 +1,4 @@
-/* __cxa_thread_atexit_impl (TASK-30, proposed ADR-0366): the destructors of a
+/* __cxa_thread_atexit_impl (TASK-30, ADR-0366): the destructors of a
  * thread's thread_local objects, which libc++abi registers here (it is built
  * with HAVE___CXA_THREAD_ATEXIT_IMPL), run when the thread ends, in reverse
  * order of registration, before the thread's pthread key destructors, as
@@ -9,7 +9,6 @@
  * destructor musl runs in key order, after libc++'s: the notification came
  * first (tests/cxx/cxxtest.cpp, mode exit-order). __pthread_exit (patch 0003)
  * and exit (for the thread that calls it) run __zoraya_thread_dtors first. */
-#include <errno.h>
 #include <stdlib.h>
 
 struct thread_dtor {
@@ -24,10 +23,11 @@ int __cxa_thread_atexit_impl(void (*f)(void *), void *arg, void *dso)
 {
 	(void)dso; /* one module: there is no dynamic loader (ADR-0100) */
 	struct thread_dtor *d = malloc(sizeof *d);
-	if (!d) {
-		errno = ENOMEM;
-		return -1;
-	}
+	/* The compiler's call ignores the result, so a failure here would lose
+	 * the destructor in silence (and with it, say, a lock's release): the
+	 * program ends instead, as glibc's does (TASK-30 second review). */
+	if (!d)
+		abort();
 	d->f = f;
 	d->arg = arg;
 	d->next = thread_dtors;

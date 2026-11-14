@@ -456,6 +456,61 @@ void exit_order() {
     check(early == 0, "a value made ready before the thread_local destructor ran, " + std::to_string(early) + " of 200");
 }
 
+// ---------------------------------------------------------------- thread_local destructors at exit
+
+// A destructor that constructs another thread_local: that one is destroyed
+// too (thread_atexit.c takes the list from its head until it is empty).
+// exit(): the calling thread's thread_local destructors run before the atexit
+// handlers and the static destructors ([basic.start.term] p1; musl patch 0003
+// in exit). The script reads the lines in that order.
+std::atomic<int> nested_destroyed{0};
+bool exit_tls_print = false;
+
+struct Inner {
+    ~Inner() {
+        nested_destroyed.fetch_add(1);
+        if (exit_tls_print)
+            std::printf("cxxtest: exit-tls inner\n");
+    }
+};
+
+void touch_inner() {
+    static thread_local Inner inner;
+    (void)&inner;
+}
+
+struct Outer {
+    int touched = 0;
+    ~Outer() {
+        nested_destroyed.fetch_add(1);
+        if (exit_tls_print)
+            std::printf("cxxtest: exit-tls outer\n");
+        touch_inner(); // constructed now, during the thread's exit
+    }
+};
+thread_local Outer outer;
+
+struct LateStatic {
+    ~LateStatic() { std::printf("cxxtest: exit-tls static\n"); }
+};
+
+void exit_tls() {
+    // A thread: both destructors done before join returns.
+    std::thread t([] { outer.touched = 1; });
+    t.join();
+    check(nested_destroyed.load() == 2, "a thread_local made by a destructor is destroyed too: " +
+                                            std::to_string(nested_destroyed.load()) + " of 2");
+    // The main thread, at exit: the thread_local first, then a static and an
+    // atexit handler, which run in reverse order of registration. Had the
+    // thread_local destructors been an atexit entry (libc++abi's fallback),
+    // the handler and the static would come before them.
+    exit_tls_print = true;
+    outer.touched = 1;
+    static LateStatic late;
+    (void)&late;
+    std::atexit([] { std::printf("cxxtest: exit-tls atexit\n"); });
+}
+
 // ---------------------------------------------------------------- iostream
 
 void iostreams(const char* dir) {
@@ -651,6 +706,8 @@ int main(int argc, char** argv) {
         alloc();
     else if (mode == "exit-order")
         exit_order();
+    else if (mode == "exit-tls")
+        exit_tls();
     else if (mode == "iostream" && argc == 3)
         iostreams(argv[2]);
     else if (mode == "fsops" && argc == 3)

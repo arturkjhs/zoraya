@@ -2182,10 +2182,14 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   reads the auxiliary vector libposix lays out (`src/ldso/dl_iterate_phdr.c` is compiled into `libc.a`). An uncaught exception,
   one out of a `noexcept` function and `std::terminate` print libc++abi's line and `abort()`: the shell says "ended by signal 6"
   (ADR-0362). A hardening check traps (`brk`): "crashed (breakpoint, class 0x3c)".
-- **What `libc.a` gained** (ADR-0366): 51 names of musl's code (the `*_l` locale functions, the wide-character I/O and
+- **What `libc.a` gained** (ADR-0366): 52 names: 49 of musl's code (the `*_l` locale functions, the wide-character I/O and
   conversions, `strtod_l` and kin, `swprintf`, `vsscanf`, `getentropy`, `dl_iterate_phdr`, `execv`, `wcsstr`, `towlower`...) and
   libposix's new `aligned_alloc` and `posix_memalign` (`malloc`'s 16-byte header now holds the size and the distance to the heap
-  block's start, which is also its alignment; `free` reads both). A weak shim in `libc++.a` (`ports/cxx/zoraya-shim.c`):
+  block's start, which is also its alignment; `free` reads both), and `__cxa_thread_atexit_impl`
+  (`ports/musl/zoraya/thread_atexit.c`, INV-0366-4): a list per thread of its `thread_local` destructors, run in reverse order
+  until it is empty (a destructor may make another `thread_local`), at the start of `__pthread_exit` (after the cleanup handlers,
+  before the key destructors that hold libc++'s `notify_all_at_thread_exit` and `set_value_at_thread_exit`) and of `exit` (before
+  the `atexit` handlers and static destructors), as glibc runs them (musl patch `0003`). A weak shim in `libc++.a` (`ports/cxx/zoraya-shim.c`):
   `sched_yield` (libposix's own), `truncate` (`open` and `ftruncate`), `pathconf` (`PATH_MAX`, `NAME_MAX`), and `link` and
   `statvfs` failing with `ENOTSUP`. `ports/cxx/cxx.mk` links a program with the whole of the three archives to prove no name is
   missing (INV-0366-1).
@@ -2198,7 +2202,8 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   (`user/describe/posix/cxxtest.cmd`): exceptions across 20 frames, out of a `std::thread` by `exception_ptr` and out of
   `std::async`, library exceptions (`bad_alloc`, `out_of_range`, `system_error`), RTTI and `dynamic_cast` through virtual bases,
   static constructors in order and destructors in reverse after `atexit`'s handler, `std::thread`, `mutex`,
-  `condition_variable`, `future`, `packaged_task`, `async`, atomic wait, `thread_local` destructors at thread exit, iostreams,
+  `condition_variable`, `future`, `packaged_task`, `async`, atomic wait, `thread_local` destructors at thread exit, before the
+  at-thread-exit notifications (`exit-order`) and at `exit` before the static destructors (`exit-tls`), iostreams,
   `fstream` in the program's `/tmp`, the C locale, `regex`, `random_device`, `std::filesystem` operations, a directory the line
   grants (`+r /work/granted`) listed and one it does not refused (`ENOENT` and the shell's hint), and the three ends of an uncaught
   exception; `tests/cxx/hello.cpp` by `posixrun`. `make test-cxx-libcxx`: libc++'s own run tests of
@@ -2219,7 +2224,11 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   terminates: musl has no unwind tables); no function names in libunwind's backtraces (no `dladdr`); named locales are the C
   locale; no time zone database (`std::chrono::current_zone` is absent), no `libc++experimental`; `std::filesystem::space` and
   `create_hard_link` fail with `ENOTSUP`; a POSIX program's namespace has no `/` entry, so `current_path("/")` fails; no `AF_UNIX`
-  socket files. CMake `try_run` checks need answers in the cache.
+  socket files. CMake `try_run` checks need answers in the cache. A `thread_local` first used after its thread's destructors ran
+  (by a pthread key destructor, an `atexit` handler or a static destructor) is never destroyed, as in glibc; `exit` does not
+  disable cancellation, so a pending cancel acted on inside a `thread_local` destructor (or an `atexit` handler) ends that thread
+  in the middle of `exit` (as in musl and glibc). `aligned_alloc` and `posix_memalign` take `align` bytes before the block (the
+  header sits just before the pointer), so a page-aligned block costs a page more.
 
 ## The window of a POSIX program and NetSurf (stage 9, 9d)
 

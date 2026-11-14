@@ -80,3 +80,86 @@ no QEMU. The reviewer's findings follow, with what the implementing session did 
 - **The libc++ subset.** The lit handling is conservative.
 - **Grants.** The descriptions grant nothing beyond the POSIX default set, and the untrusted gate is untouched.
 - **The ADRs.** ADR-0360 to ADR-0367 are all `proposed`, with an empty decision section.
+
+## Second review
+
+Independent review by the `opus-review` subagent (2026-11-14) of the delta since the first review, `git diff a8b2106 e455f78`
+(the order of a thread's exit for LWG 3343: `__cxa_thread_atexit_impl` in `libc.a`, musl patch `0003`, libc++abi built with
+`HAVE___CXA_THREAD_ATEXIT_IMPL`, INV-0366-4; the TCG split of the libc++ subset; the CI and Makefile changes), and again of
+`malloc`'s offset header (`crates/zoraya-posix/src/ffi.rs`), the 52 added names and the weak shims, after `origin/main` was
+merged into `work/cxx`. The reviewer ran `make check` (pass), `make test-cxx` (HVF, 87 steps), `make test-cxx-gtest` (166) and
+`make test-cxx-libcxx` (1357), all passing after the fixes, and `make test-changed`: 15 steps passed; `test-boot` timed out once
+on the console's `bytes dropped]` under a load average of 10 and passed alone; `test-hand-run` (and, in its lane, the apps,
+NetSurf and Python steps), `test-posix-suites` and `test-posix-threadtest3` did not run, since this worktree's port cache lacks
+the curl 8.23.0 and libc-test archives (`make fetch-ports` was not run; the candidate CI run covers them). The reviewer read
+the patched musl sources in `build/ports/work/musl-1.2.5` and `libc.a`'s symbols (`nm`, `objdump -t`).
+
+No must-fix finding.
+
+### Findings
+
+1. **should-fix (fixed)** `tests/cxx/cxx.script`, `ports/musl/zoraya/0003-thread-local-destructors-first.patch:23`,
+   `ports/musl/zoraya/thread_atexit.c:43`: two behaviours the change claims had no test. `exit` running the calling thread's
+   `thread_local` destructors first was never exercised: `cxxtest tls` and `exit-order` end worker threads only, and the main
+   thread's `thread_local`s in those modes are trivial or untouched; a `libc.a` whose `exit.o` kept the weak dummy (for example a
+   rename of the hidden name that missed one member) would pass every step. Nor was "a destructor may construct another
+   `thread_local`" (the loop that takes the list from its head). Scenario: the main thread's `thread_local` destructors run
+   after the static destructors, against [basic.start.term] p1, and nothing fails.
+   **Resolution:** `cxxtest exit-tls`: a worker whose `thread_local`'s destructor constructs a second one (both destroyed before
+   `join` returns), and the main thread, which constructs a `thread_local` first and then a static and an `atexit` handler; the
+   script requires `outer`, `inner`, `atexit`, `static` in that order. libc++abi's fallback (the main thread's list as a static
+   destructor registered at the first `thread_local`) would print `atexit` and `static` first. Passed under HVF; not run against
+   a `libc.a` without the patch.
+2. **should-fix (fixed)** `ports/musl/zoraya/thread_atexit.c:26` (was: `errno = ENOMEM; return -1`): the compiler's call to
+   `__cxa_thread_atexit` ignores the result, so an allocation failure lost the destructor in silence. Scenario: under a full heap,
+   a `thread_local` holding a lock or a `std::unique_lock` handed to the thread's exit is never destroyed, and another thread waits
+   for ever. **Resolution:** `abort()`, as glibc's `__libc_fatal`.
+3. **note** `thread_atexit.c:43`: a `thread_local` first used after the thread's list ran (from a pthread key destructor, an
+   `atexit` handler or a static destructor) registers a destructor that never runs; its 24-byte node leaks. glibc behaves the
+   same. Recorded in `docs/design.md`'s known limits.
+4. **note** `thread_atexit.c:45`: a `thread_local` destructor that calls `pthread_exit` (or re-enables cancellation and is
+   cancelled) re-enters `__pthread_exit`, which continues the list from the next node: every other destructor runs once and no
+   node is freed twice, but the current node leaks and the rest of that destructor never runs. Undefined in C++; no fix.
+5. **note** patch `0003:23`: `exit` does not disable cancellation (musl and glibc do not either), so a pending cancel acted on
+   at a cancellation point inside a `thread_local` destructor run by `exit` ends that thread in the middle of `exit`; the
+   `atexit` handlers then never run while other threads live. The same was already true of `atexit` handlers. Recorded in
+   `docs/design.md`. (In `__pthread_exit` the destructors run with `canceldisable = 1`, set before the cleanup handlers, so
+   `pthread_cancel` during them only interrupts a sleep or futex wait: a spurious wakeup the callers loop on.)
+6. **note** `crates/zoraya-posix/src/ffi.rs:632`: `aligned_alloc(A, n)` allocates `n + A` at alignment `A` (the header sits just
+   before the pointer). Correct, but `posix_memalign(4096, 4096)` costs two pages, and an alignment above a page also pays the
+   large path's gap when the heap grows. Recorded in `docs/design.md`; a header placed at the block's end would not cost this.
+7. **note** `ffi.rs:742`: `realloc` of an `aligned_alloc` block returns a 16-byte-aligned block. C and POSIX allow it, glibc does
+   the same; nothing in the tree depends on otherwise.
+8. **note** `Makefile:1021`, `tests/cxx/libcxx-tcg-excluded.txt`: CI's hosts have no HVF, so the libc++ subset runs there only
+   with the TCG script, and upstream's `notify_all_at_thread_exit_lwg3343` never runs in CI, only on a Mac with HVF. INV-0366-4
+   stays checked in CI by `cxxtest exit-order` (and now `exit-tls`) under TCG, so this is a loss of the second witness only.
+9. **note** `ports/Makefile:470`: the LLVM tree no longer depends on the patch directory, so a removed `llvm/` patch is not seen
+   (the comment says so). Acceptable while patches are only added; a list file of the patches' names would catch removal.
+10. **note** ADR-0366 lines 41 and 59, and its index row: "51 names (49 of musl's, 2 of libposix's)", while its
+    `posix-surface-added` block now holds 52 (`__cxa_thread_atexit_impl` is Zoraya's own C, built with musl's objects). The ADR
+    is accepted, so an agent does not edit it; for the architect. `docs/design.md` and the report now say 52.
+
+### Checked and found sound
+
+- **Order of a thread's exit.** `__pthread_exit` (patched source read): cancellation cleanup handlers, then the `thread_local`
+  list, then `__pthread_tsd_run_dtors` (where libc++'s `__thread_struct` notifies and makes states ready), as glibc's
+  `start_thread` runs them. `exit`: the caller's list, then `__funcs_on_exit` (`atexit` and static destructors), `__libc_exit_fini`,
+  `__stdio_exit`. `exit` from a thread other than the main one runs only that thread's list, as glibc. The last thread's
+  `pthread_exit` calls `exit(0)` with its list already empty. `quick_exit`, `_Exit` and `abort` run none.
+- **Linking.** `exit.o` and `pthread_create.o` define `__zoraya_thread_dtors` weak, `thread_atexit.o` strong, and libc++abi's
+  `cxa_thread_atexit.o` pulls `thread_atexit.o` through `__cxa_thread_atexit_impl`, so the strong one wins whenever a
+  destructor is registered; `thread_dtors` is in `.tbss`. The call log wraps `__cxa_thread_atexit_impl` only.
+- **Concurrency and memory.** The list is reached only through the thread's own TLS, so it needs no lock; `malloc` and `free`
+  take `MEM` themselves, and nothing calls `__cxa_thread_atexit_impl` with the library lock held. The head is advanced before a
+  destructor is called, so each node is freed once, also when a destructor registers another. A `fork` child keeps the forking
+  thread's list and runs it at its own exit (glibc does the same); a detached thread's list is freed before its TLS goes.
+- **The allocator.** `layout_at` uses `checked_add`, and `Layout::from_size_align` refuses any size that rounds above
+  `isize::MAX` (`aligned_alloc(1 << 63, 1)` returns null with `ENOMEM`); a non-power-of-two alignment is `EINVAL`;
+  `posix_memalign(8, ...)` is clamped to 16 inside `alloc_aligned`; `free` rebuilds exactly the layout allocated; `calloc` checks
+  its product; the heap's large path checks its own rounding (`crates/zoraya-heap`, `span_fits`, `take_span`).
+- **The shims and CI.** INV-0366-2's `nm` filter keeps defined global names, so a weak name stays `W` and a local helper is not
+  counted. The test jobs give every tracked file an old time, so the stamps of the libc++ tests hold without LLVM's tree in the
+  artifact. `CXX_LIBCXX_TCG` picks the TCG script on any host that is not a Mac.
+- **No trust boundary is touched.** The delta changes no description's grants (`cxxtest.cmd` gains a mode in its usage only),
+  no service, and not the untrusted gate (`make check`'s `check-untrusted-gate` passes); C++ programs remain POSIX programs
+  started by the shell.
