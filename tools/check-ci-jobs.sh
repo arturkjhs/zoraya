@@ -14,6 +14,13 @@
 # tools/ci-plan.sh picks, so this checks the full list, and that the workflow
 # reads the plan, that the test-gui lines (GUI_RUNS="script:accel:scale ...")
 # together run every run of GUI_RUNS_ALL, each in exactly one job, and that FULL=1 gives the plan the whole list.
+#
+# CI's runners resolve `auto` to TCG (tools/run-qemu.sh), so there an `auto`
+# run and its `tcg` twin are one run (proposed ADR-0350, INV-0350-1): a script
+# under `tcg` stands for the script under `auto`, a GUI run `S:tcg:N` for
+# `S:auto:N`, and a configuration of QEMU_AUTO_TWINS (auto-X:tcg-Y) may be
+# left out when its twin is run. The list must not hold both of a pair: that
+# is the same run twice. W8 keeps the first accelerator.
 set -eu
 workflow=$1
 list=${2:-tools/ci-tests.txt}
@@ -51,7 +58,19 @@ first_accel=${POSIX_ACCELS%% *}
 for step in $TEST_STEPS; do
 	case $step in
 	test-qemu)
-		for c in $QEMU_CONFIGS; do has_make "test-qemu-$c" || need "make test-qemu-$c"; done ;;
+		for c in $QEMU_CONFIGS; do
+			twin=
+			for t in ${QEMU_AUTO_TWINS:-}; do [ "${t%%:*}" = "$c" ] && twin=${t#*:}; done
+			if [ -n "$twin" ]; then
+				if has_make "test-qemu-$c"; then
+					has_make "test-qemu-$twin" && need "only one of test-qemu-$c and test-qemu-$twin (the same machine where auto is TCG, ADR-0350)"
+				else
+					has_make "test-qemu-$twin" || need "make test-qemu-$c or its twin test-qemu-$twin"
+				fi
+			else
+				has_make "test-qemu-$c" || need "make test-qemu-$c"
+			fi
+		done ;;
 	test-posix)
 		if echo "$pairs" | grep -q -x UNSPLIT; then
 			need "test-posix with both POSIX_SCRIPTS=\"...\" and POSIX_ACCELS=\"...\" on every line"
@@ -64,7 +83,15 @@ for step in $TEST_STEPS; do
 					has_pair "$name-$b:$first_accel" || need "$name-$b.script under $first_accel"
 				done ;;
 			*)
-				for a in $POSIX_ACCELS; do has_pair "$name:$a" || need "$name.script under $a"; done ;;
+				# One run where `auto` is TCG: `tcg` stands for `auto`, never both.
+				if has_pair "$name:auto" && has_pair "$name:tcg"; then
+					need "$name.script under one of auto and tcg, not both (the same run where auto is TCG, ADR-0350)"
+				fi
+				for a in $POSIX_ACCELS; do
+					has_pair "$name:$a" && continue
+					[ "$a" = auto ] && has_pair "$name:tcg" && continue
+					need "$name.script under $a"
+				done ;;
 			esac
 		done ;;
 	*)
@@ -83,6 +110,14 @@ if echo "$TEST_STEPS" | grep -q -w test-gui; then
 	[ -n "$want" ] || need "GUI_RUNS_ALL to compare the test-gui lines with (the Makefile gives none)"
 	for r in $(echo "$want" | uniq); do
 		n=$(echo "$have" | grep -c -x -F "$r" || true)
+		# An `auto` run whose `tcg` twin is a run of GUI_RUNS_ALL: the twin
+		# stands for it (it is checked on its own turn), and both is twice.
+		twin=
+		case $r in *:auto:*) twin=$(echo "$r" | sed 's/:auto:/:tcg:/') ;; esac
+		if [ -n "$twin" ] && echo "$want" | grep -q -x -F "$twin"; then
+			[ "$n" = 0 ] || need "GUI run $r left out: its twin $twin is the same run where auto is TCG (ADR-0350)"
+			continue
+		fi
 		[ "$n" = 1 ] || need "GUI run $r in exactly one test-gui job (it is in $n)"
 	done
 	for r in $(echo "$have" | uniq); do
@@ -122,6 +157,38 @@ for mode in full unmapped; do
 			need "make $step in the $mode plan (tools/ci-plan.sh, plan-lib.sh's all)"
 		fi
 	done
+done
+# INV-0350-2: what FULL=1 runs of each pair on each kind of host (make
+# print-legs, with the host's answer given): both accelerators, every
+# configuration and every GUI run where `auto` is HVF; one of each pair where
+# it is TCG, with no second run inside a recipe.
+mk=${MAKE:-make}
+hvf=$($mk -s --no-print-directory print-legs FULL=1 HOST_ACCEL=hvf 2>/dev/null || true)
+tcg=$($mk -s --no-print-directory print-legs FULL=1 HOST_ACCEL=tcg 2>/dev/null || true)
+leg() { echo "$1" | sed -n "s/^$2: //p"; }
+[ "$(leg "$hvf" accels)" = "auto tcg" ] || need "both accelerators with FULL=1 where auto is HVF (make print-legs gives '$(leg "$hvf" accels)')"
+[ "$(leg "$hvf" tcg-too)" = 1 ] || need "the recipes' second runs under TCG with FULL=1 where auto is HVF"
+[ "$(leg "$hvf" qemu | tr ' ' '\n' | sort | tr '\n' ' ')" = "$(echo "$QEMU_CONFIGS" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')" ] ||
+	need "every configuration of test-qemu with FULL=1 where auto is HVF"
+[ "$(leg "$hvf" gui | tr ' ' '\n' | grep . | sort | tr '\n' ' ')" = "$(echo "${GUI_RUNS_ALL:-}" | tr ' ' '\n' | grep . | sort | tr '\n' ' ')" ] ||
+	need "every run of GUI_RUNS_ALL with FULL=1 where auto is HVF"
+[ "$(leg "$tcg" accels)" = "tcg" ] || need "one accelerator with FULL=1 where auto is TCG (make print-legs gives '$(leg "$tcg" accels)')"
+[ "$(leg "$tcg" tcg-too)" = 0 ] || need "no second run under TCG inside a recipe where auto is TCG"
+for t in ${QEMU_AUTO_TWINS:-}; do
+	case " $(leg "$tcg" qemu) " in
+	*" ${t%%:*} "*) need "test-qemu-${t%%:*} left out with FULL=1 where auto is TCG (its twin is ${t#*:})" ;;
+	esac
+	case " $(leg "$tcg" qemu) " in
+	*" ${t#*:} "*) ;;
+	*) need "test-qemu-${t#*:} with FULL=1 where auto is TCG" ;;
+	esac
+done
+for r in $(leg "$tcg" gui); do
+	case $r in
+	*:auto:*)
+		twin=$(echo "$r" | sed 's/:auto:/:tcg:/')
+		case " $(leg "$tcg" gui) " in *" $twin "*) need "only one of GUI runs $r and $twin with FULL=1 where auto is TCG" ;; esac ;;
+	esac
 done
 if [ "$missing" -gt 0 ]; then
 	echo "check-ci-jobs: $missing missing" >&2

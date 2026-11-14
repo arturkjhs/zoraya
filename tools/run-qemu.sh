@@ -164,8 +164,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-command -v "$QEMU" >/dev/null 2>&1 || die "$QEMU not found; install QEMU (macOS: brew install qemu)"
-
 if [ "$accel" = auto ]; then
     accel=tcg
     if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] &&
@@ -183,6 +181,10 @@ if [ "$print_accel" = 1 ]; then
     echo "$accel"
     exit 0
 fi
+
+# After --print-accel, which asks about the host and needs no QEMU (the
+# Makefile asks it on machines that only run the checks).
+command -v "$QEMU" >/dev/null 2>&1 || die "$QEMU not found; install QEMU (macOS: brew install qemu)"
 
 # Each probe is a run of this script with --dumpdtb: QEMU creates the VM, which
 # is where HVF refuses EL2, writes the device tree and exits.
