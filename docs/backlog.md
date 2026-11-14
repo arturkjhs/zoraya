@@ -290,3 +290,18 @@ For the next free build slot; not ahead of TASK-31's parts. Order: 1, 2, 3.
 - **10e:** GNU hello's `configure` stopping at `config.sub sun4` is a compatibility defect, not a leftover. Find the cause
   before 10e merges (`sh -x config.sub sun4` in the guest; compare each step with the same toybox command's POSIX
   behaviour); fix it or record it with a test.
+
+## Decisions on the browser-engine design (TASK-33; the architect, 2026-11-14)
+
+- **The next design task: a Rust `std` for POSIX programs on the stable toolchain.** The `aarch64-unknown-linux-musl`
+  target linked against Zoraya's `libc.a`, with `libposix` answering the Linux calls `std` makes through `syscall()`
+  (futex, `statx`, `getrandom` and the others a probe finds). It must say how this squares with INV-0109-2 (`zcc`
+  refuses `__linux__`) and the no-nightly rule (`docs/design.md`, Platform). Its answer, with the foundations, decides
+  ADR-0410 (WPE, the default, or Ladybird); proposed ADRs, numbers from the architect.
+- **The foundation parts F1 to F8** of `docs/research/browser-engine/plan.md` come after TASK-31's parts, F1 (`poll`,
+  `ppoll` and `eventfd`, ADR-0414) first; F1 is the second of the three requests above. The invariant rows of ADR-0411
+  to ADR-0421 name the part that builds each check (`not yet applicable (until browser-engine plan part ...)`).
+- **The changes to accepted ADRs** that ADR-0411 to ADR-0415 decided (ADR-0103 item 12, ADR-0108, ADR-0225 items 1 and
+  10, ADR-0287 item 3, ADR-0310 item 3, ADR-0315 item 1, ADR-0341 item 7, ADR-0342 item 11, ADR-0051's assumed limit)
+  are each recorded in the changed ADR by the foundation part that implements it, with an Opus review.
+- **The 2 GiB guest** is for the browser's test steps only (ADR-0415, Decision).
