@@ -1,0 +1,15 @@
+# libc++ tests that make test-cxx-libcxx runs under HVF only, not under TCG: a
+# path relative to libcxx/test/, then why. Each passed every run under HVF; what
+# fails under TCG is a check of the test's own timing, not of the library.
+#
+# notify_all_at_thread_exit_lwg3343: its last check (condition_variable_lock_skipped_counter
+# < 250, "the threshold is arbitrary", added by D143816 so that the test fails when it stops
+# exercising the notification) counts the rounds in which the three workers end before the main
+# thread waits. CI's TCG failed exactly that assertion (run 43568887269:
+# "Assertion failed: condition_variable_lock_skipped_counter < 250 ... main: 120"); the check the
+# test exists for (the condition variable's bytes untouched, LWG 3343) passed. With
+# __cxa_thread_atexit_impl the order of a thread's exit is right: cxxtest exit-order (200 rounds
+# each of notify_all_at_thread_exit and set_value_at_thread_exit, a destructor that yields) passes
+# under HVF and TCG, in CI too (make test-cxx). Local loops: HVF 200 of 200, TCG 200 of 200 (skip
+# counter 0 to 3), TCG throttled 30 of 30 (0 to 79); docs/tasks/TASK-30-report.md.
+std/thread/thread.condition/notify_all_at_thread_exit_lwg3343.pass.cpp  its skip-count heuristic fails on CI's TCG (above); run under HVF

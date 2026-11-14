@@ -1,0 +1,25 @@
+--- a/libcxx/include/__config	2026-11-14 03:00:26
++++ b/libcxx/include/__config	2026-11-14 03:00:26
+@@ -279,7 +279,9 @@
+ #  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||                     \
+       defined(__DragonFly__)
+ #    define _LIBCPP_USING_ARC4_RANDOM
+-#  elif defined(__wasi__) || defined(__EMSCRIPTEN__)
++#  elif defined(__wasi__) || defined(__EMSCRIPTEN__) || defined(__zoraya__)
++// Zoraya: getentropy over libposix's getrandom, the random service (ADR-0227);
++// there is no /dev/urandom (INV-0310-5).
+ #    define _LIBCPP_USING_GETENTROPY
+ #  elif defined(__Fuchsia__)
+ #    define _LIBCPP_USING_FUCHSIA_CPRNG
+--- a/libcxx/src/random.cpp	2026-11-14 03:00:26
++++ b/libcxx/src/random.cpp	2026-11-14 03:00:26
+@@ -23,6 +23,9 @@
+ 
+ #if defined(_LIBCPP_USING_GETENTROPY)
+ #  include <sys/random.h>
++#  if defined(__zoraya__)
++#    include <unistd.h> // musl declares getentropy here, not in <sys/random.h>
++#  endif
+ #elif defined(_LIBCPP_USING_DEV_RANDOM)
+ #  include <fcntl.h>
+ #  include <unistd.h>

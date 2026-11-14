@@ -1,0 +1,13 @@
+--- a/libcxx/src/filesystem/operations.cpp	2026-11-14 03:03:42
++++ b/libcxx/src/filesystem/operations.cpp	2026-11-14 03:03:42
+@@ -51,7 +51,9 @@
+ #elif defined(__FreeBSD__)
+ #  define _LIBCPP_FILESYSTEM_USE_COPY_FILE_RANGE
+ #endif
+-#if __has_include(<sys/sendfile.h>)
++// Zoraya: no sendfile (a Linux call libc.a does not export); copy_file uses
++// the fstream copy (TASK-30, ADR-0366).
++#if __has_include(<sys/sendfile.h>) && !defined(__zoraya__)
+ #  include <sys/sendfile.h>
+ #  define _LIBCPP_FILESYSTEM_USE_SENDFILE
+ #elif defined(__APPLE__) || __has_include(<copyfile.h>)

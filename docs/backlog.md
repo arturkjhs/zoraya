@@ -101,6 +101,13 @@ The triage's one miss: it said the 30-piece test kills `MAX_PIECES` = 16, but a 
 `MAX_PIECES` changes with it. The test uses a literal 30.
 | - | Stage 9, "living in the system" (architect, 2026-11-12) | **curl and wget (N4's W11, W13)** are deferred from stage 8: a C TLS library first (BearSSL or rustls-ffi), then curl and wget and the `+net ... curl -O` check. `zfetch` stands in until then. Not a blocker for stage 8. |
 
+## The ports' cache key did not name ADR-0326 (found in TASK-30, done)
+
+`ports/Makefile`'s `ADDED_ADRS` names `docs/adr/0326-netsurf-text-through-zoraya-text.md` (merged from 9f-text), but the
+`ports-build` cache key and the "old time" touch list of `.github/workflows/test.yml` did not: a change to that ADR's block
+would have restored a stale `libc.a`, and a hit rebuilt `libc.a` and everything after it (the file kept its checkout time).
+Both now name `docs/adr/0326-*.md` (`work/cxx`). A check that the two lists equal `ADDED_ADRS` would keep them so.
+
 ## `sleep 60 &` ends at once in a dock-launched terminal (Q7)
 
 Seen once in `tests/gui/spinners.script` (`[1] done: sleep 60`, a terminal launched from the dock in a room); not reproduced by the reviewer,

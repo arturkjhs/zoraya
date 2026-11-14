@@ -1,0 +1,123 @@
+#!/bin/sh
+# Builds the chosen groups of libc++'s own test suite (TASK-30, the subset of
+# tests/cxx/libcxx-groups.txt) with tools/zc++ into OUT, and writes OUT/list,
+# the tests built, OUT/skipped, the tests left out with the reason, and
+# OUT/script, a runner script for tools/test-runner that runs each one by
+# posixrun in /work and expects exit 0.
+#
+#   libcxx-build.sh LIBCXX OUT
+#
+# Only the run tests (*.pass.cpp that are not *.compile.pass.cpp) are taken:
+# the compile-only tests say nothing about the runtime on Zoraya. lit's
+# directives are read the simple way: a test is left out when a REQUIRES item
+# names a feature this configuration lacks, when an UNSUPPORTED item names one
+# it has, when it is an XFAIL for one it has, or when it uses a lit
+# substitution (%{...}) or a FILE_DEPENDENCIES; an item with an operator (&&,
+# ||, !, a regular expression) counts as not matching. A test that does not
+# compile is an error; a test named in tests/cxx/libcxx-excluded.txt is left
+# out with the reason given there, and a name there that is not a test of the
+# source is an error.
+set -eu
+# The items of lit's lines may be *, which must not be a pattern here.
+set -f
+src=$1
+out=$2
+here=$(dirname "$0")
+groups=$here/libcxx-groups.txt
+excluded=$here/libcxx-excluded.txt
+mkdir -p "$out/bin"
+: > "$out/list"
+: > "$out/skipped"
+clang_major=$(${ZORAYA_CLANG:-clang} -dM -E -x c /dev/null | awk '$2 == "__clang_major__" { print $3 }')
+# The features of this configuration, as lit's names them.
+features=" c++23 stdlib=libc++ stdlib=llvm-libc++ libcpp-hardening-mode=fast clang clang-$clang_major has-unix-headers \
+  target=aarch64-unknown-zoraya libcpp-abi-version=1 objective-c++-unsupported can-create-symlinks "
+
+has() { case "$features" in *" $1 "*) return 0 ;; esac; return 1; }
+
+# directive FILE NAME: the items of every "// NAME:" line, one a line.
+directive() {
+    sed -n "s|^ *// *$1: *||p" "$2" | tr ',' '\n' | sed -e 's/^ *//' -e 's/ *$//' -e '/^$/d'
+}
+
+skip() { echo "$1 $2" >> "$out/skipped"; }
+
+for g in $(sed -e 's/#.*//' "$groups"); do
+    for f in $(find "$src/test/$g" -name '*.pass.cpp' ! -name '*.compile.pass.cpp' | sort); do
+        rel=${f#"$src/test/"}
+        name=$(echo "$rel" | sed -e 's|^std/||' -e 's|\.pass\.cpp$||' -e 's|[/.]|_|g')
+        if awk -v n="$rel" '$1 == n { f = 1 } END { exit !f }' "$excluded"; then
+            skip "$rel" "excluded (tests/cxx/libcxx-excluded.txt)"
+            continue
+        fi
+        if grep -q -e '%{' -e 'FILE_DEPENDENCIES:' "$f"; then
+            skip "$rel" "lit substitution or file dependency"
+            continue
+        fi
+        why=
+        for r in $(directive REQUIRES "$f" | tr ' ' '_'); do
+            has "$r" || { why="requires $r"; break; }
+        done
+        if [ -z "$why" ]; then
+            for u in $(directive UNSUPPORTED "$f" | tr ' ' '_'); do
+                has "$u" && { why="unsupported on $u"; break; }
+            done
+        fi
+        if [ -z "$why" ]; then
+            for x in $(directive XFAIL "$f" | tr ' ' '_'); do
+                { [ "$x" = '*' ] || has "$x"; } && { why="expected to fail on $x"; break; }
+            done
+        fi
+        if [ -n "$why" ]; then
+            skip "$rel" "$why"
+            continue
+        fi
+        flags=$(sed -n 's|^ *// *ADDITIONAL_COMPILE_FLAGS: *||p' "$f" | tr '\n' ' ')
+        # ADDITIONAL_COMPILE_FLAGS(FEATURE): flags for a configuration that has
+        # FEATURE (clang-18 in CI: -fsized-deallocation, which clang 19 has on).
+        for c in $(sed -n 's|^ *// *ADDITIONAL_COMPILE_FLAGS(\([^)]*\)):.*|\1|p' "$f" | sort -u); do
+            if has "$c"; then
+                flags="$flags $(sed -n "s|^ *// *ADDITIONAL_COMPILE_FLAGS($c): *||p" "$f" | tr '\n' ' ')"
+            fi
+        done
+        # shellcheck disable=SC2086
+        if tools/zc++ -O1 -w -Wl,--strip-debug -Wl,--gc-sections -I"$src/test/support" \
+            -D_LIBCPP_DISABLE_DEPRECATION_WARNINGS $flags -o "$out/bin/$name" "$f" > "$out/bin/$name.log" 2>&1; then
+            rm -f "$out/bin/$name.log"
+            echo "$name $rel" >> "$out/list"
+        else
+            echo "libcxx-build: $rel does not compile with zc++:" >&2
+            head -c 4000 "$out/bin/$name.log" >&2
+            exit 1
+        fi
+    done
+done
+for n in $(sed -e 's/#.*//' "$excluded" | awk 'NF { print $1 }'); do
+    [ -f "$src/test/$n" ] || { echo "libcxx-build: $n is excluded but is not a test of this source" >&2; exit 1; }
+done
+# OUT/script runs every test (HVF); OUT/script-tcg leaves out the tests of
+# tests/cxx/libcxx-tcg-excluded.txt, whose own timing checks do not hold on an
+# emulated CPU (each named there with the measurement).
+tcg_excluded=$here/libcxx-tcg-excluded.txt
+for n in $(sed -e 's/#.*//' "$tcg_excluded" | awk 'NF { print $1 }'); do
+    awk -v n="$n" '$2 == n { f = 1 } END { exit !f }' "$out/list" ||
+        { echo "libcxx-build: $n is in libcxx-tcg-excluded.txt but not built" >&2; exit 1; }
+done
+script() {
+    printf '%s\n' "# Generated by tests/cxx/libcxx-build.sh: libc++'s tests of tests/cxx/libcxx-groups.txt, each by posixrun in /work."
+    # A test that fails ends the run at once, not at the runner's timeout, on
+    # posixrun's line after it: an assertion's whole message is then in the log
+    # (a pattern on "Assertion failed" itself stopped the run before the rest
+    # of that line came).
+    printf '%s\n' "! panicked" "! ZORAYA-PANIC" "! posixrun: exit 1" "! posixrun: exit 2" "! posixrun: ended" '< \r\n~> '
+    while read -r name rel; do
+        if [ "$1" = tcg ] && awk -v n="$rel" '$1 == n { f = 1 } END { exit !f }' "$tcg_excluded"; then
+            continue
+        fi
+        printf '# %s\n> posixrun -C /work /bin/lc/%s\\r\n< posixrun: exit 0\n< \\r\\n~> \n' "$rel" "$name"
+    done < "$out/list"
+    printf '%s\n' '> poweroff\r'
+}
+script all > "$out/script"
+script tcg > "$out/script-tcg"
+echo "libcxx-build: $(wc -l < "$out/list" | tr -d ' ') tests built, $(wc -l < "$out/skipped" | tr -d ' ') left out ($out/skipped)"

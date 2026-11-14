@@ -1,5 +1,10 @@
 #!/bin/sh
 # zcc: the C compiler driver for aarch64-unknown-zoraya (ADR-0109 item 1).
+# zc++ (a link to this file) is the C++ driver (TASK-30, proposed ADR-0360):
+# the same target, sysroot and linker, libc++'s headers first, -std=c++23
+# unless the command line names a standard or a language (ADR-0364),
+# exceptions and unwind tables on, and libc++, libc++abi and libunwind linked
+# before libc.a with an .eh_frame_hdr (ADR-0361).
 #
 # It runs the host's clang for a bare AArch64 ELF target with the sysroot's
 # musl headers, and links static ET_EXEC programs with rust-lld from the
@@ -17,6 +22,10 @@
 # -nostdlib, -nostartfiles and -nodefaultlibs leave out what they say.
 set -eu
 
+# C++ by the name it was run under: zc++, or a triple-prefixed -c++ or -g++.
+cxx=0
+case $(basename "$0") in *c++|*g++) cxx=1 ;; esac
+
 # The repository from the script's own place, through any symbolic links to
 # it (build/ports/bin/aarch64-unknown-zoraya-cc is one).
 self=$0
@@ -32,6 +41,9 @@ clang=${ZORAYA_CLANG:-clang}
 link=1
 startfiles=1
 defaultlibs=1
+cxxlibs=1
+std=0
+lang=
 prev=
 for a in "$@"; do
     case "$prev" in
@@ -45,6 +57,11 @@ for a in "$@"; do
         echo "zcc: refusing -target $a: the target is aarch64-unknown-zoraya" >&2
         exit 1;;
     esac
+    if [ "$lang" = next ]; then
+        lang=$a
+        prev=$a
+        continue
+    fi
     case "$a" in
     -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*|*,-D,__linux*|*,-D,__gnu_linux*|*,-D,linux*)
         echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2
@@ -66,6 +83,14 @@ for a in "$@"; do
         startfiles=0;;
     -nodefaultlibs)
         defaultlibs=0;;
+    -nostdlib++)
+        cxxlibs=0;;
+    -std=*)
+        std=1;;
+    -x)
+        lang=next;;
+    -x*)
+        lang=${a#-x};;
     esac
     prev=$a
 done
@@ -78,7 +103,30 @@ done
 # clang's own headers out: musl's are complete. The prefix map turns this
 # checkout's absolute path, in file names and the compilation directory, into
 # ".", so that objects do not depend on where the checkout is.
-set -- --target=aarch64-unknown-none-elf -D__zoraya__=1 \
+# C++: libc++'s headers come before musl's (libc++'s <stdio.h> and the
+# others include_next them), the driver is clang's g++ mode, and exceptions
+# and unwind tables are on (a later -fno-exceptions of the caller wins).
+# _GNU_SOURCE is defined for every standard, as clang does for C++ on Linux
+# and musl targets: a strict -std=c++NN defines __STRICT_ANSI__, under which
+# musl declares no POSIX name, and libc++'s headers call nanosleep and, for
+# musl, strtod_l and the other *_l functions musl declares only under
+# _GNU_SOURCE (ADR-0364). It names no system; __linux__ stays refused. The
+# default standard is ADR-0364's, left out when the caller names one or a
+# language (-x c for a C file built with zc++).
+cxxflags=
+if [ "$cxx" = 1 ]; then
+    cxxflags="--driver-mode=g++ -nostdinc++ -isystem $sysroot/usr/include/c++/v1 -fexceptions -funwind-tables -D_GNU_SOURCE"
+    # The default standard, unless the line names one, or a language other
+    # than C++ (-x c, -xassembler-with-cpp; -x none ends a -x).
+    case "$lang" in ""|none|c++|c++-header|c++-cpp-output) cxxlang=1 ;; *) cxxlang=0 ;; esac
+    if [ "$std" = 0 ] && [ "$cxxlang" = 1 ]; then
+        cxxflags="$cxxflags -std=c++23"
+    fi
+fi
+# The word splitting of $cxxflags is intended (no spaces in the sysroot's
+# path, as below).
+# shellcheck disable=SC2086
+set -- $cxxflags --target=aarch64-unknown-none-elf -D__zoraya__=1 \
     -U__WINT_TYPE__ "-D__WINT_TYPE__=unsigned int" \
     -nostdinc -isystem "$sysroot/usr/include" \
     -fno-pic -fno-pie -fno-stack-protector \
@@ -104,6 +152,18 @@ fi
 libs=
 if [ "$defaultlibs" = 1 ]; then
     libs=-lc
+    # C++: the three libraries in one group with libc.a (libunwind needs
+    # libc.a's dl_iterate_phdr, libc.a's exit runs libc++'s destructors), and
+    # the .eh_frame_hdr that libunwind finds through PT_GNU_EH_FRAME.
+    if [ "$cxx" = 1 ] && [ "$cxxlibs" = 1 ]; then
+        libs="-Wl,--start-group -lc++ -lc++abi -lunwind -lc -Wl,--end-group"
+    fi
+fi
+# Every C++ link gets the .eh_frame_hdr, with or without the default
+# libraries (INV-0361-1): a -nodefaultlibs link that names the runtime itself
+# would otherwise throw into std::terminate.
+if [ "$cxx" = 1 ]; then
+    libs="-Wl,--eh-frame-hdr $libs"
 fi
 
 # -x none ends a -x the caller gave (as in `cc -x c -`), so that crtn.o is

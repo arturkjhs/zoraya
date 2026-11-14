@@ -1,0 +1,17 @@
+--- a/libcxx/src/thread.cpp	2026-11-14 04:21:08
++++ b/libcxx/src/thread.cpp	2026-11-14 04:21:08
+@@ -40,6 +40,14 @@
+ void thread::join() {
+   int ec = EINVAL;
+   if (!__libcpp_thread_isnull(&__t_)) {
++#if defined(__zoraya__)
++    // Zoraya (TASK-30): musl's pthread_join waits for ever on the calling
++    // thread itself, and [thread.thread.member] requires
++    // resource_deadlock_would_occur when get_id() == this_thread::get_id().
++    if (__libcpp_thread_id_equal(__libcpp_thread_get_current_id(), __libcpp_thread_get_id(&__t_)))
++      ec = EDEADLK;
++    else
++#endif
+     ec = __libcpp_thread_join(&__t_);
+     if (ec == 0)
+       __t_ = _LIBCPP_NULL_THREAD;

@@ -1,0 +1,53 @@
+--- a/libcxx/test/support/filesystem_test_helper.h	2026-11-14 04:33:29
++++ b/libcxx/test/support/filesystem_test_helper.h	2026-11-14 04:33:29
+@@ -151,14 +151,21 @@
+ struct scoped_test_env
+ {
+     scoped_test_env() : test_root(available_cwd_path()) {
+-#ifdef _WIN32
++#if defined(__zoraya__)
++        // Zoraya (TASK-30): no shell for std::system in the test image; the
++        // same directory made by the library itself.
++        fs::create_directories(test_root);
++        int ret = 0;
++#elif defined(_WIN32)
+         // Windows mkdir can create multiple recursive directories
+         // if needed.
+         std::string cmd = "mkdir " + test_root.string();
+ #else
+         std::string cmd = "mkdir -p " + test_root.string();
+ #endif
++#if !defined(__zoraya__)
+         int ret = std::system(cmd.c_str());
++#endif
+         assert(ret == 0);
+ 
+         // Ensure that the root_path is fully resolved, i.e. it contains no
+@@ -169,7 +176,26 @@
+     }
+ 
+     ~scoped_test_env() {
+-#ifdef _WIN32
++#if defined(__zoraya__)
++        // chmod -R 777 and rm -rf, without a shell: a directory made
++        // unreadable is made readable before its contents are reached, so
++        // the walk is repeated until removal succeeds.
++        std::error_code ec;
++        for (int pass = 0; pass < 16; ++pass) {
++            std::error_code ignored;
++            fs::permissions(test_root, fs::perms::all, ignored);
++            std::error_code walk;
++            for (auto it = fs::recursive_directory_iterator(test_root, fs::directory_options::skip_permission_denied, walk);
++                 !walk && it != fs::recursive_directory_iterator(); it.increment(walk))
++                if (!it->is_symlink(ignored))
++                    fs::permissions(it->path(), fs::perms::all, ignored);
++            ec.clear();
++            fs::remove_all(test_root, ec);
++            if (!ec)
++                break;
++        }
++        assert(!ec);
++#elif defined(_WIN32)
+         std::string cmd = "rmdir /s /q " + test_root.string();
+         int ret = std::system(cmd.c_str());
+         assert(ret == 0);

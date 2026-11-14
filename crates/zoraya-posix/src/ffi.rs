@@ -613,39 +613,96 @@ unsafe impl GlobalAlloc for ProcessHeap {
 #[global_allocator]
 static HEAP: ProcessHeap = ProcessHeap(UnsafeCell::new(Heap::new(Objects)));
 
-/// `malloc`'s header: the size asked, so that `free` and `realloc` know it.
+/// `malloc`'s header, the 16 bytes before every pointer it gives: the size
+/// asked, so that `free` and `realloc` know it, then the distance from the
+/// heap block's start to the pointer, which is also the block's alignment
+/// (16 for `malloc`, more for `aligned_alloc` and `posix_memalign`, TASK-30,
+/// ADR-0366).
 const HEADER: usize = 16;
 
-fn layout(n: usize) -> Option<Layout> {
-    Layout::from_size_align(n.checked_add(HEADER)?, 16).ok()
+/// The heap layout of a block of `n` bytes at `offset` (a power of two, at
+/// least `HEADER`) from its start, aligned to `offset`.
+fn layout_at(n: usize, offset: usize) -> Option<Layout> {
+    Layout::from_size_align(n.checked_add(offset)?, offset).ok()
+}
+
+/// `n` bytes aligned to `align` (a power of two; less than `HEADER` is taken
+/// as `HEADER`, so that the header always fits before the pointer); null if
+/// the heap has no room or the sizes overflow (the caller sets `errno`).
+fn alloc_aligned(n: usize, align: usize) -> *mut u8 {
+    let align = align.max(HEADER);
+    let Some(l) = layout_at(n, align) else {
+        return ptr::null_mut();
+    };
+    // SAFETY: `l` has a non-zero size (`align` at least).
+    let block = unsafe { HEAP.alloc(l) };
+    if block.is_null() {
+        return block;
+    }
+    // SAFETY: the block holds `align + n` bytes and is `align`-aligned, and
+    // `align >= HEADER`, so the two header words before `block + align` are
+    // inside it and aligned.
+    unsafe {
+        let p = block.add(align);
+        p.sub(HEADER).cast::<usize>().write(n);
+        p.sub(HEADER / 2).cast::<usize>().write(align);
+        p
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn malloc(n: usize) -> *mut u8 {
-    let Some(l) = layout(n) else {
+    let p = alloc_aligned(n, HEADER);
+    if p.is_null() {
         set_errno(ENOMEM);
+    }
+    p
+}
+
+/// C11's `aligned_alloc`: `align` must be a power of two (else `EINVAL`);
+/// any `n` is taken, as glibc and musl do.
+#[unsafe(no_mangle)]
+extern "C" fn aligned_alloc(align: usize, n: usize) -> *mut u8 {
+    if !align.is_power_of_two() {
+        set_errno(EINVAL);
         return ptr::null_mut();
-    };
-    // SAFETY: `l` has a non-zero size (the header).
-    let block = unsafe { HEAP.alloc(l) };
-    if block.is_null() {
+    }
+    let p = alloc_aligned(n, align);
+    if p.is_null() {
         set_errno(ENOMEM);
-        return block;
     }
-    // SAFETY: the block holds `HEADER + n` bytes, 16-aligned.
-    unsafe {
-        block.cast::<usize>().write(n);
-        block.add(HEADER)
+    p
+}
+
+/// POSIX's `posix_memalign`: `align` a power of two and a multiple of
+/// `sizeof(void *)`, else `EINVAL`; `ENOMEM` without room. Returns the error
+/// and leaves `errno` alone, as POSIX says.
+///
+/// # Safety
+///
+/// `out` is writable (C's contract).
+#[unsafe(no_mangle)]
+unsafe extern "C" fn posix_memalign(out: *mut *mut u8, align: usize, n: usize) -> i32 {
+    if !align.is_power_of_two() || !align.is_multiple_of(size_of::<usize>()) {
+        return EINVAL;
     }
+    let p = alloc_aligned(n, align);
+    if p.is_null() {
+        return ENOMEM;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { out.write(p) };
+    0
 }
 
 /// The size `malloc` was asked for `p`.
 ///
 /// # Safety
 ///
-/// `p` came from `malloc` and was not freed.
+/// `p` came from `malloc`, `aligned_alloc` or `posix_memalign` and was not
+/// freed.
 unsafe fn asked(p: *mut u8) -> usize {
-    // SAFETY: the header is `HEADER` bytes before every block `malloc` gives.
+    // SAFETY: the header is `HEADER` bytes before every block they give.
     unsafe { p.sub(HEADER).cast::<usize>().read() }
 }
 
@@ -654,11 +711,15 @@ extern "C" fn free(p: *mut u8) {
     if p.is_null() {
         return;
     }
-    // SAFETY: C's contract for `free`: `p` came from this `malloc`.
+    // SAFETY: C's contract for `free`: `p` came from this `malloc` (or
+    // `aligned_alloc`, `posix_memalign`), whose header gives the size and the
+    // distance to the block's start, which `alloc_aligned` allocated with
+    // `layout_at` of the same two.
     unsafe {
         let n = asked(p);
-        if let Some(l) = layout(n) {
-            HEAP.dealloc(p.sub(HEADER), l);
+        let offset = p.sub(HEADER / 2).cast::<usize>().read();
+        if let Some(l) = layout_at(n, offset) {
+            HEAP.dealloc(p.sub(offset), l);
         }
     }
 }
