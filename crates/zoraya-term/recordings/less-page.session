@@ -6,7 +6,7 @@ mark first page
 send \x20
 wait 1
 mark second page
-send /line 5[0-5]\r
+send /line 4[0-5]\r
 wait 1
 mark after a search
 send G

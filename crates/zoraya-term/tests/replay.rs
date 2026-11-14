@@ -189,3 +189,53 @@ fn recordings_are_well_formed() {
         );
     }
 }
+
+/// The screen at each mark as a picture, for the first comparison with xterm
+/// that ADR-0332 item 10 asks of a person: `ZORAYA_TERM_SHOTS=dir cargo test
+/// -p zoraya-term --test replay -- --ignored shots` writes `NAME-N.ppm`, the
+/// terminal as it draws (light set, scale 2), one per mark. Compare it with
+/// the same `.rec` shown in xterm (`TERM=xterm-256color`, 80 × 24): `cat
+/// recordings/NAME.rec` in a terminal of that size.
+#[test]
+#[ignore = "writes pictures: ZORAYA_TERM_SHOTS=dir cargo test -p zoraya-term --test replay -- --ignored shots"]
+fn shots() {
+    use zoraya_tokens::{Appearance, Scale};
+    let Ok(out) = std::env::var("ZORAYA_TERM_SHOTS") else {
+        return;
+    };
+    let scale = if std::env::var("ZORAYA_TERM_SHOTS_SCALE").as_deref() == Ok("1") {
+        Scale::ONE
+    } else {
+        Scale::TWO
+    };
+    for name in names() {
+        let rec = fs::read(dir().join(format!("{name}.rec"))).unwrap();
+        let marks = fs::read_to_string(dir().join(format!("{name}.marks"))).unwrap();
+        let mut lines = marks.lines();
+        let size: Vec<usize> = lines
+            .next()
+            .unwrap()
+            .split(' ')
+            .skip(1)
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let mut t = Term::new(size[0], size[1]);
+        let mut look = zoraya_term::Look::new(scale, Appearance::Light);
+        let (w, h) = look.surface_size(size[0], size[1]);
+        let mut at = 0;
+        for (n, line) in lines.enumerate() {
+            let offset: usize = line.split(' ').next().unwrap().parse().unwrap();
+            t.write(&rec[at..offset]);
+            at = offset;
+            let mut pixels = vec![0u32; w * h];
+            look.clear(&mut pixels);
+            t.redraw();
+            t.render(&mut look, &mut pixels, w, true);
+            let mut ppm = format!("P6\n{w} {h}\n255\n").into_bytes();
+            for p in &pixels {
+                ppm.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+            }
+            fs::write(format!("{out}/{name}-{n}.ppm"), ppm).unwrap();
+        }
+    }
+}

@@ -343,6 +343,12 @@ read is a wait point of the thread that makes it (ADR-0304).
   native program needs it yet.
 - Whether the declared group should be checked by the broker inside a line too, for the agent-isolation direction.
 - `TOSTOP` and `SIGTTOU`: still no program in scope depends on them.
+- *Note, 2026-11-14 (ADR-0001 rule 6; TASK-31 part 10a, by an agent):* INV-0331-7 is checked (`zoraya_shell::crlf`,
+  `cargo test -p zoraya-shell`), with the carriage return added to everything the shell writes to `term`; until part 10c
+  hosts the discipline in the shell, a POSIX program's output is treated as `OPOST` and `ONLCR` on. INV-0331-1 to
+  INV-0331-6 and INV-0331-8 cannot be checked yet: each is about the discipline the shell hosts (terminal connections,
+  line tags, `VMIN`/`VTIME`, `Restore` sent by the shell, `SIGWINCH`), which part 10c builds. The terminal's half of
+  INV-0331-4 (`Restore` and `reinstate` in `zoraya-term`) is tested in `zoraya-term`.
 
 ## Revisit triggers
 

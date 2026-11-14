@@ -29,6 +29,15 @@ Build tools for ring on the target: the host's `clang` (already needed by ADR-01
 (`.cargo/config.toml`); no Perl, no NASM and no libc sysroot (the pregenerated assembly is used, and `tools/ring-include`
 holds three declaration-only headers).
 
+## Host tools
+
+| Tool | Version | Licence | Used by | Purpose |
+|---|---|---|---|---|
+| ncurses (`tic`, `infocmp`, and its test programs) | 6.6, `ports/sources.lock` (SHA-256 `355b4cbb...`) | X11 (MIT-style) | `tools/term-terminfo/terminfo.sh`, `tools/term-conformance/check.sh`, `tools/term-record/build-curses-tests.sh` | `tic` compiles the four terminfo entries of ADR-0333 (INV-0333-1), `infocmp` dumps the entry the terminal is tested against (INV-0332-1), the test programs are recorded to test the terminal (ADR-0332 item 10). Built for the host into `build/ports/host/`; nothing enters the image in part 10a. The port for the target is part 10d's (ADR-0334) |
+| musl's `wcwidth.c` | 1.2.5, `ports/sources.lock` | MIT | `tools/term-width/gen.sh` | Compiled for the host and asked for every code point, to write `crates/zoraya-width/src/table.rs` (ADR-0332 item 9) |
+| Python 3 (standard library only) | the host's | PSF | `tools/term-record/record.py`, `compare-tmux.py` | Records a program on a pseudo-terminal; compares replayed grids with tmux. Run with `-I`; not part of `make test` |
+| tmux | the host's | ISC | `tools/term-record/compare-tmux.py` | A second emulator for the text of the replayed grids (not part of `make test`) |
+
 ## Data
 
 | File | Source | Licence | Used by | Purpose |

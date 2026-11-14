@@ -614,3 +614,39 @@ fn wheel_turns_become_lines() {
     t.scroll_view(w.turn(i32::MAX));
     assert_eq!(t.view(), 0);
 }
+
+/// The reader takes any foreground and background, not only the palette's
+/// (TASK-31 10a: a full-screen program's 256-colour and direct-colour text
+/// is read by glyph in the GUI scripts), at both scales and in both sets,
+/// including a low contrast and a bold face.
+#[test]
+fn text_in_any_colour_reads_back() {
+    for (scale, appearance) in [
+        (Scale::ONE, Appearance::Light),
+        (Scale::ONE, Appearance::Dark),
+        (Scale::TWO, Appearance::Light),
+    ] {
+        let mut look = Look::new(scale, appearance);
+        let mut t = Term::new(40, 6);
+        t.write(
+            "\x1b[38;2;17;200;99m\x1b[48;2;120;3;200mgreen on purple\x1b[m\r\n\
+             \x1b[38;5;226m\x1b[48;5;21mQuick brown fox\x1b[m\r\n\
+             \x1b[1;38;2;255;128;0mbold orange\x1b[m \x1b[38;2;100;100;100m\x1b[48;2;110;110;110mfaint grey\x1b[m\r\n\
+             \x1b[2;38;5;196mdim red\x1b[m \x1b[7mreverse\x1b[m \x1b[38;5;232;48;5;255mgrey ramp\x1b[m\r\n\
+             \x1b[38;2;1;2;3mx\x1b[48;2;254;253;252my"
+                .as_bytes(),
+        );
+        let (w, h) = look.surface_size(40, 6);
+        let mut pixels = vec![0u32; w * h];
+        look.clear(&mut pixels);
+        t.render(&mut look, &mut pixels, w, false);
+        let mut reader = Reader::new(Look::new(scale, appearance));
+        let rows = reader.rows(40, 6, (0, 0), (w, h), |x, y| pixels[y * w + x]);
+        // A blank on a background of its own reads `_`, one on the default ` `.
+        assert_eq!(rows[0], reader.canonical("green_on_purple"));
+        assert_eq!(rows[1], reader.canonical("Quick_brown_fox"));
+        assert_eq!(rows[2], reader.canonical("bold orange faint_grey"));
+        assert_eq!(rows[3], reader.canonical("dim red reverse grey_ramp"));
+        assert_eq!(rows[4], reader.canonical("xy"));
+    }
+}

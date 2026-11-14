@@ -473,15 +473,34 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
   At most 32 clients (`zoraya_proto_gui::MAX_CLIENTS`); an untrusted room's are counted in its account, 3 a room and
   12 for all, refused `OVER_QUOTA`, so the session keeps 20 (proposed ADR-0323). With no display driver it goes on; a new one gets the same framebuffer and one full flush.
-- **`term`** (`zoraya-term`, `zoraya-text`, ADR-0096, ADR-0162). A compositor client with an 80 × 24 grid of 8 × 18
-  cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14), 668 × 460 pixels, and
-  500 lines of scrollback (Shift with Page Up or Page Down, or the wheel, three lines a notch). It parses the VT subset of ADR-0096 with ADR-0154's faint
-  (SGR 2, ended by 22: half way to the background), draws bold (SGR 1) with JetBrains Mono Bold, takes its colours
-  from the `term.*` tokens of the light set, answers no query, and sends the shell the bytes keys make
-  (`zoraya-proto-term`): it holds up to 4 KiB of keys the shell has not read yet and sends them as soon as the shell's
-  queue has room. It draws only the rows that changed, and commits again only after the last commit's reply.
+- **`term`** (`zoraya-term`, `zoraya-width`, `zoraya-text`, ADR-0096, ADR-0162, ADR-0332). A compositor client with
+  an 80 × 24 grid of 8 × 18 cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14),
+  668 × 460 pixels, and up to 2,000 lines of scrollback (`Term::with_scrollback`, at most 10,000; the setting
+  `term.scrollback` is declared and read by a later part, so the default stands; Shift with Page Up or Page Down, or the
+  wheel, three lines a notch). *The parser* (since 10a) is a state machine of the DEC kind: `CSI` with up to 32
+  parameters and sub-parameters (colon form), `OSC`, `DCS`, `APC`, `PM` and `SOS` skipped or run and cut at 4,096
+  bytes, `CAN` and `SUB` ending any sequence. It acts on the string capabilities of the pinned `xterm-256color`
+  entry less the list in `crates/zoraya-term/entry/exceptions.txt`, and on bracketed paste (2004), the mouse modes (1000,
+  1002, 1006), focus (1004), synchronized output (2026: `term` holds its drawing for at most 150 ms), the cursor shape,
+  `OSC 4` and `OSC 104`; every other well-formed sequence is consumed and changes nothing (INV-0332-3), and no query
+  is answered: `Term::write` returns nothing (INV-0332-2). *The grid* has a 16-byte cell (a character, two combining
+  marks, ten attribute bits, two colours that are a palette index, a direct colour or the default), an alternate screen
+  with no scrollback (47, 1047, 1048, 1049), a scroll region, origin and autowrap modes, tab stops, insert mode,
+  DEC line drawing in G0 and G1, wide characters (two cells, wrapped whole) and combining marks, with every width from
+  `zoraya-width`, musl's own `wcwidth` as a table (`tools/term-width/gen.sh`). A line feed moves down and keeps the
+  column: the shell adds the carriage return (`zoraya_shell::crlf`). Bold is a weight and does not brighten; italic is
+  drawn slanted, faint is half way to the background, underline and strike are lines; blink is stored. `Term::restore`
+  gives the shell a working screen (the primary screen, cursor shown, modes, region, sets, pen and palette cleared)
+  and `Term::reinstate` sets it all again for a stopped line; nothing sends them yet (part 10c). It sends the shell
+  the bytes keys make (`zoraya-proto-term`; the F-keys, the mouse and paste are part 10b): it holds up to 4 KiB of keys
+  the shell has not read yet and sends them as soon as the shell's queue has room. It draws only the rows that changed,
+  and commits again only after the last commit's reply. *Known limits (10a):* a combining mark outside the Basic
+  Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
+  the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
-  is full), input from `Input` messages, and its width from `Size`. Without one it uses the console.
+  is full; a carriage return is written before every line feed, ADR-0331 item 8), input from `Input` messages, and its
+  width from `Size`. Without one it uses the console, which adds its own carriage return. Its line editor counts
+  columns with the same width table as the grid.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
   page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A
   dead driver is restarted alone, at most three times each, and handed to the compositor over the manager channel. A
@@ -947,6 +966,21 @@ Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md
 stage 6c `libc.a` holds the real `zoraya-posix` ("`libposix` core (as built)" below), and C programs built against
 it run in Zoraya; the ported programs need 6d's process functions. `ports/README.md` has the details.
 
+- **The terminal's entry and tools (TASK-31 10a, ADR-0332, ADR-0333).** `ports/sources.lock` pins ncurses 6.6 (the
+  port for the target is part 10d's). `tools/term-terminfo/terminfo.sh` builds `tic` and `infocmp` from it for the host
+  (into `build/ports/host/ncurses`, configured with `--enable-mixed-case` so that the directory layout does not depend
+  on the host's file system) and compiles exactly `x/xterm-256color`, `x/xterm`, `v/vt100` and `d/dumb`;
+  `ports/terminfo.manifest` holds their SHA-256 and `make check-terminfo` (in `make check-ports`) compares
+  (INV-0333-1). `tools/term-width/gen.sh` asks the pinned musl's `wcwidth` about every code point and writes
+  `crates/zoraya-width/src/table.rs`, which the grid and the shell's editor share; `make check-term-width` regenerates
+  it and compares (INV-0332-4). `tools/term-conformance/check.sh` reads the dump of the pinned entry
+  (`crates/zoraya-term/entry/xterm-256color.caps`) and fails on a capability that has neither a host test of
+  `zoraya-term` nor a reason in `entry/exceptions.txt` (INV-0332-1; in `make check`). `tools/term-record/` records
+  programs on a pseudo-terminal on the host (`record.py`), builds ncurses' own test programs from the pinned archive
+  (`build-curses-tests.sh`) and compares the replayed grids with tmux (`compare-tmux.py`); the recordings are
+  `crates/zoraya-term/recordings/` (`vi`, `less` and four ncurses programs), replayed by `tests/replay.rs`
+  (INV-0332-6).
+
 - **`make fetch-ports`** downloads the archives of `ports/sources.lock` (TASK-02's pins and hashes, musl 1.2.5 added,
   tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. Each archive
   may have mirrors after its own URL (buildroot's for musl, dash and busybox, GNU's for make), tried in turn with
@@ -1031,8 +1065,10 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   lossless, so the tolerance is zero. It also checks the background and the focused frame pixel by pixel, and `shot
   NAME` keeps a screen in `build/shots/`. `tests/gui/terminal.script` waits for the prompt, writes and reads a file, runs a
   pipeline, presses F12, types a line wider than the window in one burst and checks that it is redrawn in place,
-  reads Ukrainian and Czech names and text back (from `rootfs/texts/`, completed with Tab until 7c's layouts), measures
-  key latency, and powers off. The serial line's input is
+  reads Ukrainian and Czech names and text back (from `rootfs/texts/`, completed with Tab until 7c's layouts), plays
+  a recorded full-screen session of `less` with `cat` (`tests/gui/terminal.root/recordings/`, made by
+  `tools/term-record/gui-files.sh`: the 256-colour and direct-colour text is read by glyph, and after the program's end
+  the shell's screen is back and its prompt clean), measures key latency, and powers off. The serial line's input is
   closed, so keys reach `zosh` only through the window;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status

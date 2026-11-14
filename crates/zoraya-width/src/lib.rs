@@ -26,6 +26,10 @@ pub fn wcwidth(c: u32) -> i8 {
 /// code point musl gives no width (a control, a noncharacter) takes 1: it is
 /// drawn as a box where it is drawn at all, and never breaks a layout.
 pub fn columns(c: char) -> usize {
+    // Printable ASCII is nearly all the text there is: no search for it.
+    if matches!(c, ' '..='~') {
+        return 1;
+    }
     match wcwidth(c as u32) {
         0 => 0,
         2 => 2,
@@ -79,6 +83,18 @@ mod tests {
         assert_eq!(columns('\u{301}'), 0);
         assert_eq!(columns('中'), 2);
         assert_eq!(str_columns("a中\u{301}b"), 4);
+    }
+
+    #[test]
+    fn the_ascii_shortcut_agrees_with_the_table() {
+        for c in (0..=0x10ffffu32).filter_map(char::from_u32) {
+            let slow = match wcwidth(c as u32) {
+                0 => 0,
+                2 => 2,
+                _ => 1,
+            };
+            assert_eq!(columns(c), slow, "U+{:04X}", c as u32);
+        }
     }
 
     #[test]
