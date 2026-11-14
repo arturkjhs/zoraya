@@ -25,7 +25,7 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use zoraya_abi::posix::{self, NO_HANDLE};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
@@ -44,6 +44,7 @@ use zoraya_proto_term::{
     Title as TermTitle,
 };
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
+use zoraya_shell::crlf::Crlf;
 use zoraya_shell::editor::{self, Assist, Completion, Editor, Key, Options};
 use zoraya_shell::eval::{
     self, Exec, Found, Host, Io, LANGUAGE, Member, Pipe, Ran, Shell, Sink, State,
@@ -166,6 +167,19 @@ fn terminal_write(end: Handle, bytes: &[u8]) -> fmt::Result {
     Ok(())
 }
 
+/// The carriage-return state of what the shell has written to the terminal:
+/// the last byte decides whether the next line feed needs one.
+static CRLF_AFTER_CR: AtomicBool = AtomicBool::new(false);
+
+/// Runs `f` on the converter, with its state kept between writes (the shell
+/// has one thread).
+fn lock_crlf<R>(f: impl FnOnce(&mut Crlf) -> R) -> R {
+    let mut state = Crlf::after(CRLF_AFTER_CR.load(Ordering::Relaxed));
+    let out = f(&mut state);
+    CRLF_AFTER_CR.store(state.ended_with_cr(), Ordering::Relaxed);
+    out
+}
+
 /// Where the shell writes: its terminal, or the console. The console takes
 /// `\n` alone; the kernel adds the `\r`.
 fn show(s: &str) {
@@ -179,7 +193,16 @@ fn show_bytes(bytes: &[u8]) {
         return;
     }
     let _ = match terminal() {
-        Some(end) => terminal_write(end, bytes),
+        // The terminal's line feed keeps the column: the carriage return is
+        // the shell's to write, for its own output, a native program's and (as
+        // their attributes stand until the line discipline hosts them, 10c) a
+        // POSIX program's (ADR-0331 item 8, INV-0331-7). The console adds its
+        // own.
+        Some(end) => {
+            let mut converted = Vec::with_capacity(bytes.len() + bytes.len() / 16);
+            lock_crlf(|c| c.convert(bytes, true, &mut converted));
+            terminal_write(end, &converted)
+        }
         None => console_write(CONSOLE, bytes)
             .map(|_| ())
             .map_err(|_| fmt::Error),

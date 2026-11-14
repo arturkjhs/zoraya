@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+pub mod crlf;
 pub mod editor;
 pub mod eval;
 pub mod glob;
