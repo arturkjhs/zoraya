@@ -1,4 +1,4 @@
-# ADR-0343: The terminal's corners that ADR-0332 leaves open: the least state, and sequences that end where they are cut
+# ADR-0380: The terminal's corners that ADR-0332 leaves open: the least state, and sequences that end where they are cut
 
 - **Status:** proposed
 - **Date:** 2026-11-14
@@ -100,7 +100,7 @@ out to matter to a ported program, ADR-0332's revisit trigger names it and this 
 
 ## Invariants
 
-- **INV-0343-1.** Each numbered choice above has a host test of `zoraya-term` that fails when the choice is reversed.
+- **INV-0380-1.** Each numbered choice above has a host test of `zoraya-term` that fails when the choice is reversed.
   *Check:* `cargo test -p zoraya-term` (`tests_parser.rs`, `tests_total.rs`); a mutation run of the crate with no
   surviving mutant in `parse.rs` and `screen.rs` that the tests could not tell apart.
 

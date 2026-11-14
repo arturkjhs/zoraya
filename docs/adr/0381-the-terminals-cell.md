@@ -1,4 +1,4 @@
-# ADR-0344: The terminal's cell is 16 bytes: a character, two combining marks of the Basic Multilingual Plane, ten attribute bits and two colours
+# ADR-0381: The terminal's cell is 16 bytes: a character, two combining marks of the Basic Multilingual Plane, ten attribute bits and two colours
 
 - **Status:** proposed
 - **Date:** 2026-11-14
@@ -71,7 +71,7 @@ Option B or C is a local change.
 
 ## Invariants
 
-- **INV-0344-1.** `size_of::<Cell>()` is 16, and every colour kind and attribute bit survives a round trip through the
+- **INV-0381-1.** `size_of::<Cell>()` is 16, and every colour kind and attribute bit survives a round trip through the
   accessors. *Check:* `cargo test -p zoraya-term` (`cell::tests`, `memory_is_what_the_terminal_holds`).
 
 ## Open questions

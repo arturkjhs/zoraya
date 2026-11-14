@@ -8,7 +8,7 @@ the independent review is `opus-review`'s, afterwards. Nothing here is merged, t
 | What | Where |
 |---|---|
 | The parser and grid of ADR-0332 items 1 to 3, 6, 9 and 11: `CSI` with 32 parameters and sub-parameters, `OSC 4` and `104`, strings skipped, the alternate screen, scroll regions, tab stops, two character sets, wide and combining characters, 256 and direct colours, attributes, `Restore` and `reinstate`, scrollback as a setting (`Term::with_scrollback`, `set_scrollback`) | `crates/zoraya-term/src/{term,screen,parse,cell,colour}.rs` |
-| The 16-byte cell | `crates/zoraya-term/src/cell.rs` (proposed ADR-0344) |
+| The 16-byte cell | `crates/zoraya-term/src/cell.rs` (proposed ADR-0381) |
 | Drawing: italic slanted, underline, strike, wide cells over two columns, combining marks, the three cursor shapes, reverse screen, `OSC 4` palette | `crates/zoraya-term/src/lib.rs` (`Look`), `term.rs` (`render`), `crates/zoraya-text` (`draw_glyph_over`) |
 | The reader of screens by glyph takes any foreground and background (it fits the colour from the coverage), not only the palette's | `crates/zoraya-term/src/read.rs` |
 | The width table from the pinned musl's `wcwidth`, used by the grid and by `zosh`'s editor | `crates/zoraya-width`, `tools/term-width/gen.sh`, `crates/zoraya-shell/src/editor.rs` |
@@ -18,7 +18,7 @@ the independent review is `opus-review`'s, afterwards. Nothing here is merged, t
 | The conformance tool, the dump of the entry and the exceptions file | `tools/term-conformance/check.sh`, `crates/zoraya-term/entry/` |
 | Recorded sessions (`vi` and `less` of the host, four ncurses test programs of the pinned release), their frozen grids and the replay | `tools/term-record/`, `crates/zoraya-term/recordings/`, `crates/zoraya-term/tests/replay.rs` |
 | The GUI script plays a recorded full-screen session | `tests/gui/terminal.script`, `tests/gui/terminal.root/recordings/` |
-| Three proposed ADRs | `docs/adr/0343-*.md`, `0344-*.md`, `0345-*.md` |
+| Three proposed ADRs | `docs/adr/0380-*.md`, `0381-*.md`, `0382-*.md` |
 
 ## What was run, and what it gave
 
@@ -83,8 +83,8 @@ script), and `zoraya-width` (a table and three functions, tested against every c
 
 ## Decisions taken (no one could be asked)
 
-- **Where the ADRs were silent**, three proposed ADRs with a recommendation each: 0343 (the parser's corners), 0344
-  (the cell's layout), 0345 (how conformance is evidenced). Their numbers are from the task's reservation.
+- **Where the ADRs were silent**, three proposed ADRs with a recommendation each: 0380 (the parser's corners), 0381
+  (the cell's layout), 0382 (how conformance is evidenced). Their numbers are from the task's reservation.
 - **A generated table, committed, with a check.** ADR-0332 item 9 says the table is generated at build time from
   musl's `wcwidth`. The table is a Rust source file in the repository, written by `tools/term-width/gen.sh`, and
   `gen.sh check` regenerates it from the pinned archive and compares (also that the file names the lock's pin, offline).
@@ -95,7 +95,7 @@ script), and `zoraya-width` (a table and three functions, tested against every c
 - **Two mirrors** in `ports/sources.lock` for ncurses (ftp.gnu.org and invisible-mirror.net, the same SHA-256); the
   detached signature is not verified.
 - **The conformance dump** is `infocmp -x -1` of the compiled files, sorted; a capability is covered by a call of
-  `cap`, `flag` or `num` (proposed ADR-0345), not by a comment.
+  `cap`, `flag` or `num` (proposed ADR-0382), not by a comment.
 - **Until part 10c**, the shell treats a POSIX program's output as `OPOST` and `ONLCR` on (`show_bytes` converts
   everything for the window), and the session's `ttyd` is unchanged (it applies `ONLCR` itself).
 - **`term.scrollback` as a setting** has its API (`Term::with_scrollback`, `set_scrollback`, at most 10,000) and
@@ -112,9 +112,9 @@ script), and `zoraya-width` (a table and three functions, tested against every c
 
 | ADR | Recommendation |
 |---|---|
-| ADR-0343, the terminal's corners that ADR-0332 leaves open | Option B: the ten small choices written down (a line feed keeps the column, only a whole-screen scroll feeds the scrollback, a region needs two rows, a wide character wraps whole, more than 32 parameters ignore the sequence, `ESC` in a string abandons it, `Restore` and `reinstate`), each with a host test |
-| ADR-0344, the terminal's cell | Option A: 16 bytes, two BMP marks, nothing per cell on the heap; a mark outside the plane and a third mark are dropped; the cell is private, so Option B (a side table) is a local change |
-| ADR-0345, how conformance is evidenced | Option B: the tests expand the dump of the pinned entry, so a call is the cover; recordings of host programs with frozen grids; tmux as a hand-run second opinion |
+| ADR-0380, the terminal's corners that ADR-0332 leaves open | Option B: the ten small choices written down (a line feed keeps the column, only a whole-screen scroll feeds the scrollback, a region needs two rows, a wide character wraps whole, more than 32 parameters ignore the sequence, `ESC` in a string abandons it, `Restore` and `reinstate`), each with a host test |
+| ADR-0381, the terminal's cell | Option A: 16 bytes, two BMP marks, nothing per cell on the heap; a mark outside the plane and a third mark are dropped; the cell is private, so Option B (a side table) is a local change |
+| ADR-0382, how conformance is evidenced | Option B: the tests expand the dump of the pinned entry, so a call is the cover; recordings of host programs with frozen grids; tmux as a hand-run second opinion |
 
 None changes an accepted ADR: the changes that `rows-to-add.md`'s tensions table lists (LF keeps the column, 32
 parameters, the scrollback as a setting, the editor's widths) are made as decided, with rule-6 notes on ADR-0331 to
@@ -127,7 +127,7 @@ ADR-0333 and new statuses in `invariants.md` (INV-0331-7, INV-0332-1, -2, -3, -4
   messages are part 10b; the conformance exceptions file lists 188 capabilities for that reason.
 - **The sync hold (150 ms) is in `term` and was not exercised by a test** (nothing sends mode 2026 in the GUI scripts);
   `Term` stores the mode and has a host test.
-- **A combining mark outside the Basic Multilingual Plane, and a third on a cell, are dropped** (proposed ADR-0344).
+- **A combining mark outside the Basic Multilingual Plane, and a third on a cell, are dropped** (proposed ADR-0381).
 - **Wide characters are drawn as boxes** (no font has them); the box spans the two cells.
 - **Italic is a shear of the regular face, and an underlined or slanted cell is not matched by the screen reader**
   (the GUI scripts read plain text; the recordings' text rows were not underlined for that reason).
@@ -159,7 +159,7 @@ ADR-0333 and new statuses in `invariants.md` (INV-0331-7, INV-0332-1, -2, -3, -4
    ports' cache, `ncurses` and `musl` archives only), and that CI's Linux run agrees with `ports/terminfo.manifest`.
 4. **`ADR-0332`'s exceptions file** is the list part 10b shrinks; the tool fails when a capability is both tested and
    excepted.
-5. **The decision on the proposed ADRs 0343 to 0345** and the index rows I added for them (status `proposed`).
+5. **The decision on the proposed ADRs 0380 to 0382** and the index rows I added for them (status `proposed`).
 
 ## Time
 

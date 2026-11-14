@@ -1,4 +1,4 @@
-# ADR-0345: How the terminal's conformance is evidenced: a test calls the entry's capability, recordings are made on the host, and a second emulator is a text check
+# ADR-0382: How the terminal's conformance is evidenced: a test calls the entry's capability, recordings are made on the host, and a second emulator is a text check
 
 - **Status:** proposed
 - **Date:** 2026-11-14
@@ -78,9 +78,9 @@ stays the first-comparison gate of ADR-0332 item 10.
 
 ## Invariants
 
-- **INV-0345-1.** Every capability of the dump is called by a test or listed in the exceptions with a reason, and no
+- **INV-0382-1.** Every capability of the dump is called by a test or listed in the exceptions with a reason, and no
   capability is both. *Check:* `tools/term-conformance/check.sh` in `make check`.
-- **INV-0345-2.** The dump is the output of the pinned `infocmp` on the pinned `tic`'s compilation of `xterm-256color`.
+- **INV-0382-2.** The dump is the output of the pinned `infocmp` on the pinned `tic`'s compilation of `xterm-256color`.
   *Check:* `tools/term-conformance/check.sh pin` in `make check-ports`.
 
 ## Open questions
