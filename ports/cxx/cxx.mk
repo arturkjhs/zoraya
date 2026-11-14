@@ -77,7 +77,9 @@ $(OBJ)/whole.check: $(LIB)/libunwind.a $(LIB)/libc++abi.a $(LIB)/libc++.a
 	$(ZCXX) -x c -c -o $(OBJ)/whole-main.o $(OBJ)/whole-main.c
 	$(ZCXX) -nostdlib++ -o $(OBJ)/whole.elf $(OBJ)/whole-main.o -Wl,--error-limit=0 \
 	  -Wl,--whole-archive $(LIB)/libc++.a $(LIB)/libc++abi.a $(LIB)/libunwind.a -Wl,--no-whole-archive
-	nm $(SHIM_OBJ) | awk 'NF == 3 { print $$2, $$3 }' | sort > $(OBJ)/shim.nm
+	@# Defined global names only: GNU nm also lists AArch64's local mapping
+	@# symbols ($$x, $$d: types t, r, n), which Apple's does not.
+	nm $(SHIM_OBJ) | awk 'NF == 3 && $$2 ~ /^[A-Z]$$/ { print $$2, $$3 }' | sort > $(OBJ)/shim.nm
 	@[ "$$(tr '\n' ' ' < $(OBJ)/shim.nm)" = "$(SHIM_NAMES) " ] || \
 	  { echo "INV-0366-2: the shim defines other names, or not weakly:"; cat $(OBJ)/shim.nm; exit 1; }
 	@# INV-0109-2 for zc++: it refuses -D__linux__ and defines nothing of
