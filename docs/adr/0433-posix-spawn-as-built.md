@@ -116,6 +116,7 @@ memory descriptor of the parent to every child that does not set close-on-exec.
 ```posix-surface-added
 posix_spawnp t_spawn
 posix_spawn_file_actions_addopen t_spawn
+posix_spawn_file_actions_addclose t_spawn
 posix_spawn_file_actions_addclosefrom_np t_spawn
 posix_spawnattr_setnamespace_np t_spawn
 posix_spawnattr_setgrants_np t_spawn
