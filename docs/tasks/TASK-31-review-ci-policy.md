@@ -312,3 +312,142 @@ Do not merge as it is. Findings 1, 2 and 5 break the decision's own fail-safe an
 
 All three are small fixes in the two new scripts and the plan step, with fixtures. Findings 3, 4 and 6 to 8 should go in
 with them, since they are a few lines each. Findings 9 to 13 can follow.
+
+## Check of the fix pass (`git diff 199d38b 7732003`)
+
+The same reviewer, on the fix commit `7732003` of `work/ci-policy`. Read-mostly: host checks only, no QEMU, no workflow
+dispatched.
+
+### What was run
+
+| Command | Result |
+|---|---|
+| `make check` | 25 checks pass |
+| `make check-ci-plan`, `make check-workflow-syntax` | pass |
+| the 26 adversarial Makefiles of finding 2 against the new `tools/ci-makefile-steps.rb` | all as expected (table below) |
+| one trailing ` x` on the first recipe line of a rule of a copy of the real `Makefile` | table below |
+| 18 new adversarial edits, each alone and appended to the real `Makefile` | table below |
+| `tools/ci-plan-step.sh` with a stub `tools/ci-plan.sh` that prints a partial line and exits 1, under `bash -eo pipefail` | finding 15 |
+
+Hand breaks, each alone in a scratch clone of `7732003`, reverted:
+
+| Break | Result |
+|---|---|
+| C1. `NIGHTLY_CRON` in `ci-plan-step.sh` set to `17 3 * * *` | fails `check-ci-jobs` |
+| C2. the two crons swapped in `test.yml` | fails `check-ci-jobs` |
+| C3. the 4-hourly cron back to `0 */4 * * *` | fails `check-ci-jobs` |
+| S1. the red skip no longer exits 1 | fails `check-ci-plan` (plan step fixture) |
+| S2. a failed lookup taken as `skip=1` | fails `check-ci-plan` |
+| G1. `--green-for` counts a red run | fails `check-ci-plan` |
+| G2. `--green-for` without the ancestor test | fails `check-ci-plan` |
+| M1. the "reaches nothing: full" net removed | fails `check-ci-plan` |
+| M2. the `$(MAKE)` pattern back to the old one | fails `check-ci-plan` |
+| M3. the owner check of unchanged lines removed | fails `check-ci-plan` |
+
+### The earlier findings
+
+| Finding | State |
+|---|---|
+| 1 (`$(MAKE)` not followed) | Fixed for `$(MAKE)`, `${MAKE}`, `+`/`@`/`-` prefixes and `-f` (f01, f01b, f21). On the real file, `test-net-posix`, `test-net-dns`, `test-net-lookup` and `test-net-fetch` now plan `test-net`, `check-libposix-widths-built` plans `test-libposix`, `cxx-libcxx-tests` plans `test-cxx-libcxx`, `python` plans the python steps. A `$(MAKE)` held in a variable is still not followed: finding 14. Correction to finding 1: `@$(MAKE) -s posix-calls` (line 1380) is in `test-posix-long`, not `test-posix`. |
+| 2 (no step reached taken as unaffected) | Fixed in the tool, and right on small Makefiles (f02, f06, f07, f08, f12, f14, f24). **Never fires on the real `Makefile`**: finding 14. |
+| 3 (`export`) | Fixed (f03, f04 `full`). |
+| 4 (unchanged lines that change owner) | Fixed (f09, f15 `full`; f16 `steps: test-a`). f22 is now `full`, which is harmless. |
+| 5 (a skipping run green over a red one) | Fixed: the skip run exits 1 when the last full run is red (S1). `--green-for` counts only a green run whose `build` ran and whose head has SHA as an ancestor (G1, G2). Because a red skip run's `build` is skipped, it is never a full run, so the next tick skips again and is red again. That is the intended carry-forward. The stage-tag paragraph of CLAUDE.md can be implemented with it: see note 17 for one missing step. |
+| 6 (copied cron string) | Fixed: `check-ci-jobs` compares the workflow's first cron with `NIGHTLY_CRON` (C1, C2). |
+| 7 (busy minute) | Fixed: `23 */4 * * *` in the workflow, `check-ci-jobs`, `design.md` and ADR-0348 (C3). No `0 */4` left outside `docs/research/` and `docs/tasks/`. |
+| 8 (blame list) | Fixed: every first-parent commit, with the merges marked. The fallback counts 15 commits. |
+| 9, 10, 12, 13 | Fixed: the claim is reworded, INV-0345-1's Status records that only the tool is checked, `test-changed` honours `unit_all`, and the plan step is `tools/ci-plan-step.sh` with fixtures (S2: a failed lookup gives the full set). |
+
+Earlier adversarial Makefiles, new tool: f01 `test-a`, f01b `test-a`, f02 `test-a`, f03 `full`, f04 `full`, f05 `full`, f05b
+`full`, f06 `test-a`, f07 `test-a`, f08 `full`, f09 `full`, f10 `test-a`, f11 `test-a`, f12 `test-a`, f13 `test-a`, f14 `full`,
+f15 `full`, f16 `test-a`, f17 `test-a`, f18 `test-a`, f19 `test-a test-b`, f20 `full`, f21 `test-a`, f22 `full`, f23 `full`,
+f24 `test-a`.
+
+New adversarial edits. "Alone" is the fixture with steps `test-a test-b`. "In the real file" is the fixture appended to
+the real `Makefile`, with every step plus `test-a test-b`. In that column, `+3` stands for `test-posix test-posix-gui
+test-tour-gui`, which every answer on the real file contains (finding 14).
+
+| Case | Expected | Alone | In the real file |
+|---|---|---|---|
+| a01 a recipe line in a `define` used by two targets | `test-a test-b` | `test-a test-b` | `test-a test-b` +3 |
+| a02 `?=`, a02b `+=`, a02c `::=` | `test-a` | `test-a` | `test-a` +3 |
+| a03 a target-specific variable of a helper | `test-a` | `test-a` | `test-a` +3 |
+| a04 a pattern rule | `test-a` | `test-a` | `test-a` +3 |
+| a05 an order-only prerequisite | `test-a` | `test-a` | `test-a` +3 |
+| a06 `$(MAKE) -f other.mk zz` renamed; a06b `$(MAKE) -f Makefile h`, h changed | `test-a` | `test-a` | `test-a` +3 |
+| a07 `.SECONDEXPANSION`, `$$(ZD)`'s rule changed; a07b ZD changed | `test-a` | `test-a`; `full` | `test-a` +3; `full` |
+| a08 `@-+$(MAKE) h` | `test-a` | `test-a` | `test-a` +3 |
+| a09 a comment line | `steps:` | `steps:` | `steps:` |
+| a10 a blank line inserted | `steps:` | `steps:` | `steps:` |
+| a10b a trailing blank on a `:=` value | `test-a` | `test-a` | `test-a` +3 |
+| a11 `$(call ZR,h)` with `ZR = $(MAKE) --no-print-directory $(1)` | `test-a` | `full` | **+3 only, no `test-a`** |
+| a12 `$(ZSUB) h` with `ZSUB = $(MAKE) -s` | `test-a` | `full` | **+3 only, no `test-a`** |
+
+### 14. error: on the real `Makefile`, two closures cover every rule, so the "reaches nothing: full" net never fires and a step reached through a variable that holds `$(MAKE)` is missed
+
+*Where:* `tools/ci-makefile-steps.rb:88` (recipe lines are joined with `' '`); `makes` (`:190`, the pattern
+`[^;&|\n]*` after `$(MAKE)`); `rules_for` (`:216`, an empty prefix means every rule); `main` (`:341-372`, `hit` and `lost`);
+`Makefile:1282` (`posix-image`) and `:1752-1754` (`ci-build`).
+
+*What:* the lines of a recipe are joined with a space, so the text has no newline. After `$(MAKE)`, the pattern takes the
+rest of the recipe up to the next `;`, `&` or `|`. In `posix-image`, that means 60 words after `@$(MAKE) -s -f ports/Makefile
+rootfs workloads`: `rm`, `cp`, paths, and `$(?)` from a `$$` word with an empty prefix, which stands for every rule. The same
+happens in `ci-build` (`$(CARGO)` after `$(MAKE)`). `posix-image` is a prerequisite of `test-posix`, `test-posix-gui` and
+`test-tour-gui`, so each of their closures is the whole file (363 of 364 nodes). So is `ci-build`'s. Three results:
+- Every `Makefile` change also plans those three steps. A `test-boot` recipe edit answers `steps: test-boot test-posix
+  test-posix-gui test-tour-gui`. This over-selects, which is safe but costly.
+- Every node is `hit`, so `lost` is always empty. A new orphan rule appended to the real `Makefile` answers `steps: test-posix
+  test-posix-gui test-tour-gui`, not `full`. The fix for finding 2 holds only on the fixtures' small Makefile. That is why
+  `check-ci-plan` passes.
+- A step that reaches a rule only through a variable whose value runs `$(MAKE)` is missed. `refs` reaches the variable,
+  but `makes` is applied only to rule text, never to a variable's value. With the net disarmed, the answer leaves the step
+  out: a11 and a12 above. The real file has this today. `CONFINED` (`Makefile:460-461`) runs `$(MAKE) --no-print-directory
+  $(2)` through `$(call CONFINED,...)`. A recipe edit of `test-net-dns-run`, `test-net-lookup-run` or `test-hand-run-net-run`
+  answers `steps: test-posix test-posix-gui test-tour-gui`, without `test-net` or `test-hand-run`. On CI these sub-steps print
+  `SKIPPED`, so CI loses nothing today. `make test-changed` runs them locally, and loses them.
+
+*Fix:* join recipe lines with `"\n"` (one line of `:88`). Checked on a scratch copy of the tool: the orphan rule gives
+`full`, a11 and a12 give `full`, `test-net-dns-run` gives `full`, `test-net-posix` gives `steps: test-net`, `test-boot` gives
+`steps: test-boot`, and `posix-calls` gives `steps:` (its only caller is the root `test-posix-long`). Then follow `$(MAKE)` in
+the values of the variables a rule reaches. Apply `makes` to `@vars[v]` in `closure`, with `$(1)`-style words standing for
+every rule, so that `CONFINED` plans `test-net` instead of `full`. Add two `check-ci-plan` fixtures on the real `Makefile`
+(it is in the scratch repository's reach through `$here`): an appended orphan rule must answer `full`, and a one-character
+edit of `test-boot`'s recipe must answer exactly `steps: test-boot`.
+
+### 15. warning: `tools/ci-plan-step.sh` ignores a failure of `tools/ci-plan.sh`, which the old step did not
+
+*Where:* `tools/ci-plan-step.sh:735-742` of the diff (the three `tools/ci-plan.sh ... > plan.txt` calls, under `set -u` only).
+
+*What:* the old step ran under the workflow's `shell: bash` (`bash -eo pipefail`). A failing `ci-plan.sh` in `... | tee`
+failed the plan job. The script has no `set -e` and does not test the status, so it exits 0. Reproduced with a stub
+`ci-plan.sh` that prints `tests=["x"` and exits 1: the step exits 0 for a scheduled run, a push to `main` and a pull request.
+*Scenario:* on a scheduled run, `ci-plan.sh` dies before it prints `build=` (an unbound variable under `set -u`, a git error).
+`build` is empty, so `build` and `tests` are skipped, and `checks` runs. The run is green with no machine run, and it is the
+fail-open the policy forbids. *Fix:* `|| { echo "ci-plan-step: tools/ci-plan.sh failed" >&2; exit 1; }` on each call, and a
+fixture with a failing `ci-plan.sh` that expects exit 1.
+
+### 16. note: the `::error::` line of a red skip goes into `$GITHUB_OUTPUT`
+
+*Where:* `tools/ci-plan-step.sh` (`echo "::error::$red"` on stdout); the workflow's `cat step.txt >> "$GITHUB_OUTPUT"`;
+the fixture `grep -q 'is red' ... "$aux/step.out"`.
+
+*What:* stdout is the output file. A line with neither `=` nor `<<` is not a valid output line. The runner reports a
+file-command error instead of the annotation. This is from the runner's documented format, not from a run. The run is red
+either way, and the reason is in the summary. *Fix:* `echo "::error::$red" >&2`, and have the fixture look for it on stderr
+only.
+
+### 17. note: `--green-for` needs the runs' heads in the local clone
+
+*Where:* `tools/ci-last-full.rb` (`git merge-base --is-ancestor want head_sha`); CLAUDE.md's stage-tag paragraph.
+
+*What:* a run whose `head_sha` the local clone lacks is passed over. The tool then exits 1, or names an older green run that
+also includes the SHA. Both outcomes are fail-safe. The window is 12 completed runs, skip runs included, about two days. A
+tag on an older commit with no newer green full run exits 1. CLAUDE.md names `gh` and `GITHUB_REPOSITORY`, but not
+`git fetch origin main` first. Add the fetch, or make the tool say "head X not in this clone" when it passes over a run.
+
+### Recommendation after the fix pass
+
+Errors 1, 3 and 5 of the first review and warnings 3, 4 and 6 to 10 are fixed, with fixtures that catch each break above.
+Error 2 is fixed in the tool, but finding 14 cancels it on the real `Makefile`. Do not merge until findings 14 and 15 are
+fixed: one line plus the variable-value edge and two fixtures for 14, a few lines and a fixture for 15. 16 and 17 can go in
+with them or follow.
