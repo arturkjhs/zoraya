@@ -836,7 +836,8 @@ impl Handlers for Calls<'_> {
         }
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
-        space.map_commit(va, length, attributes, Holder::Memory(object));
+        let share = flags.is_shared().then_some(offset);
+        space.map_commit(va, length, attributes, Holder::Memory(object), share);
         Ok(va)
     }
 

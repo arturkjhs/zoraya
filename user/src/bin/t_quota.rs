@@ -462,6 +462,90 @@ fn mapping_a_foreign_object_at_the_limit_is_refused() {
     handle_close(foreign).expect("close");
 }
 
+/// INV-0413-4 (ADR-0413 item 5): the frames of a memory object are charged to
+/// the job that made it and to no other, however many processes map it. A
+/// job with a limit of 2 MiB maps a 4 MiB object another job made, shared and
+/// writable, which could not be if the mapping were charged to it; the
+/// maker's use keeps the object's size, and the two together change by the
+/// page tables alone. Closing the object returns the maker's use.
+fn a_shared_object_is_charged_to_its_creator_only() {
+    const SIZE: u64 = 4 * MIB;
+    const TABLES: u64 = 64 << 10;
+    let before = job_get_usage(JOB, false).expect("usage").memory.used;
+    let object = memory_create(SIZE, MemoryFlags::NONE).expect("made by this job");
+    let created = job_get_usage(JOB, false).expect("usage").memory.used;
+    assert!(
+        created >= before + SIZE,
+        "the maker pays: {before} -> {created}"
+    );
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    job_set_limits(room, &limits(Some(2 * MIB), None)).expect("limits");
+    let mut buffer = [0; 512];
+    let program = image("t_quota");
+    let mut e = Encoder::new(&mut buffer, room, program);
+    e.handle(console_entry());
+    e.handle(zoraya_user::dup(
+        8,
+        object,
+        Rights::READ.union(Rights::WRITE).union(Rights::DUPLICATE),
+    ));
+    let (ours, theirs) = zoraya_user::channel_create().expect("channel");
+    e.handle(HandleEntry {
+        slot: 9,
+        handle: theirs,
+        rights: ChannelObject::RIGHTS,
+        transfer: Transfer::Move,
+    });
+    e.arg(b"map-shared");
+    let length = e.finish().expect("room");
+    let p = spawn(&buffer[..length]).expect("spawn");
+    handle_close(program).expect("image");
+    // The child maps and tells us; we look at both jobs while it holds the
+    // mapping, and let it go on.
+    await_message(ours);
+    let mapped = job_get_usage(JOB, false).expect("usage").memory.used;
+    let theirs_used = job_get_usage(room, false).expect("usage").memory.used;
+    assert!(
+        mapped <= created + TABLES,
+        "mapping charged the subtree: {created} -> {mapped}"
+    );
+    assert!(theirs_used < SIZE, "the mapper's job holds {theirs_used}");
+    zoraya_user::channel_write(ours, b"go", &[]).expect("go");
+    let record = wait_exit(p);
+    assert_eq!(record.code, 0, "{record:?}");
+    handle_close(p).expect("close");
+    handle_close(room).expect("close");
+    handle_close(ours).expect("close");
+    handle_close(object).expect("close");
+    assert!(
+        eventually(|| job_get_usage(JOB, false).expect("usage").memory.used <= before + TABLES),
+        "the maker's use returns when the object is gone"
+    );
+    println!("t_quota: a shared object is charged to its creator alone");
+}
+
+/// In the child of `a_shared_object_is_charged_to_its_creator_only`.
+fn map_shared() -> i32 {
+    let object = Handle::from_parts(8, 0).expect("slot");
+    let channel = Handle::from_parts(9, 0).expect("slot");
+    let before = job_get_usage(JOB, false).expect("usage").memory.used;
+    let flags = zoraya_abi::MapFlags::WRITE.union(zoraya_abi::MapFlags::SHARED);
+    let Ok(at) = zoraya_user::memory_map(object, 0, 4 * MIB, flags) else {
+        return 1;
+    };
+    // SAFETY: the mapping just made, 4 MiB, writable.
+    let bytes = unsafe { core::slice::from_raw_parts_mut(at as *mut u8, (4 * MIB) as usize) };
+    bytes.fill(0x5a);
+    let after = job_get_usage(JOB, false).expect("usage").memory.used;
+    if after >= before + (64 << 10) {
+        println!("t_quota: map-shared: {before} -> {after}");
+        return 2;
+    }
+    zoraya_user::channel_write(channel, b"ready", &[]).expect("ready");
+    await_message(channel);
+    0
+}
+
 /// In the child of `mapping_a_foreign_object_at_the_limit_is_refused`.
 fn map_foreign() -> i32 {
     let object = Handle::from_parts(8, 0).expect("slot");
@@ -513,6 +597,7 @@ fn main() -> i32 {
         Some(b"bomb") => return bomb(),
         Some(b"quick") => return 3,
         Some(b"map-foreign") => return map_foreign(),
+        Some(b"map-shared") => return map_shared(),
         Some(b"idle") => {
             nap(30_000);
             return 0;
@@ -525,6 +610,7 @@ fn main() -> i32 {
     spawn_stops_at_the_process_limit();
     a_fork_bomb_stops_at_the_process_limit();
     mapping_a_foreign_object_at_the_limit_is_refused();
+    a_shared_object_is_charged_to_its_creator_only();
     usage_matches_the_heap_and_the_frames();
     println!("t_quota: all passed");
     0

@@ -177,6 +177,10 @@ struct Mapping {
     length: u64,
     attributes: Attributes,
     holder: Holder,
+    /// For a mapping made `SHARED` (ADR-0431): the object's offset of its
+    /// first page. A snapshot maps the same frames into the child instead of
+    /// copying them.
+    share: Option<u64>,
 }
 
 /// Why a mapping was refused.
@@ -358,6 +362,7 @@ impl AddressSpace {
                 length,
                 attributes,
                 holder,
+                share: None,
             },
         );
         Ok(va)
@@ -411,7 +416,17 @@ impl AddressSpace {
     }
 
     /// The third part: the range is mapped; records it and keeps `holder`.
-    pub fn map_commit(&mut self, va: u64, length: u64, attributes: Attributes, holder: Holder) {
+    ///
+    /// `share` is the offset in the object of the range's first page for a
+    /// `SHARED` mapping (ADR-0431), which a snapshot keeps shared.
+    pub fn map_commit(
+        &mut self,
+        va: u64,
+        length: u64,
+        attributes: Attributes,
+        holder: Holder,
+        share: Option<u64>,
+    ) {
         let index = self.mappings.partition_point(|m| m.va < va);
         // `map_reserve` reserved the list's room (it records no mapping), and
         // nothing else maps in between: the caller holds the process's
@@ -423,6 +438,7 @@ impl AddressSpace {
                 length,
                 attributes,
                 holder,
+                share,
             },
         );
     }
@@ -501,16 +517,26 @@ impl AddressSpace {
     }
 
     /// What a snapshot of this space needs to know before it starts: the
-    /// range, length and attributes of each mapping of an object. A device
-    /// mapping refuses it with `BadState` (ADR-0102 item 2).
-    pub fn snapshot_plan(&self) -> Result<Vec<(u64, u64, Attributes)>, Status> {
+    /// range, length and attributes of each mapping of an object, and for a
+    /// `SHARED` one (ADR-0431) its object and offset, which the child maps
+    /// as they are. A device mapping refuses it with `BadState` (ADR-0102
+    /// item 2).
+    pub fn snapshot_plan(&self) -> Result<Vec<PlanItem>, Status> {
         if self.has_device_mapping() {
             return Err(Status::BadState);
         }
         let mut plan = Vec::new();
         plan.try_reserve_exact(self.mappings.len())
             .map_err(|_| Status::NoMemory)?;
-        plan.extend(self.mappings.iter().map(|m| (m.va, m.length, m.attributes)));
+        plan.extend(self.mappings.iter().map(|m| PlanItem {
+            va: m.va,
+            length: m.length,
+            attributes: m.attributes,
+            share: match (&m.holder, m.share) {
+                (Holder::Memory(object), Some(offset)) => Some((object.clone(), offset)),
+                _ => None,
+            },
+        }));
         Ok(plan)
     }
 
@@ -535,6 +561,9 @@ impl AddressSpace {
                     // Mappings are kept by address, and do not overlap.
                     let i = self.mappings.partition_point(|m| m.va + m.length <= va);
                     let target = match self.mappings.get(i) {
+                        // A shared mapping is not copied: the child maps the
+                        // same frames when the snapshot finishes (ADR-0431).
+                        Some(m) if m.va <= va && build.plan[i].share.is_some() => continue,
                         Some(m) if m.va <= va => build.objects[i].page(va - m.va),
                         _ => match build.child.copy_page(va, leaf.attributes) {
                             Ok(pa) => pa,
@@ -632,20 +661,27 @@ impl Drop for AddressSpace {
 /// in no table: dropping it, as a cancelled call does, gives everything back.
 pub struct SnapshotBuild {
     child: AddressSpace,
-    plan: Vec<(u64, u64, Attributes)>,
+    plan: Vec<PlanItem>,
     objects: Vec<Arc<MemoryObject>>,
     /// The address the next step of the copy resumes at.
     next: u64,
     executable: bool,
 }
 
+/// One mapping of the parent, as a snapshot plans it.
+pub struct PlanItem {
+    va: u64,
+    length: u64,
+    attributes: Attributes,
+    /// A `SHARED` mapping's object and the offset of its first page.
+    share: Option<(Arc<MemoryObject>, u64)>,
+}
+
 impl SnapshotBuild {
-    /// The child and a fresh object, not zeroed, for every mapping of `plan`.
-    /// The objects are made in steps (`MemoryObject::new_for_copy`).
-    pub fn new(
-        plan: Vec<(u64, u64, Attributes)>,
-        payer: Option<&Arc<Job>>,
-    ) -> Result<SnapshotBuild, Status> {
+    /// The child and a fresh object, not zeroed, for every mapping of `plan`
+    /// that is not shared (a shared one keeps its object). The objects are
+    /// made in steps (`MemoryObject::new_for_copy`).
+    pub fn new(plan: Vec<PlanItem>, payer: Option<&Arc<Job>>) -> Result<SnapshotBuild, Status> {
         let mut child = AddressSpace::new(payer)?;
         child
             .mappings
@@ -655,9 +691,12 @@ impl SnapshotBuild {
         objects
             .try_reserve_exact(plan.len())
             .map_err(|_| Status::NoMemory)?;
-        for (_, length, _) in &plan {
-            // Every page is written by the copy before the child exists.
-            objects.push(MemoryObject::new_for_copy(*length, payer)?);
+        for item in &plan {
+            objects.push(match &item.share {
+                Some((object, _)) => object.clone(),
+                // Every page is written by the copy before the child exists.
+                None => MemoryObject::new_for_copy(item.length, payer)?,
+            });
         }
         Ok(SnapshotBuild {
             child,
@@ -685,7 +724,14 @@ impl SnapshotBuild {
         let mut pages = 0usize;
         let plan = core::mem::take(&mut self.plan);
         let objects = core::mem::take(&mut self.objects);
-        for ((va, length, attributes), object) in plan.into_iter().zip(objects) {
+        for (item, object) in plan.into_iter().zip(objects) {
+            let PlanItem {
+                va,
+                length,
+                attributes,
+                share,
+            } = item;
+            let base = share.as_ref().map_or(0, |&(_, offset)| offset);
             for offset in (0..length).step_by(FRAME_SIZE as usize) {
                 if pages.is_multiple_of(STEP) {
                     if pages > 0 {
@@ -699,7 +745,7 @@ impl SnapshotBuild {
                     .map_pages(
                         &mut self.child.memory,
                         va + offset,
-                        object.page(offset),
+                        object.page(base + offset),
                         FRAME_SIZE,
                         attributes,
                     )
@@ -710,6 +756,7 @@ impl SnapshotBuild {
                 length,
                 attributes,
                 holder: Holder::Memory(object),
+                share: share.map(|(_, offset)| offset),
             });
         }
         Ok(self.child)
