@@ -220,7 +220,7 @@ fn the_chunk_is_charged_at_its_full_size_and_lookups_agree_with_the_model() {
         Mappings::<u32>::CHUNK_BYTES,
         (CHUNK * core::mem::size_of::<zoraya_mappings::Entry<u32>>() + 24) as u64
     );
-    assert_eq!(list.max_growth(), Mappings::<u32>::CHUNK_BYTES);
+    assert_eq!(list.growth_for(LOW), Mappings::<u32>::CHUNK_BYTES);
     let mut model = Model(Vec::new());
     for n in 0..200u32 {
         add(&mut list, &mut model, PAGE * (1 + u64::from(n % 3)), n).expect("a gap");
@@ -294,11 +294,11 @@ fn growth_is_bounded_by_what_max_growth_says() {
     let mut model = Model(Vec::new());
     for n in 0..LIMIT as u32 {
         let before = list.bytes_held();
-        let worst = list.max_growth();
+        let worst = list.growth_for(list.find_gap(PAGE, LOW, HIGH, PAGE).0.unwrap());
         let va = list.find_gap(PAGE, LOW, HIGH, PAGE).0.unwrap();
         list.reserve_for(va).unwrap();
         let grown = list.bytes_held() - before;
-        assert!(grown <= worst, "grew {grown}, said at most {worst}");
+        assert_eq!(grown, worst, "grew {grown}, said {worst}");
         list.insert(va, PAGE, n).unwrap();
         model.0.push((va, PAGE));
     }

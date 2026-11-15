@@ -2909,6 +2909,26 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
         space.unmap_commit(places[0], PAGE_SIZE + 1).is_err(),
         "a mapping is ended whole"
     );
+    // The top chunk holds 31 now: unmapping them all empties it, and the
+    // list, the charge and the job's bytes fall by exactly one chunk (the
+    // release on removal, INV-0437-1; `F5-removal-keeps-the-charge`).
+    let (held, charged) = (space.mapping_bytes_held(), kernel_bytes());
+    for va in places.split_off(places.len() - 31) {
+        space.unmap_range(va, 0, PAGE_SIZE);
+        space
+            .unmap_commit(va, PAGE_SIZE)
+            .expect("one of the top chunk");
+    }
+    assert_eq!(
+        held - space.mapping_bytes_held(),
+        AddressSpace::mapping_chunk_bytes(),
+        "an emptied chunk goes back"
+    );
+    assert_eq!(
+        charged - kernel_bytes(),
+        AddressSpace::mapping_chunk_bytes(),
+        "and its charge with it"
+    );
     for (n, va) in places.iter().enumerate().filter(|(n, _)| n % 2 == 0) {
         let (removed, units) = interval(|| {
             space.unmap_range(*va, 0, PAGE_SIZE);
@@ -2940,6 +2960,23 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
     });
     assert_eq!(refused.err(), Some(MappingError::Quota));
     assert_eq!(small.mapping_count(), 0);
+    assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
+    // Room for the chunk but not for the page tables: the chunk is charged,
+    // the first table refused, and `map_abort` gives the chunk back, with its
+    // charge (the path of `memory_map` when a table frame is refused).
+    charge::set_limits(
+        &poor,
+        Some(used + AddressSpace::mapping_chunk_bytes() + 100),
+        None,
+        None,
+    )
+    .expect("limit");
+    let refused = small.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(refused.err(), Some(MappingError::Quota), "a table frame");
+    assert_eq!(small.mapping_count(), 0);
+    assert_eq!(small.mapping_bytes_held(), 0, "the chunk went back");
     assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
     drop(small);
     // The table's frames go back through the reaper.

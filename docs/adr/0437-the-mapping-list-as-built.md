@@ -54,7 +54,7 @@ Constant time and no allocation; 256 KiB in every process, of which the ten that
 
 ### Option E: a sorted list of sorted chunks of at most 32 records
 
-A lookup is two binary searches, an insertion or removal moves at most a chunk (about 4 KiB), the list grows by one chunk at a
+A lookup is two binary searches, an insertion or removal moves at most a chunk (32 records, 1816 bytes) and, rarely, the list of chunk headers (at most 258 of 24 bytes, 6 KiB), the list grows by one chunk at a
 time, each at its full size, room is made ahead (`reserve_for`) and the insertion that follows never allocates. The search for a place is the one walk
 of every record.
 
@@ -72,9 +72,16 @@ of every record.
    given back, so a refusal allocates nothing; a mapping that fails after its room was made gives the room back
    (`map_abort`); a removal gives back an emptied chunk. A mapping made and unmapped leaves the charge as it was (a test of
    `t_thread` needs it). The list of chunks' own slack (its capacity beyond its length, at most 24 bytes for each chunk the
-   list ever had at once, 3 KiB at 4096) is not charged. Measured: a process with one to 32 mappings is charged 1816 bytes
+   list ever had at once, 3 KiB at 4096) is not charged. A job with less than a chunk of headroom is not refused a mapping that adds no chunk (`growth_for`). Measured: a process with one to 32 mappings is charged 1816 bytes
    (before: nothing, and a `Vec` of 16 records of 56 bytes, 900 bytes, uncharged); at 4096 mappings 232,448 bytes (56.75 a
    mapping); a fixed array of 4096 records in every process would be 229,376 bytes for all of them.
+   **Merging.** A removal merges the chunk with a neighbour when the two together hold less than a chunk (the records move
+   into room the chunk already has), a full chunk gives a record to a neighbour that has room before it splits, so every two
+   neighbours hold at least 32 records and the list has at most `2 * len / 32 + 2` chunks: **258 for 4096 records, 468,528
+   bytes charged at the worst, 2.0 times the 232,448 of a list filled upward.** (Before merging, the kernel's own pattern of
+   unmapping every second mapping and mapping smaller ones again reached 485 chunks for 4096 records, 880 KB; a host test
+   repeats the pattern and asserts the bound.) The list of chunk headers is a `Vec` that reallocates when a chunk is
+   added, at most 258 headers (6 KiB), counted as the unit of the room made; its slack is not charged.
 3. **Work is counted.** The search for a place counts one unit for every 128 records (32 for 4096); an insertion or removal one;
    the plan of a snapshot is made in steps of 1024 records, a step point between them; a snapshot's walk of the page tables
    reads at most 1024 descriptors a step, empty ones included (`for_each_mapping_bounded`, 8 units): a process that mapped a
@@ -97,7 +104,7 @@ of every record.
 - **Positive.** A process holds 4096 mappings at the work of a step per call; a process of ten pays about a kilobyte for its
   list; a `fork` of 4096 mappings is steps of 1024 records and 64 frames; CPython's arenas and a browser's thread stacks fit.
 - **Negative.** Another crate; a program that maps pays 64 KiB for the table (before: 6 KiB for every program); the search
-  for a place is linear in the records below it (32 units at 4096); a process pays 1816 bytes for its first mappings.
+  for a place is linear in the records below it (32 units at 4096); a process pays 1816 bytes for its first mappings and at worst 468,528 bytes for 4096 (a fixed array would be 229,376 for all).
 - **Follow-up.** ADR-0415's items 2 and 3 (F6 and E1).
 
 ## Invariants

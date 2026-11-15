@@ -7,7 +7,7 @@
 //! (INV-0270-1). This list is a sorted list of sorted chunks of at most
 //! [`CHUNK`] records: finding a record is two binary searches, an insertion or
 //! removal moves at most a chunk, and the list grows by one chunk at a time,
-//! so no allocation is larger than a chunk (about 2.3 KiB for the kernel's
+//! so no allocation is larger than a chunk (1816 bytes for the kernel's
 //! record). The only walk of every record is [`Mappings::find_gap`], which
 //! reports how many it visited so that the caller counts them as work.
 //!
@@ -87,10 +87,20 @@ impl<T> Mappings<T> {
     pub const CHUNK_BYTES: u64 =
         (CHUNK * size_of::<Entry<T>>() + size_of::<Vec<Entry<T>>>()) as u64;
 
-    /// The most [`Mappings::reserve_for`] can add to [`Mappings::bytes_held`]:
-    /// one chunk.
-    pub fn max_growth(&self) -> u64 {
-        Self::CHUNK_BYTES
+    /// What [`Mappings::reserve_for`] at `va` adds to [`Mappings::bytes_held`]:
+    /// one chunk if the list is empty or the chunk is full with both neighbours
+    /// (a full chunk gives a record to a neighbour that has room), else none.
+    pub fn growth_for(&self, va: u64) -> u64 {
+        if self.chunks.is_empty() {
+            return Self::CHUNK_BYTES;
+        }
+        let at = self.route(va);
+        let room = |i: usize| self.chunks.get(i).is_some_and(|c| c.len() < CHUNK);
+        if room(at) || room(at + 1) || (at > 0 && room(at - 1)) {
+            0
+        } else {
+            Self::CHUNK_BYTES
+        }
     }
 
     /// The chunk that holds `va`, or that `va` would join: the last whose first

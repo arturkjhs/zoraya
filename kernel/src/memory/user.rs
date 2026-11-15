@@ -252,6 +252,12 @@ impl AddressSpace {
         self.mappings.bytes_held()
     }
 
+    /// What a chunk of the list is charged, for the test kernel.
+    #[cfg(feature = "qemu-test")]
+    pub fn mapping_chunk_bytes() -> u64 {
+        Mappings::<Record>::CHUNK_BYTES
+    }
+
     /// The length and capacity of the list of frames, for the test kernel.
     #[cfg(feature = "qemu-test")]
     pub fn list_state(&self) -> (usize, usize) {
@@ -346,7 +352,7 @@ impl AddressSpace {
     /// back, so a refusal allocates nothing (ADR-0261 point 6).
     fn reserve_record(&mut self, va: u64) -> Result<(), MappingError> {
         let before = self.mappings.bytes_held();
-        let worst = self.mappings.max_growth();
+        let worst = self.mappings.growth_for(va);
         self.memory
             .paid
             .kernel(worst)
@@ -376,14 +382,15 @@ impl AddressSpace {
     }
 
     /// Records the mapping, in the room `reserve_record` made. Gives the
-    /// holder back if there was none (a bug in the caller, which undoes what
-    /// it mapped and fails).
-    fn record(&mut self, va: u64, length: u64, record: Record) -> Result<(), MappingError> {
+    /// record back if there was none (a bug in the caller): the caller
+    /// unmaps what it mapped and only then drops the holder, which may be the
+    /// last of its object.
+    fn record(&mut self, va: u64, length: u64, record: Record) -> Result<(), Record> {
         // The most one insertion moves is a chunk: a unit.
         steps::count(1);
         self.mappings
             .insert(va, length, record)
-            .map_err(|_| MappingError::Memory)
+            .map_err(|entry| entry.value)
     }
 
     /// Maps pages given by `page`, a function of their offset, and keeps
@@ -424,10 +431,12 @@ impl AddressSpace {
             holder,
             share: None,
         };
-        if let Err(e) = self.record(va, length, record) {
+        if let Err(record) = self.record(va, length, record) {
             let _ = self.table.unmap(&mut self.memory, va, length);
             self.map_abort();
-            return Err(e);
+            // After the unmap: the holder may be the last of its object.
+            drop(record);
+            return Err(MappingError::Memory);
         }
         Ok(va)
     }
@@ -479,7 +488,8 @@ impl AddressSpace {
 
     /// The third part: the range is mapped; records it and keeps `holder`.
     /// On failure (the room `map_reserve` made is gone, which the mapping lock
-    /// prevents) the caller unmaps the range and fails.
+    /// prevents) gives the holder back: the caller unmaps the range, drops it
+    /// and fails.
     ///
     /// `share` is the offset in the object of the range's first page for a
     /// `SHARED` mapping (ADR-0431), which a snapshot keeps shared.
@@ -490,7 +500,7 @@ impl AddressSpace {
         attributes: Attributes,
         holder: Holder,
         share: Option<u64>,
-    ) -> Result<(), MappingError> {
+    ) -> Result<(), Holder> {
         self.record(
             va,
             length,
@@ -500,6 +510,7 @@ impl AddressSpace {
                 share,
             },
         )
+        .map_err(|record| record.holder)
     }
 
     /// Whether the page holding `va` is mapped writable for EL0 (ADR-0300
@@ -746,6 +757,12 @@ impl AddressSpace {
 }
 
 impl Drop for AddressSpace {
+    // This pauses (a step point) when the space still has mappings, so no
+    // spinlock may be held where the last reference to such a space goes. The
+    // callers: `exit_current` (the list is empty by then, and nothing may yield
+    // after it), a failed `spawn` and a failed or cancelled `snapshot_process`
+    // (`SnapshotBuild`'s child), the last two in system calls that hold no
+    // spinlock (checked in F5's review; the test kernel's `pause` asserts it).
     fn drop(&mut self) {
         mmu::invalidate_asid(self.memory.asid);
         // Only now can nothing reach what the mappings held. An exit has
@@ -915,7 +932,7 @@ impl SnapshotBuild {
                         share: share.map(|(_, offset)| offset),
                     },
                 )
-                .map_err(failed)?;
+                .map_err(|_| Status::NoMemory)?;
             // Making room for the record and recording it count two units
             // (`reserve_record`, `record`): two pages of the step.
             pages += 2;

@@ -388,6 +388,56 @@ fn many_mappings_sites() {
     for object in spacers {
         handle_close(object).expect("close");
     }
+
+    // 24 mappings of one page, each in a gigabyte of its own (two tables
+    // each): a child builds them, so that its tables go with it.
+    let p = child(JOB, b"far-pages").expect("spawn");
+    let record = wait_exit(p);
+    handle_close(p).expect("close");
+    assert_eq!(record.code, 0, "far pages: {record:?}");
+
+    // `memory_unmap` of a mapping whose handle was closed frees the object's
+    // frames in the call (up to a step; more go to the reaper): one step
+    // point keeps them out of the interval of the unmapping and the list.
+    let (mut worst, mut worst_big) = (0, 0);
+    for (size, worst) in [(STEP, &mut worst), (BIG, &mut worst_big)] {
+        for _ in 0..3 {
+            let object = memory_create(size, MemoryFlags::NONE).expect("create");
+            let at = memory_map(object, 0, size, MapFlags::WRITE).expect("map");
+            handle_close(object).expect("close: the mapping holds the object");
+            let ((), ns) = measure(|| memory_unmap(at, size).expect("unmap"));
+            *worst = (*worst).max(ns);
+        }
+    }
+    check("memory_unmap of the last holder", worst, worst_big);
+}
+
+/// 24 one-page mappings 1 GiB apart: each brings two page-table frames to
+/// the copy of a snapshot (`SnapshotBuild::finish`: a step is 64 units, and
+/// 22 such mappings are 88 without the count of the tables).
+fn far_pages() -> i32 {
+    const SPACER: u64 = 64 << 20;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
+    let mut spacers = alloc::vec::Vec::new();
+    let mut pages = alloc::vec::Vec::new();
+    for _ in 0..24 {
+        pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
+        // 16 mappings of 64 MiB are the gigabyte; the next page goes after it.
+        for _ in 0..16 {
+            spacers.push(memory_map(spacer, 0, SPACER, MapFlags::READ).expect("spacer"));
+        }
+    }
+    for at in spacers {
+        memory_unmap(at, SPACER).expect("unmap spacer");
+    }
+    let large = best_snapshot();
+    println!(
+        "t_bound: snapshot_process, 24 pages 1 GiB apart: {} us masked",
+        large / 1000
+    );
+    assert!(large <= bound_ns());
+    0
 }
 
 /// `count` one-page mappings, each in its own 2 MiB of address space: a page,
@@ -1205,6 +1255,7 @@ fn main() -> i32 {
     match startup().argv.next() {
         Some(b"hold-short") => hold(50),
         Some(b"hold-long") => hold(30_000),
+        Some(b"far-pages") => far_pages(),
         Some(b"maps-short") => maps(50),
         Some(b"maps-long") => maps(30_000),
         Some(b"crowd-short") => crowd(false, 50),

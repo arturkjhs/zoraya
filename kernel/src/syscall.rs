@@ -850,13 +850,23 @@ impl Handlers for Calls<'_> {
                 return Err(status);
             }
         }
-        let mut space = self.process.space.lock();
-        let space = space.as_mut().ok_or(Status::BadState)?;
         let share = flags.is_shared().then_some(offset);
-        if let Err(e) = space.map_commit(va, length, attributes, Holder::Memory(object), share) {
-            space.unmap_range(va, 0, length);
-            space.map_abort();
-            return Err(to_status(e));
+        let failed = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            match space.map_commit(va, length, attributes, Holder::Memory(object), share) {
+                Ok(()) => None,
+                Err(holder) => {
+                    space.unmap_range(va, 0, length);
+                    space.map_abort();
+                    Some(holder)
+                }
+            }
+        };
+        if let Some(holder) = failed {
+            // After the unmap, with no lock: it may be the last of its object.
+            drop(holder);
+            return Err(Status::NoMemory);
         }
         Ok(va)
     }
