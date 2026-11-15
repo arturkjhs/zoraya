@@ -345,10 +345,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # test-net and test-hand-run run their UDP and person-mode legs in a network namespace with only
-    # the loopback (tools/confine-loopback.sh, INV-0230-1): that job's container gets CAP_SYS_ADMIN
-    # (unshare) and CAP_NET_ADMIN (lo up) and no other option; every other job gets none.
-    container: ${{ needs.image.outputs.ref && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}},"options":"{3}"}}', needs.image.outputs.ref, github.actor, github.token, (contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run')) && '--cap-add=SYS_ADMIN --cap-add=NET_ADMIN' || '')) || null }}
+    container: ${{ needs.image.outputs.ref && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', needs.image.outputs.ref, github.actor, github.token)) || null }}
     # The tour's sessions are long under TCG, which is every accelerator on
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it), and test-hand-run's

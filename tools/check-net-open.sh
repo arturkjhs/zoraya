@@ -26,9 +26,9 @@
 #  5. the host-side test servers (tools/test-httpd, tools/test-dns) listen on 127.0.0.1 only;
 #  6. the wrapper really confines: inside it a TCP connection and a UDP datagram to an outside
 #     address fail at once, the loopback works, and `--verify` says confined (and says not
-#     confined outside). It says so when the host cannot confine (exit 75: a step then fails on
-#     CI and prints SKIPPED locally; CI's `checks` jobs have no capability for it, the `test-net`
-#     and `test-hand-run` jobs have).
+#     confined outside). It says so when the host cannot confine (exit 75: a step then prints
+#     SKIPPED). On CI the confined steps are not run (CONFINED prints SKIPPED), so nothing runs
+#     unconfined there.
 set -eu
 cd "$(dirname "$0")/.."
 fail() { echo "check-net-open: $*" >&2; exit 1; }
@@ -99,7 +99,7 @@ for d in $confined_defs; do
 	[ "$(grep -v "^$d:" Makefile | grep -c "[^-A-Za-z]$d[^-A-Za-z]" | tr -d ' ')" = 1 ] || fail "$d is started other than through CONFINED"
 done
 # CONFINED is the wrapper, and nothing hands out its marker.
-grep -q '^CONFINED = tools/confine-loopback\.sh \$(MAKE) ' Makefile || fail "CONFINED is not tools/confine-loopback.sh \$(MAKE) ..."
+grep -A4 '^CONFINED = ' Makefile | grep -q 'tools/confine-loopback\.sh \$(MAKE) ' || fail "CONFINED is not tools/confine-loopback.sh \$(MAKE) ..."
 if grep -n 'ZORAYA_LOOPBACK_ONLY' Makefile .github/workflows/*.yml; then fail "something sets ZORAYA_LOOPBACK_ONLY"; fi
 # Every guestfwd is a relay to 127.0.0.1.
 grep -q '^NET_RELAY = --net-guestfwd "\$(1):\$(2)=\$(CURDIR)/\$(HTTPD) --relay 127\.0\.0\.1:\$(2)"$' Makefile || fail "NET_RELAY is not a relay to 127.0.0.1"
@@ -128,7 +128,7 @@ u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.sendto(b"x", ("127.0.0.1
 ok = blocked(socket.SOCK_STREAM, ("198.51.100.7", 80)) and blocked(socket.SOCK_DGRAM, ("198.51.100.7", 53))
 ok = ok and subprocess.call(["tools/confine-loopback.sh", "--verify"]) == 0
 sys.exit(0 if ok and os.environ.get("ZORAYA_LOOPBACK_ONLY") == "1" else 3)'
-confined="not on this host (a step fails on CI, prints SKIPPED locally)"
+confined="not on this host (a step prints SKIPPED)"
 if command -v python3 >/dev/null 2>&1; then
 	rc=0
 	tools/confine-loopback.sh python3 -I -c "$probe" >/dev/null 2>&1 || rc=$?

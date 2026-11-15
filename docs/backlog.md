@@ -407,3 +407,11 @@ command per package for now. A revoke without `--kill` says how many running cop
 - **INV-0042-1:** an `abi` type is not a check by itself; it stays `not yet applicable` until a test checks it.
 - **libc++:** add the nightly step that runs the semaphore, barrier and latch groups under TCG (no time pressure there).
   The last three are part `work/test-fixes-3`.
+
+- **CI does not run `test-net-lookup`, `test-net-dns` and test-hand-run's network leg (INV-0230-1, INV-0316-1..3; for the architect, docs/architect-queue.md).**
+  They need UDP to `tools/test-dns` or person mode's router, which `restrict=on` forbids, so they run inside
+  `tools/confine-loopback.sh`; on CI `CONFINED` prints `SKIPPED:` and does not run them (`CONFINE_CI=1` tries). Candidate
+  18c10e4 showed the container with `--cap-add=SYS_ADMIN,NET_ADMIN` did not confine; one suspect, not tested, is that
+  `--verify` lists `/sys/class/net`, which in a container shows the host's namespace (`/proc/net/dev` follows the process's).
+  Question: a runner with unprivileged user namespaces, or a container allowed `unshare -n`, would run them on CI; or accept
+  that INV-0316-1..3's wire check is local only.
