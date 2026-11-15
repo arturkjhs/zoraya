@@ -23,6 +23,17 @@ commit with the same tree.
 5. `docs/design.md` (CI section), `docs/adr/0345-one-full-run-per-tree.md` (proposed; index and invariant rows;
    proposed CLAUDE.md wording for the architect; weak points). CLAUDE.md is not edited.
 
+## Review fixes (docs/tasks/TASK-31-review-ci-once.md)
+
+1. The proposed CLAUDE.md wording defines the nearest code ancestor by the paths it changes (ADR-0345 Consequences 3, design.md).
+2. A deadline per API call (30 s) and for the proof (120 s); an unanswered call is an error: the full set. Fixture with a slow API.
+3. Fixtures for `pull_request`, an unknown event, `workflow_dispatch` and `schedule`.
+4. The jobs' `Run` step (`make ci-build` for build) must be `success`; fixtures with each skipped.
+5. The fixtures take the run's jobs from the base commit's files; a tree with a list line or a matrix entry the run lacks is not proven; an empty list is not proven.
+6. The expected names come from `git show SHA:tools/ci-tests.txt` and `SHA:.github/workflows/test.yml`; the by-hand lookup is `CI_TREE_PROOF_ANY_COMMIT=1` (renamed from `MERGE=0`).
+7. Runs on the second parent and on the commit are asked for by `head_sha` first, then the scan of the 100 latest. Fixtures: found by `head_sha` with the scan failing, two pages of jobs, duplicate job names.
+8. origin/main merged (invariants Total 793). Mutation sanity: seven breaks (event filter, checks names, one page, first conclusion wins, deadline, step check, head_sha query) each fail `make check-ci-plan`.
+
 ## Rule for merging (what the workflow now rewards)
 
 Merge `origin/main` into the branch, commit everything (the invariants Total too), run the full set on that head
