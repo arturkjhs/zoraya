@@ -13,7 +13,7 @@ find = '''        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::
         mapped.ok().map(|address| address as usize)'''
 replace = '''        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
         mapped.ok().map(|address| address as usize)'''
-note = "INV-0437-3: 900 MiB of heap are 900 handles, and with 3000 mmaps the 1024 are gone"
+note = "INV-0437-3: 1.2 GiB of heap is 1200 handles, more than the table (t_maps heap)"
 
 [[mutant]]
 id = "F5-mmap-keeps-its-handle"
@@ -41,4 +41,4 @@ find = '''        if !table.contains(address, size) {
 replace = '''        if size == 0 {
             return Err(EINVAL);
         }'''
-note = "munmap ends only what the table lists (t_maps limit: the heap's block and half a mapping are EINVAL)"
+note = "survives: the kernel ends whole mappings only, so the heap's block and half a mapping are EINVAL there too; a C program cannot name a heap step's exact range (only the table's check keeps the one it could guess from ending a heap step)"

@@ -9,6 +9,10 @@
 < t_maps: limit passed
 < posixrun: exit 0
 < \r\n~> 
+> posixrun /bin/t_maps heap\r
+< t_maps: heap passed
+< posixrun: exit 0
+< \r\n~> 
 > posixrun /bin/t_maps arenas\r
 < t_maps: arenas passed
 < posixrun: exit 0

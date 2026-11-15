@@ -15,6 +15,8 @@
  *                  100 bytes on top: what
  *                  python3 -c "x=[bytearray(100) for _ in range(5_000_000)]"
  *                  asks of the process (it ended at 256 mappings before)
+ *   t_maps heap    1.2 GiB of small mallocs, 1,200 heap steps, more than the
+ *                  1024 handles of the table: no step keeps its object's handle
  *   t_maps all     every case, in one process (the heap keeps what `limit`
  *                  grew it by, so the script runs them one at a time)
  *
@@ -139,6 +141,23 @@ static void limit_case(void)
 	printf("t_maps: limit passed\n");
 }
 
+static void heap_case(void)
+{
+	enum { BLOCK = 64 * 1024, BLOCKS = (1200 * 1024) / 64 };
+	static void *block[BLOCKS];
+	for (int i = 0; i < BLOCKS; i++) {
+		block[i] = malloc(BLOCK);
+		CHECK(block[i] != NULL);
+		memset(block[i], i & 0xff, BLOCK);
+	}
+	for (int i = 0; i < BLOCKS; i++)
+		CHECK(((unsigned char *)block[i])[0] == (i & 0xff) &&
+		      ((unsigned char *)block[i])[BLOCK - 1] == (i & 0xff));
+	for (int i = 0; i < BLOCKS; i++)
+		free(block[i]);
+	printf("t_maps: heap passed\n");
+}
+
 static void arenas_case(void)
 {
 	enum { ARENAS = 400, OBJECTS = 5000000 };
@@ -181,6 +200,7 @@ int main(int argc, char **argv)
 		fn();                                                      \
 	}
 	CASE("limit", limit_case)
+	CASE("heap", heap_case)
 	CASE("arenas", arenas_case)
 	if (!known) {
 		printf("t_maps: unknown case %s FAIL\n", mode);
