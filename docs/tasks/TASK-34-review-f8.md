@@ -185,3 +185,67 @@ time limit or on which frame is freed (e.g. 130 to 0, which makes the scan short
 Fix first: finding 1 (the invariant and its check must keep INV-0270-1's 2 ms under HVF), and findings 2 to 4 (measure on
 the CPU that scans, assert the words read, no single-shot time bound off HVF). Findings 5 and 6 are documentation and
 one Makefile change plus a question for the architect; 7 is the architect's decision.
+
+## Re-check
+
+Re-check by the `opus-review` subagent, 2026-11-16, of `git diff 0673682f..ebd44b0c` (the review commit to the fixed
+head) against the findings above. Run by the reviewer on the worktree, one at a time, `CARGO_BUILD_JOBS=2`, output to
+files:
+
+- `make check`: exit 0 ("make test: all checks passed").
+- `cargo test -p zoraya-pmm`: exit 0; 17 + 5 passed.
+- `make test-qemu-auto-smp4-2g` (2 GiB, 4 CPUs, HVF): exit 0, `PASS: 120 passed, 9 expected failures`; the test printed
+  `the worst single allocation read 8191 of 8192 words in 104000 ns masked (a word of an array: 8 ns, HVF-speed)`.
+- `make -n run-gui run-browser`: `--gui --net --gui-scale 2 --mem 512M --disk build/disk.img build/zoraya-kernel.elf`
+  and the same line with `--mem 2G`; the other user of `RUN_GUI_CMD` (`test-hand-run`, two arguments) still gets 512M.
+- Not run: any TCG step, `make test-keeper` (the changed `browser-guest.script` was not run by the reviewer).
+
+Findings:
+
+1. Fixed. The test asserts the words read (`frames::alloc_counted`, `read <= alloc_scan_bound()` and `read + 4 >= bound`),
+   and the time against 2 ms where the host is HVF-speed, 1 s otherwise. INV-0436-1 (ADR and `invariants.md`, same text)
+   no longer states a time bound of its own; it says INV-0270-1's 2 ms holds under HVF and how the check tells HVF from
+   not. INV-0270-1 is not weakened. The hooks are `#[cfg(feature = "qemu-test")]`; only the test kernel's build
+   (`Makefile:130`) and its clippy enable that feature, so they are not in the ordinary kernel.
+2. Fixed in the test: `cntvct` read on the scanning CPU inside the masked section, around the call. The note that
+   `steps::masked::*` is one counter for all CPUs went into ADR-0436's open questions, not ADR-0270's (rule 6), although
+   it is INV-0270-1's own check (`t_bound`) that rests on that counter; see note 13.
+3. Fixed: `read` is asserted near the bound (8191 of 8192 measured) and printed; the comment is corrected. A mutant that
+   frees a frame nearer the hint (130 to 0) now fails the test.
+4. Fixed for CI: CI runs TCG, the calibration there should be far above 50 ns a word (8 ns under HVF; the scan was about
+   13 times slower under TCG), so CI checks only 1 s. The margin is about 2x and was not measured under TCG; see note 12.
+5. Fixed: ADR-0436 Context and design.md name the frame-list copy and the heap growth as unbounded at 2 GiB.
+6. Fixed: `run-browser` is `RUN_GUI_CMD` with a third argument; the ADR and the Makefile say no step boots it; the
+   ADR-0415 sentence is put to the architect.
+7. Fixed as asked: the script expects `above the session's 1452930K`, and design.md:1852 is no longer stale. The
+   deviation stays the architect's.
+8. Fixed: the step passes `--mem 2G` itself.
+9. Fixed: the RAM limit is asserted on `alloc_scan_bound()`.
+10. Unchanged (mutation results; the kernel list was not extended, but findings 1 and 3 now kill the mutants named).
+
+New:
+
+11. note: the time check under HVF is one measurement. `Where:` `kernel/src/testing.rs` (the call between
+    `save_and_mask_interrupts` and `restore_interrupts`). `t_bound` takes the best of three for its large cases because a
+    host can stall a vCPU; here masking stops only the guest's interrupts, not the host. 104 us against 2 ms leaves 19x,
+    so a stall of about 1.9 ms of the vCPU thread during that one call (a loaded 8 GB host running `make test-par`) fails
+    the test with nothing wrong. Fix: best of three (re-free the same frame, which the hoard makes cheap), as finding 4
+    asked.
+12. note: the speed threshold is 50 ns a word of an array, the HVF calibration measured 8 ns, and the TCG figure is
+    inferred (no TCG run of this code). A fast CI runner that calibrates at 50 ns or less is then held to 2 ms on a
+    single-shot TCG scan (1.2 ms measured once, with an earlier version of the test). Run `tcg-smp4-gicv3` once and record
+    the calibration it prints in ADR-0436, or set the threshold from that figure.
+13. note: ADR-0436's open question says `steps::masked::*` is global and can under-report on SMP, and the test avoids
+    it; but INV-0270-1's check (`t_bound`, the masked-time counter) uses that counter on the SMP configurations, so the
+    accepted invariant's check is the one that is unsound. Record it in ADR-0270's open questions (rule 6).
+14. note: ADR-0436's Recommendation and design.md still give "1.2 ms under TCG" as measured; it was measured with an
+    earlier version of the test (the review's "Not run" above). design.md says "(once)"; say which code measured it or
+    measure again.
+15. note: `browser-guest.script` now expects the exact 1452930K. It changes with any change to the frames reserved at
+    boot (kernel image, metadata, the keeper's share), so it will break for a reason unrelated to F8; acceptable as the
+    review asked for a value, but a range or a value derived from `mem` in the same output would last longer.
+
+## Re-check verdict
+
+Merge. Findings 1 to 9 are fixed; 11 to 15 are notes (11 and 12 are possible flakes, not seen; 13 is a rule-6 note for
+ADR-0270).
