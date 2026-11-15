@@ -203,6 +203,37 @@ impl MemoryObject {
         true
     }
 
+    /// Copies `length` bytes of `source` from `from` into this object at `to`,
+    /// for the kernel's fill of an object that no handle and no mapping
+    /// reaches yet (an image's kept pages). False, with nothing copied, if
+    /// either range is not inside its object, or if the two are one object.
+    pub fn copy_from(&self, to: u64, source: &MemoryObject, from: u64, length: u64) -> bool {
+        let inside = |at: u64, object: &MemoryObject| {
+            at.checked_add(length)
+                .is_some_and(|end| end <= object.size())
+        };
+        if core::ptr::eq(self, source) || !inside(to, self) || !inside(from, source) {
+            return false;
+        }
+        let mut done = 0;
+        while done < length {
+            let at = to + done;
+            let in_page = at % FRAME_SIZE;
+            let n = (FRAME_SIZE - in_page).min(length - done);
+            let target = phys_to_virt(self.page(at - in_page)) + in_page;
+            // SAFETY: a frame of this object in the direct map, alive while
+            // `self` is; `n` stays inside its page. The caller is the only
+            // one that can reach the object (no handle, no mapping), so
+            // nothing else reads or writes the bytes meanwhile, and `source`
+            // is another object, so its frames are not these.
+            let out = unsafe { core::slice::from_raw_parts_mut(target as *mut u8, n as usize) };
+            let read = source.read(from + done, out);
+            debug_assert!(read);
+            done += n;
+        }
+        true
+    }
+
     /// The physically contiguous runs, each `(address, length)`.
     pub fn runs(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
         let mut at = 0;

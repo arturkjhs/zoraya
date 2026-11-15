@@ -75,6 +75,77 @@ impl Segment {
         let end = (self.vaddr + self.memsz).next_multiple_of(PAGE_SIZE);
         (start, end)
     }
+
+    /// Whether the pages of this segment are the same bytes in every process
+    /// of the program, so one copy can serve all of them (ADR-0438): a
+    /// segment that is not writable. A writable one is copied for each.
+    pub const fn is_shared(&self) -> bool {
+        !self.write
+    }
+
+    /// The pages an image keeps of this segment (ADR-0438). A shared segment
+    /// keeps all of its pages, the zero tail past `filesz` too, since every
+    /// process maps them as they are. A writable one keeps the pages that
+    /// hold file bytes and none for its zero tail, which each process makes
+    /// afresh. Counted from the segment's first page.
+    pub const fn kept_pages(&self) -> u64 {
+        let (start, end) = self.pages();
+        if self.is_shared() {
+            (end - start) / PAGE_SIZE
+        } else if self.filesz == 0 {
+            0
+        } else {
+            ((self.vaddr + self.filesz).next_multiple_of(PAGE_SIZE) - start) / PAGE_SIZE
+        }
+    }
+}
+
+/// Where one segment's file bytes go in the image's object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeptCopy {
+    /// The offset in the file of the first byte.
+    pub from: u64,
+    /// The offset in the object of the first byte.
+    pub to: u64,
+    pub length: u64,
+}
+
+/// Where each segment's kept pages are in an image's one object, in pages
+/// from its start (ADR-0438): in segment order, with no gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Kept {
+    first: [u64; MAX_SEGMENTS],
+    pages: u64,
+}
+
+impl Kept {
+    /// The first page of segment `index`'s pages in the object.
+    pub fn first_page(&self, index: usize) -> u64 {
+        self.first.get(index).copied().unwrap_or(0)
+    }
+
+    /// Where the file bytes of `segment`, the `index`th of the program, go:
+    /// the bytes of `[offset, offset + filesz)` of the file at the segment's
+    /// address within its first kept page. Every other byte of the segment's
+    /// kept pages stays zero.
+    pub fn copy_of(&self, index: usize, segment: &Segment) -> KeptCopy {
+        KeptCopy {
+            from: segment.offset,
+            to: self.first_page(index) * PAGE_SIZE + segment.vaddr % PAGE_SIZE,
+            length: segment.filesz,
+        }
+    }
+
+    /// The object's size in pages.
+    pub const fn pages(&self) -> u64 {
+        self.pages
+    }
+
+    /// The object's size in bytes. Segments are checked against the range
+    /// the program loads in, so this cannot overflow.
+    pub const fn bytes(&self) -> u64 {
+        self.pages * PAGE_SIZE
+    }
 }
 
 /// A checked program.
@@ -150,6 +221,17 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
 impl Program {
     pub fn segments(&self) -> &[Segment] {
         &self.segments[..self.count]
+    }
+
+    /// The layout of the pages an image keeps (ADR-0438).
+    pub fn kept(&self) -> Kept {
+        let mut first = [0; MAX_SEGMENTS];
+        let mut pages = 0;
+        for (i, s) in self.segments().iter().enumerate() {
+            first[i] = pages;
+            pages += s.kept_pages();
+        }
+        Kept { first, pages }
     }
 
     /// Checks `file`, whose loaded addresses must lie in `[low, high)`.

@@ -10,8 +10,8 @@ extern crate alloc;
 
 use zoraya_abi::spawn::{Encoder, PROGRAM_HEADER_SIZE};
 use zoraya_abi::{
-    DIRECTORY, ExitReason, Handle, ImageObject, JOB, MapFlags, MemoryFlags, MemoryObject,
-    ObjectType, Rights, Status,
+    DIRECTORY, Handle, ImageObject, JOB, MapFlags, MemoryFlags, MemoryObject, ObjectType, Rights,
+    Status,
 };
 use zoraya_proto_file::open_flags;
 use zoraya_user::files::ALL;
@@ -213,22 +213,24 @@ fn image_create_checks_its_handle() {
     let _ = MemoryObject::RIGHTS;
 }
 
-/// The image keeps validated headers; new bytes in the object reach only the
-/// children spawned after, and harm only them.
-fn rewriting_an_image_harms_only_its_children(hello: &[u8]) {
+/// The image keeps its headers and its bytes (ADR-0415 item 2, proposed
+/// ADR-0438): new bytes in the object after `image_create` reach no child.
+/// Before ADR-0438 they reached the children spawned after, and harmed them.
+fn rewriting_the_object_after_the_image_changes_nothing(hello: &[u8]) {
     let (object, at, size) = object_with(hello);
     let program = image_create(object, hello.len() as u64).expect("image");
     let same = handle_duplicate(program, ImageObject::RIGHTS).expect("dup");
     assert_eq!(object_same(program, same), Ok(true));
     assert_eq!(run(program, &[]).code, 7);
-    // Zero every byte after the headers: the text becomes `udf`.
+    // Zero every byte after the headers: the text would become `udf`.
     // SAFETY: the writable mapping of `size` bytes made above.
     let bytes = unsafe { core::slice::from_raw_parts_mut(at as *mut u8, size as usize) };
     bytes[PAGE as usize..].fill(0);
-    let record = run(program, &[]);
-    assert_eq!(record.reason, ExitReason::Fault, "only the child fails");
+    assert_eq!(run(program, &[]).code, 7, "the image kept its own bytes");
+    assert_eq!(run(same, &[]).code, 7, "and so does a copy of its handle");
     memory_unmap(at, size).expect("unmap");
     handle_close(object).expect("close");
+    assert_eq!(run(program, &[]).code, 7, "with its object closed too");
     for h in [program, same] {
         handle_close(h).expect("close");
     }
@@ -328,7 +330,7 @@ fn main() -> i32 {
     a_program_from_the_volume_runs_as_from_the_ramdisk(&hello);
     bad_programs_are_refused_and_leave_nothing(&hello);
     image_create_checks_its_handle();
-    rewriting_an_image_harms_only_its_children(&hello);
+    rewriting_the_object_after_the_image_changes_nothing(&hello);
     a_full_table_refuses_an_image(&hello);
     images_come_and_go(&hello);
     the_startup_block_holds_the_program_headers(&hello);

@@ -24,7 +24,7 @@ use zoraya_abi::{
     RequestKind, Rights, SEED_SLOT, Status, process_signals,
 };
 use zoraya_abi::{POWER, PowerObject};
-use zoraya_elf::{Error as ElfError, PAGE_SIZE, PHDR_SIZE, Program, Segment};
+use zoraya_elf::{EHDR_SIZE, Error as ElfError, Header, PAGE_SIZE, PHDR_SIZE, Program, Segment};
 use zoraya_events::{RequestQueue, SourceId};
 use zoraya_pagetable::{Attributes, MemoryType};
 use zoraya_thread::Members;
@@ -34,7 +34,8 @@ use crate::charge::{self, Paid};
 use crate::job::Job;
 use crate::memory::heap::OutOfMemory;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
+use crate::memory::phys_to_virt;
+use crate::memory::user::{AddressSpace, MapFailed, MappingError, USER_HIGH, USER_LOW};
 use crate::object::{self, HandleTable, MemoryImage, Object};
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
@@ -426,8 +427,10 @@ const USER_STACK: Attributes = Attributes {
 pub enum Source<'a> {
     /// A file in one slice: the ramdisk.
     Bytes(&'a [u8]),
-    /// A memory object a process filled (ADR-0108).
-    Memory(&'a MemoryObject),
+    /// An image's kept pages (ADR-0108, ADR-0415 item 2): the program's
+    /// segments as `image_create` laid them out, which `Program::kept`
+    /// describes.
+    Kept(&'a Arc<MemoryObject>),
 }
 
 impl Source<'_> {
@@ -444,7 +447,8 @@ impl Source<'_> {
                 out.copy_from_slice(bytes);
                 true
             }
-            Source::Memory(object) => object.read(offset, out),
+            // Not file bytes: the pages are laid out by segment.
+            Source::Kept(_) => false,
         }
     }
 }
@@ -477,7 +481,7 @@ impl<'a> Loadable<'a> {
     pub fn from_image(image: &'a MemoryImage) -> Loadable<'a> {
         Loadable {
             program: image.program,
-            source: Source::Memory(&image.memory),
+            source: Source::Kept(&image.kept),
             table: &image.table,
         }
     }
@@ -548,6 +552,170 @@ fn load_segment(
     Ok(())
 }
 
+/// One unit of the load's work (a page, a record): the step point and the room
+/// in the space's list of frames come first at every `STEP`th (ADR-0270
+/// point 2). `pages` counts from the first page of the first segment.
+fn tick(space: &mut AddressSpace, pages: &mut usize) -> Result<(), SpawnError> {
+    if pages.is_multiple_of(steps::STEP) {
+        if *pages > 0 {
+            steps::between()?;
+        }
+        space.prepare_step();
+    }
+    *pages += 1;
+    Ok(())
+}
+
+/// Loads a segment of an image from its kept pages (ADR-0415 item 2, proposed
+/// ADR-0438). A segment that is not writable maps the image's frames, as
+/// they are, read-only (and executable for text): no frame is taken, none
+/// is charged to this process's job, and none is ever writable. A writable
+/// one gets a page of its own for each, and a copy of the kept page where the
+/// file has bytes.
+fn load_kept(
+    space: &mut AddressSpace,
+    object: &Arc<MemoryObject>,
+    kept: &zoraya_elf::Kept,
+    index: usize,
+    s: &Segment,
+    pages: &mut usize,
+) -> Result<(), SpawnError> {
+    let attributes = attributes(s);
+    let (start, end) = s.pages();
+    let first = kept.first_page(index) * PAGE_SIZE;
+    if s.is_shared() {
+        // The record is made and paid for by two units of work; it comes
+        // first, so that what fails later is dropped with the space.
+        tick(space, pages)?;
+        tick(space, pages)?;
+        space
+            .map_kept(start, end - start, attributes, object, first)
+            .map_err(|e| match e {
+                MappingError::Quota => SpawnError::OverQuota,
+                _ => SpawnError::NoMemory,
+            })?;
+        for page in (start..end).step_by(PAGE_SIZE as usize) {
+            tick(space, pages)?;
+            space.map_kept_page(page, object.page(first + (page - start)), attributes)?;
+        }
+        return Ok(());
+    }
+    for (n, page) in (start..end).step_by(PAGE_SIZE as usize).enumerate() {
+        tick(space, pages)?;
+        let target = space.map_new_page(page, attributes)?;
+        if (n as u64) < s.kept_pages() {
+            // SAFETY: `target` is a whole new page, only reachable by this
+            // function until the process runs; the kept page is a whole
+            // frame of the image's object, which `object` holds, in the
+            // direct map, and is another frame.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    phys_to_virt(object.page(first + n as u64 * PAGE_SIZE)) as *const u8,
+                    target,
+                    PAGE_SIZE as usize,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An image of the program in the first `length` bytes of `memory`
+/// (ADR-0108 item 1, ADR-0415 item 2): checks it as the ramdisk's are checked
+/// (INV-0108-1) and copies its pages once, into an object of its own that
+/// `job` pays for as long as the image or any process started from it lives,
+/// however many jobs those are in (ADR-0261 point 8, proposed ADR-0438). What
+/// `memory` holds afterwards changes nothing. Nothing is made if it fails.
+pub fn image_from(
+    memory: &MemoryObject,
+    length: u64,
+    job: &Arc<Job>,
+) -> Result<Arc<MemoryImage>, Status> {
+    if length > memory.size() {
+        return Err(Status::InvalidArgument);
+    }
+    let mut ehdr = [0; EHDR_SIZE];
+    let head = &mut ehdr[..(length as usize).min(EHDR_SIZE)];
+    // In range: `head` is at most `length`, which is at most the size.
+    let read = memory.read(0, head);
+    debug_assert!(read);
+    let header = Header::parse(head).map_err(|_| Status::InvalidArgument)?;
+    let end = header.table_offset as u64 + header.table_length as u64;
+    if end > length {
+        return Err(Status::InvalidArgument);
+    }
+    let mut table = Vec::new();
+    table
+        .try_reserve_exact(header.table_length)
+        .map_err(|_| Status::NoMemory)?;
+    table.resize(header.table_length, 0);
+    // In range: `end <= length <= size`, checked above.
+    let read = memory.read(header.table_offset as u64, &mut table);
+    debug_assert!(read);
+    // The same parser and range as the ramdisk's (INV-0108-1).
+    let program = Program::from_table(&header, &table, length, PROGRAM_LOW, PROGRAM_HIGH)
+        .map_err(|_| Status::InvalidArgument)?;
+    // The object is in no handle table: nothing can map it writable.
+    let kept = program.kept();
+    let object = MemoryObject::new(kept.bytes(), false, Some(job))?;
+    keep_program(memory, &program, &kept, &object)?;
+    charge::arc(
+        Paid::new(Some(job)),
+        charge::vec_cost::<u8>(table.capacity()),
+        |paid| MemoryImage {
+            kept: object,
+            program,
+            table,
+            _paid: paid,
+        },
+    )
+}
+
+/// Fills a new image's object with the program's pages from the file in
+/// `memory` (ADR-0415 item 2, proposed ADR-0438): each segment's file bytes at
+/// their place, in pieces of a step; the rest of the object is zero, as it
+/// was made. The text's pages are then made visible to instruction fetches.
+/// No lock is held.
+pub fn keep_program(
+    memory: &MemoryObject,
+    program: &Program,
+    kept: &zoraya_elf::Kept,
+    object: &MemoryObject,
+) -> Result<(), Status> {
+    let piece = steps::STEP as u64 * PAGE_SIZE;
+    for (index, s) in program.segments().iter().enumerate() {
+        let copy = kept.copy_of(index, s);
+        let mut done = 0;
+        while done < copy.length {
+            let n = (copy.length - done).min(piece);
+            if !object.copy_from(copy.to + done, memory, copy.from + done, n) {
+                return Err(Status::InvalidArgument);
+            }
+            steps::count(n.div_ceil(PAGE_SIZE) as usize);
+            done += n;
+            steps::between()?;
+        }
+        if s.execute {
+            // Every kept page of the text, the zero tail too: a frame's old
+            // contents may still be in the instruction cache.
+            let first = kept.first_page(index);
+            for n in 0..s.kept_pages() {
+                if n > 0 && n.is_multiple_of(steps::STEP as u64) {
+                    steps::between()?;
+                }
+                // SAFETY: a whole frame of `object` in the direct map.
+                unsafe {
+                    mmu::sync_instruction_cache(
+                        phys_to_virt(object.page((first + n) * PAGE_SIZE)),
+                        PAGE_SIZE,
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Maps the block a process reads its vectors and program headers from
 /// (ADR-0042, ADR-0109 item 5).
 fn map_startup_block(
@@ -607,8 +775,14 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     let first = sched::reserve_thread(&start.job)?;
     let mut space = AddressSpace::new(Some(&start.job))?;
     let mut pages = 0;
-    for segment in program.segments() {
-        load_segment(&mut space, start.image.source, segment, &mut pages)?;
+    let kept = program.kept();
+    for (index, segment) in program.segments().iter().enumerate() {
+        match start.image.source {
+            Source::Kept(object) => {
+                load_kept(&mut space, object, &kept, index, segment, &mut pages)?;
+            }
+            source => load_segment(&mut space, source, segment, &mut pages)?,
+        }
     }
     let stack_low = USER_STACK_TOP - USER_STACK_SIZE;
     for page in (stack_low..USER_STACK_TOP).step_by(PAGE_SIZE as usize) {
