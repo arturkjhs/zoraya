@@ -39,6 +39,10 @@ Read `docs/design.md` first. It says what exists and where it lives.
   the worktree's directory. This holds for `main`, for branches and for tags (`refs/tags/...`). Never push `main`
   unless `make check` exited 0 on the commit being pushed (two pushes went out on 2026-11-14 while `make check`
   failed, because a chain printed the failure and went on).
+- Merge form, each command a call of its own, the `cd` first: `git fetch origin`; `git checkout --detach origin/main`;
+  `git merge --no-ff origin/BRANCH`; `make check`; `git rev-parse HEAD` (the commit checked); `git push origin
+  HEAD:main`. If the push is refused because `main` moved, start again from `git fetch`. Then `git tag NAME`,
+  `git push origin refs/tags/NAME`, remove the part's worktree. Do not wait for `main`'s CI run after the merge.
 - A stage's tag goes on `main` only after CI on `main` is green for that commit. A published tag is moved only with
   the architect's permission.
 
