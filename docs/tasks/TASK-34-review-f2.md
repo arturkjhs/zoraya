@@ -63,7 +63,7 @@ Severities: **error** (wrong; fix before merge), **warning** (fix in this part o
    for, in the form the architect used for ADR-0156 item 2 (commit f969cf41).
 
 4. **warning**: ADR-0412 item 6 is half built, while the task assigns all of item 6 to F2, and INV-0412-1's Status
-   reads as done. A Unix socket does not cross `spawn` or `exec` (`EBADF`, `jobs.rs:786`, ADR-0430 item 7). Item 6
+   reads as done. A Unix socket does not cross `spawn` or `exec` (`EBADF`, `jobs.rs:787`, ADR-0430 item 7). Item 6
    decides that the ancillary channel moves to a spawned child that is given the socket, and that a packet socket
    listed in a spawn's file actions moves to the child. Recording the deferral in a proposed ADR is the right
    procedure. But it is a deviation from an accepted item that the task's row names, so it needs the architect's
