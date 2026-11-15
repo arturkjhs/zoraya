@@ -362,6 +362,14 @@ impl AddressSpace {
             .release_kernel(before.saturating_sub(after));
     }
 
+    /// A mapping that `map_reserve` made room for failed: the room made is
+    /// given back, with its charge, so that the refusal changed nothing.
+    pub fn map_abort(&mut self) {
+        let before = self.mappings.bytes_held();
+        self.mappings.trim();
+        self.release_records(before);
+    }
+
     /// Records the mapping, in the room `reserve_record` made. Gives the
     /// holder back if there was none (a bug in the caller, which undoes what
     /// it mapped and fails).
@@ -399,6 +407,7 @@ impl AddressSpace {
                 if offset > 0 {
                     let _ = self.table.unmap(&mut self.memory, va, offset);
                 }
+                self.map_abort();
                 return Err(match self.memory.failure() {
                     Status::OverQuota => MappingError::Quota,
                     _ => MappingError::Memory,
@@ -412,6 +421,7 @@ impl AddressSpace {
         };
         if let Err(e) = self.record(va, length, record) {
             let _ = self.table.unmap(&mut self.memory, va, length);
+            self.map_abort();
             return Err(e);
         }
         Ok(va)

@@ -424,6 +424,11 @@ fn snapshot_with() -> u64 {
         job_kill(job).expect("kill");
         wait_exit(child);
     });
+    println!(
+        "t_bound: snapshot_with: the call {} us, the child's end {} us masked",
+        ns / 1000,
+        end_ns / 1000
+    );
     assert!(
         end_ns <= bound_ns(),
         "the child's end took {end_ns} ns masked"

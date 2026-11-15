@@ -2796,6 +2796,7 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
 
     assert_eq!(MAX_MAPPINGS, 4096, "ADR-0415 item 1");
     let job = Job::create(&root(), false).expect("job");
+    let job_base = charge::counters(&job).get(Field::Memory).used;
     // The object is the kernel's own: only the space and its list are paid by
     // the job under test.
     let object = MemoryObject::new(PAGE_SIZE, false, None).expect("object");
@@ -2853,7 +2854,7 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
     assert!(worst_map <= step_limit, "{worst_map} units for one mapping");
     let held = space.mapping_bytes_held();
     println!(
-        "ZORAYA-TEST mappings: 4096 mappings, list {} bytes ({} per mapping), worst map {} units",
+        "kernel mappings test: 4096 mappings, list {} bytes ({} per mapping), worst map {} units",
         held,
         held / MAX_MAPPINGS as u64,
         worst_map
@@ -2929,6 +2930,8 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
 
     // A job that cannot take the list's next growth refuses the mapping.
     let poor = Job::create(&root(), false).expect("job");
+    // The job's own record is charged to it: "nothing left" is this much.
+    let poor_base = charge::counters(&poor).get(Field::Memory).used;
     let mut small = AddressSpace::new(Some(&poor)).expect("a space");
     let used = charge::counters(&poor).get(Field::Memory).used;
     charge::set_limits(&poor, Some(used + 64), None, None).expect("limit");
@@ -2940,7 +2943,7 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
     assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
     drop(small);
     // The table's frames go back through the reaper.
-    yield_until(|| charge::counters(&poor).get(Field::Memory).used == 0);
+    yield_until(|| charge::counters(&poor).get(Field::Memory).used == poor_base);
 
     // Dropping the space gives every record's charge back, and does it in
     // steps (`AddressSpace::drop`).
@@ -2949,7 +2952,7 @@ fn a_space_holds_4096_mappings_and_pays_for_the_list() {
     let (_, units) = interval(|| drop(space));
     crate::steps::set_kernel_steps(false);
     assert!(units <= step_limit, "{units} units to drop a space");
-    yield_until(|| charge::counters(&job).get(Field::Memory).used == 0);
+    yield_until(|| charge::counters(&job).get(Field::Memory).used == job_base);
 }
 
 /// INV-0270-1: the list of frames of a space grows by a copy

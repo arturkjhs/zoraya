@@ -834,6 +834,7 @@ impl Handlers for Calls<'_> {
                     if done > 0 {
                         space.unmap_range(va, 0, done);
                     }
+                    space.map_abort();
                     return Err(to_status(e));
                 }
             }
@@ -844,6 +845,7 @@ impl Handlers for Calls<'_> {
                 let mut space = self.process.space.lock();
                 if let Some(space) = space.as_mut() {
                     space.unmap_range(va, 0, done);
+                    space.map_abort();
                 }
                 return Err(status);
             }
@@ -853,6 +855,7 @@ impl Handlers for Calls<'_> {
         let share = flags.is_shared().then_some(offset);
         if let Err(e) = space.map_commit(va, length, attributes, Holder::Memory(object), share) {
             space.unmap_range(va, 0, length);
+            space.map_abort();
             return Err(to_status(e));
         }
         Ok(va)

@@ -7,7 +7,7 @@
 //! (INV-0270-1). This list is a sorted list of sorted chunks of at most
 //! [`CHUNK`] records: finding a record is two binary searches, an insertion or
 //! removal moves at most a chunk, and the list grows by one chunk at a time,
-//! so no allocation is larger than a chunk (about 4.6 KiB for the kernel's
+//! so no allocation is larger than a chunk (about 2.3 KiB for the kernel's
 //! record). The only walk of every record is [`Mappings::find_gap`], which
 //! reports how many it visited so that the caller counts them as work.
 //!
@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 /// Records in a chunk, at most. A full chunk splits in two.
-pub const CHUNK: usize = 64;
+pub const CHUNK: usize = 32;
 
 /// One mapping: `[va, va + length)` and what the owner keeps with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,8 +44,9 @@ pub struct NoRoom;
 /// The mappings of one space, by address. No two overlap (the caller's duty,
 /// checked in debug builds).
 pub struct Mappings<T> {
-    /// Sorted chunks. No chunk is empty unless it is the only one or the last (which a
-    /// split for a record added at the top makes, until the record comes).
+    /// Sorted chunks, each with room for [`CHUNK`] records. No chunk is empty
+    /// but the last, which a split for a record added at the top makes until
+    /// the record comes.
     chunks: Vec<Vec<Entry<T>>>,
     len: usize,
 }
@@ -72,20 +73,24 @@ impl<T> Mappings<T> {
         self.len == 0
     }
 
-    /// The bytes the heap holds for the list: every chunk's capacity and the
-    /// list of chunks.
+    /// What the list is charged: every chunk at its full size, whatever it
+    /// holds, and the chunk's place in the list of chunks. A chunk is made at
+    /// its full size and kept or given back whole, so a mapping made and
+    /// unmapped again leaves the charge as it was, and the heap holds no more
+    /// than this and the list of chunks' own slack (at most one place for each
+    /// chunk the list ever had at once).
     pub fn bytes_held(&self) -> u64 {
-        let entries: usize = self.chunks.iter().map(Vec::capacity).sum();
-        (entries * size_of::<Entry<T>>() + self.chunks.capacity() * size_of::<Vec<Entry<T>>>())
-            as u64
+        self.chunks.len() as u64 * Self::CHUNK_BYTES
     }
 
-    /// The most [`Mappings::reserve_for`] can add to [`Mappings::bytes_held`]
-    /// now: a chunk that doubles or is split off, and the list of chunks
-    /// growing by one place or by its doubling.
+    /// The bytes of one chunk, with its place in the list.
+    pub const CHUNK_BYTES: u64 =
+        (CHUNK * size_of::<Entry<T>>() + size_of::<Vec<Entry<T>>>()) as u64;
+
+    /// The most [`Mappings::reserve_for`] can add to [`Mappings::bytes_held`]:
+    /// one chunk.
     pub fn max_growth(&self) -> u64 {
-        let outer = self.chunks.capacity().max(4) * size_of::<Vec<Entry<T>>>();
-        (CHUNK * size_of::<Entry<T>>() + outer) as u64
+        Self::CHUNK_BYTES
     }
 
     /// The chunk that holds `va`, or that `va` would join: the last whose first
@@ -102,29 +107,43 @@ impl<T> Mappings<T> {
     pub fn reserve_for(&mut self, va: u64) -> Result<(), NoRoom> {
         if self.chunks.is_empty() {
             self.chunks.try_reserve(1).map_err(|_| NoRoom)?;
-            self.chunks.push(Vec::new());
+            self.chunks.push(Self::new_chunk()?);
+            return Ok(());
         }
         let at = self.chunk_for(va);
         if self.chunks[at].len() < CHUNK {
-            // Doubling stops at the chunk's size: it has room below `CHUNK`.
-            return self.chunks[at].try_reserve(1).map_err(|_| NoRoom);
+            return Ok(());
         }
+        // Full: the chunk that follows is made first, so that a failure
+        // changes nothing.
         self.chunks.try_reserve(1).map_err(|_| NoRoom)?;
-        let mut upper = Vec::new();
+        let mut upper = Self::new_chunk()?;
         if at + 1 == self.chunks.len() && self.chunks[at].last().is_some_and(|e| e.va < va) {
             // Mappings are mostly added at the top: the full chunk stays full
             // and the new record starts the next, which is empty until it is
-            // inserted (the only place an empty chunk may be but alone).
-            upper.try_reserve_exact(1).map_err(|_| NoRoom)?;
+            // inserted (the only place an empty chunk may be).
         } else {
-            // Its upper half moves to a chunk of its own, made first, so
-            // that a failure changes nothing. The half that stays keeps its
-            // capacity: the room for the next.
-            upper.try_reserve_exact(CHUNK / 2 + 1).map_err(|_| NoRoom)?;
+            // Its upper half moves to the new chunk.
             upper.extend(self.chunks[at].drain(CHUNK / 2..));
         }
         self.chunks.insert(at + 1, upper);
         Ok(())
+    }
+
+    /// An empty chunk with room for [`CHUNK`] records, exactly.
+    fn new_chunk() -> Result<Vec<Entry<T>>, NoRoom> {
+        let mut chunk = Vec::new();
+        chunk.try_reserve_exact(CHUNK).map_err(|_| NoRoom)?;
+        Ok(chunk)
+    }
+
+    /// Gives back the chunk [`Mappings::reserve_for`] made for a record that
+    /// did not come (the mapping failed), so that a refused mapping leaves the
+    /// list and its charge as they were.
+    pub fn trim(&mut self) {
+        if self.chunks.last().is_some_and(Vec::is_empty) {
+            self.chunks.pop();
+        }
     }
 
     /// Records `[va, va + length)`. Gives the record back if there is no room:
@@ -142,7 +161,7 @@ impl<T> Mappings<T> {
             at += 1;
         }
         let chunk = &mut self.chunks[at];
-        if chunk.len() >= CHUNK || chunk.len() == chunk.capacity() {
+        if chunk.len() >= CHUNK {
             return Err(entry);
         }
         let place = chunk.partition_point(|e| e.va < va);
@@ -197,9 +216,10 @@ impl<T> Mappings<T> {
     /// Removes the record with the highest address.
     pub fn pop_last(&mut self) -> Option<Entry<T>> {
         let mut last = self.chunks.len().checked_sub(1)?;
-        if self.chunks[last].is_empty() && last > 0 {
+        if self.chunks[last].is_empty() {
+            // The chunk made for a record that never came.
             self.chunks.pop();
-            last -= 1;
+            last = self.chunks.len().checked_sub(1)?;
         }
         let entry = self.chunks[last].pop()?;
         self.len -= 1;
@@ -209,7 +229,7 @@ impl<T> Mappings<T> {
 
     /// Gives an emptied chunk back, unless it is the only one.
     fn drop_if_empty(&mut self, chunk: usize) {
-        if self.chunks[chunk].is_empty() && self.chunks.len() > 1 {
+        if self.chunks[chunk].is_empty() {
             self.chunks.remove(chunk);
         }
     }

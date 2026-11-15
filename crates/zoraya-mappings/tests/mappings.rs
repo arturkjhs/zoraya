@@ -66,15 +66,11 @@ fn fills_to_the_limit_and_empties() {
         add(&mut list, &mut model, PAGE * (1 + n as u64 % 3), n as u32).expect("a gap");
     }
     same(&list, &model);
-    // Added at the top, the chunks are full: the list holds the records, one
-    // spare chunk's room at most, and the list of chunks.
+    // Added at the top, the chunks are full: the charge is the records and
+    // at most one chunk's room.
     let entry = core::mem::size_of::<zoraya_mappings::Entry<u32>>() as u64;
-    let bound = (LIMIT + 2 * CHUNK) as u64 * entry + 4096;
-    assert!(
-        list.bytes_held() <= bound,
-        "{} > {bound}",
-        list.bytes_held()
-    );
+    let bound = (LIMIT + CHUNK) as u64 * entry + (LIMIT / CHUNK + 1) as u64 * 24;
+    assert!(list.bytes_held() <= bound, "{} > {bound}", list.bytes_held());
     // Pop from the top until empty: every chunk goes back but one.
     let mut last = u64::MAX;
     while let Some(e) = list.pop_last() {
@@ -84,8 +80,8 @@ fn fills_to_the_limit_and_empties() {
     }
     same(&list, &model);
     assert!(list.is_empty());
-    // Every chunk but one went back; the list of 128 chunk headers stays.
-    assert!(list.bytes_held() < 8192, "{}", list.bytes_held());
+    // Every chunk went back, the last of them too.
+    assert_eq!(list.bytes_held(), 0);
 }
 
 #[test]
@@ -175,6 +171,41 @@ fn find_gap_reports_what_it_visited() {
     // No room at all: nothing fits above the top; an overflow is no gap.
     assert_eq!(list.find_gap(HIGH, LOW, HIGH, PAGE).0, None);
     assert_eq!(list.find_gap(u64::MAX, LOW, HIGH, PAGE).0, None);
+}
+
+#[test]
+fn a_record_added_and_removed_leaves_the_charge_as_it_was() {
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    for n in 0..=(4 * CHUNK) as u32 {
+        let before = list.bytes_held();
+        let va = add(&mut list, &mut model, PAGE, n).expect("a gap");
+        let (_, len) = model.0.pop().map(|(v, l)| (v, l)).expect("one");
+        let removed = list.remove_exact(va, len).expect("exact");
+        assert_eq!(removed.value, n);
+        assert_eq!(list.bytes_held(), before, "after {n} records");
+    }
+}
+
+#[test]
+fn room_made_for_a_record_that_does_not_come_is_given_back() {
+    let mut list: Mappings<u32> = Mappings::new();
+    list.reserve_for(LOW).unwrap();
+    assert!(list.bytes_held() > 0);
+    list.trim();
+    assert_eq!(list.bytes_held(), 0);
+    // At the top of a full chunk too: the new chunk goes, the full one stays.
+    let mut model = Model(Vec::new());
+    for n in 0..CHUNK as u32 {
+        add(&mut list, &mut model, PAGE, n).unwrap();
+    }
+    let held = list.bytes_held();
+    let va = list.find_gap(PAGE, LOW, HIGH, PAGE).0.unwrap();
+    list.reserve_for(va).unwrap();
+    assert!(list.bytes_held() > held);
+    list.trim();
+    assert_eq!(list.bytes_held(), held);
+    same(&list, &model);
 }
 
 #[test]
