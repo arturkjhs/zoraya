@@ -149,6 +149,8 @@ setrlimit int 4
 setsid pid_t 4
 setsockopt int 4
 settimeofday int 4
+shm_open int 4
+shm_unlink int 4
 shutdown int 4
 sigaction int 4
 sigaddset int 4

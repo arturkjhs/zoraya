@@ -22,6 +22,10 @@
  *   t_unix block     a blocking recv wakes when the peer sends; a full queue
  *                    blocks the writer until the reader takes a message
  *   t_unix calls     pread, pwrite, usleep, mkdtemp
+ *   t_unix memfd     a memory descriptor over SCM_RIGHTS (ADR-0413): the same
+ *                    memory in the receiver, the size fixed by the send, a
+ *                    sealed descriptor read-only in the receiver, no object
+ *                    to send (INV-0413-1, INV-0413-2)
  *   t_unix all       every case
  */
 #define _GNU_SOURCE
@@ -34,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -501,6 +506,46 @@ static void calls_case(void)
 	printf("t_unix: calls passed\n");
 }
 
+static void memfd_case(void)
+{
+	int sv[2], fds[2], got, mflags, size = 1 << 20;
+	char b[16];
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv));
+	int fd = memfd_create("t_unix", MFD_ALLOW_SEALING);
+	CHECK(fd >= 0 && ftruncate(fd, size) == 0);
+	char *w = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	CHECK(w != MAP_FAILED);
+	memcpy(w, "painted", 8);
+	/* The sender keeps it, and its size is fixed by the send. */
+	CHECK(send_fds(sv[0], "m", 1, &fd, 1, 0) == 1);
+	FAILS(ftruncate(fd, 4096), EBUSY);
+	CHECK(fcntl(fd, F_GETFD) >= 0);
+	CHECK(recv_fds(sv[1], b, sizeof b, fds, 2, &got, &mflags, 0) == 1 && got == 1);
+	struct stat st;
+	CHECK(fstat(fds[0], &st) == 0 && st.st_size == size);
+	char *rw = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
+	CHECK(rw != MAP_FAILED && memcmp(rw, "painted", 8) == 0);
+	/* The same memory: what the receiver writes, the sender sees. */
+	memcpy(rw + 100, "reply", 6);
+	CHECK(memcmp(w + 100, "reply", 6) == 0);
+	FAILS(ftruncate(fds[0], 4096), EBUSY);
+	/* Sealed against later writing, a descriptor arrives read-only. */
+	CHECK(fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) == 0);
+	CHECK(send_fds(sv[0], "m", 1, &fd, 1, 0) == 1);
+	CHECK(recv_fds(sv[1], b, sizeof b, fds + 1, 1, &got, &mflags, 0) == 1 && got == 1);
+	CHECK(mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fds[1], 0) == MAP_FAILED && errno == EACCES);
+	char *ro = mmap(NULL, size, PROT_READ, MAP_SHARED, fds[1], 0);
+	CHECK(ro != MAP_FAILED && memcmp(ro, "painted", 8) == 0 && memcmp(ro + 100, "reply", 6) == 0);
+	FAILS(write(fds[1], "x", 1), EBADF);
+	CHECK(mmap(NULL, size, PROT_READ | PROT_EXEC, MAP_SHARED, fds[1], 0) == MAP_FAILED && errno == EACCES);
+	/* A descriptor with no object has nothing to send. */
+	int empty = memfd_create("empty", 0);
+	CHECK(empty >= 0);
+	FAILS(send_fds(sv[0], "m", 1, &empty, 1, 0), EINVAL);
+	CHECK(munmap(w, size) == 0 && munmap(rw, size) == 0 && munmap(ro, size) == 0);
+	printf("t_unix: memfd passed\n");
+}
+
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -518,6 +563,7 @@ int main(int argc, char **argv)
 	CASE("poll", poll_case)
 	CASE("block", block_case)
 	CASE("calls", calls_case)
+	CASE("memfd", memfd_case)
 	if (!known) {
 		printf("t_unix: unknown case %s FAIL\n", mode);
 		return 2;

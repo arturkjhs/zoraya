@@ -137,6 +137,14 @@ process maps the same frames read-only and copies them into its window (ADR-0419
 - Whether WebKit's `SharedMemory::createHandle(ReadOnly)` uses seals or a second descriptor; read in the 2.54 source
   by the first engine part.
 
+- **Rule 6 note (plan part F3, 2026-11-15).** The checks of INV-0413-1 to INV-0413-5 are built: `cargo test -p zoraya-posix`
+  (`tests/memfd.rs`: every order of four of nine steps for INV-0413-1; the seals as rights for INV-0413-2; `shm_open` for
+  INV-0413-3; every `prot` for INV-0413-5), `make test-qemu` (`t_quota` for INV-0413-4, `t_snapshot` for the shared mapping a
+  `fork` child keeps), `make test-posix` (`t_memfd`) and `make test-libposix` (`t_unix memfd`). INV-0413-2's "in another
+  process" is checked over a fake kernel and with a `fork` child; a spawned child waits for plan part F4. What F3 decided where
+  this ADR is silent is ADR-0432 (proposed), and the kernel's `SHARED` mapping flag, which a shared `fork` needs, is ADR-0431
+  (proposed). The question above about WebKit's `createHandle(ReadOnly)` stays open for the first engine part.
+
 ## Revisit triggers
 
 - A port that needs `MAP_SHARED` of a regular file (a database): a pager in `fsd`, its own ADR.

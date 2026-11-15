@@ -17,6 +17,7 @@ mod fcntl_locks;
 pub mod fd;
 pub mod jobs;
 pub mod lock;
+pub mod memfd;
 pub mod net;
 pub mod path;
 pub mod poll;

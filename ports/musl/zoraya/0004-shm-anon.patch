@@ -1,0 +1,13 @@
+diff -ru a/include/sys/mman.h b/include/sys/mman.h
+--- a/include/sys/mman.h
++++ b/include/sys/mman.h
+@@ -113,6 +113,9 @@
+ 
+ #include <bits/mman.h>
+ 
++/* Zoraya: SHM_ANON, the one name shm_open takes (ADR-0413, ADR-0432). */
++#include <zoraya/shm.h>
++
+ void *mmap (void *, size_t, int, int, int, off_t);
+ int munmap (void *, size_t);
+ 

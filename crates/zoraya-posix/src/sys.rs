@@ -98,6 +98,20 @@ pub trait Sys {
     /// Maps the whole object writable, and gives its address.
     fn memory_map(&mut self, object: Self::H, length: u64) -> Result<u64, Status>;
     fn memory_unmap(&mut self, address: u64, length: u64) -> Result<(), Status>;
+    /// Maps `length` bytes of `object` from `offset` (both page multiples),
+    /// writable if `write`, and gives the address. `shared` keeps the mapping
+    /// shared with the object across `fork` (`MapFlags::SHARED`, ADR-0431).
+    /// Never executable (INV-0051-2).
+    fn memory_map_at(
+        &mut self,
+        object: Self::H,
+        offset: u64,
+        length: u64,
+        write: bool,
+        shared: bool,
+    ) -> Result<u64, Status>;
+    /// A handle to the same memory object without `WRITE`.
+    fn duplicate_read_only(&mut self, h: Self::H) -> Result<Self::H, Status>;
 
     /// Nanoseconds on the monotonic clock.
     fn now(&mut self) -> u64;

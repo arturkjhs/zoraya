@@ -276,6 +276,11 @@ functions; nothing in the cut changes for them. A dynamic loader (`ET_DYN`, ADR-
 - Whether `__init_libc`'s `AT_SECURE` path (polling fds 0 to 2) should be compiled out rather than fed a zero auxiliary
   entry.
 
+- Amended by ADR-0413 (accepted 2026-11-14), recorded by plan part F3 (as built: ADR-0432): item 1's rule that the sysroot's headers
+  are musl's has one included header more, `<zoraya/shm.h>` (`SHM_ANON`), which `ports/musl/zoraya/0004-shm-anon.patch` makes
+  `<sys/mman.h>` include; item 6's "no permission changes on mappings" still gives `ENOSYS` for `mprotect`, except that a
+  request for `PROT_EXEC` is `EACCES`, as it is for `mmap`.
+
 ## Revisit triggers
 
 - relibc on stable Rust with a handle-shaped platform layer: reconsider Option C.

@@ -846,7 +846,11 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # target; Ubuntu's clang 18 (CI) only warns that they are unused, which zcc's
 # -Qunused-arguments silences, so configure said yes there and the x86-only
 # Hacl_Hash_Blake2b_Simd256.c failed to compile (ADR-0320).
-PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups timerfd_create
+# shm_open and shm_unlink (plan part F3) are in libc.a now, but only for SHM_ANON: configure would build _posixshmem, whose
+# SharedMemory takes a name, and every name is EACCES (ADR-0413 item 1). They stay absent here, as before F3, so that
+# multiprocessing.shared_memory stays an ImportError and no test sees a new PermissionError (the lesson of usleep and
+# socketpair in F2); a part that wants _posixshmem decides it.
+PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups shm_open shm_unlink timerfd_create
 PYTHON_NO_X86_SIMD := ax_cv_check_cflags__Werror__msse__msse2__msse3__msse4_1__msse4_2=no ax_cv_check_cflags__Werror__mavx2=no
 PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
 PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \

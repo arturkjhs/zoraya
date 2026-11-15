@@ -212,6 +212,29 @@ impl Sys for RtSys {
         zoraya_rt::memory_unmap(address, length)
     }
 
+    fn memory_map_at(
+        &mut self,
+        object: Handle,
+        offset: u64,
+        length: u64,
+        write: bool,
+        shared: bool,
+    ) -> Result<u64, Status> {
+        let mut flags = if write {
+            MapFlags::WRITE
+        } else {
+            MapFlags::READ
+        };
+        if shared {
+            flags = flags.union(MapFlags::SHARED);
+        }
+        zoraya_rt::memory_map(object, offset, length, flags)
+    }
+
+    fn duplicate_read_only(&mut self, h: Handle) -> Result<Handle, Status> {
+        zoraya_rt::handle_duplicate(h, MemoryObject::RIGHTS.without(zoraya_abi::Rights::WRITE))
+    }
+
     fn now(&mut self) -> u64 {
         zoraya_rt::clock_monotonic()
     }
@@ -835,7 +858,15 @@ pub(crate) fn rt_errno_seen(
     errno::from_status_seen(status, call, seen)
 }
 
-fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
+fn map(length: i64, prot: i64, flags: i64, fd: i64, off: i64) -> Result<i64, i32> {
+    // Nothing is executable, whatever it maps (INV-0413-5, ADR-0413 item 6).
+    crate::memfd::deny_exec(prot as i32)?;
+    if flags & MAP_ANONYMOUS == 0 && fd >= 0 {
+        // A memory descriptor (ADR-0413); any other descriptor is a file,
+        // which `mmap` does not map (ADR-0103 item 12).
+        let (fd, flags) = (fd as i32, flags as i32);
+        return state(|p| p.memory_mmap(fd, length, prot as i32, flags, off)).map(|a| a as i64);
+    }
     if flags & MAP_SHARED != 0 || flags & MAP_ANONYMOUS == 0 || fd != -1 {
         // File and shared mappings are out of scope (ADR-0103 item 12).
         return Err(ENODEV);
@@ -863,6 +894,10 @@ fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
 }
 
 fn unmap(address: u64, length: u64) -> Result<(), i32> {
+    // A mapping of a memory descriptor is the state's (ADR-0413).
+    if let Some(r) = with(|p| p.memory_munmap(address, length)).flatten() {
+        return r;
+    }
     let size = length.next_multiple_of(PAGE_SIZE as u64);
     locked(&MEM, || {
         // The kernel ends whole mappings only: a part of one is refused.
@@ -883,12 +918,12 @@ fn unmap(address: u64, length: u64) -> Result<(), i32> {
 extern "C" fn zoraya_posix_mmap(
     _a: i64,
     length: i64,
-    _prot: i64,
+    prot: i64,
     flags: i64,
     fd: i64,
-    _off: i64,
+    off: i64,
 ) -> i64 {
-    raw(map(length, flags, fd))
+    raw(map(length, prot, flags, fd, off))
 }
 
 #[unsafe(no_mangle)]
@@ -938,8 +973,9 @@ extern "C" fn __munmap(address: *mut u8, length: usize) -> i32 {
 /// ADR-0100 item 6: no permission changes on mappings. `pthread_create`
 /// tolerates the `ENOSYS` (ADR-0302 item 7).
 #[unsafe(no_mangle)]
-extern "C" fn mprotect(_a: *mut u8, _n: usize, _prot: i32) -> i32 {
-    int(Err(ENOSYS))
+extern "C" fn mprotect(_a: *mut u8, _n: usize, prot: i32) -> i32 {
+    // A request for execution is `EACCES` as `mmap`'s is (INV-0413-5).
+    int(Err(crate::memfd::mprotect_errno(prot)))
 }
 
 #[unsafe(no_mangle)]
@@ -2356,12 +2392,33 @@ extern "C" fn umask(mask: u32) -> u32 {
     with(|p| p.umask(mask)).unwrap_or(0o022)
 }
 
-/// `MFD_CLOEXEC`.
-const MFD_CLOEXEC: u32 = 1;
-
+/// A memory descriptor (ADR-0413 item 1).
 #[unsafe(no_mangle)]
-extern "C" fn memfd_create(_name: *const c_char, flags: u32) -> i32 {
-    int(state(|p| p.unnamed(flags & MFD_CLOEXEC != 0)))
+extern "C" fn memfd_create(name: *const c_char, flags: u32) -> i32 {
+    // SAFETY: C's contract: `name` is a string.
+    let name = match unsafe { c_str(name) } {
+        Ok(n) => n,
+        Err(e) => {
+            set_errno(e);
+            return -1;
+        }
+    };
+    int(state(|p| p.memfd_create(name, flags)))
+}
+
+/// `SHM_ANON` is `((char *)1)` as FreeBSD has it (`zoraya/shm.h`); any other
+/// name is refused (INV-0413-3).
+#[unsafe(no_mangle)]
+extern "C" fn shm_open(name: *const c_char, oflag: i32, _mode: u32) -> i32 {
+    let anon = name as usize == 1;
+    int(state(|p| p.shm_open(anon, oflag as u32)))
+}
+
+/// Memory descriptors have no names to remove (ADR-0413 item 1).
+#[unsafe(no_mangle)]
+extern "C" fn shm_unlink(_name: *const c_char) -> i32 {
+    set_errno(ENOENT);
+    -1
 }
 
 #[unsafe(no_mangle)]
