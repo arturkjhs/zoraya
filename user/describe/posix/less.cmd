@@ -20,6 +20,8 @@ less 710 (the Less License) as a POSIX program with the toolchain set (ADR-0335 
 cwd none: the line gives less the files it names and nothing else. It has no history file, no key files, no tags and no
 input preprocessor (LESSOPEN is ignored); v starts vi and ! a shell, each with less's own grants and no more.
 Keys: space and b page, / and ? search, n and N repeat, g and G go to the ends, q quits, h shows less's own help.
+Put the options first, and write a command as an option (no +G or +/text): a word that starts with + is refused.
+Two files of one directory are refused until the grant can name both: give the directory (+r . less a b) or name one.
 Write the short options: the long names belong to the description.
 
 EXAMPLES

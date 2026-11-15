@@ -1091,3 +1091,49 @@ fn the_editor_and_the_pager_let_through_only_what_their_descriptions_list() {
         assert_eq!(desc.cwd, zoraya_describe::Cwd::None, "{}", desc.name);
     }
 }
+
+// Review of 10d, findings 1, 2 and 11: a `+` word is never a file, two names of one directory are
+// refused for the editor and the pager (with the way to say it), and `-R` in a cluster still reads.
+#[test]
+fn a_plus_word_is_refused_and_never_gives_the_directory() {
+    for desc in [VI, EX, VIEW, LESS] {
+        for words in [
+            &["+10", "notes.txt"][..],
+            &["notes.txt", "+G"][..],
+            &["+", "notes.txt"][..],
+        ] {
+            let r = go(desc, words, &[], &[], true, "/w");
+            let e = r.expect_err("a + word is refused");
+            assert!(e.problem.contains("starts with +"), "{e:?}");
+        }
+    }
+    // A file of that name is written as a path.
+    let p = go(VI, &["./+10"], &[], &[], true, "/w").unwrap();
+    assert_eq!(merge(&p)[0].name.as_deref(), Some("+10"));
+}
+
+#[test]
+fn two_files_of_one_directory_are_refused_for_the_editor_and_the_pager() {
+    for (desc, marker) in [(VI, "+w"), (EX, "+w"), (VIEW, "+r"), (LESS, "+r")] {
+        let e = go(desc, &["a.txt", "b.txt"], &[], &[], true, "/w").expect_err("refused");
+        assert!(e.problem.contains("two files of one directory"), "{e:?}");
+        assert!(
+            e.hint.as_deref().unwrap().contains(&format!("{marker} /w")),
+            "{e:?}"
+        );
+    }
+    // Two directories are two connections; one file is one.
+    assert!(go(VI, &["a.txt", "/x/b.txt"], &[], &[], true, "/w").is_ok());
+    assert!(go(VI, &["a.txt"], &[], &[], true, "/w").is_ok());
+    // Not the other `cwd none` programs: sed's two files keep ADR-0344's rule.
+    assert!(go(SED, &["-i", "x", "a", "b"], &[], &[], true, "/w").is_ok());
+}
+
+#[test]
+fn a_cluster_with_r_still_reads_only() {
+    use zoraya_proto_file::rights;
+    let p = go(EX, &["-Rs", "notes.txt"], &[], &[], true, "/w").unwrap();
+    let m = merge(&p);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].rights & (rights::WRITE | rights::CREATE), 0, "{m:?}");
+}

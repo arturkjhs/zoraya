@@ -224,3 +224,28 @@ so the image is safe; resetting `f` on the next line that starts a new entry wou
 - **INV-0334-1's archive half**, the configure-log half of INV-0334-2, INV-0391-2 and the `view` read plan each fail
   when broken by hand (runs above). INV-0335-4's lint was read, not broken: it judges an option by its argument's name
   (`FILE`, `DIR`, `PATH`, `ARCHIVE`), and none of the four descriptions has an argument that names a file.
+
+## Dispositions
+
+Fixed on `work/10d` after the review (the second pass of 10d, Sonnet), each with what was run.
+
+| # | Disposition |
+|---|---|
+| 1 | Fixed. `grants::plan` refuses a file operand that starts with `+` for every `cwd none` description (hint `./NAME`, `-c COMMAND`); the four help pages say so. Host tests `a_plus_word_is_refused_and_never_gives_the_directory` (all four descriptions, three positions), and `zosh-curses.script` (`grants vi +10 notes.txt`). |
+| 2 | Fixed by the dispatcher's decision: the accepted ADR-0335 item 3 wins. `vi`, `ex`, `view` and `less` with two names of one directory are refused with the hint `+w DIR` (`+r DIR`); `sed` keeps ADR-0344's rule. ADR-0391 item 8 is now a gap and an open question, no longer a deviation; INV-0391-6 added. Host test `two_files_of_one_directory_are_refused_...`; script steps for `vi` and `less`. |
+| 3 | Fixed. `t_curses setup` runs from `/usr` (which covers no home); `x hint:` and `x refused` follow the prompt of that step. The Status text says that `/tmp` is not enterable. |
+| 4 | Fixed. Each `x` follows its own prompt; the refusal text of the child (`cat: sibling.txt: Permission denied`) and of `:r` is expected; `:e` loads nothing. Status names what is checked. |
+| 5 | Fixed. The buffer is changed (`s/color/CHANGED/`) before `w!`; the refusal text is expected; `x CHANGED` after the `cat`. |
+| 6 | Fixed. The window script no longer does `:e`; it writes the buffer (`hello vi`) to the sibling, so a grant of the directory replaces `secret` and the final `screen secret` fails. |
+| 7 | Fixed. `check-curses.sh` fails for a missing sysroot lib, image, `bin` or binaries (run with two missing directories: exit 1, four messages). |
+| 8 | Fixed. Line 16, item 8, Tensions, Negative, Follow-up (vttest dropped), INV-0391-4's Check. |
+| 9 | Fixed. The comments say musl truncates and POSIX allows both; ADR item 1 likewise; `t_posix sleepintr` (a real `sleep(4)` interrupted by `SIGUSR1`, result 1 to 3; `sleep(0)` and `sleep(1)` give 0) in `invariants.script`: PASS. |
+| 10 | Fixed. `origin/work/ports-early` merged, ports-early's `check-broken-archives.sh` taken. `origin/main` merged; the invariants Total is recomputed from the rows (833). |
+| 11 | Fixed. Tests for two files, `+` words and `-Rs`. |
+| 12 | `view.cmd` now says "proposed ADR-0391". |
+| 13 | Recorded: the four help pages say to put options first. |
+| 14 | Recorded in INV-0335-2's Status. |
+| 15 | Fixed: the `ls` step expects the three names in order and the prompt right after. |
+| 16 | Fixed: the `awk` of `terminfo.sh` ends the fragment at the next entry (`make check-terminfo` passes). |
+
+Run after the fixes: `cargo test -p zoraya-shell --lib` (214 pass), `make test-posix` with `zosh-curses.script` (HVF, 128 steps) and `invariants.script` (HVF, 139 steps), `make test-tour-terminal` with `posix-curses.script` at scale 1 (HVF, 71 steps), `make check-terminfo`, `make adr-check`, `make check`.

@@ -52,6 +52,9 @@
 > t_posix eintr\r
 < t_posix: eintr passed
 < PSURF>
+> t_posix sleepintr\r
+< t_posix: sleepintr passed
+< PSURF>
 # INV-0104-5 and INV-0106-2: no broker message and no request taken on the
 # file paths of a process with no handler.
 > ZORAYA_POSIX_STATS=1 t_posix files\r

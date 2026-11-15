@@ -19,7 +19,7 @@ say() { echo "check-curses: $*"; fail=1; }
 
 # --- INV-0334-1
 for d in "$sysroot/usr/lib" "$rootfs/usr/lib"; do
-  [ -d "$d" ] || continue
+  [ -d "$d" ] || { say "$d is missing: nothing was checked"; continue; }
   for f in "$d"/*; do
     case $(basename "$f") in
       libncursesw.a | libtinfow.a) ;;
@@ -44,6 +44,7 @@ else
 fi
 
 # --- the image's files
+[ -d "$rootfs/bin" ] || say "$rootfs/bin is missing: the image was not checked"
 if [ -d "$rootfs/bin" ]; then
   for n in less vi; do [ -f "$rootfs/bin/$n" ] && [ ! -L "$rootfs/bin/$n" ] || say "/bin/$n is not a file of the image"; done
   for n in ex view; do [ "$(readlink "$rootfs/bin/$n" 2>/dev/null)" = /bin/vi ] || say "/bin/$n is not a link to /bin/vi"; done
@@ -51,6 +52,7 @@ if [ -d "$rootfs/bin" ]; then
   [ "$(find "$rootfs/usr/share/terminfo" -type f | wc -l | tr -d ' ')" = 4 ] || say "the image's terminfo directory does not hold exactly four files"
 fi
 # --- INV-0335-2, the strings half: what the patches compiled out is not in the binaries.
+[ -f "$rootfs/bin/vi" ] && [ -f "$rootfs/bin/less" ] || say "$rootfs/bin/vi or less is missing: the strings were not checked"
 if [ -f "$rootfs/bin/vi" ] && [ -f "$rootfs/bin/less" ]; then
   for pat in '/etc/vi.exrc' 'openpty' 'flock'; do
     if LC_ALL=C strings -a "$rootfs/bin/vi" | grep -q -F -e "$pat"; then say "/bin/vi names $pat, which a patch removed"; fi

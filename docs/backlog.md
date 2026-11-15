@@ -293,8 +293,8 @@ states, to be taken up later:
   - **Done in 10d:** the terminfo entry says `kbs=^?` (ADR-0383 Option C); `vttest` 20251205 is pinned in `ports/sources.lock` and its
     cursor and screen menus are recorded (`crates/zoraya-term/recordings/vttest-*.session`); the xterm comparison of the vttest grids and
     the `vi` and `less` grids is still a person's (ADR-0332 item 10).
-  - **`narrow` with a list of names** (ADR-0335 item 3, ADR-0337 item 8) is not built: `vi a.txt b.txt` is given the directory whole
-    (ADR-0344 item 2's rule). Needed before 10f's second-file case; the file protocol, `zoraya-fs-service`, `zoraya-fsclient` and the planner's merge change.
+  - **`narrow` with a list of names** (ADR-0335 item 3, ADR-0337 item 8) is not built: `vi a.txt b.txt` is refused with the hint `+w DIR`
+    (ADR-0391 item 8), as is a `+` word. Needed before 10f's second-file case; the file protocol, `zoraya-fs-service`, `zoraya-fsclient` and the planner's merge change.
   - **`ls | less` does not page:** a native first element of a pipeline takes the keys (ADR-0387 item 2). Choose between a description
     key (a native command that reads no input when given a file) and the last POSIX element taking the keys.
   - **`:e` of a name the grant does not give says "new file"** (the table has no entry, so the open says `ENOENT`); the refusal that says

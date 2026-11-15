@@ -13,8 +13,8 @@ terminfo entry has `kbs=^?`, to be built in part 10d") and the names (ADR-0342 i
 `creat` and `sleep`). They are silent (the programs' options are in stage-10/survey.md#editors-and-pagers-compared) on how the entry is changed, where the files go in the image, which options a
 description lets through, what happens to the build's other ports when a curses archive enters the sysroot, and
 what `vttest` is pinned as (`docs/backlog.md`, part 10a's leftovers, asks for the pin). This ADR records those choices
-so that none is silent. It changes no accepted decision, with two small exceptions, items 6 and 8, each narrower than
-the accepted text.
+so that none is silent. It changes no accepted decision, with one small exception, item 6, narrower than the accepted
+text; item 8 is a gap, not a deviation.
 
 The block below is the as-built list of the two names ADR-0390 left for this part. Each is imported by a program of
 the image: `creat` by less's `-o` log file (`edit.c`), `sleep` by ncurses' `mcprint` (`lib_print.c`, which `vi`
@@ -67,7 +67,7 @@ sleep ncurses
 **Recommendation (not a decision): Option A.**
 
 1. **`creat` and `sleep`** in `libposix` (`ffi.rs`): `creat` is `open` with `O_WRONLY | O_CREAT | O_TRUNC`; `sleep`
-   is `nanosleep` for whole seconds and returns 0, or after a handler ran the seconds left, rounded up as musl's
+   is `nanosleep` for whole seconds and returns 0, or after a handler ran the seconds left, rounded up (musl's truncates; POSIX allows both, and a re-sleep for the result is then never short)
    does. `ports/apps/ttyshim.c`, which stood in for the terminal's names and these two, is deleted with every use of
    it (less, nvi, OpenSSH, git): `libc.a` has all of them since part 10c and this part.
 2. **The entry's `kbs`** (ADR-0383 Option C): `tools/term-terminfo/terminfo.sh` changes, in a copy of the pinned
@@ -92,10 +92,12 @@ sleep ncurses
    narrower grant than the accepted text; if the architect wants the same operand, one word changes.
 7. **Hints.** The hint for `less` (ADR-0154 rule 6) is removed because a program of that name exists; `more`'s says
    `to page a file: less FILE` (ADR-0335 item 11). The tour's two lines and `docs/tour.md` follow.
-8. **Two files of one directory** (`vi a.txt b.txt`): the list of names in `narrow` (ADR-0335 item 3, ADR-0337 item 8) is
-   **not built** in this part. The rule of ADR-0344 item 2 applies: the directory is given whole, to read and change
-   with the union of the rights, in the words of `grants`; `help vi` says so. A person who wants the narrow grant
-   edits one file at a time. This is wider than the accepted text for that one case, and visible (`grants vi a b`).
+8. **Two files of one directory** (`vi a.txt b.txt`): ADR-0335 item 3 (accepted) says a connection narrowed to both names, and
+   the list of names in `narrow` (ADR-0337 item 8) is **not built** in this part. The planner does not widen instead: a line that
+   gives `vi`, `ex`, `view` or `less` two names of one directory is **refused**, with the hint to write `+w DIR` (`+r DIR` for
+   `view` and `less`) or to name one file; a word that starts with `+` (`vi +10 f`, `less +G f`) is refused for every `cwd none`
+   description, with the hint `./NAME` for a file of that name and `-c COMMAND` for a command. `sed`'s two files keep ADR-0344
+   item 2's rule. This is a gap in what the accepted ADR promises (two files in one `vi` without the directory), not a wider grant.
 9. **DB 1 and `lock`** (ADR-0390's open questions): DB 1.85 stays (a maintained copy is a swap of the archive and
    `ports/db1/build.sh`); nvi's `lock` option stays and locks nothing (the `flock` call is patched out, a recorded
    difference from ADR-0335 item 1). No measurement on a 100 MB file was made in this part.
@@ -118,22 +120,19 @@ sleep ncurses
     where a POSIX program is first, page. This part does not change ADR-0387; `help less` does not say it yet and the hint for
     `more` is the only word.
 
-**Tensions with accepted ADRs.** Item 6 (narrower than ADR-0335 item 9) and item 8 (wider than ADR-0335 item 3 for two
-files, until `narrow` takes a list) are the two. ADR-0390 is proposed, not accepted; its "left for 10d" lines are done here.
+**Tensions with accepted ADRs.** Item 6 is narrower than ADR-0335 item 9; item 8 leaves ADR-0335 item 3's two-file form unbuilt (refused, not widened). ADR-0390 is proposed, not accepted; its "left for 10d" lines are done here.
 
 ### Effect of the vision
 
-Target 2: the grants of the two programs are the ones the line names, as listed by `grants`; item 8 is the one case
-where a person gets more than they typed, and is said in words. Target 3: the editor and pager people expect.
+Target 2: the grants of the two programs are the ones the line names, as listed by `grants`; no line gets more than it names: the two-file case is refused (item 8). Target 3: the editor and pager people expect.
 
 ## Consequences
 
 - **Positive.** `vi`, `ex`, `view` and `less` are in the image with their descriptions; the entry says what the terminal
   sends; the early shim is gone; the sysroot has curses for programs built inside Zoraya.
-- **Negative.** `ls | less` does not page (item 13); `:e` of a name the grant does not give says "new file" until part 10f's status row says why; two files of a directory give the directory (item 8); `ports` builds ncurses, DB 1, less and nvi on every run
+- **Negative.** `ls | less` does not page (item 13); `:e` of a name the grant does not give says "new file" until part 10f's status row says why; two files of one directory are refused until `narrow` takes a list (item 8); `ports` builds ncurses, DB 1, less and nvi on every run
   (minutes on CI's build job); a release of ncurses that renames `xterm+kbs` stops the entry's build.
-- **Follow-up.** `narrow` with a list; a measurement of DB 1 on a large file; `vttest`'s sessions recorded (needs a build on
-  the host; see the part report).
+- **Follow-up.** `narrow` with a list; a measurement of DB 1 on a large file.
 
 ## Invariants
 
@@ -146,13 +145,15 @@ where a person gets more than they typed, and is said in words. Target 3: the ed
   ncurses' two archives, and a curses program calling `setupterm` finds the entry. *Check:* `ports/check-curses.sh` in `make check-ports`
   and `make test-posix` (`zosh-curses.script`).
 - **INV-0391-4.** A curses program with `keypad(TRUE)` reads Backspace as `KEY_BACKSPACE`, and gets the window's size at start
-  and a `KEY_RESIZE` after each change. *Check:* `make test-gui` (`posix-curses.script`).
+  and a `KEY_RESIZE` after each change. *Check:* `make test-tour-terminal` (`posix-curses.script`).
 - **INV-0391-5.** `vi` and `less` plan to the grants of ADR-0335 item 3 from the real description files, and the options they
   let through are those the descriptions list. *Check:* `cargo test -p zoraya-shell` (`grants_tests.rs`).
+- **INV-0391-6.** A line that gives `vi`, `ex`, `view` or `less` two names of one directory, or a word that starts with `+` as a file, is refused
+  with a hint, and no plan gives the directory. *Check:* `cargo test -p zoraya-shell` (`grants_tests.rs`) and `make test-posix` (`zosh-curses.script`).
 
 ## Open questions
 
-- Should `narrow` take a list of names in this stage (ADR-0337 item 8), or may item 8 stand until a part needs it?
+- Should `narrow` take a list of names in this stage (ADR-0337 item 8), or may the refusal of item 8 stand until a part needs it?
 - Which DB 1: 1.85 or a maintained copy, once a 100 MB file has been measured?
 - Whether `view` should have `vi`'s operand (item 6).
 - How the keys should reach a pager after a native first element (item 13): a description key for "reads no standard input when given a file", or the last POSIX element of a pipeline taking the keys when the first reads none.

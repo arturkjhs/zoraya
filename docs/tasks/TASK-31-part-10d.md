@@ -102,8 +102,7 @@ Esc, `:wq` saves, `cat notes.txt` reads `hello vi`; in a second `vi notes.txt`, 
 
 ## Gaps (honest)
 
-- **`narrow` with a list of names is not built** (the plan's 10d row, ADR-0335 item 3). `vi a.txt b.txt` gets the directory whole, to create and change anything in, and `grants`
-  says so. INV-0335-1's "two files" clause holds only in that wider form. It is a protocol change (`zoraya-proto-file`, the service, the client, the planner's merge), left for a part
+- **`narrow` with a list of names is not built** (the plan's 10d row, ADR-0335 item 3). `vi a.txt b.txt` is refused (after the review: it first got the directory whole), with the hint `+w DIR`; INV-0335-1's "two files" clause is not met. It is a protocol change (`zoraya-proto-file`, the service, the client, the planner's merge), left for a part
   that can review it as a security boundary.
 - **`ls | less` does not page**: the first native element of a pipeline takes the keys (ADR-0387 item 2). Found when the first pipeline test hung. `/bin/cat f | less` and `tcc -v &| less` do page.
 - **`:e other.txt` says "new file"**, not a refusal (the table has no entry for the name). 10f's status row is the place for the reason.

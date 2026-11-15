@@ -2801,7 +2801,7 @@ extern "C" fn usleep(microseconds: u32) -> i32 {
 }
 
 /// `sleep` (POSIX.1): `nanosleep` for a count of seconds; 0 when it slept
-/// them all, the seconds left (rounded up) when a handler ran. musl's lives in
+/// them all, the seconds left (rounded up, which musl does not do) when a handler ran. musl's lives in
 /// `src/unistd`, which this port does not retain; ncurses' `mcprint`
 /// imports it (ADR-0391).
 #[unsafe(no_mangle)]

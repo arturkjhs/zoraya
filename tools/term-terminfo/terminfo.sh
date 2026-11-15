@@ -79,7 +79,8 @@ tools() {
 # the file. Here the line is changed in a copy of the pinned file, which fails unless it finds the fragment
 # and exactly one such line, so a new release cannot slip past unchanged.
 patched_source() {
-    awk '/^xterm\+kbs\|/ { f = 1 }
+    awk '/^[^ \t#]/ { f = 0 }
+         /^xterm\+kbs\|/ { f = 1 }
          f && $0 == "\tkbs=^H," { print "\tkbs=^?,"; f = 0; n++; next }
          { print }
          END { exit n == 1 ? 0 : 3 }' "$SRC/misc/terminfo.src" > "$1" ||

@@ -56,7 +56,7 @@ pub mod o {
 pub const CREAT_FLAGS: u32 = o::WRONLY | o::CREAT | o::TRUNC;
 
 /// What `sleep` returns when a handler interrupted it: the seconds left,
-/// rounded up as musl's `sleep` does, so that a program that sleeps again for
+/// rounded up (musl's `sleep` truncates; POSIX allows both), so that a program that sleeps again for
 /// the result never sleeps too little. `sleep` returns 0 when it slept all it
 /// was asked to.
 #[must_use]

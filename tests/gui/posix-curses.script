@@ -51,20 +51,16 @@ type cat notes.txt\r
 window
 screen hello vi
 screen ~> _
-# 3. A sibling is refused, on the editor's own status line, and nothing of it changes.
+# 3. A sibling is refused, on the editor's own status line, and the file is not replaced by the buffer.
 chord ctrl l
 top ~> _
 type vi notes.txt\r
 pause 1500
-# (:e of a name the grant does not give shows "new file": the table has no entry of that name, so the open says
-# ENOENT. The refusal that says why is part 10f's status row. The write is refused outright.)
-type :e other.txt\r
-pause 1000
-shot vi-refused
+# The buffer holds `hello vi`; :w to the sibling would replace `secret` with it if the grant gave the directory.
 type :w other.txt\r
 pause 1000
 # (the editor's error line is drawn in reverse video, which the glyph reader does not read: the screen is
-# kept for the report, and the file below is what proves the refusal: it is not replaced by the empty buffer)
+# kept for the report, and the file below is what proves the refusal: it is not replaced by the buffer)
 shot vi-refused-w
 type :q!\r
 pause 800

@@ -14,10 +14,12 @@ vi is the editor of a terminal: nvi 2.2.2 (BSD-3-Clause) as a POSIX program with
 terminal; on the serial console use ex.
 cwd none (ADR-0335 item 3): the line gives vi the files it names and no other name of their directory. :e of another
 file, :w to another name and :r of another file are refused and the terminal says so; name them on the line, or give
-the directory (+w . vi notes.txt). With no file on the line vi starts in /bin, read only, and :w notes.txt is refused.
+the directory (+w . vi notes.txt), which is also how to edit two files of one directory. With no file on the line vi starts in /bin, read only, and :w notes.txt is refused.
 Saving is in place and not atomic: :w cuts the file and writes it again, so a crash, a kill or a full volume during :w
 can leave it short, and nothing else holds a copy. There is no recovery (vi -r is not offered) and no start-up file
 (.exrc is never read; EXINIT and NEXINIT are, if exported). :! and filters run /bin/sh with vi's own grants, no more.
+Put the options first, and write a command as -c COMMAND (no +10 or +/text): a word that starts with + is refused.
+Two files of one directory are refused until the grant can name both: give the directory (+w . vi a b) or name one.
 Write the short options: the long names belong to the description.
 
 EXAMPLES

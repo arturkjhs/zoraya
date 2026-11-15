@@ -14,6 +14,8 @@ exit     1  failed
 ex is vi's line mode: the same nvi 2.2.2 program, which takes its mode from the name it is run by (/bin/ex is a link to /bin/vi).
 It works on the serial console. The grants are vi's: the files the line names and nothing else of their directory
 (ADR-0335 item 3); saving is in place and not atomic; there is no recovery and no start-up file (see help vi).
+Put the options first, and write a command as -c COMMAND (no +10 or +/text): a word that starts with + is refused.
+Two files of one directory are refused until the grant can name both: give the directory (+w . ex a b) or name one.
 Write the short options: the long names belong to the description.
 
 EXAMPLES

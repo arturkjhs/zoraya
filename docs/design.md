@@ -1392,8 +1392,8 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `terminfo.src` to `kbs=^?`, so the entry says what the terminal sends: ADR-0383 Option C) and ncurses' two archives and
   headers in `/usr/lib` and `/usr/include`, for programs built inside Zoraya (`tcc life.c -lncursesw -ltinfow`). Each has a
   description with `cwd none` (`user/describe/posix/{vi,ex,view,less}.cmd`): `vi FILE` is given that one name, to create or
-  replace; `view` and `less` read it; two files of one directory give the directory (the list in `narrow` is not built,
-  ADR-0391 item 8). Saving is in place and not atomic, there is no recovery and no start-up file. A process starts on 64 KiB of
+  replace; `view` and `less` read it; two files of one directory, and a word that starts with `+`, are refused (the list in
+  `narrow` is not built, ADR-0391 item 8: say `+w DIR`). Saving is in place and not atomic, there is no recovery and no start-up file. A process starts on 64 KiB of
   stack, which ncurses' reading of an entry overflowed (three 32 KiB arrays, three calls deep): `patches/ncurses/0001` takes
   them from the heap. `creat` and `sleep` are `libposix`'s (ADR-0391 item 1); `ports/apps/ttyshim.c` is gone. The hint for
   `less` is gone and `more` says `to page a file: less FILE`. Tests: `tests/posix/t_curses.c` (`setup`, `keys`, `devtty`,

@@ -8,10 +8,16 @@
 < Type help to begin
 < \r\n~>
 # INV-0334-2: setupterm of a known entry succeeds (the entry says kbs is DEL: INV-0391-2), of an
-# unknown one gives the not-found result; the shell prints no hint for a refused path afterwards.
+# unknown one gives the not-found result. It runs from /usr, which covers neither the home nor ~/.terminfo,
+# so a lookup there would be refused and hinted; the hint is looked for after the prompt is back.
+> cd /usr\r
+< \r\n
 > t_curses setup\r
 < t_curses: setup passed
+< > 
 x hint:
+x refused
+> cd ~\r
 < \r\n~>
 > echo colour > notes.txt\r
 < \r\n~>
@@ -44,10 +50,17 @@ x create or replace
 < /bin /usr /etc
 x notes.txt
 < \r\n~>
-# Two files of one directory give the directory (ADR-0391 item 8: the list in `narrow` is not built).
+# Two files of one directory are refused until `narrow` takes a list (ADR-0391 item 8), and so is a + word.
 > grants vi notes.txt sibling.txt\r
-< vi gets (a POSIX program):
-< anything in
+< two files of one directory need the whole directory
+< +w
+< \r\n~>
+> grants less notes.txt sibling.txt\r
+< two files of one directory
+< +r
+< \r\n~>
+> grants vi +10 notes.txt\r
+< a word that starts with + is not taken as a file
 < \r\n~>
 # ex edits and saves through its one name (ex is /bin/vi under another name).
 > printf 'g/colour/s//color/\\nwq\\n' | ex -s notes.txt\r
@@ -62,26 +75,32 @@ x notes.txt
 > cat sibling.txt\r
 < \r\nSIBLING-SECRET
 < \r\n~>
-# INV-0335-3: a program started from inside holds no entry its parent lacks.
+# INV-0335-3: a program started from inside holds no entry its parent lacks: the child ran and was refused,
+# and the secret is in none of the outputs (each check follows the prompt of its own step).
 > printf '!cat sibling.txt\\nq\\n' | ex -s notes.txt\r
-x SIBLING-SECRET
+< cat: sibling.txt: Permission denied
 < \r\n~>
+x SIBLING-SECRET
 > printf 'e sibling.txt\\n%%p\\nq\\n' | ex -s notes.txt\r
-x SIBLING-SECRET
 < \r\n~>
+x SIBLING-SECRET
 > printf 'r sibling.txt\\nq\\n' | ex -s notes.txt\r
-x SIBLING-SECRET
+< sibling.txt: Permission denied
 < \r\n~>
-# -R gives the name to read only: the save is refused (view's grant).
-> printf 'w!\\nq\\n' | ex -s -R notes.txt\r
+x SIBLING-SECRET
+# -R gives the name to read only: a changed buffer cannot be saved (view's grant), and the file keeps its text.
+> printf 's/color/CHANGED/\\nw!\\nq!\\n' | ex -s -R notes.txt\r
+< notes.txt: Permission denied
 < \r\n~>
 > cat notes.txt\r
 < \r\ncolor
 < \r\n~>
+x CHANGED
 > ls\r
-< notes.txt
-< sibling.txt
-< \r\n~>
+< README
+^ \r\nnotes.txt
+^ \r\nsibling.txt
+^ \r\n~>
 # less pages a file and a pipe; on `dumb` it warns first and waits for Return.
 > less notes.txt\r
 < Press RETURN
