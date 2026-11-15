@@ -223,3 +223,34 @@ R4. **note**: an `exec` has no file actions, so an image holding a non-close-on-
 should say so. Stale text: "third message" in `docs/design.md:2214` and `unix_io.rs:503`.
 
 **Verdict: fix first** (R1, R2).
+
+## Re-check 2 (2026-11-15, head 477c560a)
+
+Re-check by the `opus-review` subagent of `git diff 090952ee..477c560a` (cad9d2a7, 964fa36a, 9d772ab7, 477c560a). Run on
+the worktree, one at a time, `CARGO_BUILD_JOBS=2`: `make check` exit 0; `cargo test -p zoraya-net -p zoraya-posix` exit 0,
+428 passed, 0 failed (`closing_the_asker_does_not_reset_the_bound` and `a_refusal_after_the_entries_closes_them` among
+them); `cargo clippy -p zoraya-net -p zoraya-posix --all-targets -- -D warnings` (host) exit 0; `make test-libposix` exit
+0, `PASS: 159 steps`.
+
+R1 fixed. `families` holds a token from a monotonic counter, never a slot id: `add` gives every connection from outside
+(and every `Narrow`) a fresh token, `Duplicate` copies the asker's token with the flag set, `remove` clears only the closed
+slot. Closing the origin changes no other slot's token, a duplicate of a duplicate carries the same token, and a reused
+slot gets a fresh one, so ask-close-ask, duplicating a duplicate and closing the origin all stay at 8 live duplicates (the
+count filters on a live connection, the flag and the token). A refused `add` (`BUSY`) changes nothing; a removed slot's
+entry is `(0, false)` and never counts. The new test drives 40 rounds of close-one, ask-two with the root closed.
+
+R2 fixed. `abandon` closes the slots' made ends, `out.message` and the temps on all four refusals of `inherit_shaped`.
+No double close: `chosen_entries` closes `opened.conn` only before pushing it (`ENOTDIR`), a failed `clone_tty` pushes
+nothing, `out` is dropped on the error path (no `Drop` closes it) and the callers close only what an `Ok` returned
+(`spawn_into`, `spawn_refused`). Each `posix_spawnp` attempt is a fresh `inherit_shaped`, so the loop leaks nothing; the
+test repeats three refusals three times with the handle count unchanged.
+
+R3 fixed. `me` is duplicated before `ZPBF` is sent; its failure returns `(EAGAIN, false)` with nothing moved, and a
+refused `ZPBF` closes it. A refused `SELF` after `ZPBF` is recorded as a limit in ADR-0433 item 6. R4 fixed (ADR-0433
+item 6 states the `execve` `EBADF`; "third message" gone from `docs/design.md` and `unix_io.rs`).
+
+N1. **note** (not in this diff): a connection that holds `narrow` can still make connections without bound by `Narrow`
+(each starts a family), as before F4. A program's connection lacks `narrow` (ADR-0434 context), so this does not reopen
+R1; it bounds only what ADR-0434 bounds.
+
+**Verdict: merge** (after the candidate run is green; `make test-python` was again not run here).
