@@ -763,7 +763,8 @@ impl<S: Sys> Posix<S> {
     /// one of them.
     pub fn memory_munmap(&mut self, address: u64, length: u64) -> Option<Result<(), i32>> {
         let at = self.memory_maps.iter().position(|m| m.addr == address)?;
-        if self.memory_maps[at].length != round(length) {
+        // A length that cannot be rounded up to a page is no mapping's.
+        if length.checked_next_multiple_of(PAGE) != Some(self.memory_maps[at].length) {
             return Some(Err(EINVAL));
         }
         let m = &self.memory_maps[at];

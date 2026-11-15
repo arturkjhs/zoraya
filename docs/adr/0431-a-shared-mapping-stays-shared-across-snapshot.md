@@ -108,7 +108,7 @@ and the mappings they made, with no more rights; sharing is the parent's mapping
 - **INV-0431-2.** A snapshot of a process with shared mappings takes no frame for their pages. *Check:* the same test compares
   the frames a snapshot takes with the mapping shared and not.
 - **INV-0431-3.** `memory_map` accepts flags 0 to 3 and refuses any other value; `SHARED` with `WRITE` through a handle without
-  `WRITE` is `AccessDenied`. *Check:* `t_snapshot` for the second; the `abi` crate's decoder tests for the first.
+  `WRITE` is `AccessDenied`. *Check:* `t_snapshot` for the second; `cargo test -p zoraya-abi` (`memory_map_flags_are_zero_to_three`) for the first.
 
 ## Open questions
 

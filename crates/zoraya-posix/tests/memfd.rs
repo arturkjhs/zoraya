@@ -130,6 +130,15 @@ fn memfd_create_takes_its_flags_and_names() {
     }
     assert_eq!(r.p.memfd_create(&[b'a'; 250], 0), Err(EINVAL));
     let fd = r.p.memfd_create(&[b'a'; 249], MFD_CLOEXEC).unwrap();
+    // The name is kept, for reports.
+    let Some(Desc::Memory(m)) = r.p.fds.get(fd) else {
+        panic!("no memory descriptor");
+    };
+    assert_eq!(m.name(), &[b'a'; 249][..]);
+    assert_eq!(
+        (m.size(), m.seals(), m.is_pinned(), m.is_writable()),
+        (0, seal::SEAL, false, true)
+    );
     assert_eq!(r.p.fcntl(fd, F_GETFD, 0), Ok(FD_CLOEXEC));
     let plain = memfd(&mut r, 0);
     assert_eq!(r.p.fcntl(plain, F_GETFD, 0), Ok(0));
@@ -160,6 +169,10 @@ fn shm_open_succeeds_only_for_the_anonymous_name() {
         );
     }
     assert_eq!(r.p.shm_open(false, o::RDONLY), Err(EACCES));
+    for flag in [o::CREAT, o::EXCL, o::TRUNC, o::CLOEXEC, o::NONBLOCK] {
+        let fd = r.p.shm_open(true, o::RDWR | flag).unwrap();
+        r.p.close(fd).unwrap();
+    }
     let fd = r.p.shm_open(true, o::RDWR).unwrap();
     // musl's shm_open closes on exec, and it takes seals.
     assert_eq!(r.p.fcntl(fd, F_GETFD, 0), Ok(FD_CLOEXEC));
@@ -225,6 +238,14 @@ fn a_write_past_the_end_grows_it_in_doubling_steps_until_it_is_used() {
             last = Some(h);
         }
     }
+    // A write that ends exactly at the object's capacity needs no new object.
+    let fd2 = memfd(&mut r, 0);
+    r.write(fd2, &[1u8; 100]).unwrap();
+    let h2 = object(&r, fd2);
+    assert_eq!(r.write(fd2, &[2u8; PAGE - 100]), Ok(PAGE - 100));
+    assert_eq!(object(&r, fd2), h2, "filled to the capacity, not past it");
+    assert_eq!(r.write(fd2, b"x"), Ok(1));
+    assert_ne!(object(&r, fd2), h2, "one byte past the capacity");
     // 20,000 bytes in 100-byte writes: a new object each time would be 200;
     // doubling makes it about log2(20000 / 4096) + 1.
     assert!(replaced <= 4, "{replaced} objects");
@@ -324,6 +345,7 @@ fn a_shared_mapping_is_the_object_and_fixes_the_size() {
     assert_eq!(size_of_object(&r, fd), 3 * PAGE);
     // The whole mapping goes: a part, or the wrong length, is refused.
     assert_eq!(r.p.memory_munmap(a, PAGE as u64), Some(Err(EINVAL)));
+    assert_eq!(r.p.memory_munmap(a, u64::MAX), Some(Err(EINVAL)));
     assert_eq!(r.p.memory_munmap(a + 5, PAGE as u64), None);
     assert_eq!(r.p.memory_munmap(a, 3 * PAGE as u64), Some(Ok(())));
     assert_eq!(r.p.memory_munmap(b, PAGE as u64 - 1), Some(Ok(())));
@@ -767,6 +789,144 @@ fn a_fork_fixes_the_size_in_both_processes() {
     let cfd = sized(&mut child, PAGE);
     child.p.after_fork_in_child(7, 7);
     assert_eq!(child.p.ftruncate(cfd, 3 * PAGE as i64), Err(EBUSY));
+}
+
+/// Copies go through a mapping of at most 1 MiB at a time: data that crosses
+/// those pieces, from an offset that is not a page, arrives whole, in reads,
+/// writes and the copy a resize makes.
+#[test]
+fn data_crossing_the_copy_pieces_arrives_whole() {
+    let mut r = rig();
+    let fd = memfd(&mut r, 0);
+    let piece = 3 * 512 * 1024;
+    let one: Vec<u8> = (0..piece).map(|i| (i % 253) as u8).collect();
+    let two: Vec<u8> = (0..piece).map(|i| (i % 249) as u8 ^ 0x55).collect();
+    // 1.5 MiB at an offset of 1000, then 1.5 MiB after it.
+    let u = r.poke(0, &one);
+    assert_eq!(r.p.pwrite(fd, u, 1000), Ok(piece));
+    let u = r.poke(0, &two);
+    assert_eq!(r.p.pwrite(fd, u, 1000 + piece as i64), Ok(piece));
+    let check = |r: &mut Rig, fd: i32| {
+        let into = r.arena.user(ARENA / 2, piece);
+        assert_eq!(r.p.pread(fd, into, 1000), Ok(piece));
+        assert!(r.peek(ARENA / 2, piece) == one, "the first piece");
+        assert_eq!(r.p.pread(fd, into, 1000 + piece as i64), Ok(piece));
+        assert!(r.peek(ARENA / 2, piece) == two, "the second piece");
+        // An odd span across the first boundary of 1 MiB.
+        let at = 1 << 20;
+        let into = r.arena.user(ARENA / 2, 5000);
+        assert_eq!(r.p.pread(fd, into, at - 2500), Ok(5000));
+        assert!(r.peek(ARENA / 2, 5000)[..] == one[(at - 2500 - 1000) as usize..][..5000]);
+    };
+    check(&mut r, fd);
+    // A resize copies 3 MiB, in pieces, into a bigger object.
+    r.p.ftruncate(fd, 3_500_000).unwrap();
+    check(&mut r, fd);
+    assert_eq!(
+        size_of_object(&r, fd),
+        3_500_000usize.next_multiple_of(PAGE)
+    );
+    // A shrink keeps the head.
+    r.p.ftruncate(fd, (1000 + piece) as i64).unwrap();
+    let into = r.arena.user(ARENA / 2, piece);
+    assert_eq!(r.p.pread(fd, into, 1000), Ok(piece));
+    assert!(r.peek(ARENA / 2, piece) == one);
+    // A private mapping copies as many pages as it asks for, across pieces.
+    let p = map(&mut r, fd, (1 << 20) + 2 * PAGE, RW, MAP_PRIVATE, 0).unwrap();
+    assert_eq!(bytes_at(&r, p + 1000, 100), one[..100]);
+    assert_eq!(
+        bytes_at(&r, p + (1 << 20) + 5, 100),
+        one[(1 << 20) + 5 - 1000..][..100]
+    );
+}
+
+#[test]
+fn a_descriptor_reports_itself_as_a_file_and_syncs() {
+    let mut r = rig();
+    let fd = sized(&mut r, 12_345);
+    let st = r.p.fstat(fd).unwrap();
+    let mode = u32::from_le_bytes(st[16..20].try_into().unwrap());
+    assert_eq!(mode & 0o170_000, 0o100_000, "a regular file: {mode:#o}");
+    assert_eq!(mode & 0o777, 0o600);
+    assert_eq!(u64::from_le_bytes(st[48..56].try_into().unwrap()), 12_345);
+    assert_eq!(r.p.fsync(fd), Ok(()));
+    assert_eq!(r.p.fsync(99), Err(EBADF));
+}
+
+#[test]
+fn the_state_of_a_descriptor_follows_what_was_done_to_it() {
+    let mut r = rig();
+    let fd = memfd(&mut r, MFD_ALLOW_SEALING);
+    let state = |r: &Rig, fd: i32| {
+        let Some(Desc::Memory(m)) = r.p.fds.get(fd) else {
+            panic!("no memory descriptor");
+        };
+        (
+            m.size(),
+            m.seals(),
+            m.is_pinned(),
+            m.is_writable(),
+            m.access(),
+        )
+    };
+    assert_eq!(state(&r, fd), (0, 0, false, true, o::RDWR));
+    r.p.ftruncate(fd, 5000).unwrap();
+    assert_eq!(state(&r, fd), (5000, 0, false, true, o::RDWR));
+    r.p.fcntl(fd, F_ADD_SEALS, i64::from(seal::GROW)).unwrap();
+    assert_eq!(state(&r, fd), (5000, seal::GROW, false, true, o::RDWR));
+    // A seal that makes the handle read-only is seen in the state.
+    r.p.fcntl(fd, F_ADD_SEALS, i64::from(seal::FUTURE_WRITE))
+        .unwrap();
+    assert_eq!(
+        state(&r, fd),
+        (5000, seal::GROW | seal::FUTURE_WRITE, false, false, o::RDWR)
+    );
+    // A shared mapping fixes it.
+    let a = map(&mut r, fd, PAGE, PROT_READ, MAP_SHARED, 0).unwrap();
+    assert!(state(&r, fd).2);
+    r.p.memory_munmap(a, PAGE as u64).unwrap().unwrap();
+    // The bounds of a resize: the size itself is no change, one more or less is.
+    let g = sized(&mut r, 2 * PAGE);
+    r.p.fcntl(g, F_ADD_SEALS, i64::from(seal::GROW)).unwrap();
+    assert_eq!(r.p.ftruncate(g, 2 * PAGE as i64), Ok(()));
+    assert_eq!(r.p.ftruncate(g, 2 * PAGE as i64 + 1), Err(EPERM));
+    assert_eq!(r.p.ftruncate(g, 2 * PAGE as i64 - 1), Ok(()));
+    let h = sized(&mut r, 2 * PAGE);
+    r.p.fcntl(h, F_ADD_SEALS, i64::from(seal::SHRINK)).unwrap();
+    assert_eq!(r.p.ftruncate(h, 2 * PAGE as i64 - 1), Err(EPERM));
+    assert_eq!(r.p.ftruncate(h, 2 * PAGE as i64 + 1), Ok(()));
+}
+
+#[test]
+fn seals_and_the_right_to_add_them_travel_with_a_descriptor() {
+    let mut r = rig();
+    let (a, b) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
+    let sealable = sized(&mut r, PAGE);
+    r.p.fcntl(sealable, F_ADD_SEALS, i64::from(seal::SHRINK))
+        .unwrap();
+    let plain = r.p.memfd_create(b"p", 0).unwrap();
+    r.p.ftruncate(plain, 100).unwrap();
+    send(&mut r, a, &[sealable, plain]).unwrap();
+    let got = receive(&mut r, b);
+    assert_eq!(r.p.fcntl(got[0], F_GET_SEALS, 0), Ok(seal::SHRINK as i32));
+    assert_eq!(r.p.fcntl(got[1], F_GET_SEALS, 0), Ok(seal::SEAL as i32));
+    // The first takes another seal; the second, made without the right, does not.
+    r.p.fcntl(got[0], F_ADD_SEALS, i64::from(seal::GROW))
+        .unwrap();
+    assert_eq!(
+        r.p.fcntl(got[1], F_ADD_SEALS, i64::from(seal::GROW)),
+        Err(EPERM)
+    );
+    // Each is a descriptor of its own: the sender's seals are not changed.
+    assert_eq!(r.p.fcntl(sealable, F_GET_SEALS, 0), Ok(seal::SHRINK as i32));
+    // The size and the name-less state came across.
+    let Some(Desc::Memory(m)) = r.p.fds.get(got[0]) else {
+        panic!("no memory descriptor");
+    };
+    assert_eq!(
+        (m.size(), m.is_pinned(), m.is_writable()),
+        (PAGE as u64, true, true)
+    );
 }
 
 /// ADR-0432 item 5, INV-0432-2: until plan part F4, a spawn cannot be given
