@@ -1,6 +1,6 @@
 # ADR-0455: What a Rust `std` changes in ADR-0410: Ladybird becomes the recommendation once Rust `std` passes its test step and Ladybird ships its alpha
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0410, ADR-0411, ADR-0418, ADR-0421, ADR-0450, ADR-0451, ADR-0452, ADR-0453, ADR-0454
 - **Evidence:** CP-13, CP-16, alternatives-postmortem.md#genode, browser-engine/survey.md#how-other-systems-got-a-browser, browser-engine/survey.md#ladybird, browser-engine/survey.md#servo, browser-engine/survey.md#the-engines-compared, rust-std/survey.md#ladybirds-rust, rust-std/survey.md#sources, rust-std/survey.md#the-probes
@@ -134,3 +134,7 @@ gate (c)  .github/ci/Dockerfile       clang 19 or newer, every port's tests pass
 - WPE drops interpreter-only builds or requires a GPU (ADR-0410's trigger).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, including the stated limit on INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1; each change is recorded by the part that implements it, with an Opus review.

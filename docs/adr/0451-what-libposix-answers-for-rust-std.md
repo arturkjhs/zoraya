@@ -1,6 +1,6 @@
 # ADR-0451: What `libposix` answers for Rust's `std`: a `long` `syscall()` with a fixed table, `FIONBIO`, ten names, and a Rust-only archive for the rest
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0005, ADR-0100, ADR-0141, ADR-0301, ADR-0302, ADR-0320, ADR-0366, ADR-0411, ADR-0412, ADR-0450
 - **Evidence:** CP-27, DM-053, DM-057, DM-120, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, rust-std/survey.md#the-probes, rust-std/survey.md#what-libposix-would-have-to-add, rust-std/survey.md#what-std-calls-through-syscall, rust-std/survey.md#what-std-links, rust-std/survey.md#zoraya-today
@@ -198,3 +198,7 @@ rust-tool: syscall 279 is not answered (ENOSYS)     # the report's wording is th
 - A program needs a number outside the table: a new ADR, never a silent row.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, including the stated limit on INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1; each change is recorded by the part that implements it, with an Opus review.

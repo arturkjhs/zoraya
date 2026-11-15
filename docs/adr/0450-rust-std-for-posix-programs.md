@@ -1,6 +1,6 @@
 # ADR-0450: Rust `std` for POSIX programs is the stable toolchain's prebuilt `aarch64-unknown-linux-musl` std over `libc.a`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0002, ADR-0005, ADR-0100, ADR-0109, ADR-0141, ADR-0143, ADR-0410, ADR-0418
 - **Evidence:** CP-13, CP-27, DM-057, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#redox, rust-std/survey.md#building-on-stable, rust-std/survey.md#crates-that-bypass-libc, rust-std/survey.md#how-other-systems-did-it, rust-std/survey.md#ladybirds-rust, rust-std/survey.md#route-a-and-inv-0109-2, rust-std/survey.md#route-a-the-prebuilt-musl-std, rust-std/survey.md#route-b-a-zoraya-target, rust-std/survey.md#route-c-no-std, rust-std/survey.md#the-probes, rust-std/survey.md#zoraya-today
@@ -178,3 +178,7 @@ $ +r /work/src rg main /work/src          # in Zoraya, under rg's description
 - A program worth porting needs a Linux-only interface beyond the table.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, including the stated limit on INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1; each change is recorded by the part that implements it, with an Opus review.

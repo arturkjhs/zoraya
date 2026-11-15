@@ -1,6 +1,6 @@
 # ADR-0453: `std::fs`, `std::net` and `std::process::Command` under Zoraya's grants: a Rust program is a described POSIX program, and the broker gives every POSIX child randomness
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0002, ADR-0013, ADR-0102, ADR-0103, ADR-0104, ADR-0107, ADR-0153, ADR-0227, ADR-0287, ADR-0288, ADR-0310, ADR-0311, ADR-0396, ADR-0397, ADR-0411, ADR-0450, ADR-0451
 - **Evidence:** CP-05, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, rust-std/survey.md#the-probes, rust-std/survey.md#what-std-calls-through-syscall, rust-std/survey.md#what-std-links
@@ -170,3 +170,7 @@ hint: rg tried to read /work/secret, which it was not given
 - A Rust port needs `TcpListener` (ADR-0287's `bind`).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, including the stated limit on INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1; each change is recorded by the part that implements it, with an Opus review.

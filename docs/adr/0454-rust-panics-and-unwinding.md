@@ -1,6 +1,6 @@
 # ADR-0454: Rust panics unwind through the sysroot's libunwind, the one unwinder C++ uses; a stack overflow is a fault
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0106, ADR-0300, ADR-0302, ADR-0360, ADR-0361, ADR-0362, ADR-0450, ADR-0451, ADR-0452
 - **Evidence:** alternatives-postmortem.md#theseus, rust-std/survey.md#building-on-stable, rust-std/survey.md#the-probes, rust-std/survey.md#what-std-calls-through-syscall, rust-std/survey.md#what-std-links
@@ -137,3 +137,7 @@ exit status 101
   (ADR-0300).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, including the stated limit on INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1; each change is recorded by the part that implements it, with an Opus review.

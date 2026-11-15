@@ -1,6 +1,6 @@
 # ADR-0452: Rust POSIX programs are built on the host by `tools/zcargo`, which links through `zcc`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0033, ADR-0109, ADR-0143, ADR-0360, ADR-0365, ADR-0367, ADR-0450, ADR-0451
 - **Evidence:** CP-13, CP-27, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#redox, rust-std/survey.md#building-on-stable, rust-std/survey.md#crates-that-bypass-libc, rust-std/survey.md#how-other-systems-did-it, rust-std/survey.md#measurements, rust-std/survey.md#route-a-and-inv-0109-2, rust-std/survey.md#the-probes
@@ -146,3 +146,7 @@ zcargo: refusing -Zbuild-std: Rust POSIX programs use the stable toolchain's pre
 - ADR-0450 moves to a Zoraya target: `zcargo` then sets that target instead.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended, including the stated limit on INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1; each change is recorded by the part that implements it, with an Opus review.
