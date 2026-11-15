@@ -962,6 +962,10 @@ impl<S: Sys> Posix<S> {
                         map.remove(&fd);
                     }
                 }
+                FileAction::CloseFrom(fd) => {
+                    let first = u32::try_from(fd).map_err(|_| EBADF)?;
+                    map.retain(|&child, _| child < first);
+                }
                 // Opened by the caller first (`inherit_shaped`).
                 FileAction::Open(..) => return Err(EINVAL),
             }
@@ -1297,6 +1301,8 @@ pub enum FileAction {
     /// `addopen(fd, path, flags, mode)`: the parent opens `path` as it would
     /// itself, and the child's `fd` is that file (ADR-0433).
     Open(i32, Vec<u8>, u32, u32),
+    /// `addclosefrom_np(fd)`: every fd from `fd` up is closed in the child.
+    CloseFrom(i32),
 }
 
 /// What a spawned child inherits (ADR-0103 item 7, ADR-0107): handles for

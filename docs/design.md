@@ -2128,7 +2128,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   16 MiB 1,305 ms (1,299 to 1,354) against 1,380 ms (1,338 to 1,397); one byte 23.1 ms (6.6 to 32.3) against 20.5 ms (1.9 to
   29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
   and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
-- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, TCP datagram sockets (`AF_UNIX` pairs: next bullets), `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
+- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, TCP datagram sockets (`AF_UNIX` pairs: next bullets), `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a TCP socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
   curl and wget (W11, W13) were built in stage 9 (see "TLS for C programs, curl and wget"), which needed `select` and TLS.
 - **`poll` and `ppoll`** (ADR-0398, proposed; ADR-0342 item 5, ADR-0414 item 1): `Posix::poll_once` (`crates/zoraya-posix/src/poll.rs`) reports
@@ -2149,8 +2149,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   `/dev/null` are `EINVAL`; an end with handles queued is `EBUSY`; a refused send changes nothing (`Sys::channel_send` is the kernel's
   all-or-nothing write). A full fd table leaves the message queued (`EMFILE`). After `fork` a stream socket's byte streams are in two
   processes and `SCM_RIGHTS` on it is `EOPNOTSUPP` in both; a packet socket does not fork (`ENOTSUP`). **Limits** (recorded, not
-  hidden): a Unix socket does not cross `spawn` or `exec` (`EBADF` without `SOCK_CLOEXEC`, as a TCP socket) until plan part F4 changes
-  the bootstrap record, so the two-process half of INV-0412-1 is the host tests' over a fake kernel; no `bind`, `listen`, `accept` or
+  hidden): (a Unix socket did not cross `spawn` or `exec` until plan part F4, the next bullets: now it does, a TCP socket still does not, `EBADF`); no `bind`, `listen`, `accept` or
   socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
   part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
   splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
@@ -2167,15 +2166,37 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   size, `EFBIG` for a write past the end); before that an `ftruncate` or a `write` past the end replaces the object, in doubling
   steps. A descriptor travels in `SCM_RIGHTS` as a copy of the object handle with its size and seals (a record of kind 7). `shm_open`
   of any name is `EACCES`, `shm_unlink` `ENOENT`; `SHM_ANON` is `((char *)1)` in `<zoraya/shm.h>`, which musl's `<sys/mman.h>`
-  includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): a memory descriptor does not cross `spawn`
-  or `exec` (`EBADF` without `O_CLOEXEC`) until plan part F4 changes the bootstrap record, so the plan's "a child reads what the
-  parent wrote" is checked with a `fork` child and in one process over a socketpair, and the two-process half over a fake kernel;
-  seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
+  includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): (a memory descriptor did not cross `spawn` or `exec` until
+  plan part F4, the next bullet: now it does); seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
   `mlock`; `MAP_SHARED` of a regular file and `MAP_SHARED|MAP_ANONYMOUS` stay `ENODEV`; `memfd_create` no longer survives `exec` or
   backs a tmpd file. CPython's `_posixshmem` stays unbuilt (`ports/Makefile`'s `PYTHON_ABSENT`). Tests:
   `crates/zoraya-posix/tests/memfd.rs` (INV-0413-1 over every order of four of nine steps, -2, -3, -5), `tests/posix/t_memfd.c`
   (`make test-posix`: the 4 MiB memfd and the fork child, the seal and the read-only child's `SIGSEGV`), `tests/posix-core/t_unix.c`
   (`memfd`, `make test-libposix`), `t_snapshot` and `t_quota` (`make test-qemu`: INV-0431-1 to -3 and INV-0413-4).
+
+- **`posix_spawn` and what each child is given** (plan part F4, ADR-0411 item 1; ADR-0433, ADR-0434 and ADR-0435, proposed, record what the
+  code decided): the logic is `crates/zoraya-posix/src/spawn.rs` (the shape of a spawn, the entries, the grants; host tested over the fake
+  kernel) with `jobs.rs` (the fds, `inherit_shaped`) and `unix_io.rs` (the descriptors that cross); the C boundary is
+  `ffi/procs.rs`. `POSIX_SPAWN_EMPTY_NAMESPACE` (0x2000), `posix_spawnattr_setnamespace_np` (a NULL-terminated list of `PATH` and
+  `PATH:ro`) and `posix_spawnattr_setgrants_np` (`POSIX_SPAWN_GRANT_NET`, `_RANDOM`, `_WINDOW`, `POSIX_SPAWN_MOVE_NET`) are declared in
+  musl's `<spawn.h>` (`ports/musl/zoraya/0005-spawn-zoraya.patch`) and stored in the padding of `posix_spawnattr_t`. A child with the
+  flag has exactly the listed entries, each opened through the parent's own table as a directory (the file service refuses a right the
+  parent's connection lacks: tested at the service, not in the library), exactly the fds of the file actions (`adddup2`, `addclose`,
+  `addopen`, `addclosefrom_np`; `addopen` is the parent's open), no working directory unless a listed directory covers the parent's (the
+  record's cwd entry may be `NO_ENTRY`), and the connections of the mask: `GRANT_NET` asks `netd` for a connection of the parent's own
+  rights and scope (`Duplicate`, message 8), `GRANT_RANDOM` the random service for one (a program's connection may make eight, ADR-0435),
+  `GRANT_WINDOW` and `MOVE_NET` hand over the parent's own, which it then lacks; a connection the parent lacks is `EACCES`. A refused
+  spawn leaves no handle made and changes nothing of the parent's. A Unix socket or memory descriptor in the child's fds goes in a
+  third bootstrap message (`ZPBF`, announced by the flag `EXT_FDS` of `ZPBX`) in the records of `SCM_RIGHTS`: a packet socket moves (the
+  parent's is dead until closed), a stream socket's byte streams are copied and its ancillary channel moves (the parent's is shared
+  from then; this differs from ADR-0412 item 6, which has `SCM_RIGHTS` `EOPNOTSUPP` in both), a memory object is copied (read-only
+  stays read-only at the kernel) and its size is fixed; `exec` carries them the same way. `posix_spawnp` searches the caller's `$PATH`;
+  the scheduling attributes are `ENOSYS`. Without an attribute a spawn gives what it gave before (INV-0411-4). **Limits** (recorded,
+  not hidden): the positive network grant is tested over a fake `netd` and in `zoraya-net`, not in QEMU (no test program holds a
+  network connection); a child with no working directory reads a relative path as one from `/`; a failure of the third message after the
+  child exists ends the child (status 127); CPython's `subprocess` uses `posix_spawn` for a program named with a directory
+  (`ports/patches/python/0007-subprocess-posix-spawn.patch`; the port's tests were not run by this part). Tests:
+  `crates/zoraya-posix/tests/spawn.rs`, `tests/posix-core/t_spawn.c` (`make test-libposix`), `zoraya-net` (`Duplicate`), `zoraya-rng`.
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 

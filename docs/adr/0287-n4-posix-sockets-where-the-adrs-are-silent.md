@@ -143,6 +143,10 @@ inet_ntoa
 - `SO_RCVTIMEO`: a library deadline needs the wait with a timeout on the connection channel (`wait_any` has one).
 - The cost of the C path against `fetch`: `docs/design.md` has the first numbers.
 
+- **Amended by ADR-0411 (accepted 2026-11-14), recorded by plan part F4 (as built: ADR-0433, proposed).** Item 3's "a spawned child gets no
+  network" becomes: no network unless its parent passes its own with `POSIX_SPAWN_GRANT_NET` or `POSIX_SPAWN_MOVE_NET`. Without
+  the attributes, and for `exec` and `fork`, it is as written; a TCP socket still does not cross a spawn.
+
 ## Revisit triggers
 - `netd` gains `listen` or `datagram`: build ADR-0225 items 4, 5, 9 and the rest of the surface.
 - A program in the workloads needs `poll`: item 9 reopens with a workload behind the row.

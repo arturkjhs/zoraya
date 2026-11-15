@@ -183,6 +183,11 @@ A program that tries `bind("/home/me/sock")` gets `EACCES` and the shell shows
   one process on the real kernel (`make test-libposix`, `t_unix rights`) and over two processes on a fake kernel
   (`cargo test -p zoraya-posix --test unix`). What F2 decided where this ADR is silent is in ADR-0430 (proposed).
 
+- **Rule 6 note (plan part F4, 2026-11-15).** The two-process half of INV-0412-1 is built: `make test-libposix` (`t_spawn unix`) passes a
+  `SOCK_SEQPACKET` and a `SOCK_STREAM` end to a spawned child, which talks over them and sends a descriptor back. Item 6's
+  inheritance is as built in ADR-0433 item 6 (proposed), with one difference: a stream socket's ancillary channel moves to the child
+  and `SCM_RIGHTS` is `EOPNOTSUPP` only in the parent, which then shares the byte streams.
+
 ## Revisit triggers
 
 - A port that needs `SCM_CREDENTIALS` or peer identity: identity is a decision of its own.

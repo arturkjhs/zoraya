@@ -2235,6 +2235,37 @@ extern "C" fn posix_spawn_file_actions_addclose(fa: *mut u8, fd: i32) -> i32 {
     }
 }
 
+/// `posix_spawn_file_actions_addclosefrom_np(fa, fd)` (glibc 2.34's name,
+/// which CPython's `subprocess` asks for): the child has no fd from `fd` up
+/// but those the actions after it make.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawn_file_actions_addclosefrom_np(fa: *mut u8, fd: i32) -> i32 {
+    if fa.is_null() || fd < 0 {
+        return EBADF;
+    }
+    // SAFETY: C's contract.
+    match unsafe { actions_of(fa) } {
+        Some(l) => {
+            l.push(FileAction::CloseFrom(fd));
+            0
+        }
+        None => EINVAL,
+    }
+}
+
+/// The scheduling attributes of `posix_spawn` are not offered, as musl's
+/// are not (`ENOSYS`): CPython's `os.posix_spawn` links them and calls them
+/// only for a program that asks for a scheduler.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnattr_setschedparam(_a: *mut u8, _param: *const u8) -> i32 {
+    ENOSYS
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnattr_setschedpolicy(_a: *mut u8, _policy: i32) -> i32 {
+    ENOSYS
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn posix_spawn_file_actions_addopen(
     fa: *mut u8,

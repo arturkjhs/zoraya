@@ -125,6 +125,36 @@ x missing.h
 < t_unix: poll passed
 < posixrun: exit 0
 < \r\n~> 
+# posix_spawn with what each child is given (ADR-0411 item 1, plan part F4, ADR-0433), run by zosh: a program it starts has a broker, as
+# posixrun's has none, and the shell's own connection to the random service. The table is /bin read-only, /tmp and the shell's cwd.
+> /bin/t_spawn table\r
+< t_spawn: table passed
+< \r\n~> 
+> /bin/t_spawn table2\r
+< t_spawn: table2 passed
+< \r\n~> 
+> /bin/t_spawn default\r
+< t_spawn: default passed
+< \r\n~> 
+> /bin/t_spawn refuse\r
+< t_spawn: refuse passed
+< \r\n~> 
+> /bin/t_spawn grants\r
+< t_spawn: parent_random=1
+< t_spawn: grants passed
+< \r\n~> 
+> /bin/t_spawn unix\r
+< t_spawn: unix passed
+< \r\n~> 
+> /bin/t_spawn memfd\r
+< t_spawn: memfd passed
+< \r\n~> 
+> /bin/t_spawn addopen\r
+< t_spawn: addopen passed
+< \r\n~> 
+> /bin/t_spawn spawnp\r
+< t_spawn: spawnp passed
+< \r\n~> 
 > posixrun /bin/t_unix calls\r
 < t_unix: calls passed
 < posixrun: exit 0

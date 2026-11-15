@@ -521,6 +521,47 @@ fn an_empty_table_has_no_entry_no_cwd_and_the_actions_fds() {
     assert_eq!(count(&mut r), held);
 }
 
+/// `addclosefrom_np`: every fd from the number up is gone, those the actions
+/// after it make stay, and a negative number is `EBADF`.
+#[test]
+fn closefrom_removes_the_fds_from_a_number_up_in_order() {
+    let mut r = rig();
+    let held = count(&mut r);
+    let fds: Vec<i32> = (0..4)
+        .map(|i| create(&mut r, format!("/f{i}").as_bytes(), b""))
+        .collect();
+    let out = r.p.inherit(&[FileAction::CloseFrom(fds[1])], 0).unwrap();
+    assert_eq!(
+        out.fds.iter().map(|f| f.fd as i32).collect::<Vec<_>>(),
+        [fds[0]]
+    );
+    drop_made(&mut r, &out);
+    // A `dup2` after it makes a fd again; one before it is closed with the rest.
+    let out =
+        r.p.inherit(
+            &[
+                FileAction::Dup2(fds[0], 40),
+                FileAction::CloseFrom(fds[1]),
+                FileAction::Dup2(fds[0], 41),
+            ],
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        out.fds.iter().map(|f| f.fd as i32).collect::<Vec<_>>(),
+        [fds[0], 41]
+    );
+    drop_made(&mut r, &out);
+    assert_eq!(
+        r.p.inherit(&[FileAction::CloseFrom(-1)], 0).err(),
+        Some(EBADF)
+    );
+    for fd in fds {
+        r.p.close(fd).unwrap();
+    }
+    assert_eq!(count(&mut r), held);
+}
+
 #[test]
 fn a_shape_no_spawn_can_have_makes_nothing() {
     let mut r = rig();
