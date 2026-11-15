@@ -55,7 +55,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 9;
+const EXPECTED_FAILURES: usize = 10;
 
 static TESTS: &[Test] = &[
     Test {
@@ -357,6 +357,14 @@ static TESTS: &[Test] = &[
         run: harness_reports_panic_as_failure,
     },
     Test {
+        name: "harness_fails_with_a_process_left",
+        run: harness_fails_with_a_process_left,
+    },
+    Test {
+        name: "nothing_is_live_after_a_failed_test",
+        run: nothing_is_live_after_a_failed_test,
+    },
+    Test {
         name: "harness_reports_exception_as_failure",
         run: harness_reports_exception_as_failure,
     },
@@ -618,7 +626,32 @@ extern "C" fn resume(next: usize) -> ! {
     if REARM_CANARY.swap(false, Ordering::Relaxed) {
         arch::stack_canary_set();
     }
+    end_what_a_failed_test_left();
     run(next)
+}
+
+/// A failed test may leave processes running: a user program that panics
+/// leaves the children it started (`t_cpu`'s 41 spinners, in a room at 25%
+/// and outside it, made `t_rooms` 35 times slower and `t_snapshot` and the
+/// big-space spawn fail after them, in a TCG run of `tcg-smp4-gicv2`). They
+/// are ended here, and the next test starts once none is left and the
+/// reaper has given their frames back.
+fn end_what_a_failed_test_left() {
+    let Ok(root) = Job::root() else { return };
+    if root.is_empty() {
+        return;
+    }
+    println!("harness: ending the processes the failed test left");
+    root.end_every_process();
+    let start = timer::now();
+    while !root.is_empty() {
+        if timer::now().nanos_since(start) > PATIENCE_NS {
+            println!("harness: processes still live after the failed test");
+            return;
+        }
+        sched::yield_now();
+    }
+    frames::settled_stats();
 }
 
 /// Called by the panic handler. Returns only if no test is running.
@@ -735,6 +768,23 @@ fn psci_system_off_available() {
 
 fn harness_reports_panic_as_failure() {
     panic!("deliberate panic to test the harness");
+}
+
+/// Fails with a process of its own still live: suspended, so it would stay
+/// so for ever if the harness did not end it (`end_what_a_failed_test_left`).
+fn harness_fails_with_a_process_left() {
+    let left = process::spawn_suspended("busy").expect("busy");
+    drop(left);
+    assert!(!Job::root().expect("root").is_empty());
+    panic!("deliberate panic with a process left live");
+}
+
+/// After the failure above, nothing it started is live.
+fn nothing_is_live_after_a_failed_test() {
+    assert!(
+        Job::root().expect("root").is_empty(),
+        "a failed test's process outlived it"
+    );
 }
 
 fn harness_reports_exception_as_failure() {

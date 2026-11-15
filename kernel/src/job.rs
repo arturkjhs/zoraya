@@ -522,6 +522,22 @@ impl Job {
             },
         );
     }
+
+    /// Ends every process of the tree and leaves its jobs open: the test
+    /// harness, after a failed test, so that what it left running does not
+    /// run on into the tests after it.
+    #[cfg(feature = "qemu-test")]
+    pub fn end_every_process(self: &Arc<Self>) {
+        // No turn (see [`Exclusive`]), as in `kill`.
+        Job::walk(self, &mut |_| {}, &mut |process| {
+            process.request_exit(ExitRecord {
+                code: 0,
+                reason: ExitReason::Killed,
+                detail: 0,
+                request_kind: None,
+            });
+        });
+    }
 }
 
 impl Drop for Job {
