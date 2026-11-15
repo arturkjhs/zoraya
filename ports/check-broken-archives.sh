@@ -31,10 +31,13 @@ expect() {
     echo "check-broken: $case: fails as it should ($want)"
 }
 
-printf 'int zoraya_not_a_libc_name(void) { return 0; }\n' > extra.c
+# The extra export is a name no tier list will admit and libc.a does not
+# define: a real libc name (strlcpy was one until ADR-0390 admitted it) would
+# turn this case into a second definition of a tier name.
+printf 'int zoraya_not_a_tier_name(void) { return 0; }\n' > extra.c
 "$zcc" -w -c -o extra.o extra.c
 cp "$libc" extra.a && "$ar" r extra.a extra.o
-expect extra "export outside the tier list (INV-0100-1): zoraya_not_a_libc_name"
+expect extra "export outside the tier list (INV-0100-1): zoraya_not_a_tier_name"
 
 # With the call log (ADR-0110 item 7) the export is the wrapper zw-puts.o and
 # puts.o holds __zoraya_real_puts: both go.
