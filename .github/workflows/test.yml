@@ -407,10 +407,16 @@ jobs:
           shopt -s nullglob
           for f in target/test-logs/*.log build/ports/logs/*.log; do echo "== $f"; tail -n 150 "$f"; done
       # The whole of each log of a red step (the console shows the last 150
-      # lines; the runner caps a log at 64 MiB). Named by the job's index,
-      # since a step's command has characters an artifact name may not.
+      # lines; the runner caps a log at 64 MiB), also when the job's own
+      # timeout cancelled it. Named by the job's index, since a step's command
+      # has characters an artifact name may not; step.txt names the command.
+      - name: Name the step in its logs
+        if: failure() || cancelled()
+        env:
+          CMD: ${{ matrix.cmd }}
+        run: mkdir -p target/test-logs && printf '%s\n' "$CMD" > target/test-logs/step.txt
       - name: Keep the test logs of a failed step
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: test-logs-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}
