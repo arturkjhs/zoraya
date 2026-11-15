@@ -1,0 +1,48 @@
+# Plan part F3 (ADR-0431, ADR-0413): a `SHARED` mapping of a memory object stays
+# shared across `snapshot_process`. One QEMU configuration per mutant; the test is
+# `t_snapshot`'s `a_shared_mapping_stays_shared` and `t_quota`'s
+# `a_shared_object_is_charged_to_its_creator_only` in the test kernel.
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "F3-share-never-recorded"
+file = "kernel/src/syscall.rs"
+find = 'let share = flags.is_shared().then_some(offset);'
+replace = 'let share: Option<u64> = None;'
+note = "INV-0431-1: a SHARED mapping must be recorded, or the snapshot copies it"
+
+[[mutant]]
+id = "F3-share-offset-lost"
+file = "kernel/src/syscall.rs"
+find = 'let share = flags.is_shared().then_some(offset);'
+replace = 'let share = flags.is_shared().then_some(0);'
+note = "INV-0431-1: a partial shared mapping starts at its offset in the object"
+
+[[mutant]]
+id = "F3-plan-drops-the-share"
+file = "kernel/src/memory/user.rs"
+find = '(Holder::Memory(object), Some(offset)) => Some((object.clone(), offset)),'
+replace = '(Holder::Memory(_), Some(_)) => None,'
+note = "INV-0431-1: the plan carries the object of a shared mapping"
+
+[[mutant]]
+id = "F3-shared-object-copied"
+file = "kernel/src/memory/user.rs"
+find = 'Some((object, _)) => object.clone(),'
+replace = 'Some((_, _)) => MemoryObject::new_for_copy(item.length, payer)?,'
+note = "INV-0431-2: a snapshot takes no frame for a shared mapping's pages"
+
+[[mutant]]
+id = "F3-child-maps-from-the-start"
+file = "kernel/src/memory/user.rs"
+find = 'object.page(base + offset),'
+replace = 'object.page(offset),'
+note = "INV-0431-1: the child's pages are those of the parent's offset"
+
+[[mutant]]
+id = "F3-shared-pages-still-copied"
+file = "kernel/src/memory/user.rs"
+find = 'Some(m) if m.va <= va && build.plan[i].share.is_some() => continue,'
+replace = 'Some(m) if false && m.va <= va && build.plan[i].share.is_some() => continue,'
+note = "the step must not copy a shared page; it would copy the frame onto itself (an equivalent mutant unless the copy is counted)"

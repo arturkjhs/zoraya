@@ -63,6 +63,18 @@ fn buffer(user: User) -> Bytes {
 /// The rights a handle of `h`'s type can have: what a moved entry names.
 fn rights_of(h: Handle) -> zoraya_abi::Rights {
     let name = zoraya_rt::handle_type(h).unwrap_or("");
+    if name == "memory" {
+        // A memory handle may have lost `WRITE` (a seal, ADR-0413 item 4): a
+        // channel entry may name no more than the handle has, and the kernel
+        // has no call that says what that is, so ask for a copy with them all.
+        return match zoraya_rt::handle_duplicate(h, MemoryObject::RIGHTS) {
+            Ok(copy) => {
+                let _ = zoraya_rt::handle_close(copy);
+                MemoryObject::RIGHTS
+            }
+            Err(_) => MemoryObject::RIGHTS.without(zoraya_abi::Rights::WRITE),
+        };
+    }
     OBJECT_TYPES
         .iter()
         .find(|t| t.name == name)
