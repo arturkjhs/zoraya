@@ -542,14 +542,19 @@ harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, 
   (`kernel_work_is_bounded`). The runner's "9 failed" are the 9 `--expect-panic` tests, and t_thread's "`8 of 8 failed`"
   is its pass line. That runner's memory calls showed masked maxima 20 to 100 times the green re-run's (host stalls of
   tens of ms); user code ran only 2 times slower. Green TCG kernel-test jobs take up to 375 s of the 420 s. Open: raise
-  the limit or shorten the longest tests under TCG; upload `target/test-logs/` on failure; print per-test times.
+  the limit or shorten the longest tests under TCG.
 - The kernel runs on one CPU in the smp4 configurations; the earlier smp4 failures were a script order (TASK-29 F5) and a
   `t_quota` sample taken while the reaper was still working (3d48c87f).
-- **Open, cause not found:** `t_cpu`'s 40-spinner case failed in 2 of 20 local `tcg-smp4-gicv2` runs. The uncapped spinner
-  counted half (685M against about 1 360M), with no other thread ready, and the share passed 500 per mille. Section 4 of
-  the report lists the three candidates and the counters that separate them.
-- **Open:** t_thread's `creating_calls_leave_no_handles` assumes the sibling finishes its unmap within one switch. It failed
-  once under host load (`channel_create: the sibling ran first`, the call having succeeded). Proposed: count a successful
-  call as a miss and repeat rounds until 8 failed.
+- **Found and fixed in the test:** `t_cpu`'s share check failed in 2 of 20 local `tcg-smp4-gicv2` runs, and in 6 of 40
+  rounds of t_cpu alone. The kernel had charged the uncapped spinner its full time, but under TCG it counted at a
+  quarter to two thirds of its usual rate: each process executes at its own speed. The upper check now compares the
+  room's counts per charged ms with the count loop's best rate, and keeps the share bound under HVF. After: 0 of 40.
+- **Fixed in the test:** t_thread's `creating_calls_leave_no_handles` assumed the sibling unmaps within one switch, and
+  failed once under host load. A successful call is now a miss, and the round is repeated.
+- **Open:** `a_killed_room_with_parked_threads_dies` took up to 1 246 ms (12 periods; 2 of 40 rounds over its bound).
+  ADR-0285 item 7 says at most one period. The likely cause is that the teardown runs on the dying thread and is
+  charged to the capped room. Exempting a killed job's threads from parking needs a proposed ADR.
+- **Done:** a red QEMU step uploads `target/test-logs/`; the runner prints the slowest tests and the running test's time
+  at a timeout.
 - **Fixed on `work/smp-tcg`:** a failed test left its program's processes running (t_cpu's 41 spinners made `t_rooms` 35
   times slower and failed `t_snapshot` and the big-space spawn). The harness now ends them after a failure.
