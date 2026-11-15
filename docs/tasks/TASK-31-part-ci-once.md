@@ -34,6 +34,15 @@ commit with the same tree.
 7. Runs on the second parent and on the commit are asked for by `head_sha` first, then the scan of the 100 latest. Fixtures: found by `head_sha` with the scan failing, two pages of jobs, duplicate job names.
 8. origin/main merged (invariants Total 793). Mutation sanity: seven breaks (event filter, checks names, one page, first conclusion wins, deadline, step check, head_sha query) each fail `make check-ci-plan`.
 
+## Second fix pass (the check of the fixes)
+
+13. The fake API and the fixtures live outside the scratch repository (`$tmp/aux`; the repository is `$tmp/repo`), so no commit carries them and no checkout removes them. Every negative fixture names the reason the proof must print (`first: make check-extra`, `the full list is empty`, ...) and fails if it was not proven for another reason.
+14. `by_hand` fixtures (`CI_TREE_PROOF_ANY_COMMIT=1`, the checkout at the base commit): the names come from `git show SHA:` for the list and for the workflow.
+15. `capture` also bounds the wait for the exit after EOF (`WNOHANG` polling, then the group is killed); fixture `SLOW=close`.
+16. `SLOW=hold` sleeps 60 s, the run must end in 10 s, and a grandchild of the call's group that would touch a marker after 3 s must have been killed.
+17. Stage-tag wording: the tagged commit itself, else the nearest code commit on its first-parent chain; `docs_only` judges the whole change (ADR-0345, design.md).
+Breaks re-run, each failing `make check-ci-plan`: names read from the checkout (list and workflow), the matrix not expected, the empty-list guard removed, the per-call deadline removed, the group kill removed, the wait after EOF unbounded.
+
 ## Rule for merging (what the workflow now rewards)
 
 Merge `origin/main` into the branch, commit everything (the invariants Total too), run the full set on that head

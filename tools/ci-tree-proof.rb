@@ -49,17 +49,23 @@ CALL_LIMIT = (ENV['CI_TREE_PROOF_CALL_TIMEOUT'] || 30).to_f
 STOP_AT = now + (ENV['CI_TREE_PROOF_TIMEOUT'] || 120).to_f
 
 # The command's output, or nil: it failed, or did not finish within the
-# limit (its process group is killed).
+# limit (its process group is killed). The limit covers the reading and the
+# wait for the exit: a command that closes its stdout and goes on running is
+# stopped too.
 def capture(cmd, limit)
   rd, wr = IO.pipe
   pid = Process.spawn(cmd, out: wr, err: File::NULL, in: File::NULL, pgroup: true)
   wr.close
   stop = now + limit
   buf = ''
+  timed_out = false
   begin
     loop do
       left = stop - now
-      raise Timeout::Error if left <= 0 || IO.select([rd], nil, nil, left).nil?
+      if left <= 0 || IO.select([rd], nil, nil, left).nil?
+        timed_out = true
+        break
+      end
       begin
         buf << rd.read_nonblock(65_536)
       rescue IO::WaitReadable
@@ -68,17 +74,25 @@ def capture(cmd, limit)
     end
   rescue EOFError
     nil
-  rescue Timeout::Error
+  end
+  until timed_out || Process.wait(pid, Process::WNOHANG)
+    timed_out = now >= stop
+    sleep 0.05 unless timed_out
+  end
+  if timed_out
     begin
       Process.kill('KILL', -pid)
     rescue StandardError
       nil
     end
-    Process.wait(pid)
+    begin
+      Process.wait(pid)
+    rescue StandardError
+      nil
+    end
     warn "ci-tree-proof: a call did not answer within #{limit.round(1)} s"
     return nil
   end
-  Process.wait(pid)
   $?.success? ? buf : nil
 end
 

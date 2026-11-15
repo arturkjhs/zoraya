@@ -9,7 +9,12 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-plan-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
-cd "$tmp"
+# The scratch repository is $tmp/repo; what the fixtures need (the fake API, its
+# answers, the plan's messages) is in $aux, outside it: a commit of the
+# scratch repository must not carry it and a checkout must not remove it.
+aux="$tmp/aux"
+mkdir -p "$aux" "$tmp/repo"
+cd "$tmp/repo"
 git init -q .
 git config user.name ci-plan-test
 git config user.email ci-plan-test@localhost
@@ -157,14 +162,18 @@ printf 'z\n' >> src/code.rs
 step other-code
 cand2=$(git rev-parse HEAD)
 git checkout -q tp
-fix="$tmp/fixtures"
+fix="$aux/fixtures"
 fixn=0
-fakeapi="$tmp/fakeapi"
+fakeapi="$aux/fakeapi"
 cat > "$fakeapi" <<'FAKE'
 #!/bin/sh
 # $1: the path with its query. head_sha=X reads the file <key>_head, page=N
-# (N > 1) the file <key>_pN; SLOW=1 does not answer for 5 s.
-[ -z "${SLOW:-}" ] || sleep 5
+# (N > 1) the file <key>_pN. SLOW=hold never answers (and a child of its group
+# would touch $MARKER after 3 s); SLOW=close closes its stdout and does not exit.
+case "${SLOW:-}" in
+hold) ( sleep 3; : > "$MARKER" ) & exec sleep 60 ;;
+close) exec >/dev/null; exec sleep 60 ;;
+esac
 path=${1%%\?*}
 query=${1#"$path"}
 suffix=
@@ -212,14 +221,19 @@ fixture() {
 	unset BAD_JOB BAD_CONCLUSION DROP_JOB SKIP_STEP DUP_JOB PAGE_FROM PAGE_TO # an assignment before a function call may stay set
 	: "$1"
 }
-# NAME EXPECTED_docs_only [BEFORE]: plan of $merge; $proof_env is added to the environment
+# NAME EXPECTED_docs_only [BEFORE]: plan of $merge; $proof_env is added to the environment;
+# $reason, with 0, is text the proof's message must hold (a negative fixture fails for its own reason)
 proof_expect() {
 	out=$(env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 BEFORE=${3:-$base} \
-		DOCS_BEFORE=${3:-$base} DOCS_AFTER=$merge SHA=$merge ${proof_env:-} sh tools/ci-plan.sh origin/main 2>"$tmp/plan.err")
+		DOCS_BEFORE=${3:-$base} DOCS_AFTER=$merge SHA=$merge ${proof_env:-} sh tools/ci-plan.sh origin/main 2>"$aux/plan.err")
 	got=$(echo "$out" | sed -n 's/^docs_only=//p')
 	if [ "$got" != "$2" ]; then
 		echo "check-ci-plan: tree proof: $1: docs_only=$got, expected $2" >&2
-		grep "ci-" "$tmp/plan.err" | head -8 >&2
+		grep "ci-" "$aux/plan.err" | head -8 >&2
+		fail=$((fail + 1))
+	elif [ "$2" = 0 ] && [ -n "${reason:-}" ] && ! grep -q -F -- "$reason" "$aux/plan.err"; then
+		echo "check-ci-plan: tree proof: $1: not proven, but not for the reason: $reason" >&2
+		grep "ci-" "$aux/plan.err" | head -8 >&2
 		fail=$((fail + 1))
 	elif [ "$2" = 1 ]; then
 		echo "$out" | grep -q '^summary=.*run 100' && echo "$out" | grep -q '^tests=\[\]$' ||
@@ -228,6 +242,7 @@ proof_expect() {
 		echo "$out" | grep -q '^build=true$' ||
 			{ echo "check-ci-plan: tree proof: $1: the full set needs the build" >&2; fail=$((fail + 1)); }
 	fi
+	reason=
 }
 [ "$(git rev-parse "$merge^{tree}")" = "$(git rev-parse "$cand^{tree}")" ] ||
 	{ echo "check-ci-plan: the fixture's merge and candidate trees differ" >&2; fail=$((fail + 1)); }
@@ -237,44 +252,44 @@ gone() { mv "$1" "$1.gone"; } # an API error for that answer
 
 fixture ok "$cand" success
 proof_expect "same tree, every job, success" 1
-proof_expect "first parent is not the previous head" 0 "$cand"
+reason="is not the previous head" proof_expect "first parent is not the previous head" 0 "$cand"
 fixture failed "$cand" failure
-proof_expect "the run failed" 0
+reason="no green full run on tree" proof_expect "the run failed" 0
 fixture other "$cand2" success
-proof_expect "a different tree" 0
+reason="no green full run on tree" proof_expect "a different tree" 0
 DROP_JOB="make test-boot" fixture ok "$cand" success
-proof_expect "same tree, a job missing" 0
+reason="first: make test-boot" proof_expect "same tree, a job missing" 0
 BAD_JOB="make test-boot" BAD_CONCLUSION=skipped fixture ok "$cand" success
-proof_expect "same tree, a job skipped" 0
+reason="first: make test-boot" proof_expect "same tree, a job skipped" 0
 BAD_JOB=build BAD_CONCLUSION=failure fixture ok "$cand" success
-proof_expect "same tree, the build failed" 0
+reason="first: build" proof_expect "same tree, the build failed" 0
 SKIP_STEP="make adr-check" fixture ok "$cand" success
-proof_expect "a checks job whose Run step was skipped" 0
+reason="first: make adr-check" proof_expect "a checks job whose Run step was skipped" 0
 SKIP_STEP="make test-boot" fixture ok "$cand" success
-proof_expect "a tests job whose Run step was skipped" 0
+reason="first: make test-boot" proof_expect "a tests job whose Run step was skipped" 0
 SKIP_STEP=build fixture ok "$cand" success
-proof_expect "a build job whose make ci-build step was skipped" 0
+reason="first: build" proof_expect "a build job whose make ci-build step was skipped" 0
 DUP_JOB="make test-boot" fixture ok "$cand" success
-proof_expect "two jobs of one name, success then failure" 0
+reason="first: make test-boot" proof_expect "two jobs of one name, success then failure" 0
 fixture ok "$cand" success
 gone "$(jobs_file)"
-proof_expect "API error reading the jobs" 0
+reason="not the full set" proof_expect "API error reading the jobs" 0
 fixture ok "$cand" success
 gone "$(runs_file)"
-proof_expect "API error listing the runs" 0
+reason="no list of runs can be read" proof_expect "API error listing the runs" 0
 # The jobs come in two pages: all of them are read.
 half=$((TOTAL_JOBS / 2))
 PAGE_TO=$half fixture ok "$cand" success
 all_jobs | PAGE_FROM=$((half + 1)) jobs_json > "$fix/$(key 'actions/runs/100/jobs')_p2"
 proof_expect "the jobs in two pages" 1
 gone "$fix/$(key 'actions/runs/100/jobs')_p2"
-proof_expect "the second page missing" 0
+reason="not the full set" proof_expect "the second page missing" 0
 # Events: a pull request's run was tested on the merge ref, an unknown event is
 # not a known way to plan the full set.
 fixture ok "$cand" success pull_request
-proof_expect "a pull_request run" 0
+reason="no green full run on tree" proof_expect "a pull_request run" 0
 fixture ok "$cand" success pull_request_target
-proof_expect "an unknown event" 0
+reason="no green full run on tree" proof_expect "an unknown event" 0
 for ev in workflow_dispatch schedule; do
 	fixture ok "$cand" success "$ev"
 	proof_expect "a $ev run" 1
@@ -282,22 +297,30 @@ done
 # A head commit this checkout does not have: its tree comes from the API.
 unknown=1111111111111111111111111111111111111111
 fixture ok "$unknown" success
-proof_expect "an unknown head, no tree from the API" 0
+reason="no green full run on tree" proof_expect "an unknown head, no tree from the API" 0
 printf '{"tree":{"sha":"%s"}}\n' "$(git rev-parse "$merge^{tree}")" > "$fix/$(key "git/commits/$unknown")"
 proof_expect "an unknown head, the API's tree is the same" 1
 printf '{"tree":{"sha":"%s"}}\n' "$(git rev-parse "$cand2^{tree}")" > "$fix/$(key "git/commits/$unknown")"
-proof_expect "an unknown head, the API's tree differs" 0
+reason="no green full run on tree" proof_expect "an unknown head, the API's tree differs" 0
 # The runs of the second parent are asked for by head_sha first: a candidate
 # older than the 100 latest runs is found, and the scan may fail.
 fixture ok "$cand" success
 mv "$(runs_file)" "$(runs_file)_head"
 proof_expect "found by head_sha, the scan of the latest runs fails" 1
-# A deadline: an API that does not answer gives the full set, not a hang.
-fixture ok "$cand" success
-start=$(date +%s)
-proof_env="SLOW=1 CI_TREE_PROOF_CALL_TIMEOUT=1 CI_TREE_PROOF_TIMEOUT=2" proof_expect "an API that does not answer" 0
+# A deadline: an API that does not answer (SLOW=hold: a child that holds the
+# pipe for 60 s, with a grandchild of its group that would touch the marker after
+# 3 s), or closes its stdout and does not exit (SLOW=close), gives the full set
+# in a few seconds, not after 60 s, and the group is killed.
+for mode in hold close; do
+	fixture ok "$cand" success
+	marker="$aux/survived"
+	start=$(date +%s)
+	proof_env="SLOW=$mode MARKER=$marker CI_TREE_PROOF_CALL_TIMEOUT=1 CI_TREE_PROOF_TIMEOUT=2" reason="did not answer" proof_expect "an API that does not answer ($mode)" 0
+	[ $(($(date +%s) - start)) -le 10 ] || { echo "check-ci-plan: tree proof: the deadline did not stop a call ($mode)" >&2; fail=$((fail + 1)); }
+done
 proof_env=
-[ $(($(date +%s) - start)) -le 15 ] || { echo "check-ci-plan: tree proof: the deadline did not stop the calls" >&2; fail=$((fail + 1)); }
+sleep 4
+[ ! -e "$marker" ] || { echo "check-ci-plan: tree proof: the process group of a call was not killed" >&2; fail=$((fail + 1)); }
 # The run is never its own proof.
 fixture ok "$cand" success
 out=$(CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=100 BEFORE=$base DOCS_BEFORE=$base DOCS_AFTER=$merge SHA=$merge sh tools/ci-plan.sh origin/main 2>/dev/null)
@@ -306,6 +329,19 @@ echo "$out" | grep -q '^docs_only=0$' || { echo "check-ci-plan: tree proof: a ru
 fixture ok "$cand" success
 out=$(CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 BEFORE=$base DOCS_BEFORE=$base DOCS_AFTER=$cand SHA=$cand sh tools/ci-plan.sh origin/main 2>/dev/null)
 echo "$out" | grep -q '^docs_only=0$' || { echo "check-ci-plan: tree proof: a one-parent commit is proven" >&2; fail=$((fail + 1)); }
+# By hand (the checkout is another commit): the names are those of the commit
+# asked about (git show), not of the checkout. BY_HAND_NAME COMMIT REASON; the
+# run, from fixture(), has the base commit's jobs.
+by_hand() {
+	git checkout -q -f -B tp "$base"
+	fixture ok "$2" success
+	if env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo CI_TREE_PROOF_ANY_COMMIT=1 SHA=$2 ruby tools/ci-tree-proof.rb > /dev/null 2> "$aux/hand.err"; then
+		echo "check-ci-plan: tree proof: by hand, $1: names read from the checkout, not the commit" >&2; fail=$((fail + 1))
+	elif ! grep -q -F -- "$3" "$aux/hand.err"; then
+		echo "check-ci-plan: tree proof: by hand, $1: not proven, but not for the reason: $3" >&2; fail=$((fail + 1))
+	fi
+}
+
 # The job names are those of the tree's own files: a tree whose list has a line
 # the run lacks, and one whose checks matrix has an entry it lacks, are not proven.
 git checkout -q -f -B tp "$base"
@@ -317,10 +353,12 @@ git checkout -q tp
 git merge -q --no-ff -m merge-cand3 cand3
 merge=$(git rev-parse HEAD)
 fixture ok "$cand3" success
-proof_expect "a list line the run lacks" 0
+reason="first: make test-extra" proof_expect "a list line the run lacks" 0
+by_hand "a list line" "$cand3" "first: make test-extra"
+
 git checkout -q -f -B tp "$base"
 git checkout -q -b cand4
-sed 's/^\(  *\)- make fmt-check$/&\n\1- make check-extra/' .github/workflows/test.yml > "$tmp/wf" && cp "$tmp/wf" .github/workflows/test.yml
+sed 's/^\(  *\)- make fmt-check$/&\n\1- make check-extra/' .github/workflows/test.yml > "$aux/wf" && cp "$aux/wf" .github/workflows/test.yml
 grep -q 'make check-extra' .github/workflows/test.yml || { echo "check-ci-plan: fixture: no matrix entry added" >&2; fail=$((fail + 1)); }
 step matrix-entry
 cand4=$(git rev-parse HEAD)
@@ -328,7 +366,8 @@ git checkout -q tp
 git merge -q --no-ff -m merge-cand4 cand4
 merge=$(git rev-parse HEAD)
 fixture ok "$cand4" success
-proof_expect "a checks matrix entry the run lacks" 0
+reason="first: make check-extra" proof_expect "a checks matrix entry the run lacks" 0
+by_hand "a matrix entry" "$cand4" "first: make check-extra"
 # An empty list proves nothing.
 git checkout -q -f -B tp "$base"
 git checkout -q -b cand5
@@ -339,7 +378,7 @@ git checkout -q tp
 git merge -q --no-ff -m merge-cand5 cand5
 merge=$(git rev-parse HEAD)
 fixture ok "$cand5" success
-no_build_check=1 proof_expect "an empty list of tests" 0
+reason="the full list is empty" no_build_check=1 proof_expect "an empty list of tests" 0
 no_build_check=
 # A merge whose tree differs from the candidate's (main moved: more than the merge).
 git checkout -q -f -B tp "$base"
@@ -350,7 +389,7 @@ before_moved=$(git rev-parse HEAD)
 git merge -q --no-ff -m merge-moved cand
 merge=$(git rev-parse HEAD)
 fixture ok "$cand" success
-proof_expect "main moved: the merge's tree is not the candidate's" 0 "$before_moved"
+reason="no green full run on tree" proof_expect "main moved: the merge's tree is not the candidate's" 0 "$before_moved"
 
 # The plan job reads the runs through its token (INV-0345-2).
 awk '/^  plan:/ { inplan = 1; next } /^  [a-z]+:/ { inplan = 0 } inplan && /^      actions: read/ { ok = 1 } END { exit !ok }' .github/workflows/test.yml ||

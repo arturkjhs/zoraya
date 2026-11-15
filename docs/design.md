@@ -2685,9 +2685,11 @@ ADR-0221 items 5, 6 and 8).
   first, then the API), and the run's jobs are read through the API; any doubt or API error runs the full set. So the merge of a
   candidate that passed the full set (merge `origin/main` into the branch, run `candidate-full/NAME` or
   `gh workflow run test.yml --ref BRANCH -f full=true`, then `--no-ff` merge and nothing else) is not tested twice; if main
-  moved in between, the trees differ and the full set runs. A stage tag needs a full green run on the tagged commit's nearest code ancestor, the latest ancestor commit that
-  changed a path `docs_only` does not allow in a docs-only push (not "the latest ancestor whose run was the full set": a proven
-  merge, or one whose plan job failed, has no such run), on that commit or on a commit with the same tree; the summary of a
+  moved in between, the trees differ and the full set runs. A stage tag needs a full green run on the code commit of the tagged commit: the tagged commit itself if its change from
+  its first parent is not docs-only (`docs_only` in `tools/plan-lib.sh` judges the whole change: a posix-surface block or a doc a
+  test reads is code although under `docs/`), else the nearest such commit on its first-parent chain (not "the latest ancestor
+  whose run was the full set": a proven merge, or one whose plan job failed, has no such run); the run is on that commit or on a
+  commit with the same tree; the summary of a
   proven `main` run names the run. By hand, for a commit: `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name>
   tools/ci-tree-proof.rb` (it reads `tools/ci-tests.txt` and `test.yml` of that commit with `git show`, not of the checkout; the
   runs on the commit are found by `head_sha`, others only among the 100 latest successful runs). Each API call and the whole proof
