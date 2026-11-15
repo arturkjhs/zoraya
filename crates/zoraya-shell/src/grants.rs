@@ -192,6 +192,9 @@ pub(crate) fn within(outer: &str, inner: &str) -> bool {
     o <= i && i + inner.len() <= o + outer.len()
 }
 
+/// The descriptions whose files are given one narrowed name each (ADR-0335 item 3).
+const NARROW_ONE: [&str; 4] = ["vi", "ex", "view", "less"];
+
 /// Plans the entries of a line (rules 1 to 4).
 pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
     let d = line.description;
@@ -288,7 +291,48 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
     for (index, text) in &p.operands {
         let kind = p.kind_of(d, *index);
         let reason = format!("operand {}", d.operands[*index].name);
+        // A `+` word is an option of the programs that are given one name and no
+        // directory (`vi +10 f`, `less +G f`): taken as a second file it would
+        // give the directory. It is refused, never planned (review of 10d, 1).
+        if d.cwd == Cwd::None && kind.is_path() && text.starts_with('+') {
+            return Err(Refused {
+                subject: (*text).into(),
+                problem: "a word that starts with + is not taken as a file".into(),
+                hint: Some(format!(
+                    "for a file of that name write ./{text}; {} takes a command with -c COMMAND",
+                    d.name
+                )),
+            });
+        }
         designate(kind, text, reason, &mut out)?;
+    }
+    // ADR-0335 item 3: the editor and the pager are given the names the line writes. A narrowed
+    // connection takes one name until `narrow` takes a list, so two names of one directory would
+    // become the directory: the line is refused instead, and the person says it (review of 10d, 2).
+    if NARROW_ONE.contains(&d.name.as_str()) {
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for e in &out {
+            let (Access::Create(n) | Access::ReadName(n) | Access::ChangeName(n)) = &e.access
+            else {
+                continue;
+            };
+            if let Some((_, first)) = seen.iter().find(|(p, _)| *p == e.path) {
+                let marker = if d.name == "vi" || d.name == "ex" {
+                    "+w"
+                } else {
+                    "+r"
+                };
+                return Err(Refused {
+                    subject: format!("{first} {n}"),
+                    problem: "two files of one directory need the whole directory".into(),
+                    hint: Some(format!(
+                        "if that is meant, write {marker} {} before the command; or name one file",
+                        e.path
+                    )),
+                });
+            }
+            seen.push((&e.path, n));
+        }
     }
     for (index, value) in &p.options {
         let o = &d.options[*index];

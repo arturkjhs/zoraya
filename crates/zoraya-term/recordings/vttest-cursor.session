@@ -1,0 +1,29 @@
+# vttest cursor movements (ADR-0332 item 10, ADR-0391 item 10): the pinned vttest (20251205) run from its main menu, menu 1, one
+# mark per screen after each Return, recorded with the pinned entry (TERM as ADR-0333 says). vttest sends DA and
+# waits for no answer here (nothing is answered, as in the other recordings). Its screens are what the terminal is
+# compared with xterm on by a person: the grids are frozen from zoraya-term and NOT yet compared (docs/tasks/TASK-31-part-10d.md).
+size 80 24
+env TERMINFO=@terminfo@
+run @vttest@/vttest
+mark menu
+send 1\r
+wait 1
+mark screen 1
+send \r
+wait 1
+mark screen 2
+send \r
+wait 1
+mark screen 3
+send \r
+wait 1
+mark screen 4
+send \r
+wait 1
+mark screen 5
+send \r
+wait 1
+mark screen 6
+send \r
+wait 1
+mark screen 7

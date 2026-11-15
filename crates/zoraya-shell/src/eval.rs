@@ -411,19 +411,13 @@ pub fn function_description(f: &Function) -> Description {
 }
 
 /// Familiar names from other systems, with what to type here (ADR-0154
-/// rule 6, as decided).
-pub const UNIX_HINTS: [(&str, &str); 6] = [
+/// rule 6, as decided; `less` has its own program since part 10d).
+pub const UNIX_HINTS: [(&str, &str); 5] = [
     ("grep", "on Zoraya this is search: search TEXT FILE..."),
     ("wc", "to count lines: count --lines FILE..."),
     ("man", "on Zoraya this is help: help NAME"),
-    (
-        "less",
-        "to print a file: cat FILE (help pages page by themselves)",
-    ),
-    (
-        "more",
-        "to print a file: cat FILE (help pages page by themselves)",
-    ),
+    // `less` is in the image (ADR-0335 item 11), so its hint is gone; `more` is not.
+    ("more", "to page a file: less FILE"),
     (
         "which",
         "help NAME says what NAME is and where it comes from",

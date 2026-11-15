@@ -1,0 +1,114 @@
+--- a/ncurses/tinfo/read_entry.c
++++ b/ncurses/tinfo/read_entry.c
+@@ -276,13 +276,18 @@
+ /*
+  * Return TGETENT_YES if read, TGETENT_NO if not found or garbled.
+  */
+-NCURSES_EXPORT(int)
+-_nc_read_termtype(TERMTYPE2 *ptr, char *buffer, int limit)
++/*
++ * Zoraya: a process has a 64 KiB stack, and this function, _nc_read_file_entry
++ * and _nc_read_tic_entry each held an array of MAX_ENTRY_SIZE (32 KiB) on it,
++ * three deep in one call of setupterm.  The arrays are the callers' to give:
++ * the exported functions below take them from the heap.
++ */
++static int
++read_termtype_with(TERMTYPE2 *ptr, char *buffer, int limit, char *buf)
+ {
+     int offset = 0;
+     int name_size, bool_count, num_count, str_count, str_size;
+     int i;
+-    char buf[MAX_ENTRY_SIZE + 2];
+     char *string_table;
+     unsigned want, have;
+     size_t (*convert_numbers) (const char *, NCURSES_INT2 *, int);
+@@ -568,6 +573,19 @@
+ 	ptr->Strings[i] = ABSENT_STRING;
+ 
+     returnDB(TGETENT_YES);
++}
++
++NCURSES_EXPORT(int)
++_nc_read_termtype(TERMTYPE2 *ptr, char *buffer, int limit)
++{
++    int code = TGETENT_NO;
++    char *scratch = (char *) malloc(MAX_ENTRY_SIZE + 2);
++
++    if (scratch != NULL) {
++	code = read_termtype_with(ptr, buffer, limit, scratch);
++	free(scratch);
++    }
++    return code;
+ }
+ 
+ /*
+@@ -591,9 +609,11 @@
+ 	code = TGETENT_NO;
+     } else {
+ 	int limit;
+-	char buffer[MAX_ENTRY_SIZE + 1];
++	char *buffer = (char *) malloc(MAX_ENTRY_SIZE + 1);
+ 
+-	limit = (int) fread(buffer, sizeof(char), sizeof(buffer), fp);
++	limit = (buffer != NULL)
++	    ? (int) fread(buffer, sizeof(char), MAX_ENTRY_SIZE + 1, fp)
++	    : 0;
+ 	if (limit > 0) {
+ 	    const char *old_source = _nc_get_source();
+ 
+@@ -607,6 +627,7 @@
+ 	} else {
+ 	    code = TGETENT_NO;
+ 	}
++	free(buffer);
+ 	fclose(fp);
+     }
+ 
+@@ -769,17 +790,17 @@
+  * success, TGETENT_NO on failure.
+  */
+ static int
+-_nc_read_tic_entry(char *filename,
+-		   unsigned limit,
+-		   const char *const path,
+-		   const char *name,
+-		   TERMTYPE2 *const tp)
++read_tic_entry_with(char *filename,
++		    unsigned limit,
++		    const char *const path,
++		    const char *name,
++		    TERMTYPE2 *const tp,
++		    char *buffer)
+ {
+     int code = TGETENT_NO;
+ #if USE_HASHED_DB
+     DB *capdbp;
+ #endif
+-    char buffer[MAX_ENTRY_SIZE + 1];
+     int used;
+ 
+     TR(TRACE_DATABASE,
+@@ -868,6 +889,23 @@
+     }
+ #endif
+     returnDB(code);
++}
++
++static int
++_nc_read_tic_entry(char *filename,
++		   unsigned limit,
++		   const char *const path,
++		   const char *name,
++		   TERMTYPE2 *const tp)
++{
++    int code = TGETENT_NO;
++    char *scratch = (char *) malloc(MAX_ENTRY_SIZE + 1);
++
++    if (scratch != NULL) {
++	code = read_tic_entry_with(filename, limit, path, name, tp, scratch);
++	free(scratch);
++    }
++    return code;
+ }
+ #endif /* NCURSES_USE_DATABASE */
+ 

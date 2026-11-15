@@ -2,43 +2,36 @@
 
 ## Status for the architect
 
-Updated 2026-11-14, after 10a and 10e.
+Updated 2026-11-15, after 10d.
 
-- **Merged and tagged:**
-  - `stage-10e` on `3981656` (`main`'s run green, 72 jobs): the userland.
-  - `stage-10a` on `e3e5774` (`main`'s run green, 72 jobs): the terminal's parser and grid.
-  - `work/test-fixes-2` merged as `914cf12` (`main`'s run green); it carries no stage tag.
-- **In progress:** 10b (keys, mouse, selection, paste; `work/10b`, from 10a's head); `work/py-hook` (the python3 build
-  hook, the first of the three requests from outside work; fix pass after its review, then a candidate).
-- **Added by the architect (2026-11-15):** part 10j, the implementation of ADR-0396, ADR-0397 and ADR-0399 (accepted
-  2026-11-15), after 10g in lane 2.
-- **Waiting:** 10c, 10d, 10f (lane 1); 10g, 10h (lane 2, after 10c, 10d and 10g); 10i (alone, at the end). Backlog
-  requests 2 (`poll` and `ppoll`) and 3 (programs installed on the volume, design first) wait for a free slot.
-- **Proposed ADRs (all `proposed`; the architect sets statuses):**
-  - ADR-0343 (names toybox's commands add to `libc.a`) and ADR-0344 (what 10e decided where ADR-0336 and ADR-0342 are
-    silent): recommend accepting both.
-  - ADR-0380 (terminal behaviour where ADR-0332 is silent), ADR-0381 (the 16-byte cell), ADR-0382 (how conformance is
-    evidenced): recommend accepting all three.
-  - ADR numbers handed out: 10a 0380 to 0382; 10b 0383 to 0385; the python hook 0396 (unused); `work/sigint-exec` 0392.
-- **Decisions for the architect (nobody was asked; these were decided to continue, each reversible):**
-  - ADR-0336 item 2's review gate for `tr`, `expr` and `diff` was met by an independent `opus-review` (it did not port
-    them), with a toybox patch (`ports/patches/toybox/0003`) for five defects it found. Overrule if you want a human.
-  - The ADR-0212 image cache was **not built** in 10e (it is a broker, `posix_child` and `libposix` change with its own
-    security argument). The userland does not depend on it.
-  - 10a's stop-gap: `zosh` writes a fixed reset before a prompt that follows a command, until 10c sends `Restore`.
-  - INV-0172-4: the console shell holds the volume root, so `room new X +w /t` is not refused there; the review judged
-    it by design (ADR-0172 point 3). Whether entering a room should narrow `room new` is yours.
-  - INV-0230-1 is no longer `checked`: the network test steps use `--net-open`. What `--net-open` may reach is yours.
-  - INV-0042-1 is `not yet applicable` (the new `checked:` rule refused its old text); is an `abi` type a check?
-  - The semaphore, barrier and latch groups of libc++'s tests run in no CI job (TCG too slow); a nightly step is open.
-- **Hand checks for the architect:** 10a: an xterm comparison (`TERM=xterm-256color cat crates/zoraya-term/recordings/vi-edit.rec`
-  in an 80x24 xterm, against the same recording in a Zoraya terminal; there is no xterm on the build machine) and
-  `vttest` (needs a pin in `ports/sources.lock`). 10f's grant line, 10g's login and 10h's clone and push are not built yet.
-- **Measurements:** 10e's W4 (HVF only, before the `config.sub` fix): 39.25 s wall time, 141 `exec` (mean 49 ms), 639
-  `posix_spawn`, 3205 broker round trips, 709,735 system calls (`docs/tasks/TASK-31-part-10e.md`). The libc.a relink fix:
-  the build job took 16 min in the candidate run (a ports-cache miss, so the saving is not yet shown).
-- **Cleanup waiting for permission:** the merged branches (`work/test-fixes-2`, `work/10e`, `work/10a`) and their
-  worktrees; an automated check refused the delete, so nothing was removed.
+- **Merged on `main`:**
+  - `stage-10a` (`e3e5774`), `stage-10b` (`23b338d`), `stage-10e` (`3981656`): tagged.
+  - 10c (`abaa43c`) and 10d with `work/ports-early` (`c9bab16`): merged on green candidates (10c: `candidate/work-10c-d`,
+    one flaky job re-run; 10d: `candidate-full/10d-a`, 77 jobs). **`stage-10c` and `stage-10d` are not tagged yet:** ADR-0348
+    needs a green scheduled or nightly full run of `main` that includes the commit (`tools/ci-last-full.rb --green-for SHA`).
+  - Small parts, no stage tag: `test-fixes-2`, `py-hook`, `poll`, `ci-expr`, `ci-once`, `test-fixes-3`, `syscall-long`,
+    `ci-policy` (ADR-0348, `47f59d2`), `alloc-flake` (`f83d1fb`), `tcg-slow` (`4640c56`).
+- **In progress:**
+  - `work/sigint-exec` (libposix: a Ctrl-C right after a job's first output was lost; a bug in `main` since 10c): fix,
+    review and check of the changed lines done; ADR-0392 proposed; candidate `-b` running, a last doc and test pass after it.
+  - `work/10g` (own directory, ssh): implemented, reviewed (3 must-fix: ssh in a room's terminal, the test sshd's
+    confinement, an ADR number clash); the fix pass and the merge with `work/10d`'s ssh port are in progress.
+- **Waiting:** 10f (lane 1), 10j, 10h (lane 2), `work/rust-std`, 10i (alone, at the end).
+- **Proposed ADRs (all `proposed`; the architect sets statuses; the table is in `docs/architect-queue.md`):** ADR-0386 to
+  0389 (10c), 0390 surface for curses (10d/ports-early), 0391 (10d), 0392 (sigint-exec, **a tension with ADR-0106's
+  INV-0106-2**), ADR-0410, 10g's ADR (renumbered in its fix pass).
+  ADR numbers handed out: 10a 0380 to 0382; 10b 0383 to 0385; the python hook 0396 (unused); `work/sigint-exec` 0392.
+- **Hand checks for the architect:** section C of `docs/architect-queue.md`: 10a's xterm comparison and `vttest` (now
+  pinned by 10d; the grids are frozen from `zoraya-term`, not compared with xterm by a person), 10g's login to a real
+  host (exact commands in `docs/tasks/TASK-31-part-10g.md`). 10f and 10h are not built yet.
+- **Known gaps of merged parts:** 10c: mode 2004 can stay disabled for a reader that never asked for bracketed paste;
+  `Clone` from a background line is allowed; `room --leave` can escape. 10d: `narrow` with a list of names is not built
+  (two files in one directory are refused with a hint); `ls | less` does not page; DB 1.85 not measured on a large file.
+  `w9-term` timed out once under TCG on CI and did not reproduce (`docs/backlog.md`).
+- **Measurements:** 10e's W4 and the libc.a relink are in `docs/tasks/TASK-31-part-10e.md`; 10d's binary sizes are in
+  `docs/tasks/TASK-31-part-10d.md` (`less` 2,975,880 and `vi` 3,340,736 bytes). SHA-256 of 64 MB for 10j: not yet measured.
+- **Cleanup waiting for the architect:** merged branches and their remote refs (`work/10a`, `10b`, `10c`, `10d`, `10e`,
+  `test-fixes-*`, `ports-early`, `ci-policy`, `tcg-slow`, `alloc-flake`, candidate tags).
 
 ## Start (2026-11-14)
 
