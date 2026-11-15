@@ -218,11 +218,14 @@ TTBR0 is disabled (`TCR_EL1.EPD0`) and holds 0. The layout is stated only in `ke
   Exhaustion is a return value. A bad free panics in the kernel (the crate returns an error).
   **Sizes (F8, proposed ADR-0436).** Nothing in the kernel states a RAM size: the boot tables map the first 4 GiB in 1 GiB
   blocks, the direct map is built from blocks, the heap grows on demand. Tested up to 2 GiB (`tests/two_gib.rs` on the host,
-  the 2 GiB steps in QEMU). One loop scales with RAM: `FrameAllocator::alloc` reads at most one word of the map per 256 KiB
-  (8192 at 2 GiB) with the lock held and IRQ masked, 94 us under HVF and 1.2 ms under TCG at 2 GiB; a machine above 4 GiB
-  (16384 words) fails `the_worst_single_allocation_is_bounded_by_the_machines_ram` and needs a second level of the map.
-  Known limitation: `top --session` is not built, `top`'s `session` row shows the use and `room set --mem` refuses above the
-  session's ceiling (1452930K on a 2 GiB guest). `make run-browser` is `run-gui` at `--mem $(BROWSER_MEM)` (2G); there is no browser yet.
+  the 2 GiB steps in QEMU). F8 bounded one loop: `FrameAllocator::alloc` reads at most one word of the map per 256 KiB (8192 at
+  2 GiB) with the lock held and IRQ masked; 94 us under HVF, 1.2 ms under TCG at 2 GiB (once); a machine above 4 GiB (16384
+  words) fails `the_worst_single_allocation_is_bounded_by_the_machines_ram` and needs a second level of the map.
+  Known limitations at 2 GiB, not bounded by F8: `memory_map`'s and `adopt`'s copy of a space's whole frame list (a room of
+  1200M is about 300,000 frames, 2.4 MB in one interval, not measured), and a heap growth of up to 256 allocations in one
+  interval. `top --session` is not built; `top`'s `session` row shows the use and `room set --mem` refuses above the session's
+  ceiling (1452930K on a 2 GiB guest). `make run-browser` is `run-gui`'s command at `--mem $(BROWSER_MEM)` (2G), booted by no
+  step; there is no browser yet.
 - **Heap.** `zoraya-heap` behind `GlobalAlloc`: power-of-two classes from 16 bytes to 2 KiB, carved from 64 KiB
   chunks, and a coalescing span list above that. It grows by at least 1 MiB, mapping one frame per page in the heap
   window, and never shrinks. `Box::new` and `Vec::push` panic on exhaustion, so they are allowed only at boot and at
@@ -1849,8 +1852,7 @@ second by every reader (`Throttle`, INV-0267-2); nothing is read on a calm deskt
   a limit and `(refused 3 mem)` at the end of a row; `top ROOM` adds the room's limits and the line that raises the limit
   that refused; `top --watch` prints again every second until Ctrl-C. A room's own shell sees that room alone; without a
   keeper it prints `top: no room keeper` and exits 1. DISK and CONNS show the limit only (no launcher forwards the
-  services' use yet); `top --session` and the job tree of `top ROOM` are not built (the keeper has no session ceiling to
-  give, and no kernel call lists a job's children).
+  services' use yet); `top --session` and the job tree of `top ROOM` are not built (no kernel call lists a job's children; the keeper's ceiling shows only as the refusal of a limit above it).
 - **The panel** reads `Usage` from the keeper on its once-a-second tick and sends the compositor `SetUsage` (request 44 of
   the client manager's channel) when the text changed. The compositor checks every line again, takes all or none, and
   draws from it and from nothing a client sends (INV-0172-1): a **pill** `mem 99%` (`procs`, `cpu`) at 90% of a limit in the
