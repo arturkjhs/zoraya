@@ -77,7 +77,7 @@ change; the existing all-or-nothing write (INV-0050-1) is enough once the librar
    and drops the ancillary channel (a channel end cannot be duplicated, ADR-0102 item 3) and whatever the library held for it.
    `SCM_RIGHTS` on a shared socket is `EOPNOTSUPP` in both; a peer that still sends descriptors to a shared holder has them closed
    as they arrive, so that its ancillary queue never fills. A packet or datagram socket open in a `fork` is `ENOTSUP` (ADR-0412
-   item 6). Bytes the library held for a socket go to the parent only.
+   item 6). Bytes the library held for a socket go to the parent only. A shared socket that is sent travels as its byte streams alone (marked shared): after the send no holder has its ancillary channel (the sender's is closed), so a peer in a third process that sends it `SCM_RIGHTS` gets errors.
 7. **`spawn` and `exec` do not carry a Unix socket yet (a deviation from ADR-0412 item 6, for the architect to accept before this part merges).** An open socket without `SOCK_CLOEXEC` makes them fail with `EBADF`,
    as a TCP socket does (ADR-0287 item 3). ADR-0412 item 6 moves a socket to a spawned child; that needs the bootstrap
    record to carry two or three handles for one fd, which is the record plan part F4 (`posix_spawn` with a grant list,

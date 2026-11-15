@@ -878,8 +878,10 @@ fn a_shared_stream_socket_is_sent_as_its_streams_alone() {
     let before = r.handles();
     assert_eq!(send(&mut r, x, b"s", &[a, pr]), Ok(1));
     assert!(r.p.fds.get(a).is_none(), "the sender's fd is closed");
-    // The parent's ancillary channel (and its peer's) went with it: one handle less than
-    // the three the socket held, plus the pipe's copy now in the message.
+    r.settle();
+    // The parent's ancillary channel was closed by the send (one handle less); the pipe end
+    // was copied into the message (one more): the count is what it was.
+    assert_eq!(r.handles(), before);
     let (_, fds, flags) = recv(&mut r, y, 5, 2, 0).unwrap();
     assert_eq!((fds.len(), flags), (2, 0), "both descriptors arrived");
     r.write(b, b"to the sent one").unwrap();
@@ -891,7 +893,6 @@ fn a_shared_stream_socket_is_sent_as_its_streams_alone() {
     // Rights stay refused on it in its new holder.
     assert_eq!(send(&mut r, x, b"t", &[pr]), Ok(1));
     assert_eq!(send(&mut r, fds[0], b"u", &[pr]), Err(EOPNOTSUPP));
-    let _ = before;
 }
 
 /// The same from the child: it holds no ancillary channel.
@@ -966,4 +967,27 @@ fn a_tag_seen_after_the_bytes_were_taken_keeps_its_message_when_the_table_is_ful
     r.p.close(extra.pop().unwrap()).unwrap();
     let (got, fds, flags) = recv(&mut r, b, 100, 1, 0).unwrap();
     assert_eq!((got.as_slice(), fds.len(), flags), (&b"CCCC"[..], 1, 0));
+}
+
+/// Review finding 14: the packet message held for a full table carries a pipe end, which the
+/// child duplicated: it is closed in the child, and the channel end is not.
+#[test]
+fn a_fork_child_closes_the_pipe_end_of_a_held_packet_message() {
+    let mut r = rig();
+    let (x, y) = pair(&mut r, SOCK_SEQPACKET);
+    let (_pr, pw) = r.p.pipe(0).unwrap();
+    send(&mut r, x, b"p", &[pw]).unwrap();
+    let mut extra = vec![];
+    while let Ok(fd) = r.p.fds.dup(x, 0, false) {
+        extra.push(fd as i32);
+    }
+    assert_eq!(recv(&mut r, y, 5, 1, 0), Err(EMFILE), "held");
+    r.settle();
+    let held = r.handles();
+    r.p.after_fork_in_child(77, 77);
+    assert_eq!(
+        r.handles(),
+        held - 1,
+        "the held pipe end is closed, the channel end is not"
+    );
 }

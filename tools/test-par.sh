@@ -27,7 +27,7 @@ max_qemu=${PAR_QEMU:-3}
 [ "${DRY:-0}" = 1 ] || mkdir -p "$logs"
 [ -n "$internal" ] || [ "${DRY:-0}" = 1 ] || rm -f "$logs"/*.log "$logs"/*.status
 
-checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-run-disk check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-netsurf-refusal check-ci-plan check-test-lanes"
+checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-run-disk check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-ci-plan check-test-lanes"
 # The lanes, the steps run alone and the steps that are skipped come from
 # tools/test-lanes.txt (make check-test-lanes checks it against make test's
 # steps and the test map).

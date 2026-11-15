@@ -13,25 +13,25 @@
 > sleep 3\r
 < \r\n~>
 # HTTP: a page, byte for byte; to a file; under the URL's name.
-> curl -s http://10.0.2.2:@PORT@/\r
+> curl -s http://@HOST@:@PORT@/\r
 < Zoraya test page
 < fetched over HTTP, byte for byte
 < \r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)
 < \r\n~>
-> curl -s -o page.txt http://10.0.2.2:@PORT@/\r
+> curl -s -o page.txt http://@HOST@:@PORT@/\r
 < \r\n~>
 > cat page.txt\r
 < Zoraya test page
 < fetched over HTTP, byte for byte
 < \r\n~>
-> curl -sO http://10.0.2.2:@PORT@/pattern/1000000\r
+> curl -sO http://@HOST@:@PORT@/pattern/1000000\r
 < \r\n~>
 > stat 1000000\r
 < file size 1000000
 < \r\n~>
-> wget -q -O - http://10.0.2.2:@PORT@/\r
+> wget -q -O - http://@HOST@:@PORT@/\r
 < Zoraya test page
 < fetched over HTTP, byte for byte
 < \r\n~>
@@ -41,7 +41,7 @@
 < file size 300000
 < \r\n~>
 # A URL's name reaches its public answers only (ADR-0328, the architect's
-# decision of 2026-11-14): test.zoraya is 10.0.2.2 in net.hosts, so without a
+# decision of 2026-11-14): test.zoraya is @HOST@ in net.hosts, so without a
 # +net word curl and wget may not use its answer (the lookup is refused, and
 # they say the name does not resolve); with the word they reach it.
 > curl http://test.zoraya:@PORT@/\r
@@ -61,26 +61,26 @@
 > +net test.zoraya wget -q -O - http://test.zoraya:@PORT@/\r
 < Zoraya test page
 < \r\n~>
-> wget -q -O more.bin http://10.0.2.2:@PORT@/close/70000\r
+> wget -q -O more.bin http://@HOST@:@PORT@/close/70000\r
 < \r\n~>
 > stat more.bin\r
 < file size 70000
 < \r\n~>
 # What goes wrong is said, and the exit status is the program's own.
-> curl -s http://10.0.2.2:@PORT@/status/404\r
+> curl -s http://@HOST@:@PORT@/status/404\r
 < status 404
 < \r\n~>
-> curl -sf http://10.0.2.2:@PORT@/status/404\r
+> curl -sf http://@HOST@:@PORT@/status/404\r
 < \r\n~>
 > status\r
 < \r\nexit status 22
 < \r\n~>
-> curl -s http://10.0.2.2:1/\r
+> curl -s http://@HOST@:1/\r
 < \r\n~>
 > status\r
 < \r\nexit status 7
 < \r\n~>
-> wget -q -O - http://10.0.2.2:1/\r
+> wget -q -O - http://@HOST@:1/\r
 < \r\n~>
 > status\r
 < \r\nexit status 4
@@ -169,7 +169,7 @@
 < \r\nexit status 35
 < \r\n~>
 # By number, the valid server's certificate is for no name that matches.
-> curl -s https://10.0.2.2:@TLSVALID@/\r
+> curl -s https://@HOST@:@TLSVALID@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 60
@@ -218,17 +218,17 @@
 < would save under a name the shell cannot be sure of
 < \r\n~>
 # A URL from a value designates nothing (ADR-0224 item 2); a +net word lets it.
-> set u http://10.0.2.2:@PORT@/\r
+> set u http://@HOST@:@PORT@/\r
 < \r\n~>
 > curl -s $u\r
 < from a value, outside the line's network grants
 < \r\n~>
-> +net 10.0.2.2:@PORT@ curl -s $u\r
+> +net @HOST@:@PORT@ curl -s $u\r
 < Zoraya test page
 < \r\n~>
 # A program may create only what the shell designated: curl -O makes the one
 # file; wget without -O has none to write in the read-only directory.
-> wget -q http://10.0.2.2:@PORT@/pattern/10\r
+> wget -q http://@HOST@:@PORT@/pattern/10\r
 < \r\n~>
 > status\r
 < \r\nexit status 3
@@ -242,7 +242,7 @@
 # file; what was there is not touched.
 > echo keep this > secret.txt\r
 < \r\n~>
-> curl -s -o got.txt -d @secret.txt http://10.0.2.2:@PORT@/\r
+> curl -s -o got.txt -d @secret.txt http://@HOST@:@PORT@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 26
@@ -254,16 +254,16 @@
 # (the starting point is a dead connection; review of 9a, W1).
 > mkdir sub\r
 < \r\n~>
-> curl -s -o sub/got.txt -d @secret.txt http://10.0.2.2:@PORT@/\r
+> curl -s -o sub/got.txt -d @secret.txt http://@HOST@:@PORT@/\r
 < \r\n~>
 > status\r
 < \r\nexit status 26
 < \r\n~>
-> grants curl -o sub/got.txt http://10.0.2.2:@PORT@/\r
+> grants curl -o sub/got.txt http://@HOST@:@PORT@/\r
 < create or replace got.txt (option -o)
 < \r\n~>
 # A +r of the directory gives the read, for exactly what the line says.
-> +r . curl -s -d @secret.txt http://10.0.2.2:@PORT@/\r
+> +r . curl -s -d @secret.txt http://@HOST@:@PORT@/\r
 < \r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)
