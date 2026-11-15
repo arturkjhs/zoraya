@@ -1602,7 +1602,8 @@ fn notices(actions: &[Action<u32>]) -> Vec<(u32, u32, u32)> {
                     return Some((h.ordinal, m.group, m.by));
                 }
                 let (_, m) = decode::<proto::ForegroundAsked>(bytes, 0).unwrap();
-                Some((h.ordinal, m.group, m.by))
+                assert_eq!(h.ordinal, proto::ForegroundAsked::ORDINAL);
+                Some((h.ordinal, m.group, m.by * 1000 + m.root))
             }
             _ => None,
         })
@@ -1702,7 +1703,7 @@ fn a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines()
         s.b.request(a.conn, &message(&proto::Tcsetpgrp { pgid: b_pid }), vec![]);
     assert_eq!(
         notices(&actions),
-        [(proto::ForegroundAsked::ORDINAL, b_pid, a.pid)]
+        [(proto::ForegroundAsked::ORDINAL, b_pid, a.pid * 1000 + a.pid)]
     );
     let (r, _) = s.ask(a.conn, &message(&proto::Tcgetpgrp {}), vec![]);
     let (_, g) = decode::<proto::TcgetpgrpReply>(&r, 0).unwrap();
@@ -1727,5 +1728,74 @@ fn a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines()
     let actions =
         s.b.request(shell.conn, &message(&proto::Tcsetpgrp { pgid: 2 }), vec![]);
     assert!(notices(&actions).is_empty());
+    // A process of a group made inside the line names the line's root, not
+    // its own group (the review of 10c, finding 1: the client decides by the
+    // root, which it started, and needs no list of the groups made since).
+    let d = s.spawn(&a, group::NEW, 0).unwrap();
+    let actions =
+        s.b.request(d.conn, &message(&proto::Tcsetpgrp { pgid: d.pid }), vec![]);
+    assert_eq!(
+        notices(&actions),
+        [(proto::ForegroundAsked::ORDINAL, d.pid, d.pid * 1000 + a.pid)]
+    );
+    s.b.kernel.close(client);
+}
+
+#[test]
+fn a_signal_to_a_group_with_groups_made_inside_it_reaches_its_members_only() {
+    // The review of 10c, finding 2: `sh`'s jobs are groups made inside its
+    // group's job (ADR-0388 item 1); a `SIGINT` to `sh`'s group must not
+    // reach them through the group job, nor `SIGKILL` or a stop.
+    let mut s = session(false);
+    let (client, actions) = s.b.add_client().unwrap();
+    let conn = match actions[..] {
+        [Action::Watch { conn, .. }] => conn,
+        ref a => panic!("{a:?}"),
+    };
+    s.conns.insert(conn, 0);
+    s.b.request(conn, &message(&proto::HostTerminal {}), vec![]);
+    let own = s.b.kernel.new_object(Obj::Job { parent: None }, JOB_RIGHTS);
+    let (r, h) = s.ask(
+        conn,
+        &message(&proto::SpawnPrepareIn { ignored: 0 }),
+        vec![own],
+    );
+    let (_, m) = decode::<SpawnPreparedIn>(&r, 3).unwrap();
+    let child_conn = s.watched.take().unwrap();
+    s.conns.insert(child_conn, m.pid);
+    let process = s.b.kernel.process_in(h[1]);
+    let p = s.b.kernel.duplicate(process, Rights::WAIT).unwrap();
+    let (r, _) = s.ask(conn, &message(&proto::SpawnCommit { pid: m.pid }), vec![p]);
+    assert_eq!(status_of(&r), status::OK);
+    let sh = Child {
+        pid: m.pid,
+        conn: child_conn,
+        parent_job: h[0],
+        child_job: h[1],
+        process,
+    };
+    let sh_group = s.group_job(sh.pid);
+    // Before sh makes a job, one call on its group job is right.
+    assert_eq!(s.kill(&sh, target::GROUP, sh.pid, SIGINT), status::OK);
+    assert_eq!(
+        s.b.kernel.calls,
+        [Call::Signal(sh_group, RequestKind::Interrupt, SIGINT)]
+    );
+    let job = s.spawn(&sh, group::NEW, 0).unwrap();
+    assert_eq!(s.kill(&sh, target::GROUP, sh.pid, SIGINT), status::OK);
+    assert_eq!(
+        s.b.kernel.calls,
+        [Call::Signal(s.job_of(&sh), RequestKind::Interrupt, SIGINT)],
+        "sh's own process only, not its group job"
+    );
+    assert_eq!(s.kill(&sh, target::GROUP, sh.pid, SIGKILL), status::OK);
+    assert_eq!(s.b.kernel.calls, [Call::Kill(s.job_of(&sh))]);
+    // The job's own group is a leaf: one call on its job.
+    let jg = s.group_job(job.pid);
+    assert_eq!(s.kill(&sh, target::GROUP, job.pid, SIGINT), status::OK);
+    assert_eq!(
+        s.b.kernel.calls,
+        [Call::Signal(jg, RequestKind::Interrupt, SIGINT)]
+    );
     s.b.kernel.close(client);
 }

@@ -31,6 +31,12 @@ pub use discipline::{Discipline, Signal, Termios};
 /// pipeline a few, ADR-0103 item 13).
 pub const MAX_CONNECTIONS: usize = 256;
 
+/// The most connections of one line of a host that tells lines apart
+/// ([`Terminal::set_front_line`]): one line cannot fill the table and leave
+/// the window's later programs without a terminal (the review of 10c,
+/// finding 5). A program has four (fds 0 to 2 and `/dev/tty`).
+pub const MAX_LINE_CONNECTIONS: usize = 64;
+
 /// A connection's index in the service.
 pub type Id = usize;
 
@@ -161,8 +167,20 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     }
 
     /// A terminal connection for a program of `line` (the host's own
-    /// number for a line of the shell), tagged with `group`.
+    /// number for a line of the shell), tagged with `group`; `None` when the
+    /// table or the line's share of it is full.
     pub fn add_terminal_in(&mut self, group: u32, line: u32) -> Option<Id> {
+        if self.lines
+            && self
+                .connections
+                .iter()
+                .flatten()
+                .filter(|c| !c.control && c.line == line)
+                .count()
+                >= MAX_LINE_CONNECTIONS
+        {
+            return None;
+        }
         self.add(group, line, false)
     }
 

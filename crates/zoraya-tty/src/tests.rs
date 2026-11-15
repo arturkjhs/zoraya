@@ -995,3 +995,33 @@ fn the_whole_line_in_front_reads_until_a_group_is_chosen() {
         "and no signal goes anywhere"
     );
 }
+
+#[test]
+fn one_line_cannot_take_the_whole_table_of_connections() {
+    // The review of 10c, finding 5: a background program that clones in a
+    // loop is refused past its line's share; another line still connects.
+    let (mut t, other) = two_lines();
+    let mut made = 1; // `other` itself
+    for i in 0..MAX_CONNECTIONS as u32 {
+        let a = t.request(other, &message(&Clone { group: 2 }, 10 + i), vec![1000 + i]);
+        if a.iter().any(|a| matches!(a, Action::Watch { .. })) {
+            made += 1;
+        } else {
+            assert!(a.contains(&Action::Close(1000 + i)), "the end is closed");
+            assert_eq!(
+                crate::reply_status(&replies(&a)[0].1),
+                status::NO_SPACE,
+                "refused for want of room"
+            );
+        }
+    }
+    assert_eq!(made, MAX_LINE_CONNECTIONS);
+    assert!(t.add_terminal_in(7, 3).is_some(), "line 3 still connects");
+    let a = t.request(1, &message(&Clone { group: 2 }, 9), vec![99]);
+    assert!(a.iter().any(|a| matches!(a, Action::Watch { end: 99, .. })));
+    // A host that does not tell lines apart (ttyd) has the table's limit only.
+    let mut s: Terminal<H> = Terminal::new();
+    for _ in 0..MAX_LINE_CONNECTIONS + 1 {
+        assert!(s.add_terminal_in(2, 0).is_some());
+    }
+}

@@ -11,7 +11,12 @@
 //! - that a change of the window's size is one `SIGWINCH` to the line in front
 //!   (INV-0331-6);
 //! - that a `tcsetpgrp` the broker passes on is accepted only for a group
-//!   created inside the line in front (ADR-0331 item 6);
+//!   made inside the line in front: the broker names the line by the group
+//!   the shell started (its root), which the shell knows (ADR-0331 item 6,
+//!   ADR-0388);
+//! - that once a group is chosen, the signal characters and `SIGWINCH` go to
+//!   that group alone, and before, `SIGWINCH` only to the groups the shell
+//!   started, never to a native element (the review of 10c, findings 2, 3);
 //! - the carriage return of a program's output (INV-0331-7), and the paste to
 //!   a program: brackets when it set 2004, a confirmation for a newline when
 //!   it did not, and nothing that can end the bracket (ADR-0332 item 8,
@@ -39,6 +44,28 @@ pub enum Effect<H> {
     /// The window's title, out of band: `Some(question)` while a paste waits
     /// for its confirmation, `None` to show the directory again.
     Question(Option<String>),
+    /// `kill(-group, signal)` through the broker: a signal character or
+    /// `SIGWINCH` for one POSIX group, not the line's whole job.
+    GroupSignal { group: u32, signal: u32 },
+}
+
+/// `SIGINT`, `SIGQUIT` and `SIGWINCH` (ADR-0106's numbers).
+const SIGINT: u32 = 2;
+const SIGQUIT: u32 = 3;
+const SIGWINCH: u32 = 28;
+
+/// Where the keys after a held paste's dismissal are: the rest of the key
+/// that dismissed it is not the program's (the review of 10c, finding 9).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Swallow {
+    #[default]
+    No,
+    /// After `ESC`.
+    Esc,
+    /// Inside `CSI`: parameters and intermediates until the final byte.
+    Csi,
+    /// After `ESC O`: one more byte.
+    Ss3,
 }
 
 /// Why a request of the broker was not taken.
@@ -118,8 +145,10 @@ struct Line<H> {
     job: H,
     /// Whether any of its programs has the terminal (INV-0331-1).
     terminal: bool,
-    /// The groups the broker says were created inside it.
-    groups: Vec<u32>,
+    /// The groups the shell started its POSIX programs in: the roots by which
+    /// the broker names the line (ADR-0388). Groups made inside it since are
+    /// the broker's to know, so nothing here grows with the line's jobs.
+    roots: Vec<u32>,
     /// The group a `tcsetpgrp` chose; until one does the whole line reads
     /// (`Terminal::set_foreground_line`).
     chosen: Option<u32>,
@@ -139,6 +168,7 @@ pub struct Host<H> {
     lines: Vec<Line<H>>,
     front: Option<u32>,
     held: Option<Held>,
+    swallow: Swallow,
 }
 
 impl<H: Copy + Eq + core::fmt::Debug> Default for Host<H> {
@@ -167,6 +197,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             lines: Vec::new(),
             front: None,
             held: None,
+            swallow: Swallow::No,
         }
     }
 
@@ -193,7 +224,11 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             id,
             job,
             terminal,
-            groups: alloc::vec![group],
+            roots: if group == 0 {
+                Vec::new()
+            } else {
+                alloc::vec![group]
+            },
             chosen: None,
             saved: None,
             bracket: Bracket::default(),
@@ -205,34 +240,35 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         self.line(id).is_some()
     }
 
-    /// The broker says a process was created in `group` inside line `id`
-    /// (ADR-0331 item 6).
-    pub fn group_created(&mut self, id: u32, group: u32) {
+    /// The shell started a POSIX program of line `id` in `group` (one per
+    /// element: a pipeline's elements are groups of their own).
+    pub fn add_root(&mut self, id: u32, group: u32) {
         if let Some(l) = self.line_mut(id)
-            && !l.groups.contains(&group)
-            && l.groups.len() < 64
+            && group != 0
+            && !l.roots.contains(&group)
         {
-            l.groups.push(group);
+            l.roots.push(group);
         }
     }
 
-    /// The line whose groups hold `group`: the broker names a group by the
-    /// group of the process that made it or asked for it (ADR-0388).
-    pub fn line_of_group(&self, group: u32) -> Option<u32> {
-        self.lines
-            .iter()
-            .find(|l| l.groups.contains(&group))
-            .map(|l| l.id)
-    }
-
-    /// The broker passed on a `tcsetpgrp` of a process of group `by`
-    /// (ADR-0388 item 4): taken only when `by`'s line is in front, for a group
-    /// of that line.
-    pub fn foreground_asked(&mut self, group: u32, by: u32) -> Result<Vec<Effect<H>>, Refused> {
-        if self.front.is_none() || self.line_of_group(by) != self.front {
+    /// The broker passed on a `tcsetpgrp(group)` of a process whose line's
+    /// root is `root` (ADR-0388 item 4; the broker checked that `group` was
+    /// made inside that same line): taken only when that line is in front.
+    pub fn foreground_asked(&mut self, group: u32, root: u32) -> Result<Vec<Effect<H>>, Refused> {
+        let front = self.front.ok_or(Refused::NotInFront)?;
+        let l = self.line(front).ok_or(Refused::NotInFront)?;
+        if root == 0 || group == 0 || !l.roots.contains(&root) {
             return Err(Refused::NotInFront);
         }
-        self.tcsetpgrp(group)
+        let job = l.job;
+        if let Some(l) = self.line_mut(front) {
+            l.chosen = Some(group);
+            // 2004 is the reader's: a new reader has not set it.
+            l.bracket.reset();
+        }
+        let mut out = Vec::new();
+        effects(self.tty.set_foreground(group, job), &mut out);
+        Ok(out)
     }
 
     /// Whether the keys go to the discipline: a line with a terminal is in
@@ -253,6 +289,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             return out;
         };
         let (job, chosen, saved, terminal) = (l.job, l.chosen, l.saved, l.terminal);
+        self.swallow = Swallow::No;
         self.drop_held(&mut out);
         self.tty.discipline.flush();
         self.front = Some(id);
@@ -268,7 +305,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             }
             out.push(Effect::Reinstate);
             if terminal {
-                out.extend(self.winch(job));
+                out.extend(self.winch());
             }
         } else if terminal {
             // A new line starts from the defaults the end of the last gave.
@@ -277,18 +314,53 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         out
     }
 
-    fn winch(&mut self, job: H) -> Option<Effect<H>> {
-        let (rows, columns) = self.tty.size;
-        self.tty
-            .resize(rows, columns)
+    /// `SIGWINCH` for the line in front: to the group a `tcsetpgrp` chose,
+    /// or to each group the shell started; never to the line's job, which
+    /// holds its native elements too (they have no handler and would be
+    /// ended, the review of 10c, finding 3).
+    fn winch(&self) -> Vec<Effect<H>> {
+        let Some(l) = self.front.and_then(|f| self.line(f)) else {
+            return Vec::new();
+        };
+        let groups: Vec<u32> = match l.chosen {
+            Some(g) => alloc::vec![g],
+            None => l.roots.clone(),
+        };
+        groups
             .into_iter()
-            .next()
-            .map(|a| match a {
-                Action::Signal { kind, detail, .. } => {
-                    Effect::Tty(Action::Signal { job, kind, detail })
-                }
-                other => Effect::Tty(other),
+            .map(|group| Effect::GroupSignal {
+                group,
+                signal: SIGWINCH,
             })
+            .collect()
+    }
+
+    /// The discipline's actions for the keys of the line in front: once a
+    /// group is chosen, an interrupt or a quit is for that group alone (as
+    /// the suspend character is), not for the line's job, which holds every
+    /// job a POSIX shell made (the review of 10c, finding 2).
+    fn keyed(&self, actions: Vec<Action<H>>, out: &mut Vec<Effect<H>>) {
+        let chosen = self.front.and_then(|f| self.line(f)).and_then(|l| l.chosen);
+        for a in actions {
+            match (a, chosen) {
+                (
+                    Action::Signal {
+                        kind:
+                            kind @ (zoraya_abi::RequestKind::Interrupt | zoraya_abi::RequestKind::Quit),
+                        ..
+                    },
+                    Some(group),
+                ) => out.push(Effect::GroupSignal {
+                    group,
+                    signal: if kind == zoraya_abi::RequestKind::Interrupt {
+                        SIGINT
+                    } else {
+                        SIGQUIT
+                    },
+                }),
+                (a, _) => out.push(Effect::Tty(a)),
+            }
+        }
     }
 
     /// The line in front stops or goes to the background: its attributes are
@@ -341,31 +413,16 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
     /// and the line in front gets one `SIGWINCH` (INV-0331-6). A program
     /// cannot set the size; no request does.
     pub fn size(&mut self, rows: u32, columns: u32) -> Vec<Effect<H>> {
-        let mut out = Vec::new();
-        let signals = self.tty.resize(rows, columns);
+        // The discipline's size; its signal to the line's job is not used
+        // (`winch`).
+        let _ = self.tty.resize(rows, columns);
         // A native line has no handler for the request: only a line with
         // the terminal is told (ADR-0331 item 7 is about POSIX programs).
         if self.takes_keys() {
-            effects(signals, &mut out);
+            self.winch()
+        } else {
+            Vec::new()
         }
-        out
-    }
-
-    /// A `tcsetpgrp` the broker passed on (ADR-0331 item 6): accepted for a
-    /// group created inside the line in front.
-    pub fn tcsetpgrp(&mut self, group: u32) -> Result<Vec<Effect<H>>, Refused> {
-        let front = self.front.ok_or(Refused::NotInFront)?;
-        let l = self.line(front).ok_or(Refused::NotInFront)?;
-        if !l.groups.contains(&group) {
-            return Err(Refused::NotInFront);
-        }
-        let job = l.job;
-        if let Some(l) = self.line_mut(front) {
-            l.chosen = Some(group);
-        }
-        let mut out = Vec::new();
-        effects(self.tty.set_foreground(group, job), &mut out);
-        Ok(out)
     }
 
     /// Keys typed while the line in front has a terminal. The discipline
@@ -379,18 +436,56 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         }
         let mut rest = bytes;
         while !rest.is_empty() {
+            if self.swallow != Swallow::No {
+                let b = rest[0];
+                self.swallow = match (self.swallow, b) {
+                    (Swallow::Esc, b'[') => Swallow::Csi,
+                    (Swallow::Esc, b'O') => Swallow::Ss3,
+                    (Swallow::Csi, 0x20..=0x3f) => Swallow::Csi,
+                    // Alt and a key, the final byte of CSI, SS3's byte.
+                    (Swallow::Esc | Swallow::Csi | Swallow::Ss3, 0x20..=0x7e) => Swallow::No,
+                    // Anything else is a key of its own.
+                    _ => {
+                        self.swallow = Swallow::No;
+                        continue;
+                    }
+                };
+                rest = &rest[1..];
+                continue;
+            }
             if let Some(held) = self.held.take() {
                 out.push(Effect::Question(None));
-                if rest[0] == b'\r' || rest[0] == b'\n' {
-                    self.send_paste(&held.text, &mut out);
+                match rest[0] {
+                    b'\r' | b'\n' => self.send_paste(&held.text, &mut out),
+                    0x1b => self.swallow = Swallow::Esc,
+                    _ => {}
                 }
                 rest = &rest[1..];
                 continue;
             }
-            effects(self.tty.keys(rest), &mut out);
+            let actions = self.tty.keys(rest);
+            self.keyed(actions, &mut out);
             break;
         }
         out
+    }
+
+    /// The keys of one read from `term` are all given: a key that dismissed
+    /// a held paste cannot continue into the next read.
+    pub fn end_of_keys(&mut self) {
+        self.swallow = Swallow::No;
+    }
+
+    /// Whether the line in front set 2004 and reads as an editor does: a
+    /// program in canonical mode cannot take the marks for what they are, so
+    /// a newline still asks (the review of 10c, finding 4: `cat` of a file
+    /// holding the sequence would otherwise turn the question off).
+    fn bracketed(&self) -> bool {
+        !self.tty.discipline.canonical()
+            && self
+                .front
+                .and_then(|f| self.line(f))
+                .is_some_and(|l| l.bracket.on())
     }
 
     /// A cleaned paste (`paste::Assembler`) for the program in front.
@@ -400,10 +495,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         if !self.takes_keys() {
             return false;
         }
-        let on = self
-            .front
-            .and_then(|f| self.line(f))
-            .is_some_and(|l| l.bracket.on());
+        let on = self.bracketed();
         if self.held.is_some() {
             // One question at a time: the new paste replaces the old.
             self.held = None;
@@ -425,10 +517,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
     /// cleaned: no `ESC`, so it cannot end the bracket, and no control
     /// character, so no signal character is in it.
     fn send_paste(&mut self, text: &str, out: &mut Vec<Effect<H>>) {
-        let on = self
-            .front
-            .and_then(|f| self.line(f))
-            .is_some_and(|l| l.bracket.on());
+        let on = self.bracketed();
         let mut bytes = Vec::with_capacity(text.len() + 12);
         if on {
             bytes.extend_from_slice(b"\x1b[200~");
@@ -439,7 +528,8 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         }
         // The marks are the shell's, not typed: ISIG cannot see them as keys
         // because ESC is no signal character.
-        effects(self.tty.keys(&bytes), out);
+        let actions = self.tty.keys(&bytes);
+        self.keyed(actions, out);
     }
 
     /// A program's output on its way to `term` (INV-0331-7): the carriage
@@ -595,18 +685,13 @@ mod tests {
         // INV-0331-6.
         let (mut h, a, _) = two();
         let es = h.size(40, 100);
-        let signals: Vec<_> = es
-            .iter()
-            .filter(|e| matches!(e, Effect::Tty(Action::Signal { .. })))
-            .collect();
-        assert_eq!(signals.len(), 1);
         assert_eq!(
-            signals[0],
-            &Effect::Tty(Action::Signal {
-                job: 101,
-                kind: RequestKind::Custom(28),
-                detail: 28
-            })
+            es,
+            [Effect::GroupSignal {
+                group: 11,
+                signal: 28
+            }],
+            "one SIGWINCH, to the group the shell started, not the line's job"
         );
         let es = h.tty.request(a, &message(&WindowSize {}, 1), vec![]);
         let es: Vec<E> = es.into_iter().map(Effect::Tty).collect();
@@ -634,7 +719,7 @@ mod tests {
         assert_eq!(h.tty.discipline.attr, raw, "the attributes it had");
         assert_eq!(
             es.iter()
-                .filter(|e| matches!(e, Effect::Tty(Action::Signal { .. })))
+                .filter(|e| matches!(e, Effect::GroupSignal { signal: 28, .. }))
                 .count(),
             1,
             "one SIGWINCH to repaint"
@@ -665,20 +750,125 @@ mod tests {
     }
 
     #[test]
-    fn tcsetpgrp_is_for_a_group_created_inside_the_front_line() {
+    fn tcsetpgrp_is_for_a_group_made_inside_the_front_line() {
         let (mut h, _, b) = two();
-        assert_eq!(h.tcsetpgrp(77), Err(Refused::NotInFront));
-        h.group_created(2, 77);
-        assert_eq!(h.tcsetpgrp(77), Err(Refused::NotInFront), "line 2's group");
-        h.group_created(1, 55);
-        assert!(h.tcsetpgrp(55).is_ok());
+        // Line 2's (root 12) is refused while line 1 is in front, whatever
+        // group it names, line 1's own included.
+        assert_eq!(h.foreground_asked(77, 12), Err(Refused::NotInFront));
+        assert_eq!(h.foreground_asked(11, 12), Err(Refused::NotInFront));
+        assert_eq!(h.foreground_asked(55, 0), Err(Refused::NotInFront));
+        assert_eq!(h.foreground_asked(0, 11), Err(Refused::NotInFront));
+        assert_eq!(h.tty.foreground(), None);
+        assert!(h.foreground_asked(55, 11).is_ok());
         assert_eq!(h.tty.foreground(), Some(55));
         // A read from line 1's first group is now NotForeground (item 6).
         let c = h.connect(1, 11).unwrap();
         assert_eq!(read(&mut h, c, 1), Err(status::NOT_FOREGROUND));
         let _ = b;
         h.stop_front();
-        assert_eq!(h.tcsetpgrp(55), Err(Refused::NotInFront));
+        assert_eq!(h.foreground_asked(55, 11), Err(Refused::NotInFront));
+    }
+
+    #[test]
+    fn a_shell_that_made_seventy_jobs_still_gives_the_next_one_the_terminal() {
+        // The review of 10c, finding 1: nothing is recorded per group made,
+        // so no count of jobs ends job control.
+        let (mut h, a, _) = two();
+        for g in 1000..1070 {
+            assert!(h.foreground_asked(g, 11).is_ok(), "job {g}");
+            assert_eq!(h.tty.foreground(), Some(g));
+        }
+        let c = h.connect(1, 1069).unwrap();
+        h.keys(b"x\n");
+        assert_eq!(read(&mut h, c, 1).unwrap(), b"x\n");
+        assert_eq!(read(&mut h, a, 2), Err(status::NOT_FOREGROUND));
+    }
+
+    #[test]
+    fn signal_characters_go_to_the_chosen_group_once_there_is_one() {
+        // The review of 10c, finding 2: `sh`'s background jobs are in the
+        // line's job; Ctrl-C for its foreground job must not reach them.
+        let (mut h, _, _) = two();
+        let es = h.keys(b"\x03");
+        assert!(
+            es.contains(&Effect::Tty(Action::Signal {
+                job: 101,
+                kind: RequestKind::Interrupt,
+                detail: 2
+            })),
+            "no group chosen: the line is the job: {es:?}"
+        );
+        assert!(h.foreground_asked(55, 11).is_ok());
+        let es = h.keys(b"\x03");
+        assert!(es.contains(&Effect::GroupSignal {
+            group: 55,
+            signal: 2
+        }));
+        assert!(
+            !es.iter()
+                .any(|e| matches!(e, Effect::Tty(Action::Signal { .. })))
+        );
+        let es = h.keys(b"\x1c");
+        assert!(es.contains(&Effect::GroupSignal {
+            group: 55,
+            signal: 3
+        }));
+        // The chosen group gets the size too, and only it.
+        assert_eq!(
+            h.size(30, 90),
+            [Effect::GroupSignal {
+                group: 55,
+                signal: 28
+            }]
+        );
+    }
+
+    #[test]
+    fn sigwinch_goes_to_each_group_the_shell_started_and_never_to_the_job() {
+        // The review of 10c, finding 3: a native element of the line (no
+        // group) would be ended by the request.
+        let mut h: Host<u32> = Host::new();
+        h.start_line(1, 101, 11, true);
+        h.connect(1, 11).unwrap();
+        h.add_root(1, 12);
+        h.add_root(1, 0);
+        h.bring_front(1);
+        assert_eq!(
+            h.size(30, 90),
+            [
+                Effect::GroupSignal {
+                    group: 11,
+                    signal: 28
+                },
+                Effect::GroupSignal {
+                    group: 12,
+                    signal: 28
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stopped_or_ended_line_leaves_the_front_of_the_discipline() {
+        // INV-0331-2 after a stop (the `leave` survivor): a stopped line
+        // continued in the background changes no mode.
+        let (mut h, a, b) = two();
+        assert_eq!(h.front(), Some(1));
+        h.stop_front();
+        assert_eq!(h.tty.front_line(), None);
+        assert_eq!(set_raw(&mut h, a), status::IO);
+        h.bring_front(2);
+        assert_eq!(h.front(), Some(2));
+        h.end_line(2);
+        assert_eq!(h.tty.front_line(), None);
+        assert_eq!(set_raw(&mut h, b), status::IO);
+        // Ending line 2 kept line 1's record (the `retain` survivor).
+        assert!(h.has_line(1));
+        assert!(!h.has_line(2));
+        h.bring_front(1);
+        assert_eq!(h.front(), Some(1));
+        h.keys(b"back\n");
+        assert_eq!(read(&mut h, a, 3).unwrap(), b"back\n");
     }
 
     #[test]
@@ -707,6 +897,12 @@ mod tests {
         assert!(b.on(), "another mode's reset is not this one's");
         b.scan(b"\x1b[2004l\x1b[?2005l\x1b[?20041l");
         assert!(b.on(), "not private, another mode, a longer number");
+        b.scan(b"\x1b[?2004;1l");
+        assert!(!b.on(), "2004 first of several");
+        b.scan(b"\x1b[?2004;1h");
+        assert!(b.on());
+        b.scan(b"\x1b[?1;25l");
+        assert!(b.on(), "neither parameter is 2004");
         b.reset();
         assert!(!b.on());
     }
@@ -764,11 +960,30 @@ mod tests {
         assert!(es.contains(&Effect::Question(None)));
         assert_eq!(typed(&mut h, a), b"one\rtwo\r");
         // Escape drops it, and the keys after it are the program's again.
-        pasted(&mut h, "x\ny");
+        let es = pasted(&mut h, "x\ny");
+        assert_eq!(
+            es,
+            [Effect::Question(Some(
+                "paste 2 lines? Enter sends, any other key drops".into()
+            ))]
+        );
         h.keys(b"\x1b");
+        h.end_of_keys();
         assert!(typed(&mut h, a).is_empty());
         h.keys(b"k");
         assert_eq!(typed(&mut h, a), b"k");
+        // An arrow key (CSI, then SS3) drops it whole, one byte at a time as
+        // zosh gives them (the review of 10c, finding 9).
+        for key in [&b"\x1b[A"[..], b"\x1b[1;5C", b"\x1bOA"] {
+            pasted(&mut h, "x\ny");
+            for b in key {
+                h.keys(&[*b]);
+            }
+            h.end_of_keys();
+            assert!(typed(&mut h, a).is_empty(), "{key:?}");
+            h.keys(b"k");
+            assert_eq!(typed(&mut h, a), b"k");
+        }
         // A key while it waits is not typed.
         pasted(&mut h, "x\ny");
         h.keys(b"q");
@@ -815,8 +1030,10 @@ mod tests {
         let es = h.bring_front(1);
         assert!(es.contains(&Effect::Reinstate));
         assert!(
-            !es.iter()
-                .any(|e| matches!(e, Effect::Tty(Action::Signal { .. }))),
+            !es.iter().any(|e| matches!(
+                e,
+                Effect::Tty(Action::Signal { .. }) | Effect::GroupSignal { .. }
+            )),
             "no SIGWINCH to a native line"
         );
         assert_eq!(h.end_line(1), [Effect::Restore { keep: false }]);
@@ -829,13 +1046,13 @@ mod tests {
         h.start_line(1, 101, 11, true);
         let first = h.connect(1, 11).unwrap();
         let last = h.connect(1, 12).unwrap();
-        h.group_created(1, 12);
+        h.add_root(1, 12);
         h.bring_front(1);
         h.keys(b"q\n");
         assert_eq!(read(&mut h, last, 1).unwrap(), b"q\n");
         h.keys(b"r\n");
         assert_eq!(read(&mut h, first, 2).unwrap(), b"r\n");
-        assert!(h.tcsetpgrp(12).is_ok());
+        assert!(h.foreground_asked(12, 12).is_ok());
         assert_eq!(read(&mut h, first, 3), Err(status::NOT_FOREGROUND));
         // The choice outlives a stop.
         h.stop_front();
@@ -866,18 +1083,30 @@ mod tests {
     }
 
     #[test]
-    fn the_brokers_notices_are_taken_for_the_line_in_front_only() {
-        // ADR-0388 item 4.
-        let (mut h, _, _) = two();
-        // Line 2's shell made group 77 and asks for it while line 1 is in front.
-        h.group_created(h.line_of_group(12).unwrap(), 77);
-        assert_eq!(h.line_of_group(77), Some(2));
-        assert_eq!(h.foreground_asked(77, 12), Err(Refused::NotInFront));
-        // Line 1's shell asks for line 2's group: refused too.
-        assert_eq!(h.foreground_asked(77, 11), Err(Refused::NotInFront));
-        h.group_created(1, 55);
+    fn mode_2004_is_believed_only_for_a_reader_out_of_canonical_mode() {
+        // The review of 10c, finding 4: `cat` of a file holding the sequence
+        // inside `sh` must not turn the newline question off for `sh`.
+        let (mut h, a, _) = two();
+        h.relay(1, b"\x1b[?2004h", &mut Crlf::new(), &mut Vec::new());
+        let es = pasted(&mut h, "ls\nrm -rf ~\n");
+        assert!(
+            es.iter().any(|e| matches!(e, Effect::Question(Some(_)))),
+            "canonical: asked"
+        );
+        h.keys(b"q");
+        h.end_of_keys();
+        assert!(
+            !h.tty.discipline.readable(),
+            "nothing sent: the paste was dropped"
+        );
+        // An editor (raw mode) that set it gets the brackets, no question.
+        set_raw(&mut h, a);
+        let es = pasted(&mut h, "a\nb");
+        assert!(!es.iter().any(|e| matches!(e, Effect::Question(_))));
+        assert_eq!(typed(&mut h, a), b"\x1b[200~a\rb\x1b[201~");
+        // A group chosen since has not set it.
         assert!(h.foreground_asked(55, 11).is_ok());
-        assert_eq!(h.tty.foreground(), Some(55));
-        assert_eq!(h.line_of_group(99), None);
+        let es = pasted(&mut h, "a\nb");
+        assert!(es.iter().any(|e| matches!(e, Effect::Question(Some(_)))));
     }
 }

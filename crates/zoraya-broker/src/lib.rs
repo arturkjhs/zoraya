@@ -166,6 +166,10 @@ struct Group<H> {
     /// (`Group(job)`) that this one was made under, itself for that one;
     /// a line of `zosh` (ADR-0388). 0 in the session.
     root: u32,
+    /// The group whose process made this one inside its job (ADR-0388
+    /// item 1), 0 for none: a signal to that group must not go to its job,
+    /// which holds this one too.
+    parent: u32,
     /// Stopped as a whole by `job_suspend` of the group job: it is resumed
     /// as a whole, since a member's resume leaves the group job suspended
     /// and every process created in it after would start stopped (review
@@ -959,6 +963,11 @@ impl<K: Kernel> Broker<K> {
                     members: 0,
                     session,
                     root,
+                    parent: if session || root == pgid {
+                        0
+                    } else {
+                        caller.and_then(|p| self.pids.get(&p)).map_or(0, |r| r.pgid)
+                    },
                     suspended: false,
                 },
             );
@@ -1278,7 +1287,14 @@ impl<K: Kernel> Broker<K> {
             .copied()
             .filter(|p| self.pids.get(p).is_some_and(|r| !r.terminated))
             .collect();
-        let group_job = group.and_then(|g| self.groups.get(&g)).map(|g| g.job);
+        // A group with groups made inside its job (a POSIX shell's jobs,
+        // ADR-0388 item 1) is signalled member by member: a call on its job
+        // would reach those groups too.
+        let nested = group.is_some_and(|g| self.groups.values().any(|x| x.parent == g));
+        let group_job = group
+            .filter(|_| !nested)
+            .and_then(|g| self.groups.get(&g))
+            .map(|g| g.job);
         let stop = matches!(sig, SIGSTOP | SIGTSTP | SIGTTIN | SIGTTOU);
         if let Some(job) = group_job {
             // One call on the group job when every member acts the same.
@@ -1393,7 +1409,11 @@ impl<K: Kernel> Broker<K> {
         }
         let by = self.pids.get(&pid).map_or(0, |r| r.pgid);
         let n = encode(
-            &ForegroundAsked { group: pgid, by },
+            &ForegroundAsked {
+                group: pgid,
+                by,
+                root,
+            },
             NO_REPLY,
             &mut self.out,
         )

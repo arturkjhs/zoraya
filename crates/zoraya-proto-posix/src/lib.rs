@@ -292,10 +292,13 @@ protocol! {
     }
 
     /// Broker to client: a process of group `by` asked that `group`, of its
-    /// own line, be the terminal's foreground group.
+    /// own line, be the terminal's foreground group. `root` is the line's:
+    /// the `Group(job)` group the client started that `group` was made under
+    /// (the broker has checked that `by`'s line is the same).
     message ForegroundAsked = 18, handles 0 {
         group: u32,
         by: u32,
+        root: u32,
     }
 
     /// What the broker has counted: the messages by ordinal, and the pids.

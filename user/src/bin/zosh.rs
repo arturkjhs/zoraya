@@ -2148,7 +2148,7 @@ impl Z {
         if !self.tty.has_line(number) {
             self.tty.start_line(number, job, group, terminal);
         }
-        self.tty.group_created(number, group);
+        self.tty.add_root(number, group);
         let id = self.tty.connect(number, group)?;
         let Ok((mine, theirs)) = channel_create() else {
             self.tty.tty.closed(id);
@@ -2240,8 +2240,11 @@ impl Z {
         }
     }
 
-    /// The broker's notices (proposed ADR-0388): a group made inside a line
-    /// joins that line's groups; a `tcsetpgrp` is the host's to take or not.
+    /// The broker's notices (proposed ADR-0388): a `tcsetpgrp` is the host's
+    /// to take or not, by the root of the caller's line. `GroupMade` is not
+    /// needed for that (the broker checks the group is of that line), so a
+    /// notice lost on a full channel loses no group (the review of 10c,
+    /// finding 1).
     fn host_notices(&mut self) {
         let Some(end) = self.host else { return };
         let mut bytes = [0u8; 64];
@@ -2264,16 +2267,9 @@ impl Z {
             };
             let m = &bytes[..n];
             match Header::decode(m).map(|(h, _)| h.ordinal) {
-                Ok(o) if o == zoraya_proto_posix::GroupMade::ORDINAL => {
-                    if let Ok((_, g)) = decode::<zoraya_proto_posix::GroupMade>(m, 0)
-                        && let Some(line) = self.tty.line_of_group(g.by)
-                    {
-                        self.tty.group_created(line, g.group);
-                    }
-                }
                 Ok(o) if o == zoraya_proto_posix::ForegroundAsked::ORDINAL => {
                     if let Ok((_, f)) = decode::<zoraya_proto_posix::ForegroundAsked>(m, 0)
-                        && let Ok(effects) = self.tty.foreground_asked(f.group, f.by)
+                        && let Ok(effects) = self.tty.foreground_asked(f.group, f.root)
                     {
                         self.carry(effects, None);
                     }
@@ -2300,6 +2296,12 @@ impl Z {
                 Effect::Tty(TtyAction::Signal { job, kind, detail }) => {
                     carried.interrupt |= kind == RequestKind::Interrupt;
                     let _ = job_signal(job, kind, detail);
+                }
+                Effect::GroupSignal { group, signal } => {
+                    carried.interrupt |= signal == zoraya_abi::posix::signal::SIGINT;
+                    if let Some(broker) = self.broker.as_ref() {
+                        let _ = broker.signal_group(group, signal);
+                    }
                 }
                 Effect::Tty(TtyAction::Suspend { group, .. }) => {
                     carried.suspend = true;
@@ -3098,6 +3100,7 @@ impl Z {
                         break 'wait Waited::Stopped(stopped);
                     }
                 }
+                self.tty.end_of_keys();
                 continue;
             }
             let mut echo = Vec::new();
