@@ -72,6 +72,8 @@ memory descriptor of the parent to every child that does not set close-on-exec.
    *in the parent*, with the parent's table and authority, when the spawn is made (not in the child, whose table may not hold it),
    and the child's fd is that file; the temporary fd is closed once the spawn is over, on every path. The child gets a file
    outside its table in this way, as it would by `adddup2` of an fd the parent holds: the parent's act, named in the spawn.
+   An `O_CLOEXEC` open gives the child no fd (it is opened, so its errors are the spawn's, and closed at the
+   exec), and the entries are checked before `addopen` runs, so a spawn refused for a bad entry has made no file.
    `posix_spawn_file_actions_addclosefrom_np(fa, n)` (glibc 2.34's name, which CPython's `subprocess` asks for) removes every
    child fd from `n` up, at its place in the order of the actions.
 5. **Connections.** The mask is applied in the parent: `GRANT_NET` asks `netd` to make a connection with the parent's own rights
@@ -81,21 +83,27 @@ memory descriptor of the parent to every child that does not set close-on-exec.
    `EACCES`; a service with no room is `EAGAIN`; a failure after the first connection was made closes it. The connections travel
    as ADR-0310 item 3 has them, in the second message `ZPBX`. A spawn without the mask, and every `exec`, send `ZPBS` and no
    connection.
-6. **Unix sockets and memory descriptors.** An open descriptor of either kind that the child's fd list names (inherited, or the
-   target of a `dup2`) goes to the child in a *third* bootstrap message: the flag `EXT_FDS` (8) of `ZPBX` says it follows, and it
-   is `ZPBF`, then the records of ADR-0430 and ADR-0432 (a record per descriptor, the same decoder), then each fd number. It is
-   sent all or nothing (`channel_send`). **A packet or datagram socket moves:** its channel goes to the child and the parent's
-   descriptor stays as a dead socket until the parent closes it (it is `EPIPE`; the fd is not closed by the spawn, so that
-   no other thread's `open` takes the number meanwhile). **A stream socket** gives the child copies of its byte streams and
-   *moves* its ancillary channel: the child's descriptor is whole, and can send and receive descriptors, once the parent has
-   closed its own; the parent's is shared from then (`SCM_RIGHTS` is `EOPNOTSUPP` on it, ADR-0412 item 2's rule for a stream
-   two processes read). **This differs from ADR-0412 item 6**, which says `SCM_RIGHTS` is `EOPNOTSUPP` "in both": a child that
-   could not send a descriptor on the socket it was handed would be useless for an engine's IPC, whose parent closes its copy at
-   once. **A memory descriptor** goes as a copy of its object handle (read-only if the descriptor is), with its size and seals;
-   the size is fixed in both from then (INV-0413-1). The same description named twice is `EINVAL`; a socket not connected, a TCP
-   socket and a socket holding bytes or a message back are `EBADF` and `EBUSY` as before and as a send of them; a memory
-   descriptor with no object is `EINVAL`. A close-on-exec descriptor stays behind as before. `exec` takes the same path, so
-   an image that `exec`s keeps the descriptors it was given.
+6. **Unix sockets and memory descriptors.** A descriptor of either kind that the child's fd list names goes to the child in an extra
+   bootstrap message, `ZPBF`, sent *before* the second message (`SELF`, ADR-0310's `ZPBX`): the records of ADR-0430 and ADR-0432
+   (a record per descriptor, the same decoder), then each fd number. It is sent all or nothing (`channel_send`), and before
+   the connections of item 5, so that a refusal of it (the kernel refuses a moved channel end that holds handles, or a full
+   queue) leaves the parent its window and its network connection (INV-0433-2). **A Unix socket moves only if the spawn's file
+   actions list it** (the target of a `dup2` or `addopen`, as ADR-0412 item 6 has it): one that is only inherited stays with
+   the parent and the spawn is `EBADF`, as a TCP socket always was (so `system()` of a program that holds an open socket
+   fails as it did, and moves nothing). **A listed socket moves whole, a stream socket too:** its byte streams and its
+   ancillary channel go to the child, and the parent's descriptor is dead (`EPIPE`) until the parent closes it, as a
+   packet socket's. **This is the point for the architect.** ADR-0412 item 6 says a stream socket's byte streams are
+   *duplicated* to a spawned child and its ancillary channel moves, with `SCM_RIGHTS` `EOPNOTSUPP` in both. Both holders
+   reading and writing one stream (a count of bytes for each, descriptors tagged by those counts) loses a descriptor
+   or attaches it to the wrong byte, so this part moves the socket whole and no process shares a stream's counts. The cost: a
+   parent that wants to go on talking over a stream socket it handed to a child must keep its own end of the pair (as
+   it does with a socketpair). The alternative, ADR-0412's text, keeps the parent's streams and refuses `SCM_RIGHTS` in
+   both; it is kept if the architect prefers. A stream socket a `fork` already shares goes as shared (no channel; the
+   channel it left with the parent is closed). **A memory descriptor** goes as a copy of its object handle (read-only if the
+   descriptor is), with its size and seals; the size is fixed in both from then (INV-0413-1), and it goes whether listed or only
+   inherited (nothing of the parent's is taken). The same description named twice is `EINVAL`; a socket not connected, a TCP
+   socket and one holding bytes or a message back are `EBADF` and `EBUSY` as before; a memory descriptor with no object is
+   `EINVAL`. A close-on-exec descriptor stays behind as before. `exec` takes the same path.
 7. **`posix_spawnp`** looks for a name without `/` in `$PATH` of the caller's own environment (default
    `/usr/local/bin:/bin:/usr/bin`, as musl's), going on past `ENOENT`, `ENOTDIR` and `EACCES`, and runs a file that is not an
    executable by `/bin/sh`, as `execvp` does. **The scheduling attributes** `posix_spawnattr_setschedparam` and
@@ -122,9 +130,9 @@ creator did not list reaches it. The browser's content process is a spawn with a
 - **Positive.** ADR-0411's launcher can be written; a Unix socket and a memory descriptor reach a child; CPython's
   `os.posix_spawn` and `subprocess` can use `posix_spawn` (`ports/Makefile` no longer lists it absent, and
   `ports/patches/python/0007-subprocess-posix-spawn.patch` turns it on for `sys.platform == "zoraya"`).
-- **Negative.** A stream socket handed to a child changes the parent's descriptor; `addopen` is the parent's open, not the
+- **Negative.** A socket handed to a child is dead in the parent; `addopen` is the parent's open, not the
   child's; a child with no working directory reads a relative path as one from `/`; `GRANT_WINDOW` and `MOVE_NET` leave the
-  parent without the connection; a failure of the third message after the child exists ends the child with status 127.
+  parent without the connection; a refusal of the descriptors message after the child exists ends the child with status 127 (the parent keeps everything).
 - **Follow-up.** The engine's launcher (ADR-0411 item 3); the positive network grant in an in-QEMU test, which needs a program
   the shell gives a network connection to.
 
@@ -146,8 +154,11 @@ creator did not list reaches it. The browser's content process is a spawn with a
 
 - Whether `POSIX_SPAWN_GRANT_WINDOW` should share a window instead of moving it, once the compositor's channel can be
   duplicated.
-- Whether a stream socket's ancillary channel should stay with the parent when the parent does not close its copy (item 6 moves
-  it either way).
+- **Known limitations of the review (F4 notes).** `posix_spawnp` repeats the whole spawn, `addopen` and the grants included,
+  for each `$PATH` directory, and goes on past an `EACCES` that came from an entry or a grant and not from the file;
+  `me`, the process handle duplicate of the second message, leaked when its write failed (closed now); the addopen/entries
+  order is fixed (entries first). The python lanes run nothing that starts a second interpreter through `subprocess`, so CI
+  shows only that the port still builds and passes; `t_spawn` is the evidence for the spawn itself.
 - The positive network grant is not in an in-QEMU test (the test guest's programs have no network connection); its library half is
   tested over a fake `netd` and `netd`'s half in `zoraya-net`.
 - CPython: `subprocess` of a bare name (`['true']`) is not spawned by `posix_spawn` (CPython requires a directory in the

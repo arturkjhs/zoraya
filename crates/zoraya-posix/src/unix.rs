@@ -275,7 +275,7 @@ pub fn decode_packet(bytes: &[u8], handles: usize) -> Option<(Vec<Record>, usize
 
 // ------------------------------------------------------------ a spawn's descriptors
 
-/// The third bootstrap message (`zoraya_abi::posix::EXT_FDS`, ADR-0433): the
+/// The bootstrap message that precedes `SELF` when a spawn gives sockets or memory (ADR-0433): the
 /// descriptors a spawn gives a child that a record's fd list cannot hold, a
 /// Unix socket and a memory descriptor. The magic, then [`encode_packet`]'s
 /// records without a payload, then each descriptor's fd number as a `u32`.

@@ -2205,10 +2205,9 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   record's cwd entry may be `NO_ENTRY`), and the connections of the mask: `GRANT_NET` asks `netd` for a connection of the parent's own
   rights and scope (`Duplicate`, message 8), `GRANT_RANDOM` the random service for one (a program's connection may make eight, ADR-0435),
   `GRANT_WINDOW` and `MOVE_NET` hand over the parent's own, which it then lacks; a connection the parent lacks is `EACCES`. A refused
-  spawn leaves no handle made and changes nothing of the parent's. A Unix socket or memory descriptor in the child's fds goes in a
-  third bootstrap message (`ZPBF`, announced by the flag `EXT_FDS` of `ZPBX`) in the records of `SCM_RIGHTS`: a packet socket moves (the
-  parent's is dead until closed), a stream socket's byte streams are copied and its ancillary channel moves (the parent's is shared
-  from then; this differs from ADR-0412 item 6, which has `SCM_RIGHTS` `EOPNOTSUPP` in both), a memory object is copied (read-only
+  spawn leaves no handle made and changes nothing of the parent's. A Unix socket or memory descriptor in the child's fds goes in an
+  extra bootstrap message (`ZPBF`, sent before `SELF`) in the records of `SCM_RIGHTS`: a socket listed in the file actions moves whole (the
+  parent's is dead until closed; a stream socket too, which differs from ADR-0412 item 6's "byte streams duplicated", and one only inherited stays with the parent: the spawn is `EBADF`), a memory object is copied (read-only
   stays read-only at the kernel) and its size is fixed; `exec` carries them the same way. `posix_spawnp` searches the caller's `$PATH`;
   the scheduling attributes are `ENOSYS`. Without an attribute a spawn gives what it gave before (INV-0411-4). **Limits** (recorded,
   not hidden): the positive network grant is tested over a fake `netd` and in `zoraya-net`, not in QEMU (no test program holds a

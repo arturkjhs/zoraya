@@ -1659,6 +1659,7 @@ fn send_record(
     granted: &crate::spawn::Granted<Handle>,
     passed: &crate::jobs::Passed<Handle>,
 ) -> Result<(), (i32, bool)> {
+    // The error says whether the descriptors had been sent (and so moved).
     let close_made = |granted: &crate::spawn::Granted<Handle>| {
         for h in granted.made() {
             let _ = zoraya_rt::handle_close(h);
@@ -1681,12 +1682,29 @@ fn send_record(
         close_made(granted);
         return Err((E2BIG, false));
     }
+    // The descriptors a record cannot hold go before `SELF`, all or nothing: a
+    // refusal of them (the kernel refuses a moved channel end that holds
+    // handles, or a full queue) leaves the connections of `ZPBX` unsent, so
+    // the parent still has its window and its network connection
+    // (INV-0433-2). The child, finding no message it can read, ends.
+    let mut passed_sent = false;
+    if !passed.is_empty() {
+        let third = crate::unix::encode_passed(&passed.fds, &passed.records);
+        if let Err(s) = p
+            .sys
+            .channel_send(boot, &third, &passed.handles, &passed.read_only)
+        {
+            close_made(granted);
+            return Err((if s == Status::BadState { EBUSY } else { EAGAIN }, false));
+        }
+        passed_sent = true;
+    }
     // TRANSFER to move it; the child receives WAIT alone.
     let me = match zoraya_rt::handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
         Ok(me) => me,
         Err(_) => {
             close_made(granted);
-            return Err((EAGAIN, false));
+            return Err((EAGAIN, passed_sent));
         }
     };
     let mut flags = 0u8;
@@ -1712,9 +1730,6 @@ fn send_record(
     if let Some(h) = granted.window {
         extra(h, abi::EXT_WINDOW);
     }
-    if !passed.is_empty() {
-        flags |= abi::EXT_FDS;
-    }
     let mut message = [0u8; 5];
     let bytes: &[u8] = if flags == 0 {
         SELF_MESSAGE
@@ -1724,26 +1739,12 @@ fn send_record(
         &message
     };
     if zoraya_rt::channel_write(boot, bytes, &second).is_err() {
+        // The kernel leaves the handles with the caller.
+        let _ = zoraya_rt::handle_close(me);
         close_made(granted);
-        return Err((EAGAIN, false));
+        return Err((EAGAIN, passed_sent));
     }
-    if passed.is_empty() {
-        return Ok(());
-    }
-    // All or nothing: a refusal leaves every handle with the parent. The
-    // child, finding no third message, ends (`bootstrap`).
-    let third = crate::unix::encode_passed(&passed.fds, &passed.records);
-    p.sys
-        .channel_send(boot, &third, &passed.handles, &passed.read_only)
-        .map_err(|s| {
-            (
-                match s {
-                    Status::BadState => EBUSY,
-                    _ => EAGAIN,
-                },
-                true,
-            )
-        })
+    Ok(())
 }
 
 /// Spawns `path` with `argv` and `envp` into `job` (a new pid's, or this
@@ -1878,13 +1879,13 @@ fn spawn_into(
     };
     let sent = send_record(p, boot, record, process, &granted, &inherited.passed);
     let _ = zoraya_rt::handle_close(boot);
-    if let Err((e, second_sent)) = sent {
+    if let Err((e, passed_sent)) = sent {
         // The child finds its bootstrap channel closed with no record, and
         // ends (`bootstrap`).
         let _ = zoraya_rt::handle_close(process);
-        if second_sent {
-            // The service connections it took are gone from here.
-            p.spawned(&crate::jobs::Inherit::empty(), &granted);
+        if passed_sent {
+            // The sockets it took are gone from here.
+            p.finish_passed(&inherited.passed);
         }
         p.spawn_refused(&inherited);
         return Err(e);

@@ -152,6 +152,12 @@ x missing.h
 > /bin/t_spawn addopen\r
 < t_spawn: addopen passed
 < \r\n~> 
+> /bin/t_spawn inherited\r
+< t_spawn: inherited passed
+< \r\n~> 
+> /bin/t_spawn queued\r
+< t_spawn: queued passed
+< \r\n~> 
 > /bin/t_spawn spawnp\r
 < t_spawn: spawnp passed
 < \r\n~> 

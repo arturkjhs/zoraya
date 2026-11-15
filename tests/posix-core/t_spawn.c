@@ -568,7 +568,7 @@ static void t_unix(void)
 	char b[64];
 	CHECK(recv(pk[0], b, sizeof b, 0) == 6 && memcmp(b, "answer", 6) == 0);
 	/* The stream: the parent keeps its end of the pair; the child has the
-	 * other, with the ability to send descriptors. */
+	 * other, whole, with the ability to send descriptors. */
 	close(st[1]);
 	CHECK(send(st[0], "stream", 6, 0) == 6);
 	struct iovec iov = {b, sizeof b};
@@ -731,6 +731,84 @@ static void t_spawnp(void)
 	PASSED();
 }
 
+/* Review of F4, finding 2: a socket the actions do not list stays with the
+ * parent, as it did before; the spawn is EBADF (what system() of a program
+ * that holds one sees) and the socket still works. */
+static void t_inherited(void)
+{
+	static const int types[] = {SOCK_SEQPACKET, SOCK_DGRAM, SOCK_STREAM};
+	for (int i = 0; i < 3; i++) {
+		posix_spawnattr_t attr;
+		posix_spawn_file_actions_t fa;
+		struct ran r;
+		int sv[2];
+		CHECK(socketpair(AF_UNIX, types[i], 0, sv) == 0);
+		fresh(&attr, &fa);
+		run(&r, &attr, &fa, "hello", "");
+		CHECK(r.spawn_error == EBADF);
+		done(&attr, &fa);
+		char b[8];
+		CHECK(send(sv[1], "ok", 2, 0) == 2);
+		CHECK(recv(sv[0], b, sizeof b, 0) == 2 && memcmp(b, "ok", 2) == 0);
+		close(sv[0]);
+		close(sv[1]);
+	}
+	PASSED();
+}
+
+/* Review of F4, finding 5: a socket the kernel will not move (its end holds a
+ * descriptor nobody has read) makes the spawn fail, and it leaves the
+ * parent's socket and its connections as they were. */
+static void t_queued(void)
+{
+	posix_spawnattr_t attr;
+	posix_spawn_file_actions_t fa;
+	struct ran r;
+	int sv[2], p[2];
+	CHECK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) == 0);
+	CHECK(pipe(p) == 0);
+	struct iovec iov = {"x", 1};
+	union {
+		struct cmsghdr h;
+		char buf[CMSG_SPACE(sizeof(int))];
+	} u;
+	memset(&u, 0, sizeof u);
+	struct msghdr m = {0};
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	m.msg_control = u.buf;
+	m.msg_controllen = sizeof u.buf;
+	struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+	c->cmsg_level = SOL_SOCKET;
+	c->cmsg_type = SCM_RIGHTS;
+	c->cmsg_len = CMSG_LEN(sizeof(int));
+	memcpy(CMSG_DATA(c), &p[0], sizeof(int));
+	CHECK(sendmsg(sv[0], &m, 0) == 1);
+	/* sv[1] now has a descriptor queued: the kernel does not move it. */
+	fresh(&attr, &fa);
+	fcntl(sv[0], F_SETFD, FD_CLOEXEC);
+	CHECK(posix_spawnattr_setflags(&attr, POSIX_SPAWN_EMPTY_NAMESPACE) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, sv[1], 9) == 0);
+	run(&r, &attr, &fa, "hello", "");
+	CHECK(r.spawn_error != 0);
+	done(&attr, &fa);
+	/* The parent's socket is whole: it reads what was sent, descriptor and all. */
+	char b[8];
+	struct iovec in = {b, sizeof b};
+	struct msghdr rm = {0};
+	union {
+		struct cmsghdr h;
+		char buf[CMSG_SPACE(sizeof(int))];
+	} ru;
+	rm.msg_iov = &in;
+	rm.msg_iovlen = 1;
+	rm.msg_control = ru.buf;
+	rm.msg_controllen = sizeof ru.buf;
+	CHECK(recvmsg(sv[1], &rm, 0) == 1);
+	CHECK(CMSG_FIRSTHDR(&rm) != NULL);
+	PASSED();
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && strcmp(argv[1], "child") == 0)
@@ -766,6 +844,10 @@ int main(int argc, char **argv)
 
 	else if (strcmp(test, "addopen") == 0)
 		t_addopen();
+	else if (strcmp(test, "inherited") == 0)
+		t_inherited();
+	else if (strcmp(test, "queued") == 0)
+		t_queued();
 	else if (strcmp(test, "spawnp") == 0)
 		t_spawnp();
 	else {

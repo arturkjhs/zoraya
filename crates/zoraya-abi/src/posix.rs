@@ -147,16 +147,10 @@ pub const EXT_RANDOM: u8 = 2;
 /// The client end of a window channel follows, after the others (proposed
 /// ADR-0317): the compositor's, for a program whose description has `window`.
 pub const EXT_WINDOW: u8 = 4;
-/// A third message follows the second, with the descriptors a record cannot
-/// hold (a Unix socket, a memory descriptor; ADR-0433): the magic `ZPBF`, the
-/// records of `zoraya_posix::unix` and the fd of each. It brings no handle to
-/// the second message.
-pub const EXT_FDS: u8 = 8;
-
 /// The handles after `SELF` that a `ZPBX` message with `flags` carries, or
 /// `None` for a flag this library does not know.
 pub const fn ext_handles(flags: u8) -> Option<usize> {
-    if flags & !(EXT_NET | EXT_RANDOM | EXT_WINDOW | EXT_FDS) != 0 {
+    if flags & !(EXT_NET | EXT_RANDOM | EXT_WINDOW) != 0 {
         return None;
     }
     Some(

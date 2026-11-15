@@ -1048,10 +1048,34 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     };
     let decoded = Bootstrap::decode(&record[..n], handles.len());
     // The second message: SELF, which a fork child gets otherwise.
-    let mut second = [0u8; 16];
+    // Before it, if the spawn gave Unix sockets or memory descriptors, `ZPBF`
+    // (ADR-0433): the spawner sends it first so that a refusal of it leaves the
+    // connections of `ZPBX` unsent. A child that finds one it cannot read ends,
+    // as one with no record does.
+    let mut third = Vec::new();
+    let mut big = vec![0u8; 4096];
     let mut self_handle = Vec::new();
-    let mut passed = false;
-    let (kept, net, random, window) = match read(sys, &mut second, &mut self_handle) {
+    let mut got = read(sys, &mut big, &mut self_handle);
+    if got.is_some_and(|n| big[..n].starts_with(&crate::unix::PASSED_MAGIC)) {
+        let n = got.unwrap_or(0);
+        match crate::unix::decode_passed(&big[..n], self_handle.len(), abi::OPEN_MAX) {
+            Some((fds, records)) => {
+                third = vec![(fds, records, core::mem::take(&mut self_handle))];
+            }
+            None => {
+                for h in self_handle {
+                    let _ = zoraya_rt::handle_close(h);
+                }
+                zoraya_rt::process_exit(127);
+            }
+        }
+        got = read(sys, &mut big, &mut self_handle);
+    }
+    let mut second = [0u8; 16];
+    let got = got.filter(|&n| n <= second.len()).inspect(|&n| {
+        second[..n].copy_from_slice(&big[..n]);
+    });
+    let (kept, net, random, window) = match got {
         Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => {
             (self_handle.pop(), None, None, None)
         }
@@ -1066,7 +1090,6 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
             if &second[..4] == SELF_EXT_MESSAGE
                 && ext_handles(second[4]).is_some_and(|n| self_handle.len() == 1 + n) =>
         {
-            passed = second[4] & abi::EXT_FDS != 0;
             let window = if second[4] & EXT_WINDOW != 0 {
                 self_handle.pop()
             } else {
@@ -1097,25 +1120,6 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     };
     for h in self_handle.drain(..) {
         let _ = zoraya_rt::handle_close(h);
-    }
-    // The third message: the Unix sockets and memory descriptors of a spawn
-    // (ADR-0433). A child that was promised them and does not get a message
-    // it can read ends, as one with no record does.
-    let mut third = Vec::new();
-    if passed {
-        let mut bytes = vec![0u8; 4096];
-        let mut handles = Vec::new();
-        let decoded = read(sys, &mut bytes, &mut handles)
-            .and_then(|n| crate::unix::decode_passed(&bytes[..n], handles.len(), abi::OPEN_MAX));
-        match decoded {
-            Some((fds, records)) => third = vec![(fds, records, handles)],
-            None => {
-                for h in handles {
-                    let _ = zoraya_rt::handle_close(h);
-                }
-                zoraya_rt::process_exit(127);
-            }
-        }
     }
     let _ = zoraya_rt::handle_close(slot::BOOTSTRAP);
     let sys = RtSys {
