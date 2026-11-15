@@ -922,15 +922,10 @@ impl<S: Sys> Posix<S> {
 
     /// The child's fds after the file actions: child fd → parent fd, each
     /// without `FD_CLOEXEC` at the end (POSIX: the actions run in the child
-    /// before the exec).
-    pub fn child_fds(&self, actions: &[FileAction]) -> Result<BTreeMap<u32, u32>, i32> {
-        self.child_fds_with(actions, false)
-    }
-
-    /// [`Posix::child_fds`], or with `empty` (ADR-0433) the fds the actions
+    /// before the exec); with `empty` (ADR-0433) the fds the actions
     /// make alone: a `dup2` takes its source from the parent's table and
-    /// nothing else is inherited. An `Open` action is a `Dup2` of the file
-    /// the caller opened for it.
+    /// nothing else is inherited. An `Open` action is `Opened`: the file
+    /// the caller opened for it, at the parent's own fd.
     pub fn child_fds_with(
         &self,
         actions: &[FileAction],
@@ -961,6 +956,12 @@ impl<S: Sys> Posix<S> {
                     if let Ok(fd) = u32::try_from(fd) {
                         map.remove(&fd);
                     }
+                }
+                FileAction::Opened(parent, to) => {
+                    let (Ok(parent), Ok(to)) = (u32::try_from(parent), u32::try_from(to)) else {
+                        return Err(EBADF);
+                    };
+                    map.insert(to, (parent, false));
                 }
                 FileAction::CloseFrom(fd) => {
                     let first = u32::try_from(fd).map_err(|_| EBADF)?;
@@ -1087,7 +1088,8 @@ impl<S: Sys> Posix<S> {
             }
         }
         if shape.empty {
-            return self.chosen_entries(group, shape, out);
+            // `inherit_shaped` made them first.
+            return Ok(());
         }
         for i in 0..self.entries.len() {
             self.stats.inherit_failed_at = 1000 + i as u32;
@@ -1301,6 +1303,9 @@ pub enum FileAction {
     /// `addopen(fd, path, flags, mode)`: the parent opens `path` as it would
     /// itself, and the child's `fd` is that file (ADR-0433).
     Open(i32, Vec<u8>, u32, u32),
+    /// What `Open` became once the parent opened it: the parent's own `fd`
+    /// (never looked up among the child's) is the child's `fd`.
+    Opened(i32, i32),
     /// `addclosefrom_np(fd)`: every fd from `fd` up is closed in the child.
     CloseFrom(i32),
 }

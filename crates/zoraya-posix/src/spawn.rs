@@ -154,6 +154,25 @@ impl<S: Sys> Posix<S> {
         shape: &Shape,
     ) -> Result<Inherit<S::H>, i32> {
         shape.check()?;
+        let mut out = Inherit {
+            slots: Vec::new(),
+            fds: Vec::new(),
+            message: Vec::new(),
+            entries: Vec::new(),
+            cwd: (self.cwd.entry as u32, self.cwd.path.clone()),
+            passed: Passed::default(),
+            temps: Vec::new(),
+        };
+        // The entries are checked before anything is opened: a spawn refused for
+        // a bad entry has created no file.
+        if shape.empty
+            && let Err(e) = self.chosen_entries(group, shape, &mut out)
+        {
+            for h in out.message.drain(..) {
+                self.sys.close(h);
+            }
+            return Err(e);
+        }
         // `addopen`: opened here, in the parent's table, as the parent's own
         // act (the child gets the descriptor, not the path).
         let mut temps: Vec<i32> = Vec::new();
@@ -165,7 +184,13 @@ impl<S: Sys> Posix<S> {
                         Ok(t) => {
                             let _ = self.fds.set_cloexec(t, true);
                             temps.push(t);
-                            resolved.push(FileAction::Dup2(t, *fd));
+                            // `O_CLOEXEC` closes it at the exec: the child has
+                            // no such fd, and the open still reported its errors.
+                            resolved.push(if flags & crate::process::o::CLOEXEC == 0 {
+                                FileAction::Opened(t, *fd)
+                            } else {
+                                FileAction::Close(*fd)
+                            });
                         }
                         Err(e) => {
                             self.close_temps(&temps);
@@ -182,15 +207,6 @@ impl<S: Sys> Posix<S> {
                 self.close_temps(&temps);
                 return Err(e);
             }
-        };
-        let mut out = Inherit {
-            slots: Vec::new(),
-            fds: Vec::new(),
-            message: Vec::new(),
-            entries: Vec::new(),
-            cwd: (self.cwd.entry as u32, self.cwd.path.clone()),
-            passed: Passed::default(),
-            temps: Vec::new(),
         };
         let r = self.inherit_into(&map, group, shape, &mut out);
         if let Err(e) = r {

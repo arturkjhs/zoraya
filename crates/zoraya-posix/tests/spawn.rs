@@ -1232,3 +1232,124 @@ fn an_entry_path_may_be_as_long_as_a_path_goes_and_no_longer() {
     assert!(parse_spec(at(4096).as_bytes()).is_ok());
     assert_eq!(parse_spec(at(4097).as_bytes()), Err(EINVAL));
 }
+
+// ------------------------------------------------------------ addopen's order (review of F4, finding 1)
+
+fn file_with(r: &mut Rig, path: &[u8], bytes: &[u8]) {
+    let fd = create(r, path, bytes);
+    r.p.close(fd).unwrap();
+}
+
+/// An `addopen` whose parent-side fd number is the child's target of another
+/// action is still its own file: two opens at 1 and 0 give each its file.
+#[test]
+fn addopen_files_are_not_confused_with_the_targets_of_other_actions() {
+    for empty in [true, false] {
+        let mut r = rig();
+        file_with(&mut r, b"/x", b"X");
+        file_with(&mut r, b"/y", b"Y");
+        let open = |fd, path: &[u8]| FileAction::Open(fd, path.to_vec(), o::RDONLY, 0);
+        let shape = Shape {
+            empty,
+            ..Default::default()
+        };
+        // The parent's free fds are 0 and 1: the temps take exactly those.
+        let out =
+            r.p.inherit_shaped(&[open(1, b"/x"), open(0, b"/y")], 0, &shape)
+                .unwrap();
+        let mut child = become_child(&mut r, &out);
+        assert_eq!(child.read(1, 4).unwrap(), b"X", "empty {empty}");
+        assert_eq!(child.read(0, 4).unwrap(), b"Y", "empty {empty}");
+        r.p.spawned(&out, &Granted::none());
+    }
+}
+
+#[test]
+fn addopen_after_closefrom_still_opens_the_file() {
+    let mut r = rig();
+    file_with(&mut r, b"/x", b"X");
+    let keep = create(&mut r, b"/y", b"Y");
+    let out =
+        r.p.inherit(
+            &[
+                FileAction::CloseFrom(0),
+                FileAction::Open(0, b"/x".to_vec(), o::RDONLY, 0),
+            ],
+            0,
+        )
+        .unwrap();
+    assert_eq!(out.fds.iter().map(|f| f.fd).collect::<Vec<_>>(), [0]);
+    let mut child = become_child(&mut r, &out);
+    assert_eq!(child.read(0, 4).unwrap(), b"X");
+    r.p.spawned(&out, &Granted::none());
+    let _ = keep;
+}
+
+/// `O_CLOEXEC` closes the file at the exec: the child has no such fd, but the
+/// open still reports its errors; and a refusal for a bad entry has created
+/// no file (the entries are checked before `addopen` runs).
+#[test]
+fn addopen_with_cloexec_gives_nothing_and_a_bad_entry_creates_no_file() {
+    let mut r = rig();
+    file_with(&mut r, b"/x", b"X");
+    let out =
+        r.p.inherit_shaped(
+            &[FileAction::Open(
+                7,
+                b"/x".to_vec(),
+                o::RDONLY | o::CLOEXEC,
+                0,
+            )],
+            0,
+            &chosen(vec![]),
+        )
+        .unwrap();
+    assert!(out.fds.is_empty());
+    r.p.spawn_refused(&out);
+    assert_eq!(
+        r.p.inherit_shaped(
+            &[FileAction::Open(
+                7,
+                b"/gone".to_vec(),
+                o::RDONLY | o::CLOEXEC,
+                0
+            )],
+            0,
+            &chosen(vec![]),
+        )
+        .err(),
+        Some(ENOENT)
+    );
+    let held = count(&mut r);
+    let create_it = FileAction::Open(7, b"/made".to_vec(), o::CREAT | o::WRONLY, 0o644);
+    assert!(
+        r.p.inherit_shaped(&[create_it], 0, &chosen(vec![spec("/nowhere", false)]))
+            .is_err()
+    );
+    assert_eq!(r.p.open(AT_FDCWD, b"/made", o::RDONLY, 0), Err(ENOENT));
+    assert_eq!(count(&mut r), held);
+}
+
+/// `addclose(n)` then `adddup2(n, m)` is `EBADF` for a child that inherits the
+/// parent's fds. An empty child never had `n`: its `dup2` takes the parent's own.
+#[test]
+fn a_dup2_of_a_closed_fd_is_ebadf() {
+    let mut r = rig();
+    let a = create(&mut r, b"/a", b"");
+    let held = count(&mut r);
+    assert_eq!(
+        r.p.inherit(&[FileAction::Close(a), FileAction::Dup2(a, 9)], 0)
+            .err(),
+        Some(EBADF)
+    );
+    assert_eq!(count(&mut r), held);
+    let out =
+        r.p.inherit_shaped(
+            &[FileAction::Close(a), FileAction::Dup2(a, 9)],
+            0,
+            &chosen(vec![]),
+        )
+        .unwrap();
+    assert_eq!(out.fds.iter().map(|f| f.fd).collect::<Vec<_>>(), [9]);
+    drop_made(&mut r, &out);
+}
