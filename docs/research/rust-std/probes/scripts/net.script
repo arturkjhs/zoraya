@@ -1,0 +1,14 @@
+# TASK-35 probe: std::net as zfetch (see basic.script). run.sh fills @PORT@.
+! ZORAYA-PANIC
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> sleep 3\r
+< \r\n~>
+> zfetch http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> +net test.zoraya:@PORT@ zfetch http://test.zoraya:@PORT@/pattern/1000000\r
+< \r\n~>
+> posixrun /bin/zfetch http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> poweroff\r

@@ -1,0 +1,8 @@
+# Route A of TASK-35: Rust's prebuilt std for aarch64-unknown-linux-musl,
+# linked by tools/zcc against Zoraya's libc.a and libunwind.a. build.sh sets
+# ZORAYA_SYSROOT and the flags of each variant (stable flags only).
+[build]
+target = "aarch64-unknown-linux-musl"
+
+[target.aarch64-unknown-linux-musl]
+linker = "../../../../tools/zcc"
