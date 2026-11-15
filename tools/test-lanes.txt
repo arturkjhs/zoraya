@@ -29,7 +29,7 @@ lane test-qemu
 lane test-libposix test-posix-threads
 lane test-files test-crash test-keeper test-hand-run
 lane test-posix
-lane test-posix-gui test-tour-gui
+lane test-posix-gui test-tour-gui test-tour-terminal
 lane test-gui
 lane test-net
 lane test-fuzz test-fuzz-net

@@ -41,9 +41,10 @@ use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
 use zoraya_proto_term::{
     Input as TermInput, MAX_OUTPUT, MAX_PASTE, MAX_TITLE, Output as TermOutput, Paste as TermPaste,
+    Reinstate as TermReinstate, Restore as TermRestore, Scrollback as TermScrollback,
     Size as TermSize, Title as TermTitle,
 };
-use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
+use zoraya_protocol::{Data, Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode};
 use zoraya_shell::crlf::Crlf;
 use zoraya_shell::editor::{self, Assist, Completion, Editor, Key, Options};
 use zoraya_shell::eval::{
@@ -56,6 +57,8 @@ use zoraya_shell::paste::{Reading, Routed};
 use zoraya_shell::record;
 use zoraya_shell::syntax;
 use zoraya_shell::syntax::Stream;
+use zoraya_shell::tty_host::{self, Effect};
+use zoraya_tty::Action as TtyAction;
 use zoraya_user::descriptions;
 use zoraya_user::files::{ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_all};
 use zoraya_user::posix_child::{self, Broker};
@@ -84,6 +87,8 @@ const CONSOLE_KEY: u64 = 1;
 /// The panel's window channel (ADR-0317) is readable: outside a request,
 /// only a late answer, closed at once (9e).
 const PANEL_KEY: u64 = 2;
+/// The broker's notices to the host of the terminal (proposed ADR-0388).
+const HOST_KEY: u64 = 3;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
 /// Jobs at once.
@@ -146,26 +151,87 @@ fn terminal_write(end: Handle, bytes: &[u8]) -> fmt::Result {
     for chunk in bytes.chunks(MAX_OUTPUT) {
         let m = TermOutput { bytes: Data(chunk) };
         let n = encode(&m, NO_REPLY, &mut out).map_err(|_| fmt::Error)?;
-        loop {
-            match channel_write(end, &out[..n], &[]) {
-                Ok(()) => break,
-                Err(Status::WouldBlock) => {
-                    let port = port_create().map_err(|_| fmt::Error)?;
-                    let room = channel_signals::WRITABLE | channel_signals::PEER_CLOSED;
-                    let _ = port_subscribe(port, end, room, 1, Mode::Level);
-                    let mut packets = [Packet::default()];
-                    let waited = port_wait(port, clock_monotonic() + OUTPUT_WAIT_NS, &mut packets);
-                    let _ = handle_close(port);
-                    if waited.is_err() {
-                        return Err(fmt::Error);
-                    }
-                }
-                Err(Status::PeerClosed) => process_exit(TERMINAL_GONE),
-                Err(_) => return Err(fmt::Error),
-            }
-        }
+        terminal_send(end, &out[..n])?;
     }
     Ok(())
+}
+
+/// Sends one message to the terminal, waiting while its queue is full.
+fn terminal_send(end: Handle, message: &[u8]) -> fmt::Result {
+    loop {
+        match channel_write(end, message, &[]) {
+            Ok(()) => return Ok(()),
+            Err(Status::WouldBlock) => {
+                let port = port_create().map_err(|_| fmt::Error)?;
+                let room = channel_signals::WRITABLE | channel_signals::PEER_CLOSED;
+                let _ = port_subscribe(port, end, room, 1, Mode::Level);
+                let mut packets = [Packet::default()];
+                let waited = port_wait(port, clock_monotonic() + OUTPUT_WAIT_NS, &mut packets);
+                let _ = handle_close(port);
+                if waited.is_err() {
+                    return Err(fmt::Error);
+                }
+            }
+            Err(Status::PeerClosed) => process_exit(TERMINAL_GONE),
+            Err(_) => return Err(fmt::Error),
+        }
+    }
+}
+
+/// The window's title, out of band (ADR-0168): the directory, or a held
+/// paste's question (ADR-0386 item 4); on the console there is none.
+fn send_title_text(shown: &str) {
+    let Some(end) = terminal() else { return };
+    let mut cut = shown.len().min(MAX_TITLE);
+    while !shown.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let m = TermTitle {
+        text: Data(&shown.as_bytes()[..cut]),
+    };
+    let mut out = [0u8; MAX_TITLE + 64];
+    if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
+        let _ = channel_write(end, &out[..n], &[]);
+    }
+}
+
+/// An out-of-band message to the terminal in its place among the output
+/// (`Restore`, `Reinstate`): waited for like output, so that it is never
+/// dropped for want of room.
+fn term_message<'m, M: Message<'m>>(m: &M) {
+    let Some(end) = terminal() else { return };
+    let mut out = [0u8; 64];
+    if let Ok(n) = encode(m, NO_REPLY, &mut out) {
+        let _ = terminal_send(end, &out[..n]);
+    }
+}
+
+/// The discipline's clock: milliseconds of the monotonic clock.
+fn now_ms() -> u64 {
+    clock_monotonic() / 1_000_000
+}
+
+/// What the discipline echoes, already through its output processing.
+fn show_processed(bytes: &[u8]) {
+    match terminal() {
+        Some(end) => {
+            lock_crlf(|c| c.convert(bytes, false, &mut Vec::new()));
+            let _ = terminal_write(end, bytes);
+        }
+        None => {
+            let _ = console_write(CONSOLE, bytes);
+        }
+    }
+}
+
+/// What carrying out the host's effects found typed.
+#[derive(Default)]
+struct Carried {
+    interrupt: bool,
+    suspend: bool,
+    /// The group the suspend character is for: the one a POSIX shell chose
+    /// with `tcsetpgrp`, or 0 when the whole line reads.
+    suspend_group: u32,
 }
 
 /// The carriage-return state of what the shell has written to the terminal:
@@ -400,6 +466,9 @@ enum Waited {
 
 /// Port keys of the shell's stream ends: above every job's.
 const STREAM_KEY: u64 = 1 << 32;
+/// Port keys of the terminal connections of POSIX programs: above every
+/// stream's (ADR-0331 item 2).
+const TTY_KEY: u64 = 1 << 48;
 /// Most bytes one relay passes before the loop looks at other events.
 const RELAY_CHUNK: usize = 4096;
 /// Most bytes of a background job's unfinished line the shell holds.
@@ -657,6 +726,16 @@ struct Z {
     next_stream: u64,
     /// The job in front, which gets the keys.
     foreground: Option<u32>,
+    /// The discipline the shell hosts for its window (ADR-0331 Option B),
+    /// with the lines it knows; a line is a job, by its number.
+    tty: tty_host::Host<Handle>,
+    /// Each terminal connection's server end and the line it is of.
+    tty_ends: BTreeMap<usize, (Handle, u32)>,
+    /// The broker's notice channel (`HostTerminal`, proposed ADR-0388).
+    host: Option<Handle>,
+    /// A line without the terminal ended in front: `Restore` before the
+    /// next prompt.
+    restore_at_prompt: bool,
     /// A line is being edited: background output goes above it.
     at_prompt: bool,
     /// The line typed to a foreground job so far, and an escape sequence
@@ -745,19 +824,7 @@ impl Z {
     /// Tells a GUI terminal the directory for its window's title (ADR-0168),
     /// out of band; on the console there is nothing to tell.
     fn send_title(&self) {
-        let Some(end) = terminal() else { return };
-        let shown = self.shown_cwd();
-        let mut cut = shown.len().min(MAX_TITLE);
-        while !shown.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        let m = TermTitle {
-            text: Data(&shown.as_bytes()[..cut]),
-        };
-        let mut out = [0u8; MAX_TITLE + 64];
-        if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
-            let _ = channel_write(end, &out[..n], &[]);
-        }
+        send_title_text(&self.shown_cwd());
     }
 
     fn abs(&self, path: &str) -> String {
@@ -1956,14 +2023,18 @@ impl Z {
     }
 
     /// Each element's `in`, `out` and `err` (ADR-0152 rules 1 to 3, ADR-0158
-    /// rule 2). Every end made for the children is added to `given`, for
-    /// the shell to close once they are started.
+    /// rule 2), with which of them are the terminal (ADR-0331 item 2: the
+    /// keys, or the terminal's output, neither redirected nor piped) and, if
+    /// any is, the write end of a stream to the terminal for a POSIX
+    /// element's tty descriptions. Every end made for the children is added
+    /// to `given`, for the shell to close once they are started.
+    #[allow(clippy::type_complexity)] // Reason: one use, named by the doc.
     fn streams(
         &mut self,
         number: u32,
         pipe: &Pipe<'_>,
         given: &mut Vec<Handle>,
-    ) -> Result<Vec<[Handle; 3]>, String> {
+    ) -> Result<(Vec<([Handle; 3], [bool; 3])>, Option<Handle>), String> {
         let fail = |s: Status| {
             zoraya_command::error("zosh", None, &zoraya_command::status_problem(s), &[])
         };
@@ -1993,7 +2064,20 @@ impl Z {
         .map_err(fail)?;
         given.push(first);
         let mut all = Vec::new();
+        let mut any_tty = false;
         for (i, exec) in pipe.programs.iter().enumerate() {
+            // The rule of ADR-0331 item 2, with the element's own redirections
+            // applied below as the files they open.
+            let mut tty = zoraya_shell::terminal::terminal_fds(
+                i,
+                n,
+                pipe.input.is_none(),
+                pipe.background,
+                pipe.out == Sink::Terminal,
+                pipe.err == Sink::Terminal,
+                exec.err_too,
+                &[],
+            );
             let mut ends = [
                 if i == 0 { first } else { pipes[i - 1].0 },
                 if i + 1 < n { pipes[i].1 } else { out },
@@ -2021,18 +2105,234 @@ impl Z {
                 .map_err(fail)?;
                 given.push(opened);
                 match stream {
-                    Stream::In => ends[0] = opened,
-                    Stream::Out => ends[1] = opened,
-                    Stream::Err => ends[2] = opened,
+                    Stream::In => (ends[0], tty[0]) = (opened, false),
+                    Stream::Out => (ends[1], tty[1]) = (opened, false),
+                    Stream::Err => (ends[2], tty[2]) = (opened, false),
                     Stream::Both => {
-                        ends[1] = opened;
-                        ends[2] = opened;
+                        (ends[1], tty[1]) = (opened, false);
+                        (ends[2], tty[2]) = (opened, false);
                     }
                 }
             }
-            all.push(ends);
+            any_tty |= tty.contains(&true);
+            all.push((ends, tty));
         }
-        Ok(all)
+        // The terminal's output for the tty descriptions: the line's own
+        // when it goes there, or one more relay.
+        let term_out = if !any_tty {
+            None
+        } else if pipe.out == Sink::Terminal {
+            Some(out)
+        } else if pipe.err == Sink::Terminal {
+            Some(err)
+        } else {
+            let t = self.relay(number, Dest::Terminal).map_err(fail)?;
+            given.push(t);
+            Some(t)
+        };
+        Ok((all, term_out))
+    }
+
+    // --- The terminal of POSIX programs (ADR-0331, ADR-0386, ADR-0387) ---
+
+    /// A terminal connection for a program of line `number` in `group`: the
+    /// server end watched on the shell's port, the client end for the
+    /// program's record. The line's record is made with the first.
+    fn tty_connect(
+        &mut self,
+        number: u32,
+        job: Handle,
+        group: u32,
+        terminal: bool,
+    ) -> Option<Handle> {
+        if !self.tty.has_line(number) {
+            self.tty.start_line(number, job, group, terminal);
+        }
+        self.tty.add_root(number, group);
+        let id = self.tty.connect(number, group)?;
+        let Ok((mine, theirs)) = channel_create() else {
+            self.tty.tty.closed(id);
+            return None;
+        };
+        if !self.tty_watch(id, mine, number) {
+            let _ = handle_close(theirs);
+            return None;
+        }
+        Some(theirs)
+    }
+
+    /// Watches connection `id`'s server end, of line `number`; on failure it
+    /// is closed and forgotten.
+    fn tty_watch(&mut self, id: usize, end: Handle, number: u32) -> bool {
+        let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+        if port_subscribe(self.port, end, wanted, TTY_KEY + id as u64, Mode::Level).is_err() {
+            let _ = handle_close(end);
+            self.tty.tty.closed(id);
+            return false;
+        }
+        self.tty_ends.insert(id, (end, number));
+        true
+    }
+
+    /// Connection `id` is gone: its end is closed and the discipline forgets
+    /// it with any request it held.
+    fn tty_gone(&mut self, id: usize) {
+        if let Some((end, _)) = self.tty_ends.remove(&id) {
+            let _ = port_unsubscribe(self.port, TTY_KEY + id as u64);
+            let _ = handle_close(end);
+        }
+        self.tty.tty.closed(id);
+    }
+
+    /// Line `number` ended (or never started): if it was in front the screen
+    /// and the attributes come back, and every connection made for it is
+    /// closed, so that none outlives it into a later line of the same number.
+    fn end_tty_line(&mut self, number: u32) {
+        let with_terminal = self.tty.front() == Some(number) && self.tty.takes_keys();
+        let mut effects = self.tty.end_line(number);
+        if !with_terminal && effects.contains(&Effect::Restore { keep: false }) {
+            // A line without the terminal (a native `cat` of a recording, in
+            // `cat x; sleep 9`) leaves its screen to the next command of the
+            // entry: the screen comes back before the next prompt (ADR-0387
+            // item 5).
+            effects.retain(|e| *e != Effect::Restore { keep: false });
+            self.restore_at_prompt = true;
+        }
+        self.carry(effects, None);
+        let ids: Vec<usize> = self
+            .tty_ends
+            .iter()
+            .filter(|(_, (_, n))| *n == number)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.tty_gone(id);
+        }
+    }
+
+    /// A message on terminal connection `id`. What the line wrote before it
+    /// is shown first, so that `Drain` is answered when the output is on the
+    /// screen and `SetAttr` changes nothing about the carriage returns of
+    /// what was written before it (ADR-0331 item 8).
+    fn tty_event(&mut self, id: usize) {
+        let Some(&(end, number)) = self.tty_ends.get(&id) else {
+            return;
+        };
+        let mut bytes = alloc::vec![0u8; MAX_WIRE_MESSAGE];
+        let mut got = [end; 4];
+        match channel_read(end, &mut bytes, &mut got) {
+            Ok(sizes) => {
+                let handles = got[..sizes.handles as usize].to_vec();
+                self.drain_relays(number);
+                self.tty.tty.set_time(now_ms());
+                let actions = self
+                    .tty
+                    .tty
+                    .request(id, &bytes[..sizes.bytes as usize], handles);
+                let effects = actions.into_iter().map(Effect::Tty).collect();
+                self.carry(effects, Some(number));
+            }
+            Err((Status::WouldBlock, _)) => {}
+            Err((_, handles)) => {
+                let _ = handles;
+                self.tty_gone(id);
+            }
+        }
+    }
+
+    /// The broker's notices (proposed ADR-0388): a `tcsetpgrp` is the host's
+    /// to take or not, by the root of the caller's line. `GroupMade` is not
+    /// needed for that (the broker checks the group is of that line), so a
+    /// notice lost on a full channel loses no group (the review of 10c,
+    /// finding 1).
+    fn host_notices(&mut self) {
+        let Some(end) = self.host else { return };
+        let mut bytes = [0u8; 64];
+        let mut got = [end; 1];
+        loop {
+            let n = match channel_read(end, &mut bytes, &mut got) {
+                Ok(sizes) => {
+                    for h in &got[..sizes.handles as usize] {
+                        let _ = handle_close(*h);
+                    }
+                    sizes.bytes as usize
+                }
+                Err((Status::WouldBlock, _)) => return,
+                Err(_) => {
+                    let _ = port_unsubscribe(self.port, HOST_KEY);
+                    let _ = handle_close(end);
+                    self.host = None;
+                    return;
+                }
+            };
+            let m = &bytes[..n];
+            match Header::decode(m).map(|(h, _)| h.ordinal) {
+                Ok(o) if o == zoraya_proto_posix::ForegroundAsked::ORDINAL => {
+                    if let Ok((_, f)) = decode::<zoraya_proto_posix::ForegroundAsked>(m, 0)
+                        && let Ok(effects) = self.tty.foreground_asked(f.group, f.root)
+                    {
+                        self.carry(effects, None);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Carries out what the host of the discipline decided; `number` is the
+    /// line a request came from (a clone is of its line). Says whether a
+    /// signal character was typed: an interrupt, or the suspend character,
+    /// which the shell's own stop carries out (ADR-0200 item 2).
+    fn carry(&mut self, effects: Vec<Effect<Handle>>, number: Option<u32>) -> Carried {
+        let mut carried = Carried::default();
+        for e in effects {
+            match e {
+                Effect::Tty(TtyAction::Reply { to, bytes }) => {
+                    if let Some(&(end, _)) = self.tty_ends.get(&to) {
+                        let _ = channel_write(end, &bytes, &[]);
+                    }
+                }
+                Effect::Tty(TtyAction::Show(bytes)) => show_processed(&bytes),
+                Effect::Tty(TtyAction::Signal { job, kind, detail }) => {
+                    carried.interrupt |= kind == RequestKind::Interrupt;
+                    let _ = job_signal(job, kind, detail);
+                }
+                Effect::Background { roots, back } => {
+                    if let Some(broker) = self.broker.as_ref() {
+                        for r in roots {
+                            let _ = broker.set_background(r, back);
+                        }
+                    }
+                }
+                Effect::GroupSignal { group, signal } => {
+                    carried.interrupt |= signal == zoraya_abi::posix::signal::SIGINT;
+                    if let Some(broker) = self.broker.as_ref() {
+                        let _ = broker.signal_group(group, signal);
+                    }
+                }
+                Effect::Tty(TtyAction::Suspend { group, .. }) => {
+                    carried.suspend = true;
+                    carried.suspend_group = group;
+                }
+                Effect::Tty(TtyAction::Watch { id, end }) => match number {
+                    Some(n) => {
+                        let _ = self.tty_watch(id, end, n);
+                    }
+                    None => {
+                        let _ = handle_close(end);
+                        self.tty.tty.closed(id);
+                    }
+                },
+                Effect::Tty(TtyAction::Close(h)) => {
+                    let _ = handle_close(h);
+                }
+                Effect::Restore { keep } => term_message(&TermRestore { keep }),
+                Effect::Reinstate => term_message(&TermReinstate {}),
+                Effect::Question(Some(q)) => send_title_text(&q),
+                Effect::Question(None) => self.send_title(),
+            }
+        }
+        carried
     }
 
     // --- Jobs ---
@@ -2199,7 +2499,17 @@ impl Z {
                     // What it printed in the background comes first.
                     let held = core::mem::take(&mut self.relays[at].partial);
                     show(&tamed(&held));
-                    show_bytes(&bytes[..n]);
+                    let number = self.relays[at].job;
+                    match terminal() {
+                        // A line with the terminal: the carriage return as its
+                        // attributes say, now (INV-0331-7), and its 2004.
+                        Some(end) if self.tty.takes_keys() => {
+                            let mut out = Vec::with_capacity(n + n / 16);
+                            lock_crlf(|c| self.tty.relay(number, &bytes[..n], c, &mut out));
+                            let _ = terminal_write(end, &out);
+                        }
+                        _ => show_bytes(&bytes[..n]),
+                    }
                 }
                 Dest::Terminal => {
                     let r = &mut self.relays[at];
@@ -2326,6 +2636,14 @@ impl Z {
             {
                 let _ = port_unsubscribe(self.port, PANEL_KEY);
             }
+            return None;
+        }
+        if packet.key == HOST_KEY {
+            self.host_notices();
+            return None;
+        }
+        if packet.key >= TTY_KEY {
+            self.tty_event((packet.key - TTY_KEY) as usize);
             return None;
         }
         if packet.key >= STREAM_KEY {
@@ -2550,6 +2868,15 @@ impl Z {
             .iter()
             .find(|e| JOB_KEY + u64::from(e.number) == key)?
             .number;
+        // A packet of a job that ended and whose number a new job took (the
+        // port can hold one past the unsubscribe): only a job that has ended
+        // is taken.
+        let ended = self.jobs.get(number).is_some_and(|e| {
+            object_get_signals(e.payload.job).is_ok_and(|s| s & job_signals::TERMINATED != 0)
+        });
+        if !ended {
+            return None;
+        }
         self.finish_streams(number);
         let _ = port_unsubscribe(self.port, key);
         let job = &self.jobs.get(number)?.payload;
@@ -2574,6 +2901,9 @@ impl Z {
         if let (Some(t), Some(name)) = (&self.tmp, tmp) {
             remove_tree(t, &name);
         }
+        // The host of the discipline lets go of the line (and of its job
+        // handle) first; in front, the screen comes back (ADR-0331 item 9).
+        self.end_tty_line(number);
         let (entry, now) = if self.foreground == Some(number) {
             (self.jobs.remove(number)?, None)
         } else {
@@ -2645,6 +2975,10 @@ impl Z {
                         if let Ok((_, m)) = decode::<TermSize>(bytes, 0) {
                             self.columns = (m.columns as usize).clamp(1, 500);
                             self.rows = (m.rows as usize).clamp(1, 500);
+                            // The discipline's size, and one SIGWINCH to a
+                            // line with the terminal in front (INV-0331-6).
+                            let effects = self.tty.size(self.rows as u32, self.columns as u32);
+                            self.carry(effects, None);
                         }
                     }
                     _ => {}
@@ -2682,17 +3016,40 @@ impl Z {
         self.foreground = Some(number);
         self.typed.clear();
         self.escape = Escape::No;
+        // The line in front of the discipline too: a stopped one gets its
+        // attributes, its screen and a SIGWINCH back (ADR-0331 item 9).
+        self.tty.tty.set_time(now_ms());
+        let effects = self.tty.bring_front(number);
+        self.carry(effects, None);
+        let tty_line = self.tty.takes_keys();
         let waited = 'wait: loop {
             // Keys typed ahead of the job reach it first.
             let mut keys = core::mem::take(&mut self.pending);
             if keys.is_empty() {
                 let mut packets = [Packet::default(); 8];
-                let deadline = offer_at.unwrap_or(DEADLINE_INFINITE);
+                // The discipline's timed read (VTIME) has its own deadline.
+                let timed = self
+                    .tty
+                    .tty
+                    .deadline()
+                    .map(|ms| ms.saturating_mul(1_000_000));
+                let deadline = match (offer_at, timed) {
+                    (Some(a), Some(b)) => a.min(b),
+                    (a, b) => a.or(b).unwrap_or(DEADLINE_INFINITE),
+                };
                 let Ok(count) = port_wait(self.port, deadline, &mut packets) else {
+                    let now = clock_monotonic();
+                    if timed.is_some_and(|t| now >= t) {
+                        let actions = self.tty.tty.tick(now_ms());
+                        self.carry(actions.into_iter().map(Effect::Tty).collect(), None);
+                    }
                     // The job outlived its Ctrl-C by a second.
-                    if offer_at.take().is_some() && self.jobs.get(number).is_some() {
-                        show("(Ctrl-C again to kill it)\n");
-                        offered = true;
+                    if offer_at.is_some_and(|t| now >= t) {
+                        offer_at = None;
+                        if self.jobs.get(number).is_some() {
+                            show("(Ctrl-C again to kill it)\n");
+                            offered = true;
+                        }
                     }
                     continue;
                 };
@@ -2700,6 +3057,11 @@ impl Z {
                     if packet.key == CONSOLE_KEY {
                         keys.extend(self.read_keys());
                     } else if let Some((entry, records)) = self.event(packet, At::Elsewhere) {
+                        if ctrl_c && tty_line {
+                            // The discipline echoed `^C`; the shell's report
+                            // goes on a line of its own.
+                            show("\n");
+                        }
                         break 'wait Waited::Ended(Box::new(entry), records, ctrl_c);
                     }
                 }
@@ -2707,6 +3069,47 @@ impl Z {
             let Some(job) = self.jobs.get(number).map(|e| e.payload.job) else {
                 continue;
             };
+            if self.tty.front() == Some(number) && self.tty.takes_keys() {
+                // A POSIX program has the terminal: every key goes through
+                // the discipline, which echoes, edits and signals as its
+                // attributes say (ADR-0331 item 10), and a paste is its
+                // (ADR-0386 item 4). No kill is offered: the program decides
+                // what Ctrl-C does (ADR-0387 item 4).
+                for (i, &key) in keys.iter().enumerate() {
+                    self.tty.tty.set_time(now_ms());
+                    let effects = match self.paste.route(key, Reading::Program) {
+                        Routed::Key(k) => self.tty.keys(&[k]),
+                        Routed::Insert(text) => {
+                            let mut out = Vec::new();
+                            self.tty.paste(&text, &mut out);
+                            out
+                        }
+                        Routed::Dropped => {
+                            show("zosh: paste: dropped: it is gone\n");
+                            continue;
+                        }
+                    };
+                    let carried = self.carry(effects, None);
+                    ctrl_c |= carried.interrupt;
+                    // A POSIX shell with job control (`sh`) chose a group of
+                    // its own with `tcsetpgrp`: the suspend character is for
+                    // that group, and the line goes on, as `sh` is the line
+                    // and says what it did itself (ADR-0331 item 6). Only
+                    // when the shell has the terminal again, or nobody chose
+                    // a group, is the line stopped (ADR-0200).
+                    if carried.suspend && self.signal_chosen_group(number, carried.suspend_group) {
+                        continue;
+                    }
+                    if carried.suspend
+                        && let Some(stopped) = self.suspend_front(number)
+                    {
+                        self.pending = keys[i + 1..].to_vec();
+                        break 'wait Waited::Stopped(stopped);
+                    }
+                }
+                self.tty.end_of_keys();
+                continue;
+            }
             let mut echo = Vec::new();
             for (i, &key) in keys.iter().enumerate() {
                 match key {
@@ -2731,22 +3134,15 @@ impl Z {
                     editor::CTRL_Z => {
                         show_bytes(&echo);
                         echo.clear();
-                        show("^Z\n");
-                        let stopped = self.stop_job(number);
-                        if let Some(e) = self.jobs.get_mut(number) {
-                            if stopped {
-                                e.state = JobState::Stopped;
-                                show(&format!("[{number}] stopped: {}\n", e.line));
-                                // What was typed after it is the prompt's.
-                                self.pending = keys[i + 1..].to_vec();
-                                break 'wait Waited::Stopped(number);
-                            }
-                            // ADR-0158 rule 4: it stays in front.
-                            show(&format!("[{number}] did not stop: {}\n", e.line));
+                        show("^Z");
+                        if let Some(stopped) = self.suspend_front(number) {
+                            // What was typed after it is the prompt's.
+                            self.pending = keys[i + 1..].to_vec();
+                            break 'wait Waited::Stopped(stopped);
                         }
                     }
-                    // A paste while a program runs: it is not sent to the
-                    // program (the paste path to a program is part 10c's).
+                    // A paste while a program without the terminal runs: it
+                    // is not sent to the program.
                     k => match self.paste.route(k, Reading::Elsewhere) {
                         Routed::Key(k) => self.type_key(number, k, &mut echo),
                         _ => {
@@ -2762,6 +3158,44 @@ impl Z {
         self.foreground = None;
         self.typed.clear();
         waited
+    }
+
+    /// The suspend character for the line in front (ADR-0158 rule 4): the
+    /// shell's stop of every element. Stopped, the line leaves the front of
+    /// the discipline with its attributes kept and the screen restored
+    /// (ADR-0331 item 9); otherwise it stays in front.
+    /// `SIGTSTP` to a group a POSIX shell chose with `tcsetpgrp`, which is
+    /// not one of the line's own (the line's own groups are what the line's
+    /// stop covers). Says whether it was sent.
+    fn signal_chosen_group(&mut self, number: u32, group: u32) -> bool {
+        let Some(e) = self.jobs.get(number) else {
+            return false;
+        };
+        if group == 0 || e.payload.posix.iter().any(|(_, pgid, _)| *pgid == group) {
+            return false;
+        }
+        let Some(broker) = self.broker.as_ref() else {
+            return false;
+        };
+        let _ = broker.signal_group(group, zoraya_abi::posix::signal::SIGTSTP);
+        true
+    }
+
+    fn suspend_front(&mut self, number: u32) -> Option<u32> {
+        show("\n");
+        let stopped = self.stop_job(number);
+        let e = self.jobs.get_mut(number)?;
+        if stopped {
+            e.state = JobState::Stopped;
+            let line = e.line.clone();
+            let effects = self.tty.stop_front();
+            self.carry(effects, None);
+            show(&format!("[{number}] stopped: {line}\n"));
+            return Some(number);
+        }
+        // ADR-0158 rule 4: it stays in front.
+        show(&format!("[{number}] did not stop: {}\n", e.line));
+        None
     }
 
     /// A job in front ended: its hints read (ADR-0153 rule 11), and its
@@ -3234,6 +3668,19 @@ impl Z {
         } else {
             path.into()
         }
+    }
+
+    /// Whether `room`'s grants cover the absolute path `abs` (for writing
+    /// when `write`): a grant covers itself and what is below it.
+    fn room_covers(&self, room: &zoraya_settings::rooms::Room, abs: &str, write: bool) -> bool {
+        room.grants.iter().any(|g| {
+            let base = self.room_path(&g.path);
+            let base = base.trim_end_matches('/');
+            (g.write || !write)
+                && (base.is_empty()
+                    || abs == base
+                    || abs.strip_prefix(base).is_some_and(|r| r.starts_with('/')))
+        })
     }
 
     /// In a room, every line receives the room's grants as if written
@@ -3821,6 +4268,19 @@ impl Z {
                             &["grants shows what a line here is given"],
                         );
                     }
+                    // Entering a room narrows `room new` (the architect,
+                    // 2026-11-15): a room made from inside one holds no more
+                    // than the room does.
+                    if let Some(room) = &self.room
+                        && !self.room_covers(room, &abs, write)
+                    {
+                        return fail(
+                            io,
+                            Some(pair[1]),
+                            &format!("outside what room {} holds", room.name),
+                            &["room --leave first to give more"],
+                        );
+                    }
                     given.push(Grant { write, path });
                 }
                 let bytes = self
@@ -3936,7 +4396,16 @@ impl Z {
     fn write_settings(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.publish_file(SETTINGS, bytes)?;
         self.settings = zoraya_settings::read(bytes, &self.declared);
+        self.send_scrollback();
         Ok(())
+    }
+
+    /// `term.scrollback` to the window's terminal, which cannot read the
+    /// settings (ADR-0332 item 11): at start and after each change.
+    fn send_scrollback(&self) {
+        let lines = zoraya_describe::parse_number(&self.setting("term.scrollback"))
+            .map_or(2000, |n| n.clamp(100, 10_000) as u32);
+        term_message(&TermScrollback { lines });
     }
 
     /// `grants LINE...`: what the command on the line would receive, and
@@ -3992,8 +4461,33 @@ impl Z {
                         });
                     }
                     let home = self.home();
-                    io.out
-                        .push_str(&grants::report(name, &plan, &home, "the terminal", !native));
+                    // The fds a run of this command alone would give the
+                    // terminal (ADR-0331 items 2 and 3): its own redirections
+                    // are the only ones `grants` sees.
+                    let redirected: Vec<Stream> = exec.redirects.iter().map(|r| r.0).collect();
+                    let tty = zoraya_shell::terminal::terminal_fds(
+                        0,
+                        1,
+                        true,
+                        false,
+                        true,
+                        true,
+                        false,
+                        &redirected,
+                    );
+                    let words = if native {
+                        String::from("the terminal")
+                    } else {
+                        zoraya_shell::terminal::streams_words(tty)
+                    };
+                    io.out.push_str(&grants::report(
+                        name,
+                        &plan,
+                        &home,
+                        &words,
+                        !native,
+                        !native && tty.contains(&true),
+                    ));
                     0
                 }
             };
@@ -4011,8 +4505,14 @@ impl Z {
             }
             Ok(Some(plan)) => {
                 let home = self.home();
-                io.out
-                    .push_str(&grants::report(name, &plan, &home, "the terminal", false));
+                io.out.push_str(&grants::report(
+                    name,
+                    &plan,
+                    &home,
+                    "the terminal",
+                    false,
+                    false,
+                ));
                 0
             }
         }
@@ -4513,8 +5013,24 @@ impl Host for Z {
         let mut posix = Vec::new();
         let mut native = Vec::new();
         let mut failed = streams.as_ref().err().cloned();
-        if let Ok(streams) = &streams {
-            for ((exec, r), ends) in pipe.programs.iter().zip(ready).zip(streams) {
+        // The line has the terminal when a POSIX element has it on any fd,
+        // unless a native first element reads the keys: they are then the
+        // shell's to cook for it (ADR-0152), and the POSIX elements' reads see
+        // none (ADR-0387 item 2).
+        let terminal = match &streams {
+            Ok((all, _)) => {
+                let posix_tty = ready
+                    .iter()
+                    .zip(all)
+                    .any(|(r, (_, tty))| matches!(r, Ready::Posix { .. }) && tty.contains(&true));
+                let native_keys = matches!(ready.first(), Some(Ready::Native { .. }))
+                    && all.first().is_some_and(|(_, tty)| tty[0]);
+                posix_tty && !native_keys
+            }
+            Err(_) => false,
+        };
+        if let Ok((streams, term_out)) = &streams {
+            for ((exec, r), (ends, tty)) in pipe.programs.iter().zip(ready).zip(streams) {
                 let (image, table) = match r {
                     Ready::Native { image, table } => (image, table),
                     Ready::Posix {
@@ -4544,15 +5060,16 @@ impl Host for Z {
                         args.extend(exec.args.iter().map(|a| a.text.as_bytes()));
                         // PATH and HOME for a POSIX program unless the line
                         // gives them (ADR-0104 item 12 gives a session's).
-                        let mut env: Vec<String> = exec.env.to_vec();
-                        let home = format!("HOME={}", self.home());
-                        for (name, value) in
-                            [("PATH=", "PATH=/bin:/usr/bin"), ("HOME=", home.as_str())]
-                        {
-                            if !env.iter().any(|v| v.starts_with(name)) {
-                                env.push(value.into());
-                            }
-                        }
+                        // TERM too for a program with the terminal on any of
+                        // its fds (ADR-0333 item 1; `console.term` on the
+                        // serial console, item 5).
+                        let env = zoraya_shell::terminal::posix_env(
+                            exec.env,
+                            &self.home(),
+                            tty.contains(&true),
+                            crate::terminal().is_some(),
+                            &self.setting("console.term"),
+                        );
                         let env: Vec<&[u8]> = env.iter().map(|v| v.as_bytes()).collect();
                         let launch = posix_child::Launch {
                             line_job: job,
@@ -4564,6 +5081,7 @@ impl Host for Z {
                             args: &args,
                             env: &env,
                             streams: *ends,
+                            tty: term_out.map(|out| (*tty, out)),
                             report: report.1,
                             net,
                             // Every program gets its own connection to the
@@ -4574,8 +5092,19 @@ impl Host for Z {
                             window,
                             realtime_base: self.realtime_base,
                         };
-                        let broker = self.broker.as_ref().expect("checked by ready");
-                        match posix_child::launch(broker, launch) {
+                        let broker = self.broker.take().expect("checked by ready");
+                        let background = pipe.background;
+                        let launched = posix_child::launch(&broker, launch, &mut |group| {
+                            // A line started in the background is so for the
+                            // broker before its program runs: its tcsetpgrp
+                            // is EPERM from the start.
+                            if background {
+                                let _ = broker.set_background(group, true);
+                            }
+                            self.tty_connect(number, job, group, terminal)
+                        });
+                        self.broker = Some(broker);
+                        match launched {
                             Ok(c) => {
                                 processes.push(c.process);
                                 posix.push((c.pid, c.pgid, c.job));
@@ -4654,8 +5183,15 @@ impl Host for Z {
             native,
             tmp: self.line_tmp_name.take(),
         };
+        if failed.is_none() && !self.tty.has_line(number) {
+            // A line with no POSIX program on the terminal is still the
+            // line in front: its end restores the screen (ADR-0331 item 9).
+            self.tty.start_line(number, job, 0, false);
+        }
         if let Some(e) = failed {
             let _ = job_kill(job);
+            // Before its job handle goes: the host holds it for signals.
+            self.end_tty_line(number);
             // Its POSIX pids go once their jobs have ended, and its /tmp
             // (review S12).
             self.reap_killed(&record.posix);
@@ -5084,6 +5620,10 @@ fn main() -> i32 {
         feeds: Vec::new(),
         next_stream: 0,
         foreground: None,
+        tty: tty_host::Host::new(),
+        tty_ends: BTreeMap::new(),
+        host: None,
+        restore_at_prompt: false,
         at_prompt: false,
         typed: Vec::new(),
         escape: Escape::No,
@@ -5117,6 +5657,16 @@ fn main() -> i32 {
         refused_seen: (0, 0),
         usage_tracker: zoraya_rooms::Tracker::new(),
     };
+    // The broker tells the host of the terminal of its lines' groups
+    // (proposed ADR-0388).
+    if let Some(end) = z.broker.as_ref().and_then(Broker::host_terminal) {
+        let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+        if port_subscribe(z.port, end, wanted, HOST_KEY, Mode::Level).is_ok() {
+            z.host = Some(end);
+        } else {
+            let _ = handle_close(end);
+        }
+    }
     z.realtime_base = z
         .root
         .as_ref()
@@ -5160,6 +5710,7 @@ fn main() -> i32 {
         show(&e);
     }
     z.send_title();
+    z.send_scrollback();
     // A late answer of the panel is closed when it comes, not at the next
     // request (9e).
     if let Some(panel) = z.panel {
@@ -5179,7 +5730,6 @@ fn main() -> i32 {
     }
     show(GREETING);
     let mut out = String::new();
-    let mut after_command = false;
     loop {
         // Ends read since the last prompt, before it (ADR-0158 rule 6).
         show(&shell.host.jobs.take_notices());
@@ -5192,15 +5742,14 @@ fn main() -> i32 {
         }
         let prompt = shell.host.prompt();
         out.clear();
-        // Stop-gap until part 10c's `Restore`: put the terminal back before a
-        // prompt that follows a command (`zoraya_shell::reset`).
-        out.push_str(zoraya_shell::reset::before_prompt(
-            after_command,
-            terminal().is_some(),
-        ));
+        // The screen is the shell's again: a line with the terminal sent
+        // `Restore` when it ended or stopped (ADR-0331 item 9), one without
+        // it now (ADR-0387 item 5).
+        if core::mem::take(&mut shell.host.restore_at_prompt) {
+            term_message(&TermRestore { keep: false });
+        }
         editor.start(&prompt, &mut out);
         show(&out);
-        after_command = true;
         shell.host.at_prompt = true;
         let entry = 'read: loop {
             // Keys typed ahead of this prompt come first.

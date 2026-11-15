@@ -27,7 +27,10 @@ pub mod signals;
 pub mod socket;
 pub mod stat;
 pub mod sys;
+pub mod termios;
 pub mod threads;
+pub mod unix;
+mod unix_io;
 pub mod wait;
 
 #[cfg(all(target_arch = "aarch64", target_os = "none"))]

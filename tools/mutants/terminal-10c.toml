@@ -1,0 +1,110 @@
+# Part 10c (TASK-31), the review's hand mutations of the shell's host of the
+# discipline, the broker's notices and libposix's terminal calls; each is
+# killed by the test named in its note. Host tests only.
+tests = ["cargo test -q -p zoraya-tty", "cargo test -q -p zoraya-shell --lib tty_host", "cargo test -q -p zoraya-broker", "cargo test -q -p zoraya-posix --test poll --test tty"]
+timeout = 600
+
+[[mutant]]
+id = "C-nested-group-job"
+file = "crates/zoraya-broker/src/lib.rs"
+find = ".filter(|_| !nested)"
+replace = ".filter(|_| true)"
+note = "10c review: a_signal_to_a_group_with_groups_made_inside_it_reaches_its_members_only"
+
+[[mutant]]
+id = "C-root-is-by"
+file = "crates/zoraya-broker/src/lib.rs"
+find = "                by,\n                root,\n"
+replace = "                by,\n                root: by,\n"
+note = "10c review: a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines"
+
+[[mutant]]
+id = "C-ctrl-c-to-the-job"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "            match (a, chosen) {"
+replace = "            match (a, None::<u32>) {"
+note = "10c review: signal_characters_go_to_the_chosen_group_once_there_is_one"
+
+[[mutant]]
+id = "C-2004-in-canonical"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "        !self.tty.discipline.canonical()\n"
+replace = "        true\n"
+note = "10c review: mode_2004_is_believed_only_for_a_reader_out_of_canonical_mode"
+
+[[mutant]]
+id = "C-winch-to-no-root"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "            None => l.roots.clone(),"
+replace = "            None => alloc::vec![],"
+note = "10c review: a_size_is_one_sigwinch_to_the_line_in_front_and_tiocgwinsz_follows"
+
+[[mutant]]
+id = "C-arrow-not-swallowed"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "                    0x1b => self.swallow = Swallow::Esc,"
+replace = "                    0x1b => {}"
+note = "10c review: a_paste_with_a_newline_to_a_program_without_2004_waits_for_enter"
+
+[[mutant]]
+id = "C-line-cap"
+file = "crates/zoraya-tty/src/lib.rs"
+find = ">= MAX_LINE_CONNECTIONS"
+replace = ">= MAX_CONNECTIONS"
+note = "10c review: one_line_cannot_take_the_whole_table_of_connections"
+
+[[mutant]]
+id = "C-read-keeps-readiness"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "        self.tty_poll_ready.retain(|h| *h != conn);"
+replace = "        self.tty_poll_ready.retain(|h| *h == conn);"
+note = "10c review: a_spent_readiness_is_not_kept_by_the_read_that_spent_it"
+
+[[mutant]]
+id = "C-stash-not-ready"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "            || self.tty_stash.iter().any(|(c, _)| *c == conn)"
+replace = "            || self.tty_stash.iter().any(|(c, _)| *c != conn)"
+note = "10c review: a_terminals_kept_answer_or_held_read_tells_without_a_request"
+
+[[mutant]]
+id = "C-held-read-signals"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "            return if signals_now & signals::READABLE != 0 {"
+replace = "            return if signals_now & signals::READABLE == 0 {"
+note = "10c review: a_terminals_kept_answer_or_held_read_tells_without_a_request"
+
+[[mutant]]
+id = "C-flush-keeps-stash"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "        self.tty_stash.retain(|(c, _)| *c != conn);\n        self.tty_poll_ready.retain(|c| *c != conn);\n        let n = self.tty_call(conn, &tp::Flush { queue: 0 })?;"
+replace = "        self.tty_stash.retain(|(c, _)| *c == conn);\n        self.tty_poll_ready.retain(|c| *c != conn);\n        let n = self.tty_call(conn, &tp::Flush { queue: 0 })?;"
+note = "10c review: tcflush_drops_unread_input_and_what_the_library_kept"
+
+[[mutant]]
+id = "C-flush-keeps-readiness"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "        self.tty_poll_ready.retain(|c| *c != conn);\n        let n = self.tty_call(conn, &tp::Flush { queue: 0 })?;"
+replace = "        self.tty_poll_ready.retain(|c| *c == conn);\n        let n = self.tty_call(conn, &tp::Flush { queue: 0 })?;"
+note = "10c review: tcflush_drops_unread_input_and_what_the_library_kept"
+
+[[mutant]]
+id = "C-tty-without-connection"
+file = "crates/zoraya-posix/src/poll.rs"
+find = "let tty = *tty && conn.is_some();"
+replace = "let tty = *tty || conn.is_some();"
+note = "10c review: a_stream_marked_terminal_without_a_connection_is_a_pipe"
+
+[[mutant]]
+id = "C-background-tcsetpgrp-ok"
+file = "crates/zoraya-broker/src/lib.rs"
+find = "if self.back.contains(&root) {"
+replace = "if false {"
+note = "10c, the architect's EPERM: a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines"
+
+[[mutant]]
+id = "C-stop-not-told"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "                    back: true,\n"
+replace = "                    back: false,\n"
+note = "10c, the architect's EPERM: the_broker_is_told_when_a_line_goes_to_the_back_and_comes_to_the_front"

@@ -306,12 +306,21 @@ pub struct Posix<S: Sys> {
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
     pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
-    /// What `Read` a terminal connection has outstanding, by connection.
-    pub(crate) tty_reads: Vec<(S::H, u32)>,
+    /// What `Read` a terminal connection has outstanding, by connection
+    /// (`pub`, like `tty_rest`, for the host tests).
+    pub tty_reads: Vec<(S::H, u32)>,
     /// Answers to held terminal reads that another request's wait took.
-    pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
+    pub tty_stash: Vec<(S::H, Vec<u8>)>,
     /// What a terminal read was given beyond the buffer that asked.
-    pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
+    pub tty_rest: Vec<(S::H, Vec<u8>)>,
+    /// The `PollReadable` each terminal connection has outstanding, by
+    /// connection (ADR-0331 item 5). A look that finds one does not send
+    /// another: the readiness request is idempotent, because a threaded
+    /// process runs the same look again after each deferred wait.
+    pub(crate) tty_polls: Vec<(S::H, u32)>,
+    /// Connections whose `PollReadable` was answered while another request's
+    /// wait was reading the channel: the next look says ready, once.
+    pub tty_poll_ready: Vec<S::H>,
     /// The record locks of this process (ADR-0319). A `fork` child starts
     /// with none, as POSIX has it: `after_fork_in_child` clears the copy.
     pub(crate) locks: crate::records::Locks<S::H>,
@@ -378,6 +387,8 @@ impl<S: Sys> Posix<S> {
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),
+            tty_polls: Vec::new(),
+            tty_poll_ready: Vec::new(),
             locks: crate::records::Locks::new(),
         }
     }
@@ -541,6 +552,16 @@ impl<S: Sys> Posix<S> {
                             .any(|&(c, ht)| c == conn && ht == header.transaction);
                         if held {
                             self.tty_stash.push((conn, self.input[..size].to_vec()));
+                            continue;
+                        }
+                        // A `PollReadable`'s answer: the next look says so.
+                        if let Some(i) = self
+                            .tty_polls
+                            .iter()
+                            .position(|&(c, pt)| c == conn && pt == header.transaction)
+                        {
+                            self.tty_polls.swap_remove(i);
+                            self.tty_poll_ready.push(conn);
                             continue;
                         }
                         return Err(EIO);
@@ -1046,11 +1067,15 @@ impl<S: Sys> Posix<S> {
                 };
                 self.install(desc, flags & o::CLOEXEC != 0)
             }
-            // The terminal is 6d's (ADR-0105).
-            EntryKind::Terminal => Err(ENXIO),
+            // ADR-0331 item 2: a connection of its own on the terminal.
+            EntryKind::Terminal => self.open_tty(r.place.entry, flags & o::NONBLOCK != 0),
             // An image is not a file this library can read.
             _ => Err(EACCES),
         }
+    }
+
+    pub(crate) fn install_desc(&mut self, desc: Desc<S::H>, cloexec: bool) -> Result<i32, i32> {
+        self.install(desc, cloexec)
     }
 
     fn install(&mut self, desc: Desc<S::H>, cloexec: bool) -> Result<i32, i32> {
@@ -1086,7 +1111,7 @@ impl<S: Sys> Posix<S> {
 
     /// Ends a description entry's handles; for a file written through, asks
     /// the service's `status` first (ADR-0103 item 6, ADR-0010).
-    fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
+    pub(crate) fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
         match desc {
             Desc::Object { conn, written, .. } => {
                 self.locks.release_description(conn);
@@ -1109,6 +1134,8 @@ impl<S: Sys> Posix<S> {
                     self.tty_reads.retain(|(h, _)| *h != c);
                     self.tty_stash.retain(|(h, _)| *h != c);
                     self.tty_rest.retain(|(h, _)| *h != c);
+                    self.tty_polls.retain(|(h, _)| *h != c);
+                    self.tty_poll_ready.retain(|h| *h != c);
                 }
                 for h in [read, write, conn].into_iter().flatten() {
                     self.sys.close(h);
@@ -1116,9 +1143,19 @@ impl<S: Sys> Posix<S> {
                 Ok(())
             }
             Desc::Null { .. } => Ok(()),
-            Desc::Socket(s) => {
+            Desc::Socket(mut s) => {
                 for h in [s.read, s.write, s.ctl].into_iter().flatten() {
                     self.sys.close(h);
+                }
+                // What a Unix socket held in the library (ADR-0412).
+                if let Some(u) = s.unix.as_mut() {
+                    let mut more = u.book.drain();
+                    if let Some(h) = u.held.take() {
+                        more.extend(h.handles);
+                    }
+                    for h in more {
+                        self.sys.close(h);
+                    }
                 }
                 Ok(())
             }
@@ -1219,6 +1256,107 @@ impl<S: Sys> Posix<S> {
                     Ok((_, r)) => Err(errno::from_file(r.status.0)),
                     Err(_) => Err(errno::from_file(self.status_of(size))),
                 }
+            }
+        }
+    }
+
+    /// `pread`: a read of a file at `offset`, which leaves the position where
+    /// it was. A stream or socket has no offset (`ESPIPE`).
+    pub fn pread(&mut self, fd: i32, into: User, offset: i64) -> Result<usize, i32> {
+        let start = u64::try_from(offset).map_err(|_| EINVAL)?;
+        match self.fds.get(fd) {
+            None => Err(EBADF),
+            Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
+            Some(Desc::Null { access }) => {
+                if *access == o::WRONLY {
+                    Err(EBADF)
+                } else {
+                    Ok(0)
+                }
+            }
+            Some(&Desc::Object { conn, access, .. }) => {
+                if access == o::WRONLY {
+                    return Err(EBADF);
+                }
+                let mut done = 0;
+                while done < into.length {
+                    let n = (into.length - done).min(MAX_INLINE);
+                    let at = start.checked_add(done as u64).ok_or(EINVAL)?;
+                    let m = proto::Read {
+                        offset: at,
+                        length: n as u32,
+                    };
+                    let size = self.call(conn, &m, &[])?;
+                    match decode::<proto::ReadReply<'_>>(&self.input[..size], 0) {
+                        Ok((_, r)) if r.status.0 == status::OK => {
+                            let got = r.data.0.len().min(n);
+                            self.sys.copy_out(into.part(done, got), &r.data.0[..got]);
+                            done += got;
+                            if got < n {
+                                break;
+                            }
+                        }
+                        Ok((_, r)) if done == 0 => return Err(errno::from_file(r.status.0)),
+                        Err(_) if done == 0 => {
+                            return Err(errno::from_file(self.status_of(size)));
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(done)
+            }
+        }
+    }
+
+    /// `pwrite`: a write of a file at `offset`, which leaves the position
+    /// where it was. (A description opened `O_APPEND` appends all the same on
+    /// Linux; here it writes at `offset`.)
+    pub fn pwrite(&mut self, fd: i32, from: User, offset: i64) -> Result<usize, i32> {
+        let start = u64::try_from(offset).map_err(|_| EINVAL)?;
+        match self.fds.get(fd) {
+            None => Err(EBADF),
+            Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
+            Some(Desc::Null { access }) => {
+                if *access == o::RDONLY {
+                    Err(EBADF)
+                } else {
+                    Ok(from.length)
+                }
+            }
+            Some(&Desc::Object {
+                conn, access, sync, ..
+            }) => {
+                if access == o::RDONLY {
+                    return Err(EBADF);
+                }
+                if from.length > isize::MAX as usize {
+                    return Err(EINVAL);
+                }
+                if let Some(Desc::Object { written, .. }) = self.fds.get_mut(fd) {
+                    *written = true;
+                }
+                let flags = if sync { write_flags::DURABLE } else { 0 };
+                let mut done = 0;
+                while done < from.length {
+                    let n = (from.length - done).min(MAX_INLINE);
+                    let at = start.checked_add(done as u64).ok_or(EINVAL)?;
+                    let mut data = core::mem::take(&mut self.data);
+                    self.sys.copy_in(from.part(done, n), &mut data[..n]);
+                    let m = proto::Write {
+                        offset: at,
+                        flags: Flags(flags),
+                        data: Data(&data[..n]),
+                    };
+                    let r = self.done(conn, &m, &[]);
+                    self.data = data;
+                    match r {
+                        Ok(0) => break,
+                        Ok(k) => done += k as usize,
+                        Err(e) if done == 0 => return Err(e),
+                        Err(_) => break,
+                    }
+                }
+                Ok(done)
             }
         }
     }

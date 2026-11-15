@@ -96,6 +96,11 @@
 < t_poll: threads passed
 < posixrun: exit 0
 < \r\n~> 
+# A blocking Unix-socket call from a process with threads (ADR-0412 item 7: a long wait, ADR-0315).
+> posixrun /bin/t_unix block\r
+< t_unix: block passed
+< posixrun: exit 0
+< \r\n~> 
 # exit() flushes stdio (a write) while a sibling is blocked in read.
 > posixrun /bin/t_threads blockedexit\r
 < t_threads: flushed at exit

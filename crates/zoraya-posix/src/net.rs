@@ -46,8 +46,20 @@ impl<S: Sys> Posix<S> {
     /// `socket(domain, type, protocol)`: a library object only; it needs no
     /// grant (ADR-0225 item 2).
     pub fn socket(&mut self, domain: i32, ty: i32, protocol: i32) -> Result<i32, i32> {
-        let (kind, nonblock, cloexec) = sock::check_socket(domain, ty, protocol)?;
-        let desc = Desc::Socket(Box::new(Socket::fresh(kind, nonblock)));
+        let desc = if domain == crate::unix::AF_UNIX {
+            let (kind, nonblock, cloexec) = crate::unix_io::check_unix(domain, ty, protocol)?;
+            (
+                Desc::Socket(Box::new(Socket::fresh_unix(kind, nonblock))),
+                cloexec,
+            )
+        } else {
+            let (kind, nonblock, cloexec) = sock::check_socket(domain, ty, protocol)?;
+            (
+                Desc::Socket(Box::new(Socket::fresh(kind, nonblock))),
+                cloexec,
+            )
+        };
+        let (desc, cloexec) = desc;
         match self.fds.install(0, desc, cloexec) {
             Ok(fd) => Ok(fd as i32),
             Err(_) => Err(EMFILE),
@@ -163,6 +175,15 @@ impl<S: Sys> Posix<S> {
     /// streams, then, unless the socket is non-blocking, the wait for
     /// `Connected` or `Failed` (ADR-0225 items 3 and 11).
     pub fn connect(&mut self, fd: i32, addr: &[u8]) -> Result<(), i32> {
+        if self.is_unix(fd) {
+            // Socket files are plan part F7's: a path names nothing yet
+            // (ADR-0412 item 5), and a connected pair is already connected.
+            return Err(if self.socket_of(fd)?.state == State::Connected {
+                EISCONN
+            } else {
+                crate::errno::ENOENT
+            });
+        }
         let (state, nonblock) = {
             let s = self.socket_of(fd)?;
             (s.state, s.nonblock)
@@ -370,6 +391,9 @@ impl<S: Sys> Posix<S> {
 
     /// `read`, `recv` of a socket: `dontwait` is `MSG_DONTWAIT`.
     pub fn sock_read(&mut self, fd: i32, into: User, dontwait: bool) -> Result<usize, i32> {
+        if self.is_unix(fd) {
+            return self.unix_read(fd, into, dontwait);
+        }
         let (state, nonblock) = {
             let s = self.socket_of(fd)?;
             (s.state, s.nonblock || dontwait)
@@ -414,6 +438,9 @@ impl<S: Sys> Posix<S> {
 
     /// `write`, `send` of a socket.
     pub fn sock_write(&mut self, fd: i32, from: User, dontwait: bool) -> Result<usize, i32> {
+        if self.is_unix(fd) {
+            return self.unix_write(fd, from, dontwait);
+        }
         let (state, nonblock) = {
             let s = self.socket_of(fd)?;
             (s.state, s.nonblock || dontwait)
@@ -455,6 +482,9 @@ impl<S: Sys> Posix<S> {
         if !(sock::SHUT_RD..=sock::SHUT_RDWR).contains(&how) {
             return Err(EINVAL);
         }
+        if self.is_unix(fd) {
+            return self.unix_shutdown(fd, how);
+        }
         let s = self.socket_mut(fd)?;
         if s.state != State::Connected {
             return Err(ENOTCONN);
@@ -495,6 +525,15 @@ impl<S: Sys> Posix<S> {
             return Ok(if e != 0 { e } else { pending });
         }
         let s = self.socket_of(fd)?;
+        if s.unix.is_some() {
+            return match (level, name) {
+                (sock::SOL_SOCKET, sock::SO_DOMAIN) => Ok(crate::unix::AF_UNIX),
+                (sock::SOL_SOCKET, sock::SO_PROTOCOL) => Ok(0),
+                (sock::SOL_SOCKET, sock::SO_ACCEPTCONN) => Ok(0),
+                (sock::IPPROTO_TCP, _) => Err(crate::errno::ENOPROTOOPT),
+                _ => sock::get_option(&s.options, s.kind, false, level, name),
+            };
+        }
         sock::get_option(&s.options, s.kind, false, level, name)
     }
 

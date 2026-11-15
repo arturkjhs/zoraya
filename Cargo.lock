@@ -762,6 +762,7 @@ dependencies = [
  "zoraya-rt",
  "zoraya-surface",
  "zoraya-test-alloc",
+ "zoraya-tty",
 ]
 
 [[package]]
@@ -940,9 +941,11 @@ dependencies = [
  "zoraya-http",
  "zoraya-proto-file",
  "zoraya-proto-term",
+ "zoraya-proto-tty",
+ "zoraya-protocol",
  "zoraya-resolve",
- "zoraya-term",
  "zoraya-test-alloc",
+ "zoraya-tty",
  "zoraya-width",
 ]
 

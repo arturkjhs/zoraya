@@ -9,6 +9,8 @@ license.workspace = true
 
 [dependencies]
 zoraya-abi = { path = "../zoraya-abi" }
+zoraya-tty = { path = "../zoraya-tty" }
+zoraya-proto-tty = { path = "../zoraya-proto-tty" }
 zoraya-describe = { path = "../zoraya-describe" }
 zoraya-command = { path = "../zoraya-command" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }
@@ -21,5 +23,5 @@ zoraya-width = { path = "../zoraya-width" }
 workspace = true
 
 [dev-dependencies]
-zoraya-term = { path = "../zoraya-term" }
+zoraya-protocol = { path = "../zoraya-protocol" }
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }

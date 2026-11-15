@@ -41,3 +41,16 @@ test_print_exception_stderr_is_none_1
 test_print_exception_stderr_is_none_2
 test_recursion_limit
 test_keyboard_interrupt_during_threading_shutdown
+# test_asyncio.test_base_events (plan part F2): the cases that make an AF_INET datagram
+# socket, a server socket (bind, listen: plan part F7) or a loopback connection for sendfile.
+test_create_connection_wrong_sock
+test_create_datagram_endpoint_allow_broadcast
+test_create_datagram_endpoint_sock
+test_create_datagram_endpoint_sockopts
+test_create_server_stream_bittype
+test_create_server_wrong_sock
+test__sock_sendfile_native_failure
+test_nonstream_socket
+test_sock_sendfile_fallback
+test_sock_sendfile_fallback_offset_and_count
+test_sock_sendfile_no_fallback

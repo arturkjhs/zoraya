@@ -1,0 +1,526 @@
+/*
+ * AF_UNIX sockets through libposix (ADR-0412, plan part F2), and the small
+ * calls that came with them (pread, pwrite, usleep): a static C program built
+ * by zcc against libc.a, run by posixrun. One binary with named cases; each
+ * prints "t_unix: NAME passed" or a line ending in FAIL and exits 1. posixrun
+ * has no broker, so there is no second process here: a descriptor is sent
+ * from one socket of a pair and received from the other, in one process, on
+ * the real kernel (the kernel half of INV-0412-1: duplicated stream ends,
+ * moved channel ends, the all-or-nothing write). A second process needs a
+ * spawn that hands a socket over (plan part F4); the host tests of
+ * crates/zoraya-posix/tests/unix.rs cover two processes on a fake kernel.
+ *
+ *   t_unix pair      socketpair of each type: bytes, boundaries, the end,
+ *                    EPIPE, truncation, the flags, getsockopt, fstat
+ *   t_unix rights    SCM_RIGHTS with a file, a directory, both ends of a pipe,
+ *                    a stream socket and a packet socket; each works when it
+ *                    arrives; read-only stays read-only
+ *   t_unix refused   what a send refuses, and that a refused send changes
+ *                    nothing (fd count, the moved socket still ours)
+ *   t_unix stream    descriptors come with the byte they were sent with
+ *   t_unix poll      poll on pairs: POLLIN, POLLOUT, POLLHUP, a full queue
+ *   t_unix block     a blocking recv wakes when the peer sends; a full queue
+ *                    blocks the writer until the reader takes a message
+ *   t_unix calls     pread, pwrite, usleep, mkdtemp
+ *   t_unix all       every case
+ */
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#define CHECK(cond)                                                             \
+	do {                                                                    \
+		if (!(cond)) {                                                  \
+			printf("t_unix: line %d: %s (errno %d) FAIL\n",         \
+			       __LINE__, #cond, errno);                         \
+			fflush(stdout);                                         \
+			exit(1);                                                \
+		}                                                               \
+	} while (0)
+
+#define OK(call) CHECK((call) == 0)
+#define FAILS(call, e) CHECK((call) == -1 && errno == (e))
+
+/* How many descriptors are open: the first free number. */
+static int first_free(void)
+{
+	int fd = dup(0);
+	CHECK(fd >= 0);
+	close(fd);
+	return fd;
+}
+
+/* Sends `n` bytes of `data` with the descriptors `fds`, as one message. */
+static ssize_t send_fds(int s, const void *data, size_t n, const int *fds, int count, int flags)
+{
+	struct iovec iov = {(void *)data, n};
+	char control[CMSG_SPACE(sizeof(int) * 70)];
+	struct msghdr m;
+	memset(&m, 0, sizeof m);
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	if (count > 0) {
+		memset(control, 0, sizeof control);
+		m.msg_control = control;
+		m.msg_controllen = CMSG_SPACE(sizeof(int) * count);
+		struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+		c->cmsg_level = SOL_SOCKET;
+		c->cmsg_type = SCM_RIGHTS;
+		c->cmsg_len = CMSG_LEN(sizeof(int) * count);
+		memcpy(CMSG_DATA(c), fds, sizeof(int) * count);
+	}
+	return sendmsg(s, &m, flags);
+}
+
+/* Receives up to `n` bytes and `room` descriptors: the count of descriptors in
+ * `*got`, the message's flags in `*mflags`. */
+static ssize_t recv_fds(int s, void *buf, size_t n, int *fds, int room, int *got, int *mflags, int flags)
+{
+	struct iovec iov = {buf, n};
+	char control[CMSG_SPACE(sizeof(int) * 70)];
+	struct msghdr m;
+	memset(&m, 0, sizeof m);
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	m.msg_control = control;
+	m.msg_controllen = CMSG_SPACE(sizeof(int) * room);
+	ssize_t r = recvmsg(s, &m, flags);
+	*got = 0;
+	if (r < 0)
+		return r;
+	*mflags = m.msg_flags;
+	/* At most one control message: the library gives all descriptors in one. */
+	struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+	if (c && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
+		int k = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+		memcpy(fds + *got, CMSG_DATA(c), k * sizeof(int));
+		*got += k;
+	}
+	return r;
+}
+
+static void pair_case(void)
+{
+	int sv[2], t;
+	char b[64];
+	int types[3] = {SOCK_STREAM, SOCK_SEQPACKET, SOCK_DGRAM};
+	for (int i = 0; i < 3; i++) {
+		OK(socketpair(AF_UNIX, types[i], 0, sv));
+		socklen_t l = sizeof t;
+		OK(getsockopt(sv[0], SOL_SOCKET, SO_TYPE, &t, &l));
+		CHECK(t == types[i]);
+		OK(getsockopt(sv[1], SOL_SOCKET, SO_DOMAIN, &t, &l));
+		CHECK(t == AF_UNIX);
+		struct stat st;
+		OK(fstat(sv[0], &st));
+		CHECK(S_ISSOCK(st.st_mode));
+		CHECK(write(sv[0], "hello", 5) == 5);
+		CHECK(send(sv[1], "back!", 5, 0) == 5);
+		if (types[i] == SOCK_STREAM) {
+			CHECK(read(sv[1], b, 3) == 3 && memcmp(b, "hel", 3) == 0);
+			CHECK(read(sv[1], b, 9) == 2 && memcmp(b, "lo", 2) == 0);
+		} else {
+			/* One message each, and the rest of a long one is lost. */
+			CHECK(read(sv[1], b, 3) == 3 && memcmp(b, "hel", 3) == 0);
+			CHECK(send(sv[0], "x", 1, 0) == 1);
+			CHECK(recv(sv[1], b, 9, MSG_DONTWAIT) == 1 && b[0] == 'x');
+		}
+		CHECK(recv(sv[0], b, 64, 0) == 5 && memcmp(b, "back!", 5) == 0);
+		FAILS(recv(sv[0], b, 64, MSG_DONTWAIT), EAGAIN);
+		/* The peer closes: the end, then EPIPE for a write. */
+		OK(close(sv[1]));
+		CHECK(read(sv[0], b, 64) == 0);
+		signal(SIGPIPE, SIG_IGN);
+		FAILS(write(sv[0], "x", 1), EPIPE);
+		OK(close(sv[0]));
+	}
+	/* The flags and what is refused. */
+	OK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, sv));
+	CHECK(fcntl(sv[0], F_GETFL) & O_NONBLOCK);
+	CHECK(fcntl(sv[0], F_GETFD) & FD_CLOEXEC);
+	FAILS(read(sv[0], b, 1), EAGAIN);
+	OK(close(sv[0]));
+	OK(close(sv[1]));
+	FAILS(socketpair(AF_INET, SOCK_STREAM, 0, sv), EAFNOSUPPORT);
+	FAILS(socketpair(AF_UNIX, SOCK_RAW, 0, sv), EPROTONOSUPPORT);
+	/* Boundaries, and the size of one message. */
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv));
+	CHECK(send(sv[0], "", 0, 0) == 0);
+	CHECK(send(sv[0], "abc", 3, 0) == 3);
+	CHECK(recv(sv[1], b, 10, 0) == 0);
+	CHECK(recv(sv[1], b, 2, 0) == 2);
+	FAILS(recv(sv[1], b, 2, MSG_DONTWAIT), EAGAIN);
+	static char big[64 * 1024];
+	FAILS(send(sv[0], big, sizeof big, 0), EMSGSIZE);
+	CHECK(send(sv[0], big, sizeof big - 1, 0) == (ssize_t)sizeof big - 1);
+	CHECK(recv(sv[1], big, sizeof big, 0) == (ssize_t)sizeof big - 1);
+	/* A message longer than the buffer says so. */
+	struct iovec iov = {b, 2};
+	struct msghdr m = {0};
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	CHECK(send(sv[0], "truncated", 9, 0) == 9);
+	CHECK(recvmsg(sv[1], &m, 0) == 2 && (m.msg_flags & MSG_TRUNC));
+	OK(close(sv[0]));
+	OK(close(sv[1]));
+	printf("t_unix: pair passed\n");
+}
+
+static void rights_case(void)
+{
+	int sv[2], file, ro, dir, p[2], ss[2], ps[2], fds[8], got, mflags;
+	char b[64];
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv));
+	file = open("/work/unix.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
+	CHECK(file >= 0);
+	CHECK(write(file, "data", 4) == 4);
+	ro = open("/work/unix.txt", O_RDONLY);
+	CHECK(ro >= 0);
+	dir = open("/work", O_RDONLY | O_DIRECTORY);
+	CHECK(dir >= 0);
+	OK(pipe(p));
+	OK(socketpair(AF_UNIX, SOCK_STREAM, 0, ss));
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, ps));
+	int send_list[7] = {file, ro, dir, p[0], p[1], ss[0], ps[0]};
+	CHECK(send_fds(sv[0], "all", 3, send_list, 7, 0) == 3);
+	/* The two sockets moved: their numbers are free. */
+	FAILS(fcntl(ss[0], F_GETFD), EBADF);
+	FAILS(fcntl(ps[0], F_GETFD), EBADF);
+	CHECK(fcntl(file, F_GETFD) >= 0 && fcntl(p[1], F_GETFD) >= 0);
+	CHECK(recv_fds(sv[1], b, sizeof b, fds, 7, &got, &mflags, MSG_CMSG_CLOEXEC) == 3);
+	CHECK(got == 7 && !(mflags & MSG_CTRUNC));
+	for (int i = 0; i < 7; i++)
+		CHECK(fcntl(fds[i], F_GETFD) & FD_CLOEXEC);
+	/* The file: the same bytes, writable; the read-only one is not. */
+	CHECK(pread(fds[0], b, 4, 0) == 4 && memcmp(b, "data", 4) == 0);
+	CHECK(pwrite(fds[0], "D", 1, 0) == 1);
+	CHECK(pread(fds[1], b, 4, 0) == 4 && memcmp(b, "Data", 4) == 0);
+	FAILS(write(fds[1], "x", 1), EBADF);
+	/* The directory. */
+	struct stat st;
+	OK(fstat(fds[2], &st));
+	CHECK(S_ISDIR(st.st_mode));
+	/* The pipe ends are this pipe's. */
+	CHECK(write(fds[4], "pipe", 4) == 4);
+	CHECK(read(p[0], b, 8) == 4 && memcmp(b, "pipe", 4) == 0);
+	CHECK(write(p[1], "back", 4) == 4);
+	CHECK(read(fds[3], b, 8) == 4 && memcmp(b, "back", 4) == 0);
+	/* The stream socket and the packet socket still talk to their peers. */
+	CHECK(write(ss[1], "stream", 6) == 6);
+	CHECK(read(fds[5], b, 8) == 6 && memcmp(b, "stream", 6) == 0);
+	CHECK(write(fds[5], "ok", 2) == 2);
+	CHECK(read(ss[1], b, 8) == 2);
+	CHECK(send(ps[1], "packet", 6, 0) == 6);
+	CHECK(recv(fds[6], b, 8, 0) == 6 && memcmp(b, "packet", 6) == 0);
+	/* A received socket can carry descriptors again. */
+	int again[1];
+	CHECK(send_fds(fds[6], "again", 5, &p[0], 1, 0) == 5);
+	CHECK(recv_fds(ps[1], b, sizeof b, again, 1, &got, &mflags, 0) == 5 && got == 1);
+	CHECK(write(p[1], "q", 1) == 1);
+	CHECK(read(again[0], b, 8) == 1 && b[0] == 'q');
+	/* Close what is left. */
+	OK(close(sv[0]));
+	OK(close(sv[1]));
+	OK(close(ps[1]));
+	OK(close(file));
+	OK(close(ro));
+	OK(close(dir));
+	OK(close(p[0]));
+	OK(close(p[1]));
+	OK(close(ss[1]));
+	printf("t_unix: rights passed\n");
+}
+
+static void refused_case(void)
+{
+	int sv[2], p[2], fds[70], got, mflags;
+	char b[16];
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv));
+	OK(pipe(p));
+	int tcp = socket(AF_INET, SOCK_STREAM, 0);
+	int null = open("/dev/null", O_RDWR);
+	CHECK(tcp >= 0 && null >= 0);
+	int open_before = first_free();
+	int bad[3];
+	bad[0] = p[0];
+	bad[1] = 99;
+	FAILS(send_fds(sv[0], "x", 1, bad, 2, 0), EBADF);
+	bad[1] = tcp;
+	FAILS(send_fds(sv[0], "x", 1, bad, 2, 0), EINVAL);
+	bad[1] = null;
+	FAILS(send_fds(sv[0], "x", 1, bad, 2, 0), EINVAL);
+	bad[1] = sv[1];
+	FAILS(send_fds(sv[0], "x", 1, bad, 2, 0), EBUSY); /* its peer's channel */
+	bad[1] = sv[0];
+	FAILS(send_fds(sv[0], "x", 1, bad, 2, 0), EBUSY); /* its own */
+	for (int i = 0; i < 70; i++)
+		fds[i] = p[0];
+	FAILS(send_fds(sv[0], "x", 1, fds, 65, 0), ETOOMANYREFS);
+	/* Nothing was sent and no descriptor was made or lost. */
+	FAILS(recv(sv[1], b, 16, MSG_DONTWAIT), EAGAIN);
+	CHECK(first_free() == open_before);
+	CHECK(fcntl(sv[0], F_GETFD) >= 0 && fcntl(sv[1], F_GETFD) >= 0);
+	/* The same moving socket twice. */
+	int two[3] = {sv[1], sv[1], 0};
+	FAILS(send_fds(sv[0], "x", 1, two, 2, 0), EINVAL);
+	/* A sent end with a handle queued at it cannot move (ADR-0050). */
+	int q[2];
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, q));
+	CHECK(send_fds(q[1], "m", 1, &p[0], 1, 0) == 1);
+	FAILS(send_fds(sv[0], "x", 1, &q[0], 1, 0), EBUSY);
+	CHECK(fcntl(q[0], F_GETFD) >= 0);
+	CHECK(recv_fds(q[0], b, 16, fds, 1, &got, &mflags, 0) == 1 && got == 1);
+	OK(close(fds[0]));
+	CHECK(send_fds(sv[0], "x", 1, &q[0], 1, 0) == 1);
+	CHECK(recv_fds(sv[1], b, 16, fds, 1, &got, &mflags, 0) == 1 && got == 1);
+	OK(close(fds[0]));
+	/* A peer that is gone: EPIPE, and the socket that would have moved stays. */
+	OK(close(sv[1]));
+	signal(SIGPIPE, SIG_IGN);
+	int s[2];
+	OK(socketpair(AF_UNIX, SOCK_STREAM, 0, s));
+	FAILS(send_fds(sv[0], "x", 1, &s[0], 1, 0), EPIPE);
+	CHECK(write(s[0], "alive", 5) == 5);
+	CHECK(read(s[1], b, 16) == 5);
+	/* A descriptor with no byte, and one past a fork's shared stream. */
+	FAILS(send_fds(s[0], "", 0, &p[0], 1, 0), EINVAL);
+	/* Control messages of another kind. */
+	struct iovec iov = {"x", 1};
+	char control[CMSG_SPACE(sizeof(int))];
+	struct msghdr m = {0};
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	m.msg_control = control;
+	m.msg_controllen = sizeof control;
+	struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+	c->cmsg_level = SOL_SOCKET;
+	c->cmsg_type = SCM_CREDENTIALS;
+	c->cmsg_len = CMSG_LEN(sizeof(int));
+	FAILS(sendmsg(s[0], &m, 0), EINVAL);
+	FAILS(socket(AF_UNIX, SOCK_STREAM, 3), EPROTONOSUPPORT);
+	/* A Unix socket with no peer. */
+	int u = socket(AF_UNIX, SOCK_STREAM, 0);
+	CHECK(u >= 0);
+	FAILS(read(u, b, 1), ENOTCONN);
+	OK(close(u));
+	printf("t_unix: refused passed\n");
+}
+
+static void stream_case(void)
+{
+	int s[2], p[2], fds[4], got, mflags;
+	char b[256];
+	OK(socketpair(AF_UNIX, SOCK_STREAM, 0, s));
+	OK(pipe(p));
+	/* Three sends, the second and the third with a descriptor: a read of
+	 * 100 bytes returns the first send alone, then the second with its
+	 * descriptor, then the third with its own. */
+	CHECK(send(s[0], "AAAA", 4, 0) == 4);
+	int a = p[0];
+	CHECK(send_fds(s[0], "BBBB", 4, &a, 1, 0) == 4);
+	CHECK(send_fds(s[0], "CCCC", 4, &p[1], 1, 0) == 4);
+	CHECK(recv_fds(s[1], b, 100, fds, 4, &got, &mflags, 0) == 4 && got == 0);
+	CHECK(memcmp(b, "AAAA", 4) == 0);
+	CHECK(recv_fds(s[1], b, 100, fds, 4, &got, &mflags, 0) == 4 && got == 1);
+	CHECK(memcmp(b, "BBBB", 4) == 0);
+	CHECK(write(p[1], "r", 1) == 1);
+	CHECK(read(fds[0], b, 1) == 1 && b[0] == 'r');
+	OK(close(fds[0]));
+	CHECK(recv_fds(s[1], b, 100, fds, 4, &got, &mflags, 0) == 4 && got == 1);
+	CHECK(memcmp(b, "CCCC", 4) == 0);
+	OK(close(fds[0]));
+	/* A plain read takes the descriptor's byte and closes the descriptor. */
+	int before = first_free();
+	CHECK(send_fds(s[0], "ZZ", 2, &p[0], 1, 0) == 2);
+	CHECK(read(s[1], b, 2) == 2);
+	CHECK(first_free() == before);
+	/* A short control buffer: the descriptor is closed and the message says so. */
+	CHECK(send_fds(s[0], "Y", 1, &p[0], 1, 0) == 1);
+	CHECK(recv_fds(s[1], b, 1, fds, 0, &got, &mflags, 0) == 1);
+	CHECK(got == 0 && (mflags & MSG_CTRUNC));
+	CHECK(first_free() == before);
+	/* A long stream, in uneven pieces, in order. */
+	static char out[20000], in[20000];
+	for (int i = 0; i < (int)sizeof out; i++)
+		out[i] = (char)(i * 7 + i / 251);
+	int sent = 0, taken = 0;
+	while (taken < (int)sizeof out) {
+		int n = 1 + (sent * 31) % 997;
+		if (n > (int)sizeof out - sent)
+			n = (int)sizeof out - sent;
+		if (n > 0) {
+			ssize_t w = send(s[0], out + sent, n, MSG_DONTWAIT);
+			if (w > 0)
+				sent += w;
+		}
+		ssize_t r = recv(s[1], in + taken, 1 + (taken * 17) % 613, MSG_DONTWAIT);
+		if (r > 0)
+			taken += r;
+	}
+	CHECK(memcmp(in, out, sizeof out) == 0);
+	OK(close(s[0]));
+	OK(close(s[1]));
+	OK(close(p[0]));
+	OK(close(p[1]));
+	printf("t_unix: stream passed\n");
+}
+
+static int rev(int fd, short events)
+{
+	struct pollfd f = {fd, events, 0x7000};
+	int n = poll(&f, 1, 0);
+	CHECK(n == (f.revents != 0 ? 1 : 0));
+	return f.revents;
+}
+
+static void poll_case(void)
+{
+	int types[2] = {SOCK_STREAM, SOCK_SEQPACKET};
+	char b[8];
+	for (int i = 0; i < 2; i++) {
+		int s[2];
+		OK(socketpair(AF_UNIX, types[i], 0, s));
+		CHECK(rev(s[0], POLLIN) == 0);
+		CHECK(rev(s[0], POLLOUT) == POLLOUT);
+		CHECK(write(s[1], "x", 1) == 1);
+		CHECK(rev(s[0], POLLIN) == POLLIN);
+		CHECK(read(s[0], b, 8) == 1);
+		CHECK(rev(s[0], POLLIN) == 0);
+		OK(close(s[1]));
+		CHECK((rev(s[0], POLLIN) & POLLHUP) == POLLHUP);
+		CHECK(read(s[0], b, 8) == 0);
+		OK(close(s[0]));
+	}
+	/* A full queue is not writable until a message is read. */
+	int s[2];
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, s));
+	int n = 0;
+	while (send(s[0], "m", 1, MSG_DONTWAIT) == 1)
+		n++;
+	CHECK(errno == EAGAIN && n >= 1);
+	CHECK(rev(s[0], POLLOUT) == 0);
+	CHECK(recv(s[1], b, 8, 0) == 1);
+	CHECK(rev(s[0], POLLOUT) == POLLOUT);
+	OK(close(s[0]));
+	OK(close(s[1]));
+	printf("t_unix: poll passed\n");
+}
+
+static void *late_send(void *arg)
+{
+	int fd = *(int *)arg;
+	struct timespec t = {0, 30 * 1000000L};
+	nanosleep(&t, NULL);
+	CHECK(send(fd, "late", 4, 0) == 4);
+	return NULL;
+}
+
+static void *late_recv(void *arg)
+{
+	int fd = *(int *)arg;
+	char b[8];
+	struct timespec t = {0, 30 * 1000000L};
+	nanosleep(&t, NULL);
+	CHECK(recv(fd, b, 8, 0) == 1);
+	return NULL;
+}
+
+static void block_case(void)
+{
+	int s[2];
+	pthread_t t;
+	char b[8];
+	for (int i = 0; i < 2; i++) {
+		OK(socketpair(AF_UNIX, i ? SOCK_SEQPACKET : SOCK_STREAM, 0, s));
+		OK(pthread_create(&t, NULL, late_send, &s[1]));
+		CHECK(recv(s[0], b, 8, 0) == 4 && memcmp(b, "late", 4) == 0);
+		OK(pthread_join(t, NULL));
+		OK(close(s[0]));
+		OK(close(s[1]));
+	}
+	/* A writer blocked on a full queue goes on when a message is read. */
+	OK(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, s));
+	while (send(s[0], "m", 1, MSG_DONTWAIT) == 1)
+		;
+	CHECK(errno == EAGAIN);
+	OK(pthread_create(&t, NULL, late_recv, &s[1]));
+	CHECK(send(s[0], "m", 1, 0) == 1);
+	OK(pthread_join(t, NULL));
+	OK(close(s[0]));
+	OK(close(s[1]));
+	printf("t_unix: block passed\n");
+}
+
+static void calls_case(void)
+{
+	char b[16];
+	int fd = open("/work/pread.txt", O_CREAT | O_TRUNC | O_RDWR, 0644);
+	CHECK(fd >= 0);
+	CHECK(write(fd, "0123456789", 10) == 10);
+	CHECK(pread(fd, b, 4, 3) == 4 && memcmp(b, "3456", 4) == 0);
+	CHECK(lseek(fd, 0, SEEK_CUR) == 10);
+	CHECK(pwrite(fd, "XY", 2, 2) == 2);
+	CHECK(lseek(fd, 0, SEEK_CUR) == 10);
+	CHECK(pread(fd, b, 16, 0) == 10 && memcmp(b, "01XY456789", 10) == 0);
+	CHECK(pread(fd, b, 16, 10) == 0);
+	FAILS(pread(fd, b, 4, -1), EINVAL);
+	int p[2];
+	OK(pipe(p));
+	FAILS(pread(p[0], b, 4, 0), ESPIPE);
+	OK(close(p[0]));
+	OK(close(p[1]));
+	OK(close(fd));
+	struct timespec a, c;
+	clock_gettime(CLOCK_MONOTONIC, &a);
+	OK(usleep(20000));
+	clock_gettime(CLOCK_MONOTONIC, &c);
+	long ms = (c.tv_sec - a.tv_sec) * 1000 + (c.tv_nsec - a.tv_nsec) / 1000000;
+	CHECK(ms >= 19 && ms < 2000);
+	OK(usleep(0));
+	/* mkdtemp: a new directory of a random name, mode 0700. */
+	char tmpl[] = "/work/dXXXXXX";
+	char *d = mkdtemp(tmpl);
+	CHECK(d == tmpl && strcmp(d, "/work/dXXXXXX") != 0);
+	struct stat st;
+	OK(stat(d, &st));
+	CHECK(S_ISDIR(st.st_mode));
+	OK(rmdir(d));
+	char bad[] = "/work/dXXXXX";
+	CHECK(mkdtemp(bad) == NULL && errno == EINVAL);
+	printf("t_unix: calls passed\n");
+}
+
+int main(int argc, char **argv)
+{
+	setvbuf(stdout, NULL, _IOLBF, 0);
+	const char *mode = argc > 1 ? argv[1] : "all";
+	int all = strcmp(mode, "all") == 0, known = 0;
+#define CASE(name, fn)                                                     \
+	if (all || strcmp(mode, name) == 0) {                              \
+		known = 1;                                                 \
+		fn();                                                      \
+	}
+	CASE("pair", pair_case)
+	CASE("rights", rights_case)
+	CASE("refused", refused_case)
+	CASE("stream", stream_case)
+	CASE("poll", poll_case)
+	CASE("block", block_case)
+	CASE("calls", calls_case)
+	if (!known) {
+		printf("t_unix: unknown case %s FAIL\n", mode);
+		return 2;
+	}
+	return 0;
+}

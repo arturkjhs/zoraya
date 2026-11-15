@@ -101,12 +101,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 #include <zoraya/posix.h>
@@ -1027,6 +1029,63 @@ static void tstp(void)
 		pause_ms(1000);
 }
 
+/* ADR-0331 items 2, 4 and 9 from zosh: the terminal's fds, and raw mode kept
+ * across a stop. `isatty` of each fd; then, with the terminal on fd 0, line
+ * editing and echo off (the signal characters kept, so Ctrl-Z stops it), each
+ * key read as it is typed and reported with whether the mode is still raw,
+ * until `q`. The modes are set with `tcsetattr` (ADR-0342 item 4, ADR-0389). */
+static void rawkeys(void)
+{
+	struct termios was, t;
+	printf("rawkeys: tty %d %d %d\n", isatty(0), isatty(1), isatty(2));
+	fflush(stdout);
+	if (tcgetattr(0, &was) != 0) {
+		printf("rawkeys: fd 0 is no terminal\n");
+		return;
+	}
+	t = was;
+	t.c_lflag &= ~(ICANON | ECHO);
+	t.c_cc[VMIN] = 1;
+	t.c_cc[VTIME] = 0;
+	if (tcsetattr(0, TCSANOW, &t) != 0) {
+		printf("rawkeys: tcsetattr: errno %d\n", errno);
+		return;
+	}
+	printf("rawkeys: raw\n");
+	fflush(stdout);
+	for (;;) {
+		unsigned char c;
+		struct termios now;
+		ssize_t n = read(0, &c, 1);
+		if (n <= 0) {
+			printf("rawkeys: read %d errno %d\n", (int)n, errno);
+			break;
+		}
+		if (c == 'q')
+			break;
+		tcgetattr(0, &now);
+		printf("rawkeys: key %02x canonical %d\n", c, (now.c_lflag & ICANON) != 0);
+		fflush(stdout);
+	}
+	tcsetattr(0, TCSANOW, &was);
+	printf("rawkeys: done\n");
+}
+
+/* ADR-0331 item 4: a read of the terminal from a line not in front, on fd 2
+ * (fd 0 of a background line is at its end): `NotForeground`, so the program
+ * stops (SIGTTIN) and reads nothing typed. */
+static void readerr(void)
+{
+	char line[64];
+	ssize_t n = read(2, line, sizeof line - 1);
+	if (n < 0)
+		printf("readerr: errno %d\n", errno);
+	else {
+		line[n] = 0;
+		printf("readerr: got=%s\n", line);
+	}
+}
+
 /* INV-0200-2: a program Ctrl-Z does not stop. */
 static void notstp(void)
 {
@@ -1891,6 +1950,10 @@ int main(int argc, char **argv)
 		tstp();
 	else if (!strcmp(argv[1], "notstp"))
 		notstp();
+	else if (!strcmp(argv[1], "rawkeys"))
+		rawkeys();
+	else if (!strcmp(argv[1], "readerr"))
+		readerr();
 	else if (!strcmp(argv[1], "tfork"))
 		tfork();
 	else if (!strcmp(argv[1], "tforkthread"))

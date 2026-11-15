@@ -8,14 +8,18 @@ adds, remove what the architect has decided (the decision itself is recorded in 
 **Both dispatchers** (TASK-31 on the Mac mini, TASK-34 on the MacBook Air) keep this file. TASK-34's dispatcher: add your
 items here too, under the same headings, with the part's name in front.
 
-Last updated: 2026-11-15 (the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`, `test-fixes-2`, `ci-expr`; 10c in review).
+Last updated: 2026-11-15 (the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
+`test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass on `work/10c`).
 
 ## A. Proposed ADRs, with the agent's one-line recommendation
 
 | ADR | What | Recommendation | From |
 |---|---|---|---|
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
-| ADR-0386, 0387, 0388, 0389 | 10c: the tty discipline in `zosh`, zosh's lines, the broker's notices, the terminal names | On branch `work/10c`, not yet merged; recommendations in `docs/tasks/TASK-31-part-10c.md` | 10c |
+| ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
+| ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
+| ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
+| ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
 
 ## B. Decisions taken to continue (the architect may overrule)
 
@@ -23,7 +27,17 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
   argument); the userland does not depend on it. The independent review of `tr`, `expr` and `diff` was done by an
   `opus-review` (decided 2026-11-15 that it counts).
 - **10a:** the shell writes a fixed reset before a prompt that follows a command, until 10c sends `Restore` (done on
-  `work/10c`).
+  `work/10c`: the reset is gone).
+- **10c, keep the shell (ADR-0331 Option B) for the relay:** one HVF run at 1024x768 (`t_tty bench`): a pipe between two
+  programs 350 MB/s; 1 MiB to the window through `zosh` and `term` 457 ms (2.3 MB/s); a full 80x24 repaint 0.57 ms; a
+  byte then `tcdrain` mean 133 us, worst 351 us. The split of the time between `zosh` and `term` (ADR-0331's "more than half"
+  condition) was not measured: a counter of `pump_relay`'s time is the follow-up.
+- **10c, decisions where the ADRs are silent** (ADR-0386 to 0389): `Restore` and `Reinstate` as two messages; mode 2004 read
+  from the program's output, believed only out of canonical mode; the held paste's question in the window's title until
+  ADR-0337's status line; newlines of a paste sent as carriage returns; a paste past 16 KiB cut; with no line in front
+  nobody reads; a change of the front line drops unread input; at most 64 terminal connections per line; a `Clone` from a
+  line not in front is still answered (refusing it would fail `fork` in a background line, `docs/backlog.md`); the signal
+  characters and `SIGWINCH` go to the group a `tcsetpgrp` chose, through the broker.
 - **10b:** a paste is marked in the shell's key stream by bytes 0xF8 to 0xFF, which no key can make; a paste while a program
   runs is dropped with a one-line notice; copy and paste drop zero-width and bidi characters and cells whose colours differ
   by 8 or less per channel.
@@ -32,8 +46,7 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
   container only); fall back to recording the gap if the container refuses it.
 - **`work/py-hook`:** the hook builds a second CPython, in the test job (4 minutes in CI).
 - **Test infrastructure:** the semaphore, barrier and latch groups of libc++'s tests run only in the nightly (TCG);
-  INV-0042-1 stays `not yet applicable`; INV-0172-4 (a room's shell cannot create a room with more than the room holds)
-  waits for its check (10c or the next part touching `zosh`'s rooms).
+  INV-0042-1 stays `not yet applicable`. INV-0172-4's narrowing of `room new` inside a room is built and checked in 10c.
 
 ## C. Hand checks (exact commands)
 

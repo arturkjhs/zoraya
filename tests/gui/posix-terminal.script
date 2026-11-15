@@ -1,0 +1,113 @@
+# Part 10c (ADR-0331, ADR-0389): a POSIX program in a terminal window, on the
+# tour's image (zosh with the POSIX programs of the ports and t_tty), at each GUI size
+# (make test-tour-terminal: scale 1 and 2, 1600x1000 and 1920x1200). A big
+# display has fewer than 24 rows (22 at 1920x1200), so nothing here depends on
+# the number of rows: the program prints the size it reads, and the script
+# reads that. The window's text starts at x 87 and a cell is 8 logical pixels
+# wide; the window's right edge is at x 742 (its grip is the strip inside it).
+#
+# 1. `sh` typed at the prompt gives a `$` prompt, and its job control works
+#    through /dev/tty and tcsetpgrp: Ctrl-C ends the job in front and sh goes
+#    on, Ctrl-Z stops it and sh says so (INV-0331-2, ADR-0388).
+# 2. t_tty box draws a box on the window's border on the alternate screen, in
+#    raw mode with the signal characters kept (a program like less or vi): it
+#    prints the bytes of each key it reads (F5, F1 and Ctrl+Right are what
+#    the pinned xterm-256color entry says: kf5=\E[15~, kf1=\EOP,
+#    kRIT5=\E[1;5C), follows the window as it is resized (SIGWINCH and
+#    TIOCGWINSZ: INV-0331-6), is stopped by Ctrl-Z and continued by fg with
+#    its screen and its raw mode back (INV-0331-4), and takes a paste as
+#    bracketed text because it set mode 2004 (INV-0332-5's program half).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+chord ctrl l
+top ~> _
+type sh\r
+window
+screen $ _
+type echo in sh\r
+screen in sh
+screen $ _
+type /bin/sleep 300\r
+pause 1200
+chord ctrl c
+window
+screen $ _
+type /bin/sleep 301\r
+pause 1200
+chord ctrl z
+window
+prefix ^Z[1] + Stopped
+screen $ _
+type kill -9 %1\r
+pause 1500
+type jobs\r
+prefix [1] + Killed
+type exit\r
+window
+screen ~> _
+# The box program.
+chord ctrl l
+top ~> _
+type t_tty box\r
+pause 1500
+window
+prefix +---
+prefix | box cols 80
+prefix | winch 0
+# F5, F1 and Ctrl+Right as the pinned entry says (ESC [ 1 5 ~, ESC O P,
+# ESC [ 1 ; 5 C), read as typed, with no echo.
+key f5
+window
+prefix | keys 1b 5b 31 35 7e
+key f1
+window
+prefix | keys 1b 4f 50
+chord ctrl right
+window
+prefix | keys 1b 5b 31 3b 35 43
+# The window is made 80 pixels (10 columns) wider by its right edge, and back:
+# one SIGWINCH each time, the size read again, the box redrawn on the new border.
+drag 741 300 821 300 300
+pause 800
+window
+prefix | box cols 90
+prefix | winch 1
+drag 821 300 741 300 300
+pause 800
+window
+prefix | box cols 80
+prefix | winch 2
+# A selection of the box's own text is pasted into the box: bracketed, since
+# it asked for mode 2004 (about ten bytes of `box cols 80`, the selection stops at its last cell; the paste is held for no
+# question).
+drag 112 147 191 147 400
+chord meta c
+pause 300
+chord meta v
+pause 600
+window
+prefix | paste bracketed 1
+# Ctrl-Z stops it: the shell's screen and prompt are back, not the box.
+chord ctrl z
+window
+prefix [1] stopped:
+# (the selection of the paste still marks two cells here, so the cursor is not read)
+prefix ~>
+# fg: the box is back on the alternate screen, and its raw mode with it (a key
+# is read as typed and not echoed); the shell told it the size again.
+type fg\r
+pause 1000
+window
+prefix | winch 3
+key f5
+window
+prefix | keys 1b 5b 31 35 7e
+# q ends it; the primary screen and the prompt come back, with the program's
+# last line, whatever it left on the alternate screen gone.
+type q
+window
+# (its last line, "t_tty: box done", starts where the shell's cursor was; it is not read)
+screen ~> _
+type poweroff\r
+exit

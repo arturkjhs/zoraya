@@ -46,7 +46,7 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
 	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md \
-	docs/adr/0398-poll-and-ppoll-as-built.md
+	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0430-unix-sockets-as-built.md docs/adr/0389-the-terminal-calls-of-libposix-where-adr-0331-and-adr-0342-are-silent.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -674,7 +674,7 @@ CURL_OPTS := --disable-shared --enable-static --with-openssl=$(DEPS) --with-zlib
 	--without-libidn2 --without-librtmp --without-libssh2 --without-libssh --without-gssapi --without-winidn
 $(CURL_BIN): $(CURL) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
 	@cd $(CURL) && $(call logged,$(CROSS_ENV) ac_cv_func_getpwuid=no ac_cv_func_getpwuid_r=no ./configure --host=aarch64-unknown-zoraya \
-	  $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-DCURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
+	  --disable-socketpair $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-DCURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
 	rm -f $(CURL_BIN)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL) -j3 V=1,curl)
 	@touch $@
@@ -691,7 +691,11 @@ $(WGET): $(LOCK) $(wildcard ports/patches/wget/*.patch)
 # metalink or libuuid. The host triple names musl, not Zoraya: wget's gnulib
 # answers its run tests (mbrtowc and the like) by the C library's name when it
 # cannot run them, and Zoraya's libc is musl's; the compiler is still zcc,
-# which defines nothing of Linux (INV-0143-1). ac_cv_func_sigsetjmp=no:
+# which defines nothing of Linux (INV-0143-1). ac_cv_func_usleep=no (wget) and
+# --disable-socketpair (curl) keep the results the ports had before libposix
+# had usleep and socketpair (plan part F2): wget's usleep branch calls sleep(), which
+# libc.a does not export, and curl's wakeup stays on its pipe until a test covers the pair.
+# ac_cv_func_sigsetjmp=no:
 # libc.a has sigsetjmp since 10e (toybox's gzip, ADR-0343), and with it wget's
 # run_with_timeout takes its signal path, which needs setitimer, a name
 # libc.a does not export (alarm is on the exclusion table, ADR-0005); wget
@@ -701,7 +705,7 @@ WGET_OPTS := --sysconfdir=/etc --with-ssl=openssl --with-libssl-prefix=$(DEPS) -
 	--disable-debug --disable-threads --disable-rpath --without-libpsl --without-libuuid --without-metalink \
 	--without-cares --without-libidn --without-gpgme --without-included-regex
 $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
-	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ac_cv_func_sigsetjmp=no ./configure --host=aarch64-unknown-linux-musl \
+	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ac_cv_func_sigsetjmp=no ac_cv_func_usleep=no ./configure --host=aarch64-unknown-linux-musl \
 	  $(WGET_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include -D_PYTHREAD_NAME_MAXLEN=15" \
 	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim" ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz",wget-configure)
 	rm -f $(WGET_BIN)
@@ -842,7 +846,7 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # target; Ubuntu's clang 18 (CI) only warns that they are unused, which zcc's
 # -Qunused-arguments silences, so configure said yes there and the x86-only
 # Hacl_Hash_Blake2b_Simd256.c failed to compile (ADR-0320).
-PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups socketpair timerfd_create
+PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups timerfd_create
 PYTHON_NO_X86_SIMD := ax_cv_check_cflags__Werror__msse__msse2__msse3__msse4_1__msse4_2=no ax_cv_check_cflags__Werror__mavx2=no
 PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
 PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \

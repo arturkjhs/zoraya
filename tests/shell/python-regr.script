@@ -10,5 +10,12 @@
 > python3 regr.py @REGRLIST@ @REGRARGS@\r
 < Result: SUCCESS
 < \r\n~>
+# Plan part F2: CPython's test_socket over a Unix pair: unixpair.py loads
+# BasicSocketPairTest (socketpair, send, recv; no sendmsg). CPython's own
+# SCM_RIGHTS classes need bind (plan part F7); the descriptor path is checked by
+# smoke.py's send_fds/recv_fds and by crates/zoraya-posix/tests/unix.rs.
+> python3 unixpair.py\r
+< unixpair: ok
+< \r\n~>
 x power off
 > poweroff\r

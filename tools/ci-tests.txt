@@ -22,6 +22,7 @@ make test-posix-suites
 make test-posix-threadtest3
 make test-posix-gui
 make test-tour-gui POSIX_ACCELS="tcg"
+make test-tour-terminal POSIX_ACCELS="tcg" POSIX_TERM_SIZES="1 1920x1200"
 make test-crash
 make test-net
 make test-gui GUI_RUNS="terminal:tcg:2 windows:auto:2 wheel:tcg:1 selection:auto:2"

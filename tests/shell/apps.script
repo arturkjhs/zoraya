@@ -195,18 +195,18 @@
 # gives no network and no roots.
 > grants curl -O https://x.example/y\r
 < curl gets (a POSIX program):
-< the terminal\r\n  ~                    create or replace y (option -O)\r\n  /system/tls          read (with the network)\r\n  /bin /usr /etc       read (system)
+< the terminal, while this line is in front\r\n  ~                    create or replace y (option -O)\r\n  /system/tls          read (with the network)\r\n  /bin /usr /etc       read (system)
 < net: x.example:443           reach, public answers only (operand URL)
 < \r\n~>
 > grants curl --help\r
-< the terminal\r\n  /bin /usr /etc       read (system)
+< the terminal, while this line is in front\r\n  /bin /usr /etc       read (system)
 < \r\n~>
 > grants curl -o f.txt http://x.example/y\r
-< the terminal\r\n  ~                    create or replace f.txt (option -o)\r\n  /system/tls          read (with the network)
+< the terminal, while this line is in front\r\n  ~                    create or replace f.txt (option -o)\r\n  /system/tls          read (with the network)
 < \r\n~>
 > grants wget -O out.txt https://x.example/y\r
 < wget gets (a POSIX program):
-< the terminal\r\n  ~                    create or replace out.txt (option -O)\r\n  /system/tls          read (with the network)
+< the terminal, while this line is in front\r\n  ~                    create or replace out.txt (option -O)\r\n  /system/tls          read (with the network)
 < net: x.example:443           reach, public answers only (operand URL)
 < \r\n~>
 # A name the shell cannot be sure of is refused before the program runs.
