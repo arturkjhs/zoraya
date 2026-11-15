@@ -989,39 +989,9 @@ fn a_send_names_the_rights_the_library_knows_without_a_probe() {
     assert!(r.net.borrow().is_read_only(object(&r, got[1])));
 }
 
-/// ADR-0432 item 5, INV-0432-2: until plan part F4, a spawn cannot be given
-/// a memory descriptor.
-#[test]
-fn a_memory_descriptor_does_not_cross_a_spawn_yet() {
-    let mut r = rig();
-    let held = r.handles();
-    // Close-on-exec: not inherited, and not an error.
-    let c = r.p.memfd_create(b"c", MFD_CLOEXEC).unwrap();
-    r.p.ftruncate(c, 100).unwrap();
-    let ok =
-        r.p.inherit(&[], 0)
-            .expect("a close-on-exec descriptor is left behind");
-    let made: Vec<u32> = ok
-        .slots
-        .iter()
-        .map(|s| s.1)
-        .chain(ok.message.iter().copied())
-        .collect();
-    for h in made {
-        r.p.sys.close(h);
-    }
-    // Without it: `EBADF`, and every handle the attempt made is closed again.
-    let fd = sized(&mut r, PAGE);
-    let before = r.handles();
-    assert_eq!(r.p.inherit(&[], 0).err(), Some(EBADF));
-    assert_eq!(r.handles(), before);
-    // Close-on-exec after the fact: the same descriptor is then left behind (a
-    // `dup2` file action of it onto a kept fd is not tested here).
-    r.p.fcntl(fd, zoraya_posix::process::F_SETFD, i64::from(FD_CLOEXEC))
-        .unwrap();
-    assert!(r.p.inherit(&[], 0).is_ok());
-    let _ = held;
-}
+// ADR-0432 item 5, INV-0432-2: a memory descriptor crosses a spawn since plan part F4;
+// `tests/spawn.rs` (`a_memory_descriptor_crosses_a_spawn_with_its_bytes_and_its_size`,
+// `a_memory_descriptor_goes_unless_close_on_exec_and_a_failure_leaves_nothing`) checks it.
 
 #[test]
 fn a_dup_shares_the_description_and_does_not_fix_the_size() {

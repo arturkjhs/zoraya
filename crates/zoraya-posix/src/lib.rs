@@ -26,6 +26,7 @@ pub mod random;
 pub mod records;
 pub mod signals;
 pub mod socket;
+pub mod spawn;
 pub mod stat;
 pub mod sys;
 pub mod termios;

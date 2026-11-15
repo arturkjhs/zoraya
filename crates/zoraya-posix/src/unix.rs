@@ -273,6 +273,52 @@ pub fn decode_packet(bytes: &[u8], handles: usize) -> Option<(Vec<Record>, usize
     (handle_count(&records) == handles).then_some((records, end))
 }
 
+// ------------------------------------------------------------ a spawn's descriptors
+
+/// The third bootstrap message (`zoraya_abi::posix::EXT_FDS`, ADR-0433): the
+/// descriptors a spawn gives a child that a record's fd list cannot hold, a
+/// Unix socket and a memory descriptor. The magic, then [`encode_packet`]'s
+/// records without a payload, then each descriptor's fd number as a `u32`.
+pub const PASSED_MAGIC: [u8; 4] = *b"ZPBF";
+
+/// The message for `records`, given to the fds `fds` (one each).
+pub fn encode_passed(fds: &[u32], records: &[Record]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 1 + RECORD * records.len() + 4 * fds.len());
+    out.extend_from_slice(&PASSED_MAGIC);
+    out.extend_from_slice(&encode_packet(records, &[]));
+    for fd in fds {
+        out.extend_from_slice(&fd.to_le_bytes());
+    }
+    out
+}
+
+/// The inverse: the fds in increasing order and below `limit`, the records
+/// (a Unix socket or a memory descriptor each) and nothing else, whose
+/// handles number `handles`. `None` for anything else, whoever sent it.
+pub fn decode_passed(bytes: &[u8], handles: usize, limit: u32) -> Option<(Vec<u32>, Vec<Record>)> {
+    if bytes.get(..4)? != PASSED_MAGIC {
+        return None;
+    }
+    let body = &bytes[4..];
+    let (records, end) = decode_packet(body, handles)?;
+    let tail = &body[end..];
+    if tail.len() != 4 * records.len() {
+        return None;
+    }
+    let mut fds: Vec<u32> = Vec::with_capacity(records.len());
+    for raw in tail.as_chunks::<4>().0 {
+        let fd = u32::from_le_bytes(*raw);
+        if fd >= limit || fds.last().is_some_and(|&l| fd <= l) {
+            return None;
+        }
+        fds.push(fd);
+    }
+    records
+        .iter()
+        .all(|r| matches!(r.kind, Kind::Stream | Kind::Packet | Kind::Memory))
+        .then_some((fds, records))
+}
+
 // ------------------------------------------------------------ the stream's tags
 
 /// An ancillary message for a stream: the offset of the first byte its
@@ -447,6 +493,47 @@ mod tests {
         Record {
             sock_type: SOCK_SEQPACKET as u8,
             ..Record::one(Kind::Packet, 0, false)
+        }
+    }
+
+    #[test]
+    fn a_spawns_descriptors_round_trip_and_nothing_else_decodes() {
+        let rs = [
+            stream_record(false),
+            packet_record(),
+            Record::one(Kind::Memory, 2, false),
+        ];
+        let bytes = encode_passed(&[3, 9, 40], &rs);
+        let (fds, back) = decode_passed(&bytes, 5, 512).unwrap();
+        assert_eq!((fds, back), (vec![3, 9, 40], rs.to_vec()));
+        // The handles must number what the records say.
+        assert!(decode_passed(&bytes, 4, 512).is_none());
+        assert!(decode_passed(&bytes, 6, 512).is_none());
+        // Fds out of order, repeated, or past the table.
+        for bad in [[9, 3, 40], [3, 3, 40], [3, 9, 512]] {
+            assert!(decode_passed(&encode_passed(&bad, &rs), 5, 512).is_none());
+        }
+        // A file or a pipe has a record, and no place in this message.
+        let file = [Record::one(Kind::File, 0, false)];
+        assert!(decode_passed(&encode_passed(&[3], &file), 1, 512).is_none());
+        // Wrong magic, a short fd list, bytes after it.
+        let mut wrong = bytes.clone();
+        wrong[0] ^= 1;
+        assert!(decode_passed(&wrong, 5, 512).is_none());
+        assert!(decode_passed(&bytes[..bytes.len() - 1], 5, 512).is_none());
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(decode_passed(&longer, 5, 512).is_none());
+        // Total on any bytes.
+        for n in 0..bytes.len() {
+            let _ = decode_passed(&bytes[..n], 5, 512);
+        }
+        for i in 0..bytes.len() {
+            for bit in 0..8 {
+                let mut m = bytes.clone();
+                m[i] ^= 1 << bit;
+                let _ = decode_passed(&m, 5, 512);
+            }
         }
     }
 
