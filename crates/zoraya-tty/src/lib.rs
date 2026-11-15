@@ -18,10 +18,10 @@ use alloc::vec::Vec;
 
 use zoraya_abi::RequestKind;
 use zoraya_proto_tty::{
-    Attr, ClearForeground, ClearForegroundReply, Clone, CloneReply, Foreground, ForegroundReply,
-    GetAttr, MAX_READ, NCCS, PollReadable, PollReadableReply, Read, ReadReply, Session,
-    SessionReply, SetAttr, SetAttrReply, Statistics, StatisticsReply, WindowSize, WindowSizeReply,
-    status,
+    Attr, ClearForeground, ClearForegroundReply, Clone, CloneReply, Drain, DrainReply, Flush,
+    FlushReply, Foreground, ForegroundReply, GetAttr, MAX_READ, NCCS, PollReadable,
+    PollReadableReply, Read, ReadReply, Session, SessionReply, SetAttr, SetAttrReply, Statistics,
+    StatisticsReply, WindowSize, WindowSizeReply, status,
 };
 use zoraya_protocol::{Below, Data, ErrorReply, Header, MAX_WIRE_MESSAGE, Message, decode, encode};
 
@@ -30,6 +30,12 @@ pub use discipline::{Discipline, Signal, Termios};
 /// The most connections the service holds (a quiet shell has one, a
 /// pipeline a few, ADR-0103 item 13).
 pub const MAX_CONNECTIONS: usize = 256;
+
+/// The most connections of one line of a host that tells lines apart
+/// ([`Terminal::set_front_line`]): one line cannot fill the table and leave
+/// the window's later programs without a terminal (the review of 10c,
+/// finding 5). A program has four (fds 0 to 2 and `/dev/tty`).
+pub const MAX_LINE_CONNECTIONS: usize = 64;
 
 /// A connection's index in the service.
 pub type Id = usize;
@@ -60,9 +66,14 @@ pub enum Action<H> {
 #[derive(Debug)]
 struct Connection {
     group: u32,
+    /// The line the host started the program for (ADR-0331 item 4); a clone
+    /// carries its parent's, whatever group it declares.
+    line: u32,
     control: bool,
-    /// A held `Read`: its transaction and size.
-    read: Option<(u32, u32)>,
+    /// A held `Read`: its transaction, size and the time it began.
+    read: Option<(u32, u32, u64)>,
+    /// A held `Drain`.
+    drain: Option<u32>,
     /// A held `PollReadable`.
     poll: Option<u32>,
 }
@@ -83,6 +94,17 @@ pub struct Terminal<H> {
     connections: Vec<Option<Connection>>,
     /// The foreground group and the job its signals go to.
     foreground: Option<(u32, H)>,
+    /// The foreground is the whole line in front, not one group of it
+    /// ([`Terminal::set_foreground_line`]): every group of that line reads.
+    any_group: bool,
+    /// Whether lines are told apart (`zosh`: set by the first
+    /// [`Terminal::set_front_line`]; `ttyd` never sets it) and the line in
+    /// front; with lines told apart and none in front nobody reads.
+    lines: bool,
+    front_line: Option<u32>,
+    /// Output written and not yet shown, for `Drain`.
+    output_pending: bool,
+    now: u64,
     session: Option<H>,
     pub size: (u32, u32),
     pub counts: Counts,
@@ -101,6 +123,11 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
             discipline: Discipline::new(),
             connections: Vec::new(),
             foreground: None,
+            any_group: false,
+            lines: false,
+            front_line: None,
+            output_pending: false,
+            now: 0,
             session: None,
             size: (24, 80),
             counts: Counts::default(),
@@ -108,11 +135,13 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
         }
     }
 
-    fn add(&mut self, group: u32, control: bool) -> Option<Id> {
+    fn add(&mut self, group: u32, line: u32, control: bool) -> Option<Id> {
         let c = Connection {
             group,
+            line,
             control,
             read: None,
+            drain: None,
             poll: None,
         };
         if let Some(i) = self.connections.iter().position(Option::is_none) {
@@ -128,13 +157,156 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
 
     /// The broker's control connection.
     pub fn add_control(&mut self) -> Option<Id> {
-        self.add(0, true)
+        self.add(0, 0, true)
     }
 
     /// A terminal connection tagged with `group`: the session's first, which
     /// `init` hands on.
     pub fn add_terminal(&mut self, group: u32) -> Option<Id> {
-        self.add(group, false)
+        self.add(group, 0, false)
+    }
+
+    /// A terminal connection for a program of `line` (the host's own
+    /// number for a line of the shell), tagged with `group`; `None` when the
+    /// table or the line's share of it is full.
+    pub fn add_terminal_in(&mut self, group: u32, line: u32) -> Option<Id> {
+        if self.lines
+            && self
+                .connections
+                .iter()
+                .flatten()
+                .filter(|c| !c.control && c.line == line)
+                .count()
+                >= MAX_LINE_CONNECTIONS
+        {
+            return None;
+        }
+        self.add(group, line, false)
+    }
+
+    /// The line in front changed (ADR-0331 item 4). From the first call on,
+    /// a `Read`, `PollReadable`, `SetAttr` or `Flush` from a connection of
+    /// any other line is refused, and a read held by one is answered
+    /// `NotForeground`. `None` puts no line in front.
+    pub fn set_front_line(&mut self, line: Option<u32>) -> Vec<Action<H>> {
+        let mut actions = Vec::new();
+        self.lines = true;
+        self.front_line = line;
+        self.background_reads(&mut actions);
+        self.answer_reads(&mut actions);
+        actions
+    }
+
+    pub fn front_line(&self) -> Option<u32> {
+        self.front_line
+    }
+
+    /// The group of the line in front that reads (ADR-0331 item 6): the host
+    /// calls it for the line's first group and after a `tcsetpgrp` it has
+    /// vetted. `job` receives the signal characters; the host keeps its
+    /// handle (nothing is closed here).
+    pub fn set_foreground(&mut self, group: u32, job: H) -> Vec<Action<H>> {
+        self.any_group = false;
+        self.replace_foreground(group, job);
+        let mut actions = Vec::new();
+        self.background_reads(&mut actions);
+        self.answer_reads(&mut actions);
+        actions
+    }
+
+    /// The whole line in front reads, whatever group a program of it is in,
+    /// until a [`Terminal::set_foreground`] chooses one (`zosh`, ADR-0331
+    /// item 6: a pipeline's programs are in groups of their own, and a line
+    /// in which no program asked for the terminal is one job). `job`
+    /// receives the signal characters; [`Terminal::foreground`] is `None`.
+    pub fn set_foreground_line(&mut self, job: H) -> Vec<Action<H>> {
+        self.replace_foreground(0, job);
+        self.any_group = true;
+        let mut actions = Vec::new();
+        self.background_reads(&mut actions);
+        self.answer_reads(&mut actions);
+        actions
+    }
+
+    fn replace_foreground(&mut self, group: u32, job: H) -> Option<H> {
+        self.foreground.replace((group, job)).map(|f| f.1)
+    }
+
+    /// No group reads: the line in front ended or stopped.
+    pub fn clear_foreground_group(&mut self) {
+        self.foreground = None;
+        self.any_group = false;
+    }
+
+    /// The line ended or stopped: the attributes go back to the defaults
+    /// with the unread input dropped; the attributes it had are returned,
+    /// for [`Terminal::continue_line`] (ADR-0331 item 9).
+    pub fn end_line(&mut self) -> (Termios, Vec<Action<H>>) {
+        let was = self.discipline.attr;
+        self.discipline.flush();
+        self.discipline.set(Termios::default());
+        let mut actions = Vec::new();
+        self.answer_reads(&mut actions);
+        (was, actions)
+    }
+
+    /// A stopped line is back in front with the attributes it had.
+    pub fn continue_line(&mut self, attr: Termios) -> Vec<Action<H>> {
+        let mut actions = Vec::new();
+        self.discipline.set(attr);
+        self.answer_reads(&mut actions);
+        actions
+    }
+
+    /// The host's clock, in milliseconds, before every call that can need
+    /// it (`VTIME`).
+    pub fn set_time(&mut self, now: u64) {
+        self.now = now;
+        self.discipline.set_now(now);
+    }
+
+    /// When the clock alone will answer a held read, if any will: the host
+    /// calls [`Terminal::tick`] then.
+    pub fn deadline(&self) -> Option<u64> {
+        let mut best: Option<u64> = None;
+        for c in self.connections.iter().flatten() {
+            let Some((_, max, since)) = c.read else {
+                continue;
+            };
+            if !self.may_read(c.line, c.group) {
+                continue;
+            }
+            if let Some(d) = self.discipline.read_deadline(max as usize, since) {
+                best = Some(best.map_or(d, |b| b.min(d)));
+            }
+        }
+        best
+    }
+
+    /// The time passed: answers the held reads whose timers ran out.
+    pub fn tick(&mut self, now: u64) -> Vec<Action<H>> {
+        self.set_time(now);
+        let mut actions = Vec::new();
+        self.answer_reads(&mut actions);
+        actions
+    }
+
+    /// Whether output written to the stream is still on its way to the
+    /// screen; when it is not, held `Drain`s are answered.
+    pub fn set_output_pending(&mut self, pending: bool) -> Vec<Action<H>> {
+        self.output_pending = pending;
+        let mut actions = Vec::new();
+        if !pending {
+            for id in 0..self.connections.len() {
+                if let Some(t) = self.connections[id].as_mut().and_then(|c| c.drain.take()) {
+                    let ok = DrainReply {
+                        status: Below(status::OK),
+                    };
+                    self.reply(id, &ok, t, &mut actions);
+                }
+            }
+        }
+        actions
     }
 
     /// The connection's peer closed it: a held request goes with it.
@@ -149,7 +321,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     }
 
     pub fn foreground(&self) -> Option<u32> {
-        self.foreground.map(|f| f.0)
+        self.foreground.filter(|_| !self.any_group).map(|f| f.0)
     }
 
     /// The group of a connection, for the tests.
@@ -184,12 +356,19 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
         actions.push(Action::Reply { to, bytes });
     }
 
-    /// True if a connection of `group` may read now.
-    fn may_read(&self, group: u32) -> bool {
-        match self.foreground {
-            Some((fg, _)) => fg == group,
-            None => true,
-        }
+    /// True if a connection of `line` is of the line in front (always, when
+    /// lines are not told apart).
+    fn line_ok(&self, line: u32) -> bool {
+        !self.lines || self.front_line == Some(line)
+    }
+
+    /// True if a connection of `line` and `group` may read now.
+    fn may_read(&self, line: u32, group: u32) -> bool {
+        self.line_ok(line)
+            && match self.foreground {
+                Some((fg, _)) => self.any_group || fg == group,
+                None => true,
+            }
     }
 
     fn connection(&mut self, id: Id) -> Option<&mut Connection> {
@@ -206,6 +385,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
         };
         let control = c.control;
         let group = c.group;
+        let line = c.line;
         let Ok((header, _)) = Header::decode(bytes) else {
             // Not even a header: nothing to answer.
             self.counts.refused += 1;
@@ -231,17 +411,22 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                 let m = parse!(Read);
                 if self.connection(id).is_some_and(|c| c.read.is_some()) {
                     self.refuse(id, status::BUSY, t, &mut actions);
-                } else if !self.may_read(group) {
+                } else if !self.may_read(line, group) {
                     self.counts.not_foreground += 1;
                     self.refuse(id, status::NOT_FOREGROUND, t, &mut actions);
-                } else if let Some(c) = self.connection(id) {
-                    c.read = Some((t, m.max.min(MAX_READ as u32)));
+                } else {
+                    let (max, now) = (m.max.min(MAX_READ as u32), self.now);
+                    if let Some(c) = self.connection(id) {
+                        c.read = Some((t, max, now));
+                    }
                     self.answer_reads(&mut actions);
                 }
             }
             o if o == PollReadable::ORDINAL => {
                 let _ = parse!(PollReadable);
-                if self.connection(id).is_some_and(|c| c.poll.is_some()) {
+                if !self.line_ok(line) {
+                    self.refuse(id, status::IO, t, &mut actions);
+                } else if self.connection(id).is_some_and(|c| c.poll.is_some()) {
                     self.refuse(id, status::BUSY, t, &mut actions);
                 } else if let Some(c) = self.connection(id) {
                     c.poll = Some(t);
@@ -268,7 +453,9 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
             }
             o if o == SetAttr::ORDINAL => {
                 let m = parse!(SetAttr<'_>);
-                if m.cc.0.len() != NCCS {
+                if !self.line_ok(line) {
+                    self.refuse(id, status::IO, t, &mut actions);
+                } else if m.cc.0.len() != NCCS {
                     self.refuse(id, status::INVALID, t, &mut actions);
                 } else {
                     let mut cc = [0; NCCS];
@@ -287,10 +474,38 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                     self.answer_reads(&mut actions);
                 }
             }
+            o if o == Flush::ORDINAL => {
+                let m = parse!(Flush);
+                if !self.line_ok(line) {
+                    self.refuse(id, status::IO, t, &mut actions);
+                } else if m.queue != 0 {
+                    // Only the input queue is the discipline's.
+                    self.refuse(id, status::INVALID, t, &mut actions);
+                } else {
+                    self.discipline.flush();
+                    let ok = FlushReply {
+                        status: Below(status::OK),
+                    };
+                    self.reply(id, &ok, t, &mut actions);
+                }
+            }
+            o if o == Drain::ORDINAL => {
+                let _ = parse!(Drain);
+                if self.connection(id).is_some_and(|c| c.drain.is_some()) {
+                    self.refuse(id, status::BUSY, t, &mut actions);
+                } else if !self.output_pending {
+                    let ok = DrainReply {
+                        status: Below(status::OK),
+                    };
+                    self.reply(id, &ok, t, &mut actions);
+                } else if let Some(c) = self.connection(id) {
+                    c.drain = Some(t);
+                }
+            }
             o if o == Clone::ORDINAL => {
                 let m = parse!(Clone);
                 let end = handles[0];
-                match self.add_terminal(m.group) {
+                match self.add_terminal_in(m.group, line) {
                     Some(new) => {
                         actions.push(Action::Watch { id: new, end });
                         let ok = CloneReply {
@@ -311,13 +526,14 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                     actions.push(Action::Close(job));
                     self.refuse(id, status::NOT_ALLOWED, t, &mut actions);
                 } else {
-                    if let Some((_, old)) = self.foreground.replace((m.group, job)) {
-                        actions.push(Action::Close(old));
-                    }
                     let ok = ForegroundReply {
                         status: Below(status::OK),
                     };
                     self.reply(id, &ok, t, &mut actions);
+                    self.any_group = false;
+                    if let Some(old) = self.replace_foreground(m.group, job) {
+                        actions.push(Action::Close(old));
+                    }
                     self.background_reads(&mut actions);
                     self.answer_reads(&mut actions);
                 }
@@ -343,6 +559,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
                 if !control {
                     self.refuse(id, status::NOT_ALLOWED, t, &mut actions);
                 } else {
+                    self.any_group = false;
                     if let Some((_, old)) = self.foreground.take() {
                         actions.push(Action::Close(old));
                     }
@@ -382,10 +599,10 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
             let Some(c) = self.connections[id].as_ref() else {
                 continue;
             };
-            if self.may_read(c.group) {
+            if self.may_read(c.line, c.group) {
                 continue;
             }
-            if let Some((t, _)) = self.connections[id].as_mut().and_then(|c| c.read.take()) {
+            if let Some((t, _, _)) = self.connections[id].as_mut().and_then(|c| c.read.take()) {
                 self.counts.not_foreground += 1;
                 let bytes = self.error(status::NOT_FOREGROUND, t);
                 actions.push(Action::Reply { to: id, bytes });
@@ -400,18 +617,32 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
             let Some(c) = self.connections[id].as_ref() else {
                 continue;
             };
-            if !self.may_read(c.group) || !self.discipline.readable() {
+            if !self.may_read(c.line, c.group) {
                 continue;
             }
-            if let Some(t) = self.connections[id].as_mut().and_then(|c| c.poll.take()) {
+            if self.discipline.readable()
+                && let Some(t) = self.connections[id].as_mut().and_then(|c| c.poll.take())
+            {
                 let m = PollReadableReply {
                     status: Below(status::OK),
                 };
                 self.reply(id, &m, t, actions);
             }
-            if let Some((t, max)) = self.connections[id].as_mut().and_then(|c| c.read.take())
-                && let Some(bytes) = self.discipline.read(max as usize)
-            {
+            let Some((_, max, since)) = self.connections[id].as_ref().and_then(|c| c.read) else {
+                continue;
+            };
+            let taken = if self.discipline.attr.lflag & discipline::bits::ICANON != 0 {
+                self.discipline.read(max as usize)
+            } else if self.discipline.read_ready(max as usize, since) {
+                Some(self.discipline.read_raw(max as usize))
+            } else {
+                None
+            };
+            if let Some(bytes) = taken {
+                let t = self.connections[id]
+                    .as_mut()
+                    .and_then(|c| c.read.take())
+                    .map_or(0, |r| r.0);
                 self.counts.lines += 1;
                 let m = ReadReply {
                     bytes: Data(&bytes),
@@ -506,6 +737,26 @@ impl<H: Copy + Eq + core::fmt::Debug> Terminal<H> {
     /// What `ttyd` writes for program output: `ONLCR`.
     pub fn output(&self, bytes: &[u8], out: &mut Vec<u8>) {
         self.discipline.output(bytes, out);
+    }
+}
+
+/// A `SetAttr` request for `attr`, for clients and for tests of hosts that
+/// must not name the flags (INV-0331-8).
+pub fn set_attr_request(attr: &Termios, transaction: u32) -> Vec<u8> {
+    let m = SetAttr {
+        iflag: attr.iflag,
+        oflag: attr.oflag,
+        cflag: attr.cflag,
+        lflag: attr.lflag,
+        cc: Data(&attr.cc),
+    };
+    let mut out = vec![0; MAX_WIRE_MESSAGE];
+    match encode(&m, transaction, &mut out) {
+        Ok(n) => {
+            out.truncate(n);
+            out
+        }
+        Err(_) => Vec::new(),
     }
 }
 

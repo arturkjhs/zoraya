@@ -16,7 +16,7 @@ extern crate alloc;
 pub mod session;
 pub mod totals;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -24,14 +24,17 @@ use zoraya_abi::posix::job_rights;
 use zoraya_abi::posix::signal::{self, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU};
 use zoraya_abi::{ExitRecord, RequestKind, Rights, Status, job_signals};
 use zoraya_proto_posix::{
-    ExecCommit, ExecCommitReply, Kill, KillReply, Lookup, LookupReply, ORDINALS, Reap, Reaped,
+    Background, BackgroundReply, ExecCommit, ExecCommitReply, ForegroundAsked, GroupMade,
+    HostTerminal, HostTerminalReply, Kill, KillReply, Lookup, LookupReply, ORDINALS, Reap, Reaped,
     ReportStats, ReportStatsReply, SetPgid, SetPgidReply, SetStopDisposition,
     SetStopDispositionReply, SpawnAbort, SpawnAbortReply, SpawnCommit, SpawnCommitReply,
     SpawnPrepare, SpawnPrepareIn, SpawnPrepared, SpawnPreparedIn, Statistics, StatisticsReply,
     StopSelf, StopSelfReply, Tcgetpgrp, TcgetpgrpReply, Tcsetpgrp, TcsetpgrpReply, group, lookup,
     status, stop, target,
 };
-use zoraya_protocol::{Below, ErrorReply, Header, MAX_WIRE_MESSAGE, Message, decode, encode};
+use zoraya_protocol::{
+    Below, ErrorReply, Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode,
+};
 
 /// The broker itself as a parent: `getppid` of the shell, and the parent of
 /// every orphan (ADR-0104 item 2).
@@ -105,6 +108,15 @@ pub enum Action<H> {
         group: u32,
         job: H,
     },
+    /// The broker's end of the channel to a native client that hosts the
+    /// terminal (`HostTerminal`, ADR-0388): keep it for [`Action::Host`].
+    HostChannel {
+        end: H,
+    },
+    /// A notice to that client (`GroupMade`, `ForegroundAsked`), no reply.
+    Host {
+        bytes: Vec<u8>,
+    },
 }
 
 /// Who is at the other end of a connection.
@@ -151,6 +163,14 @@ struct Group<H> {
     members: usize,
     /// In the session job; a `Group(job)` group is not.
     session: bool,
+    /// For a group outside the session: the group a native client started
+    /// (`Group(job)`) that this one was made under, itself for that one;
+    /// a line of `zosh` (ADR-0388). 0 in the session.
+    root: u32,
+    /// The group whose process made this one inside its job (ADR-0388
+    /// item 1), 0 for none: a signal to that group must not go to its job,
+    /// which holds this one too.
+    parent: u32,
     /// Stopped as a whole by `job_suspend` of the group job: it is resumed
     /// as a whole, since a member's resume leaves the group job suspended
     /// and every process created in it after would start stopped (review
@@ -176,6 +196,14 @@ pub struct Broker<K: Kernel> {
     next_pid: u32,
     sid: u32,
     foreground: Option<u32>,
+    /// A native client hosts the terminal of the groups it starts (ADR-0388).
+    host: bool,
+    /// Per root group (a line of the client's), the group a `tcsetpgrp` of
+    /// it last asked for.
+    asked: BTreeMap<u32, u32>,
+    /// The roots of the client's lines that are in the background
+    /// (`Background`): their `tcsetpgrp` is `EPERM`.
+    back: BTreeSet<u32>,
     pub counts: Counts,
     /// What the processes reported, and the peak of live pids (ADR-0110
     /// item 7).
@@ -217,6 +245,9 @@ impl<K: Kernel> Broker<K> {
             sid: 0,
             had_client: false,
             foreground: None,
+            host: false,
+            asked: BTreeMap::new(),
+            back: BTreeSet::new(),
             counts: Counts::default(),
             totals: totals::Totals::default(),
             shell_exit: None,
@@ -556,15 +587,68 @@ impl<K: Kernel> Broker<K> {
                 let m = parse!(Tcsetpgrp);
                 let r = match caller {
                     Some(pid) if self.in_session(pid) => self.set_foreground(m.pgid, &mut actions),
+                    Some(pid) if self.host => self.ask_foreground(pid, m.pgid, &mut actions),
                     Some(_) => Err(status::NOT_PERMITTED),
                     // `zosh` owns its terminal (ADR-0153's note on ADR-0105).
                     None => Err(status::NO_TERMINAL),
                 };
                 answer!(TcsetpgrpReply { status: code(r) });
             }
+            o if o == HostTerminal::ORDINAL => {
+                let _ = parse!(HostTerminal);
+                let made = if caller.is_some() || self.host {
+                    Err(status::NOT_PERMITTED)
+                } else {
+                    self.kernel.channel_create().map_err(|_| status::AGAIN)
+                };
+                match made {
+                    Ok((ours, theirs)) => {
+                        self.host = true;
+                        actions.push(Action::HostChannel { end: ours });
+                        let ok = HostTerminalReply {
+                            status: Below(status::OK),
+                        };
+                        let bytes = self.encode(&ok, t);
+                        actions.push(Action::Reply {
+                            to: conn,
+                            bytes,
+                            handles: vec![theirs],
+                        });
+                    }
+                    Err(e) => {
+                        let bytes = self.error(e, t);
+                        actions.push(Action::Reply {
+                            to: conn,
+                            bytes,
+                            handles: Vec::new(),
+                        });
+                    }
+                }
+            }
+            o if o == Background::ORDINAL => {
+                let m = parse!(Background);
+                let r = if caller.is_some() || !self.host {
+                    Err(status::NOT_PERMITTED)
+                } else {
+                    if m.back != 0 {
+                        self.back.insert(m.group);
+                    } else {
+                        self.back.remove(&m.group);
+                    }
+                    Ok(())
+                };
+                answer!(BackgroundReply { status: code(r) });
+            }
             o if o == Tcgetpgrp::ORDINAL => {
                 let _ = parse!(Tcgetpgrp);
-                let (s, pgid) = if !self.terminal || caller.is_none() {
+                let client = caller.filter(|_| self.host).and_then(|p| {
+                    let root = self.root_of(p)?;
+                    let own = self.pids.get(&p)?.pgid;
+                    Some(*self.asked.get(&root).unwrap_or(&own))
+                });
+                let (s, pgid) = if let Some(pgid) = client {
+                    (status::OK, pgid)
+                } else if !self.terminal || caller.is_none() {
                     (status::NO_TERMINAL, 0)
                 } else {
                     (status::OK, self.foreground.unwrap_or(0))
@@ -762,6 +846,21 @@ impl<K: Kernel> Broker<K> {
         }
     }
 
+    /// The root group (a line of the native client's) of a process outside
+    /// the session.
+    fn root_of(&self, pid: u32) -> Option<u32> {
+        let r = self.pids.get(&pid)?;
+        let g = self.groups.get(&r.pgid)?;
+        (!g.session).then_some(g.root)
+    }
+
+    /// For a process outside the session, its group's job and root.
+    fn client_group_of(&self, pid: u32) -> Option<(K::H, u32)> {
+        let r = self.pids.get(&pid)?;
+        let g = self.groups.get(&r.pgid)?;
+        (!g.session).then_some((g.job, g.root))
+    }
+
     fn in_session(&self, pid: u32) -> bool {
         self.pids
             .get(&pid)
@@ -807,24 +906,41 @@ impl<K: Kernel> Broker<K> {
                 if g.session != caller_in_session && caller.is_some() {
                     return Err(status::NOT_PERMITTED);
                 }
+                // Outside the session a group is joined only within the
+                // caller's line (ADR-0388 item 2).
+                if !g.session
+                    && caller.is_some()
+                    && caller.and_then(|p| self.root_of(p)) != Some(g.root)
+                {
+                    return Err(status::NOT_PERMITTED);
+                }
                 (pgid, None)
             }
-            Form::New => {
-                let job = self
-                    .kernel
-                    .job_create(self.session_job)
-                    .map_err(|_| status::AGAIN)?;
-                (pid, Some((job, true)))
-            }
-            Form::In(job) => (pid, Some((job, false))),
+            Form::New => match caller.and_then(|p| self.client_group_of(p)) {
+                // A process a native client started makes its new group
+                // inside its own group's job: the line's job holds it, so the
+                // line's signals and its end reach it (ADR-0388 item 1).
+                Some((parent, root)) => {
+                    let job = self.kernel.job_create(parent).map_err(|_| status::AGAIN)?;
+                    (pid, Some((job, false, root)))
+                }
+                None => {
+                    let job = self
+                        .kernel
+                        .job_create(self.session_job)
+                        .map_err(|_| status::AGAIN)?;
+                    (pid, Some((job, true, 0)))
+                }
+            },
+            Form::In(job) => (pid, Some((job, false, pid))),
         };
         let group_job = match (&new_group, self.groups.get(&pgid)) {
-            (Some((job, _)), _) => *job,
+            (Some((job, _, _)), _) => *job,
             (None, Some(g)) => g.job,
             (None, None) => return Err(status::INVALID),
         };
         let undo = |b: &mut Self| {
-            if let Some((job, _)) = new_group {
+            if let Some((job, _, _)) = new_group {
                 b.kernel.close(job);
             }
         };
@@ -858,16 +974,32 @@ impl<K: Kernel> Broker<K> {
             undo(self);
             return Err(status::AGAIN);
         };
-        if let Some((job, session)) = new_group {
+        if let Some((job, session, root)) = new_group {
             self.groups.insert(
                 pgid,
                 Group {
                     job,
                     members: 0,
                     session,
+                    root,
+                    parent: if session || root == pgid {
+                        0
+                    } else {
+                        caller.and_then(|p| self.pids.get(&p)).map_or(0, |r| r.pgid)
+                    },
                     suspended: false,
                 },
             );
+            // The host of the terminal learns of a group made inside one of
+            // its lines (ADR-0331 item 6); its own first groups it knows.
+            if self.host && !session && root != pgid {
+                let by = caller.and_then(|p| self.pids.get(&p)).map_or(0, |r| r.pgid);
+                if let Ok(n) = encode(&GroupMade { group: pgid, by }, NO_REPLY, &mut self.out) {
+                    actions.push(Action::Host {
+                        bytes: self.out[..n].to_vec(),
+                    });
+                }
+            }
         }
         if let Some(g) = self.groups.get_mut(&pgid) {
             g.members += 1;
@@ -965,6 +1097,8 @@ impl<K: Kernel> Broker<K> {
             if g.members == 0
                 && let Some(g) = self.groups.remove(&r.pgid)
             {
+                self.back.remove(&r.pgid);
+                self.asked.remove(&r.pgid);
                 self.kernel.close(g.job);
                 if self.foreground == Some(r.pgid) {
                     // The terminal keeps its handle until the next
@@ -1174,7 +1308,14 @@ impl<K: Kernel> Broker<K> {
             .copied()
             .filter(|p| self.pids.get(p).is_some_and(|r| !r.terminated))
             .collect();
-        let group_job = group.and_then(|g| self.groups.get(&g)).map(|g| g.job);
+        // A group with groups made inside its job (a POSIX shell's jobs,
+        // ADR-0388 item 1) is signalled member by member: a call on its job
+        // would reach those groups too.
+        let nested = group.is_some_and(|g| self.groups.values().any(|x| x.parent == g));
+        let group_job = group
+            .filter(|_| !nested)
+            .and_then(|g| self.groups.get(&g))
+            .map(|g| g.job);
         let stop = matches!(sig, SIGSTOP | SIGTSTP | SIGTTIN | SIGTTOU);
         if let Some(job) = group_job {
             // One call on the group job when every member acts the same.
@@ -1271,6 +1412,44 @@ impl<K: Kernel> Broker<K> {
         let job = r.job;
         r.stopped = sig;
         sent(self.kernel.job_suspend(job))
+    }
+
+    /// A `tcsetpgrp` of a process a native client started, which hosts the
+    /// terminal: a group of the caller's own line only; the client is told
+    /// and decides (ADR-0331 item 6, ADR-0388 item 3).
+    fn ask_foreground(
+        &mut self,
+        pid: u32,
+        pgid: u32,
+        actions: &mut Vec<Action<K::H>>,
+    ) -> Result2<()> {
+        let root = self.root_of(pid).ok_or(status::NOT_PERMITTED)?;
+        let g = self.groups.get(&pgid).ok_or(status::NOT_PERMITTED)?;
+        if g.session || g.root != root {
+            return Err(status::NOT_PERMITTED);
+        }
+        // A line in the background is refused here, at once: the caller
+        // hears it (the architect, 2026-11-15). The client still decides for
+        // a line in front, from the notice.
+        if self.back.contains(&root) {
+            return Err(status::NOT_PERMITTED);
+        }
+        let by = self.pids.get(&pid).map_or(0, |r| r.pgid);
+        let n = encode(
+            &ForegroundAsked {
+                group: pgid,
+                by,
+                root,
+            },
+            NO_REPLY,
+            &mut self.out,
+        )
+        .map_err(|_| status::INVALID)?;
+        actions.push(Action::Host {
+            bytes: self.out[..n].to_vec(),
+        });
+        self.asked.insert(root, pgid);
+        Ok(())
     }
 
     fn set_foreground(&mut self, pgid: u32, actions: &mut Vec<Action<K::H>>) -> Result2<()> {

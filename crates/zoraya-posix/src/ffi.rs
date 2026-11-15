@@ -85,6 +85,10 @@ impl Sys for RtSys {
         zoraya_rt::handle_duplicate(h, MemoryObject::RIGHTS)
     }
 
+    fn duplicate_stream_write(&mut self, h: Handle) -> Result<Handle, Status> {
+        zoraya_rt::handle_duplicate(h, zoraya_abi::StreamWriteObject::RIGHTS)
+    }
+
     fn channel_create(&mut self) -> Result<(Handle, Handle), Status> {
         zoraya_rt::channel_create()
     }
@@ -2510,15 +2514,6 @@ extern "C" fn getegid() -> u32 {
 #[unsafe(no_mangle)]
 extern "C" fn getlogin() -> *mut c_char {
     set_errno(ENXIO);
-    ptr::null_mut()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn ttyname(fd: i32) -> *mut c_char {
-    set_errno(match state(|p| p.isatty(fd)) {
-        Err(e) => e,
-        Ok(_) => ENOTTY,
-    });
     ptr::null_mut()
 }
 

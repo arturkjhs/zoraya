@@ -21,7 +21,7 @@ pub const ADDED: [&str; 1] = ["writev"];
 /// and `getaddrinfo` are no longer in it: ADR-0225 item 1 (accepted) takes
 /// them off, and they are exported only if the tier list or an ADR's
 /// `posix-surface-added` block names them (ADR-0287).
-pub const DENIED: [&str; 13] = [
+pub const DENIED: [&str; 23] = [
     "ptrace",
     "msgget",
     "semget",
@@ -35,6 +35,21 @@ pub const DENIED: [&str; 13] = [
     "sigaltstack",
     "setitimer",
     "alarm",
+    // ADR-0342 item 12 (INV-0342-3): not in stage 10, and guarded: the
+    // pseudo-terminal functions (ADR-0338 says when they come) and `setsid`.
+    // A block that names one fails `added_names`; the library that defines
+    // one fails `check`. `dlopen`, `ptrace` and System V IPC (`msgget`,
+    // `semget`, `shmget`) are above.
+    "posix_openpt",
+    "openpty",
+    "forkpty",
+    "login_tty",
+    "grantpt",
+    "unlockpt",
+    "ptsname",
+    "ptsname_r",
+    "getpt",
+    "setsid",
 ];
 /// INV-0005-2's `epoll_*`.
 pub const DENIED_PREFIX: &str = "epoll_";
@@ -385,6 +400,11 @@ pub fn added_names(adr: &str) -> Result<(Vec<String>, bool), String> {
             // program that imports the name. Only the name is admitted here;
             // `block_lines` gives both for INV-0342-1's second half.
             let name = l.split_whitespace().next().unwrap_or(l);
+            // INV-0342-3: a name of the exclusion table does not come in by
+            // a block; only an ADR that takes it off the table does.
+            if is_denied(name) {
+                return Err(format!("{name} is on the exclusion table (INV-0342-3)"));
+            }
             names.push(name.to_string());
         }
     }

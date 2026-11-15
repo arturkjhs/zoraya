@@ -403,6 +403,9 @@ struct Server {
     ends: BTreeMap<Conn, Handle>,
     /// `Suspend` messages that came while waiting for a reply.
     queued: Vec<(u32, u32)>,
+    /// The channel to a native client that hosts the terminal (`zosh`,
+    /// `HostTerminal`, proposed ADR-0388), for its notices.
+    host: Option<Handle>,
     transaction: u32,
     out: Vec<u8>,
     /// Jobs whose `TERMINATED` could not be subscribed (the source already
@@ -481,6 +484,19 @@ impl Server {
                     self.polled.retain(|&(p, _)| p != pid);
                 }
                 Action::Foreground { group, job } => self.foreground(group, job),
+                Action::HostChannel { end } => {
+                    if let Some(old) = self.host.replace(end) {
+                        let _ = handle_close(old);
+                    }
+                }
+                // No reply and no wait: a client that does not read loses
+                // notices, never the broker's progress (the client may be
+                // waiting on the broker itself).
+                Action::Host { bytes } => {
+                    if let Some(end) = self.host {
+                        let _ = channel_write(end, &bytes, &[]);
+                    }
+                }
             }
         }
     }
@@ -581,6 +597,7 @@ fn main() -> i32 {
         control,
         ends: BTreeMap::new(),
         queued: Vec::new(),
+        host: None,
         transaction: 0,
         out: vec![0; MAX_WIRE_MESSAGE],
         polled: Vec::new(),

@@ -491,7 +491,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   column: the shell adds the carriage return (`zoraya_shell::crlf`). Bold is a weight and does not brighten; italic is
   drawn slanted, faint is half way to the background, underline and strike are lines; blink is stored. `Term::restore`
   gives the shell a working screen (the primary screen, cursor shown, modes, region, sets, pen and palette cleared)
-  and `Term::reinstate` sets it all again for a stopped line; nothing sends them yet (part 10c). *Keys, the pointer,
+  and `Term::reinstate` sets it all again for a stopped line; `zosh` sends them (part 10c). *Keys, the pointer,
   selection and paste (10b, ADR-0383 to ADR-0385).* `zoraya_term::Session` is the terminal as the window runs it, and the
   only code that makes anything to send: its gesture methods (`key`, `pointer`, `wheel`, `focus`, `paste`) fill an outbox,
   `output` cannot (INV-0332-2); `term` sends the outbox as `Input` (keys, mouse and focus reports) and `Paste`. The key
@@ -509,19 +509,17 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   in order, as soon as the shell's queue has room; a paste that does not fit is dropped whole. It draws only the rows
   that changed, and commits again only after the last commit's reply. *Known limits (10b):* a selection ends when
   output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
-  lines (no wrap flag); no word or line selection and no primary selection; a paste to a program in front is dropped
-  until 10c, and in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
+  lines (no wrap flag); no word or line selection and no primary selection; in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
   whole stretch between its ends), and a button released outside the window is seen at the next event;
   no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
-  *Known limits until part 10c:* nothing sends `Restore`, so what a program leaves set (the alternate screen, a hidden
-  cursor, a region, a character set) would stay for the shell; as a stop-gap `zosh` writes a fixed reset
-  (`zoraya_shell::reset::BEFORE_PROMPT`) before every prompt after the first (it is idempotent), **to be removed when 10c
-  sends `Restore`** (`docs/backlog.md`); its edges: it clears a pending wrap, resets the palette and the cursor shape, and a job
-  stopped with Ctrl-Z loses its modes, which `fg` does not give back until 10c. A program that sets synchronized output (2026) and never ends it has every later update held
-  150 ms until the next prompt, whose reset ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
+  *Restore (10c):* `zosh` sends `Restore { keep: false }` when a line with the terminal ends in front (a native line's
+  before the next prompt), `Restore { keep: true }` when it
+  stops, and `Reinstate` at `fg` of a stopped one (ADR-0331 item 9, proposed ADR-0386 and ADR-0387); the stop-gap reset of
+  10a is gone. A program that sets synchronized output (2026) and never ends it has every later update held 150 ms until
+  its line ends, whose `Restore` ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
   script reads the text of a replayed session (any colour fits a glyph), and colours are checked by the frozen grids of
   `tests/replay.rs`.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
@@ -531,8 +529,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   `ESC` or other control character but tab and newline, carriage returns as line ends, INV-0332-5) and put in the key
   stream at their place as one of the bytes 0xF8 to 0xFF, which no key makes; the line editor (`Editor::paste`) inserts
   the text at the cursor without running it (a newline makes a continuation line; Enter, the person's, sends the
-  entry), and while a program is in front a paste is dropped with a line saying so (the paste to a program is part
-  10c's). Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
+  entry), and while a program is in front a paste goes to it through the discipline when it has the terminal
+  (`tty_host::Host::paste`: brackets for 2004, otherwise a question in the title for a newline) and is dropped with a
+  line saying so when it has not. Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
   Alt+f move by a word, Alt+Backspace deletes one.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
   page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A
@@ -721,7 +720,8 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
 - **`room` in `zosh`**: `room` lists (the current one marked `*`), `room NAME` enters (the prompt shows the name, the
   current directory becomes the room's first `+w` directory, every line gets the room's grants, which `grants` shows
   as `(room NAME)`), `room --leave`, `room new NAME +w PATH...` (a path under home is written with `~`), `room remove
-  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. The panel starts a shell in a room with
+  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. Inside an entered room, `room new` gives no path
+  the room does not cover (the architect, 2026-11-15; INV-0172-4). The panel starts a shell in a room with
   `zosh --room NAME`.
 - **The panel** (`panel`, ADR-0168; `zoraya-panel` holds its logic): `init` starts it once per GUI with the client
   manager (`AttachClientManager`), a clone of the root, the console to write, its job and the image directory. It
@@ -1351,6 +1351,38 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   EOF, `ICRNL`, `ONLCR`, INTR, QUIT, SUSP), connections tagged with a group, the foreground job, one held read per
   connection. Ctrl-C is `job_signal(foreground, Interrupt)`; Ctrl-Z goes to the broker as `suspend`. Backends: the
   serial console, and the stage 5 terminal window, to which `ttyd` speaks `zoraya-proto-term` as `zosh` does.
+  *Part 10c, so far (ADR-0331, ADR-0386 to ADR-0388):* `VMIN` and `VTIME` in POSIX's four cases with a
+  clock the host gives (`set_time`, `deadline`, `tick`); `Flush` and `Drain` requests and the status `IO`; a line tag on
+  every connection (a clone carries its parent's) with `set_front_line`, so that a `Read`, `PollReadable`, `SetAttr` or
+  `Flush` from a line not in front is refused and changes nothing, and with no line in front nobody reads;
+  `set_foreground`, `end_line` and `continue_line` for the shell's host. `zoraya_shell::tty_host::Host` is the shell's
+  rules around it, host-tested: the line in front, stop, `fg` and end (`Restore { keep }`, `Reinstate`, the attributes
+  kept and restored, one `SIGWINCH`), `tcsetpgrp` only for a group made inside the front line (the broker names the
+  line by the root group the shell started), the signal characters and `SIGWINCH` to the group a `tcsetpgrp` chose, or
+  `SIGWINCH` to each group the shell started, never to a native element, the relay's carriage return from the
+  attributes, and the paste to a program (mode 2004 read from its output and believed only out of canonical mode, a
+  newline held for Enter with the question in the window title, nothing in it that ends the bracket). A line has at
+  most 64 terminal connections. `zosh` uses it: a POSIX program gets a
+  tty description on each of fds 0 to 2 that is the terminal (neither redirected nor piped; a background line's fd 0
+  stays empty) and `/dev/tty` in its table, its connections are served on the shell's port and closed at the line's
+  end, keys of a line with the terminal go through the discipline, `Size` is one `SIGWINCH`, the output of such a
+  line is relayed with the carriage return its attributes say, and a line in front ends with `Restore` (a native
+  line's before the next prompt). The
+  whole line in front reads until a `tcsetpgrp` chooses a group (`Terminal::set_foreground_line`); there is no kill
+  offer for a line with the terminal (ADR-0387). The broker beside `zosh` gives it a notice channel
+  (`HostTerminal`): `GroupMade` and `ForegroundAsked` (with the line's root), with no reply, and a group made inside a
+  line stays inside its job; a signal to a group that has groups made inside it goes to its members one by one
+  (ADR-0388). `libposix` (ADR-0389): `poll`, `ppoll` and `select` wait for a terminal's input with one `PollReadable`
+  outstanding per connection (idempotent across deferred waits), `tcsetattr` has its three actions (`Drain`, `Flush`,
+  `SetAttr`) and the service's `IO` is `EIO`, `tcflush`, `tcdrain`, `tcflow`, `tcsendbreak`, `cfmakeraw` and the speed
+  functions, `ctermid`, `ttyname`, `ttyname_r`, `tcgetwinsize` and `tcsetwinsize` exist, and `open("/dev/tty")` clones the
+  entry's connection for the caller's group, so dash has job control in a window: Ctrl-C, Ctrl-\ and Ctrl-Z reach the
+  group it chose with `tcsetpgrp` and no other of its jobs, and `sh` goes on. `TIOCSWINSZ` is `EPERM`, `TIOCSTI` `ENOTTY`; the guarded names of ADR-0342
+  item 12 are on `posix-surface-check`'s table. `zosh` sets `TERM` for a program with the terminal (`xterm-256color`
+  in a window, `console.term` on the serial console), `grants` prints the `keys` line, and `term.scrollback` reaches
+  `term` as a `Scrollback` message. Tests: `tests/posix/t_tty.c` (`names`, `poll`, `box`, `lines`, `bench`) in
+  `tests/posix/zosh.script` and, in a window at each GUI size, `tests/gui/posix-terminal.script` (`make
+  test-tour-terminal`). Not yet: see `docs/tasks/TASK-31-part-10c.md`. INV-0331-8 is a lint in `make check-kernel-tty`.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).
@@ -2612,7 +2644,8 @@ ADR-0221 items 5, 6 and 8).
   stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
   is dropped without a message. A program's start-up record holds at most 64 entries (`native::MAX_ENTRIES`): a path
   covered with the same rights by another entry takes none, but a line naming more distinct paths than that is refused.
-  A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
+  A POSIX program has the terminal from `zosh` on the fds its line does not redirect or pipe (ADR-0331, part 10c);
+  with none, `isatty` is false. Native `cp`
   moves a file in one message, so it cannot copy a large program. Under the test runner, `run-qemu.sh --reboot` lets a reset start the guest
   again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
@@ -2736,7 +2769,7 @@ ADR-0221 items 5, 6 and 8).
   writers left gets a fresh pair (ADR-0107 item 15). `execl` takes six arguments after `arg0` (item 13). `fork`
   copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
   memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). A POSIX
-  session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
+  session and `zosh` do not share the console; from `zosh` a POSIX program has the terminal on the streams its line leaves alone. Dates are the
   root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
   read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
 - **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport; a

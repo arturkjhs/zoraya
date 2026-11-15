@@ -11,6 +11,8 @@ setting  shell.history-size  number 0 100000 1000  lines of history kept
 setting  shell.suggestions   yes-no yes    suggestions from history
 setting  shell.colour        yes-no yes    any colour from the shell
 setting  console.columns     number 20 500 80  width of the serial console
+setting  console.term        choice dumb|vt100|xterm|xterm-256color  dumb  the TERM of programs on the serial console; dumb says full-screen programs will not draw exactly there
+setting  term.scrollback     number 100 10000 2000  lines of scrollback a terminal window keeps
 ---
 The shell people type commands into. help language describes what it reads.
 

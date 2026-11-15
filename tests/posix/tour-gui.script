@@ -501,6 +501,7 @@ type \r
 window
 screen tcc gets (a POSIX program):
 screen   in, out, err         the terminal
+screen   keys                 the terminal, while this line is in front
 screen   ~/project            read (current directory)
 screen   ~/project/main.c     read (operand FILE)
 screen   ~/project            create and change anything in (option -o)

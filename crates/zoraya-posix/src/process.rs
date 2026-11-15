@@ -306,12 +306,21 @@ pub struct Posix<S: Sys> {
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
     pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
-    /// What `Read` a terminal connection has outstanding, by connection.
-    pub(crate) tty_reads: Vec<(S::H, u32)>,
+    /// What `Read` a terminal connection has outstanding, by connection
+    /// (`pub`, like `tty_rest`, for the host tests).
+    pub tty_reads: Vec<(S::H, u32)>,
     /// Answers to held terminal reads that another request's wait took.
-    pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
+    pub tty_stash: Vec<(S::H, Vec<u8>)>,
     /// What a terminal read was given beyond the buffer that asked.
-    pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
+    pub tty_rest: Vec<(S::H, Vec<u8>)>,
+    /// The `PollReadable` each terminal connection has outstanding, by
+    /// connection (ADR-0331 item 5). A look that finds one does not send
+    /// another: the readiness request is idempotent, because a threaded
+    /// process runs the same look again after each deferred wait.
+    pub(crate) tty_polls: Vec<(S::H, u32)>,
+    /// Connections whose `PollReadable` was answered while another request's
+    /// wait was reading the channel: the next look says ready, once.
+    pub tty_poll_ready: Vec<S::H>,
     /// The record locks of this process (ADR-0319). A `fork` child starts
     /// with none, as POSIX has it: `after_fork_in_child` clears the copy.
     pub(crate) locks: crate::records::Locks<S::H>,
@@ -378,6 +387,8 @@ impl<S: Sys> Posix<S> {
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),
+            tty_polls: Vec::new(),
+            tty_poll_ready: Vec::new(),
             locks: crate::records::Locks::new(),
         }
     }
@@ -541,6 +552,16 @@ impl<S: Sys> Posix<S> {
                             .any(|&(c, ht)| c == conn && ht == header.transaction);
                         if held {
                             self.tty_stash.push((conn, self.input[..size].to_vec()));
+                            continue;
+                        }
+                        // A `PollReadable`'s answer: the next look says so.
+                        if let Some(i) = self
+                            .tty_polls
+                            .iter()
+                            .position(|&(c, pt)| c == conn && pt == header.transaction)
+                        {
+                            self.tty_polls.swap_remove(i);
+                            self.tty_poll_ready.push(conn);
                             continue;
                         }
                         return Err(EIO);
@@ -1046,11 +1067,15 @@ impl<S: Sys> Posix<S> {
                 };
                 self.install(desc, flags & o::CLOEXEC != 0)
             }
-            // The terminal is 6d's (ADR-0105).
-            EntryKind::Terminal => Err(ENXIO),
+            // ADR-0331 item 2: a connection of its own on the terminal.
+            EntryKind::Terminal => self.open_tty(r.place.entry, flags & o::NONBLOCK != 0),
             // An image is not a file this library can read.
             _ => Err(EACCES),
         }
+    }
+
+    pub(crate) fn install_desc(&mut self, desc: Desc<S::H>, cloexec: bool) -> Result<i32, i32> {
+        self.install(desc, cloexec)
     }
 
     fn install(&mut self, desc: Desc<S::H>, cloexec: bool) -> Result<i32, i32> {
@@ -1109,6 +1134,8 @@ impl<S: Sys> Posix<S> {
                     self.tty_reads.retain(|(h, _)| *h != c);
                     self.tty_stash.retain(|(h, _)| *h != c);
                     self.tty_rest.retain(|(h, _)| *h != c);
+                    self.tty_polls.retain(|(h, _)| *h != c);
+                    self.tty_poll_ready.retain(|h| *h != c);
                 }
                 for h in [read, write, conn].into_iter().flatten() {
                     self.sys.close(h);

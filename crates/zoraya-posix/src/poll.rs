@@ -15,9 +15,11 @@
 //! - a connecting socket: its control channel's message, for both directions.
 //! - a file, a directory, `/dev/null`, a socket with no connection and a
 //!   direction with no end: ready at once, as `select` has it.
-//! - a terminal: ready at once, as `select` has it, until the readiness
-//!   request of ADR-0331 item 5 exists (stage 10 part 10c replaces that
-//!   branch; INV-0342-2 then holds for it too).
+//! - a terminal: its input by the readiness request of ADR-0331 item 5
+//!   (`PollReadable`, held by the service until a read would not block;
+//!   idempotent, see `Posix::tty_input_ready`), its output by the write end
+//!   of the stream, as a pipe's. The service going away is `POLLIN` with
+//!   `POLLHUP` (a read gives end of file).
 //! - a descriptor that is not open: `POLLNVAL`. A negative `fd` is skipped
 //!   (`revents` 0), as POSIX has it.
 //!
@@ -28,6 +30,7 @@
 
 use alloc::vec::Vec;
 
+use crate::jobs::TtyLook;
 use crate::process::{Desc, Posix};
 use crate::sys::{Sys, signals};
 
@@ -119,7 +122,7 @@ impl<S: Sys> Posix<S> {
             if f.fd < 0 {
                 continue;
             }
-            let (now, probes) = match self.probes(f.fd, f.events) {
+            let (mut now, probes) = match self.probes(f.fd, f.events) {
                 Some(x) => x,
                 None => {
                     f.revents = POLLNVAL;
@@ -127,6 +130,17 @@ impl<S: Sys> Posix<S> {
                     continue;
                 }
             };
+            // A terminal's input: the readiness request (ADR-0331 item 5).
+            let mut tty_wait = None;
+            if f.events & IN_BITS != 0
+                && let Some(conn) = self.tty_input_conn(f.fd)
+            {
+                match self.tty_input_ready(conn) {
+                    TtyLook::Ready => now |= f.events & IN_BITS,
+                    TtyLook::Hup => now |= (f.events & IN_BITS) | POLLHUP,
+                    TtyLook::Wait => tty_wait = Some(conn),
+                }
+            }
             let mut rev = now;
             for pr in &probes {
                 match self.sys.signals_of(pr.end) {
@@ -144,6 +158,9 @@ impl<S: Sys> Posix<S> {
             }
             if rev == 0 {
                 sources.extend(probes.iter().map(|pr| (pr.end, pr.mask)));
+                if let Some(conn) = tty_wait {
+                    sources.push((conn, signals::READABLE | signals::PEER_CLOSED));
+                }
             } else {
                 f.revents = rev;
                 count += 1;
@@ -173,6 +190,18 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// The connection of `fd` if it is a terminal whose input has one.
+    pub(crate) fn tty_input_conn(&self, fd: i32) -> Option<S::H> {
+        match self.fds.get(fd) {
+            Some(Desc::Stream {
+                tty: true,
+                conn: Some(c),
+                ..
+            }) => Some(*c),
+            _ => None,
+        }
+    }
+
     /// What an open descriptor is ready for at once (`revents` bits) and the
     /// handles that tell the rest; `None` if `fd` is not open.
     #[allow(clippy::type_complexity)] // a pair, used once
@@ -196,9 +225,16 @@ impl<S: Sys> Posix<S> {
         };
         match self.fds.get(fd)? {
             Desc::Stream {
-                read, write, tty, ..
-            } if !*tty => {
-                if want_in {
+                read,
+                write,
+                tty,
+                conn,
+                ..
+            } => {
+                // A terminal's input is the connection's readiness request,
+                // looked at by the caller (`tty_input_ready`).
+                let tty = *tty && conn.is_some();
+                if want_in && !tty {
                     match read {
                         Some(e) => {
                             probes.push(read_probe(*e, signals::READABLE | signals::PEER_CLOSED))
@@ -214,7 +250,7 @@ impl<S: Sys> Posix<S> {
                         None => now |= outs,
                     }
                 }
-                if !want_in && !want_out {
+                if !want_in && !want_out && !tty {
                     // Only a hang-up or an error can be told.
                     match (read, write) {
                         (Some(e), _) => probes.push(read_probe(*e, signals::PEER_CLOSED)),
@@ -243,7 +279,7 @@ impl<S: Sys> Posix<S> {
                     probes.push(read_probe(e, signals::PEER_CLOSED));
                 }
             }
-            // Files, directories, `/dev/null`, terminals: ready at once.
+            // Files, directories and `/dev/null`: ready at once.
             _ => now |= ins | outs,
         }
         Some((now, probes))

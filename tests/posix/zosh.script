@@ -116,4 +116,157 @@ w notstp: ready
 > \x03
 < t_posix: interrupted (Ctrl-C)
 < \r\n~> 
+# ADR-0331 (part 10c): a POSIX program gets the terminal from zosh on the
+# fds the line neither redirects nor pipes.
+> echo x | t_posix rawkeys\r
+< rawkeys: tty 0 1 1
+< rawkeys: fd 0 is no terminal
+< \r\n~> 
+# Ctrl-C reaches the line in front only: the background line runs on.
+> /bin/sleep 30 &\r
+< [1] /bin/sleep 30
+< \r\n~> 
+> /bin/sleep 20\r
+~ 1000 zzz
+> \x03
+< /bin/sleep: interrupted (Ctrl-C)
+< \r\n~> 
+> jobs\r
+< [1]  running   /bin/sleep 30
+< \r\n~> 
+> kill --kill %1\r
+< \r\n~> 
+# A background program cannot read what is typed: its read of the terminal
+# is refused and it stops (SIGTTIN, ADR-0105 item 8); the keys are the
+# prompt's.
+! readerr: got=
+> t_posix readerr &\r
+< [1] t_posix readerr
+< \r\n~> 
+~ 1500 zzz
+> hunter2\r
+< \r\n~> 
+> jobs\r
+< [1]  stopped   t_posix readerr
+< \r\n~> 
+> kill --kill %1\r
+< \r\n~> 
+# Raw mode, Ctrl-Z and fg: each key is read as typed; at the prompt the keys
+# are the shell's; at fg the modes it had are back (ADR-0331 item 9).
+> t_posix rawkeys\r
+< rawkeys: tty 1 1 1
+< rawkeys: raw
+> a
+< rawkeys: key 61 canonical 0
+# Echo is off: the discipline shows no ^Z.
+> \x1a
+< [1] stopped: t_posix rawkeys
+< \r\n~> 
+> jobs\r
+< [1]  stopped   t_posix rawkeys
+< \r\n~> 
+> fg\r
+< t_posix rawkeys
+> b
+< rawkeys: key 62 canonical 0
+> q
+< rawkeys: done
+< \r\n~> 
+# ADR-0333 (INV-0333-2): TERM is set exactly for a program with the terminal
+# on one of fds 0 to 2: here the serial console, where console.term is dumb.
+> sh -c 'echo term=[$TERM]' | cat\r
+< term=[dumb]
+< \r\n~> 
+> echo x > in.txt\r
+< \r\n~> 
+> sh -c 'echo term=[$TERM]' < in.txt > out.txt 2> err.txt\r
+< \r\n~> 
+> cat out.txt\r
+< term=[]
+< \r\n~> 
+# ADR-0331 item 3 (INV-0331-1): grants says `keys` exactly when one of the
+# three is the terminal.
+> grants sh\r
+< keys                 the terminal, while this line is in front
+< \r\n~> 
+# A line whose three streams are elsewhere has no keys: the host test of
+# `grants` (the_keys_line_is_there_exactly_when_a_stream_is_the_terminal), since
+# `grants` is a builtin and takes no redirection.
+# The terminal's names and calls through libposix (ADR-0342 item 4, ADR-0389):
+# /dev/tty, ttyname, the three tcsetattr actions, tcflush, tcdrain, and the
+# refusals (TIOCSWINSZ is EPERM, TIOCSTI ENOTTY).
+> t_tty names\r
+< t_tty: written through /dev/tty
+< t_tty: names passed
+< \r\n~> 
+# INV-0331-3: an idle terminal is not ready (poll and select wait their
+# timeout), and a key wakes a call that also polls a pipe nobody writes with
+# the terminal alone.
+> t_tty poll\r
+< poll: idle ok
+< select: idle ok
+< poll: type a key
+> x
+< poll: key 78
+< select: type a key
+> y
+< select: key 79
+< t_tty: poll passed
+< \r\n~> 
+# `sh` typed at the prompt is interactive: it has the terminal on 0 and 2,
+# and job control through /dev/tty and tcsetpgrp (ADR-0331 item 6, ADR-0388):
+# Ctrl-C ends the foreground job and sh goes on; Ctrl-Z stops it and sh says so.
+# A signal character is for the group in front when it is typed: each job
+# first says it runs, which it does after sh's tcsetpgrp gave it the terminal
+# (a key typed before that is sh's, as on Unix; under TCG the fork takes more
+# than the 700 ms a fixed wait gave).
+> sh\r
+< $ 
+> echo in sh\r
+< in sh
+< $ 
+> /bin/sh -c 'echo g""o-a; exec /bin/sleep 30'\r
+< go-a
+> \x03
+< $ 
+> /bin/sh -c 'echo g""o-b; exec /bin/sleep 31'\r
+< go-b
+> \x1a
+< Stopped
+< $ 
+> jobs\r
+< Stopped
+< $ 
+> kill -9 %1\r
+< $ 
+~ 700 zzz
+# sh reports the end of the job it killed before it lets itself be left.
+> jobs\r
+< Killed
+< $ 
+# Ctrl-C is for the foreground job's group: a background job of sh runs on
+# (the review of 10c, finding 2); and sh's job control outlives many jobs: 70,
+# then a program that reads the terminal still gets it (finding 1).
+> /bin/sleep 60 &\r
+< $ 
+> /bin/sh -c 'echo g""o-c; exec /bin/sleep 30'\r
+< go-c
+> \x03
+< $ 
+> jobs\r
+< Running
+< $ 
+> kill %1\r
+< $ 
+> i=0; while [ $i -lt 70 ]; do /bin/sleep 0; i=$((i+1)); done; echo looped $i\r
+< looped 70
+< $ 
+> /bin/wc -c\r
+~ 700 zzz
+> abc\r
+> \x04
+< 4
+< $ 
+> exit\r
+< \r\n~> 
 > poweroff\r

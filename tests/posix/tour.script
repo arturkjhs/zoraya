@@ -200,6 +200,7 @@
 > grants +r ~/include tcc main.c -o main\r
 < \r\ntcc gets (a POSIX program):
 ^ \r\n  in, out, err         the terminal
+^ \r\n  keys                 the terminal, while this line is in front
 ^ \r\n  ~/project            read (current directory)
 ^ \r\n  ~/project/main.c     read (operand FILE)
 ^ \r\n  ~/project            create and change anything in (option -o)

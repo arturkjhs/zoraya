@@ -18,8 +18,9 @@ pub mod jobs;
 pub mod netgrant;
 pub mod paste;
 pub mod record;
-pub mod reset;
 pub mod syntax;
+pub mod terminal;
+pub mod tty_host;
 
 #[cfg(test)]
 mod editor_tests;

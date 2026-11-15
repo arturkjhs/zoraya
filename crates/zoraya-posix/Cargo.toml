@@ -37,6 +37,7 @@ zoraya-fontset = { path = "../zoraya-fontset" }
 
 [dev-dependencies]
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }
+zoraya-tty = { path = "../zoraya-tty" }
 zoraya-fs = { path = "../zoraya-fs" }
 zoraya-fs-service = { path = "../zoraya-fs-service" }
 zoraya-fs-testkit = { path = "../zoraya-fs-testkit" }
