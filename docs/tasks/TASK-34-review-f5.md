@@ -251,3 +251,146 @@ lib.rs:10` ("about 2.3 KiB" a chunk; measured 1816 bytes, ADR-0437 rule 2); ADR-
   same as at 4096, and the units are asserted on every host.
 - `make test-posix-threads` passed in this review. `make test-keeper` and `make test-posix` were not run by the
   reviewer either.
+
+## Re-check
+
+Reviewed `git diff 09b47261..d780deff` (seven commits) against findings 1 to 10.
+
+Verdict: **fix first, small.** Findings 1 to 10 are fixed. Finding 11 is a hole in the tests of the merging code that
+fixed finding 5, and the commit message calls the mutants that show it equivalent. Its fix is one host test and a
+corrected note. Findings 12 to 15 are notes.
+
+### Findings 1 to 10
+
+1. Fixed. `make test-python-mem` boots the python volume at `--mem 2G` (`--expect-line "2048 MiB  RAM"`) and runs the
+   plan's command (with a `print` added, then `status`). `tests/python/mappings.py` repeats ADR-0320's measurement. The
+   step is in `TEST_STEPS`, `.PHONY`, `ci-tests.txt`, `test-lanes.txt` (lane and `PAR_LONG` opt-in), `plan-lib.sh` and
+   the map. The workflow takes its jobs from `TEST_STEPS`, and `make check` (with `check-ci-jobs`, `check-ci-plan`,
+   `check-test-lanes`) passes. The assertions pin no number: the free count is compared with the start, within 2.
+2. Fixed. The kernel test empties the top chunk (31 records) and asserts that the list and the job's bytes fall by one
+   chunk. Merging does not change this: 1 + 32 is not under a chunk, so the chunk empties and is not merged first.
+3. Fixed. The poor job gets room for a chunk and not for a table frame: `Quota`, no mapping, no chunk, bytes as before.
+   `F5-abort-keeps-the-chunk` is listed.
+4. Fixed. `t_bound` has a case for `memory_unmap` of the last holder (64 pages and 24 MiB). The mutant on the step point
+   is listed as equivalent under the unit check. I accept this. The frees count a unit each (`frames::free`), so the
+   unit check would see the work, and by the note it stays under 80. I did not run the mutant.
+5. Fixed, apart from finding 11. Chunks merge on removal and spill to a neighbour before they split. Checked by reading
+   below.
+6. Fixed. `t_bound far-pages`: 22 one-page mappings 1 GiB apart, built in a child, with 352 unmapped 64 MiB spacer
+   mappings. The mutant is in `tools/mutants/mappings-f5-2g.toml`. By reading it is killed: 22 x (2 tables + 2 record
+   units) is 88 against 80. I did not run the mutant. The case ran in this re-check (161 us masked). It runs wherever
+   more than 40,000 frames are free, a 512 MiB guest included, not only "the 2 GiB guests".
+7. Fixed (`growth_for`). It agrees with `reserve_for` in every branch: room, spill up, spill down, split. Both use
+   `route`. The host test asserts equality over 30,000 random operations.
+8. Fixed. `record` and `map_commit` give back the record or holder. `map_object` drops it after the unmap and
+   `map_abort`, and `memory_map` drops it after the space lock is released.
+9. Fixed (the comment at `Drop`).
+10. Fixed (the index says 32, `lib.rs` says 1816 bytes, Option E gives the figures).
+
+### 11. warning: the forward merge in `rebalance` is not tested; three of the 11 host survivors are this hole, not equivalents
+
+Where: `crates/zoraya-mappings/src/lib.rs:275` (`if c + 1 < self.chunks.len() && ... < CHUNK`);
+`build/mutants/cargo/mutants.out/missed.txt`; commit d92275b4 ("11 survivors, all equivalent").
+
+What is wrong: the survivors `275:22 replace < with >` (the forward branch never runs), `275:93 replace < with ==` and
+`275:66 replace + with *` (it merges less often) all switch off the merge with the chunk after. No host test needs that
+merge. `small_neighbours_merge_and_the_charge_follows` takes records from the end of the last chunk, so its merge is the
+backward one. The pattern test removes in address order, so it too merges backwards only. The random test runs
+`check` only every 211 rounds, and its inserts heal a broken pair before then. With the forward branch gone, removals
+from a chunk whose next neighbour is small leave pairs under 32 records. Then "every two neighbours hold at least
+32" fails, and so does the chunk bound that ADR-0437 rule 2 states (468,528 bytes at the worst). The bound rests on
+this branch. Only `275:93 < → <=` and `278:80 < → <=` (merging at exactly 32) are equivalent: the merged chunk is full,
+fits its capacity, and keeps the pair invariant.
+
+Evidence: a throwaway host test, not committed. It fills 96 one-page records (3 full chunks), removes 31 from the
+top (32, 32, 1), then removes 2 from the middle chunk (30 + 1 must merge). It passes on d780deff. With mutant `275:22`
+applied, the 14 committed tests of `tests/mappings.rs` pass and this test panics at `lib.rs:345` ("chunks 1 and 2 could
+be one").
+
+Fix: add this case (and its mirror for the backward branch) to `tests/mappings.rs`, asserting `check()` and
+`chunk_count() == 2`. Correct the survivor list in the mutant notes or the report: the forward-merge three are killed
+by the new test, and the rest are equivalent.
+
+### 12. note: `F5-worst-growth-kept` is not equivalent when `reserve_for` fails
+
+Where: `kernel/src/memory/user.rs:360-364`; the note in `tools/mutants/mappings-f5.toml`.
+
+The note says that the difference to give back "is always 0". That is true when the chunk is made. When `try_reserve`
+or `new_chunk` fails (`NoRoom`), `grown` is 0 and `worst` (a chunk) must be given back. The mutant keeps 1816 bytes
+charged, with nothing allocated, until the space is reaped. No test can reach that path without injecting a heap
+failure, so it survives. Its note should say this, instead of "equivalent".
+
+### 13. note: a refused mapping after a split in the middle keeps the new chunk and its charge
+
+Where: `crates/zoraya-mappings/src/lib.rs:164-168`, `trim`; `kernel/src/memory/user.rs:378-382`; ADR-0437 rule 2 ("a
+mapping that fails after its room was made gives the room back").
+
+`trim` removes only a trailing empty chunk, which is what the top split makes. A split in the middle (16 and 16, both
+neighbours full) stays when the mapping is then refused. The lowest-gap search often places a mapping in the middle once
+mappings have been unmapped. The charge is exact (the chunk exists and holds records) and stays within the
+`2 * len / 32 + 2` bound, so this is no leak. But the job pays one chunk more for a refusal, and the ADR's sentence holds
+only for the top split. Fix: say so in rule 2, or undo the split in `map_abort` (merge the two halves back, which
+allocates nothing).
+
+### 14. note: the outer list's slack is up to 12 KiB, not 6
+
+Where: ADR-0437 rule 2 ("at most 24 bytes for each chunk the list ever had at once, 6 KiB at the worst");
+`lib.rs:77-81`.
+
+`try_reserve(1)` doubles the capacity. Adding the 257th chunk makes it 512 places, 12,288 bytes. This is all slack once
+the list shrinks. That is two places for each chunk the list ever had at once, not one. The amount is immaterial and
+uncharged, but the stated figure is wrong.
+
+### 15. note: a change to the mapping list's kernel code runs neither `test-python-mem` nor `test-libposix` on a candidate
+
+Where: `tools/test-map.txt:61, 66-67` (`kernel/`, `crates/zoraya-pagetable/`, `crates/zoraya-mappings/` map to
+`test-qemu` and a few others).
+
+This branch runs everything because it changes the `Makefile`. A later change to `crates/zoraya-mappings/` or
+`kernel/src/memory/user.rs` is covered on a candidate by `test-qemu` only. The CPython acceptance test and `t_maps`
+then run only nightly. This follows the map's existing practice for `kernel/`, so it is a note. Fix: add
+`test-libposix test-python-mem` to the `crates/zoraya-mappings/` line.
+
+### Checked and sound
+
+- The chunk list (`lib.rs`), by reading:
+  - Address order and no overlap are kept by both spills. Spill down moves a chunk's first record to the end of the
+    one before. Spill up moves its last record to the front of the next, and only when `route` kept the record inside
+    the chunk, so `va` is below the moved record. `insert`'s `route` finds the same chunk as `reserve_for`'s did,
+    after either spill and after either split.
+  - The pair invariant (every two non-empty neighbours hold at least 32) is kept:
+    - A spill takes one record from a full chunk, and its other neighbour is non-empty.
+    - A split leaves 16 + 16 next to full neighbours.
+    - A removal merges at most once. After a forward merge no further merge applies, and after a backward one no
+      forward one applies.
+  - The invariant gives at most `2 * len / 32 + 1` non-empty chunks, plus the trailing one.
+  - Merging allocates nothing: the sum is under the capacity of 32 that `new_chunk` reserved exactly.
+  - No chunk `Vec` ever grows past 32. A spill pushes into a chunk under 32, and so does a merge.
+  - The outer `Vec` allocates only in `reserve_for` (at most 12 KiB, within the fixed growth that `heap::prepare`'s doc allows without a prepare).
+- The charge follows the chunks:
+  - `growth_for` equals what `reserve_for` adds.
+  - A merge and an emptied chunk lower `bytes_held` by exactly one chunk, which `release_records` returns.
+  - `map_abort` after a spill changes nothing, and after a top split it trims the chunk.
+  - No underflow: `saturating_sub`, `release_kernel` capped.
+  - A merge could remove a trailing empty chunk only while a reservation is pending. `MapGuard` forbids removals then.
+- Bounded time:
+  - A removal moves at most 31 records, plus one merge of at most 31 records and up to 257 headers, about 9.6 KB.
+  - An insertion moves at most 31 records twice (spill and insert), or a split: 16 records, an outer insert, and an
+    outer reallocation of at most 6 KB.
+  - Both are counted as one or two units (a unit is 128 records read, about 7 KB). They are under-counted by at most
+    half a unit, which is immaterial against 80.
+- ADR-0437: 258 x 1816 = 468,528 and 128 x 1816 = 232,448 agree with the code and with the bound `check` asserts.
+- `tests/python/mappings.py`: the free count measures one-page private `mmap`s and closes them all. The ±2 tolerance
+  covers a detached thread still leaving. The recursion and the bytearrays are asserted by output and exit status.
+
+### Run in this re-check (d780deff, HVF)
+
+- `make check`: exit 0.
+- `cargo test -p zoraya-mappings -p zoraya-pagetable -p zoraya-posix`: exit 0 (`mappings`: 14 passed; `pagetable`: 22
+  passed; every `posix` binary passed).
+- `make test-qemu-auto-smp4-2g`: PASS, 122 passed, 10 expected failures. `t_bound` printed "22 pages 1 GiB apart: 161
+  us masked" and "memory_unmap of the last holder: one step 50 us, large 32 us masked".
+- `make test-python-mem`: PASS, 24 steps, about 18 s with the image build. "free mappings at the start 4086", "free
+  mappings after 4086", "recursion to 200000 frames", "bytearrays 5000000".
+- Not run: any mutant of the kernel lists, `test-python-mem` under TCG (what CI uses). Its TCG time is unmeasured, and
+  the candidate run in progress will show it against `PYTHON_MEM_TIMEOUT` 900 s.
