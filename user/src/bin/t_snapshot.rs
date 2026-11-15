@@ -225,6 +225,13 @@ fn a_shared_mapping_stays_shared() {
         Status::AccessDenied
     );
     let reading = memory_map(read_only, 0, size, MapFlags::SHARED).expect("read-only shared");
+    // A shared mapping needs DUPLICATE too: a fork child could not be given
+    // the handle (ADR-0431 item 4); a private one does not.
+    let no_dup = handle_duplicate(object, Rights::READ.union(Rights::WRITE)).expect("dup");
+    assert_err!(memory_map(no_dup, 0, size, MapFlags::SHARED), Status::AccessDenied);
+    let private_view = memory_map(no_dup, 0, size, MapFlags::READ).expect("not shared");
+    memory_unmap(private_view, size).expect("unmap");
+    handle_close(no_dup).expect("close");
     // A mapping that is not shared.
     let private_object = memory_create(size, MemoryFlags::NONE).expect("private object");
     let private = memory_map(private_object, 0, size, MapFlags::WRITE).expect("private map");

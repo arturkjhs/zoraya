@@ -760,11 +760,17 @@ impl Handlers for Calls<'_> {
         length: Size,
         flags: MapFlags,
     ) -> Result<u64, Status> {
-        let needed = if flags.is_write() {
+        let mut needed = if flags.is_write() {
             Rights::READ.union(Rights::WRITE)
         } else {
             Rights::READ
         };
+        // A shared mapping is repeated in a `fork` child, which gets the
+        // handle only if it can be duplicated: without `DUPLICATE` the child
+        // would hold the frames with no handle (ADR-0431 item 4).
+        if flags.is_shared() {
+            needed = needed.union(Rights::DUPLICATE);
+        }
         let Object::Memory(object) = self.object(object, needed)? else {
             return Err(Status::BadHandle);
         };

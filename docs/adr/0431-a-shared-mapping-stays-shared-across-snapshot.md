@@ -82,8 +82,10 @@ a received object is the same call as a mapping of the process's own scratch buf
    copied.
 3. **Charges.** The child pays the page tables of the shared pages (as for any mapping, ADR-0261) and nothing for the
    frames, which are the creator's.
-4. **Not changed.** The handle of the object is duplicated into the child by the snapshot's table copy as before
-   (`DUPLICATE`); `memory_unmap` of a shared mapping is as any; no right is added.
+4. **Rights.** A `SHARED` mapping needs `DUPLICATE` on the handle, besides `READ` (and `WRITE`): the snapshot gives the child a
+   handle only if it can be duplicated, so without the right the child would keep the frames with no handle. A mapping that is
+   not shared needs no more than before. The handle of the object is duplicated into the child by the snapshot's table copy as
+   before; `memory_unmap` of a shared mapping is as any; no right is added to what a process may do.
 
 ### Effect of the vision
 
@@ -108,7 +110,7 @@ and the mappings they made, with no more rights; sharing is the parent's mapping
 - **INV-0431-2.** A snapshot of a process with shared mappings takes no frame for their pages. *Check:* the same test compares
   the frames a snapshot takes with the mapping shared and not.
 - **INV-0431-3.** `memory_map` accepts flags 0 to 3 and refuses any other value; `SHARED` with `WRITE` through a handle without
-  `WRITE` is `AccessDenied`. *Check:* `t_snapshot` for the second; `cargo test -p zoraya-abi` (`memory_map_flags_are_zero_to_three`) for the first.
+  `WRITE`, and `SHARED` through a handle without `DUPLICATE`, are `AccessDenied`. *Check:* `t_snapshot` for the second; `cargo test -p zoraya-abi` (`memory_map_flags_are_zero_to_three`) for the first.
 
 ## Open questions
 
