@@ -75,8 +75,8 @@ sleep ncurses
    and fails unless it finds exactly one. Two of the four files of ADR-0333 change (`x/xterm`, `x/xterm-256color`); the
    manifest, the conformance dump and the key test (`kbs` is now covered by a test, and its exception is gone) follow.
 3. **Files of the image.** `/bin/less` and `/bin/vi` are files; `/bin/ex` and `/bin/view` are absolute links to
-   `/bin/vi` (nvi takes its mode from the name it is run by; a relative link was not followed by `zosh`'s lookup,
-   ADR-0344 item 1). `/usr/share/terminfo` holds the four files of ADR-0333 (`tic`'s output on the host, copied by the
+   `/bin/vi` (nvi takes its mode from the name it is run by, which a fourth patch takes from `argv[0]`: the port had
+   fixed `getprogname` at `vi`; a relative link was not followed by `zosh`'s lookup, ADR-0344 item 1). `/usr/share/terminfo` holds the four files of ADR-0333 (`tic`'s output on the host, copied by the
    rootfs rule). The two archives and the headers (`curses.h`, `ncurses.h` as a file, `term.h`, `termcap.h`, `unctrl.h`,
    `ncurses_dll.h`) go into the sysroot, so into the image's `/usr/lib` and `/usr/include` (ADR-0334 item 3).
 4. **No other curses reader** (ADR-0334 item 4, INV-0334-1): CPython's configure would find the archives in the sysroot
@@ -108,6 +108,16 @@ sleep ncurses
     and an unknown name from `/tmp`, the keys of `keypad(TRUE)` (Backspace is `KEY_BACKSPACE`), and `LINES`, `COLS` at
     start and after each `KEY_RESIZE`.
 
+12. **ncurses on a 64 KiB stack.** A process starts on 64 KiB, and `setupterm` faulted in every curses program: ncurses'
+    `_nc_read_tic_entry`, `_nc_read_file_entry` and `_nc_read_termtype` each hold an array of 32 KiB (`MAX_ENTRY_SIZE`), three
+    calls deep. `ports/patches/ncurses/0001-terminfo-buffers-on-the-heap.patch` takes the three arrays from the heap (the
+    functions keep their names; the arrays become their callers' to give). The host's `tic` is not patched. A program that
+    holds a 32 KiB array on a 64 KiB stack, a library's or its own, will meet the same limit.
+13. **Keys of a pager after a native command.** A pipeline whose first element is native gives that element the keys
+    (ADR-0387 item 2), so `ls | less` shows the first screen and `less` reads no key. `/bin/cat f | less` and `tcc -v &| less`,
+    where a POSIX program is first, page. This part does not change ADR-0387; `help less` does not say it yet and the hint for
+    `more` is the only word.
+
 **Tensions with accepted ADRs.** Item 6 (narrower than ADR-0335 item 9) and item 8 (wider than ADR-0335 item 3 for two
 files, until `narrow` takes a list) are the two. ADR-0390 is proposed, not accepted; its "left for 10d" lines are done here.
 
@@ -120,7 +130,7 @@ where a person gets more than they typed, and is said in words. Target 3: the ed
 
 - **Positive.** `vi`, `ex`, `view` and `less` are in the image with their descriptions; the entry says what the terminal
   sends; the early shim is gone; the sysroot has curses for programs built inside Zoraya.
-- **Negative.** Two files of a directory give the directory (item 8); `ports` builds ncurses, DB 1, less and nvi on every run
+- **Negative.** `ls | less` does not page (item 13); `:e` of a name the grant does not give says "new file" until part 10f's status row says why; two files of a directory give the directory (item 8); `ports` builds ncurses, DB 1, less and nvi on every run
   (minutes on CI's build job); a release of ncurses that renames `xterm+kbs` stops the entry's build.
 - **Follow-up.** `narrow` with a list; a measurement of DB 1 on a large file; `vttest`'s sessions recorded (needs a build on
   the host; see the part report).
@@ -145,6 +155,7 @@ where a person gets more than they typed, and is said in words. Target 3: the ed
 - Should `narrow` take a list of names in this stage (ADR-0337 item 8), or may item 8 stand until a part needs it?
 - Which DB 1: 1.85 or a maintained copy, once a 100 MB file has been measured?
 - Whether `view` should have `vi`'s operand (item 6).
+- How the keys should reach a pager after a native first element (item 13): a description key for "reads no standard input when given a file", or the last POSIX element of a pipeline taking the keys when the first reads none.
 
 ## Revisit triggers
 

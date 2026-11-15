@@ -289,6 +289,20 @@ states, to be taken up later:
     reason begins `deferred (10b)` again.
   - **A program that sets 2026 and never ends it** has each later update held 150 ms until its line ends, whose `Restore` ends it.
   - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
+- Part 10d (TASK-31) leftovers (`docs/tasks/TASK-31-part-10d.md`, proposed ADR-0391):
+  - **Done in 10d:** the terminfo entry says `kbs=^?` (ADR-0383 Option C); `vttest` 20251205 is pinned in `ports/sources.lock` and its
+    cursor and screen menus are recorded (`crates/zoraya-term/recordings/vttest-*.session`); the xterm comparison of the vttest grids and
+    the `vi` and `less` grids is still a person's (ADR-0332 item 10).
+  - **`narrow` with a list of names** (ADR-0335 item 3, ADR-0337 item 8) is not built: `vi a.txt b.txt` is given the directory whole
+    (ADR-0344 item 2's rule). Needed before 10f's second-file case; the file protocol, `zoraya-fs-service`, `zoraya-fsclient` and the planner's merge change.
+  - **`ls | less` does not page:** a native first element of a pipeline takes the keys (ADR-0387 item 2). Choose between a description
+    key (a native command that reads no input when given a file) and the last POSIX element taking the keys.
+  - **`:e` of a name the grant does not give says "new file"** (the table has no entry, so the open says `ENOENT`); the refusal that says
+    why is 10f's status row.
+  - **A 32 KiB array on a 64 KiB stack:** ncurses had three; other ports may. A process's stack size is fixed (`USER_STACK_SIZE`); a larger one
+    for a POSIX program (or `RLIMIT_STACK`) would end the class of fault.
+  - **Not measured:** DB 1.85 on a 100 MB file (ADR-0390's open question), a second run of the GUI script under TCG, the `tools/`-level
+    mutation run (not required for 10d).
 - Part 10c (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10c.md`, notes not fixed in the fix pass):
   - **INV-0386-1 and a program's own `c_cc`:** a program may make a printable byte a signal character (`VINTR` = `[`, `~` or a
     digit); then a paste, or the shell's own bracket marks, carry signal characters for it. Only its own line is affected; the

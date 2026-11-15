@@ -9,6 +9,7 @@
 #   and ports/sources.lock names no other such library.
 # INV-0334-2: the configure log of the port records the configured terminfo directory, the disabled
 #   home lookup and an empty fallback list.
+# INV-0335-2 (strings): vi names no system start-up file, openpty or flock; less no key, history or system file.
 # Also: the image has the four entries in letter-named directories, less, vi, and ex and view as
 #   links to vi.
 set -eu
@@ -48,6 +49,15 @@ if [ -d "$rootfs/bin" ]; then
   for n in ex view; do [ "$(readlink "$rootfs/bin/$n" 2>/dev/null)" = /bin/vi ] || say "/bin/$n is not a link to /bin/vi"; done
   for p in x/xterm-256color x/xterm v/vt100 d/dumb; do [ -f "$rootfs/usr/share/terminfo/$p" ] || say "$rootfs/usr/share/terminfo/$p is missing"; done
   [ "$(find "$rootfs/usr/share/terminfo" -type f | wc -l | tr -d ' ')" = 4 ] || say "the image's terminfo directory does not hold exactly four files"
+fi
+# --- INV-0335-2, the strings half: what the patches compiled out is not in the binaries.
+if [ -f "$rootfs/bin/vi" ] && [ -f "$rootfs/bin/less" ]; then
+  for pat in '/etc/vi.exrc' 'openpty' 'flock'; do
+    if LC_ALL=C strings -a "$rootfs/bin/vi" | grep -q -F -e "$pat"; then say "/bin/vi names $pat, which a patch removed"; fi
+  done
+  for pat in '/etc/sysless' '.lesskey' 'lesshst' 'openpty' 'flock'; do
+    if LC_ALL=C strings -a "$rootfs/bin/less" | grep -q -F -e "$pat"; then say "/bin/less names $pat, which is compiled out"; fi
+  done
 fi
 [ $fail = 0 ] && echo "check-curses: passed"
 exit $fail

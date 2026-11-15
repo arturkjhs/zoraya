@@ -1457,18 +1457,18 @@ test-tour-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 # paste to it, on the tour's image at each size of POSIX_TERM_SIZES: a scale or
 # a WxH (the GUI sizes of test-gui; a big display has fewer than 24 rows, so
 # the script depends on none).
-POSIX_TERM_SCRIPT := tests/gui/posix-terminal.script
+POSIX_TERM_SCRIPTS := tests/gui/posix-terminal.script tests/gui/posix-curses.script
 POSIX_TERM_SIZES ?= 1 2 1600x1000 1920x1200
 test-tour-terminal: $(POSIX_IMAGE_DEP) $(RUNNER)
-	@for accel in $(POSIX_ACCELS); do for size in $(POSIX_TERM_SIZES); do \
-	  label=posix-terminal-$$accel-$$size; \
+	@for script in $(POSIX_TERM_SCRIPTS); do for accel in $(POSIX_ACCELS); do for size in $(POSIX_TERM_SIZES); do \
+	  label=$$(basename $$script .script)-$$accel-$$size; \
 	  case $$size in *x*) g="--gui-size $$size" ;; *) g="--gui-scale $$size" ;; esac; \
 	  timeout=1200; [ $$size = 1 ] || timeout=1800; \
 	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-term.img > /dev/null && \
-	  $(RUNNER) --timeout $$timeout --gui-script $(POSIX_TERM_SCRIPT) --qmp $(BUILD)/$$label.qmp \
+	  $(RUNNER) --timeout $$timeout --gui-script $$script --qmp $(BUILD)/$$label.qmp \
 	    --label $$label -- $(RUN_QEMU) --test --gui $$g --mem $(POSIX_MEM) --qmp $(BUILD)/$$label.qmp \
 	    --disk $(BUILD)/posix-term.img --accel $$accel $(KERNEL) && \
-	  target/debug/zoraya-fsck $(BUILD)/posix-term.img > /dev/null || exit 1; done; done
+	  target/debug/zoraya-fsck $(BUILD)/posix-term.img > /dev/null || exit 1; done; done; done
 
 # The tour's two sessions, from docs/tour.md (INV-0154-4), and INV-0155-1's
 # from the descriptions; make test-unit fails when the committed ones differ.
