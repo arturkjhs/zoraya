@@ -805,8 +805,11 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
                 }
                 self.notice = Some((STATUS_PLAIN, text));
             }
+            // Why nothing was given is said once: the row goes back to what
+            // was pending (a refusal, or nothing) when the next field closes.
             Err(why) => {
-                self.notice = Some((STATUS_PLAIN, String::from(why)));
+                out.push(Self::status(STATUS_PLAIN, why));
+                return out;
             }
         }
         out.push(self.rest_row());

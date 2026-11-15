@@ -60,7 +60,8 @@ status /nowhere: does not exist
 chord meta k
 status kill vi? Enter kills, Escape keeps
 key esc
-status -
+# Escape keeps it, and the row is what it was: the refusal still pending, not the last answer.
+status vi was not given ~/other.txt (to read)
 chord meta k
 pause 800
 key ret
