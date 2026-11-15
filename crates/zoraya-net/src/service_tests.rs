@@ -1143,7 +1143,7 @@ fn duplicates_are_bounded_per_family() {
     let mut service = Service::new();
     let a = service.add(Connection::root()).unwrap();
     let b = service.add(Connection::root()).unwrap();
-    let mut dup = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
+    let dup = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
         from,
         &bytes(&Duplicate {}, n),
         1,
