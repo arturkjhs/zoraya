@@ -129,6 +129,10 @@ pause 3000
 click 300 87
 pause 500
 type echo closed3\r
+# The two refusals above now print their hints at once (a write refused inside a read-only
+# entry is reported since 10f: ADR-0337 item 1), which scrolls the screen by more lines than the
+# row of `closed2` allowed for: the row is read from the top.
+window
 screen closed3
 # ADR-0324: the web grant. `grants` says it in words (on a clear screen: with
 # /system/fonts its lines reach past the window's last row).
