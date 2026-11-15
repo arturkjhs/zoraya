@@ -21,18 +21,20 @@
 # - A push to main runs the document checks only (the plan's doc_checks;
 #   build and tests are skipped, so the run is green), whatever changed, and
 #   cancels nothing that runs.
-# - The full set of main runs on a schedule: every 4 hours (cron 0 */4 * * *)
+# - The full set of main runs on a schedule: every 4 hours (cron 23 */4 * * *, an off minute)
 #   if main changed since the last full run (tools/ci-last-full.rb reads that
 #   from the API; unknown means run), and nightly (17 2 * * *, always, with the
 #   nightly's own jobs). The summary of a scheduled run lists the merges since
-#   the last green full run. A stage tag needs a green scheduled or nightly run
-#   that includes the tagged commit.
+#   the last green full run. A skipping 4-hourly run fails if the last full run was red
+#   (it must not read as green over it). A stage tag needs a green scheduled or nightly
+#   run that includes the tagged commit (tools/ci-last-full.rb --green-for SHA).
 # - On demand (a manual run with full=true, to chase a flake) and on a tag
 #   `candidate-full/NAME` the full set runs as well; a manual run without
 #   full=true is planned like a candidate.
 # A new push to a branch cancels its older run; the concurrency group is per
 # event kind and ref, and a run of main (a push, a scheduled or a manual full
-# run) is never cancelled by another.
+# run) is not cancelled while it runs (a group keeps one pending run, so a newer
+# queued run of the same kind replaces an older queued one).
 #
 # The image (.github/ci/Dockerfile, built by ci-image.yml): the job `image`
 # computes its tag (tools/ci-image-tag.sh) and looks for it in ghcr.io. If it
@@ -57,8 +59,8 @@ on:
     - cron: '17 2 * * *'
     # Every 4 hours, on main: the full set if main changed since the last full run.
     # A red scheduled run is fixed first, before the next merge (CLAUDE.md):
-    # gh run list --workflow 'make test' --event schedule
-    - cron: '0 */4 * * *'
+    # gh run list --workflow 'make test' --event schedule (a skipping run fails if the last full run was red)
+    - cron: '23 */4 * * *'
 
 concurrency:
   # One group per kind of event, ref and (for a schedule) cron: a push to main
@@ -137,40 +139,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          full=0
-          case "$GITHUB_REF" in
-            refs/tags/candidate-full/*) full=1 ;;
-          esac
-          if [ "$FULL_INPUT" = true ]; then full=1; fi
-          nightly=0
-          skip=
-          last=
-          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
-            full=1
-            # The latest full scheduled run, through the API; an answer it does
-            # not give is no answer: the full set runs (fail safe).
-            last=$(tools/ci-last-full.rb 2>last.err) || last=
-            cat last.err
-            if [ "$SCHEDULE" = '17 2 * * *' ]; then
-              nightly=1
-            elif echo "$last" | grep -q '^skip=1$'; then
-              # Every 4 hours: only if main changed since the last full run.
-              skip="main is at $GITHUB_SHA, the commit of the last full scheduled run ($(echo "$last" | sed -n 's/^last_run=//p'))"
-            fi
-          fi
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
-            # A push to main: the document checks only (ADR-0348).
-            PUSH_MAIN=1 tools/ci-plan.sh origin/main | tee plan.txt >> "$GITHUB_OUTPUT"
-          elif [ -n "$skip" ]; then
-            CI_PLAN_SKIP="$skip" tools/ci-plan.sh origin/main | tee plan.txt >> "$GITHUB_OUTPUT"
-          else
-            NIGHTLY=$nightly FULL=$full tools/ci-plan.sh origin/main | tee plan.txt >> "$GITHUB_OUTPUT"
-          fi
-          grep '^summary=' plan.txt | sed 's/^summary=//' >> "$GITHUB_STEP_SUMMARY"
-          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
-            # The merges since the last green full run: what a red run may be blamed on.
-            { echo; tools/ci-last-full.rb --merges "$(echo "$last" | sed -n 's/^green_sha=//p')"; } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          # tools/ci-plan-step.sh: the plan of the event (a push to main, a scheduled run, a candidate...).
+          rc=0
+          tools/ci-plan-step.sh > step.txt || rc=$?
+          cat step.txt >> "$GITHUB_OUTPUT"
+          exit $rc
 
   # The ports, the sysroot, libc.a, the kernels, the user programs, the host
   # tools and tests (built, not run) and the POSIX image (make ci-build), as

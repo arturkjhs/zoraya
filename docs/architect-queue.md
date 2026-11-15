@@ -64,5 +64,5 @@ The CI policy of ADR-0348 (the architect, 2026-11-15) applies to this dispatcher
 `tools/ci-plan.sh` selects (the full set only for `kernel/`, libposix or `tools/test-runner/`; a `Makefile` change maps to the
 steps whose recipes or variables it changes); do not wait for `main`'s run after a merge, the next part merges as soon as its
 own candidate is green; `main`'s full set runs every 4 hours if `main` changed, and nightly; a red scheduled run
-(`gh run list --workflow 'make test' --event schedule`) is fixed first, before the next merge, and its summary lists the merges
-since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit.
+(`gh run list --workflow 'make test' --event schedule`; a skipping 4-hourly run fails if the last full run was red) is fixed first, before the next merge, and its summary lists the merges
+since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).

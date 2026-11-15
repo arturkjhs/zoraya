@@ -150,7 +150,7 @@ if [ -r "$nightly_list" ]; then
 		echo "$nplan" | grep -F -q "\"$line\"" || echo "check-ci-jobs: the nightly plan lacks $line" >&2
 		echo "$oplan$cplan" | grep -F -q "\"$line\"" && echo "check-ci-jobs: $line is in a plan that is not the nightly's" >&2
 	done 2>&1 | grep -q . && need "the nightly's jobs (tools/ci-nightly-tests.txt) in the nightly plan only"
-	grep -q 'NIGHTLY=\$nightly' "$workflow" || need "the workflow giving tools/ci-plan.sh NIGHTLY=1 on a schedule run"
+	grep -q 'NIGHTLY=\$nightly' tools/ci-plan-step.sh || need "the workflow giving tools/ci-plan.sh NIGHTLY=1 on a schedule run"
 	for s in $(grep -E '^make ' "$nightly_list" | awk '{ print $2 }'); do
 		echo " $TEST_STEPS " | grep -q " $s " && need "$s not in TEST_STEPS (a nightly-only job is not a step of make test)"
 	done
@@ -160,7 +160,14 @@ fi
 # event (and by cron) and a run of main is never cancelled, and the scheduled run asks the
 # API for the last full run and lists the merges since the last green one.
 grep -q -F "cron: '17 2 * * *'" "$workflow" || need "the nightly schedule (cron '17 2 * * *')"
-grep -q -F "cron: '0 */4 * * *'" "$workflow" || need "the schedule every 4 hours (cron '0 */4 * * *')"
+grep -q -F "cron: '23 */4 * * *'" "$workflow" || need "the schedule every 4 hours (cron '23 */4 * * *', an off minute)"
+# The nightly is told from the 4-hourly run by its cron string, kept in tools/ci-plan-step.sh:
+# the two must not drift (a nightly planned as a 4-hourly run would skip and never run its own jobs).
+wf_nightly=$(sed -n "s/^[[:space:]]*- cron: '\(.*\)'\$/\1/p" "$workflow" | head -1)
+step_nightly=$(sed -n "s/^NIGHTLY_CRON='\(.*\)'\$/\1/p" tools/ci-plan-step.sh)
+[ -n "$wf_nightly" ] && [ "$wf_nightly" = "$step_nightly" ] ||
+	need "the first cron of the workflow ('$wf_nightly') to be the NIGHTLY_CRON of tools/ci-plan-step.sh ('$step_nightly')"
+grep -q 'tools/ci-plan-step.sh' "$workflow" || need "the plan step calling tools/ci-plan-step.sh"
 group=$(sed -n 's/^[[:space:]]*group:[[:space:]]*//p' "$workflow" | head -1)
 case "$group" in
 *github.event_name*github.event.schedule*github.ref*) ;;
@@ -170,9 +177,9 @@ cancel=$(sed -n 's/^[[:space:]]*cancel-in-progress:[[:space:]]*//p' "$workflow" 
 for w in "github.ref != 'refs/heads/main'" "github.event_name != 'schedule'" "github.event_name != 'workflow_dispatch'"; do
 	case "$cancel" in *"$w"*) ;; *) need "cancel-in-progress that spares main, a schedule and a manual run ($w)" ;; esac
 done
-grep -q 'PUSH_MAIN=1 tools/ci-plan.sh' "$workflow" || need "a push to main planned with PUSH_MAIN=1 (the document checks only)"
-grep -q 'tools/ci-last-full.rb' "$workflow" || need "the scheduled run reading the last full run (tools/ci-last-full.rb)"
-grep -q 'ci-last-full.rb --merges' "$workflow" || need "the scheduled run's summary listing the merges since the last green run"
+grep -q 'PUSH_MAIN=1 tools/ci-plan.sh' tools/ci-plan-step.sh || need "a push to main planned with PUSH_MAIN=1 (the document checks only)"
+grep -q 'ci-last-full.rb' tools/ci-plan-step.sh || need "the scheduled run reading the last full run (tools/ci-last-full.rb)"
+grep -q -- '--merges' tools/ci-plan-step.sh || need "the scheduled run's summary listing the commits since the last green run"
 # Every test step of TEST_STEPS must be in the full plan and in the plan of a
 # change the map does not know (which runs every step: plan-lib.sh's $all).
 for mode in full unmapped; do

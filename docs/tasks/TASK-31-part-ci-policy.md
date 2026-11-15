@@ -26,16 +26,17 @@ lines) to its variable; a blank or comment line to nothing. A step is reached fr
 (variables expanded, `$(addprefix P,...)` and an unexpandable word standing for every target that begins with the text before
 it, pattern rules), `$(MAKE) TARGET` in a recipe, and variables referenced in a prerequisite list, a recipe or another
 variable (`$(V)`, `${V}`, `$(call V,..)`, transitively). Removed lines are attributed in the old Makefile, added lines in the
-new one. `.PHONY`, `include`, `export`, a conditional or any other line: the full set. A change that reaches the recipe of
+new one. `.PHONY`, `include`, `export` (and an exported variable), `SHELL`/`MAKEFLAGS`, a conditional, `$(eval` (and variables its template uses), any other line, and an unchanged line that changed owner (deleted rule header, removed trailing backslash): the full set. A changed node that no step, `test-unit`, `ci-build` or listed non-step root reaches is the full set too; an unresolvable word stands for every rule. A change that reaches the recipe of
 `test-unit` runs all host tests; one that reaches only `ci-build` runs the boot step (so the build job runs).
 
 ## Known limits and open risks
 
 - A `.PHONY` change is always the full set, as ordered, so a new target is a full set (ADR-0348 open question).
+- After review (`docs/tasks/TASK-31-review-ci-policy.md`): `$(MAKE) T` edges are followed, unreached means full, a red last run makes a skipping run fail, `--green-for`, off-minute cron, commit list, `tools/ci-plan-step.sh` with fixtures, `unit=1` in `make test-changed`.
 - The parser expands only simple variables and `addprefix`; other functions (`$(if ..)`, `$(foreach ..)`) are not
   evaluated, so a target name made by them is found only by prefix.
 - The new workflow and the lookup against the real API have not run (no dispatch was allowed): the first scheduled runs show
   whether `status=completed` runs and the `build` job name are what `tools/ci-last-full.rb` expects. Any error runs the full set.
-- Two cron strings: the nightly is told from the 4-hourly by `github.event.schedule == '17 2 * * *'`; change one and the
+- (Superseded: the nightly's cron is compared with `NIGHTLY_CRON` by `make check-ci-jobs`.) Two cron strings: the nightly is told from the 4-hourly by `github.event.schedule == '17 2 * * *'`; change one and the
   other, together (`make check-ci-jobs` checks both exist).
 - A push to `main` no longer runs fmt, clippy or the code checks; candidates ran `make check`'s jobs on the branch.

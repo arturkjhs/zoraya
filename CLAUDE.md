@@ -40,7 +40,8 @@ Read `docs/design.md` first. It says what exists and where it lives.
   unless `make check` exited 0 on the commit being pushed (two pushes went out on 2026-11-14 while `make check`
   failed, because a chain printed the failure and went on).
 - A stage's tag goes on `main` only after a scheduled or nightly full run of `main` that includes the tagged commit
-  (its head is that commit or a descendant of it) is green (ADR-0348). A published tag is moved only with the
+  (its head is that commit or a descendant of it) is green (ADR-0348); `tools/ci-last-full.rb --green-for SHA` (with
+  `GITHUB_REPOSITORY` set and `gh` logged in) names that run, or exits 1: a run that skipped or a red one never counts. A published tag is moved only with the
   architect's permission.
 
 ## Environment
@@ -98,7 +99,8 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
     `tools/test-runner/`. A `Makefile` change maps to the steps whose recipes or variables the diff changes
     (`tools/ci-makefile-steps.rb`), not to every step; a change it cannot attribute (`.PHONY`, an include) runs the
     full set.
-  - `main`'s full set runs on a schedule: every 4 hours if `main` changed since the last full run, and nightly. A
+  - `main`'s full set runs on a schedule: every 4 hours if `main` changed since the last full run, and nightly (a 4-hourly run that skips fails if the last
+    full run was red). A
     push to `main` runs the document checks only, whatever changed, and does not cancel a scheduled or manual full
     run in progress.
 - Before a merge, the candidate run on the branch must be green; merge only when it is. After a merge do not wait for
@@ -107,7 +109,7 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
   infer it.
 - A stage is not done until a scheduled or nightly full run that includes its last commit is green (a tag
   `candidate-full/NAME` or a `full=true` run is not needed, and is for chasing a flake). A stage tag needs that green
-  run: its head is the tagged commit or a descendant of it on `main`.
+  run: `tools/ci-last-full.rb --green-for SHA` finds it (its head is the tagged commit or a descendant of it on `main`).
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this
   session.
 - Logic that does not need hardware lives in a separate `no_std` crate under `crates/`, with host tests

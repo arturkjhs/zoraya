@@ -42,7 +42,7 @@ fi
 plan_changed
 
 echo "make test-changed: since $base"
-echo "  host tests: ${packages:-none}"
+echo "  host tests: ${packages:-none}$([ "$unit_all" = 1 ] && echo " (all: the Makefile changed test-unit)")"
 echo "  steps: ${steps:-none} (under HVF)"
 if [ "${DRY:-0}" = 1 ]; then
     # The lanes' own verdict: which steps run, which print SKIPPED, which fail.
@@ -56,9 +56,11 @@ fi
 
 status=0
 "${MAKE:-make}" --no-print-directory check || status=1
-if [ -n "$packages" ]; then
+if [ -n "$packages" ] || [ "$unit_all" = 1 ]; then
     args=
     for p in $packages; do args="$args -p $p"; done
+    # A change of the Makefile that reaches test-unit's recipe: every host test.
+    [ "$unit_all" != 1 ] || args="--workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt"
     log=build/logs-par/host-tests.log
     mkdir -p build/logs-par
     t0=$(date +%s)

@@ -2691,16 +2691,16 @@ ADR-0221 items 5, 6 and 8).
   (`tools/ci-tests.txt`). A push to `main` runs only the document checks (`doc_checks`: `adr-check`, `check-host-paths`,
   `check-untrusted-gate`, `check-quota-tests`, `check-tls-roots`), no build and no machine, whatever changed, and a push never
   cancels a scheduled or manual run (the concurrency group is per kind of event, cron and ref). `main`'s full set runs on a
-  schedule: every 4 hours (`0 */4 * * *`) if `main` changed since the last scheduled run that ran the build
+  schedule: every 4 hours (`23 */4 * * *`, an off minute) if `main` changed since the last scheduled run that ran the build
   (`tools/ci-last-full.rb`, from the API; an answer it cannot give means run), and nightly (`17 2 * * *`, always, with the
   nightly's own jobs in `tools/ci-nightly-tests.txt`). A scheduled run's summary lists the merges since the last green full run
-  (`git log --merges --first-parent LAST..HEAD`). A red scheduled run is fixed before the next merge; a stage tag needs a green
-  scheduled or nightly full run whose head is the tagged commit or a descendant of it. A manual run with `full=true` (to chase
+  (the commits of `git log --first-parent LAST..HEAD`, merges marked); a 4-hourly run that skips fails if the last full run was
+  red (so it never reads as green over it); the plan step is `tools/ci-plan-step.sh`. A red scheduled run is fixed before the next merge; a stage tag needs a green
+  scheduled or nightly full run whose head is the tagged commit or a descendant of it (`tools/ci-last-full.rb --green-for SHA`). A manual run with `full=true` (to chase
   a flake) and a tag `candidate-full/NAME` still run the full set. ADR-0345's tree proof (`tools/ci-tree-proof.rb`) is no longer
   called by the plan; by hand, `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name> tools/ci-tree-proof.rb`
   shows that a commit's tree has a green full run. `make check-ci-plan` tests the plans, the Makefile mapping, the scheduled
-  lookup and the proof on fixtures. Known limits: a `.PHONY` change always runs the full set; a variable reached only through a
-  `$(...)` the parser does not expand reaches the steps of its other references. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
+  lookup and the proof on fixtures. Known limits: a `.PHONY` change always runs the full set; a changed rule or variable that no step and no listed non-step root reaches, a `$(eval`, an exported variable and `SHELL` are the full set too; a word the parser cannot resolve stands for every rule. A push to `main` runs 5 of the 25 check commands (a scheduled full run runs all). The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
   The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
   that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
   (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".

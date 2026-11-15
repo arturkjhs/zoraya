@@ -23,7 +23,7 @@ git config user.name ci-plan-test
 git config user.email ci-plan-test@localhost
 git config commit.gpgsign false
 mkdir -p tools docs/adr docs/research/task-02 docs/research/desktop/mockups src
-for f in ci-plan.sh plan-lib.sh ci-tests.txt test-map.txt ci-tree-proof.rb ci-makefile-steps.rb ci-last-full.rb ci-nightly-tests.txt; do cp "$here/tools/$f" tools/; done
+for f in ci-plan.sh plan-lib.sh ci-tests.txt test-map.txt ci-tree-proof.rb ci-makefile-steps.rb ci-last-full.rb ci-nightly-tests.txt ci-plan-step.sh; do cp "$here/tools/$f" tools/; done
 mkdir -p .github/workflows
 cp "$here/.github/workflows/test.yml" .github/workflows/
 printf 'x\n' > docs/design.md
@@ -40,8 +40,8 @@ printf 'prose\n' > docs/adr/0998-plain.md
 mkdir -p kernel/src crates/zoraya-posix/src crates/zoraya-posix-extra/src crates/zoraya-proto-posix/src ports/musl tools/test-runner/src
 for f in kernel/src/main.rs crates/zoraya-posix/src/lib.rs crates/zoraya-posix-extra/src/lib.rs crates/zoraya-proto-posix/src/lib.rs ports/musl/musl.mk tools/test-runner/src/main.rs; do printf 'x\n' > "$f"; done
 # A small Makefile for tools/ci-makefile-steps.rb's cases.
-printf '%s\n' '# a comment' '.PHONY: test-boot test-files test-gui test-net other' 'KERNEL := build/k.elf' 'SHARED := -x' 'ONLY_BOOT := b' 'DERIVED = $(ONLY_BOOT)' 'TIMEOUT ?= 180' 'LONGVAR := a \' > Makefile
-printf '\tb\n$(KERNEL):\n\tcc -o $@ k\ntest-boot: $(KERNEL)\n\trun $(SHARED) $(ONLY_BOOT)\ntest-files: $(KERNEL)\n\trun $(SHARED) files\ntest-gui:\n\trun gui $(TIMEOUT) $(DERIVED)\ntest-net:\n\trun net $(LONGVAR)\n\trun net2\nother:\n\techo hi\n' >> Makefile
+printf '%s\n' '# a comment' '.PHONY: test-boot test-files test-gui test-net other' 'KERNEL := build/k.elf' 'SHARED := -x' 'ONLY_BOOT := b' 'DERIVED = $(ONLY_BOOT)' 'TIMEOUT ?= 180' 'export EXPORTED := 1' 'GEN := build/gen' 'LONGVAR := a \' > Makefile
+printf '\tb\n$(KERNEL):\n\tcc -o $@ k\ntest-boot: $(KERNEL)\n\trun $(SHARED) $(ONLY_BOOT)\ntest-files: $(KERNEL)\n\trun $(SHARED) files\ntest-gui:\n\trun gui $(TIMEOUT) $(DERIVED)\ntest-net:\n\trun net $(LONGVAR)\n\trun net2\n\t@$(MAKE) --no-print-directory helper\nhelper:\n\techo h\nother:\n\techo hi\ncheck-x:\n\techo chk\n' >> Makefile
 git add -A
 git commit -q -m base
 base=$(git rev-parse HEAD)
@@ -116,7 +116,22 @@ mk_steps "a variable used through another variable" "steps: test-boot test-gui"
 mk_edit continuation 's/^	b$/	c/'
 mk_steps "a continuation line of a variable" "steps: test-net"
 mk_edit other 's/echo hi/echo ho/'
-mk_steps "a recipe no step reaches" "steps:"
+mk_steps "a recipe that no step and no root reaches is not known to be harmless" "full"
+mk_edit check-x 's/echo chk/echo chk2/'
+mk_steps "a recipe only a check target reaches" "steps:"
+mk_edit make-edge 's/echo h$/echo h2/'
+mk_steps "a recipe a step runs through \$(MAKE)" "steps: test-net"
+mk_edit make-rename 's/^helper:/helper2:/'
+mk_steps "a helper renamed while its caller still names the old one" "full"
+mk_edit exported 's/^export EXPORTED := 1/export EXPORTED := 2/'
+mk_steps "an exported variable" "full"
+mk_edit shell 's/^TIMEOUT ?= 180/SHELL := \/bin\/bash\
+TIMEOUT ?= 180/'
+mk_steps "SHELL" "full"
+mk_edit delheader '/^helper:/d'
+mk_steps "a deleted rule header moves its recipe to another rule" "full"
+mk_edit backslash 's/^LONGVAR := a \\$/LONGVAR := a/'
+mk_steps "a removed trailing backslash" "full"
 mk_edit comment 's/^# a comment/# another comment/'
 mk_steps "a comment" "steps:"
 mk_edit deleted '/run net2/d'
@@ -133,6 +148,23 @@ mk_steps "a conditional" "full"
 mk_edit include 's/^other:/include x.mk\
 other:/'
 mk_steps "an include" "full"
+# Constructs the parser cannot follow must not read as "no step": each of these changes what test-a does.
+adv() { # NAME EXPECTED OLD-TEXT NEW-TEXT (printf formats)
+	printf "$3" > "$aux/adv.old"
+	printf "$4" > "$aux/adv.new"
+	got=$(ruby tools/ci-makefile-steps.rb --files "$aux/adv.old" "$aux/adv.new" "test-a test-b" 2>/dev/null) || got=ERROR
+	[ "$got" = "$2" ] || { echo "check-ci-plan: Makefile: $1: got '$got', expected '$2'" >&2; fail=$((fail + 1)); }
+}
+adv "a substitution reference" "steps: test-a" 'X := a.c\ntest-a:\n\tcc $(X:.c=.o)\ntest-b:\n\tb\n' 'X := b.c\ntest-a:\n\tcc $(X:.c=.o)\ntest-b:\n\tb\n'
+adv "a prerequisite through foreach" "steps: test-a" 'L := 1\ntest-a: $(foreach s,$(L),h-$(s))\n\ta\nh-1:\n\tx\ntest-b:\n\tb\n' 'L := 1\ntest-a: $(foreach s,$(L),h-$(s))\n\ta\nh-1:\n\ty\ntest-b:\n\tb\n'
+adv "a prerequisite through if" "steps: test-a" 'test-a: $(if $(CI),h,h)\n\ta\nh:\n\tx\ntest-b:\n\tb\n' 'test-a: $(if $(CI),h,h)\n\ta\nh:\n\ty\ntest-b:\n\tb\n'
+adv "a computed variable name" "steps: test-a" 'S := a\na_F := 1\ntest-a:\n\tcc $($(S)_F)\ntest-b:\n\tb\n' 'S := a\na_F := 2\ntest-a:\n\tcc $($(S)_F)\ntest-b:\n\tb\n'
+adv "an eval template" "full" 'define T\n$(1):\n\tx\nendef\n$(eval $(call T,test-a))\ntest-b:\n\tb\n' 'define T\n$(1):\n\ty\nendef\n$(eval $(call T,test-a))\ntest-b:\n\tb\n'
+adv "a variable used only in a target list" "full" 'GEN := g1\ntest-a: g1\n\ta\n$(GEN):\n\tx\ntest-b:\n\tb\n' 'GEN := g2\ntest-a: g1\n\ta\n$(GEN):\n\tx\ntest-b:\n\tb\n'
+adv "a make word the tool cannot resolve" "steps: test-a" 'F = $(MAKE) $(1)\ntest-a:\n\t$(call F,x)\n\t$(MAKE) $(X)\nx:\n\ta\ntest-b:\n\tb\n' 'F = $(MAKE) $(1)\ntest-a:\n\t$(call F,x)\n\t$(MAKE) $(X)\nx:\n\tb\ntest-b:\n\tb\n'
+adv "a tab comment that continues into a command" "steps: test-a" 'test-a:\n\t# c \\\n\techo one\n' 'test-a:\n\t# c \\\n\techo two\n'
+adv "\${MAKE}" "steps: test-a" 'test-a:\n\t+${MAKE} h\nh:\n\tx\ntest-b:\n\tb\n' 'test-a:\n\t+${MAKE} h\nh:\n\ty\ntest-b:\n\tb\n'
+
 # Through the plan: the one recipe's step and the smoke set; not test-net; not the full set.
 mk_edit recipe 's/) files$/) files2/'
 out=$(sh tools/ci-plan.sh "$base" 2>"$aux/plan.err")
@@ -433,6 +465,51 @@ out=$(ruby tools/ci-last-full.rb --merges "$base" 2>/dev/null)
 echo "$out" | grep -q 'merge-moved' || { echo "check-ci-plan: last full run: the merges since the last green run are listed" >&2; fail=$((fail + 1)); }
 out=$(ruby tools/ci-last-full.rb --merges 1234567890abcdef1234567890abcdef12345678 2>/dev/null)
 echo "$out" | grep -q 'No green full run is known' || { echo "check-ci-plan: last full run: an unknown last green run says so" >&2; fail=$((fail + 1)); }
+
+# --green-for: the stage-tag rule (a green full run whose head has the tag's commit as an ancestor).
+printf '%s\n' '203 success '"$merge"' skipped' '202 failure '"$merge"' success' '201 success '"$cand"' success' > "$aux/runs.txt"; lastfull
+out=$(env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 ruby tools/ci-last-full.rb --green-for "$base" 2>/dev/null) && echo "$out" | grep -q '^green_run=201$' ||
+	{ echo "check-ci-plan: green-for: a skipped run and a red run do not count, an older green run on a descendant does" >&2; fail=$((fail + 1)); }
+if env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 ruby tools/ci-last-full.rb --green-for "$base" >/dev/null 2>&1; then :; else
+	echo "check-ci-plan: green-for: $base is an ancestor of the green run's head" >&2; fail=$((fail + 1))
+fi
+if env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 ruby tools/ci-last-full.rb --green-for "$merge" >/dev/null 2>&1; then
+	echo "check-ci-plan: green-for: the merge is only on a red run and a skipped run, not on a green one" >&2; fail=$((fail + 1))
+fi
+printf '%s\n' '201 success '"$cand"' success' > "$aux/runs.txt"; lastfull
+lf "last_conclusion of a green run" last_conclusion=success
+printf '%s\n' '201 failure '"$cand"' success' > "$aux/runs.txt"; lastfull
+lf "last_conclusion of a red run" last_conclusion=failure
+
+# The plan step (tools/ci-plan-step.sh): what each event plans.
+fakelast="$aux/fakelast"
+cat > "$fakelast" <<'FAKE'
+#!/bin/sh
+[ "${1:-}" = --merges ] && { echo "merges since ${2:-none}"; exit 0; }
+[ -z "${FAKE_FAIL:-}" ] || exit 1
+cat "$FAKE_OUT"
+FAKE
+chmod +x "$fakelast"
+step_plan() { # NAME EXPECTED_EXIT EXPECTED_REGEX; env of the event in $ev
+	env CI_LAST_FULL="$fakelast" GITHUB_STEP_SUMMARY="$aux/summary" GITHUB_SHA=headsha SCHEDULE="${SCHEDULE:-}" $ev sh tools/ci-plan-step.sh > "$aux/step.out" 2>"$aux/step.err" && rc=0 || rc=$?
+	[ "$rc" = "$2" ] || { echo "check-ci-plan: plan step: $1: exit $rc, expected $2" >&2; fail=$((fail + 1)); }
+	grep -q -E "$3" "$aux/step.out" || { echo "check-ci-plan: plan step: $1: the plan lacks $3" >&2; fail=$((fail + 1)); }
+}
+: > "$aux/summary"
+printf 'skip=1\nlast_run=7\nlast_sha=headsha\nlast_conclusion=success\ngreen_sha=g1\n' > "$aux/last.skip.green"
+printf 'skip=1\nlast_run=7\nlast_sha=headsha\nlast_conclusion=failure\n' > "$aux/last.skip.red"
+printf 'skip=0\nlast_run=7\nlast_sha=old\nlast_conclusion=failure\n' > "$aux/last.new"
+ev="GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main" step_plan "a push to main" 0 '^docs_only=1$'
+ev="GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/work/x" FAKE_OUT="$aux/last.new" step_plan "a push to a branch plans a candidate (no merge base here: full)" 0 '^tests='
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green SCHEDULE=4h" step_plan "the 4-hourly run, nothing new, last run green: nothing runs, green" 0 '^summary=nothing to run'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.red SCHEDULE=4h" step_plan "the 4-hourly run, nothing new, last run red: the run is red" 1 '^summary=nothing to run'
+grep -q 'is red' "$aux/step.err" "$aux/summary" 2>/dev/null || grep -q 'is red' "$aux/step.out" "$aux/summary" || { echo "check-ci-plan: plan step: a red skip does not say why" >&2; fail=$((fail + 1)); }
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.new SCHEDULE=4h" step_plan "the 4-hourly run, main moved: the full set" 0 '^summary=full set: [0-9]+ jobs'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_FAIL=1 SCHEDULE=4h" step_plan "the 4-hourly run, the lookup fails: the full set" 0 '^summary=full set: [0-9]+ jobs'
+nightly_cron=$(sed -n "s/^NIGHTLY_CRON='\(.*\)'$/\1/p" tools/ci-plan-step.sh)
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green" SCHEDULE="$nightly_cron" step_plan "the nightly never skips" 0 "nightly's own jobs"
+ev="GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/work/x FULL_INPUT=true" step_plan "a manual full run" 0 '^summary=full set: [0-9]+ jobs'
+grep -q 'merges since' "$aux/summary" || { echo "check-ci-plan: plan step: the summary of a scheduled run lists the merges" >&2; fail=$((fail + 1)); }
 
 # The plan job reads the runs through its token (INV-0345-2).
 awk '/^  plan:/ { inplan = 1; next } /^  [a-z]+:/ { inplan = 0 } inplan && /^      actions: read/ { ok = 1 } END { exit !ok }' .github/workflows/test.yml ||
