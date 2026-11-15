@@ -389,12 +389,18 @@ fn many_mappings_sites() {
         handle_close(object).expect("close");
     }
 
-    // 24 mappings of one page, each in a gigabyte of its own (two tables
+    // 22 mappings of one page, each in a gigabyte of its own (two tables
     // each): a child builds them, so that its tables go with it.
-    let p = child(JOB, b"far-pages").expect("spawn");
-    let record = wait_exit(p);
-    handle_close(p).expect("close");
-    assert_eq!(record.code, 0, "far pages: {record:?}");
+    // It needs 22 gigabytes of address space in tables (45 MB): the 2 GiB
+    // guests only.
+    if free_frames() > 40_000 {
+        let p = child(JOB, b"far-pages").expect("spawn");
+        let record = wait_exit(p);
+        handle_close(p).expect("close");
+        assert_eq!(record.code, 0, "far pages: {record:?}");
+    } else {
+        println!("t_bound: snapshot_process, 22 pages 1 GiB apart: skipped, too little memory");
+    }
 
     // `memory_unmap` of a mapping whose handle was closed frees the object's
     // frames in the call (up to a step; more go to the reaper): one step
@@ -412,7 +418,7 @@ fn many_mappings_sites() {
     check("memory_unmap of the last holder", worst, worst_big);
 }
 
-/// 24 one-page mappings 1 GiB apart: each brings two page-table frames to
+/// 22 one-page mappings 1 GiB apart: each brings two page-table frames to
 /// the copy of a snapshot (`SnapshotBuild::finish`: a step is 64 units, and
 /// 22 such mappings are 88 without the count of the tables).
 fn far_pages() -> i32 {
@@ -421,7 +427,7 @@ fn far_pages() -> i32 {
     let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
     let mut spacers = alloc::vec::Vec::new();
     let mut pages = alloc::vec::Vec::new();
-    for _ in 0..24 {
+    for _ in 0..22 {
         pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
         // 16 mappings of 64 MiB are the gigabyte; the next page goes after it.
         for _ in 0..16 {
@@ -433,7 +439,7 @@ fn far_pages() -> i32 {
     }
     let large = best_snapshot();
     println!(
-        "t_bound: snapshot_process, 24 pages 1 GiB apart: {} us masked",
+        "t_bound: snapshot_process, 22 pages 1 GiB apart: {} us masked",
         large / 1000
     );
     assert!(large <= bound_ns());

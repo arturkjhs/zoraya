@@ -72,7 +72,7 @@ of every record.
    given back, so a refusal allocates nothing; a mapping that fails after its room was made gives the room back
    (`map_abort`); a removal gives back an emptied chunk. A mapping made and unmapped leaves the charge as it was (a test of
    `t_thread` needs it). The list of chunks' own slack (its capacity beyond its length, at most 24 bytes for each chunk the
-   list ever had at once, 3 KiB at 4096) is not charged. A job with less than a chunk of headroom is not refused a mapping that adds no chunk (`growth_for`). Measured: a process with one to 32 mappings is charged 1816 bytes
+   list ever had at once, 6 KiB at the worst) is not charged. A job with less than a chunk of headroom is not refused a mapping that adds no chunk (`growth_for`). Measured: a process with one to 32 mappings is charged 1816 bytes
    (before: nothing, and a `Vec` of 16 records of 56 bytes, 900 bytes, uncharged); at 4096 mappings 232,448 bytes (56.75 a
    mapping); a fixed array of 4096 records in every process would be 229,376 bytes for all of them.
    **Merging.** A removal merges the chunk with a neighbour when the two together hold less than a chunk (the records move

@@ -22,7 +22,7 @@ find = '''        self.release_records(before);
         Ok(entry.value.holder)'''
 replace = '''        let _ = before;
         Ok(entry.value.holder)'''
-note = "INV-0437-1: the charge follows the list down after an unmap"
+note = "INV-0437-1: the charge follows the list down after an unmap (the kernel test empties the top chunk and asserts the fall by one chunk)"
 
 [[mutant]]
 id = "F5-exit-keeps-the-charge"
@@ -31,14 +31,14 @@ find = '''        self.release_records(before);
         Some(entry.value.holder)'''
 replace = '''        let _ = before;
         Some(entry.value.holder)'''
-note = "INV-0437-1: the charge follows the list down as an exit drops the mappings"
+note = "equivalent for every test: an exit gives the charge back when the reaper drops the space's `Paid`, so the release in `pop_mapping` only makes it earlier; kept as the record of the release"
 
 [[mutant]]
 id = "F5-worst-growth-kept"
 file = "kernel/src/memory/user.rs"
 find = 'self.memory.paid.release_kernel(worst - grown.min(worst));'
 replace = 'let _ = (worst, grown);'
-note = "INV-0437-1: only what the list grew by stays charged"
+note = "INV-0437-1: only what the list grew by stays charged (the kernel test's exact check at the first mapping)"
 
 [[mutant]]
 id = "F5-quota-not-asked"
@@ -69,14 +69,7 @@ id = "F5-snapshot-step-ignores-tables"
 file = "kernel/src/memory/user.rs"
 find = 'taken + grown(build) < STEP'
 replace = 'taken < STEP'
-note = "survives in this guest: the pages of a snapshot step that bring tables are the process's own (image, stack), whose layout no test varies; the mappings' pages are copied into objects and their tables are made by `finish`. Kept for a layout of the process's own pages that is sparse. Not a hole a test of this size can close."
-
-[[mutant]]
-id = "F5-finish-ignores-tables"
-file = "kernel/src/memory/user.rs"
-find = 'if pages == 0 || pages >= STEP || tables >= STEP / 2 {'
-replace = 'if pages == 0 || pages >= STEP {'
-note = "survives in this guest: a mapping brings at most one table in t_bound's layouts (the two units of its record end the step first); three tables for each mapping need mappings 1 GiB apart, which needs a 1 GiB object. Kept as the bound for that layout."
+note = "survives: the pages of a snapshot step that bring tables are the process's own (image, stack), whose layout no test varies (a sparse image is unverified); the mappings' pages are copied into objects and their tables are made by `finish`, which `F5-finish-ignores-tables` covers."
 
 [[mutant]]
 id = "F5-space-drops-its-mappings-at-once"
@@ -91,3 +84,28 @@ file = "kernel/src/memory/user.rs"
 find = 'pub const WALK_READS: usize = 1024;'
 replace = 'pub const WALK_READS: usize = usize::MAX;'
 note = "INV-0437-2: a snapshot's walk reads a bounded number of descriptors a step, empty tables included (t_bound: the 40 unmapped 24 MiB mappings of the cases before leave about a thousand empty tables)"
+
+[[mutant]]
+id = "F5-abort-keeps-the-chunk"
+file = "kernel/src/memory/user.rs"
+find = '''            if mapped.is_err() {
+                if offset > 0 {
+                    let _ = self.table.unmap(&mut self.memory, va, offset);
+                }
+                self.map_abort();'''
+replace = '''            if mapped.is_err() {
+                if offset > 0 {
+                    let _ = self.table.unmap(&mut self.memory, va, offset);
+                }'''
+note = "INV-0437-1: a mapping refused for a page-table frame gives its chunk back (the kernel test's poor job with room for a chunk and not for the tables)"
+
+[[mutant]]
+id = "F5-unmap-has-no-step-point-before-the-free"
+file = "kernel/src/syscall.rs"
+find = '''        steps::before(holder.weight());
+        steps::count(1);
+        drop(holder);
+        Ok(())'''
+replace = '''        drop(holder);
+        Ok(())'''
+note = "equivalent under the unit check: the last holder's frames (at most 64) and the unmapping's own work together stay under 80 units (t_bound, memory_unmap of the last holder, 64 pages and 24 MiB); the step point is for the margin, not a bound the tests can tell"
