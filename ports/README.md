@@ -49,7 +49,7 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | zlib | 1.3.1 | zlib (the licence at the end of `zlib.h`) | none |
 | curl | 8.23.0 | curl (`COPYING`) | `patches/curl/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
 | GNU wget | 1.25.0 | GPL-3.0-or-later (`COPYING`) | `patches/wget/0001-openssl-without-sockets.patch` (`SSL_set_fd` becomes a plain-fd BIO), `0002-no-msg-peek.patch` (`fd_read_hunk` reads a byte at a time: libposix has no `MSG_PEEK`) |
-| OpenSSH portable | 10.6p2 | BSD and ISC (its `LICENCE`; the client and ssh-keygen only) | `patches/openssh/0001-ssh-reads-no-configuration-and-offers-only-the-lines-options.patch` (no `ssh_config` or `~/.ssh/config`, the options of `ssh.cmd`, the host ends the options, a user name is needed), `0002-no-askpass.patch` (`SSH_ASKPASS` and `SSH_ASKPASS_REQUIRE` are not read), `0003-no-agent.patch`; all under `__zoraya__`; TASK-31 10g, ADR-0340 |
+| OpenSSH portable | 10.6p2 | BSD and ISC (its `LICENCE`; the client and ssh-keygen only) | `patches/openssh/0001-ssh-reads-no-configuration-and-offers-only-the-lines-options.patch` (no `ssh_config` or `~/.ssh/config`, the options of `ssh.cmd`, the host ends the options, a user name is needed), `0002-no-askpass.patch` (`SSH_ASKPASS` and `SSH_ASKPASS_REQUIRE` are not read), `0003-no-agent.patch`, `0004-no-hard-links.patch` (`known_hosts.old` by `rename`); all under `__zoraya__`; TASK-31 10g, ADR-0340 |
 
 `make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
 `build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and
