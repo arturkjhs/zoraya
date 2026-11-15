@@ -1,0 +1,20 @@
+# TASK-35 probe: Rust's prebuilt std (aarch64-unknown-linux-musl) inside
+# Zoraya. Every output line is in the runner's log; the script only waits
+# for each command's prompt.
+! ZORAYA-PANIC
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> posixrun /bin/rprobe hello a b\r
+< \r\n~>
+> cxxtest hello\r
+< \r\n~>
+> cxxtest syscall\r
+< \r\n~>
+> cxxtest time\r
+< \r\n~>
+> cxxtest hash\r
+< \r\n~>
+> cxxtest threads\r
+< \r\n~>
+> poweroff\r
