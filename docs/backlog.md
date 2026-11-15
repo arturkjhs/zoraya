@@ -503,3 +503,9 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
   MacBook Air). The xterm comparison (10a) waits for 10d (with `vi`).
 - **Order (architect):** 10c (fix pass pushed), review of `work/ports-early`, 10d on top of it; then lane 1 10f, lane 2 10g, 10j,
   10h; then `work/rust-std` in the next free slot; 10i last.
+
+## Flaky test: asserting_a_signal_allocates_nothing (2026-11-15)
+
+`crates/zoraya-events/tests/no_allocation.rs` counted allocations in one process-wide counter, so allocations by the
+harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, a part that does not touch the crate) saw
+226 against 222, and its re-run passed. The counter is now per thread (`work/alloc-flake`).

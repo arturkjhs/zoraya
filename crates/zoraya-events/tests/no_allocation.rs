@@ -8,19 +8,24 @@ use zoraya_test_alloc::{Capped, LIMIT};
 /// What this file's counting allocator forwards to: capped, as every host
 /// test is (docs/backlog.md).
 static INNER: Capped = Capped::new(LIMIT);
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use zoraya_abi::Mode;
 use zoraya_events::Events;
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+// Counted per thread: the test harness's own threads allocate while the test
+// runs (run 43696414920 saw 226 against 222), and they must not add to the
+// count. A `const` initialiser with a `Cell<usize>` needs no lazy allocation.
+thread_local! {
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 // SAFETY: forwards to the capped system allocator.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
         // SAFETY: the caller's contract.
         unsafe { INNER.alloc(layout) }
     }
@@ -54,7 +59,7 @@ fn asserting_a_signal_allocates_nothing() {
     }
     let mut drained = [zoraya_abi::Packet::default(); 2048];
     e.take(port, &mut drained).unwrap();
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = ALLOCATIONS.with(Cell::get);
     let mut packets = [zoraya_abi::Packet::default(); 64];
     for _ in 0..100 {
         e.set(source, 1, &mut |_| {});
@@ -63,5 +68,5 @@ fn asserting_a_signal_allocates_nothing() {
         e.take(port, &mut packets).unwrap();
         e.clear(source, 1);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), before);
+    assert_eq!(ALLOCATIONS.with(Cell::get), before);
 }
