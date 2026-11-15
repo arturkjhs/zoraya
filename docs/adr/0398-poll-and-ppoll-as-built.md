@@ -1,6 +1,6 @@
 # ADR-0398: `poll` and `ppoll` as built: what each descriptor kind reports, the limits of a call, and the two names
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0106, ADR-0315, ADR-0342, ADR-0414
 - **Evidence:** CP-08, CP-10, browser-engine/survey.md#the-posix-library, browser-engine/survey.md#ladybird
@@ -128,4 +128,6 @@ process) is not made here.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.

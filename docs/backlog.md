@@ -471,3 +471,22 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
 - **Not requested (closed outside):** `bind`, `listen`, `accept`, `sendmsg`, `in6addr_any` (client programs on an IPv4-only
   system; ADR-0225); `__unix__` predefined by `zcc`; `getrandom` for a program another program starts (ADR-0310, by design; the
   ADR-0453 random connection of `work/rust-std` is the broker-side answer); starting a script by its `#!` line.
+
+## Decisions of 2026-11-15 from `docs/architect-queue.md` (the architect)
+
+- **Accepted:** ADR-0280, 0281, 0285, 0286; ADR-0383 Option C (the terminfo entry has `kbs=^?`, with ADR-0333: part 10d builds
+  it before the curses programs); ADR-0384, 0385 and 0398 Option A.
+- **10c, the kill offer:** ADR-0387's removal of ADR-0158 rule 3's offer for a line with the terminal is accepted, with an
+  escape **System+K**, a chord no client receives (as System+G), that shows `kill <program>?` on the terminal's status row;
+  Enter kills the line's group. Built in 10f (the status row and System+G machinery), with a test.
+- **A refused `tcsetpgrp` returns `EPERM`, not success** (10c).
+- **Native `fetch`** follows ADR-0328 as curl and wget do. **ADR-0224 item 5's `+net` hint** is built in curl's and wget's refusal.
+- **Wording fixed:** INV-0324-2 (a public-only name rule is within a web rule), INV-0326-1 ("implicitly"), ADR-0366's count (52).
+- **CI's confined network steps:** run `test-net-lookup`, `test-net-dns` and `test-hand-run`'s network leg on the runner itself,
+  outside the job container (the runner has passwordless sudo, so `sudo unshare -n` works there), in a job of their own; if that
+  also fails, record the gap. (`tools/confine-loopback.sh --verify` may read the host's `/sys/class/net`; `/proc/net/dev` follows
+  the process.)
+- **`vttest`:** pin it in `ports/sources.lock` and build it with 10d. **Hand check done:** NetSurf on real sites (2026-11-14,
+  MacBook Air). The xterm comparison (10a) waits for 10d (with `vi`).
+- **Order (architect):** 10c (fix pass pushed), review of `work/ports-early`, 10d on top of it; then lane 1 10f, lane 2 10g, 10j,
+  10h; then `work/rust-std` in the next free slot; 10i last.

@@ -119,7 +119,7 @@ for the Internet, the host and the LAN always closed).
   zoraya-abi` (the blocks at their edges, the rule's matcher), `cargo test -p zoraya-net` (connect by name and address,
   resolve, `net.hosts`), `make test-netsurf` (links to 10.0.2.2, 127.0.0.1 and the gateway refused, with no request at
   the server).
-- **INV-0324-2.** No rule but a web rule is within a web rule, and a web rule is within no rule but a web rule or
+- **INV-0324-2.** No rule but a web rule or a public-only name rule (ADR-0328) is within a web rule, and a web rule is within no rule but a web rule or
   `any`. *Check:* `cargo test -p zoraya-abi` (the subset property over random scopes with web rules), `cargo test -p
   zoraya-net` (`narrow` through the service).
 - **INV-0324-3.** The shell gives the web rule only for a description of the system image with `net web`, only outside

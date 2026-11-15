@@ -1,6 +1,6 @@
 # ADR-0384: Selecting, copying and pasting in the terminal where ADR-0332 item 8 is silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0052, ADR-0096, ADR-0154, ADR-0170, ADR-0332
 - **Evidence:** CP-25, DM-071, desktop/survey.md#spoofing-and-the-trusted-path, stage-10/survey.md#what-a-small-terminal-implements
@@ -136,3 +136,7 @@ becomes input holds for what a program put in the clipboard, too.
 - A clipboard larger than 32 KiB (ADR-0170's bound changes).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.

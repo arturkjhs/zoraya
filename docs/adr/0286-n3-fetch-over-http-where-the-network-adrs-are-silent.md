@@ -1,6 +1,6 @@
 # ADR-0286: What N3 decided where the network ADRs are silent: the shape of `connect` with the client's streams, the copy loop, the resolver, a `url` operand that designates, and a test server
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0101, ADR-0220, ADR-0222, ADR-0223, ADR-0224, ADR-0281
 - **Evidence:** CP-08, CP-11, CP-14, network/survey.md#smoltcp, network/survey.md#fuchsias-socket-provider, network/survey.md#qemu-networking-for-development-and-ci
@@ -133,4 +133,6 @@ ADR-0222 option B: rejected there (every byte a message, `pselect` cannot wait o
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

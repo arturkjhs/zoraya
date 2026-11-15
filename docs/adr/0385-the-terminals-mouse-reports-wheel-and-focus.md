@@ -1,6 +1,6 @@
 # ADR-0385: The terminal's mouse reports, wheel and focus, and one place that makes what is sent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0052, ADR-0094, ADR-0096, ADR-0322, ADR-0332, ADR-0384
 - **Evidence:** CP-25, DM-071, stage-10/survey.md#terminfo-entries-compared, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal
@@ -114,3 +114,7 @@ a selection possible when a program takes the mouse. It is the terminal xterm-aw
 - A compositor that tells a client of the pointer's leaving.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.
