@@ -21,11 +21,6 @@ find = '''    let (frame, next) = unhoard_one(node).expect("a frame");
 replace = '''    let (frame, next) = unhoard_one(node).expect("a frame");'''
 note = "the allocation then has nothing to find: the case must see the one free frame come back"
 
-[[mutant]]
-id = "F8-alloc-ends-late"
-file = "crates/zoraya-pmm/src/lib.rs"
-find = '''            let end_word = if step == self.region_count {
-                (first_index / WORD_BITS) as usize'''
-replace = '''            let end_word = if step == self.region_count {
-                region.words()'''
-note = "the wrap-around reads the start region again whole (the old scan): the host test counts exactly 8192 words; in the guest only the time shows it"
+# Not listed: `end_word` of `FrameAllocator::alloc_counted` (the wrap-around's end, a bound
+# that holds even for a map that disagrees with its free count). With `free > 0` the frame
+# is found before it, so every mutation of it is equivalent (host run of F8: one miss, this).
