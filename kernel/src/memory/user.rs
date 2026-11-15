@@ -567,7 +567,7 @@ impl AddressSpace {
                             // Not copied, but a unit of the step all the
                             // same: a step stays bounded however many
                             // shared pages the walk meets (INV-0270-1).
-                            taken += 1;
+                            taken += 1; // a shared page
                             continue;
                         }
                         Some(m) if m.va <= va => build.objects[i].page(va - m.va),
