@@ -36,14 +36,22 @@ cp "$here/config.h" "$here/pathnames.h" "$here/bitstring.h" "$obj/"; mkdir -p "$
 # regex library is used instead of musl's (CMakeLists.txt, USE_WIDECHAR).
 DEFS="-include $here/compat.h -D_GNU_SOURCE -D_XOPEN_SOURCE_EXTENDED -D__REGEX_PRIVATE -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
 INC="-I$obj -I$src/common -Iregex -I$curses/usr/include -I$dbinc -I."
+# Three compiles at a time. Each one's trace (`sh -x`: its zcc command line,
+# which check-early.sh counts for INV-0390-2) and diagnostics go to a log of its
+# own, copied whole into this build's log after the wait: dash writes a trace
+# one word at a time, so three compiles and this loop tracing into one file
+# split each other's lines (CI counted 113 and 114 of 115).
+mkdir -p "$obj/log"
 n=0
 for f in $CL $COMMON $EX $VI $REGEX "$here/compat.c" "$here/recover.c"; do
   o=$obj/$(echo "${f#$here/}" | tr '/' '_' | sed 's/\.c$/.o/')
   echo "$o"
-  ( "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" || echo "$f" >> "$obj/failed.txt" ) &
+  ( "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" || echo "$f" >> "$obj/failed.txt" ) 2> "$obj/log/${o##*/}.log" &
   n=$((n + 1)); [ $((n % 3)) = 0 ] && wait
 done > "$obj/objects.txt"
 wait
+for o in $(cat "$obj/objects.txt"); do cat "$obj/log/${o##*/}.log" >&2; done
+rm -rf "$obj/log"
 [ ! -s "$obj/failed.txt" ] || { echo "nvi: these did not compile:"; cat "$obj/failed.txt"; exit 1; }
 for o in $(cat "$obj/objects.txt"); do [ -f "$o" ] || { echo "nvi: $o was not made"; exit 1; }; done
 "$zcc" $cflags -Wl,--error-limit=0 -o "$out" $(cat "$obj/objects.txt") -L"$dblib" -L"$curses/usr/lib" -lncursesw -ltinfow -ldb1
