@@ -10,14 +10,19 @@
 # change to them; the full set runs 600 s.
 #
 #   tools/ci-plan.sh [BASE]     (BASE: origin/main; FULL=1: the full set)
-#   DOCS_BEFORE=SHA DOCS_AFTER=SHA tools/ci-plan.sh
-#       a push to main: if only docs/ changed between the two commits
-#       (plan-lib.sh's docs_only) the plan is `docs_only=1`, no tests, no
-#       build, and `doc_checks` names the checks to run; any other change, or
-#       an unusable BEFORE, gives the full set, unless tools/ci-tree-proof.rb
-#       proves that a run of the full set went green on a commit with the same
-#       tree (ADR-0345: the merge commit of a candidate that merged nothing
-#       new); then the plan is `docs_only=1` as well.
+#   PUSH_MAIN=1 tools/ci-plan.sh
+#       a push to main (ADR-0348): no tests, no build, `docs_only=1`, and
+#       `doc_checks` names the document checks to run, whatever changed. The full
+#       set runs on main on a schedule, not on a push.
+#   CI_PLAN_SKIP="reason" tools/ci-plan.sh
+#       a scheduled run with nothing new on main since the last full run: the
+#       plan runs nothing, not even the document checks.
+#
+# A candidate runs the steps the change touches and the smoke set, except that
+# a change under kernel/, crates/zoraya-posix* (libposix and its ffi),
+# ports/musl/ or tools/test-runner/ runs the full set (ADR-0348). A change of
+# the Makefile gives the steps whose recipes or variables the diff changes
+# (tools/ci-makefile-steps.rb), the full set if it cannot be attributed.
 #
 # Prints key=value lines for $GITHUB_OUTPUT: `tests` (a JSON array of the
 # make commands of tools/ci-tests.txt, the full list or a part of it),
@@ -56,31 +61,24 @@ if [ "${FULL:-0}" = 1 ]; then
     echo "docs_only=0"
     exit 0
 fi
-if [ -n "${DOCS_AFTER:-}" ]; then
+if [ -n "${CI_PLAN_SKIP:-}" ]; then
+    echo "tests=[]"
+    echo "build=false"
+    echo "docs_only=1"
+    echo "doc_checks="
+    echo "summary=nothing to run: $CI_PLAN_SKIP"
+    echo "ci-plan: nothing to run: $CI_PLAN_SKIP" >&2
+    exit 0
+fi
+if [ "${PUSH_MAIN:-0}" = 1 ]; then
     # shellcheck source=tools/plan-lib.sh
     . tools/plan-lib.sh
-    if docs_only "${DOCS_BEFORE:-}" "$DOCS_AFTER"; then
-        echo "tests=[]"
-        echo "build=false"
-        echo "docs_only=1"
-        echo "doc_checks=$doc_checks"
-        echo "summary=docs only: the document checks ($doc_checks), 0 jobs"
-        echo "ci-plan: docs only: $doc_checks" >&2
-    elif proof=$(SHA=$DOCS_AFTER BEFORE=${DOCS_BEFORE:-} ${CI_TREE_PROOF:-tools/ci-tree-proof.rb} </dev/null) && proof_run=$(echo "$proof" | sed -n 's/^proof_run=//p') && [ -n "$proof_run" ]; then
-        # The merge commit has the tree of a candidate whose run went green
-        # with every job of the full set (ADR-0345): what the merge changed
-        # was tested as it stands. Only the document checks run again.
-        proof_tree=$(echo "$proof" | sed -n 's/^proof_tree=//p')
-        echo "tests=[]"
-        echo "build=false"
-        echo "docs_only=1"
-        echo "doc_checks=$doc_checks"
-        echo "summary=tree $proof_tree already ran the full set green (run $proof_run): the document checks ($doc_checks), 0 jobs"
-        echo "ci-plan: tree $proof_tree proven by run $proof_run: document checks only" >&2
-    else
-        jobs | emit "full set (push to main)"
-        echo "docs_only=0"
-    fi
+    echo "tests=[]"
+    echo "build=false"
+    echo "docs_only=1"
+    echo "doc_checks=$doc_checks"
+    echo "summary=push to main: the document checks ($doc_checks), 0 jobs; the full set runs on the schedule"
+    echo "ci-plan: push to main: document checks only" >&2
     exit 0
 fi
 if [ -n "${CI_PLAN_PATHS:-}" ]; then
@@ -92,11 +90,29 @@ elif ! mb=$(git merge-base "$base" HEAD 2>/dev/null); then
     exit 0
 fi
 [ -n "${CI_PLAN_PATHS:-}" ] || changed=$(git diff --name-only "$mb" HEAD | sort -u)
+# The kernel, libposix and the test runner touch every test (ADR-0348).
+for p in $changed; do
+    case "$p" in
+        kernel/* | crates/zoraya-posix* | ports/musl/* | tools/test-runner/*)
+            echo "ci-plan: $p is the kernel, libposix or the test runner: full set" >&2
+            jobs | emit "full set ($p: kernel, libposix or test runner)"
+            echo "docs_only=0"
+            exit 0
+            ;;
+    esac
+done
 echo "ci-plan: $(echo "$changed" | grep -c .) changed paths since $base" >&2
 
 # shellcheck source=tools/plan-lib.sh
 . tools/plan-lib.sh
+mk_base=${mb:-}
 plan_changed
+if [ "$makefile_full" = 1 ]; then
+    echo "ci-plan: the Makefile changed where no rule or variable is to blame: full set" >&2
+    jobs | emit "full set (a change of the Makefile that no rule or variable explains)"
+    echo "docs_only=0"
+    exit 0
+fi
 
 # The jobs of the full list that run a step; test-qemu is one job a
 # configuration. test-unit takes the packages found.
@@ -109,7 +125,7 @@ sel=$(
         done
     done
 )
-if [ "$everything" = 1 ]; then
+if [ "$everything" = 1 ] || [ "$unit_all" = 1 ]; then
     sel=$(printf '%s\n%s\n' "make test-unit" "$sel")
 elif [ -n "$packages" ]; then
     args=

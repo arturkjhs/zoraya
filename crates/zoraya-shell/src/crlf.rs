@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn a_line_feed_is_preceded_by_a_carriage_return() {
         assert_eq!(run(&[b"a\nb\n"], true), b"a\r\nb\r\n");
-        assert_eq!(run(&[b"a\nb\n"], false), b"a\nb\n", "OPOST or ONLCR off");
+        assert_eq!(run(&[b"a\nb\n"], false), b"a\nb\n", "output processing off");
         assert_eq!(run(&[b"\n\n"], true), b"\r\n\r\n");
     }
 

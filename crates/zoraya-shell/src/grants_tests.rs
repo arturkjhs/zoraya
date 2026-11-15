@@ -81,7 +81,7 @@ fn the_tours_example_14() {
     )
     .unwrap();
     assert_eq!(
-        report("cp", &p, "/u", "the terminal", false),
+        report("cp", &p, "/u", "the terminal", false, false),
         "cp gets:
   in, out, err         the terminal
   ~                    read (current directory)
@@ -287,7 +287,7 @@ fn entries_of_one_path_merge() {
         Access::Read.rights() | Access::Create("b.txt".into()).rights()
     );
     assert_eq!(
-        report("cp", &p, "/u", "the terminal", false),
+        report("cp", &p, "/u", "the terminal", false, false),
         "cp gets:
   in, out, err         the terminal
   ~                    read (current directory)
@@ -422,9 +422,10 @@ fn a_posix_programs_report_shows_its_toolchain_set() {
     )
     .unwrap();
     assert_eq!(
-        report("tcc", &p, "/u", "the terminal", true),
+        report("tcc", &p, "/u", "the terminal", true, true),
         "tcc gets (a POSIX program):
   in, out, err         the terminal
+  keys                 the terminal, while this line is in front
   ~/project            read (current directory)
   ~/project/main.c     read (operand FILE)
   ~/project            create and change anything in (option -o)
@@ -980,5 +981,41 @@ fn a_narrowed_name_that_is_a_link_is_followed() {
         p.iter()
             .any(|e| e.path == "/w" && e.access == Access::Remove("notes.txt".into())),
         "{p:?}"
+    );
+}
+
+/// INV-0331-1: `grants` prints the `keys` line exactly when any of the three
+/// fds is the terminal, for every combination of redirections.
+#[test]
+fn the_keys_line_is_there_exactly_when_a_stream_is_the_terminal() {
+    use crate::syntax::Stream;
+    let words = crate::terminal::KEYS_WORDS;
+    let all = [Stream::In, Stream::Out, Stream::Err];
+    for mask in 0..8u32 {
+        let redirects: Vec<Stream> = all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| mask & (1 << i) != 0)
+            .map(|(_, s)| *s)
+            .collect();
+        let tty = crate::terminal::terminal_fds(0, 1, true, false, true, true, false, &redirects);
+        let keys = tty.contains(&true);
+        let text = report(
+            "sh",
+            &[],
+            "/u",
+            &crate::terminal::streams_words(tty),
+            true,
+            keys,
+        );
+        assert_eq!(text.contains("keys "), keys, "{redirects:?}");
+        assert_eq!(text.contains(words), keys, "{redirects:?}");
+        // The terminal's entry is inside the system's `/usr`.
+        assert!(text.contains("/bin /usr /etc"));
+    }
+    // A program whose three streams are all elsewhere has no keys.
+    assert!(
+        !report("sh", &[], "/u", "none", true, false).contains("keys"),
+        "no terminal, no keys"
     );
 }

@@ -634,10 +634,22 @@ pub fn summary(plan: &[Planned], home: &str) -> String {
 /// the streams, then each entry of the plan in the order of the line, its
 /// rights in words (rule 2's fallback words where a directory is given
 /// whole). A POSIX program's also shows its toolchain set (rule 10).
-pub fn report(name: &str, plan: &[Planned], home: &str, streams: &str, posix: bool) -> String {
+pub fn report(
+    name: &str,
+    plan: &[Planned],
+    home: &str,
+    streams: &str,
+    posix: bool,
+    keys: bool,
+) -> String {
     let merged = merge(plan);
     let mut rows: Vec<(String, String)> = Vec::new();
     rows.push(("in, out, err".into(), streams.into()));
+    // ADR-0331 item 3: a program with the terminal on any of its three
+    // fds reads keys while its line is in front.
+    if keys {
+        rows.push(("keys".into(), crate::terminal::KEYS_WORDS.into()));
+    }
     for e in plan {
         let narrowed = merged
             .iter()

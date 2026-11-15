@@ -256,6 +256,7 @@ program gets.
 ~/project> grants +r ~/include tcc main.c -o main
 tcc gets (a POSIX program):
   in, out, err         the terminal
+  keys                 the terminal, while this line is in front
   ~/project            read (current directory)
   ~/project/main.c     read (operand FILE)
   ~/project            create and change anything in (option -o)

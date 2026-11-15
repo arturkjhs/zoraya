@@ -6,30 +6,13 @@
  * (ADR-0287 item 9): fails with an errno and changes nothing, so that a
  * caller that tries one reports an error instead of crashing.
  *
- * `select` is not a refusal: it is `pselect` (which libc.a exports, ADR-0006)
- * with a timeval. `tcsetattr` is refused with ENOTTY: curl's password
- * prompt is the only caller, and `--user` without a password is not offered
- * by curl.cmd.
+ * `select` and `tcsetattr` were here until stage 10 part 10c: libc.a
+ * exports both now (ADR-0342 item 3, ADR-0389), and curl's password prompt
+ * has a real terminal to turn echo off on.
  */
 #include <errno.h>
-#include <sys/select.h>
 #include <sys/socket.h>
-#include <termios.h>
 #include <time.h>
-
-int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
-{
-	struct timespec ts;
-	if (tv) {
-		if (tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000) {
-			errno = EINVAL;
-			return -1;
-		}
-		ts.tv_sec = tv->tv_sec;
-		ts.tv_nsec = tv->tv_usec * 1000L;
-	}
-	return pselect(n, r, w, e, tv ? &ts : 0, 0);
-}
 
 int bind(int fd, const struct sockaddr *a, socklen_t len)
 {
@@ -49,13 +32,6 @@ int accept(int fd, struct sockaddr *a, socklen_t *len)
 {
 	(void)fd; (void)a; (void)len;
 	errno = ENOSYS;
-	return -1;
-}
-
-int tcsetattr(int fd, int action, const struct termios *t)
-{
-	(void)fd; (void)action; (void)t;
-	errno = ENOTTY;
 	return -1;
 }
 

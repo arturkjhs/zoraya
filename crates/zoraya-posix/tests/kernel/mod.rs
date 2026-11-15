@@ -32,6 +32,9 @@ pub struct Ring {
 }
 
 pub const STREAM_CAPACITY: usize = 64 * 1024;
+/// Messages a channel end queues for its peer before a writer must wait
+/// (`zoraya_channel::MAX_QUEUED`).
+pub const CHANNEL_QUEUE: usize = 64;
 const STREAM_ATOMIC: usize = 4096;
 
 enum Obj {
@@ -175,6 +178,22 @@ impl Net {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A channel end's peer has room for a message: what the kernel asserts
+    /// as `WRITABLE` (`signals_of` shows it; the waits of the older tests
+    /// do not, as their stand-ins for a signal source share its bit).
+    fn peer_has_room(&self, h: H) -> bool {
+        let Some(object) = self.object(h) else {
+            return false;
+        };
+        match self.objects.get(&object) {
+            Some(Obj::End { peer, .. }) => match self.objects.get(peer) {
+                Some(Obj::End { queue, .. }) => queue.len() < CHANNEL_QUEUE,
+                _ => false,
+            },
+            _ => false,
         }
     }
 
@@ -426,6 +445,9 @@ pub struct Fake {
     /// Run when a wait finds nothing yet, before the services: what another
     /// process would do meanwhile (drain a stream, close its reader).
     pub meanwhile: Option<Meanwhile>,
+    /// Run once after the next `stream_read` that gave bytes: what a sender
+    /// does between a reader's two looks (ADR-0412 item 2's race).
+    pub after_stream_read: Option<Meanwhile>,
     /// `signals_of` fails, as for a kernel that cannot say (`poll`'s fallback).
     pub signals_unknown: bool,
     /// A signal source: the wait point after this many more waits (counting
@@ -447,6 +469,7 @@ impl Fake {
             craft: None,
             craft_skip: 0,
             meanwhile: None,
+            after_stream_read: None,
             signals_unknown: false,
             signal_after_waits: None,
             interrupts: Vec::new(),
@@ -579,6 +602,45 @@ impl Sys for Fake {
         }
     }
 
+    /// The kernel's all-or-nothing write (INV-0050-1): a refused one changes
+    /// nothing, a moved channel end may not hold queued handles or be one of
+    /// the channel the message travels on (ADR-0050).
+    fn channel_send(&mut self, end: H, bytes: &[u8], handles: &[(H, bool)]) -> Result<(), Status> {
+        let mut n = self.net.borrow_mut();
+        let object = n.object(end).ok_or(Status::BadHandle)?;
+        let peer = match n.objects.get(&object) {
+            Some(Obj::End { peer, .. }) => *peer,
+            _ => return Err(Status::BadHandle),
+        };
+        match n.objects.get(&peer) {
+            Some(Obj::End { queue, .. }) if queue.len() >= CHANNEL_QUEUE => {
+                return Err(Status::WouldBlock);
+            }
+            Some(Obj::End { .. }) => {}
+            _ => return Err(Status::PeerClosed),
+        }
+        let mut objects = Vec::new();
+        for &(h, copy) in handles {
+            let o = n.object(h).ok_or(Status::BadHandle)?;
+            if !copy
+                && let Some(Obj::End { queue, .. }) = n.objects.get(&o)
+                && (o == object || o == peer || queue.iter().any(|(_, held)| !held.is_empty()))
+            {
+                return Err(Status::BadState);
+            }
+            objects.push(o);
+        }
+        let list: Vec<H> = handles
+            .iter()
+            .zip(objects)
+            .map(|(&(h, copy), o)| if copy { n.new_handle(o) } else { h })
+            .collect();
+        if let Some(Obj::End { queue, .. }) = n.objects.get_mut(&peer) {
+            queue.push_back((bytes.to_vec(), list));
+        }
+        Ok(())
+    }
+
     fn channel_read(
         &mut self,
         end: H,
@@ -641,7 +703,12 @@ impl Sys for Fake {
         if self.net.borrow().object(h).is_none() {
             return Err(Status::BadHandle);
         }
-        Ok(self.net.borrow().signals(h))
+        let n = self.net.borrow();
+        let mut s = n.signals(h);
+        if n.peer_has_room(h) {
+            s |= signals::WRITABLE;
+        }
+        Ok(s)
     }
 
     fn stream_create(&mut self) -> Result<(H, H), Status> {
@@ -673,7 +740,11 @@ impl Sys for Fake {
         }
         let count = into.length.min(ring.bytes.len());
         let taken: Vec<u8> = ring.bytes.drain(..count).collect();
+        drop(ring);
         n.memory(into.address, count).copy_from_slice(&taken);
+        if let Some(mut f) = self.after_stream_read.take() {
+            f(&mut n);
+        }
         Ok(count)
     }
 

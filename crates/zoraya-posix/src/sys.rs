@@ -47,6 +47,11 @@ pub trait Sys {
     fn close(&mut self, h: Self::H);
     /// A duplicate with the same rights, for the scratch buffer.
     fn duplicate(&mut self, h: Self::H) -> Result<Self::H, Status>;
+    /// A duplicate of a stream's write end, for `open("/dev/tty")`: the
+    /// terminal's output has more than one writer.
+    fn duplicate_stream_write(&mut self, h: Self::H) -> Result<Self::H, Status> {
+        self.duplicate(h)
+    }
 
     fn channel_create(&mut self) -> Result<(Self::H, Self::H), Status>;
     /// Sends a message, moving `moved`. Whatever happens, the moved handles
@@ -57,6 +62,21 @@ pub trait Sys {
         bytes: &[u8],
         moved: &[Self::H],
     ) -> Result<(), Status>;
+    /// Sends a message that carries handles, all or nothing (INV-0050-1): each
+    /// of `handles` is moved (`false`) or copied (`true`, the caller keeps its
+    /// own), in this order. On any error nothing happened and every handle is
+    /// still the caller's, unlike [`Sys::channel_write`], which takes what it
+    /// is given whatever happens. `BadState` is a channel end that holds
+    /// handles queued, or the end the message travels on (ADR-0050).
+    fn channel_send(
+        &mut self,
+        end: Self::H,
+        bytes: &[u8],
+        handles: &[(Self::H, bool)],
+    ) -> Result<(), Status> {
+        let _ = (end, bytes, handles);
+        Err(Status::BadSyscall)
+    }
     /// Takes the next message into `bytes`, its handles onto `handles`, and
     /// gives its size; `WouldBlock` when there is none.
     fn channel_read(

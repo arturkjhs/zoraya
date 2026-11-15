@@ -491,7 +491,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   column: the shell adds the carriage return (`zoraya_shell::crlf`). Bold is a weight and does not brighten; italic is
   drawn slanted, faint is half way to the background, underline and strike are lines; blink is stored. `Term::restore`
   gives the shell a working screen (the primary screen, cursor shown, modes, region, sets, pen and palette cleared)
-  and `Term::reinstate` sets it all again for a stopped line; nothing sends them yet (part 10c). *Keys, the pointer,
+  and `Term::reinstate` sets it all again for a stopped line; `zosh` sends them (part 10c). *Keys, the pointer,
   selection and paste (10b, ADR-0383 to ADR-0385).* `zoraya_term::Session` is the terminal as the window runs it, and the
   only code that makes anything to send: its gesture methods (`key`, `pointer`, `wheel`, `focus`, `paste`) fill an outbox,
   `output` cannot (INV-0332-2); `term` sends the outbox as `Input` (keys, mouse and focus reports) and `Paste`. The key
@@ -509,19 +509,17 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   in order, as soon as the shell's queue has room; a paste that does not fit is dropped whole. It draws only the rows
   that changed, and commits again only after the last commit's reply. *Known limits (10b):* a selection ends when
   output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
-  lines (no wrap flag); no word or line selection and no primary selection; a paste to a program in front is dropped
-  until 10c, and in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
+  lines (no wrap flag); no word or line selection and no primary selection; in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
   whole stretch between its ends), and a button released outside the window is seen at the next event;
   no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
-  *Known limits until part 10c:* nothing sends `Restore`, so what a program leaves set (the alternate screen, a hidden
-  cursor, a region, a character set) would stay for the shell; as a stop-gap `zosh` writes a fixed reset
-  (`zoraya_shell::reset::BEFORE_PROMPT`) before every prompt after the first (it is idempotent), **to be removed when 10c
-  sends `Restore`** (`docs/backlog.md`); its edges: it clears a pending wrap, resets the palette and the cursor shape, and a job
-  stopped with Ctrl-Z loses its modes, which `fg` does not give back until 10c. A program that sets synchronized output (2026) and never ends it has every later update held
-  150 ms until the next prompt, whose reset ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
+  *Restore (10c):* `zosh` sends `Restore { keep: false }` when a line with the terminal ends in front (a native line's
+  before the next prompt), `Restore { keep: true }` when it
+  stops, and `Reinstate` at `fg` of a stopped one (ADR-0331 item 9, proposed ADR-0386 and ADR-0387); the stop-gap reset of
+  10a is gone. A program that sets synchronized output (2026) and never ends it has every later update held 150 ms until
+  its line ends, whose `Restore` ends it. An unterminated string holds the parser until `CAN`, `SUB`, `ESC` or a reset. The GUI
   script reads the text of a replayed session (any colour fits a glyph), and colours are checked by the frozen grids of
   `tests/replay.rs`.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
@@ -531,8 +529,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   `ESC` or other control character but tab and newline, carriage returns as line ends, INV-0332-5) and put in the key
   stream at their place as one of the bytes 0xF8 to 0xFF, which no key makes; the line editor (`Editor::paste`) inserts
   the text at the cursor without running it (a newline makes a continuation line; Enter, the person's, sends the
-  entry), and while a program is in front a paste is dropped with a line saying so (the paste to a program is part
-  10c's). Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
+  entry), and while a program is in front a paste goes to it through the discipline when it has the terminal
+  (`tty_host::Host::paste`: brackets for 2004, otherwise a question in the title for a newline) and is dropped with a
+  line saying so when it has not. Ctrl+V at the prompt shows the next key as it is sent (`^[[1;5C`); Ctrl and Alt with Left and Right, Alt+b and
   Alt+f move by a word, Alt+Backspace deletes one.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
   page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A
@@ -721,7 +720,8 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
 - **`room` in `zosh`**: `room` lists (the current one marked `*`), `room NAME` enters (the prompt shows the name, the
   current directory becomes the room's first `+w` directory, every line gets the room's grants, which `grants` shows
   as `(room NAME)`), `room --leave`, `room new NAME +w PATH...` (a path under home is written with `~`), `room remove
-  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. The panel starts a shell in a room with
+  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. Inside an entered room, `room new` gives no path
+  the room does not cover (the architect, 2026-11-15; INV-0172-4). The panel starts a shell in a room with
   `zosh --room NAME`.
 - **The panel** (`panel`, ADR-0168; `zoraya-panel` holds its logic): `init` starts it once per GUI with the client
   manager (`AttachClientManager`), a clone of the root, the console to write, its job and the image directory. It
@@ -1351,6 +1351,38 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   EOF, `ICRNL`, `ONLCR`, INTR, QUIT, SUSP), connections tagged with a group, the foreground job, one held read per
   connection. Ctrl-C is `job_signal(foreground, Interrupt)`; Ctrl-Z goes to the broker as `suspend`. Backends: the
   serial console, and the stage 5 terminal window, to which `ttyd` speaks `zoraya-proto-term` as `zosh` does.
+  *Part 10c, so far (ADR-0331, ADR-0386 to ADR-0388):* `VMIN` and `VTIME` in POSIX's four cases with a
+  clock the host gives (`set_time`, `deadline`, `tick`); `Flush` and `Drain` requests and the status `IO`; a line tag on
+  every connection (a clone carries its parent's) with `set_front_line`, so that a `Read`, `PollReadable`, `SetAttr` or
+  `Flush` from a line not in front is refused and changes nothing, and with no line in front nobody reads;
+  `set_foreground`, `end_line` and `continue_line` for the shell's host. `zoraya_shell::tty_host::Host` is the shell's
+  rules around it, host-tested: the line in front, stop, `fg` and end (`Restore { keep }`, `Reinstate`, the attributes
+  kept and restored, one `SIGWINCH`), `tcsetpgrp` only for a group made inside the front line (the broker names the
+  line by the root group the shell started), the signal characters and `SIGWINCH` to the group a `tcsetpgrp` chose, or
+  `SIGWINCH` to each group the shell started, never to a native element, the relay's carriage return from the
+  attributes, and the paste to a program (mode 2004 read from its output and believed only out of canonical mode, a
+  newline held for Enter with the question in the window title, nothing in it that ends the bracket). A line has at
+  most 64 terminal connections. `zosh` uses it: a POSIX program gets a
+  tty description on each of fds 0 to 2 that is the terminal (neither redirected nor piped; a background line's fd 0
+  stays empty) and `/dev/tty` in its table, its connections are served on the shell's port and closed at the line's
+  end, keys of a line with the terminal go through the discipline, `Size` is one `SIGWINCH`, the output of such a
+  line is relayed with the carriage return its attributes say, and a line in front ends with `Restore` (a native
+  line's before the next prompt). The
+  whole line in front reads until a `tcsetpgrp` chooses a group (`Terminal::set_foreground_line`); there is no kill
+  offer for a line with the terminal (ADR-0387). The broker beside `zosh` gives it a notice channel
+  (`HostTerminal`): `GroupMade` and `ForegroundAsked` (with the line's root), with no reply, and a group made inside a
+  line stays inside its job; a signal to a group that has groups made inside it goes to its members one by one
+  (ADR-0388). `libposix` (ADR-0389): `poll`, `ppoll` and `select` wait for a terminal's input with one `PollReadable`
+  outstanding per connection (idempotent across deferred waits), `tcsetattr` has its three actions (`Drain`, `Flush`,
+  `SetAttr`) and the service's `IO` is `EIO`, `tcflush`, `tcdrain`, `tcflow`, `tcsendbreak`, `cfmakeraw` and the speed
+  functions, `ctermid`, `ttyname`, `ttyname_r`, `tcgetwinsize` and `tcsetwinsize` exist, and `open("/dev/tty")` clones the
+  entry's connection for the caller's group, so dash has job control in a window: Ctrl-C, Ctrl-\ and Ctrl-Z reach the
+  group it chose with `tcsetpgrp` and no other of its jobs, and `sh` goes on. `TIOCSWINSZ` is `EPERM`, `TIOCSTI` `ENOTTY`; the guarded names of ADR-0342
+  item 12 are on `posix-surface-check`'s table. `zosh` sets `TERM` for a program with the terminal (`xterm-256color`
+  in a window, `console.term` on the serial console), `grants` prints the `keys` line, and `term.scrollback` reaches
+  `term` as a `Scrollback` message. Tests: `tests/posix/t_tty.c` (`names`, `poll`, `box`, `lines`, `bench`) in
+  `tests/posix/zosh.script` and, in a window at each GUI size, `tests/gui/posix-terminal.script` (`make
+  test-tour-terminal`). Not yet: see `docs/tasks/TASK-31-part-10c.md`. INV-0331-8 is a lint in `make check-kernel-tty`.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).
@@ -2095,17 +2127,32 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   16 MiB 1,305 ms (1,299 to 1,354) against 1,380 ms (1,338 to 1,397); one byte 23.1 ms (6.6 to 32.3) against 20.5 ms (1.9 to
   29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
   and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
-- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `sendmsg`/`recvmsg`,
-  `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
+- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, TCP datagram sockets (`AF_UNIX` pairs: next bullets), `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
   curl and wget (W11, W13) were built in stage 9 (see "TLS for C programs, curl and wget"), which needed `select` and TLS.
 - **`poll` and `ppoll`** (ADR-0398, proposed; ADR-0342 item 5, ADR-0414 item 1): `Posix::poll_once` (`crates/zoraya-posix/src/poll.rs`) reports
   readiness per descriptor from the handle signals over the same `wait_for` as `pselect`, so a threaded process defers the wait (ADR-0315);
   `ffi/procs.rs` owns the timeout, the mask (`ppoll`) and `EINTR`. `POLLIN` with `POLLHUP` at end of file, `POLLERR` on a write end with no
   reader, `POLLNVAL` for a closed fd, `nfds` above `OPEN_MAX` is `EINVAL`. Limits: a terminal and a file are ready at once (as `select`;
-  the terminal's true readiness is stage 10 part 10c), `select` is still `ports/apps/zshim.c`'s, there is no `eventfd`, no Unix socket and no
-  listener to poll yet (plan parts F1 and F2). Tests: `crates/zoraya-posix/tests/poll.rs` and `net.rs`, `tests/posix-core/t_poll.c` (in
+  the terminal's true readiness is stage 10 part 10c), `select` is still `ports/apps/zshim.c`'s, there is no `eventfd` and no
+  listener to poll yet (plan parts F1 and F7); a Unix socket joined with plan part F2 (next bullet). Tests: `crates/zoraya-posix/tests/poll.rs` and `net.rs`, `tests/posix-core/t_poll.c` (in
   `make test-libposix` and `make test-posix-threads`).
+- **`AF_UNIX` sockets** (plan part F2, ADR-0412 items 1 to 4, 6, 7; ADR-0430, proposed, records what the code decided):
+  `socketpair`, `socket(AF_UNIX)` (no peer yet), `send`/`recv`, `sendmsg`/`recvmsg` with `SCM_RIGHTS`, in
+  `crates/zoraya-posix/src/unix.rs` (the wire form, the stream's tag book: pure, host tested) and `unix_io.rs` (the calls on handles).
+  A `SOCK_SEQPACKET` or `SOCK_DGRAM` pair is one channel (a message of at most 65,535 bytes less 24 for each descriptor, 64 queued); a
+  `SOCK_STREAM` pair is two byte streams and an ancillary channel that carries each `SCM_RIGHTS` descriptor ahead of its byte, with the
+  stream offset, so that a `recvmsg` returns it with that byte (it cuts its reads at the next tag, and keeps what it had read past a late
+  one). A descriptor becomes a handle: a file or directory a `share`d connection with the same rights or fewer, a pipe end a copy, a
+  Unix socket moved (its sender's description is left dead); at most 64 handles a message (`ETOOMANYREFS`); a TCP socket, a terminal and
+  `/dev/null` are `EINVAL`; an end with handles queued is `EBUSY`; a refused send changes nothing (`Sys::channel_send` is the kernel's
+  all-or-nothing write). A full fd table leaves the message queued (`EMFILE`). After `fork` a stream socket's byte streams are in two
+  processes and `SCM_RIGHTS` on it is `EOPNOTSUPP` in both; a packet socket does not fork (`ENOTSUP`). **Limits** (recorded, not
+  hidden): a Unix socket does not cross `spawn` or `exec` (`EBADF` without `SOCK_CLOEXEC`, as a TCP socket) until plan part F4 changes
+  the bootstrap record, so the two-process half of INV-0412-1 is the host tests' over a fake kernel; no `bind`, `listen`, `accept` or
+  socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
+  part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
+  splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 
@@ -2232,7 +2279,7 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   Built in: `_socket`, `select`, `_ssl` and `_hashlib` (OpenSSL), `_sqlite3`, `zlib`, `_asyncio`, `_thread`. No shared modules
   (no `dlopen`), `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`.
 - **Patches** (`ports/patches/python/`): `_ssl` uses a file-descriptor BIO (OpenSSL has no sockets); the environment, byte code
-  files and the per-user site directory are off; `asyncio`'s self-pipe is `os.pipe()` (no `socketpair`); `main` runs the interpreter
+  files and the per-user site directory are off; `asyncio`'s self-pipe is a real `socketpair` since plan part F2 (the old patch 0003, which used `os.pipe()`, is gone, and `configure` no longer says `socketpair` is absent); `main` runs the interpreter
   on a thread with a 2 MiB stack (committed in full, copied by every `fork` child; measured 8, 2 and 1 MiB, ADR-0320 item 5) and ends the process with `exit(status)` from it, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB (the main thread blocks every signal, so Ctrl-C reaches the interpreter's thread); no `pyvenv.cfg`
   search; `-c`, `-m` and a program read from standard input put no directory on `sys.path`; `urllib` takes no proxy from the environment. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`, and `_PYTHREAD_NAME_MAXLEN` is 15 (configure does not know the platform), so a long thread name is truncated, not refused.
 - **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
@@ -2269,8 +2316,8 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   the hash at each rebuild; modules are built in, never shared (no `dlopen`), and C++ modules need their runtime library named in
   the `Setup` line.
 - **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
-  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
-  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
+  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). `socketpair` and `sendmsg`/`recvmsg` work (plan part F2); no
+  `bind`/`listen`/`accept` (a client only), `posix_spawn`, and a Unix socket does not cross `spawn` (ADR-0430); the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
 
@@ -2597,7 +2644,8 @@ ADR-0221 items 5, 6 and 8).
   stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
   is dropped without a message. A program's start-up record holds at most 64 entries (`native::MAX_ENTRIES`): a path
   covered with the same rights by another entry takes none, but a line naming more distinct paths than that is refused.
-  A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
+  A POSIX program has the terminal from `zosh` on the fds its line does not redirect or pipe (ADR-0331, part 10c);
+  with none, `isatty` is false. Native `cp`
   moves a file in one message, so it cannot copy a large program. Under the test runner, `run-qemu.sh --reboot` lets a reset start the guest
   again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
@@ -2680,27 +2728,27 @@ ADR-0221 items 5, 6 and 8).
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there, and
   where `auto` is TCG a run and its `tcg` twin are run once: CI's list holds the `tcg` one (ADR-0350);
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
-  What a run contains is `tools/ci-plan.sh`'s plan: a merge candidate (tag `candidate/NAME`, a pull request) runs the steps its
-  change touches (`tools/test-map.txt`) plus a smoke set; a push to `main` whose changes are all under `docs/` (except the docs a
-  test or build reads, listed in `tools/plan-lib.sh`'s `docs_only`, and the `libc.a` surface lists and blocks) runs only the
-  document checks (`doc_checks`: `adr-check`, `check-host-paths`, `check-untrusted-gate`, `check-quota-tests`,
-  `check-tls-roots`), no build and no machine; every other push to `main`, the nightly run and `candidate-full/` run the full
-  set (`tools/ci-tests.txt`). A push to `main` that is not docs-only also gets the document checks only when the workflow
-  proves (`tools/ci-tree-proof.rb`, ADR-0345, proposed) that the merge commit has the tree of a run of `test.yml` that went
-  green with every job of the full set (the list of `tools/ci-tests.txt`, `build` and the checks, each `success` with its `Run` step, none skipped):
-  the commit is a merge of exactly two parents whose first is the previous head, a run's `head_sha` has the same tree (`git`
-  first, then the API), and the run's jobs are read through the API; any doubt or API error runs the full set. So the merge of a
-  candidate that passed the full set (merge `origin/main` into the branch, run `candidate-full/NAME` or
-  `gh workflow run test.yml --ref BRANCH -f full=true`, then `--no-ff` merge and nothing else) is not tested twice; if main
-  moved in between, the trees differ and the full set runs. A stage tag needs a full green run on the code commit of the tagged commit: the tagged commit itself if its change from
-  its first parent is not docs-only (`docs_only` in `tools/plan-lib.sh` judges the whole change: a posix-surface block or a doc a
-  test reads is code although under `docs/`), else the nearest such commit on its first-parent chain (not "the latest ancestor
-  whose run was the full set": a proven merge, or one whose plan job failed, has no such run); the run is on that commit or on a
-  commit with the same tree; the summary of a
-  proven `main` run names the run. By hand, for a commit: `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name>
-  tools/ci-tree-proof.rb` (it reads `tools/ci-tests.txt` and `test.yml` of that commit with `git show`, not of the checkout; the
-  runs on the commit are found by `head_sha`, others only among the 100 latest successful runs). Each API call and the whole proof
-  have a deadline: a call that does not answer runs the full set. `make check-ci-plan` tests the plan and this rule on fixtures. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
+  What a run contains is the policy of ADR-0348 (the architect, 2026-11-15: CI is the brake on the work). A push to a branch
+  (`work/*`) runs the quick checks only (`make check`'s jobs), no plan, no build, no machine. A merge candidate (tag
+  `candidate/NAME`, a pull request) runs `tools/ci-plan.sh`'s plan: the steps its change touches (`tools/test-map.txt`) plus a
+  smoke set (boot, the shell's files script, one GUI run, the POSIX hello script, the hand-run machines); a change of the
+  `Makefile` gives the steps whose recipes or variables the diff changes (`tools/ci-makefile-steps.rb`: a recipe line belongs to
+  its target, an assignment to its variable, steps are reached through prerequisites, `$(MAKE)` calls and variable references; an
+  unattributable change, such as `.PHONY`, an `include`, an `export` or a conditional, runs the full set); a change under
+  `kernel/`, `crates/zoraya-posix*` (libposix and its ffi), `ports/musl/` or `tools/test-runner/` runs the full set
+  (`tools/ci-tests.txt`). A push to `main` runs only the document checks (`doc_checks`: `adr-check`, `check-host-paths`,
+  `check-untrusted-gate`, `check-quota-tests`, `check-tls-roots`), no build and no machine, whatever changed, and a push never
+  cancels a scheduled or manual run (the concurrency group is per kind of event, cron and ref). `main`'s full set runs on a
+  schedule: every 4 hours (`23 */4 * * *`, an off minute) if `main` changed since the last scheduled run that ran the build
+  (`tools/ci-last-full.rb`, from the API; an answer it cannot give means run), and nightly (`17 2 * * *`, always, with the
+  nightly's own jobs in `tools/ci-nightly-tests.txt`). A scheduled run's summary lists the merges since the last green full run
+  (the commits of `git log --first-parent LAST..HEAD`, merges marked); a 4-hourly run that skips fails if the last full run was
+  red (so it never reads as green over it); the plan step is `tools/ci-plan-step.sh`. A red scheduled run is fixed before the next merge; a stage tag needs a green
+  scheduled or nightly full run whose head is the tagged commit or a descendant of it (`tools/ci-last-full.rb --green-for SHA`). A manual run with `full=true` (to chase
+  a flake) and a tag `candidate-full/NAME` still run the full set. ADR-0345's tree proof (`tools/ci-tree-proof.rb`) is no longer
+  called by the plan; by hand, `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name> tools/ci-tree-proof.rb`
+  shows that a commit's tree has a green full run. `make check-ci-plan` tests the plans, the Makefile mapping, the scheduled
+  lookup and the proof on fixtures. Known limits: a `.PHONY` change always runs the full set; a changed rule or variable that no step and no listed non-step root reaches, a `$(eval`, an exported variable and `SHELL` are the full set too; a word the parser cannot resolve stands for every rule. A push to `main` runs 5 of the 25 check commands (a scheduled full run runs all). The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
   The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
   that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
   (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".
@@ -2721,7 +2769,7 @@ ADR-0221 items 5, 6 and 8).
   writers left gets a fresh pair (ADR-0107 item 15). `execl` takes six arguments after `arg0` (item 13). `fork`
   copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
   memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). A POSIX
-  session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
+  session and `zosh` do not share the console; from `zosh` a POSIX program has the terminal on the streams its line leaves alone. Dates are the
   root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
   read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
 - **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport; a

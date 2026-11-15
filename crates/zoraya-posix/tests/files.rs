@@ -1894,3 +1894,49 @@ mod record_locks {
         assert!(r2.p.locks_is_empty());
     }
 }
+
+/// `pread` and `pwrite` (a backlog request): the offset is the call's, the
+/// position stays, a stream has no offset, and a transfer larger than one
+/// request goes in pieces.
+#[test]
+fn pread_and_pwrite_take_an_offset_and_leave_the_position() {
+    let mut r = rig();
+    let fd = open(&mut r, "/pf", RW_CREATE, 0o644).unwrap();
+    r.write(fd, b"0123456789").unwrap();
+    let u = r.arena.user(ARENA / 2, 4);
+    assert_eq!(r.p.pread(fd, u, 3), Ok(4));
+    assert_eq!(r.peek(ARENA / 2, 4), b"3456");
+    assert_eq!(r.p.lseek(fd, 0, 1), Ok(10), "the position did not move");
+    let w = r.poke(0, b"XY");
+    assert_eq!(r.p.pwrite(fd, w, 2), Ok(2));
+    assert_eq!(r.p.lseek(fd, 0, 1), Ok(10));
+    let all = r.arena.user(ARENA / 2, 20);
+    assert_eq!(r.p.pread(fd, all, 0), Ok(10));
+    assert_eq!(r.peek(ARENA / 2, 10), b"01XY456789");
+    assert_eq!(r.p.pread(fd, all, 10), Ok(0), "at the end");
+    assert_eq!(r.p.pread(fd, all, 7), Ok(3), "short at the end");
+    assert_eq!(r.p.pread(fd, all, -1), Err(EINVAL));
+    assert_eq!(r.p.pwrite(fd, w, -1), Err(EINVAL));
+    // Past the end, a write extends the file.
+    assert_eq!(r.p.pwrite(fd, w, 12), Ok(2));
+    assert_eq!(r.p.pread(fd, all, 0), Ok(14));
+    // The access mode is the description's.
+    let ro = open(&mut r, "/pf", o::RDONLY, 0).unwrap();
+    assert_eq!(r.p.pwrite(ro, w, 0), Err(EBADF));
+    let wo = open(&mut r, "/pf", o::WRONLY, 0).unwrap();
+    assert_eq!(r.p.pread(wo, all, 0), Err(EBADF));
+    // A stream and a bad descriptor.
+    let (pr, pw) = r.p.pipe(0).unwrap();
+    assert_eq!(r.p.pread(pr, all, 0), Err(ESPIPE));
+    assert_eq!(r.p.pwrite(pw, w, 0), Err(ESPIPE));
+    assert_eq!(r.p.pread(99, all, 0), Err(EBADF));
+    // More than one request carries.
+    let big: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    let u = r.poke(0, &big);
+    let f2 = open(&mut r, "/big", RW_CREATE, 0o644).unwrap();
+    assert_eq!(r.p.pwrite(f2, u, 100), Ok(big.len()));
+    let back = r.arena.user(ARENA / 2, big.len());
+    assert_eq!(r.p.pread(f2, back, 100), Ok(big.len()));
+    assert_eq!(r.peek(ARENA / 2, big.len()), big);
+    assert_eq!(r.p.lseek(f2, 0, 1), Ok(0));
+}

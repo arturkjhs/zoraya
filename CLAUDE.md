@@ -39,8 +39,14 @@ Read `docs/design.md` first. It says what exists and where it lives.
   the worktree's directory. This holds for `main`, for branches and for tags (`refs/tags/...`). Never push `main`
   unless `make check` exited 0 on the commit being pushed (two pushes went out on 2026-11-14 while `make check`
   failed, because a chain printed the failure and went on).
-- A stage's tag goes on `main` only after CI on `main` is green for that commit. A published tag is moved only with
-  the architect's permission.
+- Merge form, each command a call of its own, the `cd` first: `git fetch origin`; `git checkout --detach origin/main`;
+  `git merge --no-ff origin/BRANCH`; `make check`; `git rev-parse HEAD` (the commit checked); `git push origin
+  HEAD:main`. If the push is refused because `main` moved, start again from `git fetch`. Then `git tag NAME`,
+  `git push origin refs/tags/NAME`, remove the part's worktree. Do not wait for `main`'s CI run after the merge.
+- A stage's tag goes on `main` only after a scheduled or nightly full run of `main` that includes the tagged commit
+  (its head is that commit or a descendant of it) is green (ADR-0348); `tools/ci-last-full.rb --green-for SHA` (with
+  `GITHUB_REPOSITORY` set and `gh` logged in) names that run, or exits 1: a run that skipped or a red one never counts. A published tag is moved only with the
+  architect's permission.
 
 ## Environment
 
@@ -85,20 +91,29 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
     watchdog). `make test`: every step, one after another. These are for the architect and for CI's own checks;
     an agent session does not run them, nor a full GUI run (`FULL=1`, every `GUI_RUNS`).
   - Locally the TCG runs, the tour's second run and crash rounds past 2 are skipped; CI runs them all.
-- Locally run only `make check` and `make test-changed`; CI does the rest. A merge candidate (the tag
-  `candidate/BRANCH` on the branch's head, a pull request, or `gh workflow run test.yml --ref BRANCH`) runs the
-  steps its change touches (`tools/ci-plan.sh`, the map of `make test-changed`) and a smoke set (boot, the shell's
-  files script, one GUI run, the POSIX hello script). The full set (`tools/ci-tests.txt`, what `make test` runs)
-  runs nightly on `main`, on demand (`gh workflow run test.yml --ref BRANCH -f full=true`) and on a tag
-  `candidate-full/NAME` that the orchestrator pushes before every stage tag.
-- Before a merge, the candidate run on the branch must be green; merge only when it is. A stage is not done until a
-  full run of its head (`candidate-full/`), and then `main`'s, pass. Run them; do not infer them. A red nightly run
-  is the first item of the next session.
-- A push to main runs only the document checks when every changed file is under docs/ and no posix-surface block of
-  an ADR changed and none of the docs a test or build reads (`docs/tour.md`, `docs/dependencies.md`,
-  `docs/adr/0211-*`, `docs/research/task-02/`, `docs/research/desktop/mockups/`, the tier lists); every other push to main, the nightly and candidate-full/ run the full set. A stage tag still needs
-  a full green run on the tagged commit or on its nearest code ancestor (the latest ancestor commit whose run was the
-  full set).
+- Locally run only `make check` and `make test-changed`; CI does the rest. CI policy (ADR-0348). Accepted 2026-11-15. Decided by
+  the architect; recorded by an agent at the architect's request. CI is the brake on the work, so it runs less.
+  - A push to a `work/*` branch (or any branch but `main`) runs `make check` only, no QEMU. Do not dispatch a full run
+    (`workflow_dispatch` with `full=true`) except to chase a flake.
+  - A merge candidate (the tag `candidate/BRANCH` on the branch's head, a pull request, or
+    `gh workflow run test.yml --ref BRANCH`) runs the steps `tools/ci-plan.sh` selects for its change (the map of
+    `make test-changed`, `tools/test-map.txt`) and a smoke set (boot, the shell's files script, one GUI run, the POSIX
+    hello script), not the full set. The full set (`tools/ci-tests.txt`, what `make test` runs) runs for a candidate
+    only when the change touches the kernel (`kernel/`), libposix (`crates/zoraya-posix*`, `ports/musl/`) or
+    `tools/test-runner/`. A `Makefile` change maps to the steps whose recipes or variables the diff changes
+    (`tools/ci-makefile-steps.rb`), not to every step; a change it cannot attribute (`.PHONY`, an include) runs the
+    full set.
+  - `main`'s full set runs on a schedule: every 4 hours if `main` changed since the last full run, and nightly (a 4-hourly run that skips fails if the last
+    full run was red). A
+    push to `main` runs the document checks only, whatever changed, and does not cancel a scheduled or manual full
+    run in progress.
+- Before a merge, the candidate run on the branch must be green; merge only when it is. After a merge do not wait for
+  `main`'s run: the next part merges as soon as its own candidate is green. A red scheduled or nightly run is fixed
+  first, before the next merge; its summary lists the merges since the last green full run. Run the candidate; do not
+  infer it.
+- A stage is not done until a scheduled or nightly full run that includes its last commit is green (a tag
+  `candidate-full/NAME` or a `full=true` run is not needed, and is for chasing a flake). A stage tag needs that green
+  run: `tools/ci-last-full.rb --green-for SHA` finds it (its head is the tagged commit or a descendant of it on `main`).
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this
   session.
 - Logic that does not need hardware lives in a separate `no_std` crate under `crates/`, with host tests

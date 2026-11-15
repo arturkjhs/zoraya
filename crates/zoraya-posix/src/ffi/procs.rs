@@ -13,9 +13,9 @@ use zoraya_abi::spawn::{Encoder as SpawnEncoder, HandleEntry, Transfer};
 use zoraya_abi::{Disposition, RequestKind, Rights, process_signals};
 use zoraya_proto_posix as bp;
 use zoraya_proto_tty as tp;
-use zoraya_protocol::{Below, Data, decode};
+use zoraya_protocol::{Below, decode};
 
-use crate::jobs::{FileAction, Next, Prepared, WNOHANG, WUNTRACED};
+use crate::jobs::{FileAction, Next, Prepared, TtyLook, WNOHANG, WUNTRACED};
 use crate::signals::{
     Action, SIG_BLOCK, SIG_DFL, SIG_IGN, SIG_SETMASK, Taken, bit,
     flags::{SA_RESETHAND, SA_RESTART, SA_SIGINFO},
@@ -720,8 +720,8 @@ extern "C" fn wait3(status: *mut i32, options: i32, usage: *mut u8) -> i32 {
 }
 
 /// `pselect` (ADR-0106 items 3 and 10): stream ends wait for their signals;
-/// files, directories, `/dev/null` and terminals are ready at once (a
-/// terminal's readiness, `poll_readable`, is deferred by ADR-0105).
+/// files, directories and `/dev/null` are ready at once, and a terminal's
+/// input waits for the readiness request (ADR-0331 item 5).
 #[unsafe(no_mangle)]
 extern "C" fn pselect(
     nfds: i32,
@@ -810,6 +810,33 @@ extern "C" fn pselect(
     }
 }
 
+/// `select` (ADR-0342 items 3 and 5): `pselect` with a `struct timeval` and
+/// no signal mask, so `select`, `pselect` and `poll` report the same
+/// readiness (INV-0342-2). The timeout is not written back (as musl's
+/// `pselect`; Linux's `select` does, and no program here relies on it).
+#[unsafe(no_mangle)]
+extern "C" fn select(
+    nfds: i32,
+    readfds: *mut u64,
+    writefds: *mut u64,
+    exceptfds: *mut u64,
+    timeout: *const [i64; 2],
+) -> i32 {
+    let ts;
+    let timespec = if timeout.is_null() {
+        ptr::null()
+    } else {
+        // SAFETY: C's contract: a `struct timeval`.
+        let [s, us] = unsafe { timeout.read() };
+        if s < 0 || !(0..1_000_000).contains(&us) {
+            return int(Err(EINVAL));
+        }
+        ts = [s, us * 1000];
+        &ts as *const [i64; 2]
+    };
+    pselect(nfds, readfds, writefds, exceptfds, timespec, ptr::null())
+}
+
 /// One look at the fds and, if none is ready, one wait: `Some` with the
 /// ready sets (and a timeout's empty ones), `None` to look again.
 #[allow(clippy::type_complexity)] // the two sets and the count pselect gives
@@ -832,11 +859,28 @@ fn select_once(
             if want[w] & b == 0 {
                 continue;
             }
+            // A terminal's input: the readiness request (ADR-0331 item 5).
+            let tty_conn = if writing {
+                None
+            } else {
+                p.tty_input_conn(fd as i32)
+            };
+            if let Some(conn) = tty_conn {
+                match p.tty_input_ready(conn) {
+                    TtyLook::Ready | TtyLook::Hup => {
+                        ready[w] |= b;
+                        count += 1;
+                    }
+                    TtyLook::Wait => {
+                        sources.push((conn, READABLE | PEER_CLOSED));
+                        owners.push((fd, writing));
+                    }
+                }
+                continue;
+            }
             let end = match p.fds.get(fd as i32) {
                 None => return Err(EBADF),
-                Some(Desc::Stream {
-                    read, write, tty, ..
-                }) if !tty => {
+                Some(Desc::Stream { read, write, .. }) => {
                     if writing {
                         write.map(|e| (e, WRITABLE | PEER_CLOSED))
                     } else {
@@ -1112,44 +1156,14 @@ extern "C" fn tcgetpgrp(fd: i32) -> i32 {
 
 /// musl's `struct termios`: four flag words, `c_line`, `c_cc[32]`, the two
 /// speeds.
-const TERMIOS_SIZE: usize = 60;
+const TERMIOS_SIZE: usize = crate::termios::SIZE;
 
 fn get_attr(fd: i32) -> Result<[u8; TERMIOS_SIZE], i32> {
-    state(|p| {
-        let conn = p.tty_of(fd)?;
-        let n = p.tty_call(conn, &tp::GetAttr {})?;
-        let (_, a) = decode::<tp::Attr<'_>>(&p.input[..n], 0).map_err(|_| EIO)?;
-        let mut t = [0u8; TERMIOS_SIZE];
-        for (i, w) in [a.iflag, a.oflag, a.cflag, a.lflag].iter().enumerate() {
-            t[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
-        }
-        let cc = a.cc.0.len().min(32);
-        t[17..17 + cc].copy_from_slice(&a.cc.0[..cc]);
-        // B38400 in and out.
-        t[52..56].copy_from_slice(&15u32.to_le_bytes());
-        t[56..60].copy_from_slice(&15u32.to_le_bytes());
-        Ok(t)
-    })
+    state(|p| p.tty_get_attr(fd))
 }
 
-fn set_attr(fd: i32, t: &[u8; TERMIOS_SIZE]) -> Result<(), i32> {
-    let word = |i: usize| u32::from_le_bytes([t[i * 4], t[i * 4 + 1], t[i * 4 + 2], t[i * 4 + 3]]);
-    state(|p| {
-        let conn = p.tty_of(fd)?;
-        let m = tp::SetAttr {
-            iflag: word(0),
-            oflag: word(1),
-            cflag: word(2),
-            lflag: word(3),
-            cc: Data(&t[17..49]),
-        };
-        let n = p.tty_call(conn, &m)?;
-        if crate::process::reply_ok(&p.input[..n]) {
-            Ok(())
-        } else {
-            Err(EINVAL)
-        }
-    })
+fn set_attr(fd: i32, when: i32, t: &[u8; TERMIOS_SIZE]) -> Result<(), i32> {
+    state(|p| p.tty_set_attr(fd, when, t))
 }
 
 #[unsafe(no_mangle)]
@@ -1161,15 +1175,153 @@ extern "C" fn tcgetattr(fd: i32, t: *mut u8) -> i32 {
     unit(get_attr(fd).and_then(|a| unsafe { put(t, &a) }))
 }
 
+/// `tcsetattr` with its three actions (ADR-0331 item 5, ADR-0342 item 4).
 #[unsafe(no_mangle)]
-extern "C" fn tcsetattr(fd: i32, _when: i32, t: *const u8) -> i32 {
+extern "C" fn tcsetattr(fd: i32, when: i32, t: *const u8) -> i32 {
     if t.is_null() {
         return int(Err(EFAULT));
     }
     let mut a = [0u8; TERMIOS_SIZE];
     // SAFETY: C's contract: `t` is a `struct termios`.
     unsafe { ptr::copy_nonoverlapping(t, a.as_mut_ptr(), TERMIOS_SIZE) };
-    unit(set_attr(fd, &a))
+    unit(set_attr(fd, when, &a))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn tcflush(fd: i32, queue: i32) -> i32 {
+    unit(state(|p| p.tty_flush(fd, queue)))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn tcdrain(fd: i32) -> i32 {
+    // A cancellation point (POSIX).
+    testcancel();
+    unit(state(|p| p.tty_drain(fd)))
+}
+
+/// `tcflow` and `tcsendbreak` succeed and do nothing (ADR-0342 item 4).
+#[unsafe(no_mangle)]
+extern "C" fn tcflow(fd: i32, action: i32) -> i32 {
+    unit(state(|p| {
+        p.tty_of(fd)?;
+        crate::termios::check_flow(action)
+    }))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn tcsendbreak(fd: i32, _duration: i32) -> i32 {
+    unit(state(|p| p.tty_of(fd).map(|_| ())))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn cfmakeraw(t: *mut u8) {
+    if t.is_null() {
+        return;
+    }
+    let mut a = [0u8; TERMIOS_SIZE];
+    // SAFETY: C's contract: `t` is a `struct termios`.
+    unsafe { ptr::copy_nonoverlapping(t, a.as_mut_ptr(), TERMIOS_SIZE) };
+    crate::termios::make_raw(&mut a);
+    // SAFETY: as above.
+    unsafe { ptr::copy_nonoverlapping(a.as_ptr(), t, TERMIOS_SIZE) };
+}
+
+/// Both speeds are `c_cflag`'s baud bits (stored, without effect).
+#[unsafe(no_mangle)]
+extern "C" fn cfgetospeed(t: *const u8) -> u32 {
+    let mut a = [0u8; TERMIOS_SIZE];
+    // SAFETY: C's contract: `t` is a `struct termios`.
+    unsafe { ptr::copy_nonoverlapping(t, a.as_mut_ptr(), TERMIOS_SIZE) };
+    crate::termios::speed(&a)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn cfgetispeed(t: *const u8) -> u32 {
+    cfgetospeed(t)
+}
+
+fn with_termios(t: *mut u8, f: impl FnOnce(&mut [u8; TERMIOS_SIZE]) -> Result<(), i32>) -> i32 {
+    if t.is_null() {
+        return int(Err(EFAULT));
+    }
+    let mut a = [0u8; TERMIOS_SIZE];
+    // SAFETY: C's contract: `t` is a `struct termios`.
+    unsafe { ptr::copy_nonoverlapping(t, a.as_mut_ptr(), TERMIOS_SIZE) };
+    let r = f(&mut a);
+    if r.is_ok() {
+        // SAFETY: as above.
+        unsafe { ptr::copy_nonoverlapping(a.as_ptr(), t, TERMIOS_SIZE) };
+    }
+    unit(r)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn cfsetospeed(t: *mut u8, speed: u32) -> i32 {
+    with_termios(t, |a| crate::termios::set_speed(a, speed))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn cfsetispeed(t: *mut u8, speed: u32) -> i32 {
+    with_termios(t, |a| crate::termios::set_input_speed(a, speed))
+}
+
+/// `tcgetwinsize` is `TIOCGWINSZ`; `tcsetwinsize` is refused with `EPERM`
+/// on a terminal: only the window sets the size (ADR-0331 item 7).
+#[unsafe(no_mangle)]
+extern "C" fn tcgetwinsize(fd: i32, w: *mut u8) -> i32 {
+    if w.is_null() {
+        return int(Err(EFAULT));
+    }
+    int(ioctl_tty(fd, TIOCGWINSZ, w as i64))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn tcsetwinsize(fd: i32, _w: *const u8) -> i32 {
+    int(ioctl_tty(fd, TIOCSWINSZ, 0))
+}
+
+/// `ctermid` (ADR-0342 item 4): `/dev/tty`, in `s` if given.
+#[unsafe(no_mangle)]
+extern "C" fn ctermid(s: *mut u8) -> *const u8 {
+    if s.is_null() {
+        return crate::termios::TTY_NAME.as_ptr();
+    }
+    // SAFETY: C's contract: `s` holds at least `L_ctermid` (20) bytes.
+    unsafe { ptr::copy_nonoverlapping(crate::termios::TTY_NAME.as_ptr(), s, 9) };
+    s
+}
+
+/// `ttyname_r`: `/dev/tty` for a terminal fd; the errno itself, not -1.
+#[unsafe(no_mangle)]
+extern "C" fn ttyname_r(fd: i32, buf: *mut u8, size: usize) -> i32 {
+    match state(|p| p.isatty(fd)) {
+        Err(e) => e,
+        Ok(false) => ENOTTY,
+        Ok(true) => {
+            if buf.is_null() || size < crate::termios::TTY_NAME.len() {
+                return ERANGE;
+            }
+            // SAFETY: C's contract: `buf` holds `size` bytes, checked above.
+            unsafe { ptr::copy_nonoverlapping(crate::termios::TTY_NAME.as_ptr(), buf, 9) };
+            0
+        }
+    }
+}
+
+/// `ttyname`: one static buffer, as POSIX allows.
+#[unsafe(no_mangle)]
+extern "C" fn ttyname(fd: i32) -> *const u8 {
+    match state(|p| p.isatty(fd)) {
+        Ok(true) => crate::termios::TTY_NAME.as_ptr(),
+        Ok(false) => {
+            set_errno(ENOTTY);
+            ptr::null()
+        }
+        Err(e) => {
+            set_errno(e);
+            ptr::null()
+        }
+    }
 }
 
 const TCGETS: i64 = 0x5401;
@@ -1179,6 +1331,8 @@ const TCSETSF: i64 = 0x5404;
 const TIOCGPGRP: i64 = 0x540f;
 const TIOCSPGRP: i64 = 0x5410;
 const TIOCGWINSZ: i64 = 0x5413;
+const TIOCSWINSZ: i64 = 0x5414;
+const TIOCSTI: i64 = 0x5412;
 
 /// `ioctl` on a terminal (ADR-0105 item 7); `ENOTTY` on anything else.
 pub(super) fn ioctl_tty(fd: i32, request: i64, argument: i64) -> Result<i32, i32> {
@@ -1211,7 +1365,9 @@ pub(super) fn ioctl_tty(fd: i32, request: i64, argument: i64) -> Result<i32, i32
             let mut a = [0u8; TERMIOS_SIZE];
             // SAFETY: C's contract: a `struct termios`.
             unsafe { ptr::copy_nonoverlapping(arg, a.as_mut_ptr(), TERMIOS_SIZE) };
-            set_attr(fd, &a).map(|()| 0)
+            // `TCSETS`, `TCSETSW` and `TCSETSF` are the three actions.
+            let when = (request - TCSETS) as i32;
+            set_attr(fd, when, &a).map(|()| 0)
         }
         TIOCGPGRP => {
             let g = tcgetpgrp(fd);
@@ -1235,6 +1391,12 @@ pub(super) fn ioctl_tty(fd: i32, request: i64, argument: i64) -> Result<i32, i32
                 _ => Ok(0),
             }
         }
+        // Only the window sets the size (ADR-0331 item 7); input is never
+        // injected (ADR-0338 item 2): `termios::ioctl_refusal`.
+        TIOCSWINSZ | TIOCSTI => state(|p| {
+            p.tty_ioctl_refusal(fd, request)?;
+            Err(ENOTTY)
+        }),
         _ => state(|p| p.tty_of(fd).and(Err(ENOTTY))),
     }
 }
@@ -2244,6 +2406,9 @@ fn fork_locked() -> Result<i32, i32> {
                     return Err(e);
                 }
                 let _ = zoraya_rt::handle_close(process);
+                // The byte streams of Unix stream sockets are the child's too
+                // now (ADR-0412 items 2 and 6).
+                p.after_fork_in_parent();
                 p.stats.forks += 1;
                 p.stats.snapshot_ns += snapshot_ns;
                 p.stats.fork_ns += zoraya_rt::clock_monotonic().saturating_sub(started);

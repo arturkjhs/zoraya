@@ -32,7 +32,11 @@ pub mod status {
     /// The service's table of connections is full.
     pub const NO_SPACE: u32 = 5;
     pub const UNSUPPORTED: u32 = 6;
-    pub const COUNT: u32 = 7;
+    /// The request is from a connection of a line that is not in front, or
+    /// the terminal is not in a state to take it (ADR-0331 item 4); the
+    /// client reports `EIO`.
+    pub const IO: u32 = 7;
+    pub const COUNT: u32 = 8;
 }
 
 pub type Code = Below<{ status::COUNT }>;
@@ -87,6 +91,22 @@ protocol! {
         group: u32,
     }
     message CloneReply = 6, handles 0 {
+        status: Code,
+    }
+
+    /// `tcflush` (ADR-0331 item 5): `queue` is 0 for the unread input
+    /// (`TCIFLUSH`); the other queues are the client's (output is a stream).
+    message Flush = 7, handles 0 {
+        queue: u32,
+    }
+    message FlushReply = 7, handles 0 {
+        status: Code,
+    }
+
+    /// `tcdrain` and the wait of `TCSADRAIN`: answered when everything
+    /// written so far has been shown.
+    message Drain = 8, handles 0 {}
+    message DrainReply = 8, handles 0 {
         status: Code,
     }
 
@@ -185,6 +205,14 @@ mod tests {
         });
         round_trip!(SetAttrReply => SetAttrReply {
             status: Below(status::INVALID)
+        });
+        round_trip!(Flush => Flush { queue: 0 });
+        round_trip!(FlushReply => FlushReply {
+            status: Below(status::IO)
+        });
+        round_trip!(Drain => Drain {});
+        round_trip!(DrainReply => DrainReply {
+            status: Below(status::OK)
         });
         round_trip!(Clone => Clone { group: 5 });
         round_trip!(CloneReply => CloneReply {

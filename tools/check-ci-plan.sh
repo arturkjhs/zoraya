@@ -1,8 +1,11 @@
 #!/bin/sh
-# Tests the docs-only rule of tools/ci-plan.sh (plan-lib.sh's docs_only) and the
-# tree-proof rule (tools/ci-tree-proof.rb, ADR-0345) on a scratch repository: a push to main whose every changed path is under docs/
-# and that changes no posix-surface block gets `docs_only=1`; everything else,
-# and an unusable before commit, gets the full set.
+# Tests tools/ci-plan.sh and its helpers on a scratch repository (ADR-0348): a push
+# to main plans the document checks only, whatever changed; a candidate runs the
+# steps its change touches and the full set only for the kernel, libposix or the
+# test runner; a change of the Makefile runs the steps whose recipes or variables
+# it changes (tools/ci-makefile-steps.rb); the scheduled run's lookup of the last
+# full run (tools/ci-last-full.rb); and the tree proof (tools/ci-tree-proof.rb,
+# ADR-0345, kept as a way to show that a commit's tree went green on the full set).
 #
 #   tools/check-ci-plan.sh
 set -eu
@@ -20,7 +23,7 @@ git config user.name ci-plan-test
 git config user.email ci-plan-test@localhost
 git config commit.gpgsign false
 mkdir -p tools docs/adr docs/research/task-02 docs/research/desktop/mockups src
-for f in ci-plan.sh plan-lib.sh ci-tests.txt test-map.txt ci-tree-proof.rb; do cp "$here/tools/$f" tools/; done
+for f in ci-plan.sh plan-lib.sh ci-tests.txt test-map.txt ci-tree-proof.rb ci-makefile-steps.rb ci-last-full.rb ci-nightly-tests.txt ci-plan-step.sh; do cp "$here/tools/$f" tools/; done
 mkdir -p .github/workflows
 cp "$here/.github/workflows/test.yml" .github/workflows/
 printf 'x\n' > docs/design.md
@@ -34,112 +37,156 @@ printf 'x\n' > README.md
 printf 'abs\n' > docs/adr/posix-surface-T9.txt
 printf 'prose\n\n```posix-surface-added\nabs\nacos\n```\n\nmore prose\n' > docs/adr/0999-surface.md
 printf 'prose\n' > docs/adr/0998-plain.md
+mkdir -p kernel/src crates/zoraya-posix/src crates/zoraya-posix-extra/src crates/zoraya-proto-posix/src ports/musl tools/test-runner/src
+for f in kernel/src/main.rs crates/zoraya-posix/src/lib.rs crates/zoraya-posix-extra/src/lib.rs crates/zoraya-proto-posix/src/lib.rs ports/musl/musl.mk tools/test-runner/src/main.rs; do printf 'x\n' > "$f"; done
+# A small Makefile for tools/ci-makefile-steps.rb's cases.
+printf '%s\n' '# a comment' '.PHONY: test-boot test-files test-gui test-net other' 'KERNEL := build/k.elf' 'SHARED := -x' 'ONLY_BOOT := b' 'DERIVED = $(ONLY_BOOT)' 'TIMEOUT ?= 180' 'export EXPORTED := 1' 'GEN := build/gen' 'LONGVAR := a \' > Makefile
+printf '\tb\n$(KERNEL):\n\tcc -o $@ k\ntest-boot: $(KERNEL)\n\trun $(SHARED) $(ONLY_BOOT)\ntest-files: $(KERNEL)\n\trun $(SHARED) files\ntest-gui:\n\trun gui $(TIMEOUT) $(DERIVED)\ntest-net:\n\trun net $(LONGVAR)\n\trun net2\n\t@$(MAKE) --no-print-directory helper\nhelper:\n\techo h\nother:\n\techo hi\ncheck-x:\n\techo chk\n' >> Makefile
 git add -A
 git commit -q -m base
 base=$(git rev-parse HEAD)
 
 fail=0
-# expect NAME EXPECTED_docs_only BEFORE: plan for BASE..HEAD
-expect() {
-	out=$(DOCS_BEFORE=$3 DOCS_AFTER=$(git rev-parse HEAD) sh tools/ci-plan.sh origin/main 2>/dev/null)
-	got=$(echo "$out" | sed -n 's/^docs_only=//p')
-	if [ "$got" != "$2" ]; then
-		echo "check-ci-plan: $1: docs_only=$got, expected $2" >&2
-		fail=$((fail + 1))
-	fi
-	if [ "$2" = 1 ]; then
-		echo "$out" | grep -q '^tests=\[\]$' && echo "$out" | grep -q '^build=false$' ||
-			{ echo "check-ci-plan: $1: a docs-only plan has no tests and no build" >&2; fail=$((fail + 1)); }
-	else
-		echo "$out" | grep -q '^build=true$' ||
-			{ echo "check-ci-plan: $1: the full set needs the build" >&2; fail=$((fail + 1)); }
-	fi
-}
 step() { # NAME: commit the working tree
 	git add -A
 	git commit -q -m "$1"
 }
 reset_to() { git reset -q --hard "$1"; }
+ALL=$(sed -n 's/^all="\(.*\)"/\1/p' tools/plan-lib.sh)
+njobs=$(grep -c -E '^make ' tools/ci-tests.txt)
 
-printf 'y\n' >> docs/design.md; printf 'q\n' >> docs/adr/0998-plain.md
-step docs
-expect "docs only" 1 "$base"
+# A push to main: the document checks only, whatever changed (ADR-0348).
+out=$(PUSH_MAIN=1 sh tools/ci-plan.sh origin/main 2>/dev/null)
+for want in '^docs_only=1$' '^tests=\[\]$' '^build=false$' '^doc_checks=.*make adr-check'; do
+	echo "$out" | grep -q "$want" || { echo "check-ci-plan: a push to main does not plan the document checks only ($want)" >&2; fail=$((fail + 1)); }
+done
+# A scheduled run with nothing new: no jobs, no checks.
+out=$(CI_PLAN_SKIP="main did not change" sh tools/ci-plan.sh origin/main 2>/dev/null)
+for want in '^docs_only=1$' '^tests=\[\]$' '^build=false$' '^doc_checks=$'; do
+	echo "$out" | grep -q "$want" || { echo "check-ci-plan: a skipped scheduled run does not plan nothing ($want)" >&2; fail=$((fail + 1)); }
+done
+out=$(FULL=1 sh tools/ci-plan.sh 2>/dev/null)
+echo "$out" | grep -q '^docs_only=0$' && echo "$out" | grep -q '^build=true$' || { echo "check-ci-plan: FULL=1 gives the full set" >&2; fail=$((fail + 1)); }
 
-reset_to "$base"
-printf 'prose changed\n\n```posix-surface-added\nabs\nacos\n```\n\nmore prose\n' > docs/adr/0999-surface.md
-step prose-in-block-file
-expect "prose edit of an ADR with a block" 1 "$base"
-
-reset_to "$base"
-printf 'prose\n\n```posix-surface-added\nabs\nacos\nasin\n```\n\nmore prose\n' > docs/adr/0999-surface.md
-step block
-expect "docs and a changed block" 0 "$base"
-
-reset_to "$base"
-printf 'prose\n\n```posix-surface-added\nabs\n```\n\nmore prose\n' > docs/adr/0999-surface.md
-step block-removed
-expect "a block shrinks" 0 "$base"
-
-reset_to "$base"
-printf 'new\n\n```posix-surface-added\nabs\n```\n' > docs/adr/0997-new.md
-printf 'y\n' >> docs/design.md
-step new-block
-expect "a new ADR with a block" 0 "$base"
-
-reset_to "$base"
-printf 'abs\nacos\n' > docs/adr/posix-surface-T9.txt
-step tier-list
-expect "a tier list" 0 "$base"
-
-reset_to "$base"
-printf 'y\n' >> docs/design.md; printf 'y\n' >> src/code.rs
-step code
-expect "docs and one code file" 0 "$base"
-
-for f in docs/tour.md docs/dependencies.md docs/adr/0211-acceptance.md docs/research/task-02/libc-surface.csv docs/research/desktop/mockups/t.txt; do
+# A candidate: the full set for the kernel, libposix and the test runner, the steps
+# of the map for the rest.
+cand_summary() { sh tools/ci-plan.sh "$base" 2>"$aux/plan.err" | sed -n 's/^summary=//p'; }
+for f in kernel/src/main.rs crates/zoraya-posix/src/lib.rs crates/zoraya-posix-extra/src/lib.rs ports/musl/musl.mk tools/test-runner/src/main.rs; do
+	reset_to "$base"
+	mkdir -p "$(dirname "$f")"
+	printf 'y\n' >> "$f"
+	step full-path
+	case "$(cand_summary)" in
+	"full set"*": $njobs jobs") ;;
+	*) echo "check-ci-plan: a candidate that changes $f runs the full set (got: $(cand_summary))" >&2; fail=$((fail + 1)) ;;
+	esac
+done
+for f in docs/design.md crates/zoraya-proto-posix/src/lib.rs; do
 	reset_to "$base"
 	printf 'y\n' >> "$f"
-	step read-by-tests
-	expect "$f is read by a test" 0 "$base"
+	step not-full-path
+	case "$(cand_summary)" in
+	"full set"*) echo "check-ci-plan: a candidate that changes $f runs the full set" >&2; fail=$((fail + 1)) ;;
+	esac
 done
 
-reset_to "$base"
-printf 'y\n' >> README.md
-step readme
-expect "README.md outside docs/" 0 "$base"
+# A change of the Makefile: the steps whose recipes or variables it changes.
+mk_steps() { # NAME EXPECTED_LINE: what tools/ci-makefile-steps.rb says of the working tree against $base
+	got=$(ruby tools/ci-makefile-steps.rb "$base" "$ALL" 2>/dev/null | grep -v '^unit=') || got=ERROR
+	if [ "$got" != "$2" ]; then
+		echo "check-ci-plan: Makefile: $1: got '$got', expected '$2'" >&2
+		fail=$((fail + 1))
+	fi
+}
+mk_edit() { # NAME SED_EXPRESSION: change the Makefile, commit
+	reset_to "$base"
+	sed -e "$2" Makefile > "$aux/mk" && cp "$aux/mk" Makefile
+	step "mk $1"
+}
+mk_edit recipe 's/) files$/) files2/'
+mk_steps "a one-line change of one recipe" "steps: test-files"
+mk_edit shared 's/^SHARED := -x/SHARED := -y/'
+mk_steps "a variable two recipes use" "steps: test-boot test-files"
+mk_edit kernel-recipe 's/cc -o \$@ k/cc -o $@ k2/'
+mk_steps "the recipe of a file the steps depend on" "steps: test-boot test-files"
+mk_edit timeout 's/^TIMEOUT ?= 180/TIMEOUT ?= 181/'
+mk_steps "a variable one recipe uses" "steps: test-gui"
+mk_edit derived 's/^ONLY_BOOT := b/ONLY_BOOT := c/'
+mk_steps "a variable used through another variable" "steps: test-boot test-gui"
+mk_edit continuation 's/^	b$/	c/'
+mk_steps "a continuation line of a variable" "steps: test-net"
+mk_edit other 's/echo hi/echo ho/'
+mk_steps "a recipe that no step and no root reaches is not known to be harmless" "full"
+mk_edit check-x 's/echo chk/echo chk2/'
+mk_steps "a recipe only a check target reaches" "steps:"
+mk_edit make-edge 's/echo h$/echo h2/'
+mk_steps "a recipe a step runs through \$(MAKE)" "steps: test-net"
+mk_edit make-rename 's/^helper:/helper2:/'
+mk_steps "a helper renamed while its caller still names the old one" "full"
+mk_edit exported 's/^export EXPORTED := 1/export EXPORTED := 2/'
+mk_steps "an exported variable" "full"
+mk_edit shell 's/^TIMEOUT ?= 180/SHELL := \/bin\/bash\
+TIMEOUT ?= 180/'
+mk_steps "SHELL" "full"
+mk_edit delheader '/^helper:/d'
+mk_steps "a deleted rule header moves its recipe to another rule" "full"
+mk_edit backslash 's/^LONGVAR := a \\$/LONGVAR := a/'
+mk_steps "a removed trailing backslash" "full"
+mk_edit comment 's/^# a comment/# another comment/'
+mk_steps "a comment" "steps:"
+mk_edit deleted '/run net2/d'
+mk_steps "a deleted recipe line" "steps: test-net"
+mk_edit phony 's/^\.PHONY: test-boot/.PHONY: other-new test-boot/'
+mk_steps ".PHONY" "full"
+mk_edit export 's/^TIMEOUT ?= 180/export TIMEOUT\
+TIMEOUT ?= 180/'
+mk_steps "an export" "full"
+mk_edit conditional 's/^other:/ifeq ($(X),1)\
+endif\
+other:/'
+mk_steps "a conditional" "full"
+mk_edit include 's/^other:/include x.mk\
+other:/'
+mk_steps "an include" "full"
+# Constructs the parser cannot follow must not read as "no step": each of these changes what test-a does.
+adv() { # NAME EXPECTED OLD-TEXT NEW-TEXT (printf formats)
+	printf "$3" > "$aux/adv.old"
+	printf "$4" > "$aux/adv.new"
+	got=$(ruby tools/ci-makefile-steps.rb --files "$aux/adv.old" "$aux/adv.new" "test-a test-b" 2>/dev/null) || got=ERROR
+	[ "$got" = "$2" ] || { echo "check-ci-plan: Makefile: $1: got '$got', expected '$2'" >&2; fail=$((fail + 1)); }
+}
+adv "a substitution reference" "steps: test-a" 'X := a.c\ntest-a:\n\tcc $(X:.c=.o)\ntest-b:\n\tb\n' 'X := b.c\ntest-a:\n\tcc $(X:.c=.o)\ntest-b:\n\tb\n'
+adv "a prerequisite through foreach" "steps: test-a" 'L := 1\ntest-a: $(foreach s,$(L),h-$(s))\n\ta\nh-1:\n\tx\ntest-b:\n\tb\n' 'L := 1\ntest-a: $(foreach s,$(L),h-$(s))\n\ta\nh-1:\n\ty\ntest-b:\n\tb\n'
+adv "a prerequisite through if" "steps: test-a" 'test-a: $(if $(CI),h,h)\n\ta\nh:\n\tx\ntest-b:\n\tb\n' 'test-a: $(if $(CI),h,h)\n\ta\nh:\n\ty\ntest-b:\n\tb\n'
+adv "a computed variable name" "steps: test-a" 'S := a\na_F := 1\ntest-a:\n\tcc $($(S)_F)\ntest-b:\n\tb\n' 'S := a\na_F := 2\ntest-a:\n\tcc $($(S)_F)\ntest-b:\n\tb\n'
+adv "an eval template" "full" 'define T\n$(1):\n\tx\nendef\n$(eval $(call T,test-a))\ntest-b:\n\tb\n' 'define T\n$(1):\n\ty\nendef\n$(eval $(call T,test-a))\ntest-b:\n\tb\n'
+adv "a variable used only in a target list" "full" 'GEN := g1\ntest-a: g1\n\ta\n$(GEN):\n\tx\ntest-b:\n\tb\n' 'GEN := g2\ntest-a: g1\n\ta\n$(GEN):\n\tx\ntest-b:\n\tb\n'
+adv "a make word the tool cannot resolve" "steps: test-a" 'F = $(MAKE) $(1)\ntest-a:\n\t$(call F,x)\n\t$(MAKE) $(X)\nx:\n\ta\ntest-b:\n\tb\n' 'F = $(MAKE) $(1)\ntest-a:\n\t$(call F,x)\n\t$(MAKE) $(X)\nx:\n\tb\ntest-b:\n\tb\n'
+adv "a tab comment that continues into a command" "steps: test-a" 'test-a:\n\t# c \\\n\techo one\n' 'test-a:\n\t# c \\\n\techo two\n'
+adv "\${MAKE}" "steps: test-a" 'test-a:\n\t+${MAKE} h\nh:\n\tx\ntest-b:\n\tb\n' 'test-a:\n\t+${MAKE} h\nh:\n\ty\ntest-b:\n\tb\n'
 
-reset_to "$base"
-printf 'y\n' >> docs/design.md
-step docs
-expect "no before (first push)" 0 0000000000000000000000000000000000000000
-expect "empty before" 0 ""
-expect "unknown before" 0 1234567890abcdef1234567890abcdef12345678
-expect "an empty change" 0 "$(git rev-parse HEAD)"
+adv "a helper reached through a call that holds \$(MAKE)" "steps: test-a" 'ZR = $(MAKE) $(1)\ntest-a:\n\t$(call ZR,h)\nh:\n\tx\ntest-b:\n\tb\n' 'ZR = $(MAKE) $(1)\ntest-a:\n\t$(call ZR,h)\nh:\n\ty\ntest-b:\n\tb\n'
+adv "a helper reached through a variable that holds \$(MAKE)" "steps: test-a" 'ZSUB = $(MAKE) -s\ntest-a:\n\t$(ZSUB) h\nh:\n\tx\ntest-b:\n\tb\n' 'ZSUB = $(MAKE) -s\ntest-a:\n\t$(ZSUB) h\nh:\n\ty\ntest-b:\n\tb\n'
+# On the real Makefile: an orphan rule is the full set, and one recipe line of test-boot is exactly test-boot.
+cp "$here/Makefile" "$aux/real.old"
+{ cat "$here/Makefile"; printf 'orphan-for-check-ci-plan:\n\techo x\n'; } > "$aux/real.new"
+got=$(ruby tools/ci-makefile-steps.rb --files "$aux/real.old" "$aux/real.new" "$ALL" 2>/dev/null) || got=ERROR
+[ "$got" = full ] || { echo "check-ci-plan: the real Makefile: an orphan rule is '$got', expected full" >&2; fail=$((fail + 1)); }
+awk 'f && /^\t/ { print $0 " "; f = 0; next } /^test-boot:/ { f = 1 } { print }' "$here/Makefile" > "$aux/real.new"
+got=$(ruby tools/ci-makefile-steps.rb --files "$aux/real.old" "$aux/real.new" "$ALL" 2>/dev/null) || got=ERROR
+[ "$got" = "steps: test-boot" ] || { echo "check-ci-plan: the real Makefile: a recipe line of test-boot is '$got', expected steps: test-boot" >&2; fail=$((fail + 1)); }
 
-# A merge commit: the diff against the first parent (the before of a push to
-# main), and a mixed push of two commits.
+# Through the plan: the one recipe's step and the smoke set; not test-net; not the full set.
+mk_edit recipe 's/) files$/) files2/'
+out=$(sh tools/ci-plan.sh "$base" 2>"$aux/plan.err")
+echo "$out" | grep -q '"make test-files"' && ! echo "$out" | grep -q '"make test-net' && echo "$out" | grep -q '^summary=candidate' ||
+	{ echo "check-ci-plan: Makefile: the plan of a one-line recipe change is its step and the smoke set" >&2; fail=$((fail + 1)); }
+mk_edit phony 's/^\.PHONY: test-boot/.PHONY: other-new test-boot/'
+case "$(cand_summary)" in
+"full set"*) ;;
+*) echo "check-ci-plan: Makefile: a change of .PHONY runs the full set" >&2; fail=$((fail + 1)) ;;
+esac
 reset_to "$base"
-main_head=$base
-git checkout -q -b side
-printf 'y\n' >> docs/design.md
-step side-docs
-git checkout -q -
-git merge -q --no-ff -m merge side
-expect "a merge of docs" 1 "$main_head"
-git checkout -q -b side2 "$main_head"
-printf 'y\n' >> src/code.rs
-step side-code
-git checkout -q -
-git merge -q --no-ff -m merge2 side2
-expect "a merge with code" 0 "$main_head"
-
-# A force push: before is not an ancestor.
-git checkout -q -b other "$base"
-printf 'z\n' >> docs/design.md
-step other
-other=$(git rev-parse HEAD)
-git checkout -q -
-expect "before not an ancestor" 0 "$other"
 
 
 # The tree-proof rule (ADR-0345): a push to main that is not docs-only gets
@@ -221,14 +268,13 @@ fixture() {
 	unset BAD_JOB BAD_CONCLUSION DROP_JOB SKIP_STEP DUP_JOB PAGE_FROM PAGE_TO # an assignment before a function call may stay set
 	: "$1"
 }
-# NAME EXPECTED_docs_only [BEFORE]: plan of $merge; $proof_env is added to the environment;
+# NAME EXPECTED_docs_only [BEFORE]: the proof of $merge (1: proven, 0: not); $proof_env is added to the environment;
 # $reason, with 0, is text the proof's message must hold (a negative fixture fails for its own reason)
 proof_expect() {
 	out=$(env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 BEFORE=${3:-$base} \
-		DOCS_BEFORE=${3:-$base} DOCS_AFTER=$merge SHA=$merge ${proof_env:-} sh tools/ci-plan.sh origin/main 2>"$aux/plan.err")
-	got=$(echo "$out" | sed -n 's/^docs_only=//p')
+		SHA=$merge ${proof_env:-} ruby tools/ci-tree-proof.rb 2>"$aux/plan.err" </dev/null) && got=1 || got=0
 	if [ "$got" != "$2" ]; then
-		echo "check-ci-plan: tree proof: $1: docs_only=$got, expected $2" >&2
+		echo "check-ci-plan: tree proof: $1: proven=$got, expected $2" >&2
 		grep "ci-" "$aux/plan.err" | head -8 >&2
 		fail=$((fail + 1))
 	elif [ "$2" = 0 ] && [ -n "${reason:-}" ] && ! grep -q -F -- "$reason" "$aux/plan.err"; then
@@ -236,11 +282,8 @@ proof_expect() {
 		grep "ci-" "$aux/plan.err" | head -8 >&2
 		fail=$((fail + 1))
 	elif [ "$2" = 1 ]; then
-		echo "$out" | grep -q '^summary=.*run 100' && echo "$out" | grep -q '^tests=\[\]$' ||
-			{ echo "check-ci-plan: tree proof: $1: the summary names the run, no tests" >&2; fail=$((fail + 1)); }
-	elif [ -z "${no_build_check:-}" ]; then
-		echo "$out" | grep -q '^build=true$' ||
-			{ echo "check-ci-plan: tree proof: $1: the full set needs the build" >&2; fail=$((fail + 1)); }
+		echo "$out" | grep -q '^proof_run=100$' ||
+			{ echo "check-ci-plan: tree proof: $1: the proof names the run" >&2; fail=$((fail + 1)); }
 	fi
 	reason=
 }
@@ -323,12 +366,14 @@ sleep 4
 [ ! -e "$marker" ] || { echo "check-ci-plan: tree proof: the process group of a call was not killed" >&2; fail=$((fail + 1)); }
 # The run is never its own proof.
 fixture ok "$cand" success
-out=$(CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=100 BEFORE=$base DOCS_BEFORE=$base DOCS_AFTER=$merge SHA=$merge sh tools/ci-plan.sh origin/main 2>/dev/null)
-echo "$out" | grep -q '^docs_only=0$' || { echo "check-ci-plan: tree proof: a run proves itself" >&2; fail=$((fail + 1)); }
+if CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=100 BEFORE=$base SHA=$merge ruby tools/ci-tree-proof.rb >/dev/null 2>&1; then
+	echo "check-ci-plan: tree proof: a run proves itself" >&2; fail=$((fail + 1))
+fi
 # Not a merge: the candidate's own commit, one parent.
 fixture ok "$cand" success
-out=$(CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 BEFORE=$base DOCS_BEFORE=$base DOCS_AFTER=$cand SHA=$cand sh tools/ci-plan.sh origin/main 2>/dev/null)
-echo "$out" | grep -q '^docs_only=0$' || { echo "check-ci-plan: tree proof: a one-parent commit is proven" >&2; fail=$((fail + 1)); }
+if CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 BEFORE=$base SHA=$cand ruby tools/ci-tree-proof.rb >/dev/null 2>&1; then
+	echo "check-ci-plan: tree proof: a one-parent commit is proven" >&2; fail=$((fail + 1))
+fi
 # By hand (the checkout is another commit): the names are those of the commit
 # asked about (git show), not of the checkout. BY_HAND_NAME COMMIT REASON; the
 # run, from fixture(), has the base commit's jobs.
@@ -391,6 +436,103 @@ merge=$(git rev-parse HEAD)
 fixture ok "$cand" success
 reason="no green full run on tree" proof_expect "main moved: the merge's tree is not the candidate's" 0 "$before_moved"
 
+# The scheduled run's lookup of the last full run (tools/ci-last-full.rb, ADR-0348).
+# last_full RUNS_JSON JOBS...: the API answers a list of runs and, for each run id
+# given as ID:BUILD_CONCLUSION, its jobs (a skipped build is a run that ran nothing).
+lastfull() { # CONCLUSION-LIST: lines "ID CONCLUSION SHA BUILD"
+	fixn=$((fixn + 1))
+	[ ! -d "$fix" ] || mv "$fix" "$fix.old.$fixn"
+	mkdir -p "$fix"
+	awk 'BEGIN { printf "{\"workflow_runs\":[" } { printf "%s{\"id\":%s,\"conclusion\":\"%s\",\"head_sha\":\"%s\"}", (NR > 1 ? "," : ""), $1, $2, $3 } END { print "]}" }' > "$fix/$(key 'actions/workflows/test.yml/runs')" < "$aux/runs.txt"
+	while read -r id _ _ build; do
+		printf '{"jobs":[{"name":"plan","conclusion":"success"},{"name":"build","conclusion":"%s"}]}\n' "$build" > "$fix/$(key "actions/runs/$id/jobs")"
+	done < "$aux/runs.txt"
+}
+lf() { # NAME EXPECTED_OUTPUT_LINE [SHA]: run the lookup; $2 must be one line of its output (or FAIL)
+	if out=$(env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 SHA=${3:-aaaa} ruby tools/ci-last-full.rb 2>"$aux/lf.err"); then
+		[ "$2" != FAIL ] && echo "$out" | grep -q -x -F "$2" || { echo "check-ci-plan: last full run: $1: expected $2, got: $(echo "$out" | tr '\n' ' ')" >&2; fail=$((fail + 1)); }
+	else
+		[ "$2" = FAIL ] || { echo "check-ci-plan: last full run: $1: failed: $(cat "$aux/lf.err")" >&2; fail=$((fail + 1)); }
+	fi
+}
+printf '%s\n' '201 success aaaa success' '200 success bbbb success' > "$aux/runs.txt"; lastfull
+lf "the latest full run is on this commit: skip" skip=1
+lf "a newer main: run" skip=0 cccc
+printf '%s\n' '203 success aaaa skipped' '202 cancelled aaaa success' '201 failure aaaa success' '200 success bbbb success' > "$aux/runs.txt"; lastfull
+lf "skipped and cancelled runs do not count, a red run on this commit does" skip=1
+lf "the green run is the older one" green_sha=bbbb
+printf '%s\n' '203 success dddd skipped' '202 success cccc success' > "$aux/runs.txt"; lastfull
+lf "a run that skipped its build is not the last full run" skip=0 dddd
+lf "a run that skipped its build is not the last full run (its predecessor is)" last_sha=cccc dddd
+printf '%s\n' '203 success aaaa skipped' > "$aux/runs.txt"; lastfull
+lf "no full run at all: run" skip=0
+printf '%s\n' '201 success aaaa success' > "$aux/runs.txt"; lastfull
+gone "$(runs_file)"
+lf "an API error listing the runs: unknown, run" FAIL
+lastfull
+rm "$fix/$(key 'actions/runs/201/jobs')"
+lf "an API error reading the jobs: unknown, run" FAIL
+out=$(ruby tools/ci-last-full.rb --merges "$base" 2>/dev/null)
+echo "$out" | grep -q 'merge-moved' || { echo "check-ci-plan: last full run: the merges since the last green run are listed" >&2; fail=$((fail + 1)); }
+out=$(ruby tools/ci-last-full.rb --merges 1234567890abcdef1234567890abcdef12345678 2>/dev/null)
+echo "$out" | grep -q 'No green full run is known' || { echo "check-ci-plan: last full run: an unknown last green run says so" >&2; fail=$((fail + 1)); }
+
+# --green-for: the stage-tag rule (a green full run whose head has the tag's commit as an ancestor).
+printf '%s\n' '203 success '"$merge"' skipped' '202 failure '"$merge"' success' '201 success '"$cand"' success' > "$aux/runs.txt"; lastfull
+out=$(env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 ruby tools/ci-last-full.rb --green-for "$base" 2>/dev/null) && echo "$out" | grep -q '^green_run=201$' ||
+	{ echo "check-ci-plan: green-for: a skipped run and a red run do not count, an older green run on a descendant does" >&2; fail=$((fail + 1)); }
+if env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 ruby tools/ci-last-full.rb --green-for "$base" >/dev/null 2>&1; then :; else
+	echo "check-ci-plan: green-for: $base is an ancestor of the green run's head" >&2; fail=$((fail + 1))
+fi
+if env CI_API="$fakeapi" FIXTURES="$fix" GITHUB_REPOSITORY=$repo RUN_ID=999 ruby tools/ci-last-full.rb --green-for "$merge" >/dev/null 2>&1; then
+	echo "check-ci-plan: green-for: the merge is only on a red run and a skipped run, not on a green one" >&2; fail=$((fail + 1))
+fi
+printf '%s\n' '201 success '"$cand"' success' > "$aux/runs.txt"; lastfull
+lf "last_conclusion of a green run" last_conclusion=success
+printf '%s\n' '201 failure '"$cand"' success' > "$aux/runs.txt"; lastfull
+lf "last_conclusion of a red run" last_conclusion=failure
+
+# The plan step (tools/ci-plan-step.sh): what each event plans.
+fakelast="$aux/fakelast"
+cat > "$fakelast" <<'FAKE'
+#!/bin/sh
+[ "${1:-}" = --merges ] && { echo "merges since ${2:-none}"; exit 0; }
+[ -z "${FAKE_FAIL:-}" ] || exit 1
+cat "$FAKE_OUT"
+FAKE
+chmod +x "$fakelast"
+step_plan() { # NAME EXPECTED_EXIT EXPECTED_REGEX; env of the event in $ev
+	env CI_LAST_FULL="$fakelast" GITHUB_STEP_SUMMARY="$aux/summary" GITHUB_SHA=headsha SCHEDULE="${SCHEDULE:-}" $ev sh tools/ci-plan-step.sh > "$aux/step.out" 2>"$aux/step.err" && rc=0 || rc=$?
+	[ "$rc" = "$2" ] || { echo "check-ci-plan: plan step: $1: exit $rc, expected $2" >&2; fail=$((fail + 1)); }
+	grep -q -E "$3" "$aux/step.out" || { echo "check-ci-plan: plan step: $1: the plan lacks $3" >&2; fail=$((fail + 1)); }
+}
+: > "$aux/summary"
+printf 'skip=1\nlast_run=7\nlast_sha=headsha\nlast_conclusion=success\ngreen_sha=g1\n' > "$aux/last.skip.green"
+printf 'skip=1\nlast_run=7\nlast_sha=headsha\nlast_conclusion=failure\n' > "$aux/last.skip.red"
+printf 'skip=0\nlast_run=7\nlast_sha=old\nlast_conclusion=failure\n' > "$aux/last.new"
+ev="GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main" step_plan "a push to main" 0 '^docs_only=1$'
+ev="GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/work/x" FAKE_OUT="$aux/last.new" step_plan "a push to a branch plans a candidate (no merge base here: full)" 0 '^tests='
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green SCHEDULE=4h" step_plan "the 4-hourly run, nothing new, last run green: nothing runs, green" 0 '^summary=nothing to run'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.red SCHEDULE=4h" step_plan "the 4-hourly run, nothing new, last run red: the run is red" 1 '^summary=nothing to run'
+grep -q 'is red' "$aux/step.err" "$aux/summary" 2>/dev/null || grep -q 'is red' "$aux/step.out" "$aux/summary" || { echo "check-ci-plan: plan step: a red skip does not say why" >&2; fail=$((fail + 1)); }
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.new SCHEDULE=4h" step_plan "the 4-hourly run, main moved: the full set" 0 '^summary=full set: [0-9]+ jobs'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_FAIL=1 SCHEDULE=4h" step_plan "the 4-hourly run, the lookup fails: the full set" 0 '^summary=full set: [0-9]+ jobs'
+nightly_cron=$(sed -n "s/^NIGHTLY_CRON='\(.*\)'$/\1/p" tools/ci-plan-step.sh)
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green" SCHEDULE="$nightly_cron" step_plan "the nightly never skips" 0 "nightly's own jobs"
+ev="GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/work/x FULL_INPUT=true" step_plan "a manual full run" 0 '^summary=full set: [0-9]+ jobs'
+grep -q 'merges since' "$aux/summary" || { echo "check-ci-plan: plan step: the summary of a scheduled run lists the merges" >&2; fail=$((fail + 1)); }
+
+# A plan that fails fails the step (a stub tools/ci-plan.sh that exits 3, and one that prints nothing).
+cp tools/ci-plan.sh "$aux/ci-plan.real"
+for stub in 'exit 3' 'exit 0'; do
+	printf '#!/bin/sh\n%s\n' "$stub" > tools/ci-plan.sh
+	if env GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main sh tools/ci-plan-step.sh >/dev/null 2>&1; then
+		echo "check-ci-plan: plan step: a plan that fails ('$stub') leaves the step green" >&2; fail=$((fail + 1))
+	fi
+done
+cp "$aux/ci-plan.real" tools/ci-plan.sh
+git checkout -q -- tools/ci-plan.sh 2>/dev/null || true
+
 # The plan job reads the runs through its token (INV-0345-2).
 awk '/^  plan:/ { inplan = 1; next } /^  [a-z]+:/ { inplan = 0 } inplan && /^      actions: read/ { ok = 1 } END { exit !ok }' .github/workflows/test.yml ||
 	{ echo "check-ci-plan: the plan job of test.yml lacks 'actions: read'" >&2; fail=$((fail + 1)); }
@@ -403,4 +545,4 @@ if [ "$fail" -gt 0 ]; then
 	echo "check-ci-plan: $fail failed" >&2
 	exit 1
 fi
-echo "check-ci-plan: the docs-only rule and the tree-proof rule hold"
+echo "check-ci-plan: the plans, the Makefile mapping, the scheduled lookup and the tree proof hold"

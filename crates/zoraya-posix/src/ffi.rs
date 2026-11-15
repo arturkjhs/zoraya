@@ -85,6 +85,10 @@ impl Sys for RtSys {
         zoraya_rt::handle_duplicate(h, MemoryObject::RIGHTS)
     }
 
+    fn duplicate_stream_write(&mut self, h: Handle) -> Result<Handle, Status> {
+        zoraya_rt::handle_duplicate(h, zoraya_abi::StreamWriteObject::RIGHTS)
+    }
+
     fn channel_create(&mut self) -> Result<(Handle, Handle), Status> {
         zoraya_rt::channel_create()
     }
@@ -109,6 +113,29 @@ impl Sys for RtSys {
             }
         }
         r
+    }
+
+    fn channel_send(
+        &mut self,
+        end: Handle,
+        bytes: &[u8],
+        handles: &[(Handle, bool)],
+    ) -> Result<(), Status> {
+        let entries: Vec<ChannelEntry> = handles
+            .iter()
+            .map(|&(h, copy)| ChannelEntry {
+                handle: h,
+                rights: rights_of(h),
+                transfer: if copy {
+                    zoraya_abi::spawn::Transfer::Duplicate
+                } else {
+                    zoraya_abi::spawn::Transfer::Move
+                },
+            })
+            .collect();
+        // The kernel's write has no effect when it fails (INV-0050-1): the
+        // handles stay the caller's, unlike `channel_write`.
+        zoraya_rt::channel_write(end, bytes, &entries)
     }
 
     fn channel_read(
@@ -1807,6 +1834,25 @@ extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
     }
 }
 
+/// `pread` (a backlog request): a read at an offset that leaves the position.
+#[unsafe(no_mangle)]
+extern "C" fn pread(fd: i32, buf: *mut u8, n: usize, offset: i64) -> isize {
+    size(user(buf, n).and_then(|u| {
+        testcancel();
+        procs::poll();
+        procs::restartable(|p| p.pread(fd, u, offset))
+    }))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn pwrite(fd: i32, buf: *const u8, n: usize, offset: i64) -> isize {
+    size(user(buf, n).and_then(|u| {
+        testcancel();
+        procs::poll();
+        procs::after_write(procs::restartable(|p| p.pwrite(fd, u, offset)))
+    }))
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn __lseek(fd: i32, offset: i64, whence: i32) -> i64 {
     lseek(fd, offset, whence)
@@ -2472,15 +2518,6 @@ extern "C" fn getlogin() -> *mut c_char {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn ttyname(fd: i32) -> *mut c_char {
-    set_errno(match state(|p| p.isatty(fd)) {
-        Err(e) => e,
-        Ok(_) => ENOTTY,
-    });
-    ptr::null_mut()
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn uname(out: *mut [u8; 65]) -> i32 {
     if out.is_null() {
         return int(Err(EFAULT));
@@ -2680,6 +2717,17 @@ extern "C" fn __clock_nanosleep(
     procs::nanosleep_until(deadline, _rem)
 }
 
+/// `usleep`: `nanosleep` for a count of microseconds (POSIX.1-2001, still
+/// asked for by programs; musl's lives in a directory this port replaces).
+#[unsafe(no_mangle)]
+extern "C" fn usleep(microseconds: u32) -> i32 {
+    let deadline = zoraya_rt::clock_monotonic().saturating_add(u64::from(microseconds) * 1000);
+    match procs::nanosleep_until(deadline, ptr::null_mut()) {
+        0 => 0,
+        e => int(Err(e)),
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn times(out: *mut [i64; 4]) -> i64 {
     let ticks = (zoraya_rt::clock_monotonic() / 10_000_000) as i64;
@@ -2774,7 +2822,7 @@ extern "C" fn siglongjmp(env: *mut u8, value: i32) -> ! {
 // ------------------------------------------------------------ outside T1
 
 /// Names of the tier list that no measured T1 program needs working
-/// (`sendmsg`, `syscall`, `setsid`; the stream client's socket calls are
+/// (`syscall`, `setsid`; the stream client's socket calls are
 /// `sockets.rs`, N4): each fails with `ENOSYS`, as ADR-0140's
 /// stub did. Each stub returns the width its C prototype declares
 /// (`long` for `syscall`, `ssize_t` for `tee` and `sendmsg`; `int` for the
@@ -2810,5 +2858,5 @@ fn not_yet_long() -> i64 {
 }
 
 not_yet!(int setgroups setsid);
-not_yet!(long syscall tee sendmsg);
+not_yet!(long syscall tee);
 not_yet!(ptr __map_file);
