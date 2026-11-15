@@ -1,6 +1,6 @@
 # ADR-0433: `posix_spawn` as built (plan part F4): the shape of a child's table and fds, the grants, what crosses to it, and the names
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0042, ADR-0102, ADR-0103, ADR-0104, ADR-0107, ADR-0142, ADR-0287, ADR-0310, ADR-0341, ADR-0411, ADR-0412, ADR-0413, ADR-0430, ADR-0432, ADR-0434, ADR-0435
 - **Evidence:** CP-05, DM-002, GR-005
@@ -175,4 +175,6 @@ creator did not list reaches it. The browser's content process is a spawn with a
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+A Unix socket crosses spawn as built; `execve` with a Unix socket open returns `EBADF` as an interim limit (sockets surviving `exec` are in the backlog).

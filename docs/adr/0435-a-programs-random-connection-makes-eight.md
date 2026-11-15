@@ -1,6 +1,6 @@
 # ADR-0435: A program's connection to the random service may make eight others (plan part F4)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0227, ADR-0288, ADR-0310, ADR-0411, ADR-0433
 - **Evidence:** CP-05, GR-005
@@ -58,4 +58,6 @@ programs that all use their share. It is a constant (`PROGRAM_CHILDREN`) beside 
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+`rngd`'s connection limit of 8 is accepted, superseding ADR-0288 item 6 for that limit.
