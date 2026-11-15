@@ -156,3 +156,65 @@ Severities: **error** (wrong; fix before merge), **warning** (fix in this part o
 
 Fix first: finding 1 (a kernel bound of an accepted ADR). Findings 2 to 4 are fixed or recorded in ADR-0431 and
 ADR-0432 before the architect decides on them.
+
+## Re-check at 66ad2da7
+
+The `opus-review` subagent read `git diff 9c308b4f..66ad2da7` against the findings above, 2026-11-15. Run by the
+reviewer on the worktree, one at a time, `CARGO_BUILD_JOBS=2`, output to files:
+
+- `make check`: exit 0 ("make test: all checks passed").
+- `cargo test -p zoraya-posix`: exit 0, 252 passed, none failed (the two new tests in `tests/memfd.rs` among them).
+- `make test-qemu-one`: exit 0, `PASS: 119 passed, 9 expected failures`; the guest measured factor 2, and
+  `t_bound: snapshot_process, shared: one step 283 us, large 199 us masked`; `t_snapshot: shared mappings stay shared
+  across a snapshot, others are copied`.
+- `make mutants MUTANTS_ARGS="--jobs 1 --only F3-shared-pages-not-counted tools/mutants/shared-mappings-f3.toml"`:
+  caught. Under the mutant, the large shared case held IRQ masked for 46.9 ms against 0.77 ms for the small one
+  ("shared snapshot grows with the pages"). That is caught by the ratio check, and under HVF by the 2 ms bound as well.
+
+Not run: `make test-posix` (`t_memfd`), the other mutants, and the TCG lanes.
+
+Findings:
+
+1. Fixed. `snapshot_step` counts a skipped shared page toward `taken` (`kernel/src/memory/user.rs:570`). A step ends
+   at the next leaf boundary after `STEP` units, whether the pages were copied or skipped, which was the bound before
+   F3. `t_bound` maps one object 41 times and checks the bound and the growth ratio. Both ran, and the mutant shows
+   the ratio check bites.
+2. Fixed. `memory_map` with `SHARED` needs `DUPLICATE` (`kernel/src/syscall.rs:771`). `map_commit` has one caller,
+   so no other path records a shared mapping. The child of a snapshot keeps its mapping as shared, and the parent
+   needed `DUPLICATE` to make it. Spawn carries no mappings. A handle that has `DUPLICATE` can be duplicated without
+   it, but making that copy needs `DUPLICATE` in the first place, so a process that can map `SHARED` could always
+   have passed the object on. Closing the duplicable handle after mapping does leave a fork child with frames and no
+   handle, but that is the ordinary "a mapping outlives its handle" case, not a widening. Every handle `libposix`
+   maps has `MemoryObject::RIGHTS` minus at most `WRITE`, so it has `DUPLICATE`. `t_snapshot` checks both the
+   refusal and that a private mapping is still allowed.
+3. Fixed. The probe is gone from `ffi.rs`. `prepare_rights` lists the handles whose descriptor is not writable, and
+   `RtSys` takes `WRITE` off exactly those. A full handle table no longer matters because no slot is spent. The fake
+   kernel asserts the list against its own state in both directions.
+4. Fixed. `F_SEAL_WRITE` from the wire is never reported. `SEAL`, `SHRINK` and `GROW` are kept, and `FUTURE_WRITE`
+   is set for a read-only arrival. ADR-0432 item 1 and `docs/design.md` state the limit. The one legitimate loss is
+   that a receiver no longer sees a genuine sender's `F_SEAL_WRITE`, only `F_SEAL_FUTURE_WRITE`. That is recorded,
+   and nothing in the tree reads received seals.
+5. to 8. Recorded (5, 6 in ADR-0432's open questions) or corrected (7, 8: the test comments, the
+   `F3-shared-pages-still-copied` note).
+
+ADR edits touch only the proposed ADR-0431 (item 4, INV-0431-3) and ADR-0432 (item 1, open questions). No status
+line or Architect's decision section changed. `docs/adr/invariants.md` has 809 rows and a Total of 809, and its
+INV-0431-3 row matches the ADR.
+
+New findings:
+
+9. **note**: the received record's `access`, not the handle, decides `FUTURE_WRITE` and the read-only list.
+   `crates/zoraya-posix/src/unix_io.rs:871` and `:290`, `memfd.rs:184`. The comment "which the kernel enforces" and
+   ADR-0432 item 1's "if its own handle is read-only" claim more than the code checks. *Scenario a:* a forged record
+   with `access` 0 over a writable handle reports `F_SEAL_FUTURE_WRITE`. The library refuses writes through that fd,
+   so the descriptor's own behaviour holds, but the handle could write. *Scenario b:* INV-0432-1's forged case,
+   `access` 2 over a read-only handle. Forwarding that descriptor is now refused by `channel_write`
+   (`kernel/src/syscall.rs:910`, `AccessDenied`), where the old probe sent it read-only. This fails closed. The fake
+   kernel asserts in that case instead of modelling the refusal (`tests/kernel/mod.rs:200`). *Fix:* reword the
+   comment and the ADR ("if the record says read-only; the library writes nothing through it"), and say in ADR-0432
+   that a descriptor received with an overstated access cannot be forwarded.
+10. **note**: `snapshot_of` checks only masked time, not the units counter (`measure`), so on a slow host the bound
+    rests on the 10x ratio alone. The margin under the mutant was 60x. Making the snapshot report units would make
+    the check independent of host speed (this predates F3).
+
+Verdict: merge. No error or warning is open. Notes 9 and 10 can be handled when the architect decides on ADR-0432.
