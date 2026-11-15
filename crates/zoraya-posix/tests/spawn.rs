@@ -1512,3 +1512,48 @@ fn a_listed_terminal_is_a_clone_for_the_childs_group() {
             .is_err()
     );
 }
+
+/// Review of F4, R2: a spawn refused after the entries were opened (a failed
+/// `addopen`, a `dup2` of an fd the parent lacks) closes them, as every path
+/// does; a `posix_spawnp`-like loop of attempts leaves the count where it was.
+#[test]
+fn a_refusal_after_the_entries_closes_them() {
+    let mut r = rig();
+    mkdir(&mut r, b"/d");
+    let held = count(&mut r);
+    let shape = chosen(vec![spec("/d", false)]);
+    for _ in 0..3 {
+        assert_eq!(
+            r.p.inherit_shaped(
+                &[FileAction::Open(7, b"/gone".to_vec(), o::RDONLY, 0)],
+                0,
+                &shape
+            )
+            .err(),
+            Some(ENOENT)
+        );
+        assert_eq!(count(&mut r), held);
+        assert_eq!(
+            r.p.inherit_shaped(&[FileAction::Dup2(55, 3)], 0, &shape)
+                .err(),
+            Some(EBADF)
+        );
+        assert_eq!(count(&mut r), held);
+        // An open that works, then one that fails: the first's file closes too.
+        file_with(&mut r, b"/ok", b"x");
+        let held_files = count(&mut r);
+        assert_eq!(
+            r.p.inherit_shaped(
+                &[
+                    FileAction::Open(6, b"/ok".to_vec(), o::RDONLY, 0),
+                    FileAction::Open(7, b"/gone".to_vec(), o::RDONLY, 0),
+                ],
+                0,
+                &shape
+            )
+            .err(),
+            Some(ENOENT)
+        );
+        assert_eq!(count(&mut r), held_files);
+    }
+}

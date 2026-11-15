@@ -168,9 +168,7 @@ impl<S: Sys> Posix<S> {
         if shape.empty
             && let Err(e) = self.chosen_entries(group, shape, &mut out)
         {
-            for h in out.message.drain(..) {
-                self.sys.close(h);
-            }
+            self.abandon(&out, &[]);
             return Err(e);
         }
         // `addopen`: opened here, in the parent's table, as the parent's own
@@ -193,7 +191,7 @@ impl<S: Sys> Posix<S> {
                             });
                         }
                         Err(e) => {
-                            self.close_temps(&temps);
+                            self.abandon(&out, &temps);
                             return Err(e);
                         }
                     }
@@ -204,7 +202,7 @@ impl<S: Sys> Posix<S> {
         let map = match self.child_fds_with(&resolved, shape.empty) {
             Ok(m) => m,
             Err(e) => {
-                self.close_temps(&temps);
+                self.abandon(&out, &temps);
                 return Err(e);
             }
         };
@@ -217,21 +215,28 @@ impl<S: Sys> Posix<S> {
             .collect();
         let r = self.inherit_into(&map, group, shape, &listed, &mut out);
         if let Err(e) = r {
-            let made: Vec<S::H> = out
-                .slots
-                .iter()
-                .filter(|s| s.2)
-                .map(|s| s.1)
-                .chain(out.message.iter().copied())
-                .collect();
-            for h in made {
-                self.sys.close(h);
-            }
-            self.close_temps(&temps);
+            self.abandon(&out, &temps);
             return Err(e);
         }
         out.temps = temps;
         Ok(out)
+    }
+
+    /// A refusal: every handle made for the child (the slots' new ends, the
+    /// entries) and the files `addopen` opened are closed again, on whichever
+    /// path it came (INV-0433-2).
+    fn abandon(&mut self, out: &Inherit<S::H>, temps: &[i32]) {
+        let made: Vec<S::H> = out
+            .slots
+            .iter()
+            .filter(|s| s.2)
+            .map(|s| s.1)
+            .chain(out.message.iter().copied())
+            .collect();
+        for h in made {
+            self.sys.close(h);
+        }
+        self.close_temps(temps);
     }
 
     /// Closes the files `addopen` opened for the spawn.
