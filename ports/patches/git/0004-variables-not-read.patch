@@ -1,0 +1,53 @@
+--- a/git-compat-util.h	2026-11-15 04:04:19
++++ b/git-compat-util.h	2026-11-15 06:32:17
+@@ -25,6 +25,17 @@
+ 
+ #include "compat/posix.h"
+ 
++/*
++ * Zoraya (ADR-0339 item 8): the variables that would decide what is trusted,
++ * which program a prompt or a transport runs, or which configuration is read
++ * are not read: zoraya_getenv answers "not set" for them. The macro follows the
++ * system headers and precedes every use in this header, outside every #ifdef,
++ * so every object of git uses it; only wrapper.c (and compat/regex's locale
++ * lookups, which do not include this header) call libc's getenv.
++ */
++char *zoraya_getenv(const char *name);
++#define getenv(name) zoraya_getenv(name)
++
+ struct strbuf;
+ 
+ #if defined(__GNUC__) || defined(__clang__)
+--- a/wrapper.c	2026-11-15 04:04:19
++++ b/wrapper.c	2026-11-15 06:31:01
+@@ -987,3 +987,30 @@
+ 		die_errno(_("mmap failed%s"), mmap_os_err());
+ 	return ret;
+ }
++
++#undef getenv
++/*
++ * The names that are not read, by prefix. GIT_CONFIG covers GIT_CONFIG_GLOBAL, _SYSTEM, _NOSYSTEM, _COUNT, _KEY_n,
++ * _VALUE_n and GIT_CONFIG_PARAMETERS (so `git -c` sets nothing: a line's environment must not carry
++ * configuration, and the variable is how -c reaches the readers; recorded in ADR-0347). GIT_EXEC_PATH and
++ * GIT_TEMPLATE_DIR would name a directory of programs or of hooks to copy into a new repository: the compiled-in
++ * paths are used.
++ */
++char *zoraya_getenv(const char *name)
++{
++	static const char *const prefixes[] = {
++		"GIT_SSL_", "GIT_CONFIG", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR",
++		"GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_PROXY_COMMAND",
++		"GIT_PROXY_SSL_", "GIT_HTTP_PROXY_AUTHMETHOD", "GIT_CURL_",
++		"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
++		"ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "CURL_CA_BUNDLE",
++		"SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_EXTERNAL_DIFF", "GIT_ALLOW_PROTOCOL",
++		NULL
++	};
++	size_t i;
++
++	for (i = 0; prefixes[i]; i++)
++		if (!strncmp(name, prefixes[i], strlen(prefixes[i])))
++			return NULL;
++	return getenv(name);
++}

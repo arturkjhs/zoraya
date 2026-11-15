@@ -1351,12 +1351,17 @@ fn control_codes_nul_and_back_tab() {
     assert_eq!(send(code::TAB, CTRL, None, m), b"\t");
 }
 
-/// Backspace is DEL, ADR-0096's, where the pinned entry's `kbs` says `^H`
-/// (an exception with its reason, ADR-0383); Shift with Page Up or Page Down
-/// scrolls the view and sends nothing, with any other modifier it sends.
+/// Backspace is DEL, ADR-0096's, and the pinned entry's `kbs` says `^?`
+/// (ADR-0383 Option C: the entry is compiled with the line changed, so there
+/// is no exception); Shift with Page Up or Page Down scrolls the view and
+/// sends nothing, with any other modifier it sends.
 #[test]
 fn backspace_and_the_views_own_keys() {
     let m = KeyModes::default();
+    assert_eq!(
+        send(code::BACKSPACE, NONE, None, m),
+        cap("kbs", &[]).as_slice()
+    );
     assert_eq!(send(code::BACKSPACE, NONE, None, m), b"\x7f");
     assert_eq!(send(code::BACKSPACE, SHIFT, None, m), b"\x7f");
     assert_eq!(send(code::PAGE_UP, SHIFT, None, m), b"");

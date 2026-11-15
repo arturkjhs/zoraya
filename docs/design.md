@@ -498,7 +498,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   table (`keys.rs`) is the entry's `k*` strings: F1 to F12, Alt as an `ESC` prefix, xterm's modifier parameter on cursor
   keys, Home, End, Insert, Delete, Page keys and F-keys, `SS3` forms while DECCKM is set, the keypad as characters or, in
   keypad application mode, `SS3` letters, Ctrl+Space and Ctrl+@ as NUL, Ctrl+^ and Ctrl+_ as their codes in every
-  layout, Shift+Tab as `CSI Z`; Backspace stays `0x7f` (ADR-0096, the entry's `kbs=^H` is an exception) and Shift+Page
+  layout, Shift+Tab as `CSI Z`; Backspace is `0x7f` (ADR-0096) and the entry says `kbs=^?` (ADR-0383 Option C: `tools/term-terminfo/terminfo.sh` compiles it from a copy of `terminfo.src` with the one line of the `xterm+kbs` fragment changed) and Shift+Page
   Up and Down scroll the view. A drag selects text (linear, in reading order, ended by any change to a row it covers, a
   scroll of the view or a resize); with a program holding the mouse (1000, 1002) Shift+drag selects and the pointer is
   reported in the SGR form, the wheel as buttons 64 and 65 (at most 8 a turn), focus as `CSI I` and `CSI O` (1004).
@@ -511,7 +511,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
   lines (no wrap flag); no word or line selection and no primary selection; in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
   whole stretch between its ends), and a button released outside the window is seen at the next event;
-  no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
+  no hover (1003), no other mouse encoding; the keypad has no
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
@@ -1000,7 +1000,7 @@ stage 6c `libc.a` holds the real `zoraya-posix` ("`libposix` core (as built)" be
 it run in Zoraya; the ported programs need 6d's process functions. `ports/README.md` has the details.
 
 - **The terminal's entry and tools (TASK-31 10a, ADR-0332, ADR-0333).** `ports/sources.lock` pins ncurses 6.6 (the
-  port for the target is part 10d's). `tools/term-terminfo/terminfo.sh` builds `tic` and `infocmp` from it for the host
+  port for the target is in the image since part 10d, below). `tools/term-terminfo/terminfo.sh` builds `tic` and `infocmp` from it for the host
   (into `build/ports/host/ncurses`, configured with `--enable-mixed-case` so that the directory layout does not depend
   on the host's file system) and compiles exactly `x/xterm-256color`, `x/xterm`, `v/vt100` and `d/dumb`;
   `ports/terminfo.manifest` holds their SHA-256 and `make check-terminfo` (in `make check-ports`) compares
@@ -1011,8 +1011,9 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   `zoraya-term` nor a reason in `entry/exceptions.txt` (INV-0332-1; in `make check`). `tools/term-record/` records
   programs on a pseudo-terminal on the host (`record.py`), builds ncurses' own test programs from the pinned archive
   (`build-curses-tests.sh`) and compares the replayed grids with tmux (`compare-tmux.py`); the recordings are
-  `crates/zoraya-term/recordings/` (`vi`, `less` and four ncurses programs), replayed by `tests/replay.rs`
-  (INV-0332-6).
+  `crates/zoraya-term/recordings/` (`vi`, `less`, four ncurses programs and `vttest`'s cursor and screen menus, the pinned vttest 20251205 built for
+  the host by `build-vttest.sh`), replayed by `tests/replay.rs` (INV-0332-6; the vttest grids are frozen from `zoraya-term` and
+  not yet compared with xterm by a person).
 
 - **`make fetch-ports`** downloads the archives of `ports/sources.lock` (TASK-02's pins and hashes, musl 1.2.5 added,
   tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. Each archive
@@ -1384,6 +1385,24 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `term` as a `Scrollback` message. Tests: `tests/posix/t_tty.c` (`names`, `poll`, `box`, `lines`, `bench`) in
   `tests/posix/zosh.script` and, in a window at each GUI size, `tests/gui/posix-terminal.script` (`make
   test-tour-terminal`). Not yet: see `docs/tasks/TASK-31-part-10c.md`. INV-0331-8 is a lint in `make check-kernel-tty`.
+- **ncurses, `less` and `vi` (TASK-31 10d, ADR-0334, ADR-0335, ADR-0383, proposed ADR-0391).** The image (`build/rootfs-posix`)
+  holds `/bin/less`, `/bin/vi` (nvi2 2.2.2, with `/bin/ex` and `/bin/view` as absolute links to it: it takes its mode from
+  the name it is run by, `patches/nvi2/0004`), the four terminfo entries in `/usr/share/terminfo` (compiled on the host by
+  `tools/term-terminfo/terminfo.sh`, which changes the one `kbs=^H` line of the `xterm+kbs` fragment in a copy of the pinned
+  `terminfo.src` to `kbs=^?`, so the entry says what the terminal sends: ADR-0383 Option C) and ncurses' two archives and
+  headers in `/usr/lib` and `/usr/include`, for programs built inside Zoraya (`tcc life.c -lncursesw -ltinfow`). Each has a
+  description with `cwd none` (`user/describe/posix/{vi,ex,view,less}.cmd`): `vi FILE` is given that one name, to create or
+  replace; `view` and `less` read it; two files of one directory, and a word that starts with `+`, are refused (the list in
+  `narrow` is not built, ADR-0391 item 8: say `+w DIR`). Saving is in place and not atomic, there is no recovery and no start-up file. A process starts on 64 KiB of
+  stack, which ncurses' reading of an entry overflowed (three 32 KiB arrays, three calls deep): `patches/ncurses/0001` takes
+  them from the heap. `creat` and `sleep` are `libposix`'s (ADR-0391 item 1); `ports/apps/ttyshim.c` is gone. The hint for
+  `less` is gone and `more` says `to page a file: less FILE`. Tests: `tests/posix/t_curses.c` (`setup`, `keys`, `devtty`,
+  `poll2`) in `tests/posix/zosh-curses.script` (`make test-posix`) and, in a window at each GUI size,
+  `tests/gui/posix-curses.script` (`make test-tour-terminal`: the size at start and after each `KEY_RESIZE`, Backspace as
+  `KEY_BACKSPACE`, F1, an edit and a save with `vi`, the refusal of a sibling, `tcc -v &| less`). *Known limits:* a native
+  first element of a pipeline reads the keys (ADR-0387 item 2), so `ls | less` does not page (`/bin/cat f | less` and
+  `tcc -v &| less` do); `:e` of a name the grant does not give says "new file" (the refusal that says why is part 10f's);
+  `view` is a read-only grant, narrower than ADR-0335 item 9; DB 1.85 and nvi's `lock` option are as ADR-0390 left them.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).

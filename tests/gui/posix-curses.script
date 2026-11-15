@@ -1,0 +1,85 @@
+# Part 10d (ADR-0334, ADR-0335, ADR-0383, ADR-0391) in a terminal window, on the tour's image (zosh with the
+# POSIX programs of the ports and t_curses): a curses program gets the window's size at start and a
+# KEY_RESIZE after each change, Backspace is KEY_BACKSPACE (the entry says kbs=^?), vi edits and saves a
+# file through its one-name grant and is refused a sibling, less pages a pipe whose first element is a POSIX
+# program. A big display has fewer than 24 rows, so no step depends on the rows: the program prints the
+# size it reads and the script reads the columns. The window's right edge is at x 742 (see
+# posix-terminal.script).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+chord ctrl l
+top ~> _
+# 1. A curses program.
+type t_curses keys\r
+pause 1500
+window
+prefix start cols 80
+key backspace
+window
+prefix key KEY_BACKSPACE
+key f1
+window
+prefix key KEY_F(1)
+drag 741 300 821 300 300
+pause 800
+window
+prefix resize cols 90
+drag 821 300 741 300 300
+pause 800
+window
+prefix resize cols 80
+type q
+window
+screen ~> _
+# 2. vi: the file is made, saved and read back by cat; Backspace erases in insert mode.
+chord ctrl l
+top ~> _
+type echo secret > other.txt\r
+type vi notes.txt\r
+pause 1500
+shot vi-new-file
+type ihello vix
+key backspace
+type \e
+pause 300
+type :wq\r
+pause 1000
+window
+screen ~> _
+type cat notes.txt\r
+window
+screen hello vi
+screen ~> _
+# 3. A sibling is refused, on the editor's own status line, and the file is not replaced by the buffer.
+chord ctrl l
+top ~> _
+type vi notes.txt\r
+pause 1500
+# The buffer holds `hello vi`; :w to the sibling would replace `secret` with it if the grant gave the directory.
+type :w other.txt\r
+pause 1000
+# (the editor's error line is drawn in reverse video, which the glyph reader does not read: the screen is
+# kept for the report, and the file below is what proves the refusal: it is not replaced by the buffer)
+shot vi-refused-w
+type :q!\r
+pause 800
+window
+screen ~> _
+type cat other.txt\r
+window
+screen secret
+screen ~> _
+# 4. less pages the output of a POSIX program (tcc -v: its own messages go through &|).
+chord ctrl l
+top ~> _
+type tcc -v &| less\r
+pause 1500
+window
+screen tcc version 0.9.28rc (AArch64 Zoraya)
+shot less-tcc
+type q
+window
+screen ~> _
+type poweroff\r
+exit

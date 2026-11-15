@@ -588,6 +588,24 @@ static pid_t later(pid_t to, int sig, long ms, int fd)
 	return pid;
 }
 
+/* sleep (ADR-0391 item 1): 0 for a whole sleep; after a handler ran, the seconds left rounded up. */
+static void sleepintr(void)
+{
+	pid_t me = getpid();
+	int p[2];
+	CHECK(pipe(p) == 0);
+	CHECK(sleep(0) == 0);
+	CHECK(sleep(1) == 0);
+	counted = 0;
+	handle(SIGUSR1, count, 0);
+	pid_t pid = later(me, SIGUSR1, 1000, p[1]);
+	unsigned left = sleep(4);
+	CHECK(counted == 1);
+	CHECK(left >= 1 && left <= 3);
+	reap(pid);
+	passed();
+}
+
 static void eintr(void)
 {
 	pid_t me = getpid();
@@ -1926,6 +1944,8 @@ int main(int argc, char **argv)
 		raise_self();
 	else if (!strcmp(argv[1], "eintr"))
 		eintr();
+	else if (!strcmp(argv[1], "sleepintr"))
+		sleepintr();
 	else if (!strcmp(argv[1], "files"))
 		files();
 	else if (!strcmp(argv[1], "time"))

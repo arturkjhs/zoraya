@@ -1857,6 +1857,14 @@ extern "C" fn open(path: *const c_char, flags: i32, mode: u32) -> i32 {
     openat(AT_FDCWD, path, flags, mode)
 }
 
+/// `creat` (POSIX.1): `open` with `O_WRONLY | O_CREAT | O_TRUNC`. musl's lives
+/// in `src/fcntl`, which this port does not retain (ADR-0141); less's `-o`
+/// log file imports it (ADR-0391).
+#[unsafe(no_mangle)]
+extern "C" fn creat(path: *const c_char, mode: u32) -> i32 {
+    openat(AT_FDCWD, path, process::CREAT_FLAGS as i32, mode)
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn openat(dirfd: i32, path: *const c_char, flags: i32, mode: u32) -> i32 {
     // A cancellation point (ADR-0305 item 2), at the top, outside the lock.
@@ -2789,6 +2797,25 @@ extern "C" fn usleep(microseconds: u32) -> i32 {
     match procs::nanosleep_until(deadline, ptr::null_mut()) {
         0 => 0,
         e => int(Err(e)),
+    }
+}
+
+/// `sleep` (POSIX.1): `nanosleep` for a count of seconds; 0 when it slept
+/// them all, the seconds left (rounded up, which musl does not do) when a handler ran. musl's lives in
+/// `src/unistd`, which this port does not retain; ncurses' `mcprint`
+/// imports it (ADR-0391).
+#[unsafe(no_mangle)]
+extern "C" fn sleep(seconds: u32) -> u32 {
+    let deadline = zoraya_rt::clock_monotonic()
+        .saturating_add(u64::from(seconds).saturating_mul(1_000_000_000));
+    let mut left = [0i64; 2];
+    match procs::nanosleep_until(deadline, &mut left) {
+        0 => 0,
+        _ => process::unslept_seconds(
+            (left[0] as u64)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(left[1] as u64),
+        ),
     }
 }
 

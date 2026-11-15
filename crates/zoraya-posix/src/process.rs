@@ -51,6 +51,20 @@ pub mod o {
     pub const TMPFILE: u32 = 0o20040000;
 }
 
+/// `creat(path, mode)` is `open(path, CREAT_FLAGS, mode)` (POSIX.1; less's
+/// log file, ADR-0390's block).
+pub const CREAT_FLAGS: u32 = o::WRONLY | o::CREAT | o::TRUNC;
+
+/// What `sleep` returns when a handler interrupted it: the seconds left,
+/// rounded up (musl's `sleep` truncates; POSIX allows both), so that a program that sleeps again for
+/// the result never sleeps too little. `sleep` returns 0 when it slept all it
+/// was asked to.
+#[must_use]
+pub fn unslept_seconds(left_nanoseconds: u64) -> u32 {
+    let s = left_nanoseconds.div_ceil(1_000_000_000);
+    u32::try_from(s).unwrap_or(u32::MAX)
+}
+
 pub const AT_FDCWD: i32 = -100;
 pub const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
 pub const AT_REMOVEDIR: u32 = 0x200;

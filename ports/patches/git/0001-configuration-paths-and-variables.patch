@@ -1,0 +1,43 @@
+--- a/config.c	2026-11-15 04:04:19
++++ b/config.c	2026-11-15 04:04:20
+@@ -1507,9 +1507,8 @@
+ 
+ char *git_system_config(void)
+ {
+-	char *system_config = xstrdup_or_null(getenv("GIT_CONFIG_SYSTEM"));
+-	if (!system_config)
+-		system_config = system_path(ETC_GITCONFIG);
++	/* Zoraya (ADR-0339 items 4 and 8): GIT_CONFIG_SYSTEM does not move the system file. */
++	char *system_config = system_path(ETC_GITCONFIG);
+ 	normalize_path_copy(system_config, system_config);
+ 	return system_config;
+ }
+@@ -1536,21 +1535,21 @@
+ 
+ void git_global_config_paths(char **user_out, char **xdg_out)
+ {
+-	char *user_config = xstrdup_or_null(getenv("GIT_CONFIG_GLOBAL"));
++	/*
++	 * Zoraya (ADR-0339 item 4): the one global configuration is
++	 * ~/.config/git/config, git's own directory (ADR-0341); never
++	 * ~/.gitconfig, and GIT_CONFIG_GLOBAL does not move it.
++	 */
++	char *user_config = interpolate_path("~/.config/git/config", 0);
+ 	char *xdg_config = NULL;
+ 
+-	if (!user_config) {
+-		user_config = interpolate_path("~/.gitconfig", 0);
+-		xdg_config = xdg_config_home("config");
+-	}
+-
+ 	*user_out = user_config;
+ 	*xdg_out = xdg_config;
+ }
+ 
+ int git_config_system(void)
+ {
+-	return !git_env_bool("GIT_CONFIG_NOSYSTEM", 0);
++	return 1;	/* Zoraya: GIT_CONFIG_NOSYSTEM is not read (ADR-0339 item 8). */
+ }
+ 
+ static int do_git_config_sequence(const struct config_options *opts,
