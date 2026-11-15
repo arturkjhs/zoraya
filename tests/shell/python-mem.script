@@ -1,0 +1,29 @@
+# Plan part F5 (ADR-0415 item 1): CPython in a 2 GiB guest holds more than 256
+# mappings. `make test-python-mem` boots the volume of the python steps at
+# --mem 2G and runs tests/python/mappings.py: ADR-0320's measurement of the
+# free mappings across 4000 threads and 30 forks, a recursion of 200,000
+# frames, and five million bytearrays (the plan's "done when").
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> python3 -c "x=[bytearray(100) for _ in range(5_000_000)]; print('five million', len(x))"\r
+< five million 5000000
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> python3 mappings.py\r
+< free mappings at the start
+< 4000 threads
+< 30 forks
+< free mappings after
+< recursion to 200000 frames
+< bytearrays 5000000
+< ok mappings
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+x power off
+> poweroff\r

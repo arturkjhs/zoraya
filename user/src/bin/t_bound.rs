@@ -307,6 +307,205 @@ fn snapshot_of(size: u64, shared: bool) -> u64 {
     ns
 }
 
+/// Mappings the process holds in the cases of 4096 (ADR-0415 item 1,
+/// INV-0415-1): the limit less the few the program, its stack and the case's
+/// own take.
+const MANY: usize = zoraya_abi::MAPPING_SLOTS - 64;
+
+/// The cases of a process with the most mappings it may hold, each a step's
+/// work between two step points (INV-0270-1, ADR-0415 item 1): `memory_map`
+/// that searches all of them, `memory_unmap` that ends one, `snapshot_process`
+/// that plans, copies and records them, and the process's exit and kill that
+/// drop them one by one. Then the same with every mapping in a page-table of
+/// its own (the layout that makes one table frame for each page), and
+/// the refusal at the limit with nothing changed.
+fn many_mappings_sites() {
+    // The cases before left 40 unmapped mappings of 24 MiB: a thousand empty
+    // page-tables, which every snapshot from here walks (INV-0270-1: in steps
+    // of `WALK_READS` descriptors, counted).
+    let small = best_snapshot();
+    let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let mut places = alloc::vec::Vec::new();
+    let (mut first, mut worst) = (u64::MAX, 0);
+    for _ in 0..MANY {
+        let (at, ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ).expect("map"));
+        first = first.min(ns);
+        worst = worst.max(ns);
+        places.push(at);
+    }
+    check("memory_map, up to 4032 mappings", first, worst);
+    // A hole in the middle: the next map finds it by the walk from the top.
+    let hole = places.swap_remove(MANY / 2);
+    let (_, unmap_ns) = measure(|| memory_unmap(hole, PAGE).expect("unmap"));
+    let (again, map_ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ).expect("map"));
+    assert_eq!(again, hole, "the lowest place is the hole");
+    places.push(again);
+    check("memory_unmap of one of 4032", unmap_ns, unmap_ns);
+    check("memory_map into a hole of 4032", map_ns, map_ns);
+    // Up to the limit: the next is refused, and nothing is left behind.
+    let mut at_limit = alloc::vec::Vec::new();
+    let refused = loop {
+        match memory_map(object, 0, PAGE, MapFlags::READ) {
+            Ok(at) => at_limit.push(at),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(refused, Status::LimitReached, "the limit");
+    assert!(
+        at_limit.len() <= 64,
+        "{} mappings besides the {MANY}: the program's own are few",
+        at_limit.len()
+    );
+    let (r, ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ));
+    assert_eq!(r.err(), Some(Status::LimitReached), "still the limit");
+    assert!(ns <= bound_ns(), "the refusal took {ns} ns masked");
+    for at in at_limit.drain(..) {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+
+    // A snapshot of the process with the mappings of the plan, the copy and
+    // the record, and the end of the child that drops them.
+    let large = best_snapshot();
+    check("snapshot_process, 4032 mappings", small, large);
+    for at in places.drain(..) {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    handle_close(object).expect("close");
+
+    // The same, one mapping in each table of the page-table: every page of
+    // the copy brings its own table frames (INV-0270-1: a step is 64 frames,
+    // not 64 pages).
+    let (spread, spacers) = spread_mappings(MANY / 2);
+    let large = best_snapshot();
+    check(
+        "snapshot_process, a table for each of 2016 pages",
+        small,
+        large,
+    );
+    for at in spread {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    for object in spacers {
+        handle_close(object).expect("close");
+    }
+
+    // 22 mappings of one page, each in a gigabyte of its own (two tables
+    // each): a child builds them, so that its tables go with it.
+    // It needs 22 gigabytes of address space in tables (45 MB): the 2 GiB
+    // guests only.
+    if free_frames() > 40_000 {
+        let p = child(JOB, b"far-pages").expect("spawn");
+        let record = wait_exit(p);
+        handle_close(p).expect("close");
+        assert_eq!(record.code, 0, "far pages: {record:?}");
+    } else {
+        println!("t_bound: snapshot_process, 22 pages 1 GiB apart: skipped, too little memory");
+    }
+
+    // `memory_unmap` of a mapping whose handle was closed frees the object's
+    // frames in the call (up to a step; more go to the reaper): one step
+    // point keeps them out of the interval of the unmapping and the list.
+    let (mut worst, mut worst_big) = (0, 0);
+    for (size, worst) in [(STEP, &mut worst), (BIG, &mut worst_big)] {
+        for _ in 0..3 {
+            let object = memory_create(size, MemoryFlags::NONE).expect("create");
+            let at = memory_map(object, 0, size, MapFlags::WRITE).expect("map");
+            handle_close(object).expect("close: the mapping holds the object");
+            let ((), ns) = measure(|| memory_unmap(at, size).expect("unmap"));
+            *worst = (*worst).max(ns);
+        }
+    }
+    check("memory_unmap of the last holder", worst, worst_big);
+}
+
+/// 22 one-page mappings 1 GiB apart: each brings two page-table frames to
+/// the copy of a snapshot (`SnapshotBuild::finish`: a step is 64 units, and
+/// 22 such mappings are 88 without the count of the tables).
+fn far_pages() -> i32 {
+    const SPACER: u64 = 64 << 20;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
+    let mut spacers = alloc::vec::Vec::new();
+    let mut pages = alloc::vec::Vec::new();
+    for _ in 0..22 {
+        pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
+        // 16 mappings of 64 MiB are the gigabyte; the next page goes after it.
+        for _ in 0..16 {
+            spacers.push(memory_map(spacer, 0, SPACER, MapFlags::READ).expect("spacer"));
+        }
+    }
+    for at in spacers {
+        memory_unmap(at, SPACER).expect("unmap spacer");
+    }
+    let large = best_snapshot();
+    println!(
+        "t_bound: snapshot_process, 22 pages 1 GiB apart: {} us masked",
+        large / 1000
+    );
+    assert!(large <= bound_ns());
+    0
+}
+
+/// `count` one-page mappings, each in its own 2 MiB of address space: a page,
+/// then a spacer of 510 pages (mapped, so that the next page lands after it,
+/// then unmapped). Gives the pages and the spacer's object, which the caller
+/// closes.
+fn spread_mappings(count: usize) -> (alloc::vec::Vec<u64>, alloc::vec::Vec<Handle>) {
+    const SPACER: u64 = 510 * PAGE;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
+    let mut pages = alloc::vec::Vec::new();
+    let mut spacers = alloc::vec::Vec::new();
+    for _ in 0..count {
+        pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
+        spacers.push(memory_map(spacer, 0, SPACER, MapFlags::READ).expect("spacer"));
+    }
+    for at in spacers {
+        memory_unmap(at, SPACER).expect("unmap spacer");
+    }
+    handle_close(page).expect("close");
+    (pages, alloc::vec![spacer])
+}
+
+/// The best of three snapshots: a pause of the host, or work of another
+/// thread inside the interval, is not the kernel holding IRQ masked, and a
+/// regression shows in all three (as in `memory_sites`).
+fn best_snapshot() -> u64 {
+    (0..3).map(|_| snapshot_with()).min().unwrap_or(u64::MAX)
+}
+
+/// A snapshot of this process into a suspended child, and its end: the longest
+/// masked interval of the call (the units of every interval are checked by
+/// `measure`).
+fn snapshot_with() -> u64 {
+    let job = job_create(JOB, JobFlags::POSIX).expect("job");
+    let mut buffer = alloc::vec![0u8; 512];
+    let mut e = SnapshotEncoder::new(&mut buffer, job);
+    e.suspended();
+    let length = e.finish().expect("room");
+    let (child, ns) = measure(|| snapshot_process(&buffer[..length]).expect("snapshot"));
+    let Some(child) = child else { process_exit(0) };
+    // The child's end drops every mapping it was given, one by one.
+    let (_, end_ns) = measure(|| {
+        job_kill(job).expect("kill");
+        wait_exit(child);
+    });
+    println!(
+        "t_bound: snapshot_with: the call {} us masked, the child's end {} us; {} pages copied in {} us",
+        ns / 1000,
+        end_ns / 1000,
+        raw_syscall(0x700f, [0; 6]).1,
+        raw_syscall(0x700e, [0; 6]).1 / 1000
+    );
+    assert!(
+        end_ns <= bound_ns(),
+        "the child's end took {end_ns} ns masked"
+    );
+    handle_close(child).expect("close");
+    handle_close(job).expect("job");
+    ns
+}
+
 /// More mappings of one shared object than a limited job's tables would
 /// allow it to copy.
 const SHARED_COPIES: usize = 40;
@@ -954,11 +1153,25 @@ fn many_subscriptions_sites() {
 fn teardown_sites() {
     teardown("a process holding 24 MiB", b"hold-short", b"hold-long");
     teardown("400 objects of 256 KiB", b"crowd-short", b"crowd-long");
+    teardown("4000 mappings of 4000 objects", b"maps-short", b"maps-long");
     teardown(
         "256 mappings and 1024 handles",
         b"crowd-mapped-short",
         b"crowd-mapped-long",
     );
+}
+
+/// A child that maps 4000 objects of one page each and closes their handles
+/// (ADR-0415 item 1: what holds each object is its mapping), then waits, to end
+/// by itself or to be killed.
+fn maps(wait_ms: u64) -> i32 {
+    for _ in 0..4000 {
+        let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+        memory_map(object, 0, PAGE, MapFlags::WRITE).expect("map");
+        handle_close(object).expect("close");
+    }
+    nap(wait_ms);
+    0
 }
 
 /// A child that holds many objects of 64 pages (256 KiB), up to 400 or as
@@ -1029,6 +1242,7 @@ fn inner() -> i32 {
         large <= 10 * small.max(floor),
         "shared snapshot grows with the pages: {small} ns, {large} ns"
     );
+    many_mappings_sites();
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();
@@ -1047,6 +1261,9 @@ fn main() -> i32 {
     match startup().argv.next() {
         Some(b"hold-short") => hold(50),
         Some(b"hold-long") => hold(30_000),
+        Some(b"far-pages") => far_pages(),
+        Some(b"maps-short") => maps(50),
+        Some(b"maps-long") => maps(30_000),
         Some(b"crowd-short") => crowd(false, 50),
         Some(b"crowd-long") => crowd(false, 30_000),
         Some(b"crowd-mapped-short") => crowd(true, 50),

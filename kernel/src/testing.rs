@@ -315,6 +315,10 @@ static TESTS: &[Test] = &[
         run: a_run_freed_behind_the_scan_is_found_by_a_second_pass,
     },
     Test {
+        name: "a_space_holds_4096_mappings_and_pays_for_the_list",
+        run: a_space_holds_4096_mappings_and_pays_for_the_list,
+    },
+    Test {
         name: "a_space_list_growth_is_counted_and_prepared",
         run: a_space_list_growth_is_counted_and_prepared,
     },
@@ -2775,6 +2779,218 @@ const USER_DATA: zoraya_pagetable::Attributes = zoraya_pagetable::Attributes {
     execute: false,
     user: true,
 };
+
+/// INV-0415-1, kernel half: a space holds `MAX_MAPPINGS` (4096) mappings and
+/// refuses the next with `Limit`, nothing changed; what the heap holds for the
+/// list is charged to the space's job as kernel bytes, exactly, at every size
+/// and after every removal, and a limit that cannot take the list's next
+/// growth refuses the mapping with `Quota`, nothing changed (ADR-0415 item 1,
+/// ADR-0261 point 6). The walks over the 4096 records (the search for a place,
+/// the plan of a snapshot, the removal) hold no more than a step's work
+/// between two step points (INV-0270-1). Prints the bytes per mapping.
+fn a_space_holds_4096_mappings_and_pays_for_the_list() {
+    use crate::charge;
+    use crate::memory::object::MemoryObject;
+    use crate::memory::user::{AddressSpace, Holder, MAX_MAPPINGS, MappingError, PLAN_STEP};
+    use zoraya_charge::Field;
+
+    assert_eq!(MAX_MAPPINGS, 4096, "ADR-0415 item 1");
+    let job = Job::create(&root(), false).expect("job");
+    let job_base = charge::counters(&job).get(Field::Memory).used;
+    // The object is the kernel's own: only the space and its list are paid by
+    // the job under test.
+    let object = MemoryObject::new(PAGE_SIZE, false, None).expect("object");
+    let kernel_bytes = || {
+        let c = charge::counters(&job);
+        c.get(Field::Memory).used - c.get(Field::User).used
+    };
+    let attributes = zoraya_pagetable::Attributes {
+        memory: MemoryType::Normal,
+        write: false,
+        execute: false,
+        user: true,
+    };
+    // Runs `f` as one interval between two step points, with the units of
+    // work it counted.
+    fn interval<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let daif = arch::save_and_mask_interrupts();
+        let _ = test_step_point();
+        crate::steps::masked_max_units(true);
+        let r = f();
+        let _ = test_step_point();
+        arch::restore_interrupts(daif);
+        (r, crate::steps::masked_max_units(true))
+    }
+    let step_limit = crate::steps::STEP as u64 + 16;
+
+    let mut space = AddressSpace::new(Some(&job)).expect("a space");
+    let base = kernel_bytes();
+    let mut places = Vec::new();
+    let mut worst_map = 0;
+    for n in 0..MAX_MAPPINGS {
+        let (va, units) = interval(|| {
+            space
+                .map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+                    object.page(o)
+                })
+                .expect("a mapping below the limit")
+        });
+        worst_map = worst_map.max(units);
+        places.push(va);
+        if n % 509 == 0 || n == MAX_MAPPINGS - 1 {
+            let (tables, _) = space.list_state();
+            // The root table is in the base; each table after it, and the
+            // list, are charged: nothing more, nothing less.
+            let expected = base + (tables as u64 - 1) * PAGE_SIZE + space.mapping_bytes_held();
+            assert_eq!(
+                kernel_bytes(),
+                expected,
+                "charge exact at {} mappings",
+                n + 1
+            );
+        }
+    }
+    assert_eq!(space.mapping_count(), MAX_MAPPINGS);
+    assert!(worst_map <= step_limit, "{worst_map} units for one mapping");
+    let held = space.mapping_bytes_held();
+    println!(
+        "kernel mappings test: 4096 mappings, list {} bytes ({} per mapping), worst map {} units",
+        held,
+        held / MAX_MAPPINGS as u64,
+        worst_map
+    );
+
+    // The 4097th: the limit, nothing changed.
+    let (charged, tables) = (kernel_bytes(), space.list_state().0);
+    let r = space.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(r.err(), Some(MappingError::Limit));
+    assert_eq!(
+        space.map_reserve(PAGE_SIZE).err(),
+        Some(MappingError::Limit)
+    );
+    assert_eq!(space.mapping_count(), MAX_MAPPINGS);
+    assert_eq!((kernel_bytes(), space.list_state().0), (charged, tables));
+
+    // The plan of a snapshot, in steps of PLAN_STEP records.
+    let mut plan = Vec::new();
+    plan.try_reserve_exact(MAX_MAPPINGS).expect("room");
+    let (mut from, mut worst_plan, mut steps_taken) = (0, 0, 0);
+    loop {
+        let (next, units) = interval(|| space.snapshot_plan_step(&mut plan, from).expect("plan"));
+        worst_plan = worst_plan.max(units);
+        steps_taken += 1;
+        match next {
+            Some(at) => from = at,
+            None => break,
+        }
+    }
+    assert_eq!(plan.len(), MAX_MAPPINGS);
+    assert_eq!(steps_taken, MAX_MAPPINGS.div_ceil(PLAN_STEP));
+    assert!(
+        worst_plan <= step_limit,
+        "{worst_plan} units in a plan step"
+    );
+    drop(plan);
+
+    // Unmapping the last, then every second one: each removal moves at most a
+    // chunk, and the charge follows the list down.
+    let mut worst_unmap = 0;
+    let last = places.pop().expect("a mapping");
+    let (removed, units) = interval(|| {
+        space.unmap_range(last, 0, PAGE_SIZE);
+        space.unmap_commit(last, PAGE_SIZE)
+    });
+    assert!(removed.is_ok());
+    worst_unmap = worst_unmap.max(units);
+    assert!(space.unmap_commit(last, PAGE_SIZE).is_err(), "once");
+    assert!(
+        space.unmap_commit(places[0], PAGE_SIZE + 1).is_err(),
+        "a mapping is ended whole"
+    );
+    // The top chunk holds 31 now: unmapping them all empties it, and the
+    // list, the charge and the job's bytes fall by exactly one chunk (the
+    // release on removal, INV-0437-1; `F5-removal-keeps-the-charge`).
+    let (held, charged) = (space.mapping_bytes_held(), kernel_bytes());
+    for va in places.split_off(places.len() - 31) {
+        space.unmap_range(va, 0, PAGE_SIZE);
+        space
+            .unmap_commit(va, PAGE_SIZE)
+            .expect("one of the top chunk");
+    }
+    assert_eq!(
+        held - space.mapping_bytes_held(),
+        AddressSpace::mapping_chunk_bytes(),
+        "an emptied chunk goes back"
+    );
+    assert_eq!(
+        charged - kernel_bytes(),
+        AddressSpace::mapping_chunk_bytes(),
+        "and its charge with it"
+    );
+    for (n, va) in places.iter().enumerate().filter(|(n, _)| n % 2 == 0) {
+        let (removed, units) = interval(|| {
+            space.unmap_range(*va, 0, PAGE_SIZE);
+            space.unmap_commit(*va, PAGE_SIZE)
+        });
+        assert!(removed.is_ok(), "mapping {n}");
+        worst_unmap = worst_unmap.max(units);
+    }
+    assert!(
+        worst_unmap <= step_limit,
+        "{worst_unmap} units to unmap one"
+    );
+    let (tables, _) = space.list_state();
+    assert_eq!(
+        kernel_bytes(),
+        base + (tables as u64 - 1) * PAGE_SIZE + space.mapping_bytes_held(),
+        "the charge follows the list down"
+    );
+
+    // A job that cannot take the list's next growth refuses the mapping.
+    let poor = Job::create(&root(), false).expect("job");
+    // The job's own record is charged to it: "nothing left" is this much.
+    let poor_base = charge::counters(&poor).get(Field::Memory).used;
+    let mut small = AddressSpace::new(Some(&poor)).expect("a space");
+    let used = charge::counters(&poor).get(Field::Memory).used;
+    charge::set_limits(&poor, Some(used + 64), None, None).expect("limit");
+    let refused = small.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(refused.err(), Some(MappingError::Quota));
+    assert_eq!(small.mapping_count(), 0);
+    assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
+    // Room for the chunk but not for the page tables: the chunk is charged,
+    // the first table refused, and `map_abort` gives the chunk back, with its
+    // charge (the path of `memory_map` when a table frame is refused).
+    charge::set_limits(
+        &poor,
+        Some(used + AddressSpace::mapping_chunk_bytes() + 100),
+        None,
+        None,
+    )
+    .expect("limit");
+    let refused = small.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(refused.err(), Some(MappingError::Quota), "a table frame");
+    assert_eq!(small.mapping_count(), 0);
+    assert_eq!(small.mapping_bytes_held(), 0, "the chunk went back");
+    assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
+    drop(small);
+    // The table's frames go back through the reaper.
+    yield_until(|| charge::counters(&poor).get(Field::Memory).used == poor_base);
+
+    // Dropping the space gives every record's charge back, and does it in
+    // steps (`AddressSpace::drop`).
+    // Step points count in this thread as in a process's call.
+    crate::steps::set_kernel_steps(true);
+    let (_, units) = interval(|| drop(space));
+    crate::steps::set_kernel_steps(false);
+    assert!(units <= step_limit, "{units} units to drop a space");
+    yield_until(|| charge::counters(&job).get(Field::Memory).used == job_base);
+}
 
 /// INV-0270-1: the list of frames of a space grows by a copy
 /// (`GlobalAlloc::realloc`: allocate, copy, free) that is work in the

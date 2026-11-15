@@ -167,12 +167,13 @@ fn no_object_mapping_is_executable() {
     handle_close(object).expect("close");
 }
 
-/// 256 mappings, then `LimitReached`, and each ends a place to reuse.
+/// `MAPPING_SLOTS` (4096) mappings, then `LimitReached`, and each ends a place
+/// to reuse (INV-0415-1: the 4097th is refused with no side effect).
 fn mapping_limit() {
     let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
     let mut first = 0;
     let mut last = 0;
-    for i in 0..256 {
+    for i in 0..zoraya_abi::MAPPING_SLOTS {
         last = memory_map(object, 0, PAGE, MapFlags::READ).expect("map");
         if i == 0 {
             first = last;

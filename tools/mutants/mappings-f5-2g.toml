@@ -1,0 +1,12 @@
+# Plan part F5: mutants that need the 2 GiB guest (a process with 22 mappings
+# 1 GiB apart needs 45 MB of page tables): `t_bound`'s `far-pages` case runs
+# in `make test-qemu-auto-smp4-2g` and is skipped in the 128 MiB guest.
+tests = ["make -s test-qemu-auto-smp4-2g"]
+timeout = 1800
+
+[[mutant]]
+id = "F5-finish-ignores-tables"
+file = "kernel/src/memory/user.rs"
+find = 'if pages == 0 || pages >= STEP || tables >= STEP / 2 {'
+replace = 'if pages == 0 || pages >= STEP {'
+note = "INV-0437-2: the child's tables end a step of `finish`: 22 pages 1 GiB apart are 88 units (2 tables and 2 for the record each) without it (t_bound far-pages)"
