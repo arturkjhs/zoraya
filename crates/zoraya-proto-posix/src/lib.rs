@@ -301,6 +301,18 @@ protocol! {
         root: u32,
     }
 
+    /// Client to broker: the line whose root is `group` (a `Group(job)` group
+    /// the client started) is in the background (`back` 1) or not (0). A
+    /// `tcsetpgrp` of a process of a line in the background is `EPERM`, at
+    /// once (the architect, 2026-11-15, on the 10c review's finding 7).
+    message Background = 19, handles 0 {
+        group: u32,
+        back: u32,
+    }
+    message BackgroundReply = 19, handles 0 {
+        status: Code,
+    }
+
     /// What the broker has counted: the messages by ordinal, and the pids.
     message Statistics = 14, handles 0 {}
     message StatisticsReply = 14, handles 0 {

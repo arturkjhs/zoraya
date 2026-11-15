@@ -42,7 +42,10 @@ which way the channel is made, whether the broker waits for the shell's answer, 
   3. `zosh` sends `HostTerminal` (ordinal 16 of `zoraya-proto-posix`) once on its client connection and receives the
      client end of a channel. On it the broker sends, with no reply, `GroupMade { group, by }` (17) when a process
      of group `by` makes `group`, and `ForegroundAsked { group, by, root }` (18) when a process of group `by`, of
-     the line whose root is `root`, asks `tcsetpgrp(group)` for a group of its own line. The broker answers that `tcsetpgrp` at once with success,
+     the line whose root is `root`, asks `tcsetpgrp(group)` for a group of its own line. The client tells the broker
+     which lines are in the background (`Background { group, back }`, 19, a request with a reply, from the client
+     only: for a line started with `&` before its program runs, on a stop, and on `fg`); a `tcsetpgrp` of such a line
+     is `EPERM` at once and no notice goes. Otherwise the broker answers that `tcsetpgrp` at once with success,
      remembers the group for the line, and answers `tcgetpgrp` from it (the caller's own group until one is
      asked). A `tcsetpgrp` for a group of another line, or of the session, is `EPERM`.
   4. `zosh` knows each line's roots (the groups it started the line's POSIX programs in) and gives `ForegroundAsked`
@@ -89,7 +92,8 @@ decides what reads the keys. Target 3: nothing here is per-machine.
 
 - **Positive.** A POSIX shell's job control can work in a window once `libposix` opens `/dev/tty`; its jobs stay
   inside its line.
-- **Negative.** A refused `tcsetpgrp` is reported as done.
+- **Negative.** A `tcsetpgrp` the client refuses after the broker said yes (the line changed in front between the two,
+  a window of one message) is reported as done.
 - **Follow-up.** The in-QEMU test with `sh`'s own job control (needs `open("/dev/tty")`, REMAINS 3 of part 10c).
 
 ## Invariants
@@ -102,7 +106,10 @@ decides what reads the keys. Target 3: nothing here is per-machine.
 
 ## Open questions
 
-- Whether the caller should hear the shell's refusal (Option B without the wait: a deferred reply).
+- Whether the caller should hear the shell's refusal (Option B without the wait: a deferred reply). Decided by the
+  architect, 2026-11-15: a refused `tcsetpgrp` returns `EPERM`, not success. Recorded by an agent: built as the
+  `Background` request above (the broker decides from the line's root; the broker never waits for the client, so
+  no call can wait on another).
 
 ## Revisit triggers
 

@@ -16,7 +16,7 @@ extern crate alloc;
 pub mod session;
 pub mod totals;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -24,12 +24,13 @@ use zoraya_abi::posix::job_rights;
 use zoraya_abi::posix::signal::{self, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU};
 use zoraya_abi::{ExitRecord, RequestKind, Rights, Status, job_signals};
 use zoraya_proto_posix::{
-    ExecCommit, ExecCommitReply, ForegroundAsked, GroupMade, HostTerminal, HostTerminalReply, Kill,
-    KillReply, Lookup, LookupReply, ORDINALS, Reap, Reaped, ReportStats, ReportStatsReply, SetPgid,
-    SetPgidReply, SetStopDisposition, SetStopDispositionReply, SpawnAbort, SpawnAbortReply,
-    SpawnCommit, SpawnCommitReply, SpawnPrepare, SpawnPrepareIn, SpawnPrepared, SpawnPreparedIn,
-    Statistics, StatisticsReply, StopSelf, StopSelfReply, Tcgetpgrp, TcgetpgrpReply, Tcsetpgrp,
-    TcsetpgrpReply, group, lookup, status, stop, target,
+    Background, BackgroundReply, ExecCommit, ExecCommitReply, ForegroundAsked, GroupMade,
+    HostTerminal, HostTerminalReply, Kill, KillReply, Lookup, LookupReply, ORDINALS, Reap, Reaped,
+    ReportStats, ReportStatsReply, SetPgid, SetPgidReply, SetStopDisposition,
+    SetStopDispositionReply, SpawnAbort, SpawnAbortReply, SpawnCommit, SpawnCommitReply,
+    SpawnPrepare, SpawnPrepareIn, SpawnPrepared, SpawnPreparedIn, Statistics, StatisticsReply,
+    StopSelf, StopSelfReply, Tcgetpgrp, TcgetpgrpReply, Tcsetpgrp, TcsetpgrpReply, group, lookup,
+    status, stop, target,
 };
 use zoraya_protocol::{
     Below, ErrorReply, Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode,
@@ -200,6 +201,9 @@ pub struct Broker<K: Kernel> {
     /// Per root group (a line of the client's), the group a `tcsetpgrp` of
     /// it last asked for.
     asked: BTreeMap<u32, u32>,
+    /// The roots of the client's lines that are in the background
+    /// (`Background`): their `tcsetpgrp` is `EPERM`.
+    back: BTreeSet<u32>,
     pub counts: Counts,
     /// What the processes reported, and the peak of live pids (ADR-0110
     /// item 7).
@@ -243,6 +247,7 @@ impl<K: Kernel> Broker<K> {
             foreground: None,
             host: false,
             asked: BTreeMap::new(),
+            back: BTreeSet::new(),
             counts: Counts::default(),
             totals: totals::Totals::default(),
             shell_exit: None,
@@ -619,6 +624,20 @@ impl<K: Kernel> Broker<K> {
                         });
                     }
                 }
+            }
+            o if o == Background::ORDINAL => {
+                let m = parse!(Background);
+                let r = if caller.is_some() || !self.host {
+                    Err(status::NOT_PERMITTED)
+                } else {
+                    if m.back != 0 {
+                        self.back.insert(m.group);
+                    } else {
+                        self.back.remove(&m.group);
+                    }
+                    Ok(())
+                };
+                answer!(BackgroundReply { status: code(r) });
             }
             o if o == Tcgetpgrp::ORDINAL => {
                 let _ = parse!(Tcgetpgrp);
@@ -1078,6 +1097,8 @@ impl<K: Kernel> Broker<K> {
             if g.members == 0
                 && let Some(g) = self.groups.remove(&r.pgid)
             {
+                self.back.remove(&r.pgid);
+                self.asked.remove(&r.pgid);
                 self.kernel.close(g.job);
                 if self.foreground == Some(r.pgid) {
                     // The terminal keeps its handle until the next
@@ -1405,6 +1426,12 @@ impl<K: Kernel> Broker<K> {
         let root = self.root_of(pid).ok_or(status::NOT_PERMITTED)?;
         let g = self.groups.get(&pgid).ok_or(status::NOT_PERMITTED)?;
         if g.session || g.root != root {
+            return Err(status::NOT_PERMITTED);
+        }
+        // A line in the background is refused here, at once: the caller
+        // hears it (the architect, 2026-11-15). The client still decides for
+        // a line in front, from the notice.
+        if self.back.contains(&root) {
             return Err(status::NOT_PERMITTED);
         }
         let by = self.pids.get(&pid).map_or(0, |r| r.pgid);

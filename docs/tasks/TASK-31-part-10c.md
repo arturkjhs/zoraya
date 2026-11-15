@@ -129,6 +129,15 @@ what it found, on this branch, after merging `origin/main` (the invariants Total
 - **Finding 9, an arrow key on a held paste:** the whole key is taken.
 - **Finding 13, INV-0172-4:** built: inside an entered room `room new` refuses a path the room does not cover;
   `tests/shell/rooms.script` (`make test-files`, PASS).
+- **Finding 7, the architect's decision (2026-11-15): a refused `tcsetpgrp` is `EPERM`.** `zosh` tells the broker which
+  lines are in the background (`Background { group, back }`, a request with a reply from the client only: for a line
+  started with `&` before its program runs, on a stop, on `fg`); the broker answers a `tcsetpgrp` of such a line `EPERM`
+  at once and sends no notice. The broker never waits for `zosh`, so no deadlock. Left: a line that changes in front
+  between the broker's yes and `zosh`'s notice (one message) still hears success (ADR-0388's Negative). Tests: the
+  broker's hosting test (`Background` from a process refused, from the client honoured, both ways), and
+  `the_broker_is_told_when_a_line_goes_to_the_back_and_comes_to_the_front`.
+- **The kill offer (the architect, 2026-11-15):** ADR-0387 item 4 accepted with the System+K escape, built in 10f; recorded
+  in ADR-0387's open questions and `docs/backlog.md`. **ADR-0383 Option C** (`kbs=^?`) is 10d's; the entry is unchanged here.
 - **Notes 8, 10, 12, 14:** the kill offer in `docs/architect-queue.md` (ADR-0387's row); the rest in `docs/backlog.md`.
 
 Run in the fix pass: `make check` before each commit; `cargo test -p zoraya-tty -p zoraya-shell -p zoraya-broker -p

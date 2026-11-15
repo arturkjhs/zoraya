@@ -2297,6 +2297,13 @@ impl Z {
                     carried.interrupt |= kind == RequestKind::Interrupt;
                     let _ = job_signal(job, kind, detail);
                 }
+                Effect::Background { roots, back } => {
+                    if let Some(broker) = self.broker.as_ref() {
+                        for r in roots {
+                            let _ = broker.set_background(r, back);
+                        }
+                    }
+                }
                 Effect::GroupSignal { group, signal } => {
                     carried.interrupt |= signal == zoraya_abi::posix::signal::SIGINT;
                     if let Some(broker) = self.broker.as_ref() {
@@ -5086,7 +5093,14 @@ impl Host for Z {
                             realtime_base: self.realtime_base,
                         };
                         let broker = self.broker.take().expect("checked by ready");
+                        let background = pipe.background;
                         let launched = posix_child::launch(&broker, launch, &mut |group| {
+                            // A line started in the background is so for the
+                            // broker before its program runs: its tcsetpgrp
+                            // is EPERM from the start.
+                            if background {
+                                let _ = broker.set_background(group, true);
+                            }
                             self.tty_connect(number, job, group, terminal)
                         });
                         self.broker = Some(broker);

@@ -115,7 +115,10 @@ not outlive its line. Target 3: nothing here is per-machine.
 ## Open questions
 
 - Whether a reserved chord should end the program in front whatever it does with Ctrl-C (ADR-0337's key, or a
-  second one).
+  second one). Decided by the architect, 2026-11-15: item 4 (no kill offer for a line with the terminal, against
+  ADR-0158 rule 3) is accepted with an escape, System+K, a chord no client receives (as System+G), which shows
+  `kill <program>?` on the terminal's status row; Enter kills the line's group. Built in part 10f with the status
+  row and System+G's machinery, not in 10c. Recorded by an agent.
 - Whether a native first element that reads the keys should hand them to the discipline once a POSIX element of its
   line asks for them.
 

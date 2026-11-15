@@ -1738,6 +1738,32 @@ fn a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines()
         notices(&actions),
         [(proto::ForegroundAsked::ORDINAL, d.pid, d.pid * 1000 + a.pid)]
     );
+    // The architect, 2026-11-15 (the 10c review's finding 7): a line the
+    // client put in the background hears EPERM at once, and no notice goes.
+    let back = |g: u32, b: u32| message(&proto::Background { group: g, back: b });
+    assert_eq!(
+        s.status(d.conn, &back(a.pid, 1)),
+        status::NOT_PERMITTED,
+        "a process may not"
+    );
+    assert_eq!(s.status(conn, &back(a.pid, 1)), status::OK);
+    let actions =
+        s.b.request(d.conn, &message(&proto::Tcsetpgrp { pgid: d.pid }), vec![]);
+    assert!(notices(&actions).is_empty());
+    assert_eq!(
+        s.status(a.conn, &message(&proto::Tcsetpgrp { pgid: a.pid })),
+        status::NOT_PERMITTED
+    );
+    // Line c is not in the background: its own group is still asked for.
+    let actions =
+        s.b.request(c.conn, &message(&proto::Tcsetpgrp { pgid: c.pid }), vec![]);
+    assert_eq!(notices(&actions).len(), 1);
+    // Back in front: asked again.
+    assert_eq!(s.status(conn, &back(a.pid, 0)), status::OK);
+    assert_eq!(
+        s.status(a.conn, &message(&proto::Tcsetpgrp { pgid: a.pid })),
+        status::OK
+    );
     s.b.kernel.close(client);
 }
 

@@ -47,6 +47,10 @@ pub enum Effect<H> {
     /// `kill(-group, signal)` through the broker: a signal character or
     /// `SIGWINCH` for one POSIX group, not the line's whole job.
     GroupSignal { group: u32, signal: u32 },
+    /// Tell the broker that the line of these roots is in the background
+    /// (`back`) or in front, so that its `tcsetpgrp` is refused with `EPERM`
+    /// at once while it is not in front (the architect, 2026-11-15).
+    Background { roots: Vec<u32>, back: bool },
 }
 
 /// `SIGINT`, `SIGQUIT` and `SIGWINCH` (ADR-0106's numbers).
@@ -289,6 +293,12 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             return out;
         };
         let (job, chosen, saved, terminal) = (l.job, l.chosen, l.saved, l.terminal);
+        if !l.roots.is_empty() {
+            out.push(Effect::Background {
+                roots: l.roots.clone(),
+                back: false,
+            });
+        }
         self.swallow = Swallow::No;
         self.drop_held(&mut out);
         self.tty.discipline.flush();
@@ -377,6 +387,12 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         self.leave(&mut out);
         if let Some(l) = self.line_mut(id) {
             l.saved = Some(was);
+            if !l.roots.is_empty() {
+                out.push(Effect::Background {
+                    roots: l.roots.clone(),
+                    back: true,
+                });
+            }
         }
         out.push(Effect::Restore { keep: true });
         out
@@ -767,6 +783,36 @@ mod tests {
         let _ = b;
         h.stop_front();
         assert_eq!(h.foreground_asked(55, 11), Err(Refused::NotInFront));
+    }
+
+    #[test]
+    fn the_broker_is_told_when_a_line_goes_to_the_back_and_comes_to_the_front() {
+        // So that a `tcsetpgrp` of a line not in front is EPERM at once
+        // (the architect, 2026-11-15).
+        let (mut h, _, _) = two();
+        let es = h.stop_front();
+        assert!(es.contains(&Effect::Background {
+            roots: vec![11],
+            back: true
+        }));
+        let es = h.bring_front(2);
+        assert!(es.contains(&Effect::Background {
+            roots: vec![12],
+            back: false
+        }));
+        // A native line (no root) tells the broker nothing.
+        let mut n: Host<u32> = Host::new();
+        n.start_line(1, 101, 0, false);
+        assert!(
+            !n.bring_front(1)
+                .iter()
+                .any(|e| matches!(e, Effect::Background { .. }))
+        );
+        assert!(
+            !n.stop_front()
+                .iter()
+                .any(|e| matches!(e, Effect::Background { .. }))
+        );
     }
 
     #[test]

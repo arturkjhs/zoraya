@@ -304,8 +304,11 @@ states, to be taken up later:
     connection for each `fork` and `posix_spawn` (`share`), and a refusal fails the call, so `make &` or `sh script &` with the
     terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
     line can take; refusing it outright waits for a fork that can go on without the terminal.
-  - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): in the
-    architect's queue.
+  - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): accepted
+    by the architect (2026-11-15) with the System+K escape: a chord no client receives shows `kill <program>?` on the
+    terminal's status row and Enter kills the line's group. **Part 10f** builds it with the status row and System+G.
+  - **ADR-0383 Option C** (the architect, 2026-11-15): the terminfo entry gets `kbs=^?` (with ADR-0333). Not in 10c:
+    part 10d changes the entry.
 - Part 10b (TASK-31) leftovers (`docs/tasks/TASK-31-part-10b.md`):
   - **`kbs`, to settle before part 10d (the architect):** build the entry with `kbs=^?` (ADR-0383 Option C) or accept the exception, and
     have 10d's curses test program press Backspace; whether ncurses maps the erase character to `KEY_BACKSPACE` was not checked. The pinned entry says Backspace is `^H`; the terminal sends `0x7f` (ADR-0096). Proposed ADR-0383 lists it as an exception;

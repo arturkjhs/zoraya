@@ -19,14 +19,10 @@ on `work/10c`).
 | ADR-0281 | What N2 decided where the network ADRs are silent (smoltcp 0.14.0 from crates.io, the scope's encoding, a diagnostic echo request, first supervision) | Accept; vendoring is the alternative to the registry crate | stage 8 |
 | ADR-0285 | What Q4 decided where ADR-0264 is silent (one parked list, a slice floor of 50 us, `cpu` 1 to 1000, a 120-byte usage record) | Accept | stage 8 |
 | ADR-0286 | What N3 decided where the network ADRs are silent (`connect` with the client's streams, the copy loop, the resolver, a `url` operand that designates, a test server) | Accept | stage 8 |
-| ADR-0383 | The terminal's keys: Backspace stays DEL, the keypad, Alt, a way to see a key's bytes | Option A. **Your choice:** Option C builds the terminfo entry with `kbs=^?` (with ADR-0333) so curses programs see DEL; decide before 10d | 10b |
-| ADR-0384 | Selecting, copying and pasting in the terminal | Option A (linear selection, `Offer` only when something is selected, `Paste` parts cleaned by the shell, newlines at the prompt as continuation lines) | 10b |
-| ADR-0385 | The terminal's mouse reports, wheel and focus, and `Session` as the only code that makes anything to send | Option A (SGR only, wheel as buttons 64 and 65, Shift selects) | 10b |
-| ADR-0398 | `poll` and `ppoll` as built | Option A. **Note:** its "a terminal is ready at once" arm departed from ADR-0342 item 5 until 10c's readiness request replaced it; it is replaced on `work/10c` | `work/poll` |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 | ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
-| ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. **Your choice:** item 4 drops ADR-0158 rule 3's kill offer for a line with the terminal (accepted ADR-0158 changes): a program that ignores `SIGINT`, `SIGQUIT` and `SIGTSTP` can then be ended only by closing its window or `kill` from another; a key no program sees (as ADR-0337's System key) would keep a way out | 10c |
-| ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; a signal to a group reaches no group made inside it) | Option A as amended by the 10c review's fix pass; a refused `tcsetpgrp` is reported as success (now only for a line not in front, where POSIX stops the job anyway) | 10c |
+| ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
+| ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
 | ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
 
 ## B. Decisions taken to continue (the architect may overrule)
@@ -78,6 +74,4 @@ on `work/10c`).
 - **Native `fetch`** keeps the old name rule (a rebinding can reach the LAN): should it follow ADR-0328 as curl and wget do?
 - **curl and wget refusal text** shows no `+net` hint (ADR-0224 item 5's hint is not built).
 - **ADR-0230:** what `--net-open` may reach (decided 2026-11-15: the runner's own servers only; implemented in `work/test-fixes-3`).
-- **A refused `tcsetpgrp`** is reported as success to the caller (ADR-0388's open question: a deferred reply). The 10c review
-  judged it acceptable once the shell decides by the line's root (only a line not in front is refused).
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.

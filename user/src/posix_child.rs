@@ -204,6 +204,21 @@ impl Broker {
 
     /// `kill(-pgid, signal)`: the broker applies each process's
     /// disposition (ADR-0104 item 9).
+    /// `Background`: the line whose root is `group` is in the background or
+    /// in front; the broker then answers its `tcsetpgrp` with `EPERM` at once
+    /// while it is in the background.
+    pub fn set_background(&self, group: u32, back: bool) -> Result<(), Status> {
+        let m = bp::Background {
+            group,
+            back: u32::from(back),
+        };
+        let (bytes, _) = self.call(&m, &[])?;
+        match decode::<bp::BackgroundReply>(&bytes, 0) {
+            Ok((_, r)) if r.status.0 == bp::status::OK => Ok(()),
+            _ => Err(Status::BadState),
+        }
+    }
+
     pub fn signal_group(&self, pgid: u32, signal: u32) -> Result<(), Status> {
         let m = bp::Kill {
             target: Below(bp::target::GROUP),

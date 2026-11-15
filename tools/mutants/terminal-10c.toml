@@ -94,3 +94,17 @@ file = "crates/zoraya-posix/src/poll.rs"
 find = "let tty = *tty && conn.is_some();"
 replace = "let tty = *tty || conn.is_some();"
 note = "10c review: a_stream_marked_terminal_without_a_connection_is_a_pipe"
+
+[[mutant]]
+id = "C-background-tcsetpgrp-ok"
+file = "crates/zoraya-broker/src/lib.rs"
+find = "if self.back.contains(&root) {"
+replace = "if false {"
+note = "10c, the architect's EPERM: a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines"
+
+[[mutant]]
+id = "C-stop-not-told"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "                    back: true,\n"
+replace = "                    back: false,\n"
+note = "10c, the architect's EPERM: the_broker_is_told_when_a_line_goes_to_the_back_and_comes_to_the_front"
