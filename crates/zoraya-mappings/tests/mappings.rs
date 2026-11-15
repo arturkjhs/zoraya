@@ -250,6 +250,44 @@ fn the_chunk_is_charged_at_its_full_size_and_lookups_agree_with_the_model() {
     }
 }
 
+/// The kernel's own pattern (lowest place first, a guard page): fill the list
+/// with big mappings, unmap all but every second, fill the holes with half
+/// the size, again and again. Before chunks merged it reached 485 chunks for
+/// 4096 records.
+#[test]
+fn unmapping_and_mapping_again_keeps_the_chunks_few() {
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    let mut size = 8u64;
+    while model.0.len() < LIMIT {
+        add(&mut list, &mut model, PAGE * size, 0).expect("a gap");
+    }
+    for round in 0..12 {
+        // Unmap all but every second record, in address order.
+        let keep: Vec<(u64, u64)> = model.0.iter().copied().step_by(2).collect();
+        for &(va, length) in model.0.clone().iter().filter(|r| !keep.contains(r)) {
+            list.remove_exact(va, length).expect("exact");
+        }
+        model.0 = keep;
+        same(&list, &model);
+        size = (size / 2).max(1);
+        while model.0.len() < LIMIT {
+            if add(&mut list, &mut model, PAGE * size, round).is_none() {
+                break;
+            }
+        }
+        same(&list, &model);
+        let bound = 2 * list.len() / CHUNK + 2;
+        assert!(
+            list.chunk_count() <= bound,
+            "round {round}: {} chunks for {}",
+            list.chunk_count(),
+            list.len()
+        );
+        assert!(list.bytes_held() <= bound as u64 * Mappings::<u32>::CHUNK_BYTES);
+    }
+}
+
 #[test]
 fn growth_is_bounded_by_what_max_growth_says() {
     let mut list = Mappings::new();

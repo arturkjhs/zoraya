@@ -101,21 +101,50 @@ impl<T> Mappings<T> {
             .saturating_sub(1)
     }
 
+    /// The chunk a record at `va` goes to: the one that holds its place, or the
+    /// next if that one is full and the next has room and the record is above
+    /// all of the first's (the top of a list, or after a spill).
+    fn route(&self, va: u64) -> usize {
+        let at = self.chunk_for(va);
+        let full = self.chunks[at].len() >= CHUNK;
+        let above = self.chunks[at].last().is_some_and(|e| e.va < va);
+        if full && above && at + 1 < self.chunks.len() && self.chunks[at + 1].len() < CHUNK {
+            at + 1
+        } else {
+            at
+        }
+    }
+
     /// Makes room for one record at `va`, without recording it: a later
-    /// [`Mappings::insert`] at an address in the same place needs no
-    /// allocation. May split a full chunk, which leaves the list valid.
+    /// [`Mappings::insert`] at the same address needs no allocation. A full
+    /// chunk gives a record to a neighbour that has room; only when both are
+    /// full does it split (so that every two neighbours hold at least a
+    /// chunk's worth, and the list has under `2 * len / CHUNK + 2` chunks,
+    /// which [`Mappings::check`] asserts). Leaves the list valid.
     pub fn reserve_for(&mut self, va: u64) -> Result<(), NoRoom> {
         if self.chunks.is_empty() {
             self.chunks.try_reserve(1).map_err(|_| NoRoom)?;
             self.chunks.push(Self::new_chunk()?);
             return Ok(());
         }
-        let at = self.chunk_for(va);
+        let at = self.route(va);
         if self.chunks[at].len() < CHUNK {
             return Ok(());
         }
-        // Full: the chunk that follows is made first, so that a failure
-        // changes nothing.
+        // Full, and the record goes inside it (above all of it, the next has
+        // no room: `route`).
+        if at + 1 < self.chunks.len() && self.chunks[at + 1].len() < CHUNK {
+            let last = self.chunks[at].pop().expect("a full chunk");
+            self.chunks[at + 1].insert(0, last);
+            return Ok(());
+        }
+        if at > 0 && self.chunks[at - 1].len() < CHUNK {
+            let first = self.chunks[at].remove(0);
+            self.chunks[at - 1].push(first);
+            return Ok(());
+        }
+        // Both neighbours are full: the chunk that follows is made first, so
+        // that a failure changes nothing.
         self.chunks.try_reserve(1).map_err(|_| NoRoom)?;
         let mut upper = Self::new_chunk()?;
         if at + 1 == self.chunks.len() && self.chunks[at].last().is_some_and(|e| e.va < va) {
@@ -153,13 +182,7 @@ impl<T> Mappings<T> {
         if self.chunks.is_empty() {
             return Err(entry);
         }
-        let mut at = self.chunk_for(va);
-        if self.chunks[at].len() >= CHUNK
-            && at + 1 < self.chunks.len()
-            && self.chunks[at + 1].is_empty()
-        {
-            at += 1;
-        }
+        let at = self.route(va);
         let chunk = &mut self.chunks[at];
         if chunk.len() >= CHUNK {
             return Err(entry);
@@ -209,7 +232,7 @@ impl<T> Mappings<T> {
         }
         let entry = self.chunks[c].remove(p);
         self.len -= 1;
-        self.drop_if_empty(c);
+        self.rebalance(c);
         Some(entry)
     }
 
@@ -223,15 +246,44 @@ impl<T> Mappings<T> {
         }
         let entry = self.chunks[last].pop()?;
         self.len -= 1;
-        self.drop_if_empty(last);
+        self.rebalance(last);
         Some(entry)
     }
 
-    /// Gives an emptied chunk back, unless it is the only one.
-    fn drop_if_empty(&mut self, chunk: usize) {
-        if self.chunks[chunk].is_empty() {
-            self.chunks.remove(chunk);
+    /// After a removal from chunk `c`: gives an emptied chunk back, and
+    /// merges the chunk with a neighbour when the two together are less than
+    /// a chunk (the records move into the room the chunk already has: no
+    /// allocation), so that every two neighbours hold at least [`CHUNK`]
+    /// records and the list has at most `2 * len / CHUNK + 1` chunks, whatever
+    /// was mapped and unmapped (INV-0437-1).
+    fn rebalance(&mut self, mut c: usize) {
+        loop {
+            if self.chunks[c].is_empty() {
+                self.chunks.remove(c);
+                return;
+            }
+            if c + 1 < self.chunks.len() && self.chunks[c].len() + self.chunks[c + 1].len() < CHUNK
+            {
+                self.merge_next(c);
+            } else if c > 0 && self.chunks[c - 1].len() + self.chunks[c].len() < CHUNK {
+                self.merge_next(c - 1);
+                c -= 1;
+            } else {
+                return;
+            }
         }
+    }
+
+    /// Moves chunk `c + 1` into chunk `c`, which has room for it, and gives
+    /// the emptied chunk back.
+    fn merge_next(&mut self, c: usize) {
+        let next = self.chunks.remove(c + 1);
+        self.chunks[c].extend(next);
+    }
+
+    /// How many chunks the list has.
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
     }
 
     /// Every record, by address.
@@ -280,6 +332,11 @@ impl<T> Mappings<T> {
                 !chunk.is_empty() || i + 1 == self.chunks.len(),
                 "empty chunk {i} before the last"
             );
+            assert!(
+                i == 0 || chunk.is_empty() || self.chunks[i - 1].len() + chunk.len() >= CHUNK,
+                "chunks {} and {i} could be one",
+                i - 1
+            );
             for e in chunk {
                 assert!(e.va >= end, "{:#x} overlaps or is out of order", e.va);
                 assert!(e.length > 0);
@@ -288,5 +345,11 @@ impl<T> Mappings<T> {
             }
         }
         assert_eq!(count, self.len);
+        assert!(
+            self.chunks.len() <= 2 * self.len / CHUNK + 2,
+            "{} chunks for {} records",
+            self.chunks.len(),
+            self.len
+        );
     }
 }
