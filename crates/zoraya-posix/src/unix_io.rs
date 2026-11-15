@@ -1034,6 +1034,16 @@ impl<S: Sys> Posix<S> {
 
     // ------------------------------------------------------------ the rest
 
+    /// `getsockname` and `getpeername` of a Unix socket: it has no name (socket
+    /// files are plan part F7's); a peer exists once it is connected.
+    pub fn unix_name(&self, fd: i32, peer: bool) -> Result<(), i32> {
+        let s = self.unix_socket(fd)?;
+        if peer && s.state != State::Connected {
+            return Err(ENOTCONN);
+        }
+        Ok(())
+    }
+
     /// `shutdown` of a Unix socket. A stream socket closes its byte streams as
     /// TCP does; a packet socket (one channel, no half close) keeps a flag
     /// and ends when both halves are shut.

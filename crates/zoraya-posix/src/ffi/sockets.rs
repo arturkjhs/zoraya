@@ -64,6 +64,25 @@ extern "C" fn socket(domain: i32, ty: i32, protocol: i32) -> i32 {
     int(state(|p| p.socket(domain, ty, protocol)))
 }
 
+/// `socketpair` (ADR-0412 item 1): a connected pair of Unix sockets.
+#[unsafe(no_mangle)]
+extern "C" fn socketpair(domain: i32, ty: i32, protocol: i32, sv: *mut i32) -> i32 {
+    if sv.is_null() {
+        return int(Err(EFAULT));
+    }
+    match state(|p| p.socketpair(domain, ty, protocol)) {
+        Ok((a, b)) => {
+            // SAFETY: C's contract: `sv` is an `int[2]`.
+            unsafe {
+                sv.write_unaligned(a);
+                sv.add(1).write_unaligned(b);
+            }
+            0
+        }
+        Err(e) => int(Err(e)),
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn connect(fd: i32, addr: *const u8, len: u32) -> i32 {
     testcancel();
@@ -190,8 +209,38 @@ extern "C" fn getsockopt(fd: i32, level: i32, name: i32, value: *mut u8, len: *m
     unit(r)
 }
 
+/// Writes an unnamed `struct sockaddr_un` (its family alone: two bytes) to a
+/// program's `addr` / `addrlen` pair, with `getsockname`'s truncation rule.
+///
+/// # Safety
+///
+/// As [`put_sockaddr`].
+unsafe fn put_unix_addr(addr: *mut u8, addrlen: *mut u32) -> Result<(), i32> {
+    if addr.is_null() || addrlen.is_null() {
+        return if addr.is_null() && addrlen.is_null() {
+            Ok(())
+        } else {
+            Err(EFAULT)
+        };
+    }
+    let bytes = (crate::unix::AF_UNIX as u16).to_ne_bytes();
+    // SAFETY: the caller's contract.
+    unsafe {
+        let room = addrlen.read_unaligned() as usize;
+        ptr::copy_nonoverlapping(bytes.as_ptr(), addr, room.min(bytes.len()));
+        addrlen.write_unaligned(bytes.len() as u32);
+    }
+    Ok(())
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn getpeername(fd: i32, addr: *mut u8, len: *mut u32) -> i32 {
+    if with(|p| p.is_unix(fd)).unwrap_or(false) {
+        // SAFETY: C's contract for `addr` and `len`.
+        return unit(
+            state(|p| p.unix_name(fd, true)).and_then(|()| unsafe { put_unix_addr(addr, len) }),
+        );
+    }
     // SAFETY: C's contract for `addr` and `len`.
     let r = state(|p| p.getpeername(fd))
         .and_then(|(a, port)| unsafe { put_sockaddr(addr, len, a, port) });
@@ -200,6 +249,12 @@ extern "C" fn getpeername(fd: i32, addr: *mut u8, len: *mut u32) -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn getsockname(fd: i32, addr: *mut u8, len: *mut u32) -> i32 {
+    if with(|p| p.is_unix(fd)).unwrap_or(false) {
+        // SAFETY: C's contract for `addr` and `len`.
+        return unit(
+            state(|p| p.unix_name(fd, false)).and_then(|()| unsafe { put_unix_addr(addr, len) }),
+        );
+    }
     // SAFETY: C's contract for `addr` and `len`.
     let r = state(|p| p.getsockname(fd))
         .and_then(|(a, port)| unsafe { put_sockaddr(addr, len, a, port) });
@@ -497,5 +552,184 @@ extern "C" fn getrandom(buf: *mut u8, n: usize, flags: u32) -> isize {
         poll();
         crate::random::in_spans(u, |part| restartable(|p| p.getrandom(part, flags)))
     });
+    size(r)
+}
+
+// ------------------------------------------------------------ sendmsg, recvmsg
+
+// `struct msghdr` and `struct cmsghdr` as musl lays them out on AArch64
+// (LP64, little endian): the padding after `msg_iovlen`, `msg_controllen` and
+// `cmsg_len` is part of the structures.
+const MSG_NAME: usize = 0;
+const MSG_NAMELEN: usize = 8;
+const MSG_IOV: usize = 16;
+const MSG_IOVLEN: usize = 24;
+const MSG_CONTROL: usize = 32;
+const MSG_CONTROLLEN: usize = 40;
+const MSG_FLAGS: usize = 48;
+const CMSG_HEADER: usize = 16;
+
+/// `CMSG_ALIGN`.
+const fn cmsg_align(n: usize) -> usize {
+    (n + 7) & !7
+}
+
+/// The descriptors of the `SCM_RIGHTS` control messages in `control`. A
+/// message of another level or type is refused (`EINVAL`): `SCM_CREDENTIALS`
+/// and the rest are not offered (ADR-0412 item 4).
+///
+/// # Safety
+///
+/// `control` is NULL or readable for `len` bytes.
+unsafe fn scm_rights(control: *const u8, len: usize) -> Result<Vec<i32>, i32> {
+    let mut out = Vec::new();
+    if len == 0 {
+        return Ok(out);
+    }
+    if control.is_null() {
+        return Err(EFAULT);
+    }
+    let mut at = 0;
+    while at + CMSG_HEADER <= len {
+        // SAFETY: `at + CMSG_HEADER <= len`, inside what the caller gave.
+        let (clen, level, kind) = unsafe {
+            let h = control.add(at);
+            (
+                h.cast::<u32>().read_unaligned() as usize,
+                h.add(8).cast::<i32>().read_unaligned(),
+                h.add(12).cast::<i32>().read_unaligned(),
+            )
+        };
+        if clen < CMSG_HEADER || at + clen > len {
+            return Err(EINVAL);
+        }
+        if level != sock::SOL_SOCKET || kind != crate::unix::SCM_RIGHTS {
+            return Err(EINVAL);
+        }
+        let data = clen - CMSG_HEADER;
+        if !data.is_multiple_of(4) {
+            return Err(EINVAL);
+        }
+        for i in 0..data / 4 {
+            // SAFETY: inside this message, checked above.
+            out.push(unsafe {
+                control
+                    .add(at + CMSG_HEADER + 4 * i)
+                    .cast::<i32>()
+                    .read_unaligned()
+            });
+            if out.len() > crate::unix::MAX_HANDLES {
+                return Err(crate::unix::ETOOMANYREFS);
+            }
+        }
+        at += cmsg_align(clen);
+    }
+    Ok(out)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn sendmsg(fd: i32, msg: *const u8, flags: i32) -> isize {
+    if msg.is_null() {
+        return size(Err(EFAULT));
+    }
+    let r = (|| {
+        crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
+        // SAFETY: C's contract: `msg` is a `struct msghdr`, whose iovecs and
+        // control buffer are the program's.
+        let (iov, rights) = unsafe {
+            let iov = msg
+                .add(MSG_IOV)
+                .cast::<*const [usize; 2]>()
+                .read_unaligned();
+            let count = msg.add(MSG_IOVLEN).cast::<i32>().read_unaligned();
+            let control = msg.add(MSG_CONTROL).cast::<*const u8>().read_unaligned();
+            let controllen = msg.add(MSG_CONTROLLEN).cast::<u32>().read_unaligned();
+            (
+                vectors(iov, i64::from(count))?,
+                scm_rights(control, controllen as usize)?,
+            )
+        };
+        testcancel();
+        poll();
+        restartable(|p| p.sendmsg(fd, &iov, &rights, flags))
+    })();
+    if flags & sock::MSG_NOSIGNAL != 0 {
+        size(r)
+    } else {
+        size(after_write(r))
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn recvmsg(fd: i32, msg: *mut u8, flags: i32) -> isize {
+    if msg.is_null() {
+        return size(Err(EFAULT));
+    }
+    let r = (|| {
+        crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
+        // SAFETY: C's contract, as `sendmsg`'s.
+        let (iov, control, controllen) = unsafe {
+            let iov = msg
+                .add(MSG_IOV)
+                .cast::<*const [usize; 2]>()
+                .read_unaligned();
+            let count = msg.add(MSG_IOVLEN).cast::<i32>().read_unaligned();
+            (
+                vectors(iov, i64::from(count))?,
+                msg.add(MSG_CONTROL).cast::<*mut u8>().read_unaligned(),
+                msg.add(MSG_CONTROLLEN).cast::<u32>().read_unaligned() as usize,
+            )
+        };
+        if controllen > 0 && control.is_null() {
+            return Err(EFAULT);
+        }
+        // As many descriptors as the control buffer holds beside its header.
+        let max_fds = controllen.saturating_sub(CMSG_HEADER) / 4;
+        testcancel();
+        poll();
+        let got = restartable(|p| p.recvmsg(fd, &iov, max_fds, flags))?;
+        let mut used = 0;
+        if !got.fds.is_empty() {
+            let clen = CMSG_HEADER + 4 * got.fds.len();
+            // SAFETY: `max_fds` descriptors fit in `controllen` after the
+            // header, and `got.fds.len() <= max_fds`.
+            unsafe {
+                ptr::write_bytes(control, 0, clen);
+                control.cast::<u32>().write_unaligned(clen as u32);
+                control
+                    .add(8)
+                    .cast::<i32>()
+                    .write_unaligned(sock::SOL_SOCKET);
+                control
+                    .add(12)
+                    .cast::<i32>()
+                    .write_unaligned(crate::unix::SCM_RIGHTS);
+                for (i, fd) in got.fds.iter().enumerate() {
+                    control
+                        .add(CMSG_HEADER + 4 * i)
+                        .cast::<i32>()
+                        .write_unaligned(*fd);
+                }
+            }
+            used = cmsg_align(clen).min(controllen);
+        }
+        // SAFETY: the fields of the caller's `struct msghdr`.
+        unsafe {
+            msg.add(MSG_CONTROLLEN)
+                .cast::<u32>()
+                .write_unaligned(used as u32);
+            msg.add(MSG_FLAGS).cast::<i32>().write_unaligned(got.flags);
+            // A connected Unix socket has no peer address to give.
+            if !msg
+                .add(MSG_NAME)
+                .cast::<*mut u8>()
+                .read_unaligned()
+                .is_null()
+            {
+                msg.add(MSG_NAMELEN).cast::<u32>().write_unaligned(0);
+            }
+        }
+        Ok(got.bytes)
+    })();
     size(r)
 }
