@@ -1123,6 +1123,28 @@ mod bootstrap {
         assert!(with(&[root]));
     }
 
+    /// ADR-0433: a record may have no cwd; one with no entry must not have one.
+    #[test]
+    fn a_record_may_have_no_cwd() {
+        use crate::posix::NO_ENTRY;
+        let mut b = [0; 512];
+        let root = Entry {
+            prefix: "/",
+            kind: EntryKind::Directory,
+            handle: 0,
+        };
+        // No entries: only `NO_ENTRY` and an empty cwd.
+        let n = encode(&FACTS, 0, "/bin/x", NO_ENTRY, "", &[], &[], 4, &mut b).unwrap();
+        let r = Bootstrap::decode(&b[..n], 4).unwrap();
+        assert_eq!((r.entry_count(), r.cwd_entry, r.cwd), (0, NO_ENTRY, ""));
+        assert!(encode(&FACTS, 0, "/bin/x", 0, "", &[], &[], 4, &mut b).is_none());
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "a", &[], &[], 4, &mut b).is_none());
+        // Entries: `NO_ENTRY` is no cwd, with an empty path.
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "", &[], &[root], 4, &mut b).is_some());
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "a", &[], &[root], 4, &mut b).is_none());
+        assert!(encode(&FACTS, 0, "/bin/x", 0, "", &[], &[root], 4, &mut b).is_some());
+    }
+
     #[test]
     fn a_record_round_trips() {
         let mut b = [0; 1024];
@@ -1720,14 +1742,20 @@ fn a_base_says_whether_the_real_time_clock_gave_the_date() {
 // not know makes the message unknown.
 #[test]
 fn zpbx_flags_count_the_handles_after_self() {
-    use crate::posix::{EXT_NET, EXT_RANDOM, EXT_WINDOW, ext_handles};
+    use crate::posix::{EXT_FDS, EXT_NET, EXT_RANDOM, EXT_WINDOW, ext_handles};
     assert_eq!(ext_handles(0), Some(0));
     assert_eq!(ext_handles(EXT_NET), Some(1));
     assert_eq!(ext_handles(EXT_RANDOM), Some(1));
     assert_eq!(ext_handles(EXT_NET | EXT_RANDOM), Some(2));
     assert_eq!(ext_handles(EXT_WINDOW), Some(1));
     assert_eq!(ext_handles(EXT_NET | EXT_RANDOM | EXT_WINDOW), Some(3));
-    for flags in 8..=255u8 {
+    // The passed-descriptors message (ADR-0433) brings no handle to this one.
+    assert_eq!(ext_handles(EXT_FDS), Some(0));
+    assert_eq!(
+        ext_handles(EXT_FDS | EXT_NET | EXT_RANDOM | EXT_WINDOW),
+        Some(3)
+    );
+    for flags in 16..=255u8 {
         assert_eq!(ext_handles(flags), None, "{flags:#x}");
     }
 }

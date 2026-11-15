@@ -10,8 +10,9 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE, Narrow, NarrowAccount,
-    Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source, status as code,
+    Address, Connect, Connecting, Duplicate, Duplicated, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE,
+    Narrow, NarrowAccount, Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source,
+    status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
@@ -487,6 +488,26 @@ impl Service {
                             }
                         }
                     }
+                }
+            }
+            8 => {
+                // Another connection of this one's own rights and scope
+                // (ADR-0434): never wider, so no right is asked for.
+                let Ok((_, _)) = decode::<Duplicate>(message, handles) else {
+                    return Action::Close;
+                };
+                let answer = |c| Action::Reply(reply(&Duplicated { status: Below(c) }, t));
+                match self.add(connection.clone()) {
+                    Some(new) => Action::Narrowed {
+                        id: new,
+                        reply: reply(
+                            &Duplicated {
+                                status: Below(code::OK),
+                            },
+                            t,
+                        ),
+                    },
+                    None => answer(code::BUSY),
                 }
             }
             _ => Action::Reply(reply(

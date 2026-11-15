@@ -6,7 +6,8 @@ use crate::connection::{ConnectTarget, Request, Verdict};
 use crate::service::{Action, MAX_CONNECTIONS, Service};
 use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode as encode_scope, rights};
 use zoraya_proto_net::{
-    GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, render, source, status,
+    Duplicate, Duplicated, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, render,
+    source, status,
 };
 use zoraya_protocol::{Below, Data, ErrorReply, decode, encode};
 
@@ -209,6 +210,62 @@ fn a_connection_that_goes_while_its_run_goes_loses_only_the_reply() {
     assert_eq!(
         service.handle(b, &ping_message(SERVER_IP, 1), 0, &mut net.client, net.now),
         Action::Deferred
+    );
+}
+
+/// ADR-0434: `Duplicate` makes a connection of the caller's own rights and
+/// scope, also for one that cannot `narrow`, never a wider one, and it counts
+/// against the bound of connections.
+#[test]
+fn duplicate_gives_the_same_rights_and_scope_and_nothing_more() {
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let root = service.add(Connection::root()).unwrap();
+    // A connection that can reach and cannot narrow: a program's.
+    let program = {
+        let Action::Narrowed { id, .. } = service.handle(
+            root,
+            &bytes(
+                &Narrow {
+                    rights: rights::STATUS | rights::REACH,
+                    scope: Data(Scope::EMPTY.as_bytes()),
+                },
+                3,
+            ),
+            1,
+            &mut net.client,
+            0,
+        ) else {
+            panic!("narrowed");
+        };
+        id
+    };
+    let before = service.connection(program).unwrap().clone();
+    let Action::Narrowed { id, reply } =
+        service.handle(program, &bytes(&Duplicate {}, 4), 1, &mut net.client, 0)
+    else {
+        panic!("duplicated");
+    };
+    assert_eq!(
+        decode::<Duplicated>(&reply, 0).unwrap().1.status.0,
+        status::OK
+    );
+    assert_eq!(service.connection(id).unwrap(), &before);
+    assert_ne!(id, program);
+    // A message without its handle ends the connection, as `Narrow` does.
+    assert_eq!(
+        service.handle(program, &bytes(&Duplicate {}, 5), 0, &mut net.client, 0),
+        Action::Close
+    );
+    // At the bound the answer is `BUSY` and nothing is attached.
+    while service.add(before.clone()).is_some() {}
+    let Action::Reply(r) = service.handle(program, &bytes(&Duplicate {}, 6), 1, &mut net.client, 0)
+    else {
+        panic!("busy");
+    };
+    assert_eq!(
+        decode::<Duplicated>(&r, 0).unwrap().1.status.0,
+        status::BUSY
     );
 }
 
