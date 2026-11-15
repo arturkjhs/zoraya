@@ -65,6 +65,11 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 - **DB 1 for nvi (ADR-0390):** 1.85 under the 4-clause UC licence; a maintained copy is an open question.
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
+- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the dying thread runs its
+  teardown and is charged and parked like the room's other threads, so a killed room at a low ceiling takes as many
+  periods to die as its teardown needs (measured: 55 parks after the kill, nine periods; up to 12 periods). Options:
+  charge but do not park an ending process's thread, or move the teardown to the reaper. A proposed ADR needs a number:
+  none of 0380..0399 outside 0390..0395 is free on the remote branches. ADR-0285's open questions have the note.
 
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)

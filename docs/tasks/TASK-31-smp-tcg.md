@@ -26,17 +26,19 @@ show, what a local reproduction showed, and what is fixed.
   mille. **Cause (section 4.1): not the kernel.** In 6 of 40 rounds of t_cpu alone, the kernel had charged the spinner
   its full time (1 243 to 1 268 ms of 2 s), with idle time and interrupts as usual, but it counted at 0.25 to 0.62 of
   its usual rate. Under TCG each process executes at its own speed, and the test took counts for CPU time. **Fixed in the
-  test (4.2):** the upper check compares the room's counts per charged ms with the count loop's best rate; after the
-  fix, 0 of 40 rounds failed. Not a kernel change. Then t_cpu panicked and left its 41 spinners running. That made
+  test (4.2, revised after the review):** a room of clock spinners measures its own run time, at most 5/4 of its charge
+  and at most `upper`. The halved-charges mutant fails it under TCG and HVF. 0 of 40 rounds failed. Not a kernel
+  change. Then t_cpu panicked and left its 41 spinners running. That made
   `t_rooms` 35 times slower, and `t_snapshot` (frames moving under its frame-exhaustion check) and
   `a_spawn_with_a_big_space_is_bounded` (1 090 frames free instead of about 17 400) fail.
 - Under host load (10 CPU hogs, `-smp 1`), t_thread's `creating_calls_leave_no_handles` failed once. It assumes the
   sibling finishes its unmap within the one switch of the paused call (section 4b). **Fixed in the test:** a call that
   succeeded is a miss and the round is repeated. Wall-clock bounds of two other tests failed under the heaviest load;
   recorded, not changed.
-- **Open (4.3):** a killed room at 10% with 20 parked spinners took up to 1 246 ms (12 periods) to die, in 2 of 40
-  rounds. ADR-0285 item 7 says at most one period. The likely cause is that the teardown runs on the dying thread and
-  is charged to the capped room. Changing that is a decision for a proposed ADR; nothing is changed.
+- **Proven, open for the architect (4.3):** a killed room's dying threads are parked, since the teardown runs on them
+  and is charged to the room. It dies in as many periods as its parks need: 55 parks after the kill, nine periods; up to
+  1 246 ms. That breaks ADR-0285 item 7. I added the note to ADR-0285's open questions and a row to the architect queue.
+  No proposed ADR: no number in the allowed range is free. The kernel is unchanged.
 - **CI and runner (section 6):** a red QEMU step now uploads `target/test-logs/`, and the runner prints the five
   slowest tests and, at a timeout, how long the running test had run. Time limits are not changed.
 - **Fixed on this branch: the cascade.** After a failed test, the harness now ends every process left in the job tree and
@@ -186,48 +188,66 @@ free 1.08; free 0.25 with room 1.07). It never rose above the best, 1.08.
 the room's share of the spinners' counts at most twice the ceiling, assumed that every process counts at the same rate
 per ns of CPU. TCG does not keep that.
 
-### 4.2 The fix (`user/src/bin/t_cpu.rs`)
+### 4.2 The fix (`user/src/bin/t_cpu.rs`), as revised after the review
 
-`check_share` keeps an independent check (review W4), in a form a slowdown cannot break. A kernel that let a room run
-longer than it charged shows as the room counting more per charged millisecond than the count loop can. A slow vCPU only
-lowers rates, so it cannot fail this. The upper check is now: the room's counts per millisecond of the kernel's charge are
-at most 5/4 of the best rate seen. The best rate is the free spinner's rate in the same window, or `calibrate_counts`'s:
-the count loop alone, uncapped, three times 200 ms, the best. The share of all counts stays as the lower check, a quarter
-of the ceiling (not starved). The kernel's own checks are unchanged (`used <= upper(..)`, `used * 5 >= budget * 4`).
+The first fix (ee3b1a8c) replaced the share's upper bound with a rate check: the room's counts per millisecond of the
+kernel's charge, at most 5/4 of the best rate seen (the free spinner's in the window or `calibrate_counts`'s). The
+review (`docs/tasks/TASK-31-review-smp-tcg.md`, findings 2 to 4) showed what that check is. It divides counts by
+charges, so a uniform under-charge moves its reference with it: with every charge halved, the room took 533 and 534 per
+mille under TCG and the check passed. A slow room hides an under-charge (by up to 3.4 times at the slowest rate seen),
+and a slow reference next to a fast room can fail a correct kernel. My earlier claim that "a slow vCPU only lowers a
+rate, so it cannot fail this" was wrong for the reference. The rate check stays, as what it is: a check of the charges
+against each other. It caught the review's room-only under-charge (M3) under TCG.
 
-Why this is not weaker. Under TCG the old upper check did not measure CPU: it failed 6 of 40 rounds of a correct kernel,
-and a bound that fails on a correct kernel shows nothing when it fails on a wrong one. The new check bounds the room's
-true CPU by its counts and the loop's best rate: true CPU ≥ counts / best rate, and the check requires that to be at
-most 5/4 of the kernel's charge, which `upper(budget)` bounds. So under TCG a room that ran more than it was charged
-fails, whatever its neighbour did. Under HVF (factor 1) a lone spinner counts about 2.3 times as fast per CPU-ns as a
-room's spinners (6.42M against 2.79M a ms), so there the rate check is loose. The old share bound (at most twice the
-ceiling) therefore stays under HVF, where it never failed, as `upper` and `masked_limit` already differ by factor.
+The independent upper bound is now a case of its own, `a_room_at_a_quarter_by_its_own_clock`. It runs 8 spinners of a
+new role, `clock`, in a room at 25%, next to an uncapped one, for 2 s. Each spinner adds the clock's steps shorter than
+the floor slice (50 us) to its own word. A longer step is time off the CPU (another thread's turn is at least the floor
+slice) or a stall, and is dropped. So the measure is at most the time the spinner ran, which a correct kernel charges in
+full (ADR-0285 item 4). The case asserts own ≤ 5/4 of the charge, and own ≤ `upper(budget, periods)`. No charge enters
+the measure, and neither TCG's speed per process nor a stall can raise it. The count loop keeps no system call. With a
+clock read in it, TCG ran some processes up to 45 times slower (4 counts a ms against 176), and the starved check
+failed a correct kernel in 2 of 12 rounds.
 
-A hand mutant tests it: `schedule` charging half of every run (`ran / 2` and the period part `/ 2`), under HVF. In the
-first two cases neither the old share bound (374 and 381 per mille, limit 500) nor the new rate check (2.79M against
-6.42M a ms) caught it. `rooms_together_stay_under_their_parent`'s kernel-counter lower bound did ("764864909 ns:
-starved"). So the count check was never the detector of a uniform undercharge; it watches the room against its
-neighbour.
+Also: the share's upper bound is gone everywhere, instead of being kept by host speed (finding 3: a loaded HVF host
+has factor 2). `calibrate_counts` reads the charge before the counter at the start and after it at the end, so its
+counts lie inside its charge (finding 4).
 
-**Runs** (t_cpu 40 times in one `-smp 4` TCG boot, the temporary loop; prints removed afterwards):
+**Runs.** t_cpu 40 times in one `-smp 4` TCG boot, with the temporary loop, removed afterwards:
 
-| | rounds | share/rate failures | other failures |
-|---|---|---|---|
-| before (old check) | 40 | 6 (shares 506 to 717) | none |
-| after (rate check) | 40 | 0 (80 checks; room rate at most 0.996 of the reference) | 2: `a_killed_room_with_parked_threads_dies` (section 4.3) |
+| | rounds | failures |
+|---|---|---|
+| before (the old share check) | 40 | 6 (shares 506 to 717) |
+| the rate check (ee3b1a8c) | 40 | 0 of 80 share and rate checks; 2 `a_killed_room_with_parked_threads_dies` (4.3) |
+| final (f6aa4e61) | 40 | 0; own clock 0.935 to 0.989 of the charge |
 
-### 4.3 Open: a killed parked room took up to 12 periods to die
+**The halved-charges mutant** (`schedule` charging `ran / 2` and the period part `/ 2`, in a scratch worktree, with the
+clock case run first; never on the branch):
+- TCG `-smp 4`: "the room ran 1044249024 ns by its own clock, it was charged 531077448 ns".
+- HVF: "the room ran 1002431872 ns by its own clock, it was charged 502977725 ns".
+
+In the usual order, HVF at factor 1 stops it earlier, at `parked > 0`.
+
+### 4.3 Proven: a killed room's dying threads are parked, so it dies in as many periods as its teardown needs
 
 `a_killed_room_with_parked_threads_dies` asserts that a killed room at 10% with 20 parked spinners has no process left
-within (100 + 50) ms × factor. Over the 74 rounds of both loops that reached it, it took 18 to 1 246 ms, median 147
-ms. It failed twice in the second loop (950 and 1 246 ms; the first loop's slowest pass took 937 ms, at a larger
-factor). ADR-0285 item 7 says a killed job's parked thread ends at the next boundary, at most one period. But the dying
-thread runs the process's teardown itself (`process::leave_current` → `teardown`), and `schedule` charges it to the
-room, so the exits of 20 processes share the room's 10 ms a period. If they need more than one period's budget, the room
-takes several periods to die. 8 to 12 periods is what about 5 ms of teardown each under a slow TCG host would give.
-This is a hypothesis: no count of the room's parks after the kill was taken. If it holds, letting the threads of a killed
-job run unparked is a decision: it breaks `RunQueue::pick`'s rule that no thread of a spent job ever runs, so it needs a
-proposed ADR (a free number in 0380..0389 or 0396..0399). Not done here; the bound is not changed.
+within (100 + 50) ms × factor. Over 74 rounds it took 18 to 1 246 ms, median 147 ms, and it failed twice (950 and
+1 246 ms). The dying thread runs its process's teardown itself (`process::leave_current` → `teardown`), and `schedule`
+charges it to the room and `RunQueue::pick` parks it like any other thread of a spent job. A temporary count of the
+room's parks after the kill (16 rounds) proves it:
+
+| parks after the kill | periods to die | rounds |
+|---|---|---|
+| 0 | 1 | 9 |
+| 1 to 9 | 2 | 5 |
+| 12 | 4 | 1 |
+| 55 | 9 | 1 |
+
+So ADR-0285 item 7 ("a killed job's parked thread ends at the next boundary, at most one period") does not hold when
+the teardown needs more than one period's budget. The ADR's open questions now have the note (ADR-0001 rule 6), and
+`docs/architect-queue.md` section D has the row. A fix is a decision: a thread whose process is ending is charged but not
+parked, or the teardown moves to the reaper. **No proposed ADR is written:** every number in 0380..0399 outside
+0390..0395 is in use on some remote branch (`git ls-tree` of `origin/*`), so the number is the architect's to give. The
+scheduler and the test's bound are unchanged.
 
 ## 4b. Under host load: t_thread's creating calls assume the sibling finishes in one switch
 
@@ -237,12 +257,14 @@ call succeeded, because the sibling had **not** unmapped the buffer in time. (Th
 case relies on `PAUSE_IN_PREPARE` and `FORCE_SWITCH`. The paused call switches away once (`steps::pause`), and the sibling
 must leave its `thread_yield` loop and finish `memory_unmap` before the creator runs again. With `FORCE_SWITCH` on, a
 slice is 1 ms of guest time (`FORCED_SLICE_NS`), and a host that stalls the vCPU can end the sibling's slice first. This
-is a wall-clock assumption of the test, not a kernel fault. It was seen once. **Fixed in the test** (`user/src/bin/t_thread.rs`): a round whose call succeeded is a miss. Its two
-new handles, the table's entries that were not there before the call (`handles_in_use`, the test kernel's
-`HANDLE_AT`), are closed, and the round is repeated until 8 rounds have failed as required, with at most 56 misses. Every
-counted round still reaches the undo and checks the table and the charge, so the mutant that keeps the handles still
-dies. The charge is checked after a miss too. The line now reads `8 of N failed (M missed)`, and the message of the
-other case names it: "the sibling never unmapped in time".
+is a wall-clock assumption of the test, not a kernel fault. It was seen once. **Fixed in the test** (`user/src/bin/t_thread.rs`). `ENDS_GO` is read as soon as the call returns.
+A success after the sibling's unmap is the defect the case exists for, and fails it. A success before the unmap is a
+miss: its two new handles (the entries that were not in the table before the call, found with the test kernel's
+`HANDLE_AT`) are closed, and the round is repeated until 8 rounds have failed, with at most 56 misses. The first round of
+each call is a miss on purpose (no pause, no switch, the sibling let go after the call), so that the miss path runs in
+every run. Every counted round still reaches the undo and checks the table and the charge. One false failure remains:
+the sibling's slice could end exactly at the call's return to EL0, letting it finish the unmap before the read. Green
+runs print `8 of 8 failed (0 missed, 1 forced miss)`.
 
 The heavy efficiency-core run (section 3) also failed two other wall-clock bounds:
 `timer_interrupts_agree_with_the_clock` (13 ticks in 200 ms) and t_thread's `the process took 440 ms to end` (limit
@@ -250,27 +272,39 @@ The heavy efficiency-core run (section 3) also failed two other wall-clock bound
 
 ## 5. Fixed: a failed test no longer leaves its processes running
 
-`kernel/src/testing.rs`: `resume` (the harness's way back after a failed test) calls `end_what_a_failed_test_left`. If
-the root job's tree has a live process, it ends all of them (`Job::end_every_process`, test kernel only: as `kill`, but
-it leaves the jobs open), yields until none is live (at most `PATIENCE_NS`, then it says so and goes on), and drains the
-reaper (`frames::settled_stats`).
+`kernel/src/testing.rs`, as revised after the review (finding 1, and note 7):
+- `run` records the live processes before each test.
+- `on_panic` counts a process whose thread it abandons as lost for good (`sched::adopt_boot_thread` says so; that is
+  how `fault_report_for_stack_overflow_from_el0` leaves `koverflow`).
+- After a failure, `resume` ends the tree's processes (`Job::end_every_process`, test kernel only), walking it again
+  every 100 ms. It waits until the live count is back at the count before the test plus the lost ones, and drains the
+  reaper.
+- A wait that runs out (10 s) panics outside any test, which fails the run.
 
-Tests: `harness_fails_with_a_process_left` is a new expected failure (in `EXPECT`, and `EXPECTED_FAILURES` is 10). It
-spawns `busy` suspended, so the process would stay live for ever, and panics. `nothing_is_live_after_a_failed_test`
-runs right after it and asserts that the root job's tree is empty. Without the fix it fails on every host, because a
-suspended process never ends by itself.
+The first version waited for an empty root, which never came after `koverflow`. It waited its full 10 s after each later
+failure, expected ones included: 20 s in every green run.
 
-Run on this branch: `make check` exit 0. `make test-qemu-auto-default`: 120 passed, 10 expected failures. The cleanup
-also ran after two older expected failures whose processes were still live. `make test-qemu-tcg-smp4-gicv2`: 120 passed,
-10 expected failures. With the call in `resume` commented out, `make test-qemu-auto-default` failed in
-`nothing_is_live_after_a_failed_test` ("a failed test's process outlived it"), and `harness_resumes_after_panic` counted
-11 failures. `make test-changed` was not run: the change is under `kernel/`, which maps to every QEMU step, and the
-candidate run covers them.
+| green `make test-qemu-auto-default` | wall time | cleanup lines |
+|---|---|---|
+| before (c01bc84c) | 83 s | "processes still live" twice |
+| after (9dbcd2ed) | 62 s | "ended what the failed test left in 0 ms" once |
+
+With the lost count removed (scratch), the run fails: `ZORAYA-PANIC ... 1 processes the failed test left are still live
+after 10 s`.
+
+Tests: `harness_fails_with_a_process_left` is an expected failure (`EXPECTED_FAILURES` is 10). It spawns `busy`
+suspended and panics. `nothing_is_live_after_a_failed_test` asserts that the live count is the one before that spawn.
+With the call in `resume` commented out, it fails.
+
+Final runs on this branch: `make check` exit 0. `make test-qemu-auto-default` passed, 120 and 10 expected failures, in
+65 s. `make test-qemu-tcg-smp4-gicv2` passed, 120 and 10, in 167 s. `make test-changed` was not run: the change is
+under `kernel/`, which maps to every QEMU step, and the candidate run covers them.
 
 ## 6. CI and the runner
 
 - **Done:** `.github/workflows/test.yml`, job `tests`: after "The logs of what failed", a step "Keep the test logs of a
-  failed step" (`if: failure()`) uploads `target/test-logs/` as `test-logs-<job index>-attempt-<n>` and keeps it 7 days.
+  failed step" (`if: failure() || cancelled()`, so a job ended by its own timeout uploads too) uploads `target/test-logs/`
+  as `test-logs-<job index>-attempt-<n>`, with `step.txt` naming the command, and keeps it 7 days.
   The runner caps each log at 64 MiB. The name uses the job's index because a step's command has characters an artifact
   name may not have. `make check-workflow-syntax` and `make check-ci-jobs` pass.
 - **Done:** `tools/test-runner/src/timing.rs`: the runner times each test by its `ZORAYA-TEST run` and `ok`/`fail` lines.

@@ -547,14 +547,16 @@ harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, 
   `t_quota` sample taken while the reaper was still working (3d48c87f).
 - **Found and fixed in the test:** `t_cpu`'s share check failed in 2 of 20 local `tcg-smp4-gicv2` runs, and in 6 of 40
   rounds of t_cpu alone. The kernel had charged the uncapped spinner its full time, but under TCG it counted at a
-  quarter to two thirds of its usual rate: each process executes at its own speed. The upper check now compares the
-  room's counts per charged ms with the count loop's best rate, and keeps the share bound under HVF. After: 0 of 40.
-- **Fixed in the test:** t_thread's `creating_calls_leave_no_handles` assumed the sibling unmaps within one switch, and
-  failed once under host load. A successful call is now a miss, and the round is repeated.
-- **Open:** `a_killed_room_with_parked_threads_dies` took up to 1 246 ms (12 periods; 2 of 40 rounds over its bound).
-  ADR-0285 item 7 says at most one period. The likely cause is that the teardown runs on the dying thread and is
-  charged to the capped room. Exempting a killed job's threads from parking needs a proposed ADR.
-- **Done:** a red QEMU step uploads `target/test-logs/`; the runner prints the slowest tests and the running test's time
-  at a timeout.
+  quarter to two thirds of its usual rate: each process executes at its own speed. Now a room of clock spinners
+  measures its own run time, which must be at most 5/4 of its charge and at most `upper`. The halved-charges mutant
+  fails it under TCG and HVF. After: 0 of 40.
+- **Fixed in the test:** t_thread's `creating_calls_leave_no_handles` assumed the sibling unmaps within one switch.
+  A success before the unmap is now a miss and is repeated; a success after it fails; one forced miss a run.
+- **Open, cause proven:** a killed room's dying threads are parked (the teardown runs on them, charged to the room), so it
+  dies in as many periods as its parks need (55 parks, nine periods; up to 12). That breaks ADR-0285 item 7. The ADR has
+  the open-question note, and the architect queue (D) a row. A proposed ADR needs a number from the architect.
+- **Done:** a red or cancelled QEMU step uploads `target/test-logs/`; the runner prints the slowest tests and the
+  running test's time at a timeout.
 - **Fixed on `work/smp-tcg`:** a failed test left its program's processes running (t_cpu's 41 spinners made `t_rooms` 35
-  times slower and failed `t_snapshot` and the big-space spawn). The harness now ends them after a failure.
+  times slower and failed `t_snapshot` and the big-space spawn). The harness now ends them after a failure, back to the
+  live count before the test plus the processes the panic lost for good, and fails the run if it cannot within 10 s.
