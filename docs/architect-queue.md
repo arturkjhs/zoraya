@@ -8,17 +8,13 @@ adds, remove what the architect has decided (the decision itself is recorded in 
 **Both dispatchers** (TASK-31 on the Mac mini, TASK-34 on the MacBook Air) keep this file. TASK-34's dispatcher: add your
 items here too, under the same headings, with the part's name in front.
 
-Last updated: 2026-11-15 (after stage 10a, 10b, 10e, `poll`, `py-hook`, `test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass
-on `work/10c`).
+Last updated: 2026-11-15 (the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
+`test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass on `work/10c`).
 
 ## A. Proposed ADRs, with the agent's one-line recommendation
 
 | ADR | What | Recommendation | From |
 |---|---|---|---|
-| ADR-0280 | The frame slot layout and the driver's side of the frame protocol (N1) | Accept: a slot is a bare Ethernet frame; the virtio header lives in the driver's queue memory | stage 8 (TASK-26) |
-| ADR-0281 | What N2 decided where the network ADRs are silent (smoltcp 0.14.0 from crates.io, the scope's encoding, a diagnostic echo request, first supervision) | Accept; vendoring is the alternative to the registry crate | stage 8 |
-| ADR-0285 | What Q4 decided where ADR-0264 is silent (one parked list, a slice floor of 50 us, `cpu` 1 to 1000, a 120-byte usage record) | Accept | stage 8 |
-| ADR-0286 | What N3 decided where the network ADRs are silent (`connect` with the client's streams, the copy loop, the resolver, a `url` operand that designates, a test server) | Accept | stage 8 |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 | ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
 | ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
@@ -57,21 +53,19 @@ on `work/10c`).
 1. **10a, xterm comparison** (ADR-0332 item 10): in an 80x24 xterm run `TERM=xterm-256color cat crates/zoraya-term/recordings/vi-edit.rec`
    and compare with the same recording in a Zoraya terminal (screenshots: `docs/tasks/TASK-31-part-10a-shots/`).
 2. **10a, `vttest`:** needs a pin in `ports/sources.lock` (not pinned, so not recorded).
-3. **Not done by anyone yet** (from the stage 9 handoff): `netsurf https://example.org/` from a desktop terminal;
    `python3 -c 'import sqlite3, ssl, asyncio'` and `ping google.com` in the guest.
 4. **Later parts:** 10f's grant line (first terminal, a room's terminal, a shell that entered a room), 10g's `ssh -l NAME HOST`
    to a real host, 10h's `git clone` and `git push`: commands will be listed with the part.
 
 ## D. Open questions
 
-- **CI and the confined network steps:** `test-net-lookup`, `test-net-dns` and `test-hand-run`'s network leg run only locally (CI cannot confine
-  them: no `unshare -n` in the job container, even with extra capabilities; `--verify` may read the host's `/sys/class/net`, where
-  `/proc/net/dev` would follow the process). A CI runner with unprivileged user namespaces would let them run (`work/test-fixes-3`).
 
-- **INV-0324-2's wording** (a public-only name rule is within a web rule; proposed text in the TASK-27 report, "9g-url, for the architect").
-- **INV-0326-1's wording** (its check covers only the grant that comes with `window`).
-- **ADR-0366** and its index row say 51 added names; the list holds 52.
-- **Native `fetch`** keeps the old name rule (a rebinding can reach the LAN): should it follow ADR-0328 as curl and wget do?
-- **curl and wget refusal text** shows no `+net` hint (ADR-0224 item 5's hint is not built).
-- **ADR-0230:** what `--net-open` may reach (decided 2026-11-15: the runner's own servers only; implemented in `work/test-fixes-3`).
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
+
+
+## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
+
+ADR-0280, 0281, 0285, 0286, 0384, 0385, 0398 accepted; ADR-0383 Option C (`kbs=^?`, built in 10d); the kill offer's escape
+System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal; a refused
+`tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
+the runner itself in a job of their own; `vttest` pinned and built with 10d.

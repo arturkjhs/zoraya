@@ -1,6 +1,6 @@
 # ADR-0285: What Q4 decided where ADR-0264 is silent: one parked list, a slice floor, the unit and its range, a 120-byte usage record, and two reserved deadlines
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0030, ADR-0261, ADR-0264, ADR-0270
 - **Evidence:** CP-07, quotas/survey.md#cpu, quotas/survey.md#linux-cgroups-v2
@@ -112,4 +112,6 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

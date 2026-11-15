@@ -56,7 +56,7 @@ leaves it undefined, and allows `EDEADLK`), while C++ requires `std::thread::joi
 - **Evidence against:** two places a name can live; `std::filesystem::create_hard_link` and `space` always fail; `malloc`'s header
   changed for every program (unsafe code in the allocator, reviewed with this part).
 - **Cost:** *(measured)* 70 lines of C, 60 lines of Rust in libposix, two patches of 13 and 22 lines (of the port's four:
-  `llvm/0001` is ADR-0360's `random_device`, `llvm/0004` a test-only one), 51 names (49 of musl's, 2 of libposix's).
+  `llvm/0001` is ADR-0360's `random_device`, `llvm/0004` a test-only one), 52 names.
 - **Precedent:** ADR-0310 (a block of musl's names for ports) and ADR-0320 (a shim beside the block).
 ### Option B: everything in `libc.a`
 - **Description:** also `link`, `statvfs`, `pathconf`, `truncate` and `sched_yield` exported by libposix.
@@ -135,7 +135,7 @@ wctob
 ## Consequences
 - **Positive.** `iostream`, `locale`, `regex`, `filesystem`, `random_device` and exceptions link and run; C programs gain the
   same wide-character and `*_l` functions and aligned allocation.
-- **Negative.** 51 more exports; `std::filesystem::create_hard_link` and `space` fail with `ENOTSUP`.
+- **Negative.** 52 more exports; `std::filesystem::create_hard_link` and `space` fail with `ENOTSUP`.
 - **Follow-up.** `statvfs` when the filesystem service reports free space; `truncate` and `pathconf` in libposix.
 
 ## Invariants

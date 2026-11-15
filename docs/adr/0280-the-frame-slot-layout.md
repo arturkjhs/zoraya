@@ -1,6 +1,6 @@
 # ADR-0280: The frame slot layout and the driver's side of the frame protocol
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0051, ADR-0052, ADR-0054, ADR-0091, ADR-0221, ADR-0230
 - **Evidence:** CP-12, CP-15, DM-047, X-5, network/survey.md#the-device-virtio-net-under-qemu
@@ -104,4 +104,6 @@ SLIRP, and the time from the driver's wake to the message read by the client. **
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

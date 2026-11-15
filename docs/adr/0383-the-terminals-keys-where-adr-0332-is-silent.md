@@ -1,6 +1,6 @@
 # ADR-0383: The terminal's keys where ADR-0332 item 7 is silent: Backspace stays DEL, the keypad, Alt, and a way to see a key's bytes
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0092, ADR-0096, ADR-0154, ADR-0163, ADR-0332, ADR-0333
 - **Evidence:** alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#terminfo-entries-compared, stage-10/survey.md#what-full-screen-programs-ask-of-a-terminal
@@ -139,3 +139,7 @@ the smallest way to see the sequences without a raw-mode program; programs that 
 - The pinned entry is updated (ADR-0333).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C: the terminfo entry has `kbs=^?` (with ADR-0333), to be built in part 10d, before the curses programs.

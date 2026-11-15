@@ -1,6 +1,6 @@
 # ADR-0281: What N2 decided where the network ADRs are silent: smoltcp as a registry crate, the scope's encoding, a diagnostic echo request, and the first supervision of the network
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0052, ADR-0054, ADR-0055, ADR-0157, ADR-0220, ADR-0221, ADR-0222, ADR-0224, ADR-0229, ADR-0230, ADR-0280
 - **Evidence:** CP-12, CP-14, network/survey.md#smoltcp, network/survey.md#qemu-networking-for-development-and-ci
@@ -130,4 +130,6 @@ changed.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.
