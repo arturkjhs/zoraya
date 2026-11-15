@@ -498,7 +498,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   table (`keys.rs`) is the entry's `k*` strings: F1 to F12, Alt as an `ESC` prefix, xterm's modifier parameter on cursor
   keys, Home, End, Insert, Delete, Page keys and F-keys, `SS3` forms while DECCKM is set, the keypad as characters or, in
   keypad application mode, `SS3` letters, Ctrl+Space and Ctrl+@ as NUL, Ctrl+^ and Ctrl+_ as their codes in every
-  layout, Shift+Tab as `CSI Z`; Backspace stays `0x7f` (ADR-0096, the entry's `kbs=^H` is an exception) and Shift+Page
+  layout, Shift+Tab as `CSI Z`; Backspace is `0x7f` (ADR-0096) and the entry says `kbs=^?` (ADR-0383 Option C: `tools/term-terminfo/terminfo.sh` compiles it from a copy of `terminfo.src` with the one line of the `xterm+kbs` fragment changed) and Shift+Page
   Up and Down scroll the view. A drag selects text (linear, in reading order, ended by any change to a row it covers, a
   scroll of the view or a resize); with a program holding the mouse (1000, 1002) Shift+drag selects and the pointer is
   reported in the SGR form, the wheel as buttons 64 and 65 (at most 8 a turn), focus as `CSI I` and `CSI O` (1004).
@@ -511,7 +511,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
   lines (no wrap flag); no word or line selection and no primary selection; in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
   whole stretch between its ends), and a button released outside the window is seen at the next event;
-  no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
+  no hover (1003), no other mouse encoding; the keypad has no
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.

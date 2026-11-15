@@ -73,6 +73,19 @@ tools() {
     echo "$version $sha" > "$HOST/bin/.pin"
 }
 
+# ADR-0383 (Option C, accepted 2026-11-15): the entry says what the terminal sends for Backspace. ncurses
+# 6.6's terminfo.src gives the fragment xterm+kbs, which xterm-256color and xterm use, `kbs=^H`; the
+# configure option --with-xterm-kbs=DEL makes the same one-line change when ncurses builds its own copy of
+# the file. Here the line is changed in a copy of the pinned file, which fails unless it finds the fragment
+# and exactly one such line, so a new release cannot slip past unchanged.
+patched_source() {
+    awk '/^xterm\+kbs\|/ { f = 1 }
+         f && $0 == "\tkbs=^H," { print "\tkbs=^?,"; f = 0; n++; next }
+         { print }
+         END { exit n == 1 ? 0 : 3 }' "$SRC/misc/terminfo.src" > "$1" ||
+        { echo "terminfo: the xterm+kbs fragment of terminfo.src has no single 'kbs=^H' line to change" >&2; exit 1; }
+}
+
 compile() {
     out=$1
     tools
@@ -81,9 +94,10 @@ compile() {
     # -x keeps the extensions (Ms, XM, Smulx, ...): the entry the terminal is
     # tested against has them. -e writes the four entries and not the ones
     # they `use=`.
-    "$HOST/bin/tic" -x -e "$NAMES" -o "$out" "$SRC/misc/terminfo.src" >"$out.log" 2>&1 ||
+    patched_source "$out.src"
+    "$HOST/bin/tic" -x -e "$NAMES" -o "$out" "$out.src" >"$out.log" 2>&1 ||
         { cat "$out.log" >&2; echo "terminfo: tic failed" >&2; exit 1; }
-    rm -f "$out.log"
+    rm -f "$out.log" "$out.src"
     # tic also writes the aliases of an entry's name field (vt100-am): the
     # image holds exactly the four files of ADR-0333 item 2.
     find "$out" -type f | while read -r f; do
