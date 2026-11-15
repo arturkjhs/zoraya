@@ -428,3 +428,15 @@ each change is recorded by the part that implements it, with an Opus review. Two
   `--verify` lists `/sys/class/net`, which in a container shows the host's namespace (`/proc/net/dev` follows the process's).
   Question: a runner with unprivileged user namespaces, or a container allowed `unshare -n`, would run them on CI; or accept
   that INV-0316-1..3's wire check is local only.
+
+## From the review of `work/syscall-long` (TASK-31)
+
+For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, findings 4 to 8):
+- The 12 `-` rows (`zoraya_text_*`, `zoraya_window_*`) and the `INTERNAL` dictionary of `tools/check-libposix-widths.py` are
+  checked against no C declaration: parse musl's `src/internal`, `ports/musl/zoraya/syscall.h` and the ports' own headers in
+  `--headers` mode instead.
+- Parameter widths are not checked. `ioctl`'s `request` is `i64` in `ffi.rs` where `<sys/ioctl.h>` says `int`: make it `i32`,
+  matched as `u32`, when FIONBIO is added (ADR-0451 item 2), and extend the checker to named parameters.
+- The stubs of `libzoraya-rust.a` (C, ADR-0451 items 4 and 5) need their own width check; the checker reads Rust only.
+- ADR-0451 item 1's `REPORT` line per unanswered `syscall` number is not built.
+

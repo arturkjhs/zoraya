@@ -44,6 +44,8 @@ tools/check-net-open.sh       check
 tools/net-open-allowed.txt    check
 tools/confine-loopback.sh    check test-net
 tools/check-tls-roots.sh      check
+tools/check-libposix-widths.py check test-libposix
+tools/libposix-widths.txt     check test-libposix
 tools/test-run-disk.sh        check
 tools/run-disk.sh             check test-hand-run test-apps test-python test-python-ext test-python-regr
 rootfs/system/tls/        check test-files test-hand-run
@@ -172,7 +174,7 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
+crates/zoraya-posix/          check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
