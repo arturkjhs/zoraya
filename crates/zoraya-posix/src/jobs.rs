@@ -991,6 +991,7 @@ impl<S: Sys> Posix<S> {
         map: &BTreeMap<u32, u32>,
         group: u32,
         shape: &crate::spawn::Shape,
+        listed: &[u32],
         out: &mut Inherit<S::H>,
     ) -> Result<(), i32> {
         for (&child, &parent) in map {
@@ -1029,9 +1030,17 @@ impl<S: Sys> Posix<S> {
             }
             // A Unix socket or a memory descriptor goes in the third
             // message (ADR-0433); a TCP socket cannot go.
-            if matches!(self.fds.get(parent as i32), Some(Desc::Memory(_)))
-                || matches!(self.fds.get(parent as i32), Some(Desc::Socket(s)) if s.unix.is_some())
-            {
+            let unix =
+                matches!(self.fds.get(parent as i32), Some(Desc::Socket(s)) if s.unix.is_some());
+            // A socket moves only when the spawn's file actions name it
+            // (ADR-0412 item 6): an inherited one stays with the parent and
+            // is refused as a TCP socket is (`system()` of a program that holds
+            // one fails, as it always did). A memory object is copied, so
+            // it goes either way.
+            if unix && !listed.contains(&child) {
+                return Err(EBADF);
+            }
+            if unix || matches!(self.fds.get(parent as i32), Some(Desc::Memory(_))) {
                 self.pass_to_child(child, parent as i32, &mut out.passed)?;
                 continue;
             }
@@ -1365,10 +1374,11 @@ pub struct Passed<H> {
     /// The parent's fds the descriptors come from, to refuse one description
     /// given twice.
     pub sources: Vec<i32>,
-    /// Packet sockets that move: dead in the parent afterwards.
+    /// Sockets that move (all kinds): dead in the parent afterwards.
     pub moved_packets: Vec<i32>,
-    /// Stream sockets whose ancillary channel moves: shared afterwards.
-    pub shared_streams: Vec<i32>,
+    /// The parent's handles that stay behind and are closed once the spawn
+    /// happened (the ancillary channel of a socket a `fork` shared).
+    pub close_after: Vec<H>,
     /// Memory descriptors that go: their size stays (INV-0413-1).
     pub sent_memory: Vec<i32>,
 }
@@ -1382,7 +1392,7 @@ impl<H> Default for Passed<H> {
             read_only: Vec::new(),
             sources: Vec::new(),
             moved_packets: Vec::new(),
-            shared_streams: Vec::new(),
+            close_after: Vec::new(),
             sent_memory: Vec::new(),
         }
     }

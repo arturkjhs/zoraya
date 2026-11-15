@@ -427,24 +427,32 @@ impl<S: Sys> Posix<S> {
                     r.sock_type = SOCK_STREAM as u8;
                     r.read_off = u.book.read_off;
                     r.write_off = u.book.write_off;
+                    // The whole socket moves, as a packet socket does: its
+                    // byte streams and its ancillary channel, so that one
+                    // process holds the stream's counts of bytes and
+                    // descriptors. The parent's descriptor is dead until it is
+                    // closed (ADR-0433 item 6, the architect's to accept).
                     for (h, flag) in [(s.read, &mut r.has_read), (s.write, &mut r.has_write)] {
                         if let Some(h) = h {
                             *flag = true;
-                            handles.push((h, true));
+                            handles.push((h, false));
                         }
                     }
                     match s.ctl {
-                        // The child holds the ancillary channel; this
-                        // process keeps the byte streams and stops sending
-                        // descriptors on them (the bytes of the stream
-                        // are counted for one reader and one writer).
                         Some(c) if !u.shared => {
                             r.has_anc = true;
                             handles.push((c, false));
-                            out.shared_streams.push(parent);
                         }
-                        _ => r.shared = true,
+                        // Shared by a `fork` already: the channel stays where
+                        // `fork` left it and is closed once the child has the
+                        // streams, which it holds as shared.
+                        Some(c) => {
+                            r.shared = true;
+                            out.close_after.push(c);
+                        }
+                        None => r.shared = true,
                     }
+                    out.moved_packets.push(parent);
                     if r.handles() == 0 {
                         return Err(EBADF);
                     }
@@ -466,7 +474,11 @@ impl<S: Sys> Posix<S> {
             // Rolled back: nothing of this one stays in the bookkeeping.
             out.sent_memory.retain(|&f| f != parent);
             out.moved_packets.retain(|&f| f != parent);
-            out.shared_streams.retain(|&f| f != parent);
+            if let Some(Desc::Socket(sock)) = self.fds.get(parent)
+                && let Some(c) = sock.ctl
+            {
+                out.close_after.retain(|&h| h != c);
+            }
             return Err(crate::errno::E2BIG);
         }
         out.fds.push(child);
@@ -489,13 +501,8 @@ impl<S: Sys> Posix<S> {
                 s.state = State::Dead;
             }
         }
-        for &fd in &passed.shared_streams {
-            if let Some(Desc::Socket(s)) = self.fds.get_mut(fd) {
-                s.ctl = None;
-                if let Some(u) = s.unix.as_mut() {
-                    u.shared = true;
-                }
-            }
+        for &h in &passed.close_after {
+            self.sys.close(h);
         }
         self.memory_sent(&passed.sent_memory);
     }

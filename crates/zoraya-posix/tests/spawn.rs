@@ -193,6 +193,13 @@ fn ship(parent: &mut Rig, out: &Inherit<u32>, child: &mut Rig) {
     parent.p.sys.close(b);
 }
 
+/// `fd` as a socket a spawn lists: close-on-exec itself (so that it is not
+/// inherited as well) and the target of a `dup2` to `to`.
+fn listed(r: &mut Rig, fd: i32, to: i32) -> FileAction {
+    r.p.fcntl(fd, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    FileAction::Dup2(fd, to)
+}
+
 fn read_fds(r: &mut Rig, fd: i32) -> Result<(Vec<u8>, Vec<i32>), i32> {
     let u = r.arena.user(ARENA / 2, 100);
     let got = r.p.recvmsg(fd, &[u], 8, 0)?;
@@ -660,19 +667,19 @@ fn a_stream_socket_crosses_a_spawn_and_its_rights_work_in_the_child() {
     let out =
         r.p.inherit_shaped(&[FileAction::Dup2(b, 4)], 0, &chosen(vec![]))
             .unwrap();
-    // One fd, three handles: the two byte streams copied, the ancillary
-    // channel moved.
+    // One fd, three handles, all moved: the socket goes whole (ADR-0433 item 6).
     assert_eq!(out.passed.fds, [4]);
-    assert_eq!(out.passed.handles.iter().filter(|h| h.1).count(), 2);
-    assert_eq!(out.passed.handles.iter().filter(|h| !h.1).count(), 1);
+    assert_eq!(out.passed.handles.len(), 3);
+    assert!(out.passed.handles.iter().all(|h| !h.1));
     let mut child = second(&r);
     ship(&mut r, &out, &mut child);
     r.p.spawned(&out, &Granted::none());
-    // The parent keeps the bytes and gives up descriptors on this socket.
+    // The parent's copy is dead until it closes it, as a packet socket's.
+    assert_eq!(r.write(b, b"x"), Err(EPIPE));
     let Some(Desc::Socket(s)) = r.p.fds.get(b) else {
         panic!()
     };
-    assert!(s.ctl.is_none() && s.unix.as_ref().unwrap().shared);
+    assert!(s.ctl.is_none() && s.read.is_none() && s.write.is_none());
     // Bytes, both ways.
     assert_eq!(r.write(a, b"to the child").unwrap(), 12);
     assert_eq!(child.read(4, 100).unwrap(), b"to the child");
@@ -687,9 +694,11 @@ fn a_stream_socket_crosses_a_spawn_and_its_rights_work_in_the_child() {
     let (bytes, fds) = read_fds(&mut r, a).unwrap();
     assert_eq!((bytes.as_slice(), fds.len()), (&b"!"[..], 1));
     assert_eq!(r.read(fds[0], 10).unwrap(), b"payload");
-    // The parent's end cannot send descriptors any more (shared, item 6).
+    // The parent's end of the other half goes on as before: it can send too.
     let u = r.poke(0, b"?");
-    assert_eq!(r.p.sendmsg(b, &[u], &[fds[0]], 0), Err(EOPNOTSUPP));
+    assert_eq!(r.p.sendmsg(a, &[u], &[fds[0]], 0), Ok(1));
+    let (bytes, got) = read_fds(&mut child, 4).unwrap();
+    assert_eq!((bytes.as_slice(), got.len()), (&b"?"[..], 1));
     // Nothing left over: close every fd of both and every handle is back
     // (but the child's own arena).
     for fd in fds {
@@ -735,10 +744,11 @@ fn a_spawn_that_does_not_happen_changes_no_socket() {
     let (a, b) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
     let (c, d) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
     let held = count(&mut r);
-    let out =
-        r.p.inherit(&[FileAction::Close(a), FileAction::Close(c)], 0)
-            .unwrap();
-    assert_eq!(out.passed.fds, [b as u32, d as u32]);
+    r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    r.p.fcntl(c, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    let actions = [listed(&mut r, b, 20), listed(&mut r, d, 21)];
+    let out = r.p.inherit(&actions, 0).unwrap();
+    assert_eq!(out.passed.fds, [20, 21]);
     // Nobody called `spawned`: the parent's sockets are as they were.
     r.p.spawn_refused(&out);
     drop_made(&mut r, &out);
@@ -755,8 +765,11 @@ fn a_spawn_that_does_not_happen_changes_no_socket() {
 fn a_socket_that_cannot_go_makes_the_spawn_fail_and_leaves_nothing() {
     let mut r = rig();
     let held = count(&mut r);
-    let (a, _b) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
-    let (c, _d) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
+    let (a, b) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
+    let (c, d) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
+    for fd in [a, b, c, d] {
+        r.p.fcntl(fd, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    }
     let before = count(&mut r);
     // A description at two fds of the child goes once: `EINVAL`.
     assert_eq!(
@@ -782,21 +795,57 @@ fn a_socket_that_cannot_go_makes_the_spawn_fail_and_leaves_nothing() {
     let _ = held;
 }
 
-/// Close-on-exec is the one way to keep a socket from a child that does not
-/// list it, and an inherited one is no longer an error.
+/// ADR-0412 item 6, review of F4 finding 2: a socket goes only when the file
+/// actions list it. One that is merely inherited (a spawn with no attribute,
+/// `system()`) stays with the parent, as an inherited socket always did: the
+/// spawn is `EBADF`, and nothing is moved, shared or made.
 #[test]
-fn a_close_on_exec_socket_is_not_inherited_and_the_rest_is() {
+fn an_inherited_unix_socket_is_not_moved_and_the_spawn_is_ebadf() {
+    for ty in [SOCK_SEQPACKET, SOCK_DGRAM, SOCK_STREAM] {
+        let mut r = rig();
+        let held = count(&mut r);
+        let (a, b) = r.p.socketpair(AF_UNIX, ty, 0).unwrap();
+        for shape in [Shape::default(), chosen(vec![])] {
+            // Nothing listed: with the flag, no fd at all, so nothing to refuse.
+            let r1 = r.p.inherit_shaped(&[], 0, &shape);
+            if shape.empty {
+                drop_made(&mut r, &r1.unwrap());
+            } else {
+                assert_eq!(r1.err(), Some(EBADF), "type {ty}");
+            }
+        }
+        let _ = held;
+        let Some(Desc::Socket(s)) = r.p.fds.get(b) else {
+            panic!()
+        };
+        assert!(s.ctl.is_some() || s.read.is_some(), "still the parent's");
+        assert!(!s.unix.as_ref().unwrap().shared);
+        assert_eq!(r.write(b, b"still").unwrap(), 5);
+        assert_eq!(r.read(a, 10).unwrap(), b"still");
+    }
+}
+
+/// Close-on-exec keeps a socket from a child; listing one moves it, and the
+/// one inherited next to it is refused.
+#[test]
+fn a_close_on_exec_socket_is_not_inherited_and_a_listed_one_goes() {
     let mut r = rig();
     let (a, b) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
     r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
-    // Made close-on-exec, as `SOCK_CLOEXEC` does.
+    r.p.fcntl(b, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
     let (c, d) =
         r.p.socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0)
             .unwrap();
+    // Everything is close-on-exec: nothing goes, and that is no error.
     let out = r.p.inherit(&[], 0).unwrap();
-    assert_eq!(out.passed.fds, [b as u32]);
-    let _ = (c, d);
+    assert!(out.passed.is_empty());
     drop_made(&mut r, &out);
+    // `b` listed at 7: it goes, `d` (close-on-exec) does not.
+    let list = [listed(&mut r, b, 7)];
+    let out = r.p.inherit(&list, 0).unwrap();
+    assert_eq!(out.passed.fds, [7]);
+    drop_made(&mut r, &out);
+    let _ = (c, d);
 }
 
 // ------------------------------------------------------------ memory descriptors
@@ -932,9 +981,10 @@ fn a_hostile_third_message_is_dropped_and_its_handles_closed() {
     let mut r = rig();
     let (a, b) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
     let (c, d) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
-    let out =
-        r.p.inherit(&[FileAction::Close(a), FileAction::Close(c)], 0)
-            .unwrap();
+    r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    r.p.fcntl(c, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    let actions = [listed(&mut r, b, 20), listed(&mut r, d, 21)];
+    let out = r.p.inherit(&actions, 0).unwrap();
     let good = encode_passed(&out.passed.fds, &out.passed.records);
     assert_eq!(out.passed.fds.len(), 2);
     let _ = (b, d);
@@ -1165,52 +1215,96 @@ fn too_many_descriptors_for_one_message_is_e2big_and_leaves_the_parent_whole() {
     let mut r = rig();
     let held = count(&mut r);
     // 22 stream sockets bring 3 handles each: 66.
+    let mut actions = Vec::new();
     let mut ends = Vec::new();
-    for _ in 0..22 {
+    for i in 0..22 {
         let (a, b) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
         r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+        actions.push(listed(&mut r, b, 100 + i));
         ends.push(b);
     }
     let before = count(&mut r);
-    assert_eq!(r.p.inherit(&[], 0).err(), Some(E2BIG));
-    let one = count(&mut r);
-    assert_eq!(r.p.inherit(&[], 0).err(), Some(E2BIG));
-    assert_eq!((one - before, count(&mut r) - one), (0, 0));
+    assert_eq!(r.p.inherit(&actions, 0).err(), Some(E2BIG));
+    assert_eq!(r.p.inherit(&actions, 0).err(), Some(E2BIG));
+    assert_eq!(count(&mut r), before);
     // Nothing was told to the parent: every socket still has its channel.
     for &b in &ends {
         let Some(Desc::Socket(s)) = r.p.fds.get(b) else {
             panic!()
         };
-        assert!(s.ctl.is_some() && !s.unix.as_ref().unwrap().shared);
+        assert!(s.ctl.is_some() && s.read.is_some() && !s.unix.as_ref().unwrap().shared);
     }
-    // 21 are 63 handles, and go.
-    r.p.fcntl(ends[0], F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
-    let out = r.p.inherit(&[], 0).unwrap();
-    assert_eq!(out.passed.handles.len(), 63);
-    r.p.spawn_refused(&out);
+    // 21 are 63 handles, and a memory object makes the 64th, which still goes;
+    // one more makes 65, which does not.
+    actions.pop();
+    let m1 = r.p.memfd_create(b"one", 0).unwrap();
+    r.p.ftruncate(m1, 100).unwrap();
+    let m2 = r.p.memfd_create(b"two", 0).unwrap();
+    r.p.ftruncate(m2, 100).unwrap();
+    for m in [m1, m2] {
+        r.p.fcntl(m, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    }
+    actions.push(FileAction::Dup2(m1, 200));
+    let out = r.p.inherit(&actions, 0).unwrap();
+    assert_eq!(out.passed.handles.len(), 64);
     drop_made(&mut r, &out);
+    actions.push(FileAction::Dup2(m2, 201));
+    assert_eq!(r.p.inherit(&actions, 0).err(), Some(E2BIG));
     close_all(&mut r);
     assert_eq!(count(&mut r), held);
 }
 
-/// A stream socket that is shared already goes as shared, with no channel; and
-/// a refusal closes the files `addopen` opened.
+/// A stream socket a `fork` shared goes as shared, without a channel (the
+/// channel stays where `fork` left it and is closed with the move), and
+/// a refusal closes the files `addopen` opened. A socket not shared goes with
+/// its channel (the guard of `pass_to_child`, review of F4 finding 7).
 #[test]
-fn a_shared_stream_goes_without_a_channel_and_a_refusal_closes_the_addopen_files() {
+fn a_fork_shared_stream_goes_without_a_channel_and_a_refusal_closes_the_addopen_files() {
     let mut r = rig();
+    let held = count(&mut r);
     let (a, b) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
     r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
-    let out = r.p.inherit(&[], 0).unwrap();
-    assert!(out.passed.records[0].has_anc && !out.passed.records[0].shared);
-    r.p.spawned(&out, &Granted::none());
-    // A second spawn of the same, now shared, socket: no channel to give.
-    let out = r.p.inherit(&[], 0).unwrap();
+    let list = [listed(&mut r, b, 30)];
+    let out = r.p.inherit_shaped(&list, 0, &chosen(vec![])).unwrap();
     let rec = out.passed.records[0];
-    assert!(rec.shared && !rec.has_anc);
+    assert!(rec.has_anc && !rec.shared);
+    assert_eq!(out.passed.handles.len(), 3);
+    assert!(out.passed.close_after.is_empty());
+    // Not told it went: the parent's socket is whole.
+    r.p.spawn_refused(&out);
+    // A `fork` shares it: both processes read the same bytes, the channel stays.
+    r.p.after_fork_in_parent();
+    let Some(Desc::Socket(s)) = r.p.fds.get(b) else {
+        panic!()
+    };
+    assert!(s.ctl.is_some() && s.unix.as_ref().unwrap().shared);
+    let before = count(&mut r);
+    let out = r.p.inherit_shaped(&list, 0, &chosen(vec![])).unwrap();
+    let rec = out.passed.records[0];
+    assert!(rec.shared && !rec.has_anc, "no channel for a shared stream");
     assert_eq!(out.passed.handles.len(), 2);
-    assert!(out.passed.handles.iter().all(|h| h.1));
-    assert!(r.p.fds.get(b).is_some());
+    assert_eq!(out.passed.close_after.len(), 1);
+    let mut child = second(&r);
+    ship(&mut r, &out, &mut child);
+    r.p.spawned(&out, &Granted::none());
+    // The parent's copy is dead and its channel closed; the child's has bytes
+    // and no `SCM_RIGHTS`.
+    assert_eq!(r.write(b, b"x"), Err(EPIPE));
+    assert_eq!(
+        count(&mut r),
+        before,
+        "the arena of the child, less the closed channel"
+    );
+    assert_eq!(r.write(a, b"hi").unwrap(), 2);
+    assert_eq!(child.read(30, 10).unwrap(), b"hi");
+    let u = child.poke(0, b"!");
+    let (pr, _pw) = child.p.pipe(0).unwrap();
+    assert_eq!(child.p.sendmsg(30, &[u], &[pr], 0), Err(EOPNOTSUPP));
+    close_all(&mut child);
+    close_all(&mut r);
+    assert_eq!(count(&mut r), held + 1);
     // `addopen` files are closed by a refusal.
+    let mut r = rig();
     let f = create(&mut r, b"/f", b"x");
     r.p.close(f).unwrap();
     let out =

@@ -208,7 +208,14 @@ impl<S: Sys> Posix<S> {
                 return Err(e);
             }
         };
-        let r = self.inherit_into(&map, group, shape, &mut out);
+        let listed: Vec<u32> = resolved
+            .iter()
+            .filter_map(|a| match *a {
+                FileAction::Dup2(_, to) | FileAction::Opened(_, to) => u32::try_from(to).ok(),
+                _ => None,
+            })
+            .collect();
+        let r = self.inherit_into(&map, group, shape, &listed, &mut out);
         if let Err(e) = r {
             let made: Vec<S::H> = out
                 .slots
