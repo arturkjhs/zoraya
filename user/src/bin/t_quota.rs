@@ -484,6 +484,7 @@ fn a_shared_object_is_charged_to_its_creator_only() {
     let program = image("t_quota");
     let mut e = Encoder::new(&mut buffer, room, program);
     e.handle(console_entry());
+    e.handle(zoraya_user::dup(JOB.slot(), room, JobObject::RIGHTS));
     e.handle(zoraya_user::dup(
         8,
         object,

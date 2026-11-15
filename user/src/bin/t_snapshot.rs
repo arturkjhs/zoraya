@@ -242,15 +242,16 @@ fn a_shared_mapping_stays_shared() {
     fill(private_bytes, 0x20);
     let child = snap(JOB, &[], SELF_SLOT, true).expect("snapshot");
     let Some(child) = child else {
-        // The child sees what the parent wrote before it ran, in the shared
-        // mappings and in its copy of the private one; the partial mapping
-        // is the third and fourth page of the object.
-        let mut ok = all(whole_bytes, 0x10) && all(part_bytes, 0x10) && all(private_bytes, 0x20);
+        // The parent wrote 0x11 into the shared mappings after the snapshot,
+        // and 0x21 into the private one: the child sees the first, and its
+        // copy of the second as it was (0x20). The partial mapping is the
+        // third and fourth page of the object.
+        let mut ok = all(whole_bytes, 0x11) && all(part_bytes, 0x11) && all(private_bytes, 0x20);
         fill(part_bytes, 0x30);
         fill(private_bytes, 0x40);
         // Through the whole mapping, pages 2 and 3 are the partial one's.
         ok &= all(&whole_bytes[2 * 4096..4 * 4096], 0x30);
-        ok &= all(&whole_bytes[..2 * 4096], 0x10);
+        ok &= all(&whole_bytes[..2 * 4096], 0x11);
         // The read-only mapping sees the same frames.
         ok &= all(&reading_bytes[2 * 4096..4 * 4096], 0x30);
         child_exit(ok, 5);
