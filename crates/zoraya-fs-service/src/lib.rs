@@ -864,6 +864,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             .all(|(n, r)| self.may_name(index, n) && r & !self.rights_on(index, n) == 0)
     }
 
+    /// Whether connection `index` has `right` on `name`: the right itself, and
+    /// for a connection narrowed to a list, that name's own entry holds it
+    /// (the connection's rights are the union of the list's, so a right one
+    /// name holds is not another's).
+    fn has_on(&self, index: usize, name: &str, right: u32) -> bool {
+        self.has(index, right) && self.rights_on(index, name) & right == right
+    }
+
     /// Whether connection `index` may name `name`: always, unless it is
     /// narrowed to another name.
     fn may_name(&self, index: usize, name: &str) -> bool {
@@ -2536,6 +2544,17 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.reply(i, t, &m);
     }
 
+    /// Whether the connection a token names has `right` on `name`.
+    fn token_has_on(&mut self, token: T::End, name: &str, right: u32) -> bool {
+        if self.transport.kind(token) != HandleKind::Token {
+            return true; // refused by token_directory
+        }
+        match self.token_target(token) {
+            Some(target) => self.has_on(target, name, right),
+            None => true,
+        }
+    }
+
     /// Whether the connection a token names may name `name`.
     fn token_may_name(&mut self, token: T::End, name: &str) -> bool {
         if self.transport.kind(token) != HandleKind::Token {
@@ -2578,7 +2597,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
         if !self.may_name(i, m.old.0)
+            || !self.has_on(i, m.old.0, right)
             || !self.token_may_name(token, m.new.0)
+            || !self.token_has_on(token, m.new.0, right)
             || self.is_sealed_name(i, m.old.0)
             || self.token_is_sealed_name(token, m.new.0)
         {
@@ -2606,7 +2627,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let (Some(file), Some(token)) = (self.handle_of(i), handles.first().copied()) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
-        if !self.token_may_name(token, m.name.0) || self.token_is_sealed_name(token, m.name.0) {
+        if !self.token_may_name(token, m.name.0)
+            || !self.token_has_on(token, m.name.0, right)
+            || self.token_is_sealed_name(token, m.name.0)
+        {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let directory = match self.token_directory(token, right) {
@@ -2624,7 +2648,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn remove(&mut self, i: usize, t: u32, name: &str) {
-        if !self.has(i, proto::rights::REMOVE) {
+        if !self.has_on(i, name, proto::rights::REMOVE) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let Some(directory) = self.handle_of(i) else {
@@ -2639,7 +2663,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn make_directory(&mut self, i: usize, t: u32, mode: u32, name: &str) {
-        if !self.has(i, proto::rights::CREATE) {
+        if !self.has_on(i, name, proto::rights::CREATE) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let Some(directory) = self.handle_of(i) else {
@@ -2718,7 +2742,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn make_link(&mut self, i: usize, t: u32, name: &str, target: &str) {
-        if !self.has(i, proto::rights::CREATE) {
+        if !self.has_on(i, name, proto::rights::CREATE) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let Some(directory) = self.handle_of(i) else {

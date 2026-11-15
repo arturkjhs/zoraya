@@ -2223,6 +2223,72 @@ fn a_connection_narrowed_to_a_list_gives_each_name_its_own_rights() {
     assert_ne!(r.done(root, &m, vec![end]).0, status::OK);
 }
 
+/// The review of 10f, finding 2: a right one name of a list holds is not another's
+/// for any request that names something (`Remove`, `MakeDirectory`, `MakeLink`,
+/// `Rename` from and to, `Publish` through a token), not only for `open`.
+#[test]
+fn a_list_gives_remove_rename_and_the_rest_to_the_names_that_hold_them() {
+    let mut r = rig();
+    let root = r.root;
+    for n in ["a.txt", "b.txt"] {
+        let f = r.open(root, n, open_flags::CREATE);
+        r.write_text(f, 0, 0, b"x");
+    }
+    let denied = status::ACCESS_DENIED;
+    let ro = rights::READ | rights::CLONE;
+    let all = rights::READ | rights::RENAME | rights::CREATE | rights::REMOVE | rights::CLONE;
+    let (s, n) = narrow_list(&mut r, root, &[("a.txt", all), ("b.txt", ro)], all);
+    assert_eq!(s, status::OK);
+    // b.txt is read only: it cannot be removed, made, linked, renamed over or from.
+    let rm_b = proto::Remove {
+        name: Name("b.txt"),
+    };
+    assert_eq!(r.done(n, &rm_b, vec![]).0, denied);
+    assert_eq!(
+        r.try_open(root, "b.txt", 0, rights::READ).0,
+        status::OK,
+        "still there"
+    );
+    let mk = proto::MakeDirectory {
+        mode: 0o755,
+        name: Name("b.txt"),
+    };
+    assert_eq!(r.done(n, &mk, vec![]).0, denied);
+    let ln = proto::MakeLink {
+        name: Name("b.txt"),
+        target: zoraya_protocol::Text("a.txt"),
+    };
+    assert_eq!(r.done(n, &ln, vec![]).0, denied);
+    let token = token_of(&mut r, n);
+    let onto = proto::Rename {
+        mode: Below(0),
+        old: Name("a.txt"),
+        new: Name("b.txt"),
+    };
+    assert_eq!(
+        r.done(n, &onto, vec![token]).0,
+        denied,
+        "a rename onto b.txt"
+    );
+    let token = token_of(&mut r, n);
+    let from = proto::Rename {
+        mode: Below(0),
+        old: Name("b.txt"),
+        new: Name("a.txt"),
+    };
+    assert_eq!(
+        r.done(n, &from, vec![token]).0,
+        denied,
+        "a rename from b.txt"
+    );
+    assert_eq!(r.try_open(root, "b.txt", 0, rights::READ).0, status::OK);
+    // a.txt holds them: its own removal works.
+    let rm_a = proto::Remove {
+        name: Name("a.txt"),
+    };
+    assert_eq!(r.done(n, &rm_a, vec![]).0, status::OK);
+}
+
 /// ADR-0055's note (ADR-0153 rule 2): a narrowed connection names its one
 /// name and nothing else, cannot list, cannot widen, and its clones and
 /// shares stay narrowed; "create or replace" works through it.
