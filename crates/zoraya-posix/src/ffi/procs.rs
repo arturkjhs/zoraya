@@ -1391,11 +1391,12 @@ pub(super) fn ioctl_tty(fd: i32, request: i64, argument: i64) -> Result<i32, i32
                 _ => Ok(0),
             }
         }
-        // Only the window sets the size (ADR-0331 item 7).
-        TIOCSWINSZ => state(|p| p.tty_of(fd).and(Err(EPERM))),
-        // Input is never injected (ADR-0338 item 2, ADR-0342 item 12): not
-        // offered, as on a kernel built without it.
-        TIOCSTI => state(|p| p.tty_of(fd).and(Err(ENOTTY))),
+        // Only the window sets the size (ADR-0331 item 7); input is never
+        // injected (ADR-0338 item 2): `termios::ioctl_refusal`.
+        TIOCSWINSZ | TIOCSTI => state(|p| {
+            p.tty_ioctl_refusal(fd, request)?;
+            Err(ENOTTY)
+        }),
         _ => state(|p| p.tty_of(fd).and(Err(ENOTTY))),
     }
 }

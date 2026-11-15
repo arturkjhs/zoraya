@@ -1089,6 +1089,40 @@ mod bootstrap {
         encode(&FACTS, 0, exe, 3, "home/Київ", &FDS, &entries(), 4, out).unwrap()
     }
 
+    /// INV-0338-2: a table's only terminal is `/dev/tty`, and only a
+    /// terminal has that name.
+    #[test]
+    fn a_table_names_no_terminal_but_its_own_dev_tty() {
+        let with = |entries: &[Entry<'_>]| {
+            let mut b = [0; 1024];
+            // The root is the last entry, and the working directory.
+            let cwd = (entries.len() - 1) as u32;
+            // The encoder refuses what the decoder would.
+            let Some(n) = encode(&FACTS, 0, "/bin/x", cwd, "", &[], entries, 4, &mut b) else {
+                return false;
+            };
+            Bootstrap::decode(&b[..n], 4).is_some()
+        };
+        let root = Entry {
+            prefix: "/",
+            kind: EntryKind::Directory,
+            handle: 0,
+        };
+        let tty = |prefix, kind| Entry {
+            prefix,
+            kind,
+            handle: 1,
+        };
+        assert!(with(&[tty("/dev/tty", EntryKind::Terminal), root]));
+        // A terminal under another name, or another kind under that name.
+        assert!(!with(&[tty("/dev/console", EntryKind::Terminal), root]));
+        assert!(!with(&[tty("/tty", EntryKind::Terminal), root]));
+        assert!(!with(&[tty("/dev/tty", EntryKind::Directory), root]));
+        assert!(!with(&[tty("/dev/tty", EntryKind::Tmp), root]));
+        // No terminal at all is a table.
+        assert!(with(&[root]));
+    }
+
     #[test]
     fn a_record_round_trips() {
         let mut b = [0; 1024];

@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -1233,6 +1233,8 @@ posix-image: $(KERNEL) tools-storage
 	rm -rf $(POSIX_TOUR_ROOT)
 	mkdir -p $(POSIX_TOUR_ROOT)
 	cp -R rootfs/. $(BUILD)/rootfs-posix/. $(POSIX_TOUR_ROOT)/
+	@# The terminal's test program (tests/gui/posix-terminal.script).
+	cp $(POSIX_ROOT)/bin/t_tty $(POSIX_TOUR_ROOT)/bin/t_tty
 
 # One boot per script under each accelerator, zoraya-fsck after each
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
@@ -1363,6 +1365,25 @@ test-tour-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 	    --label $$name-$$accel -- $(RUN_QEMU) --test --gui --mem $(POSIX_MEM) --qmp $(BUILD)/$$name-$$accel.qmp \
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done; done
+
+# Part 10c (ADR-0331, ADR-0389): `sh` in a window with Ctrl-C and Ctrl-Z, a
+# raw-mode program (t_tty box) whose box follows its window's size
+# (SIGWINCH, TIOCGWINSZ), the sequences of its keys, its modes after fg, and a
+# paste to it, on the tour's image at each size of POSIX_TERM_SIZES: a scale or
+# a WxH (the GUI sizes of test-gui; a big display has fewer than 24 rows, so
+# the script depends on none).
+POSIX_TERM_SCRIPT := tests/gui/posix-terminal.script
+POSIX_TERM_SIZES ?= 1 2 1600x1000 1920x1200
+test-tour-terminal: $(POSIX_IMAGE_DEP) $(RUNNER)
+	@for accel in $(POSIX_ACCELS); do for size in $(POSIX_TERM_SIZES); do \
+	  label=posix-terminal-$$accel-$$size; \
+	  case $$size in *x*) g="--gui-size $$size" ;; *) g="--gui-scale $$size" ;; esac; \
+	  timeout=1200; [ $$size = 1 ] || timeout=1800; \
+	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-term.img > /dev/null && \
+	  $(RUNNER) --timeout $$timeout --gui-script $(POSIX_TERM_SCRIPT) --qmp $(BUILD)/$$label.qmp \
+	    --label $$label -- $(RUN_QEMU) --test --gui $$g --mem $(POSIX_MEM) --qmp $(BUILD)/$$label.qmp \
+	    --disk $(BUILD)/posix-term.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(BUILD)/posix-term.img > /dev/null || exit 1; done; done
 
 # The tour's two sessions, from docs/tour.md (INV-0154-4), and INV-0155-1's
 # from the descriptions; make test-unit fails when the committed ones differ.
@@ -1649,7 +1670,7 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-tour-terminal test-crash test-gui test-net
 TEST_STEPS += check-ci-jobs test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

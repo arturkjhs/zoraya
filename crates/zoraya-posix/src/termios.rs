@@ -58,6 +58,22 @@ pub const TCOON: i32 = 1;
 pub const TCIOFF: i32 = 2;
 pub const TCION: i32 = 3;
 
+/// `ioctl` requests that a terminal always refuses (ADR-0331 item 7,
+/// ADR-0338 item 2).
+pub const TIOCSTI: i64 = 0x5412;
+pub const TIOCSWINSZ: i64 = 0x5414;
+
+/// What a terminal answers to a request it never carries out: `EPERM` for
+/// the size (only the window sets it), `ENOTTY` for input injection
+/// (`TIOCSTI` is not offered; INV-0338-1).
+pub fn ioctl_refusal(request: i64) -> Option<i32> {
+    match request {
+        TIOCSWINSZ => Some(crate::errno::EPERM),
+        TIOCSTI => Some(crate::errno::ENOTTY),
+        _ => None,
+    }
+}
+
 /// The name of the controlling terminal (ADR-0342 item 4, ADR-0105 item 6).
 pub const TTY_NAME: &[u8; 9] = b"/dev/tty\0";
 
@@ -206,6 +222,15 @@ mod tests {
             assert_eq!(check_flow(a), Ok(()));
         }
         assert_eq!(check_flow(4), Err(EINVAL));
+    }
+
+    #[test]
+    fn no_request_injects_input_and_only_the_window_sets_the_size() {
+        // INV-0338-1.
+        assert_eq!(ioctl_refusal(TIOCSTI), Some(crate::errno::ENOTTY));
+        assert_eq!(ioctl_refusal(TIOCSWINSZ), Some(crate::errno::EPERM));
+        assert_eq!(ioctl_refusal(0x5413), None, "TIOCGWINSZ is answered");
+        assert_eq!(ioctl_refusal(0x5401), None, "TCGETS is answered");
     }
 
     #[test]

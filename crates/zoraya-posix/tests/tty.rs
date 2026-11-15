@@ -244,6 +244,20 @@ fn open_dev_tty_without_a_connection_in_the_entry_is_enxio() {
 }
 
 #[test]
+fn a_terminal_refuses_input_injection_and_a_size_change() {
+    // INV-0338-1: TIOCSTI is ENOTTY on a terminal, TIOCSWINSZ is EPERM; a pipe
+    // and a closed fd say what any ioctl says.
+    let mut r = rig();
+    let t = tty_with(&mut r, tp::status::OK);
+    assert_eq!(r.p.tty_ioctl_refusal(t.fd, termios::TIOCSTI), Err(ENOTTY));
+    assert_eq!(r.p.tty_ioctl_refusal(t.fd, termios::TIOCSWINSZ), Err(EPERM));
+    assert_eq!(r.p.tty_ioctl_refusal(t.fd, 0x5413), Ok(()));
+    let (rd, _wr) = r.p.pipe(0).unwrap();
+    assert_eq!(r.p.tty_ioctl_refusal(rd, termios::TIOCSTI), Err(ENOTTY));
+    assert_eq!(r.p.tty_ioctl_refusal(99, termios::TIOCSTI), Err(EBADF));
+}
+
+#[test]
 fn ioctl_free_names_of_the_terminal() {
     assert_eq!(termios::TTY_NAME, b"/dev/tty\0");
 }

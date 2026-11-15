@@ -72,7 +72,22 @@ decision.
   9. **The guarded names** of ADR-0342 item 12 (the pseudo-terminal functions and `setsid`, beside `ptrace`,
      `dlopen` and System V IPC) are on `posix-surface-check`'s exclusion table; a block that names one is an error
      (`added_names`), and so is a `libc.a` that exports one.
-  10. **The names** this part adds, behind `t_tty` (`tests/posix/t_tty.c`):
+  10. **The suspend character with a job-control shell.** When a POSIX shell has chosen a group with `tcsetpgrp`
+      that is not one of the line's own, Ctrl-Z is `SIGTSTP` to that group through the broker and the line stays in
+      front (`sh` says `Stopped` itself); the line is stopped as ADR-0200 says only when the group is one of the
+      line's own (the shell back at its prompt, which ignores it: `did not stop`).
+  11. **`TERM`, `keys` and `console.term`.** `zoraya_shell::terminal` holds the rules: `terminal_fds` (the fds of an
+      element that are the terminal), `posix_env` (`PATH`, `HOME`, then `TERM` for a program with the terminal on any
+      fd: `xterm-256color` in a window, the setting `console.term` on the serial console, default `dumb`; never
+      `TERMINFO`, `TERMINFO_DIRS`, `LINES`, `COLUMNS` or `COLORTERM`), and the `keys` row of `grants`. A program
+      whose three streams are elsewhere has no `TERM` from the shell and no `keys` row. `sh.cmd` and `dash.cmd` no
+      longer say there is no terminal.
+  12. **`term.scrollback`.** Declared by `zosh` (number, 100 to 10,000, default 2,000); the shell tells the window's
+      `term` with a new message `Scrollback { lines }` (ordinal 8 of `zoraya-proto-term`) at start and after each
+      change of the settings file. `ttyd` ignores it.
+  13. **The table's terminal.** A namespace record (`Bootstrap::decode`) names a terminal only as `/dev/tty`, and
+      nothing else has that name (INV-0338-2).
+  14. **The names** this part adds, behind `t_tty` (`tests/posix/t_tty.c`):
 
 ```posix-surface-added
 tcsetattr t_tty
@@ -98,7 +113,7 @@ select t_tty
   connection closes; a second `poll` finds it outstanding and uses it (no leak, one slot). Two threads polling one
   terminal share one request. A `poll` while a `read` of another thread is held waits on the read's answer, so it
   may report ready for bytes that the other thread then takes (as on Linux).
-- **Cost:** *(measured)* `jobs.rs` 130 lines, `poll.rs` 25, `termios.rs` 190, the FFI 190; 12 host tests.
+- **Cost:** *(measured)* `jobs.rs` 200 lines, `poll.rs` 25, `termios.rs` 200, `terminal.rs` 190, the FFI 200; 27 host tests.
 - **Precedent:** Linux's `n_tty_poll` is the same rule in the kernel; musl implements `tcsetattr`'s actions as three
   `ioctl` codes.
 

@@ -712,6 +712,16 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// The errno of an `ioctl` a terminal never carries out, once `fd` is
+    /// one (`ENOTTY`/`EBADF` first, as for any request).
+    pub fn tty_ioctl_refusal(&mut self, fd: i32, request: i64) -> Result<(), i32> {
+        self.tty_of(fd)?;
+        match crate::termios::ioctl_refusal(request) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
     /// `tcgetattr`: musl's `struct termios` of the terminal at `fd`.
     pub fn tty_get_attr(&mut self, fd: i32) -> Result<[u8; crate::termios::SIZE], i32> {
         let conn = self.tty_of(fd)?;

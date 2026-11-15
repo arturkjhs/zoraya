@@ -392,6 +392,10 @@ fn fd_at(bytes: &[u8], at: usize) -> Fd {
     }
 }
 
+/// The one name of a terminal in a namespace table (ADR-0105 item 6,
+/// ADR-0338 INV-0338-2).
+pub const TTY_PATH: &str = "/dev/tty";
+
 impl<'a> Bootstrap<'a> {
     /// Decodes a record that came with `handles` handles. Any input gives a
     /// result, never a panic.
@@ -471,8 +475,11 @@ impl<'a> Bootstrap<'a> {
                 EntryKind::Null => handle == NO_HANDLE,
                 _ => take(handle),
             };
+            // INV-0338-2: the only terminal a table names is the process's
+            // own `/dev/tty`, and that name is nothing else.
             if head[2..4] != [0, 0]
                 || !handle_ok
+                || (kind == EntryKind::Terminal) != (prefix == TTY_PATH)
                 || !is_absolute_normal(prefix)
                 || previous.is_some_and(|p| p.len() < prefix.len() || p == prefix)
             {

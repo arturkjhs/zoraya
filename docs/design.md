@@ -1363,9 +1363,17 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   whole line in front reads until a `tcsetpgrp` chooses a group (`Terminal::set_foreground_line`); there is no kill
   offer for a line with the terminal (ADR-0387). The broker beside `zosh` gives it a notice channel
   (`HostTerminal`): `GroupMade` and `ForegroundAsked`, with no reply, and a group made inside a line stays inside its
-  job (ADR-0388). Not yet: `libposix`'s readiness request, `open("/dev/tty")` (so `sh` has no job control) and
-  `ttyname`, `grants`' `keys` line, `TERM`, `term.scrollback`, GUI checks and the relay measurement (see
-  `docs/tasks/TASK-31-part-10c.md`). INV-0331-8 is a lint in `make check-kernel-tty`.
+  job (ADR-0388). `libposix` (ADR-0389): `poll`, `ppoll` and `select` wait for a terminal's input with one `PollReadable`
+  outstanding per connection (idempotent across deferred waits), `tcsetattr` has its three actions (`Drain`, `Flush`,
+  `SetAttr`) and the service's `IO` is `EIO`, `tcflush`, `tcdrain`, `tcflow`, `tcsendbreak`, `cfmakeraw` and the speed
+  functions, `ctermid`, `ttyname`, `ttyname_r`, `tcgetwinsize` and `tcsetwinsize` exist, and `open("/dev/tty")` clones the
+  entry's connection for the caller's group, so dash has job control in a window: Ctrl-C and Ctrl-Z reach the group it
+  chose with `tcsetpgrp` and `sh` goes on. `TIOCSWINSZ` is `EPERM`, `TIOCSTI` `ENOTTY`; the guarded names of ADR-0342
+  item 12 are on `posix-surface-check`'s table. `zosh` sets `TERM` for a program with the terminal (`xterm-256color`
+  in a window, `console.term` on the serial console), `grants` prints the `keys` line, and `term.scrollback` reaches
+  `term` as a `Scrollback` message. Tests: `tests/posix/t_tty.c` (`names`, `poll`, `box`, `lines`, `bench`) in
+  `tests/posix/zosh.script` and, in a window at each GUI size, `tests/gui/posix-terminal.script` (`make
+  test-tour-terminal`). Not yet: see `docs/tasks/TASK-31-part-10c.md`. INV-0331-8 is a lint in `make check-kernel-tty`.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).
@@ -2609,7 +2617,8 @@ ADR-0221 items 5, 6 and 8).
   stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
   is dropped without a message. A program's start-up record holds at most 64 entries (`native::MAX_ENTRIES`): a path
   covered with the same rights by another entry takes none, but a line naming more distinct paths than that is refused.
-  A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
+  A POSIX program has the terminal from `zosh` on the fds its line does not redirect or pipe (ADR-0331, part 10c);
+  with none, `isatty` is false. Native `cp`
   moves a file in one message, so it cannot copy a large program. Under the test runner, `run-qemu.sh --reboot` lets a reset start the guest
   again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
@@ -2718,7 +2727,7 @@ ADR-0221 items 5, 6 and 8).
   writers left gets a fresh pair (ADR-0107 item 15). `execl` takes six arguments after `arg0` (item 13). `fork`
   copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
   memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). A POSIX
-  session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
+  session and `zosh` do not share the console; from `zosh` a POSIX program has the terminal on the streams its line leaves alone. Dates are the
   root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
   read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
 - **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport; a
