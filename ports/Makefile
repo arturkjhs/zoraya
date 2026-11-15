@@ -46,7 +46,7 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
 	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md \
-	docs/adr/0398-poll-and-ppoll-as-built.md
+	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0390-surface-for-curses-less-and-vi.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -63,7 +63,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
+	ncurses less db1 nvi openssh git dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -388,6 +388,99 @@ $(AWK_BIN): $(AWK) $(SYSROOT_STAMP) $(AWK_BISON)
 	rm -f $(AWK_BIN)
 	@cd $(AWK) && $(call logged,sh -xc 'mkdir -p objs && for f in awkgram.tab.c proctab.c $(AWK_SRCS); do $(ZCC) $(CROSS_CFLAGS) -c -o objs/$$(basename $$f .c).o $$f || exit 1; done && $(ZCC) $(CROSS_CFLAGS) -o awk objs/*.o -lm',awk)
 	@touch $@
+
+# ---------------------------------------------------------------- curses (TASK-31 ports-early, ADR-0334)
+
+# ncurses 6.6 for the target: wide characters, the terminfo half as its own
+# archive, static, no C++ binding, no programs, no manual pages, no lookup in
+# the home directory, directories named by letters whatever the build host
+# (ADR-0334 item 1). The entries are read from /usr/share/terminfo, the
+# directory ADR-0333's `tic` fills; nothing is compiled in. The build helpers
+# (make_hash, make_keys) run on the host (--with-build-cc). Installed into
+# $(CURSES) (usr/include, usr/lib), not into the sysroot: part 10d copies the
+# two archives and the headers into the sysroot (and so into the image) when
+# `vi` and `less` need them. The host triple names musl so that config.sub
+# accepts it, as for wget; zcc defines nothing of Linux.
+CURSES := $(PORTS)/curses
+NCURSES := $(WORK)/ncurses-$(call lock_ver,ncurses)
+NCURSES_BUILD := $(WORK)/ncurses-build
+NCURSES_LIBS := $(CURSES)/usr/lib/libncursesw.a $(CURSES)/usr/lib/libtinfow.a
+NCURSES_OPTS := --prefix=/usr --without-shared --without-debug --without-ada --without-cxx --without-cxx-binding \
+	--without-manpages --without-tests --without-progs \
+	--enable-widec --with-termlib --enable-overwrite --enable-mixed-case --disable-home-terminfo \
+	--with-default-terminfo-dir=/usr/share/terminfo --with-terminfo-dirs=/usr/share/terminfo \
+	--without-pkg-config --disable-stripping --without-gpm --disable-db-install --without-fallbacks
+ncurses: $(NCURSES_LIBS)
+$(NCURSES): $(LOCK) $(wildcard ports/patches/ncurses/*.patch)
+	$(call unpack,ncurses,ports/patches/ncurses)
+	@touch $@
+$(NCURSES_LIBS): $(NCURSES) $(SYSROOT_STAMP) ports/config.site
+	rm -rf $(NCURSES_BUILD) $(CURSES) && mkdir -p $(NCURSES_BUILD) $(CURSES)
+	@cd $(NCURSES_BUILD) && $(call logged,$(CROSS_ENV) $(NCURSES)/configure --host=aarch64-unknown-linux-musl \
+	  --build=$$($(NCURSES)/config.guess) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" --with-build-cc=$(HOSTCC) \
+	  $(NCURSES_OPTS),ncurses-configure)
+	@# Only include/ and ncurses/ (the two archives); panel, menu and form are not wanted.
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/include && $(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/ncurses -j3 V=1,ncurses)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/include install.libs DESTDIR=$(CURSES) && $(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/ncurses install.libs DESTDIR=$(CURSES),ncurses-install)
+	@touch $(NCURSES_LIBS)
+
+# ---------------------------------------------------------------- less (TASK-31 ports-early, ADR-0335 item 8)
+
+# less 710 under the Less License, linked with the terminfo half of ADR-0334's
+# library alone (libtinfow.a). The compiled-in defaults of ADR-0335 item 8 are
+# the patch's: no history file, no key files, no tags, no input preprocessor.
+# The names of the terminal (tcsetattr, tcflush, cfgetospeed) are not in
+# libc.a before part 10c: ports/apps/ttyshim.c stands in for them in these
+# early builds (the same pattern as zshim.c) and is not part of any image.
+TTYSHIM := $(PORTS)/ttyshim/libttyshim.a
+$(TTYSHIM): ports/apps/ttyshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(dir $@) $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/ttyshim.o ports/apps/ttyshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/ttyshim.o
+
+LESS := $(WORK)/less-$(call lock_ver,less)
+LESS_BIN := $(LESS)/less
+less: $(LESS_BIN)
+$(LESS): $(LOCK) $(wildcard ports/patches/less/*.patch)
+	$(call unpack,less,ports/patches/less)
+	@touch $@
+$(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(TTYSHIM) ports/config.site
+	@cd $(LESS) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl \
+	  --with-regex=posix $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" \
+	  CPPFLAGS="-I$(CURSES)/usr/include" LDFLAGS="-L$(CURSES)/usr/lib -L$(dir $(TTYSHIM))" LIBS="-ltinfow -lttyshim",less-configure)
+	rm -f $(LESS_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(LESS) less V=1,less)
+	@touch $@
+
+# ---------------------------------------------------------------- DB 1 and nvi (TASK-31 ports-early, ADR-0335 items 1 and 2)
+
+# Berkeley DB 1.85 (the BSD licence of the University of California), built by
+# ports/db1/build.sh into $(PORTS)/db1: nvi's buffer is its recno access
+# method. nvi2 2.2.2 is built by ports/nvi/build.sh (its own CMake is not
+# used): the list of sources, the generated headers, config.h and pathnames.h
+# are the port's, the program is patched by ports/patches/nvi2/. `ex` and
+# `view` are links to `vi` in the image (part 10d).
+DB1 := $(WORK)/db1-$(call lock_ver,db1)
+DB1_PREFIX := $(PORTS)/db1
+db1: $(DB1_PREFIX)/lib/libdb1.a
+$(DB1): $(LOCK) $(wildcard ports/patches/db1/*.patch)
+	$(call unpack,db1,ports/patches/db1)
+	@touch $@
+$(DB1_PREFIX)/lib/libdb1.a: $(DB1) ports/db1/build.sh $(SYSROOT_STAMP)
+	rm -rf $(DB1_PREFIX) $(OBJ)/db1
+	@$(call logged,sh -x ports/db1/build.sh $(DB1) $(OBJ)/db1 $(DB1_PREFIX) $(ZCC) $(TOOLBIN)/aarch64-unknown-zoraya-ar "$(APPS_CFLAGS)",db1)
+
+NVI := $(WORK)/nvi2-$(call lock_ver,nvi2)
+NVI_BIN := $(NVI)/nvi
+nvi: $(NVI_BIN)
+$(NVI): $(LOCK) $(wildcard ports/patches/nvi2/*.patch)
+	$(call unpack,nvi2,ports/patches/nvi2)
+	@touch $@
+$(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h ports/nvi/compat.c \
+	$(NCURSES_LIBS) $(DB1_PREFIX)/lib/libdb1.a $(TTYSHIM)
+	rm -f $(NVI_BIN)
+	@$(call logged,sh -x ports/nvi/build.sh $(NVI) $(OBJ)/nvi $(NVI_BIN) $(ZCC) $(CURSES) $(DB1_PREFIX)/include \
+	  $(DB1_PREFIX)/lib "$(APPS_CFLAGS)" $(dir $(TTYSHIM)),nvi)
 
 # ---------------------------------------------------------------- tcc
 
@@ -1211,4 +1304,6 @@ check-ports: | tools
 	LC_ALL=C grep -a -q 'run is not available in a cross compiler' $(TCC_BIN)
 	@echo "== the userland: list, sources, busybox, surface block (INV-0336-1, -3, INV-0342-1)"
 	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK) $(AWK)/objs
+	@echo "== the ports built ahead of their parts (ADR-0390, TASK-31 ports-early)"
+	sh ports/check-early.sh $(LOGS) $(ZCC) $(SURFACE_CHECK) $(ELF_CHECK) $(ROOT)/build
 	@echo "check-ports: all passed"

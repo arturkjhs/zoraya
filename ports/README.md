@@ -49,6 +49,10 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | zlib | 1.3.1 | zlib (the licence at the end of `zlib.h`) | none |
 | curl | 8.23.0 | curl (`COPYING`) | `patches/curl/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
 | GNU wget | 1.25.0 | GPL-3.0-or-later (`COPYING`) | `patches/wget/0001-openssl-without-sockets.patch` (`SSL_set_fd` becomes a plain-fd BIO), `0002-no-msg-peek.patch` (`fd_read_hunk` reads a byte at a time: libposix has no `MSG_PEEK`) |
+| ncurses | 6.6 | X11 (MIT-style; the notice at the head of `COPYING`) | none (TASK-31 ports-early, ADR-0334): the target's `libncursesw.a` and `libtinfow.a` and the headers, built into `build/ports/curses` (`make ncurses`); the host's `tic` is part 10a's |
+| less | 710 | the Less License (`LICENSE`: a BSD-2-clause-style licence; the release is also offered under GPL-3.0-or-later, which is not used) | `patches/less/0001-zoraya-compiled-in-defaults.patch` (no key files, no tags, no history file, `LESSOPEN` ignored; ADR-0335 item 8) |
+| nvi2 | 2.2.2 | BSD-3-Clause (`LICENSE`) | `patches/nvi2/0001-no-startup-files.patch`, `0002-no-script.patch`, `0003-no-flock.patch` (ADR-0335 items 1 and 6); `nvi/` holds the port's own files: `build.sh` (its build, instead of CMake), `config.h`, `pathnames.h`, `recover.c` (replaces `common/recover.c`: no recovery), `compat.c`, `compat.h`, `bitstring.h` and `sys/queue.h` (musl has neither header) under the repository's licence |
+| Berkeley DB (DB 1) | 1.85 | BSD-3-Clause (the notice in each file) | `patches/db1/0001-hash-errno-field.patch` (a structure field named `errno`, which musl's `<errno.h>` makes a macro); `db1/build.sh` builds `libdb1.a` |
 
 `make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
 `build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and

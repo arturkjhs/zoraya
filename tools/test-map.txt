@@ -272,5 +272,6 @@ user/describe/tests/memhog.cmd test-files
 tests/shell/rooms.script      test-files
 user/describe/posix/gtrun.cmd  test-cxx-gtest test-files
 docs/adr/0343-surface-for-the-userland.md check test-libposix test-posix test-apps test-files
+docs/adr/0390-surface-for-curses-less-and-vi.md check test-libposix test-posix
 tests/python-ext/            test-python-ext
 tests/shell/python-ext.script test-python-ext

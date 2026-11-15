@@ -33,7 +33,7 @@ holds three declaration-only headers).
 
 | Tool | Version | Licence | Used by | Purpose |
 |---|---|---|---|---|
-| ncurses (`tic`, `infocmp`, and its test programs) | 6.6, `ports/sources.lock` (SHA-256 `355b4cbb...`) | X11 (MIT-style) | `tools/term-terminfo/terminfo.sh`, `tools/term-conformance/check.sh`, `tools/term-record/build-curses-tests.sh` | `tic` compiles the four terminfo entries of ADR-0333 (INV-0333-1), `infocmp` dumps the entry the terminal is tested against (INV-0332-1), the test programs are recorded to test the terminal (ADR-0332 item 10). Built for the host into `build/ports/host/`; nothing enters the image in part 10a. The port for the target is part 10d's (ADR-0334) |
+| ncurses (`tic`, `infocmp`, and its test programs) | 6.6, `ports/sources.lock` (SHA-256 `355b4cbb...`) | X11 (MIT-style) | `tools/term-terminfo/terminfo.sh`, `tools/term-conformance/check.sh`, `tools/term-record/build-curses-tests.sh` | `tic` compiles the four terminfo entries of ADR-0333 (INV-0333-1), `infocmp` dumps the entry the terminal is tested against (INV-0332-1), the test programs are recorded to test the terminal (ADR-0332 item 10). Built for the host into `build/ports/host/`; nothing enters the image in part 10a. The port for the target is in the table of ports above (TASK-31 ports-early, built into `build/ports/curses`; in the image from part 10d, ADR-0334) |
 | musl's `wcwidth.c` | 1.2.5, `ports/sources.lock` | MIT | `tools/term-width/gen.sh` | Compiled for the host and asked for every code point, to write `crates/zoraya-width/src/table.rs` (ADR-0332 item 9) |
 | Python 3 (standard library only) | the host's | PSF | `tools/term-record/record.py`, `compare-tmux.py` | Records a program on a pseudo-terminal; compares replayed grids with tmux. Run with `-I`; not part of `make test` |
 | tmux | the host's | ISC | `tools/term-record/compare-tmux.py` | A second emulator for the text of the replayed grids (not part of `make test`) |
@@ -157,6 +157,10 @@ measured T1 workloads).
 | zlib | 1.3.1 | zlib | `libz.a` for curl and wget (TASK-27 9a) |
 | curl | 8.23.0 | curl (MIT-like, its `COPYING`) | `/bin/curl` on the volume of `make run` and the apps' tests (TASK-27 9a) |
 | GNU wget | 1.25.0 | GPL-3.0-or-later | `/bin/wget`, same (TASK-27 9a) |
+| ncurses | 6.6 | X11 (MIT-style) | `libncursesw.a` and `libtinfow.a` for the target, static, wide-character, no database compiled in, no lookup in the home directory (ADR-0334; TASK-31 ports-early; `make ncurses`); the host's `tic` is a host tool (below) |
+| less | 710 | the Less License (BSD-2-clause-style; also offered under GPL-3.0-or-later, not used) | `/bin/less` (ADR-0335 item 8; built by TASK-31 ports-early, in the image from part 10d) |
+| nvi2 | 2.2.2 | BSD-3-Clause | `/bin/vi`, `ex`, `view` (ADR-0335 item 1; built by TASK-31 ports-early, in the image from part 10d); its CMake build is replaced by `ports/nvi/build.sh` |
+| Berkeley DB (DB 1) | 1.85 | BSD-3-Clause | `libdb1.a`, nvi's buffer (its `recno` access method; ADR-0335 item 2). The reason it is not written in-house: nvi's buffer is `dbopen`'s record file. A maintained copy (the BSDs' libc) is an open question of ADR-0390 |
 | NetSurf (netsurf-all) | 3.11 | GPL-2.0-only with the additional permission to link with OpenSSL (COPYING lines 8-15) (the browser), MIT (its libraries `libnsfb`, `libcss`, `libdom`, `libhubbub`, `libparserutils`, `libwapcaplet`, `libnsbmp`, `libnsgif`, `libnslog`, `libnspsl`, `libnsutils`, `libutf8proc`), as ADR-0109 shipped GPL ports | `/bin/netsurf` (TASK-27 9d, proposed ADR-0317, ADR-0318); built by `make netsurf` (no JavaScript, no SVG) |
 | libpng | 1.6.50 | libpng licence (permissive) | PNG images for NetSurf (9d) |
 | IJG libjpeg | 9f | IJG licence (permissive) | JPEG images for NetSurf (9d) |
