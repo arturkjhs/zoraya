@@ -68,6 +68,10 @@ on `work/10c`).
 
 ## D. Open questions
 
+- **CI and the confined network steps:** `test-net-lookup`, `test-net-dns` and `test-hand-run`'s network leg run only locally (CI cannot confine
+  them: no `unshare -n` in the job container, even with extra capabilities; `--verify` may read the host's `/sys/class/net`, where
+  `/proc/net/dev` would follow the process). A CI runner with unprivileged user namespaces would let them run (`work/test-fixes-3`).
+
 - **INV-0324-2's wording** (a public-only name rule is within a web rule; proposed text in the TASK-27 report, "9g-url, for the architect").
 - **INV-0326-1's wording** (its check covers only the grant that comes with `window`).
 - **ADR-0366** and its index row say 51 added names; the list holds 52.

@@ -138,6 +138,23 @@ listed=$(grep -c -E '^make ' "$list")
 if [ "${planned:-0}" != "$listed" ]; then
 	need "all $listed jobs of $list in the full plan (tools/ci-plan.sh with FULL=1 gives ${planned:-none})"
 fi
+# The nightly's own jobs (tools/ci-nightly-tests.txt): in the plan of FULL=1 with NIGHTLY=1, in no other
+# plan (not the full set of a push to main or candidate-full/, not a candidate's), and the workflow sets
+# NIGHTLY on a schedule run.
+nightly_list=${NIGHTLY_LIST:-tools/ci-nightly-tests.txt}
+if [ -r "$nightly_list" ]; then
+	nplan=$(NIGHTLY=1 FULL=1 sh tools/ci-plan.sh 2>/dev/null | sed -n 's/^tests=//p')
+	oplan=$(FULL=1 sh tools/ci-plan.sh 2>/dev/null | sed -n 's/^tests=//p')
+	cplan=$(CI_PLAN_PATHS="unmapped-path-for-check-ci-jobs/x" sh tools/ci-plan.sh origin/main 2>/dev/null | sed -n 's/^tests=//p')
+	grep -E '^make ' "$nightly_list" | while read -r line; do
+		echo "$nplan" | grep -F -q "\"$line\"" || echo "check-ci-jobs: the nightly plan lacks $line" >&2
+		echo "$oplan$cplan" | grep -F -q "\"$line\"" && echo "check-ci-jobs: $line is in a plan that is not the nightly's" >&2
+	done 2>&1 | grep -q . && need "the nightly's jobs (tools/ci-nightly-tests.txt) in the nightly plan only"
+	grep -q 'NIGHTLY=\$nightly' "$workflow" || need "the workflow giving tools/ci-plan.sh NIGHTLY=1 on a schedule run"
+	for s in $(grep -E '^make ' "$nightly_list" | awk '{ print $2 }'); do
+		echo " $TEST_STEPS " | grep -q " $s " && need "$s not in TEST_STEPS (a nightly-only job is not a step of make test)"
+	done
+fi
 # Every test step of TEST_STEPS must be in the full plan and in the plan of a
 # change the map does not know (which runs every step: plan-lib.sh's $all).
 for mode in full unmapped; do

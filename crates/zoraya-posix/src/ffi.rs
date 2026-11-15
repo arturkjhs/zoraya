@@ -2771,12 +2771,21 @@ extern "C" fn siglongjmp(env: *mut u8, value: i32) -> ! {
 /// Names of the tier list that no measured T1 program needs working
 /// (`sendmsg`, `syscall`, `setsid`; the stream client's socket calls are
 /// `sockets.rs`, N4): each fails with `ENOSYS`, as ADR-0140's
-/// stub did.
+/// stub did. Each stub returns the width its C prototype declares
+/// (`long` for `syscall`, `ssize_t` for `tee` and `sendmsg`; `int` for the
+/// rest): a 32-bit `-1` read as a 64-bit result is 4294967295
+/// (INV-0451-1, `make check-libposix-widths`).
 macro_rules! not_yet {
     (int $($name:ident)*) => {$(
         #[unsafe(no_mangle)]
         extern "C" fn $name() -> i32 {
             int(Err(ENOSYS))
+        }
+    )*};
+    (long $($name:ident)*) => {$(
+        #[unsafe(no_mangle)]
+        extern "C" fn $name() -> i64 {
+            not_yet_long()
         }
     )*};
     (ptr $($name:ident)*) => {$(
@@ -2788,5 +2797,13 @@ macro_rules! not_yet {
     )*};
 }
 
-not_yet!(int syscall tee sendmsg setgroups setsid);
+/// The `-1` of a stub whose C result is `long` or `ssize_t`, with `errno`
+/// `ENOSYS`, as 64 bits.
+fn not_yet_long() -> i64 {
+    set_errno(ENOSYS);
+    -1
+}
+
+not_yet!(int setgroups setsid);
+not_yet!(long syscall tee sendmsg);
 not_yet!(ptr __map_file);
