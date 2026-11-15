@@ -303,6 +303,18 @@ states, to be taken up later:
     for a POSIX program (or `RLIMIT_STACK`) would end the class of fault.
   - **Not measured:** DB 1.85 on a 100 MB file (ADR-0390's open question), a second run of the GUI script under TCG, the `tools/`-level
     mutation run (not required for 10d).
+- Part 10f (TASK-31) leftovers (`docs/tasks/TASK-31-part-10f.md`, proposed ADR-0395):
+  - **The grant line gives nothing yet.** Needed: `slot::GRANTS` (1006) and a `Startup` index, the runtime's read on a miss in
+    `libposix` and `zoraya-rt`, `narrow` with a list of names (`zoraya-proto-file`, `zoraya-fs-service`, `zoraya-fsclient`, the
+    planner's merge; also 10d's second-file refusal), the shell's per-element write end closed with the job, `jobs`' mark
+    `(given while running)`, the limit of 16 restarting after a grant. The wire is in ADR-0395's recommendation.
+  - **The network refusal report and hint** (ADR-0224 item 5): no report kind for `NotGranted` exists; `libposix`, `zoraya-rt` and
+    the hint in `zosh` are not built (the `+net` hint of curl's and wget's refusal waits on it).
+  - **A write refused inside a read-only entry** is not reported (`EACCES`); `user/src/namespace.rs` reports per path, not per
+    path and access.
+  - **Not run:** the GUI script of ADR-0337's "What the person sees" (needs the delivery), a QEMU run of the row and the kill
+    offer (`make test-changed` was not run for the window's new height: see the report), the mutation run for `zoraya-shell`.
+  - **The row after `fg`:** a refusal reported while a line was in the background is not shown when it comes back.
 - Part 10c (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10c.md`, notes not fixed in the fix pass):
   - **INV-0386-1 and a program's own `c_cc`:** a program may make a printable byte a signal character (`VINTR` = `[`, `~` or a
     digit); then a paste, or the shell's own bracket marks, carry signal characters for it. Only its own line is affected; the

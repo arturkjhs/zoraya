@@ -434,3 +434,48 @@ fn the_kill_offer_asks_and_takes_only_enter_and_escape() {
     assert_eq!(k.keys(b"\x1b", 9_999), vec![Step::Close]);
     assert_eq!(k.keys(b"\r", 9_999), vec![Step::Kill]);
 }
+
+#[test]
+fn the_grant_line_and_its_parser_are_total_on_any_bytes() {
+    // INV-0337-1 and INV-0337-3 for hostile input: no panic, the text stays
+    // bounded, and what parses is only ever what the shell holds.
+    let h = holds();
+    let mut seed = 0x0123_4567_89ab_cdefu64;
+    let mut next = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as usize
+    };
+    for round in 0..3000 {
+        let mode = if round % 5 == 0 {
+            Mode::Kill
+        } else {
+            Mode::Give
+        };
+        let mut g = open(mode, &["a", "b", "c"], Some(next() % 5), 0);
+        let mut now = 0u64;
+        for _ in 0..40 {
+            let n = next() % 12;
+            let bytes: Vec<u8> = (0..n).map(|_| next() as u8).collect();
+            now += (next() % 300) as u64;
+            for step in g.keys(&bytes, now) {
+                if let Step::Complete(w) = step {
+                    g.complete(&[w.clone(), alloc::format!("{w}x")]);
+                }
+            }
+            assert!(g.text().len() <= crate::grantline::MAX_TEXT);
+            assert!(g.element() < 3);
+            assert!(!g.field().contains('\n'));
+            let text: String = g.text().into();
+            if let Ok(gives) = parse_give(&text, "/home/u", HOME, &h) {
+                for give in gives {
+                    match give {
+                        Give::Path { path, write } => assert!(h.path(&path, write), "{text:?}"),
+                        Give::Net(word) => assert!(h.net(&word)),
+                    }
+                }
+            }
+        }
+    }
+}

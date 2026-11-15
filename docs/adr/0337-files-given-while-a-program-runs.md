@@ -402,6 +402,9 @@ same line gives a host. Threads: the runtime's re-read is under the library's lo
 - A way to give a running program of a room more from the room's own terminal, and the card for untrusted rooms
   (the path ADR-0172 point 4 uses for `Room { name }`, through the panel), once ADR-0268's gate has passed.
 - Whether a running child should receive later grants through its parent's runtime.
+- INV-0337-4's check is not implemented (part 10f, ADR-0395): it needs the `GRANTS` channel (item 7) and `narrow`
+  with a list of names (item 8), which are not built. Until then the grant line parses and checks what is typed and
+  gives nothing, and says so.
 
 ## Revisit triggers
 

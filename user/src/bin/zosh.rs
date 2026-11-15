@@ -3477,7 +3477,7 @@ impl Z {
         let gives = grantline::parse_give(text, &self.cwd, &home, &Holds(self))?;
         let _ = (line, element);
         // The `GRANTS` channel to the running program is not built (the
-        // task report, proposed ADR-0393): nothing is given, and the person
+        // task report, proposed ADR-0395): nothing is given, and the person
         // is told so rather than shown a grant that did not happen.
         Err(format!(
             "{}: cannot be given to a running program yet; start it with the grant instead",
