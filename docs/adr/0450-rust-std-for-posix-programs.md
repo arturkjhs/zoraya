@@ -19,7 +19,8 @@ stable flags only and linked by `zcc` against `libc.a` (rust-std/survey.md#build
 inside Zoraya through `posixrun` and through the broker under existing descriptions: files, processes, TCP, panics with
 unwinding and threads work; `HashMap`, every blocking wait, `fs::copy`, `Command::output` and `connect_timeout` fail
 for two causes in libposix (`syscall()` returns `int`, and `ioctl(FIONBIO)` is unanswered), and with those two
-emulated every check passes except `Command::current_dir`. It needs 22 libc names `libc.a` does not export and a rename
+emulated every check that ran passes except `Command::current_dir` and a spawned child's `HashMap` (a child has no
+random connection, ADR-0453). It needs 22 libc names `libc.a` does not export and a rename
 of six colliding `__rustc` symbols (rust-std/survey.md#route-a-the-prebuilt-musl-std). ADR-0451 to ADR-0454 decide those
 details; this ADR decides the route.
 
@@ -112,10 +113,15 @@ them visible and bounded.
    (ADR-0453).
 2. **Stable only.** No `-Z` option, no `RUSTC_BOOTSTRAP`, no nightly toolchain builds a Rust POSIX program; the flags are
    ADR-0452's.
-3. **INV-0109-2 is unchanged for C** (a Rust program's C parts go through `zcc`; `uname -s` prints `Zoraya`). **For
-   Rust code** the rule's intent is carried by a mechanical one: a Rust program reaches only `libc.a`'s exports, the
-   Rust-only archive of ADR-0451 and the `syscall()` table of ADR-0451, and contains no `svc` instruction outside
-   `zoraya-rt` (INV-0450-2).
+3. **INV-0109-2's letter holds** (a Rust program's C parts go through `zcc`, which still refuses `-D__linux__`; `uname
+   -s` prints `Zoraya`); **its intent is eroded, and this ADR accepts that for Rust programs only**: `std` and every
+   crate take `target_os = "linux"` branches, `std::env::consts::OS` is `"linux"`, and a crate's `build.rs` sees
+   `CARGO_CFG_TARGET_OS=linux` and may choose Linux C sources or defines for its `cc`-built parts. What bounds the
+   erosion is mechanical: a Rust program links only against `libc.a`'s exports, the Rust-only archive and the
+   `syscall()` table of ADR-0451, so a Linux-only function fails at link and a Linux-only system call fails with
+   `ENOSYS` and a report; and it contains no Linux `svc` of its own (INV-0450-2). The C side of a crate is otherwise not
+   checked for Linux assumptions beyond what `zcc` refuses; a crate that compiles Linux-only C fails at link or at run
+   time, as an unported C program would.
 4. **ADR-0418 item 4 is superseded** by this ADR (its other items stand): Rust `std` exists for POSIX programs.
 5. **Scope.** This is for ports and for programs built outside the repository. The repository's own programs stay
    native and `no_std`, and `docs/design.md`'s Platform rule for the workspace is unchanged.
@@ -125,8 +131,10 @@ them visible and bounded.
 
 ### Effect of the vision
 
-For target 2 (untrusted code), an agent's Rust program is a POSIX program with exactly its description's grants; the
-`svc` check means a program cannot step around `libc.a` into Linux numbers. Target 3 (a general desktop): Rust tools
+For target 2 (untrusted code), an agent's Rust program is a POSIX program with exactly its description's grants; its
+authority is its handles, whatever instructions it contains. The `svc` check is a portability check, not a boundary:
+it catches a crate that would issue Linux system-call numbers (which reach unrelated Zoraya calls), and an untrusted
+binary that did not come through `zcargo` is confined by the kernel as any program is. Target 3 (a general desktop): Rust tools
 and Ladybird's Rust become possible. Networking: `std::net`'s client, under the same grants as C (ADR-0453). Threads:
 `std::thread` over libposix's pthreads and futex (ADR-0451).
 
@@ -152,10 +160,10 @@ $ +r /work/src rg main /work/src          # in Zoraya, under rg's description
   `RUSTC_BOOTSTRAP`, and `rust-toolchain.toml`'s channel is a stable version. *Check:* `make check-rust-stable`, a script
   that greps `tools/zcargo`, `ports/` and the `Makefile` for `RUSTC_BOOTSTRAP`, `-Z` passed to cargo or rustc and
   `nightly`, and reads the channel; `tools/zcargo` itself refuses `-Z` arguments and a set `RUSTC_BOOTSTRAP`.
-- **INV-0450-2.** A Rust POSIX program contains no `svc` instruction outside `zoraya-rt`'s system-call functions.
-  *Check:* `zoraya-elf-check --no-foreign-svc`, run on every program `tools/zcargo` links, disassembles the executable
-  sections and fails on an `svc` whose enclosing symbol is not one of `zoraya-rt`'s; a test program that issues a raw
-  `svc` is refused.
+- **INV-0450-2.** A Rust POSIX program built by `tools/zcargo` contains no `svc` instruction outside the code linked from
+  `libc.a`. *Check:* `zcargo` links with `-Wl,-Map` and `zoraya-elf-check --no-foreign-svc MAP`, run before any
+  stripping, disassembles the executable sections and fails on an `svc` whose address lies outside the input sections
+  the map file attributes to `libc.a`'s members; a test crate that issues a raw `svc` is refused.
 
 ## Open questions
 

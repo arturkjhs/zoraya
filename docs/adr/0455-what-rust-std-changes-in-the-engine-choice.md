@@ -45,7 +45,7 @@ architect's decision on ADR-0410 could say.
 
 - **Description:** Rust `std` exists, but the engine stays WPE.
 - **Evidence for:** A stable release line; no compiler step; WPE's dependencies are C and C++ only.
-- **Evidence against:** Five times the code; about 28 dependency ports, several LGPL (ADR-0421); GLib's `dlopen`-based
+- **Evidence against:** About 3.8 times the code (7.08 million lines against 1.85 million; 5.3 times the C++); about 28 dependency ports, several LGPL (ADR-0421); GLib's `dlopen`-based
   pieces (browser-engine/survey.md#the-engines-compared).
 - **Cost:** ADR-0410's estimate.
 - **Precedent:** Haiku's WebKit, Sony's.
@@ -81,8 +81,14 @@ architect's decision on ADR-0410 could say.
 **Recommendation (not a decision): Option C.** Rust `std` removes the policy reason for WPE; it does not remove the
 other two (a compiler step and a pre-alpha engine), and ADR-0410's own trigger asks for the alpha.
 
+0. **Measure now, before the gates.** A link-only build of Ladybird's Rust crate graph at the pinned commit with
+   `tools/zcargo` (no run, no C++), in the foundation lane once ADR-0451's names exist: it tests the inferences of
+   rust-std/survey.md#ladybirds-rust (`cbindgen` only on the host, WebRTC separable, `getrandom`'s newer versions over
+   libc or the table) on 433 crates instead of one probe, and its undefined names are the list a Ladybird port would
+   add.
 1. **The gates.** ADR-0410's Option C becomes the recommendation when all three hold: (a) ADR-0450 to ADR-0454 are
-   accepted and built, with `make test-rust-std` green in CI; (b) Ladybird has published an alpha release; (c) CI's
+   accepted and built (after ADR-0411's `posix_spawnp`, or with it, ADR-0451 item 4), with `make test-rust-std` green in
+   CI and item 0's link build clean; (b) Ladybird has published an alpha release; (c) CI's
    compiler has moved to clang 19 or newer by ADR-0418 item 3's part. Until then WPE stays the default, as ADR-0410
    and the architect's note say.
 2. **When they hold**, before the plan's E parts start: Ladybird is pinned at its alpha's tag, built with

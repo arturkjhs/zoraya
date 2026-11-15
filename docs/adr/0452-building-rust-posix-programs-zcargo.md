@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0033, ADR-0109, ADR-0143, ADR-0360, ADR-0365, ADR-0367, ADR-0450, ADR-0451
-- **Evidence:** CP-13, CP-27, alternatives-postmortem.md#redox, rust-std/survey.md#building-on-stable, rust-std/survey.md#crates-that-bypass-libc, rust-std/survey.md#how-other-systems-did-it, rust-std/survey.md#measurements, rust-std/survey.md#route-a-and-inv-0109-2, rust-std/survey.md#the-probes
+- **Evidence:** CP-13, CP-27, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#redox, rust-std/survey.md#building-on-stable, rust-std/survey.md#crates-that-bypass-libc, rust-std/survey.md#how-other-systems-did-it, rust-std/survey.md#measurements, rust-std/survey.md#route-a-and-inv-0109-2, rust-std/survey.md#the-probes
 
 ## Context
 
@@ -58,16 +58,31 @@ project needs one tool instead. C programs have `zcc` and C++ `zc++` (ADR-0109, 
 - **Cost:** *(estimate)* 80 lines.
 - **Precedent:** none here.
 
+### Option D: A Zoraya SDK for outside projects (the Fuchsia way)
+
+- **Description:** Ship the sysroot, `zcc`, the archive and a toolchain configuration as one bundle that an outside
+  build system (GN, CMake, cargo) points at, as Fuchsia's SDK "provides the tools, libraries, and binaries required to
+  build and link programs for Fuchsia" (rust-std/survey.md#how-other-systems-did-it).
+- **Evidence for:** Outside projects need no checkout of this repository.
+- **Evidence against:** Zoraya builds every port from this repository (ADR-0109); a bundle is a release artefact with
+  its own versioning, which nothing here needs yet; the flags still need a tool that guards them.
+- **Cost:** *(estimate)* A packaging step and its versioning rules.
+- **Precedent:** Fuchsia's SDK (alternatives-postmortem.md#fuchsia--zircon-incl-starnix for the system).
+
 ## Recommendation
 
 **Recommendation (not a decision): Option B.**
 
-1. **`tools/zcargo ARGS...`** runs the pinned toolchain's `cargo` with `CARGO_BUILD_TARGET=aarch64-unknown-linux-musl`,
+1. **`tools/zcargo ARGS...`** runs the toolchain of this repository's `rust-toolchain.toml`, forced by
+   `RUSTUP_TOOLCHAIN` set to its channel, whatever the project's own `rust-toolchain.toml` says (Ladybird pins 1.98.0)
+   and whatever the caller's `RUSTUP_TOOLCHAIN` was, so that no build fetches another toolchain; its `cargo` runs with `CARGO_BUILD_TARGET=aarch64-unknown-linux-musl`,
    `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=tools/zcc` and, in `CARGO_ENCODED_RUSTFLAGS` (cargo's
    highest-precedence source, which with a `--target` applies to the target's crates and not to build scripts),
    `-C relocation-model=static -C link-self-contained=no -C target-feature=+crt-static -C link-arg=-lzoraya-rust`
    (ADR-0451's archive) followed by the caller's `RUSTFLAGS`, which `zcargo` then unsets, so that no caller's
-   variable replaces its flags.
+   variable replaces its flags. A project's own `rustflags` in its `.cargo/config.toml` are replaced by these (cargo
+   uses the highest-precedence source only); `zcargo` prints them with a note, and a port that needs one passes it in
+   `RUSTFLAGS`, where item 2's refusals see it.
 2. **It refuses** a `-Z` argument, a `+toolchain` argument, a set `RUSTC_BOOTSTRAP` (INV-0450-1), another `--target`,
    and in the caller's flags `link-self-contained=yes`, a `relocation-model` other than `static`, `-crt-static` and
    `panic=` other than `unwind` or `abort` (ADR-0454).
@@ -75,7 +90,9 @@ project needs one tool instead. C programs have `zcc` and C++ `zc++` (ADR-0109, 
    If the `cc` crate passes `--target=aarch64-unknown-linux-musl`, `zcc` accepts exactly that one value when called
    with `ZORAYA_RUST=1` set by `zcargo` and drops it; every other `--target` is refused as today, and `__linux__` stays
    undefined (INV-0109-2).
-4. **After a link**, `zcargo` runs `zoraya-elf-check --no-foreign-svc` (INV-0450-2) on each executable it produced.
+4. **After a link**, `zcargo` runs `zoraya-elf-check` and its `--no-foreign-svc` check (INV-0450-2) on each executable
+   it produced. That is also what catches link arguments a build script emits (`cargo:rustc-link-arg`), which item 2
+   does not see: a static-pie, a foreign `libc.a` or a missing `PT_GNU_EH_FRAME` fails there.
 5. **The archive.** `make -f ports/Makefile rust` builds `libzoraya-rust.a` into `build/sysroot/usr/lib`; `make ports`
    includes it.
 6. **The toolchain.** `rust-toolchain.toml`'s `targets` lists `aarch64-unknown-linux-musl` beside

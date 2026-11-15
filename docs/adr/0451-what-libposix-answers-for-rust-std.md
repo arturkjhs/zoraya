@@ -10,15 +10,17 @@
 ADR-0450 recommends Rust's prebuilt `aarch64-unknown-linux-musl` std over `libc.a`. That `std` was compiled for Linux
 and reaches Linux in three ways (rust-std/survey.md#what-std-links, rust-std/survey.md#what-std-calls-through-syscall):
 
-- **22 libc names** `libc.a` does not export: six implemented and hidden by the tier list (`bcmp`, `pause`, `pipe2`,
-  `sendmsg`, `setgroups`, `setsid`), sixteen absent, three of them on ADR-0005's deny list (`setuid`, `setgid`,
-  `sigaltstack`).
+- **22 libc names** `libc.a` does not export: seven hidden by the tier list, of which four are implemented (`bcmp`,
+  `getauxval`, `pause`, `pipe2`) and three are libposix's `ENOSYS` stubs (`sendmsg`, `setgroups`, `setsid`); fifteen
+  absent, three of them on ADR-0005's deny list (`setuid`, `setgid`, `sigaltstack`). `std` references `posix_spawnp`,
+  `socketpair`, `sendmsg` and `recvmsg` strongly, so no Rust program links without them.
 - **`syscall()`**, through `std`'s `syscall!` macro, which falls back to `libc::syscall` because a weak reference never
   pulls a function out of a static archive: `futex` (`FUTEX_WAIT_BITSET` with an absolute `CLOCK_MONOTONIC` deadline and
   a full mask, `FUTEX_WAKE`), `getrandom`, `statx`, `copy_file_range`, `splice`, `gettid`, `pidfd_*`.
 - **`ioctl(FIONBIO)`** for every `set_nonblocking`.
 
-Measured (rust-std/survey.md#the-probes): libposix's `syscall` is `not_yet!(int syscall ...)` and returns a 32-bit `-1`;
+Measured (rust-std/survey.md#the-probes): libposix's `syscall` is `not_yet!(int syscall tee sendmsg ...)` and returns a
+32-bit `-1` (so do `tee` and `sendmsg`, whose prototypes return `ssize_t`);
 `std` reads `long`, sees 4294967295 and treats it as success, so `HashMap::new` panics, `fs::copy` writes a wrong
 file and every futex wait returns at once (a condvar ping-pong of 1000 rounds took 37.5 s; with a correct futex,
 10 ms). `ioctl(FIONBIO)` answers `ENOTTY`, so `Command::output` panics. With `syscall()` and `FIONBIO` emulated in the
@@ -53,9 +55,9 @@ mangled hash is the same for every target of one compiler) stop the link until r
 
 ### Option B: A fixed `syscall()` table, `FIONBIO`, ten exported names, a Rust-only archive
 
-- **Description:** Items 1 to 6 below.
-- **Evidence for:** Every failure the probes found is answered by items 1 and 2, and the rest of the probe passed
-  (rust-std/survey.md#the-probes); the archive follows `libpyshim.a` (ADR-0320) and libc++'s shim (ADR-0366).
+- **Description:** Items 1 to 7 below.
+- **Evidence for:** Every failure the probes found is answered by items 1 and 2, except a spawned child's randomness
+  (ADR-0453) and `Command::current_dir` (item 3), and the rest of the probe passed (rust-std/survey.md#the-probes); the archive follows `libpyshim.a` (ADR-0320) and libc++'s shim (ADR-0366).
 - **Evidence against:** A program that calls `syscall()` with any other number gets `ENOSYS`; the names in the archive
   are failures, so a crate that relies on them gets errors.
 - **Cost:** *(estimate)* 200 to 400 lines in `zoraya-posix` with host tests, a 50-line archive, the renaming rule.
@@ -71,7 +73,18 @@ mangled hash is the same for every target of one compiler) stop the link until r
 - **Cost:** *(estimate)* The 91-line shim in the archive.
 - **Precedent:** the probe.
 
-### Option D: Change nothing
+### Option D: Answer `std` through the native ABI with a `std` of Zoraya's own (the Fuchsia way)
+
+- **Description:** As Fuchsia's `std` calls its kernel's typed futex and handle calls directly, a Zoraya `sys` module
+  would call `futex_wait`, the random service and the stream calls with no `syscall()` and no `ioctl`
+  (alternatives-postmortem.md#fuchsia--zircon-incl-starnix for Zircon's typed futex calls, DM-120).
+- **Evidence for:** No Linux numbers at all (driver 2); typed calls (driver 5).
+- **Evidence against:** It needs a `std` built for a Zoraya target, which is ADR-0450's rejected Route B (nightly or a
+  compiler fork).
+- **Cost:** *(estimate)* ADR-0450 Option C or D.
+- **Precedent:** Fuchsia, Redox.
+
+### Option E: Change nothing
 
 - **Description:** Rust programs get what `libc.a` has today.
 - **Evidence for:** No work.
@@ -92,27 +105,38 @@ mangled hash is the same for every target of one compiler) stop the link until r
    - `SYS_gettid` (178): as `gettid` (item 3).
    - Every other number: `-1` with `errno = ENOSYS`, and a line on the `REPORT` channel once per number (as the
      resolver reports a path, ADR-0100), so that a program's unanswered call is visible. `std` falls back from
-     `ENOSYS` for `statx`, `copy_file_range`, `splice` and `pidfd_*` (rust-std/survey.md#what-std-calls-through-syscall);
-     these four are not reported.
+     `ENOSYS` for `statx`, `copy_file_range`, `splice`, `pidfd_open` and `pidfd_send_signal`
+     (rust-std/survey.md#what-std-calls-through-syscall); these five are not reported.
+   - Every `not_yet!` stub returns its prototype's type: `tee` and `sendmsg` (`ssize_t`) return a 64-bit `-1` too.
 2. **`ioctl(fd, FIONBIO, &int)`** sets or clears `O_NONBLOCK` as `fcntl(F_SETFL)` does, on every descriptor `fcntl`
    accepts; other requests are unchanged.
-3. **Names `libc.a` adds** (the block below): the hidden `bcmp`, `pause` and `pipe2`; `sched_yield` (libposix's
+3. **Names `libc.a` adds** (the block below): the hidden `bcmp`, `getauxval` (musl's, over the auxiliary vector
+   libposix lays out, ADR-0361), `pause` and `pipe2`; `sched_yield` (libposix's
    `zoraya_posix_sched_yield`); `clock_nanosleep` (`CLOCK_MONOTONIC` and `CLOCK_REALTIME`, relative and
-   `TIMER_ABSTIME`, over `nanosleep`'s wait; other clocks `EINVAL`); `dirfd`; `getauxval` (musl's, over the auxiliary
-   vector libposix lays out); `gettid` (the thread's kernel id, as `pthread_self`'s); `posix_spawn_file_actions_addchdir`
-   (POSIX.1-2024) and its `_np` alias. `posix_spawnp` (ADR-0411) and `socketpair`, `sendmsg`, `recvmsg` (ADR-0412) are
-   already accepted and come with their parts.
-4. **`libzoraya-rust.a`**, built from `ports/rust/zoraya-rust.c` into the sysroot and linked only by `tools/zcargo`
+   `TIMER_ABSTIME`, over `nanosleep`'s wait; other clocks `EINVAL`); `dirfd`; `gettid` (the thread's kernel id, as `pthread_self`'s); `posix_spawn_file_actions_addchdir`
+   (POSIX.1-2024) and its `_np` alias. This reverses two earlier choices, named here: ADR-0366 rejected exporting
+   `sched_yield` from libposix (its Option B), and libc++'s shim keeps a weak `sched_yield` (INV-0366-2), which the strong
+   export now overrides without a clash, so INV-0366-2 stands unchanged; CPython's `libpyshim.a` (ADR-0320 item 3)
+   defines `dirfd` (`ENOTSUP`), `pause` and `sched_yield`, and the part that builds this removes those three from it,
+   recording the change in ADR-0320 (ADR-0001 rule 6 note).
+4. **Order of parts.** `std` needs `posix_spawnp` (ADR-0411 item 1) and `socketpair`, `sendmsg`, `recvmsg` (ADR-0412)
+   to link. The Rust part builds `posix_spawnp` itself as ADR-0411 item 1 specifies it, if the foundation part has not
+   yet; `socketpair`, `sendmsg` and `recvmsg` are in the Rust-only archive as `ENOSYS` until ADR-0412's part exports them,
+   and leave the archive in that part.
+5. **`libzoraya-rust.a`**, built from `ports/rust/zoraya-rust.c` into the sysroot and linked only by `tools/zcargo`
    (ADR-0452), defines the names `std` references that `libc.a` keeps out, each failing with `ENOSYS`: `setuid`,
    `setgid`, `setgroups`, `setsid`, `chroot` (`CommandExt` options), `sigaltstack` (`std` then installs no alternate
    stack), `sched_getaffinity` (`std` falls back to `sysconf`), `sendfile`, `splice` (`std` falls back), `waitid`. A name
-   enters it only by an ADR.
-5. **The `__rustc` names** of libposix's Rust runtime (`_RNvCs..._7___rustc*`) are renamed when `libc.a` is assembled,
+   enters it only by an ADR. **This is a scoped exception to INV-0005-2's intent**, named here: in a program `zcargo`
+   links, `setuid`, `setgid` and `sigaltstack` resolve (to failures), so a crate's C code that calls them links and gets
+   `ENOSYS` at run time instead of failing at link. `libposix` still exports none of them, and no C or C++ program built
+   by `zcc` or `zc++` links the archive (INV-0451-2).
+6. **The `__rustc` names** of libposix's Rust runtime (`_RNvCs..._7___rustc*`) are renamed when `libc.a` is assembled,
    by the same hiding step as the tier list (`posix-surface-check hide` stops treating them as internal), so that no
    Rust program collides with libposix.
-6. **`std`'s probes** of `/proc/self/cgroup` and `/proc/self/mountinfo` (from `available_parallelism`) are `ENOENT`
-   without a report or hint; `/proc/self/maps` likewise (the main thread's guard). Any other missing path is reported
-   as today.
+7. **`std`'s probes** of `/proc/self/cgroup` and `/proc/self/mountinfo` (from `available_parallelism`) are `ENOENT`
+   without a report or hint; `/proc/self/maps` likewise (read when a backtrace is symbolised). Any other missing path is
+   reported as today.
 
 ```posix-surface-added
 bcmp
@@ -142,8 +166,9 @@ rust-tool: syscall 279 is not answered (ENOSYS)     # the report's wording is th
 
 ## Consequences
 
-- **Positive.** C callers of `syscall()` get a correct `long`; `std`'s synchronisation sleeps; `HashMap`, `fs::copy`,
-  `Command::output` and `connect_timeout` work; the surface grows by ten listed names.
+- **Positive.** C callers of `syscall()` get a correct `long`; `std`'s synchronisation sleeps; `HashMap`, `fs::copy`
+  and `Command::output` work (measured with the emulation); `connect_timeout` gets past `FIONBIO` (its non-blocking
+  connect path was not exercised); the surface grows by ten listed names.
 - **Negative.** Zoraya answers three Linux system-call numbers and one Linux `ioctl` request; a Rust-only archive to keep
   in step with `std`.
 - **Follow-up.** The part that builds ADR-0450 to ADR-0454; `docs/design.md`'s libposix section.
@@ -151,9 +176,10 @@ rust-tool: syscall 279 is not answered (ENOSYS)     # the report's wording is th
 ## Invariants
 
 - **INV-0451-1.** `syscall()` returns `long` and answers exactly the numbers of item 1; any other number returns `-1`
-  with `errno == ENOSYS`. *Check:* host tests in `zoraya-posix` for each answered number, for an unanswered one (the
-  return read as a 64-bit `-1`, not 4294967295) and for each futex form; `posix-surface-check` reads `syscall`'s
-  declared return type from the header.
+  with `errno == ENOSYS`; every libposix definition returns the width its C prototype declares. *Check:* a C test
+  program of `make test-libposix`, compiled by `zcc` against the sysroot's headers, calls `syscall` with an unanswered
+  number, `tee` and `sendmsg` through their prototypes and asserts each result is `-1L` (not 4294967295), and calls each
+  futex form; host tests in `zoraya-posix` for each answered number; `not_yet!` takes the return type per name.
 - **INV-0451-2.** `libzoraya-rust.a` defines only names listed in this or a later accepted ADR, each failing, and is
   linked into no program but those `tools/zcargo` links. *Check:* `make check-rust-archive` lists its defined names
   against the ADR's list and greps every non-Rust link line (`zcc`'s, `zc++`'s) for it.

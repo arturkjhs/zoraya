@@ -4,8 +4,10 @@
  * libposix should do instead is in docs/research/rust-std/survey.md.
  *
  * Three kinds, so that the probe table can say which result depends on what:
- *   H  libposix implements the name but the tier list hides it as
- *      __zoraya_NAME (ADR-0141): the shim only forwards.
+ *   H  libposix defines the name but the tier list hides it as
+ *      __zoraya_NAME (ADR-0141): the shim only forwards. (sendmsg,
+ *      setgroups and setsid are libposix's ENOSYS stubs; getauxval is
+ *      hidden too, but the shim answers it itself.)
  *   C  absent; the shim composes it from exported functions.
  *   E  absent; the shim fails with ENOSYS (what std then does is measured). */
 #include <errno.h>

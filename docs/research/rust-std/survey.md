@@ -101,21 +101,22 @@ Two obstacles appear at the first link (**measured**, `hello` and then the full 
    index stays valid (`build.sh`); 168 bytes change.
 2. **22 names `libc.a` does not export**: `bcmp`, `chroot`, `clock_nanosleep`, `dirfd`, `getauxval`, `pause`, `pipe2`,
    `posix_spawn_file_actions_addchdir_np`, `posix_spawnp`, `recvmsg`, `sched_getaffinity`, `sched_yield`, `sendfile`,
-   `sendmsg`, `setgid`, `setgroups`, `setsid`, `setuid`, `sigaltstack`, `socketpair`, `splice`, `waitid`. Six of them
-   are implemented in `libc.a` and hidden by the tier list as `__zoraya_NAME`: `bcmp`, `pause`, `pipe2`, `sendmsg`,
-   `setgroups`, `setsid`. Sixteen are absent. `hello` alone needs four: `bcmp`, `getauxval`, `pause`, `sigaltstack`.
+   `sendmsg`, `setgid`, `setgroups`, `setsid`, `setuid`, `sigaltstack`, `socketpair`, `splice`, `waitid`. Seven of them
+   are in `libc.a` but hidden by the tier list as `__zoraya_NAME`: four implemented (`bcmp`, `getauxval`, musl's and weak,
+   `pause`, `pipe2`) and three that are libposix's `not_yet!` stubs failing with `ENOSYS` (`sendmsg`, `setgroups`,
+   `setsid`, `ffi.rs:2796`). Fifteen are absent. `hello` alone needs four: `bcmp`, `getauxval`, `pause`, `sigaltstack`.
 
 What `std` does with each, from the source:
 
 | Name | Where `std` uses it | Kind in the probe shim |
 |---|---|---|
 | `bcmp` | compiler-emitted for slice comparison | hidden, forwarded |
-| `getauxval` | `AT_MINSIGSTKSZ` for the guard handler (`pal/unix/stack_overflow.rs:304`); `std_detect` reads `AT_HWCAP` | composed: `0`, `ENOENT` |
+| `getauxval` | `AT_MINSIGSTKSZ` for the guard handler (`pal/unix/stack_overflow.rs:304`); `std_detect` reads `AT_HWCAP` | hidden (musl's, weak); the shim composes `0`, `ENOENT` instead |
 | `sigaltstack` | the stack-overflow handler of every thread (`stack_overflow.rs:258`) | `ENOSYS`; `std` then reads a zeroed `stack_t` and installs no alternate stack |
 | `pause` | exit races (`sys/exit.rs:52`), a failed guard record (`thread_info.rs:107`) | hidden, forwarded |
 | `pipe2` | every pipe, `O_CLOEXEC` (`sys/pipe/unix.rs:28`) | hidden, forwarded |
-| `posix_spawnp`, `posix_spawn_file_actions_addchdir_np` | `Command::spawn` and `Command::current_dir` (`process/unix/unix.rs:482`, `615`) | `posix_spawnp` composed (`$PATH` search over `posix_spawn`); `addchdir_np` `ENOSYS` |
-| `waitid`, `recvmsg`, `sendmsg` | pidfds (`process/unix/pidfd.rs`, `unix.rs:924`) | `ENOSYS`; hidden `sendmsg` forwarded |
+| `posix_spawnp`, `posix_spawn_file_actions_addchdir_np` | `Command::spawn` and `Command::current_dir` (`process/unix/unix.rs:482`; on musl `addchdir_np` is a strong reference, `unix.rs:642-646`) | `posix_spawnp` composed (`$PATH` search over `posix_spawn`); `addchdir_np` `ENOSYS` |
+| `waitid`, `recvmsg`, `sendmsg` | pidfds (`process/unix/pidfd.rs`, `unix.rs:924`) | `ENOSYS`; hidden `sendmsg` forwarded (itself an `ENOSYS` stub that returns `int`, though `sendmsg` returns `ssize_t`) |
 | `sched_yield` | `thread::yield_now`, spin loops | composed: `nanosleep` of 0 |
 | `clock_nanosleep` | `thread::sleep_until` | composed over `nanosleep` |
 | `dirfd` | `fs::remove_dir_all` (the `openat` walk) | composed: libposix's `DIR` holds the fd after its 280-byte `dirent` (`ffi.rs:2124`) |
@@ -147,8 +148,19 @@ the probe: `getrandom` is exported by `libc.a`, yet `std` reached `syscall()`), 
 
 Not used by `std` at all: `clone3`, `epoll_*`, `eventfd`, `memfd_create`, `prctl` outside `thread::set_name` (which
 uses `pthread_setname_np` on musl), `io_uring`. `std` also reads `/proc/self/cgroup` and `/proc/self/mountinfo` in
-`available_parallelism` (`thread/unix.rs:820`, `969`), `/proc/self/maps` for the main thread's guard, and
-`/proc/self/exe` in `current_exe`.
+`available_parallelism` (`thread/unix.rs:820`, `969`), `/proc/self/maps` when a backtrace is symbolised (the `backtrace`
+crate's `parse_running_mmaps_unix.rs:48`; on musl the main thread's guard is not looked up, `stack_overflow.rs:447-453`),
+and `/proc/self/exe` in `current_exe`.
+
+**Start-up and signals.** `std`'s start-up installs `SIGSEGV` and `SIGBUS` handlers with `sigaction`
+(`stack_overflow.rs:172-194`), which never run on Zoraya (no handler runs on a fault, ADR-0106); sets `SIGPIPE` to
+ignored (a write to a closed pipe is `EPIPE`, which is Zoraya's native behaviour anyway, ADR-0004); and checks fds 0 to
+2 with `poll`, opening `/dev/null` for a closed one. Spawned children get `SIGPIPE` reset to the default through
+`posix_spawnattr_setsigdefault`. A terminal on standard input was not probed.
+
+**Stacks.** The main thread's stack is 64 KiB (`zoraya_abi::spawn::USER_STACK_SIZE`, `crates/zoraya-abi/src/spawn.rs:46`;
+ADR-0300); `std`'s threads take 2 MiB unless a size is given (`thread/unix.rs:31`, `RUST_MIN_STACK`). The probe's
+unbounded recursion faulted on the main stack; nothing else in the probe came near either limit.
 
 **The return-type defect (measured).** libposix's `syscall` returns `int`. On AArch64 a function returning `int`
 leaves `-1` in `w0`; a caller reading `long` from `x0` sees `0x00000000ffffffff`, so `std` sees 4294967295, a large
@@ -161,7 +173,8 @@ by `std`, read the low half and behave as `-1` by luck.
 **Non-blocking descriptors.** On Linux `std` sets `O_NONBLOCK` with `ioctl(fd, FIONBIO, &v)` (`sys/fd/unix.rs:632`,
 `net/connection/socket/unix.rs:594`), not with `fcntl`. libposix's `ioctl` answers `ENOTTY` (**measured**), and
 `Command::output` unwraps the result (`read2` puts both pipes in non-blocking mode), so it panics.
-`TcpStream::connect_timeout` and `set_nonblocking` fail. Close-on-exec on Linux goes through `fcntl` (the `FIOCLEX`
+`TcpStream::connect_timeout` and `set_nonblocking` fail. `set_read_timeout` and `set_write_timeout` succeed but
+never fire: libposix accepts `SO_RCVTIMEO` and `SO_SNDTIMEO` and does not honour them (ADR-0287 item 4). Close-on-exec on Linux goes through `fcntl` (the `FIOCLEX`
 branch excludes Linux, `fd/unix.rs:570`), and `FIONBIO` is the only `ioctl` `std` makes.
 
 ### The probes
@@ -217,7 +230,7 @@ name ends in `zfetch`). Scripts: [`scripts/basic.script`](probes/scripts/basic.s
 | process | a child that makes a `HashMap` | (not reached: `output` panics first) | **exit 101**: "failed to generate random data: ... NotFound" (a child has no random connection, INV-0411-4, and `std` falls back to `/dev/urandom`) |
 | net | `ToSocketAddrs` of `10.0.2.2:PORT` and of `test.zoraya:PORT` (`net.hosts`) | works | works |
 | net | `TcpStream` GET of a page; of 1,000,090 bytes by name | works; 205 ms and 46 ms in two runs | works; 51 ms |
-| net | `TcpStream::connect_timeout` | **fails**: `ENOTTY` from `FIONBIO` | `EACCES` (the port is not the URL's: the grant's answer) |
+| net | `TcpStream::connect_timeout` (to a port the grant does not cover) | **fails**: `ENOTTY` from `FIONBIO` | `EACCES` from the grant; the non-blocking connect, `poll` and `SO_ERROR` path itself did not run |
 | net | the same program through `posixrun`, no grant | `EACCES` | `EACCES` |
 | panic | `catch_unwind` of a panic 20 frames down, 20 destructors run; `resume_unwind` with a `u32` payload; a panic in a thread seen by `join`; a poisoned `Mutex`; an index out of bounds caught | works | works |
 | panic | `Backtrace::force_capture` | captured, 6 lines, no function names (release build without debug information; `/proc/self/maps` not given) | same |
@@ -230,7 +243,7 @@ So **today**, with nothing but the probe shim, a Rust `std` program runs and get
 and threads, but every blocking wait of `std`'s synchronisation spins (correct but CPU-bound: a condvar round trip
 waits for the next scheduler tick), `HashMap::new` panics, `fs::copy` is wrong and `Command::output` and
 `connect_timeout` panic or fail. All of those come from two causes, `syscall()`'s return type and missing answers,
-and `FIONBIO`; with both emulated (**fixed**), every check passes except `Command::current_dir`, which needs
+and `FIONBIO`; with both emulated (**fixed**), every check that ran passes except `Command::current_dir`, which needs
 `posix_spawn_file_actions_addchdir`, a child's `HashMap` (a spawned child has no random connection), and the
 platform's own refusals (hard links, ungranted paths and ports).
 
@@ -238,17 +251,18 @@ platform's own refusals (hard links, ungranted paths and ports).
 
 From the two sections above and the **fixed** run:
 
-1. **`syscall()` returns `long`** and answers a fixed table: `SYS_futex` (98) with `FUTEX_WAIT`, `FUTEX_WAKE` and
+1. **`syscall()` returns `long`** (and so do the other `not_yet!` stubs whose prototypes return `ssize_t`: `tee`,
+   `sendmsg`) and answers a fixed table: `SYS_futex` (98) with `FUTEX_WAIT`, `FUTEX_WAKE` and
    `FUTEX_WAIT_BITSET` with `FUTEX_BITSET_MATCH_ANY` and an absolute `CLOCK_MONOTONIC` deadline, each with or without
    `FUTEX_PRIVATE_FLAG`; `SYS_getrandom` (278) as `getrandom`; `SYS_gettid` (178). Every other number fails with
    `ENOSYS` (as `-1`, `long`). The emulation is 91 lines of C; in libposix it is a match in `ffi.rs` beside
    `zoraya_posix_futex` (estimate: under 150 lines with tests).
 2. **`ioctl(FIONBIO)`** sets or clears `O_NONBLOCK` as `fcntl(F_SETFL)` does (Linux and the BSDs define it so; C
    programs use it too).
-3. **Names to export**: the six hidden ones `std` needs (`bcmp`, `pause`, `pipe2`, `sendmsg` and, if their semantics
-   are wanted, `setgroups`, `setsid`) and absent ones with a real meaning on Zoraya: `sched_yield` (libposix has
+3. **Names to export**: the four hidden ones that are implemented (`bcmp`, `getauxval`, `pause`, `pipe2`; `sendmsg`,
+   `setgroups` and `setsid` are hidden `ENOSYS` stubs) and absent ones with a real meaning on Zoraya: `sched_yield` (libposix has
    `zoraya_posix_sched_yield`, ADR-0366), `clock_nanosleep` (over the same wait as `nanosleep`), `dirfd`,
-   `getauxval` (musl's reads the auxiliary vector libposix lays out, ADR-0361), `gettid`,
+   `gettid`,
    `posix_spawn_file_actions_addchdir` (POSIX.1-2024) and its `_np` alias. `posix_spawnp` (ADR-0411) and
    `socketpair`, `sendmsg`, `recvmsg` (ADR-0412) are already accepted.
 4. **Names that stay out of `libc.a`** because the deny list or an ADR keeps them out (`setuid`, `setgid`,
@@ -268,8 +282,8 @@ From the two sections above and the **fixed** run:
 system calls themselves would issue Linux `svc` instructions on Zoraya, whose kernel numbers its calls differently
 (ADR-0002), so such a call reaches an unrelated Zoraya call or an error (inference). The known case is `rustix`,
 whose default on Linux is its `linux_raw` backend over `linux-raw-sys` `[unverified: rustix's documentation was not
-fetched]`. Crates that call Linux-only libc functions (`epoll_*` through `mio` and `tokio`, `inotify`, `memfd_create`,
-`dlopen` through `libloading`) fail at link, because `libc.a` exports none of them, which is the surface gate working
+fetched]`. Crates that call Linux-only libc functions (`epoll_*` through `mio` and `tokio`, `inotify`, `dlopen` through
+`libloading`) fail at link, because `libc.a` exports none of them (`memfd_create` it does export, ADR-0413), which is the surface gate working
 as intended. **Measured** on the probe: one `svc` instruction in the whole program, inside
 `zoraya_rt::raw_syscall` (libposix's), found by disassembling and attributing each `svc` to its function; a check of
 that shape would catch a `rustix` that slipped through.
@@ -331,7 +345,8 @@ From pages fetched on 2026-11-15; times to port were not found in any of them.
   own libc in Rust: Route B with a libc Zoraya rejected (ADR-0100). The postmortem's Redox section
   (alternatives-postmortem.md#redox) describes the shim living in relibc in user space.
 - **Fuchsia.** `x86_64-unknown-fuchsia` and `aarch64-unknown-fuchsia` are tier 2; "Fuchsia targets support `std`" [R7],
-  maintained by five named Google engineers. Route B, upstreamed, by the system's vendor. Fuchsia also runs Linux
+  maintained by five named Google engineers. Programs are built against the Fuchsia SDK, which "provides the tools,
+  libraries, and binaries required to build and link programs for Fuchsia" [R7]. Route B, upstreamed, by the system's vendor. Fuchsia also runs Linux
   binaries unmodified through Starnix, a user-space Linux-ABI runner (alternatives-postmortem.md#fuchsia--zircon-incl-starnix):
   for Linux programs, Fuchsia chose to answer Linux's interface rather than to port them.
 - **Hermit.** All four `-unknown-hermit` targets are tier 3 with `std` [R1]; maintained by two people [R8].
@@ -368,7 +383,9 @@ Read from `Cargo.lock` at `8ab2c0bb9c43` (the commit TASK-33 measured; SHA-256
   further).
 
 So a Ladybird build without WebRTC needs no crate that bypasses libc in the target (inference from the lock), and its
-Rust parts would link against the surface of Route A. Whether WebRTC can be left out of a build was not read.
+Rust parts would link against the surface of Route A. Whether WebRTC can be left out of a build was not read, nor which
+Linux backend `getrandom` 0.3.4 and 0.4.2 choose (0.2.17 calls `libc::syscall(SYS_getrandom)` `[unverified: not read here]`, which ADR-0451's table
+answers); a link-only build of the crate graph with the Route A flags would test all three inferences.
 
 ## Measurements
 

@@ -2,8 +2,8 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-15
-- **Depends on:** ADR-0106, ADR-0360, ADR-0361, ADR-0362, ADR-0450, ADR-0451, ADR-0452
-- **Evidence:** alternatives-postmortem.md#theseus, rust-std/survey.md#building-on-stable, rust-std/survey.md#the-probes, rust-std/survey.md#what-std-links
+- **Depends on:** ADR-0106, ADR-0300, ADR-0302, ADR-0360, ADR-0361, ADR-0362, ADR-0450, ADR-0451, ADR-0452
+- **Evidence:** alternatives-postmortem.md#theseus, rust-std/survey.md#building-on-stable, rust-std/survey.md#the-probes, rust-std/survey.md#what-std-calls-through-syscall, rust-std/survey.md#what-std-links
 
 ## Context
 
@@ -18,6 +18,11 @@ no Rust message, because `std`'s guard handler needs `sigaltstack` and a `SIGSEG
 a fault (ADR-0106 item 12; ADR-0451 item 4 makes `sigaltstack` fail). `Backtrace::force_capture` captured six frames
 without names in a release build without debug information. Panic messages print the thread id as
 18446744073709551615 until `gettid` is answered (ADR-0451) (rust-std/survey.md#what-std-links).
+
+Stacks (rust-std/survey.md#what-std-calls-through-syscall): the main thread's stack is 64 KiB
+(`zoraya_abi::spawn::USER_STACK_SIZE`, ADR-0300); `std`'s threads take 2 MiB unless the program asks otherwise, beside
+libposix's own pthread default of 128 KiB (ADR-0302). `std` installs `SIGSEGV` and `SIGBUS` handlers at start, which
+never run on Zoraya, and ignores `SIGPIPE` (a write to a closed pipe is `EPIPE`, as natively).
 
 Theseus recovers from faults by unwinding, and failed to recover from 31% of the injected hardware faults that
 manifested, mainly because Rust and LLVM emit only synchronous unwind tables (alternatives-postmortem.md#theseus).
@@ -75,8 +80,14 @@ manifested, mainly because Rust and LLVM emit only synchronous unwind tables (al
 2. **An uncaught panic** prints `std`'s message on standard error and exits with status 101; the shell says "exit status
    101". `abort` is `SIGABRT` ("ended by signal 6"), as for C++ (ADR-0362).
 3. **A stack overflow** is a fault ("crashed (data abort, ...)"), with no Rust message; recorded as a known limit.
-4. **A panic across a C or C++ frame** follows Rust's rules for `extern "C"` (it aborts) `[unverified: Rust's reference
-   was not fetched]`; a C++ exception through Rust frames is not supported. Mixed programs catch at their boundaries.
+   The main thread's 64 KiB stack is small for Rust, debug builds especially: a Rust program that recurses deeply runs
+   its work on a `std::thread` with a stack size it chooses; `zcargo` does not change the main stack (a larger one is
+   ADR-0300's to decide, revisit trigger below). `std`'s 2 MiB thread stacks count against the process's memory quota
+   as libposix's mappings do (ADR-0300's 256 mappings and 128 threads bound how many).
+4. **Panics and foreign frames.** This ADR decides only that Rust and C++ share one unwinder, so that a later ADR can
+   allow unwinding between them; it allows none now. Programs catch panics and exceptions at their language
+   boundaries. (How Rust treats a panic at an `extern "C"` boundary, and whether `extern "C-unwind"` makes unwinding
+   across it defined, was not read here: an open question, not a basis of this ADR.)
 5. **Backtraces** have names only with symbols in the program (a build with debug information or without stripping);
    measured without names in the release build.
 
@@ -113,10 +124,16 @@ exit status 101
 
 - Whether `std`'s backtrace finds names through `/proc/self/exe` when the program has symbols; one build with debug
   information answers it.
+- Rust's rules for panics at `extern "C"` and `extern "C-unwind"` boundaries, and whether Ladybird's Rust and C++ rely
+  on unwinding across them; read before the engine's first Rust part.
+- Whether 2 MiB `std` thread stacks are committed at once by libposix's `mmap` or as touched, which decides how many
+  Rust threads fit a job's memory quota; measured with a thread-heavy program.
 
 ## Revisit triggers
 
 - Zoraya gains fault handlers (ADR-0106 revisited): the stack-overflow message becomes possible.
 - A port needs C++ exceptions through Rust frames.
+- A ported Rust program overflows the 64 KiB main stack in normal use: a larger main stack for POSIX programs
+  (ADR-0300).
 
 ## Architect's decision
