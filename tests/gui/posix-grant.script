@@ -49,7 +49,7 @@ chord meta g
 pause 800
 type +r $HOME/x
 type \r
-status +r $HOME/x: only plain words are given
+status $HOME/x: only plain words are given
 chord meta g
 pause 800
 type +r /nowhere

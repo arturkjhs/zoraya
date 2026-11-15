@@ -543,7 +543,12 @@ impl Screen {
             (self.width, self.height),
             |x, y| self.at(x, y),
         );
-        all.last().cloned().unwrap_or_default()
+        // The row is drawn on the selection's ground, where the reader reads a
+        // blank cell as `_` (its mark for a cell with a ground of its own).
+        // A script's expected text has none (an underscore in it is a space).
+        all.last()
+            .map(|r| r.replace('_', " ").trim_end().to_string())
+            .unwrap_or_default()
     }
 
     /// The rows of a terminal whose body is at `(ox, oy)`, physical.
@@ -1723,6 +1728,43 @@ mod tests {
         assert!(parse_ppm(b"P5\n1 1\n255\n\0").is_err());
         assert!(parse_ppm(b"P6\n2 2\n255\n\0\0\0").is_err());
         assert!(parse_ppm(b"P6\n").is_err());
+    }
+
+    /// ADR-0337: the status row below the grid reads back as its text, its
+    /// blank cells (on the selection's ground) as spaces.
+    #[test]
+    fn the_status_row_reads_back_as_its_text() {
+        let (w, h) = (1024usize, 768usize);
+        let mut look = Look::new(Scale::ONE, Appearance::Light);
+        let (columns, rows) = look.grid_for(w as u32, h as u32);
+        let (sw, sh) = look.surface_size(columns, rows + 1);
+        let mut surface = vec![0u32; sw * sh];
+        look.clear(&mut surface);
+        let mut row = zoraya_term::StatusRow::default();
+        row.set(
+            zoraya_proto_term::STATUS_NOTICE,
+            b"vi was not given ~/other.txt (to read)",
+        );
+        assert!(row.render(&mut look, &mut surface, sw, columns, rows));
+        let mut pixels = vec![0x0020_3040u32; w * h];
+        let (ox, oy) = zoraya_compositor::first_body(Scale::ONE);
+        for y in 0..sh {
+            for x in 0..sw {
+                pixels[(oy as usize + y) * w + ox as usize + x] = surface[y * sw + x];
+            }
+        }
+        let screen = Screen {
+            width: w,
+            height: h,
+            pixels,
+        };
+        let mut reader = reader();
+        let got = screen.status_at(&mut reader, (ox, oy));
+        assert!(
+            got.starts_with("vi was not given ~/other.txt (to read)"),
+            "{got:?}"
+        );
+        assert!(got.ends_with("System+G: give"), "{got:?}");
     }
 
     /// The screen reader against the real terminal's rendering, placed as
