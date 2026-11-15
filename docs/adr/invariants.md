@@ -1104,4 +1104,4 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0453](0453-rust-command-and-fs-under-grants.md) `std::fs`, `std::net` and `std::process::Command` under Zoraya's grants: a Rust program is a described POSIX program, and the broker gives every POSIX child randomness | 2 |
 | [ADR-0454](0454-rust-panics-and-unwinding.md) Rust panics unwind through the sysroot's libunwind, the one unwinder C++ uses; a stack overflow is a fault | 2 |
 | [ADR-0455](0455-what-rust-std-changes-in-the-engine-choice.md) What a Rust `std` changes in ADR-0410: Ladybird becomes the recommendation once Rust `std` passes its test step and Ladybird ships its alpha | 1 |
-| **Total** | **840** |
+| **Total** | **842** |
