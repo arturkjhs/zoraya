@@ -1447,3 +1447,68 @@ fn a_dup2_of_a_closed_fd_is_ebadf() {
     assert_eq!(out.fds.iter().map(|f| f.fd).collect::<Vec<_>>(), [9]);
     drop_made(&mut r, &out);
 }
+
+// ------------------------------------------------------------ the terminal entry (review of F4, finding 6)
+
+/// `/dev/tty` listed by name is a clone of the parent's terminal connection
+/// for the child's group, a handle of its own at its own index; `:ro` of it
+/// is `EINVAL`, and a parent without one is `EACCES`.
+#[test]
+fn a_listed_terminal_is_a_clone_for_the_childs_group() {
+    use zoraya_proto_tty::Clone as TtyClone;
+    let mut r = rig();
+    mkdir(&mut r, b"/d");
+    // No terminal in the table: nothing to give.
+    assert!(
+        r.p.inherit_shaped(&[], 7, &chosen(vec![spec("/dev/tty", false)]))
+            .is_err()
+    );
+    let (mine, theirs) = r.p.sys.channel_create().unwrap();
+    r.p.add_entry("/dev/tty", EntryKind::Terminal, Some(mine));
+    let seen: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let keep = seen.clone();
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| {
+        while let Some((bytes, handles)) = n.take_message(theirs) {
+            let (h, m) = zoraya_protocol::decode::<TtyClone>(&bytes, handles.len()).unwrap();
+            keep.borrow_mut().push((m.group, handles[0]));
+            let mut out = vec![0u8; 64];
+            let len = encode(
+                &zoraya_proto_tty::CloneReply { status: Below(0) },
+                h.transaction,
+                &mut out,
+            )
+            .unwrap();
+            n.send_message(theirs, &out[..len], &[]);
+        }
+    }));
+    let out =
+        r.p.inherit_shaped(
+            &[],
+            7,
+            &chosen(vec![spec("/dev/tty", false), spec("/d", false)]),
+        )
+        .unwrap();
+    let list: Vec<(&str, EntryKind, u8)> = out
+        .entries
+        .iter()
+        .map(|e| (e.0.as_str(), e.1, e.2))
+        .collect();
+    assert_eq!(
+        list,
+        [
+            ("/dev/tty", EntryKind::Terminal, 0),
+            ("/d", EntryKind::Directory, 1)
+        ]
+    );
+    // One request, for the child's group, with the far end of the child's handle.
+    let (group, far) = seen.borrow()[0];
+    assert_eq!((seen.borrow().len(), group), (1, 7));
+    assert!(r.net.borrow_mut().send_message(out.message[0], b"w", &[]));
+    assert_eq!(r.net.borrow_mut().take_message(far).unwrap().0, b"w");
+    assert_ne!(out.message[0], mine);
+    drop_made(&mut r, &out);
+    assert!(
+        r.p.inherit_shaped(&[], 7, &chosen(vec![spec("/dev/tty", true)]))
+            .is_err()
+    );
+}

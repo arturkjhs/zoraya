@@ -487,6 +487,16 @@ mod tests {
             shape(false, vec![], GRANT_NET | GRANT_RANDOM | GRANT_WINDOW).check(),
             Ok(())
         );
+        // Each alone, `MOVE_NET` too (the mutants of the check's operators).
+        for one in [
+            GRANT_NET,
+            GRANT_RANDOM,
+            GRANT_WINDOW,
+            MOVE_NET,
+            MOVE_NET | GRANT_RANDOM,
+        ] {
+            assert_eq!(shape(false, vec![], one).check(), Ok(()), "{one}");
+        }
         // `:ro` and plain on one path are one path.
         let ro = Spec {
             path: "/a".into(),
