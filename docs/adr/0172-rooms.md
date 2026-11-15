@@ -116,6 +116,7 @@ A POSIX program launched in a room gets a namespace table built by the launcher 
 - Whether `home` should show the launch record's pills at all, or only coloured rooms should.
 - Whether a room should remember its windows and restore them when entered (a session per room), which Option B would give.
 - Whether a shell's `Room` message to its terminal is enough, or the shell should run a new terminal per room.
+- Decided by the architect, 2026-11-15: entering a room narrows `room new`. A room's shell cannot create a room with more than the room holds. INV-0172-4 is to get a check in part 10c or the next part that touches `zosh`'s rooms (docs/backlog.md).
 
 ## Revisit triggers
 - A program (an agent's supervisor) that needs to create rooms: a capability for `room new` over a channel.

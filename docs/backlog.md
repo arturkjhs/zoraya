@@ -393,3 +393,16 @@ ADR-0396, ADR-0397 and ADR-0399 are accepted (Option C, B, B; the amendment of A
 implementation is part **10j**, scheduled after 10g in lane 2: `install`, `/config/apps`, `programs`, the Programs page in
 `settings`, the 16 invariant rows (stage 10). Measure the SHA-256 at each launch for a 64 MB program in that part. One
 command per package for now. A revoke without `--kill` says how many running copies keep access.
+
+## Decisions of 2026-11-15 on TASK-31's status block (the architect)
+
+- ADR-0343, ADR-0344, ADR-0380, ADR-0381 and ADR-0382 accepted as recommended. ADR-0336 item 2's independent review of `tr`,
+  `expr` and `diff` counts; no human review needed.
+- **INV-0172-4:** entering a room narrows `room new`: a room's shell cannot create a room with more than the room holds.
+  Make it a check, in part 10c or the next part that touches `zosh`'s rooms (the test: launch `zosh` as a line inside an
+  entered room and type `room new wide +w /etc`; see `docs/tasks/TASK-31-review-test-fixes-2.md`).
+- **INV-0230-1:** the network test steps may reach only the runner's own test servers (and the QEMU host address they use),
+  never the Internet; restrict `--net-open` accordingly and make INV-0230-1 `checked` again.
+- **INV-0042-1:** an `abi` type is not a check by itself; it stays `not yet applicable` until a test checks it.
+- **libc++:** add the nightly step that runs the semaphore, barrier and latch groups under TCG (no time pressure there).
+  The last three are part `work/test-fixes-3`.
