@@ -1177,7 +1177,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 };
                 let option = match next_word(r3) {
                     None => None,
-                    Some((o, after)) if after.is_empty() => Some(String::from(o)),
+                    Some((o, "")) => Some(String::from(o)),
                     Some(_) => return err(number, usage),
                 };
                 reach_raw = Some((number, operand.into(), port, option));
@@ -1198,7 +1198,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 };
                 let read = match next_word(r3) {
                     None => false,
-                    Some(("read", after)) if after.is_empty() => true,
+                    Some(("read", "")) => true,
                     Some(_) => return err(number, usage),
                 };
                 if !is_command_name(name) {

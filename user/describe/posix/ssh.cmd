@@ -36,7 +36,8 @@ session.
 
 EXAMPLES
   ssh -l ada build.example.org
-  ssh ada@build.example.org ls -l
+  ssh -l ada build.example.org ls -l
+  ssh -l ada 10.0.2.50 'uname -a'
   ssh -p 2222 -l ada 10.0.2.50
 
 FILES

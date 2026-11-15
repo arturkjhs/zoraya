@@ -52,3 +52,8 @@ llvm      20.1.8                                     6898f963c8e938981e6c4a302e8
 googletest 1.18.0                                    6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5 googletest-1.18.0.tar.gz                               https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
 awk       72e9b56caddb4a6f8d1405315a5183c26b8650a4   b59f2ec3f40e7446d2ca3793c829800834faf95d929eafb623c5331238eb8c9e  awk-72e9b56caddb4a6f8d1405315a5183c26b8650a4.tar.gz   https://github.com/onetrueawk/awk/archive/72e9b56caddb4a6f8d1405315a5183c26b8650a4.tar.gz
 ncurses   6.6                                        355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11  ncurses-6.6.tar.gz                                     https://ftp.gnu.org/gnu/ncurses/ncurses-6.6.tar.gz https://invisible-mirror.net/archives/ncurses/ncurses-6.6.tar.gz
+# openssh (TASK-31 10g, ADR-0340): OpenSSH portable 10.6p2, the newest release when 10g started (2026-11-15). The
+# SHA-256 is the one of the download from cdn.openbsd.org over https (the project publishes no .sha256 file beside
+# the archive; the .asc signature is not verified here, as for ncurses). Its client and ssh-keygen are built for the
+# image; no server, agent or other tool.
+openssh   10.6p2                                     9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b  openssh-10.6p2.tar.gz                                 https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz

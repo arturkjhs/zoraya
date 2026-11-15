@@ -1,0 +1,15 @@
+diff --git a/authfd.c b/authfd.c
+index aef809f..c050503 100644
+--- a/authfd.c
++++ b/authfd.c
+@@ -125,6 +125,10 @@ ssh_get_authentication_socket(int *fdp)
+ 	if (fdp != NULL)
+ 		*fdp = -1;
+ 
++#ifdef __zoraya__
++	/* ADR-0340 item 1: no agent is built, and none is reached. */
++	return SSH_ERR_AGENT_NOT_PRESENT;
++#endif
+ 	authsocket = getenv(SSH_AUTHSOCKET_ENV_NAME);
+ 	if (authsocket == NULL || *authsocket == '\0')
+ 		return SSH_ERR_AGENT_NOT_PRESENT;

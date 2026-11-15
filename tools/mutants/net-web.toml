@@ -200,7 +200,17 @@ id = "U-shell-public-name-is-a-name"
 file = "crates/zoraya-shell/src/netgrant.rs"
 find = 'target: Named::PublicName(name),'
 replace = 'target: Named::Name(name),'
+occurrence = 1
 note = "on another port the URL's name takes every answer"
+tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
+
+[[mutant]]
+id = "U-shell-ssh-name-is-a-name"
+file = "crates/zoraya-shell/src/netgrant.rs"
+find = 'target: Named::PublicName(name),'
+replace = 'target: Named::Name(name),'
+occurrence = 2
+note = "ssh's host name (reach, ADR-0340 item 4) takes every answer, as curl's would"
 tests = ["cargo test -q -p zoraya-shell --lib netgrant"]
 
 [[mutant]]

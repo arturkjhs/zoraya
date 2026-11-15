@@ -1,0 +1,53 @@
+diff --git a/readpass.c b/readpass.c
+index 2502e52..0d8f4b5 100644
+--- a/readpass.c
++++ b/readpass.c
+@@ -54,6 +54,12 @@ ssh_askpass(char *askpass, const char *msg, const char *env_hint)
+ 	char buf[1024];
+ 	void (*osigchld)(int);
+ 
++#ifdef __zoraya__
++	/* ADR-0340 item 3: no program is started to ask. */
++	(void)askpass; (void)msg; (void)env_hint; (void)pid; (void)ret;
++	(void)len; (void)pass; (void)p; (void)status; (void)buf; (void)osigchld;
++	return NULL;
++#endif
+ 	if (fflush(stdout) != 0)
+ 		error_f("fflush: %s", strerror(errno));
+ 	if (askpass == NULL)
+@@ -124,6 +130,13 @@ read_passphrase(const char *prompt, int flags)
+ 	const char *askpass_hint = NULL;
+ 	const char *s;
+ 
++#ifndef __zoraya__
++	/*
++	 * Zoraya (ADR-0340 item 3): SSH_ASKPASS and SSH_ASKPASS_REQUIRE, and
++	 * the display variables that enable them, are not read: a line could
++	 * otherwise make ssh run a program that inherits its keys. A passphrase
++	 * is asked on the terminal only.
++	 */
+ 	if (((s = getenv("DISPLAY")) != NULL && *s != '\0') ||
+ 	    ((s = getenv("WAYLAND_DISPLAY")) != NULL && *s != '\0'))
+ 		allow_askpass = 1;
+@@ -136,6 +149,9 @@ read_passphrase(const char *prompt, int flags)
+ 		else if (strcasecmp(s, "never") == 0)
+ 			allow_askpass = 0;
+ 	}
++#else
++	(void)s;
++#endif
+ 
+ 	rppflags = (flags & RP_ECHO) ? RPP_ECHO_ON : RPP_ECHO_OFF;
+ 	if (use_askpass)
+@@ -253,6 +269,11 @@ notify_start(int force_askpass, const char *fmt, ...)
+ 		writemsg(prompt);
+ 		goto out_ctx;
+ 	}
++#ifdef __zoraya__
++	/* ADR-0340 item 3: SSH_ASKPASS is not read; nothing is started. */
++	debug3_f("cannot notify: no askpass");
++	goto out;
++#endif
+ 	if ((askpass = getenv("SSH_ASKPASS")) == NULL)
+ 		askpass = _PATH_SSH_ASKPASS_DEFAULT;
+ 	if (*askpass == '\0') {

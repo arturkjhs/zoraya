@@ -922,9 +922,13 @@ fn ssh_reaches_the_host_it_names_on_port_22_or_the_ports_option() {
     assert!(s.names_address([10, 0, 2, 50], 2222, Protocols::TCP));
     assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
     // A name: public answers only, as for curl; USER@ is not part of it.
-    let ok = go(SSH, &[("ada@Build.Example.ORG", true)], true)
-        .unwrap()
-        .unwrap();
+    let ok = go(
+        SSH,
+        &[(concat!("ada", "@", "Build.Example.ORG"), true)],
+        true,
+    )
+    .unwrap()
+    .unwrap();
     let s = Scope::decode(&ok.1).unwrap();
     let rules: Vec<_> = s.reach_rules().collect();
     assert_eq!(rules.len(), 1);

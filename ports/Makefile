@@ -62,7 +62,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget openssh ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -635,6 +635,13 @@ $(DEPS)/lib/libzshim.a: ports/apps/zshim.c $(SYSROOT_STAMP)
 	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/zshim.o ports/apps/zshim.c
 	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/zshim.o
 
+# The names OpenSSH's client and ssh-keygen reference that libc.a does not
+# export (ports/apps/sshshim.c, proposed ADR-0390), linked from here.
+$(DEPS)/lib/libsshshim.a: ports/apps/sshshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/lib $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/sshshim.o ports/apps/sshshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/sshshim.o
+
 # The test program of ADR-0309 item 4 (OpenSSL with threads): four threads
 # share one context and run handshakes at the same time. It is built here,
 # against the OpenSSL above, but is not part of $(APPS_ROOT): `make test-apps`
@@ -713,16 +720,57 @@ $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.si
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/src -j3 V=1,wget)
 	@touch $@
 
+OPENSSH := $(WORK)/openssh-$(call lock_ver,openssh)
+OPENSSH_BIN := $(OPENSSH)/ssh
+OPENSSH_KEYGEN := $(OPENSSH)/ssh-keygen
+openssh: $(OPENSSH_BIN)
+$(OPENSSH): $(LOCK) $(wildcard ports/patches/openssh/*.patch)
+	$(call unpack,openssh,ports/patches/openssh)
+	@touch $@
+# OpenSSH's client and ssh-keygen (ADR-0340 item 1) on the OpenSSL above and
+# zlib, and nothing else of it: no server, agent, ssh-add, ssh-keyscan,
+# sftp or scp (`make ssh ssh-keygen`), no PAM, SELinux, Kerberos, libedit,
+# LDNS, PKCS#11 or security-key provider, no hardening flags the compiler may
+# not know. The patches (ports/patches/openssh/) are under __zoraya__: no
+# configuration file, no askpass variable, no agent, only the options of
+# ssh.cmd, and a user name on the line. The `--without-openssl-header-check`
+# is for the library version check, which compares OpenSSL's headers with the
+# library it links and has no run test to make while cross compiling.
+OPENSSH_OPTS := --sysconfdir=/etc/ssh --with-ssl-dir=$(DEPS) --with-zlib=$(DEPS) --without-pam --without-selinux \
+	--without-kerberos5 --without-libedit --without-ldns --without-openssl-header-check --without-hardening \
+	--without-stackprotect --without-retpoline --disable-pkcs11 --disable-security-key --disable-strip \
+	--disable-etc-default-login --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
+	--disable-libutil --without-sandbox --with-privsep-path=/var/empty --with-default-path=/bin:/usr/bin
+$(OPENSSH_BIN): $(OPENSSH) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a $(DEPS)/lib/libsshshim.a ports/config.site
+	@cd $(OPENSSH) && $(call logged,$(CROSS_ENV) ac_cv_header_sys_statvfs_h=no ac_cv_func_malloc_0_nonnull=yes ac_cv_func_calloc_0_nonnull=yes ac_cv_func_dirfd=yes ac_cv_func_realloc_0_nonnull=yes ./configure --host=aarch64-unknown-elf \
+	  $(OPENSSH_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" \
+	  CPPFLAGS="-I$(DEPS)/include" \
+	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lsshshim -lzshim",openssh-configure)
+	rm -f $(OPENSSH_BIN) $(OPENSSH_KEYGEN)
+	@# The system headers first: OpenSSH's replacements for functions libc.a lacks are macros
+	@# (setlinebuf, mblen) that musl's headers declare, so they must not meet them second.
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(OPENSSH) -j3 V=1 \
+	  CC="$(ZCC) -D_GNU_SOURCE -include stdarg.h -include grp.h -include pwd.h -include stdio.h -include stdlib.h -include string.h -include unistd.h" ssh ssh-keygen,openssh)
+	@touch $@
+
 # build/rootfs-apps: the two programs as they go into the volume's /bin
 # (ADR-0310), and nothing else. `make image EXTRA_ROOT=build/rootfs-apps`
 # (tools/run-disk.sh) is how an image takes them; their descriptions are
 # user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
 apps: $(APPS_STAMP)
-$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
+$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BIN)
 	mkdir -p $(APPS_ROOT)/bin
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
+	cp $(OPENSSH_BIN) $(APPS_ROOT)/bin/ssh
+	cp $(OPENSSH_KEYGEN) $(APPS_ROOT)/bin/ssh-keygen
 	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no ssh server, agent or other OpenSSH tool in the image, and no listener imported (INV-0340-4)"
+	@for b in sshd sshd-session sshd-auth ssh-agent ssh-add ssh-keyscan ssh-keysign sftp scp sftp-server; do \
+	  if [ -e $(APPS_ROOT)/bin/$$b ]; then echo "$$b is in the image"; exit 1; fi; done
+	@# listen and accept in the programs are libzshim's, which fail with ENOSYS (ports/apps/zshim.c).
+	@if nm $(SYSROOT)/usr/lib/libc.a | grep -q -e ' T listen$$' -e ' T accept$$'; then \
+	  echo "libc.a exports listen or accept"; exit 1; fi
 	@echo "== no entropy source but getrandom, and no TLS before 1.2 (INV-0310-5)"
 	@for b in curl wget; do \
 	  if LC_ALL=C grep -a -q -e '/dev/urandom' -e '/dev/random' $(APPS_ROOT)/bin/$$b; then \
@@ -732,7 +780,7 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	  if grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method' $(APPS_ROOT)/$$b.nm; then \
 	    echo "$$b links a TLS method before 1.2"; exit 1; fi; rm -f $(APPS_ROOT)/$$b.nm; done
 	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
-	@for l in zlib openssl curl wget; do \
+	@for l in zlib openssl curl wget openssh; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"
