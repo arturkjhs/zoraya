@@ -314,6 +314,11 @@ and exits.
   of up to 1024 `Paid` are not counted in units, only timed (`t_bound`).
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
+- *F8 note (agent, ADR-0001 rule 6, 2026-11-16):* `steps::masked::*` (`SINCE`, `MAX_TICKS`) is one counter for all CPUs, while
+  `mask_began` and `mask_ended` run on every exception of every CPU: an exception returned on another CPU ends the interval
+  that this CPU began and records only its first part, or records another CPU's interval, so `masked_max_ns` can under-report on
+  SMP (the 2 GiB steps run 4 CPUs). F8's test of the frame scan reads its own CPU's `cntvct` around the call instead
+  (ADR-0436). The counter is not made per CPU yet.
 
 ## Revisit triggers
 - SMP (interrupts masked on one CPU stop less, but locks across steps matter more).

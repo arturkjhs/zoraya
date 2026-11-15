@@ -83,6 +83,7 @@ not build. Options: (a) accept `top`'s `session` row plus the keeper's refusal a
 ## Open questions
 
 - Whether the 2 ms bound holds under TCG: 1.2 ms was measured once at 2 GiB, the in-guest check keeps 2 ms for HVF-speed hosts only (a word of an array in 50 ns or less) and ADR-0270 Q6's 1 s elsewhere. `steps::masked::*` is one counter for all CPUs and can under-report on SMP; the test reads its own CPU's counter around the call.
+- Known limitation of the in-guest check: the time is one measurement, not the best of three as `t_bound` takes, so a vCPU stall on an HVF-speed host during the call can fail it with nothing wrong; the words check does not depend on the host. The worst case cannot be repeated cheaply (the search moves with each allocation).
 - Whether `top --session` should list the session's services' accounts (ADR-0267); not before a service reports its use.
 
 ## Revisit triggers

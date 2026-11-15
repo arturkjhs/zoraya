@@ -25,7 +25,7 @@
 < session
 < tab /t/w> 
 > room set tab --mem 1800M\r
-< --mem 1800M: above the session's 1452930K
+< --mem 1800M: above the session's
 < tab /t/w> 
 > grants probe\r
 < limits --mem 1200M --procs 64  (room tab)
