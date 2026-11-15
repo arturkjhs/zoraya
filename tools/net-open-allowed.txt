@@ -1,17 +1,17 @@
-# Where the Makefile starts QEMU with --net-open (no `restrict=on`; INV-0230-1,
-# tools/check-net-open.sh). NAME is the Makefile definition holding the line.
-# INV-0230-1 does not hold while these exist (what --net-open may reach is the
-# architect's decision, docs/backlog.md). Most run against the host-side servers of tools/test-httpd,
-# which listen on 127.0.0.1 only and which the guest reaches at 10.0.2.2, or
-# is a hand run that is not a step of make test. A new --net-open line needs a
-# line here, with its reason.
-NET_FETCH_RUN            fetch against the host test server (test-net, test-net-fetch)
-test-net-fetch           the DNS leg: SLIRP's forwarder asks the host's resolver, so a name such as nothing.invalid may go to an outside DNS server
-test-net-lookup          the lookup test against the test server's name data, with a pcap
-NET_POSIX_RUN            libposix and the POSIX network scripts against the test server
-APPS_RUN                 curl and wget against the test server (test-apps)
-test-python              Python's socket, ssl and urllib tests against the test server
-NS_RUN                   NetSurf against the test server's pages (test-netsurf)
-bench-net                a measurement against the test server, not a step of make test
-hand-netsurf-wikipedia   a hand run that reaches the real Wikipedia; not a step of make test
-RUN_NET_CMD             person mode with --net and no --test (no restrict=on, no --net-open): test-hand-run runs it, and make run-net
+# Where the Makefile starts QEMU with a network that is not `restrict=on`
+# (INV-0230-1, tools/check-net-open.sh). NAME is the Makefile definition holding
+# the line. Every network test step is `restrict=on` and reaches the runner's own
+# test servers only through `--net-guestfwd` rules (NET_RELAY) to
+# `zoraya-test-httpd --relay 127.0.0.1:PORT`. The exceptions:
+#  - `--net-open` (tools/run-qemu.sh): unrestricted SLIRP, only for the steps
+#    that need UDP to tools/test-dns; run-qemu.sh refuses it outside
+#    tools/confine-loopback.sh, and the Makefile calls these steps only through
+#    CONFINED. The check proves the wrapper blocks every address but the loopback.
+#  - `--net-internet`: a hand run that reaches the Internet; name must start with
+#    `hand-`; run-qemu.sh refuses it on CI.
+#  - person mode (`--net`, no `--test`): a person's `make run-net`.
+# A new unrestricted line needs a line here, with its reason.
+test-net-dns-run         --net-open: the names asked of tools/test-dns (UDP), inside tools/confine-loopback.sh
+test-net-lookup-run      --net-open: the lookup test against the test DNS server (UDP) with a pcap, inside tools/confine-loopback.sh
+hand-netsurf-wikipedia   --net-internet: a hand run that reaches the real Wikipedia; not a step of make test
+RUN_NET_CMD              person mode with --net and no --test (no restrict=on, no --net-open): test-hand-run runs it, and make run-net

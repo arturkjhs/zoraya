@@ -35,13 +35,19 @@
 #                         (SLIRP: guest 10.0.2.15/24, gateway 10.0.2.2). With
 #                         --test the network is `restrict=on`: the guest reaches
 #                         nothing outside it (ADR-0230 item 2, INV-0230-1).
-#   --net-open            with --net --test: no `restrict=on`, so that the guest
-#                         reaches the host at 10.0.2.2 (SLIRP's alias of the
-#                         host's 127.0.0.1) and gets a router and a DNS server
-#                         in its lease. Only `make test-net`'s fetch step uses
-#                         it, against the host-side test server of
-#                         tools/test-httpd, which listens on 127.0.0.1 only;
-#                         it reaches the Internet if the host does (N3).
+#   --net-open            with --net --test: no `restrict=on`, because a test needs
+#                         UDP to the runner's own DNS server (SLIRP's host alias
+#                         10.0.2.2 is 127.0.0.1; `restrict=on` blocks UDP to it).
+#                         The Internet must stay out of reach (INV-0230-1), so
+#                         the run refuses unless it is inside
+#                         tools/confine-loopback.sh (ZORAYA_LOOPBACK_ONLY=1: the
+#                         process may open connections to the loopback only).
+#                         A test that needs only TCP to the runner's servers
+#                         does not use it: it stays `restrict=on` and gets
+#                         --net-guestfwd rules to the servers.
+#   --net-internet        with --net, by hand only: no `restrict=on` and no
+#                         confinement, the guest reaches the Internet through the
+#                         host (`make hand-netsurf-wikipedia`). Refused on CI.
 #   --net-pcap FILE       with --net: write the frames to FILE (filter-dump),
 #                         256 bytes of each
 #   --net-forward PORT    with --net: forward 127.0.0.1:PORT on the host to the
@@ -113,6 +119,7 @@ net=0
 net_pcap=
 net_forward=
 net_open=0
+net_internet=0
 net_maxlen=,maxlen=256
 net_subnet=
 net_guestfwd=
@@ -138,6 +145,7 @@ while [ $# -gt 0 ]; do
         --gui-size) [ $# -ge 2 ] || die "--gui-size needs WxH"; gui_size=$2; shift 2 ;;
         --net) net=1; shift ;;
         --net-open) net_open=1; shift ;;
+        --net-internet) net_internet=1; shift ;;
         --net-pcap) [ $# -ge 2 ] || die "--net-pcap needs a file"; net_pcap=$2; shift 2 ;;
         --net-forward) [ $# -ge 2 ] || die "--net-forward needs a port"; net_forward=$2; shift 2 ;;
         --net-capture-all) net_maxlen=; shift ;;
@@ -253,8 +261,14 @@ esac
 if [ -n "$net_forward" ] && [ "$net" != 1 ]; then
     die "--net-forward needs --net"
 fi
-if [ "$net_open" = 1 ] && [ "$net" != 1 ]; then
-    die "--net-open needs --net"
+if { [ "$net_open" = 1 ] || [ "$net_internet" = 1 ]; } && [ "$net" != 1 ]; then
+    die "--net-open and --net-internet need --net"
+fi
+if [ "$net_open" = 1 ] && [ "${ZORAYA_LOOPBACK_ONLY:-}" != 1 ]; then
+    die "--net-open runs only inside tools/confine-loopback.sh (INV-0230-1): the guest could reach the Internet"
+fi
+if [ "$net_internet" = 1 ] && { [ -n "${CI:-}" ] || [ "$net_open" = 1 ]; }; then
+    die "--net-internet is for a person's hand run: not on CI, not with --net-open (INV-0230-1)"
 fi
 if [ -n "$net_pcap" ] && [ "$net" != 1 ]; then
     die "--net-pcap needs --net"
@@ -317,7 +331,7 @@ fi
 # with restrict=on; a person at `make run-net` gets the Internet through SLIRP.
 if [ "$net" = 1 ]; then
     restrict=
-    [ "$mode" = test ] && [ "$net_open" != 1 ] && restrict=,restrict=on
+    [ "$mode" = test ] && [ "$net_open" != 1 ] && [ "$net_internet" != 1 ] && restrict=,restrict=on
     forward=
     [ -z "$net_forward" ] || forward=",hostfwd=tcp:127.0.0.1:$net_forward-10.0.2.15:$net_forward"
     subnet=

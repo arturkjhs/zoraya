@@ -552,7 +552,7 @@ fn start_tls(dir: &str, backend: u16, deadline: Instant) -> Result<[u16; 3], Str
 /// Copies stdin to a connection to `to` and the connection to stdout until
 /// both directions end; the exit status says whether it connected.
 fn relay(to: &str) -> i32 {
-    use std::io::{copy, stdin, stdout};
+    use std::io::{Read, Write, copy, stdin, stdout};
     use std::net::Shutdown;
     let Ok(server) = TcpStream::connect(to) else {
         return 1;
@@ -565,9 +565,25 @@ fn relay(to: &str) -> i32 {
         let _ = copy(&mut stdin().lock(), &mut up);
         let _ = up.shutdown(Shutdown::Write);
     });
+    // Standard output is line-buffered: a TLS flight has no newline and would
+    // wait in the buffer, so every chunk is flushed as it arrives.
     let mut down = server;
-    let _ = copy(&mut down, &mut stdout().lock());
-    let _ = stdout().flush();
+    let mut out = stdout().lock();
+    let mut chunk = [0u8; 16384];
+    loop {
+        match down.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if out
+                    .write_all(&chunk[..n])
+                    .and_then(|()| out.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
     // The guest may keep its side open after the answer; the server's end
     // of file ends the relay.
     drop(upward);

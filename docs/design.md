@@ -2021,8 +2021,11 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   command is `ping` by name, then `fetch` by name, then the two silent names ("the name lookup timed out") and one that
   does not exist; its `netd` takes the server's port from `/config/net-test-dns-port` (feature `net-test` only; port 53
   needs root). `zoraya-test-dns --check-pcap` then reads the run's capture: one ARP request for the server before the
-  first query, and the echo request and the SYN within 0.5 s of their answers. The step runs the
-  network without `restrict=on` (`tools/run-qemu.sh --net-open`); every other step keeps it. The fuzz target
+  first query, and the echo request and the SYN within 0.5 s of their answers. The step (and `make
+  test-net-dns`, the names answered by `tools/test-dns`) needs UDP to the host, which `restrict=on` forbids: it runs inside
+  `tools/confine-loopback.sh` (macOS `sandbox-exec`, Linux `unshare -rn`; a host that cannot confine skips the two steps)
+  with `tools/run-qemu.sh --net-open`, which refuses to start outside it. Every other network step is `restrict=on` and
+  reaches the test servers only through `--net-guestfwd` relays to `127.0.0.1` (INV-0230-1, `make check-net-open`). The fuzz target
   `fuzz/fuzz_targets/net_dns_http.rs` was compiled and driven with 400,000 random inputs in a scratch crate (not run under
   libFuzzer: no nightly toolchain here).
 - **Measured** (`fetch --sum` against `tools/test-httpd` on the host, QEMU 11.1.2, 128 MiB, 1 CPU, normal kernel,

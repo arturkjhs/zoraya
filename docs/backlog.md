@@ -352,7 +352,7 @@ cannot be loaded (no `dlopen`), so the hook should refuse it; the `-ext` build i
 
 For the architect.
 
-- **What may `--net-open` reach (INV-0230-1, audit C3)?** The network steps of `make test` run QEMU without `restrict=on`
+- **What may `--net-open` reach (INV-0230-1, audit C3)?** *Decided 2026-11-15 and done in work/test-fixes-3: see TASK-31-part-test-fixes-3.* (The question as asked:) The network steps of `make test` run QEMU without `restrict=on`
   (`NET_FETCH_RUN`, `test-net-fetch`'s DNS leg, `test-net-lookup`, `NET_POSIX_RUN`, `APPS_RUN`, `test-python`, `NS_RUN`;
   `test-hand-run` and `make run-net` use person mode), which ADR-0230 item 2 does not describe: a script that fetches a public
   address connects out. Decide: move them to `restrict=on` with `guestfwd`, or accept `--net-open` against the host test servers
