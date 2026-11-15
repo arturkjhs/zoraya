@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(w(CFLAG), !(CSIZE | PARENB) | CS8);
         for (i, b) in t.iter().enumerate() {
             match i {
-                0..=3 | 4..=7 | 8..=11 | 12..=15 => {}
+                0..=15 => {}
                 x if x == CC + VMIN => assert_eq!(*b, 1),
                 x if x == CC + VTIME => assert_eq!(*b, 0),
                 _ => assert_eq!(*b, 0xff, "byte {i}"),

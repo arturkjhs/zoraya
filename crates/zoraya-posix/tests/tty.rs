@@ -284,7 +284,8 @@ fn the_termios_layout_goes_to_the_service_and_comes_back() {
             )
             .unwrap() as i32;
     let cc: Vec<u8> = (0..32).map(|i| i as u8 + 100).collect();
-    let sent: Rc<RefCell<Option<(u32, u32, u32, u32, Vec<u8>)>>> = Rc::new(RefCell::new(None));
+    type Words = (u32, u32, u32, u32, Vec<u8>);
+    let sent: Rc<RefCell<Option<Words>>> = Rc::new(RefCell::new(None));
     let (seen, reply_cc) = (sent.clone(), cc.clone());
     r.p.sys.meanwhile = Some(Box::new(move |net: &mut Net| {
         while let Some((bytes, handles)) = net.take_message(server) {
