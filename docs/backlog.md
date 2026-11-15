@@ -440,3 +440,34 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
 - The stubs of `libzoraya-rust.a` (C, ADR-0451 items 4 and 5) need their own width check; the checker reads Rust only.
 - ADR-0451 item 1's `REPORT` line per unanswered `syscall` number is not built.
 
+
+## Three requests from outside work: R20 to R22 (2026-11-15), for part 10j's design or right after it
+
+- **R20, the parts of a native window program as crates of their own.** The heap of a native program (`user/src/heap.rs`), the
+  platform of an application over the compositor's channel (`Gui` in `user/src/app.rs`), the file link and the chooser's
+  client, in a crate (or crates) that depends on `zoraya-rt`, `zoraya-heap` and `zoraya-app` only, with the link script
+  (`user/user.ld`) reachable from a build script; `zoraya-user` then uses them itself (R3's first half: native programs built
+  outside the image). Why: a program outside the repository can name every `crates/` crate by path, but these live inside
+  `zoraya-user`, which is every program of the ramdisk at once (network stack, TLS, drivers, the `ring` patch and the C
+  compiler wrapper). Until then the outside program carries its own copies (about 190 lines, two `unsafe` places). Minimal
+  test: a crate outside the repository with `zoraya-rt`, `zoraya-app` and the new crate as path dependencies builds for
+  `aarch64-unknown-none` a program that opens a window with one label; `zoraya-elf-check` (or the packer) accepts it; its
+  dependency tree holds no network or driver crate.
+- **R21, native programs from outside the repository in the image.** `make build EXTRA_PROGRAMS="PATH..."`: ELF files with the
+  native mark, added to the ramdisk after the repository's own under their base names (the packer already checks the mark and
+  an optional description). Later the same through the volume, as ADR-0396 installs a POSIX program. Why: the program
+  directory a launch looks in is the ramdisk inside the kernel image; `EXTRA_ROOT` adds only to the volume, where a native
+  program is never looked for. Until then: `overlay/0001-extra-programs-in-the-ramdisk.patch` on a local clone (8 lines of the
+  Makefile). Minimal test: a `hello`-like native ELF built outside and passed in `EXTRA_PROGRAMS`: the shell runs it by name;
+  the ramdisk lists it; a file without the mark fails the build with the packer's message.
+- **R22, a dock tile and a launch record for a program that is not one of the four.** The dock's list (`zoraya_panel::APPS`)
+  takes more names at build time (`EXTRA_APPS="NAME ..."`), and later from the records of installed programs (ADR-0396): each
+  gets the launch record of an application (the console, its compositor channel, the chooser, its data directory), a tile with
+  its initial, and its windows' pills. Also a way to start a window program from a terminal by its name. Why: a window program
+  is launched only by the panel, and the panel launches only what its table names. Until then:
+  `overlay/0002-extra-applications-in-the-dock.patch`. Minimal test: with `EXTRA_APPS=demo` and a `demo` program in the ramdisk,
+  the dock shows a fifth tile with `D`, a press opens its window with the pill `+w /data/home/demo`, a second press raises it,
+  and in a room it opens with the room's grants; without the variable the dock is as today.
+- **Not requested (closed outside):** `bind`, `listen`, `accept`, `sendmsg`, `in6addr_any` (client programs on an IPv4-only
+  system; ADR-0225); `__unix__` predefined by `zcc`; `getrandom` for a program another program starts (ADR-0310, by design; the
+  ADR-0453 random connection of `work/rust-std` is the broker-side answer); starting a script by its `#!` line.
