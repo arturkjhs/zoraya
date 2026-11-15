@@ -76,8 +76,9 @@ shot windows-many
 # has its shell: it takes keys after a click on its title bar. With 8 slots
 # the compositor refused the seventh of them. Where the cascade stops it
 # depends on the terminal's height, which is not the same at both scales
-# (its title bar is at y 196 at scale 1, 209 at scale 2), so it is first
-# dragged by its title bar (y 220 is in it at both) up against the bar,
+# (its title bar is at y 178 at scale 1, about 191 at scale 2: the terminal is a
+# row taller since 10f's status row, so the ninth window is held up against the
+# dock), so it is first dragged by its title bar (y 200 is in it at both) up against the bar,
 # where the compositor stops every window: its body then starts at
 # (361, 64), the bar's 28 and the title bar's 36, at both scales.
 # The drag moves it in steps, and the compositor draws each; under TCG a
@@ -87,7 +88,6 @@ shot windows-many
 # 2026-11-13). So the click that focuses it comes first: its input follows
 # the release, and its focused title bar, waited for against the bar, is
 # drawn only with the window at its place; then its rows are read.
-shot pre-drag
 drag 560 200 560 30
 click 560 46
 region 600 33 60 4 f7f7f8
