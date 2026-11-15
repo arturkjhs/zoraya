@@ -78,6 +78,12 @@ pub const STARTUP_SLOT: u32 = 1000;
 pub const HOME_GRANTS: [(&str, bool); 4] =
     [("/", false), ("~", true), ("/config", true), ("/tmp", true)];
 
+/// The directory the shell itself holds, `/data/ROOM` or `/data/home`
+/// (ADR-0341 item 2): where it makes the own directories of programs.
+pub fn shell_data_dir(room: Option<&Room>) -> String {
+    format!("/data/{}", room.map_or(HOME, |r| r.name.as_str()))
+}
+
 /// What a trusted room's shell holds besides the room's grants: the
 /// toolchain, read-only, so that POSIX programs run in rooms (the
 /// architect's decision of 2026-11-09, recorded in ADR-0172). A room grant
@@ -377,6 +383,12 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             .collect(),
     };
     let entries = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
+    // ADR-0341 item 2: the shell's own entry `/data/ROOM` (`/data/home` for
+    // the first terminal), to change anything in, so that it can make and
+    // give the directory of a program's own files. It is not a grant of the
+    // room: not in the record's entries, not in `/config/rooms`, no pill.
+    let mut holds = holds;
+    holds.push((shell_data_dir(room), true));
     let keeper = room.is_some().then_some(Slot {
         slot: KEEPER_SLOT,
         give: Give::Keeper,

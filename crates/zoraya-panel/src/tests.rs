@@ -64,7 +64,11 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
     let home = terminal(None);
     assert_eq!(home.room, None);
     assert_eq!(home.entries, ["+r /", "+w ~", "+w /config", "+w /tmp"]);
-    assert_eq!(home.holds.len(), HOME_GRANTS.len());
+    // ADR-0341 item 2: the shell's own entry `/data/home` is held and is
+    // neither shown nor a room's grant.
+    assert_eq!(home.holds.len(), HOME_GRANTS.len() + 1);
+    assert_eq!(home.holds.last(), Some(&(String::from("/data/home"), true)));
+    assert_eq!(shell_data_dir(None), "/data/home");
     assert_eq!(home.line, "term");
     let s = spawned(&home);
     assert_eq!(s[0].0, "term");
@@ -134,7 +138,11 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
         }
         let mine: Vec<String> = held.iter().map(|(p, w)| grant_words(p, *w)).collect();
         assert_eq!(l.entries, mine);
+        // ... and the shell's own `/data/ROOM` beside them, not shown
+        // (ADR-0341 item 2).
+        held.push((format!("/data/{}", room.name), true));
         assert_eq!(l.holds, held);
+        assert!(l.entries.iter().all(|e| !e.contains("/data")));
         for other in p.rooms.rooms.iter().filter(|o| o.name != room.name) {
             for g in &other.grants {
                 assert!(

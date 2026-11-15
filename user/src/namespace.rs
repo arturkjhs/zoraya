@@ -325,16 +325,32 @@ pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> O
         };
         let rel = abs.trim_start_matches('/');
         // A folder the shell may change that is not there yet (`/config`
-        // on a new volume) is made, one level, so that the grant holds.
+        // on a new volume) is made, so that the grant holds.
         let opened = match open(rel) {
             Err(status::NOT_FOUND) if *write && !rel.is_empty() => {
-                let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
-                let made = match parent {
-                    "" => root.make_directory(name),
-                    p => root
-                        .open(p, open_flags::DIRECTORY, rights::ALL)
-                        .and_then(|d| d.make_directory(name)),
-                };
+                // Each missing level, so that `/data/ROOM` (ADR-0341 item
+                // 2) is there on a volume with no `/data` yet.
+                let mut at = String::new();
+                let mut made = Ok(());
+                for part in rel.split('/') {
+                    if !at.is_empty() {
+                        at.push('/');
+                    }
+                    at.push_str(part);
+                    if root.open(&at, open_flags::DIRECTORY, rights::READ).is_ok() {
+                        continue;
+                    }
+                    let (parent, name) = at.rsplit_once('/').unwrap_or(("", at.as_str()));
+                    made = match parent {
+                        "" => root.make_directory(name),
+                        p => root
+                            .open(p, open_flags::DIRECTORY, rights::ALL)
+                            .and_then(|d| d.make_directory(name)),
+                    };
+                    if made.is_err() {
+                        break;
+                    }
+                }
                 made.and_then(|()| open(rel))
             }
             other => other,

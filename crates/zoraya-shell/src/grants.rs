@@ -197,7 +197,11 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
     let d = line.description;
     let p = line.parsed;
     let mut out = Vec::new();
-    if d.cwd == Cwd::Read {
+    // ADR-0341 item 8: a current directory at `/`, `/data`, a room's
+    // directory or inside a program's own directory gives nothing, as if the
+    // description said `cwd none`; relative operands still resolve.
+    let into_data = cwd_reaches_data(line.cwd);
+    if d.cwd == Cwd::Read && !into_data {
         out.push(Planned {
             path: line.cwd.into(),
             access: Access::Read,
@@ -239,9 +243,12 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             let narrows = matches!(
                 kind,
                 Kind::Create | Kind::Remove | Kind::RemoveTree | Kind::Rename
-            ) || (d.cwd == Cwd::None && matches!(kind, Kind::Read | Kind::Write));
+            ) || ((d.cwd == Cwd::None || into_data)
+                && matches!(kind, Kind::Read | Kind::Write));
             let within = |base: &str| covers(base, &abs) && !(narrows && abs == base);
-            let inside = within(line.cwd) || granted.iter().any(|g| within(g));
+            // A value inside a current directory that gives nothing is not
+            // inside anything (ADR-0341 item 8).
+            let inside = (!into_data && within(line.cwd)) || granted.iter().any(|g| within(g));
             if !literal && !inside {
                 let parent = parent_and_name(&abs).map_or_else(|| "/".to_string(), |(p, _)| p);
                 // The least grant that would cover it (review S10).
@@ -642,6 +649,20 @@ pub fn report(
     posix: bool,
     keys: bool,
 ) -> String {
+    report_with(name, plan, home, streams, posix, keys, None)
+}
+
+/// [`report`] with the program's own directory, shown with the real path and
+/// the path the program sees (ADR-0341 item 4, INV-0341-3).
+pub fn report_with(
+    name: &str,
+    plan: &[Planned],
+    home: &str,
+    streams: &str,
+    posix: bool,
+    keys: bool,
+    own: Option<&Own>,
+) -> String {
     let merged = merge(plan);
     let mut rows: Vec<(String, String)> = Vec::new();
     rows.push(("in, out, err".into(), streams.into()));
@@ -661,6 +682,9 @@ pub fn report(
             fallback(&e.access)
         };
         rows.push((shown(&e.path, home), format!("{words} ({})", e.reason)));
+    }
+    if let Some(own) = own {
+        rows.push((own.real.clone(), own_words(own)));
     }
     if posix {
         for (path, right) in [
@@ -705,4 +729,132 @@ pub fn report(
 /// on a volume is ever read for one.
 pub fn trusted_description<'a>(trusted: &'a [Description], path: &str) -> Option<&'a Description> {
     trusted.iter().find(|d| d.program.as_deref() == Some(path))
+}
+
+/// The home directory of the image's user database, which `~` in a `data`
+/// line means (ADR-0341 item 3): the program's view of its own directory.
+pub const USER_HOME: &str = "/home";
+
+/// ADR-0341 item 5: every `NAME` of a `data` line with the programs that
+/// carry it, one `NAME program...` per line. The lint of INV-0341-4 keeps
+/// it and the descriptions to each other.
+pub const DATA_NAMES: &str = include_str!("../../../user/describe/data-names.txt");
+
+/// The names of the list.
+pub fn data_names() -> impl Iterator<Item = &'static str> {
+    DATA_NAMES
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.split_whitespace().next())
+}
+
+/// The program's own directory a line gives (ADR-0341 items 2 and 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Own {
+    /// The `NAME` of the description's `data` line.
+    pub name: String,
+    /// `/data/ROOM/NAME`, or `/data/home/NAME` outside a room: the shell's
+    /// path to it, which it makes when the program first runs.
+    pub real: String,
+    /// Where the program sees it: `~` of the user database, `/home`, and the
+    /// path of the line.
+    pub view: String,
+    /// `read`: to read only.
+    pub read: bool,
+}
+
+/// What a program's own-directory entry is, if it has one. Only a system
+/// image's description with a `data` line gives one (INV-0341-1), and only
+/// for a name the list gives this program (INV-0341-4).
+pub fn own_directory(d: &Description, base_system: bool, room: Option<&str>) -> Option<Own> {
+    if !base_system {
+        return None;
+    }
+    let data = d.data.as_ref()?;
+    let listed = DATA_NAMES.lines().any(|l| {
+        let mut words = l.split_whitespace();
+        words.next() == Some(data.name.as_str()) && words.any(|p| p == d.name)
+    });
+    if !listed {
+        return None;
+    }
+    Some(Own {
+        name: data.name.clone(),
+        real: format!("/data/{}/{}", room.unwrap_or("home"), data.name),
+        view: format!("{USER_HOME}/{}", data.path.strip_prefix("~/")?),
+        read: data.read,
+    })
+}
+
+/// ADR-0341 item 8: whether a current directory is `/`, `/data`, the
+/// directory of a room (or `home`) or inside a program's own directory, so
+/// that the line gives no current-directory entry. A read connection on any
+/// of them reaches every program's files below, and nothing can cut a
+/// subtree out of one.
+pub fn cwd_reaches_data(cwd: &str) -> bool {
+    if cwd == "/" || cwd == "/data" {
+        return true;
+    }
+    let Some(rest) = cwd.strip_prefix("/data/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    let _room = parts.next();
+    match parts.next() {
+        None => true,
+        Some(name) => data_names().any(|n| n == name),
+    }
+}
+
+/// ADR-0341 item 3: the own-directory entry is never merged with a grant of
+/// the line. A `+r` or `+w` at or inside the path the program sees it at is
+/// refused.
+pub fn own_conflict(own: &Own, cwd: &str, grants: &[(bool, Value)]) -> Result<(), Refused> {
+    for (_, value) in grants {
+        let abs = join(cwd, 0, &value.text);
+        if covers(&own.view, &abs) {
+            return Err(Refused {
+                subject: value.text.clone(),
+                problem: format!(
+                    "is {}'s own directory, which its description gives and a grant cannot name",
+                    own.name
+                ),
+                hint: Some(format!(
+                    "to read the files yourself, name them: cat {}/FILE",
+                    own.real
+                )),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// How `grants` words the entry (ADR-0341 item 4).
+pub fn own_words(own: &Own) -> String {
+    let seen = shown(&own.view, USER_HOME);
+    if own.read {
+        format!("its own files, to read (it sees them as {seen})")
+    } else {
+        format!("its own files (it sees them as {seen})")
+    }
+}
+
+/// ADR-0340 item 4: for a description with a `rest` operand, where the shell
+/// writes `--` into the program's arguments: before the operand that comes
+/// first, the host, so that a program that reads options again after the host
+/// (OpenSSH does) reads none. `None` for a description without one, a line
+/// that does not parse, a line with no operand, or one that already has the
+/// `--` there. The index is into `args` (the words after the program's name).
+pub fn end_of_options_at(d: &Description, args: &[&str]) -> Option<usize> {
+    d.operands.iter().find(|o| o.kind == Kind::Rest)?;
+    let Ok(zoraya_command::Outcome::Run(parsed)) = zoraya_command::parse(d, args) else {
+        return None;
+    };
+    let (_, first) = parsed.operands.first()?;
+    // The operand's text is a slice of the argument it came from.
+    let at = args
+        .iter()
+        .position(|a| core::ptr::eq(a.as_ptr(), first.as_ptr()) && a.len() == first.len())?;
+    (at == 0 || args[at - 1] != "--").then_some(at)
 }

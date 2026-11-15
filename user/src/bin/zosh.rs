@@ -413,6 +413,9 @@ enum Ready {
         /// The client end of the window's channel to the compositor, for a
         /// description with `window` (ADR-0317), made by the panel.
         window: Option<Handle>,
+        /// The program has an own directory (ADR-0341): its `HOME` is the
+        /// user database's home, which that directory sits under.
+        own_home: bool,
     },
 }
 
@@ -1563,6 +1566,18 @@ impl Z {
         let with_roots = net.is_some() && self.posix_reaches(exec, path);
         // The system's fonts come with a window, read only (ADR-0326 item 4).
         let fonts = Self::posix_fonts(path);
+        // ADR-0341: the program's own directory, from its description.
+        let own = match self.posix_own(exec, path) {
+            Ok(o) => o,
+            Err(e) => {
+                let _ = handle_close(image);
+                if let Some(h) = net {
+                    let _ = handle_close(h);
+                }
+                return Err(e);
+            }
+        };
+        let own_home = own.is_some();
         let planned = self
             .posix_plan(exec, path)
             .map(|mut plan| {
@@ -1576,7 +1591,10 @@ impl Z {
                 }
                 plan
             })
-            .and_then(|plan| self.posix_entries(exec, image, &plan).map(|t| (t, plan)));
+            .and_then(|plan| {
+                self.posix_entries(exec, image, &plan, own.as_ref())
+                    .map(|t| (t, plan))
+            });
         let ((entries, cwd_entry, cwd), plan) = match planned {
             Ok(x) => x,
             Err(e) => {
@@ -1622,6 +1640,7 @@ impl Z {
                 report,
                 net,
                 window,
+                own_home,
             },
             given,
         ))
@@ -1720,6 +1739,95 @@ impl Z {
             .map_err(|why| zoraya_command::error("zosh", Some(exec.name), &why, &[]))
     }
 
+    /// The own directory the line gives a POSIX program (ADR-0341): from the
+    /// image's description that names `path` and no other, in the room the
+    /// line runs in. A line that sets `HOME`, or names the directory in a
+    /// `+r` or `+w`, is refused.
+    fn posix_own(&self, exec: &Exec<'_>, path: &str) -> Result<Option<grants::Own>, String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let Some(d) = grants::trusted_description(&trusted, path) else {
+            return Ok(None);
+        };
+        let room = self.room.as_ref().map(|r| r.name.as_str());
+        let Some(own) = grants::own_directory(d, true, room) else {
+            return Ok(None);
+        };
+        let refuse = |subject: &str, problem: &str, hints: &[&str]| {
+            zoraya_command::error("zosh", Some(subject), problem, hints)
+        };
+        if exec.env.iter().any(|v| v.starts_with("HOME=")) {
+            return Err(refuse(
+                "HOME",
+                &format!(
+                    "{} finds its files through HOME, which is its own directory's home",
+                    exec.name
+                ),
+                &["write the line without HOME="],
+            ));
+        }
+        grants::own_conflict(&own, &self.cwd, exec.grants).map_err(|r| {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            refuse(&r.subject, &r.problem, &hints)
+        })?;
+        Ok(Some(own))
+    }
+
+    /// Where `--` goes in the arguments of a POSIX program of the image whose
+    /// description has a `rest` operand (ADR-0340 item 4).
+    fn end_of_options(exec: &Exec<'_>, path: &str) -> Option<usize> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let d = grants::trusted_description(&trusted, path)?;
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        grants::end_of_options_at(d, &texts)
+    }
+
+    /// A connection to the own directory `own`, made when the program first
+    /// runs (ADR-0341 item 2): to change anything in, or with `read` to read
+    /// only. Each missing level is made, which the shell may do under
+    /// `/data/home` or `/data/ROOM` only.
+    fn own_connection(&self, who: &str, own: &grants::Own) -> Result<File, String> {
+        let fail = |s: u32| zoraya_command::error("zosh", Some(&own.real), &problem(s), &[]);
+        let wanted = if own.read {
+            file_rights::READ | file_rights::CLONE
+        } else {
+            file_rights::ALL & !file_rights::PUBLISH
+        };
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| fail(zoraya_command::FILE_GONE))?;
+        if let Some(hint) = self.not_given(who, &own.real, true, None) {
+            return Err(hint);
+        }
+        let rel = own.real.trim_start_matches('/');
+        let mut at = String::new();
+        for part in rel.split('/') {
+            if !at.is_empty() {
+                at.push('/');
+            }
+            at.push_str(part);
+            let all = file_rights::ALL & !file_rights::PUBLISH;
+            if root.open(&at, OPEN_DIRECTORY, all).is_err() {
+                let (parent, name) = at.rsplit_once('/').unwrap_or(("", at.as_str()));
+                let made = if parent.is_empty() {
+                    root.open("", OPEN_DIRECTORY, all)
+                        .and_then(|d| d.make_directory(name))
+                } else {
+                    root.open(parent, OPEN_DIRECTORY, all)
+                        .and_then(|d| d.make_directory(name))
+                };
+                made.map_err(fail)?;
+            }
+        }
+        root.open(rel, OPEN_DIRECTORY, wanted).map_err(fail)
+    }
+
     /// A POSIX program's plan: by the description of the system image's
     /// that names `path` (INV-0153-6), or the current directory and the
     /// line's grants alone.
@@ -1754,7 +1862,12 @@ impl Z {
     /// through: the line runs with no designations, so it is no widening,
     /// though its other words are not checked (N4).
     fn userland_options(exec: &Exec<'_>, d: &Description) -> Result<(), String> {
-        if !descriptions::USERLAND.contains(&d.name.as_str()) {
+        // A program with an own directory or a `reach` (ssh, ssh-keygen) is
+        // held to its options the same way (ADR-0340 item 4): `-J`,
+        // `-o` and the rest are a usage mistake the shell refuses, not words
+        // the program reads.
+        let userland = descriptions::USERLAND.contains(&d.name.as_str());
+        if !userland && d.reach.is_none() && d.data.is_none() {
             return Ok(());
         }
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
@@ -1786,7 +1899,7 @@ impl Z {
             d.name
         );
         let mut hints = alloc::vec![help.as_str()];
-        if d.name != "awk" {
+        if userland && d.name != "awk" {
             hints.push(toybox.as_str());
         }
         Err(zoraya_command::error(
@@ -1808,6 +1921,7 @@ impl Z {
         exec: &Exec<'_>,
         image: Handle,
         plan: &[grants::Planned],
+        own: Option<&grants::Own>,
     ) -> Result<(Vec<posix_child::Entry>, u32, String), String> {
         use zoraya_abi::posix::EntryKind as P;
         let merged = grants::merge(plan);
@@ -1833,6 +1947,25 @@ impl Z {
                 Ok(Some((_, _))) => files.push(m.path.clone()),
                 // Missing: the program finds it missing.
                 Ok(None) => {}
+                Err(e) => {
+                    close(&entries);
+                    return Err(e);
+                }
+            }
+        }
+        // ADR-0341 item 3: the program's own directory, at the path it
+        // looks at, marked so that its children get it to read only. Never
+        // merged with an entry of the line (`own_conflict` refused those).
+        if let Some(own) = own {
+            match self.own_connection(exec.name, own) {
+                Ok(dir) => {
+                    entries.push(posix_child::Entry {
+                        prefix: own.view.clone(),
+                        kind: P::Own,
+                        handle: Some(dir.end),
+                    });
+                    core::mem::forget(dir);
+                }
                 Err(e) => {
                     close(&entries);
                     return Err(e);
@@ -4480,13 +4613,25 @@ impl Z {
                     } else {
                         zoraya_shell::terminal::streams_words(tty)
                     };
-                    io.out.push_str(&grants::report(
+                    let own = if native {
+                        None
+                    } else {
+                        match self.posix_own(exec, &path) {
+                            Ok(o) => o,
+                            Err(e) => {
+                                io.err.push_str(&e);
+                                return 1;
+                            }
+                        }
+                    };
+                    io.out.push_str(&grants::report_with(
                         name,
                         &plan,
                         &home,
                         &words,
                         !native,
                         !native && tty.contains(&true),
+                        own.as_ref(),
                     ));
                     0
                 }
@@ -5042,6 +5187,7 @@ impl Host for Z {
                         report,
                         net,
                         window,
+                        own_home,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
@@ -5058,14 +5204,29 @@ impl Host for Z {
                         }
                         let mut args: Vec<&[u8]> = alloc::vec![exec.name.as_bytes()];
                         args.extend(exec.args.iter().map(|a| a.text.as_bytes()));
+                        // A description with a `rest` operand (ssh): `--`
+                        // before the host, so that the program reads no
+                        // option after it (ADR-0340 item 4).
+                        if let Some(at) = Self::end_of_options(exec, &exe) {
+                            args.insert(1 + at, b"--");
+                        }
                         // PATH and HOME for a POSIX program unless the line
                         // gives them (ADR-0104 item 12 gives a session's).
                         // TERM too for a program with the terminal on any of
                         // its fds (ADR-0333 item 1; `console.term` on the
                         // serial console, item 5).
+                        // A program with an own directory has the user
+                        // database's home as `HOME`, whatever `shell.home`
+                        // is: OpenSSH and git find their files under it
+                        // (ADR-0341 item 3).
+                        let home = if own_home {
+                            String::from(grants::USER_HOME)
+                        } else {
+                            self.home()
+                        };
                         let env = zoraya_shell::terminal::posix_env(
                             exec.env,
-                            &self.home(),
+                            &home,
                             tty.contains(&true),
                             crate::terminal().is_some(),
                             &self.setting("console.term"),
