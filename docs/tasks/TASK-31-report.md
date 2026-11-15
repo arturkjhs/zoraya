@@ -6,9 +6,8 @@ Updated 2026-11-15, after 10d.
 
 - **Merged on `main`:**
   - `stage-10a` (`e3e5774`), `stage-10b` (`23b338d`), `stage-10e` (`3981656`): tagged.
-  - 10c (`abaa43c`) and 10d with `work/ports-early` (`c9bab16`): merged on green candidates (10c: `candidate/work-10c-d`,
-    one flaky job re-run; 10d: `candidate-full/10d-a`, 77 jobs). **`stage-10c` and `stage-10d` are not tagged yet:** ADR-0348
-    needs a green scheduled or nightly full run of `main` that includes the commit (`tools/ci-last-full.rb --green-for SHA`).
+  - `stage-10c` on `abaa43c` and `stage-10d` on `c9bab16` (with `work/ports-early`): tagged 2026-11-15 on the scheduled full run
+    43749759496 (head `9b78d380`, 78 of 78 jobs green; `tools/ci-last-full.rb --green-for` names it for both).
   - Small parts, no stage tag: `test-fixes-2`, `py-hook`, `poll`, `ci-expr`, `ci-once`, `test-fixes-3`, `syscall-long`,
     `ci-policy` (ADR-0348, `47f59d2`), `alloc-flake` (`f83d1fb`), `tcg-slow` (`4640c56`).
 - **In progress:**
