@@ -523,6 +523,12 @@ impl Job {
         );
     }
 
+    /// Live processes in the tree.
+    #[cfg(feature = "qemu-test")]
+    pub fn live(&self) -> usize {
+        self.state.lock().live
+    }
+
     /// Ends every process of the tree and leaves its jobs open: the test
     /// harness, after a failed test, so that what it left running does not
     /// run on into the tests after it.
