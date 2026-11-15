@@ -173,6 +173,14 @@ and the network process refuses `file:` URLs from a page.
 - Whether WebKit's network process needs a `/tmp` (it may write cache files); if so, a per-browser `tmpd` entry.
 - Whether a helper description key is worth having before a second multi-process port exists.
 
+- **Rule 6 note (plan part F4, 2026-11-15).** INV-0411-1 and INV-0411-4 are checked: `cargo test -p zoraya-posix` (`tests/spawn.rs`: the
+  entries opened through the parent's table with their rights asked of the service, the fds of the actions, the grants over a fake
+  `netd` and random service, and the old spawn unchanged) and `make test-libposix` (`t_spawn table`, `table2`, `default`, `refuse`,
+  `grants`). INV-0411-2 and INV-0411-3 wait for the engine's step. What F4 decided where this ADR is silent is ADR-0433 (the entries'
+  syntax, the working directory, `addopen`, the third bootstrap message), with ADR-0434 (`netd`'s `Duplicate`) and ADR-0435 (a program's
+  random connection makes eight), all proposed. The changes to ADR-0287 item 3, ADR-0310 item 3 and ADR-0341 item 7 that the
+  decision accepts are recorded in those ADRs.
+
 ## Revisit triggers
 
 - A second engine (Ladybird) with more process types: the table of item 2 per type, perhaps Option C.

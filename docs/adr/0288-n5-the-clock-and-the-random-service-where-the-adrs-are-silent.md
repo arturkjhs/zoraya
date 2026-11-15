@@ -98,6 +98,9 @@ Predictable; rejected for anything that guards a secret.
 ## Open questions
 - Replace the generator with a library DRBG (item 5).
 - Whether the seed in the kernel's blob should be zeroed after `init` has it.
+- Note, 2026-11-15 (from plan part F4, recorded under ADR-0001 rule 6): item 6's limit on a program's `Random` connections
+  is superseded by [ADR-0435](0435-a-programs-random-connection-makes-eight.md) (accepted 2026-11-15): a program's connection may
+  make 8 live ones, depth 3 none.
 
 ## Revisit triggers
 - A virtio-rng device in the QEMU command line: build the reseed path.

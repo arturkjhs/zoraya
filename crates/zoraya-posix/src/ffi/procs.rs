@@ -1553,6 +1553,9 @@ struct Start<'a> {
     /// `POSIX_SPAWN_TCSETPGRP` (ADR-0142).
     foreground: bool,
     actions: &'a [FileAction],
+    /// The table and the service connections the child gets beyond its fds
+    /// (plan part F4, ADR-0433); the default for `exec`.
+    shape: &'a crate::spawn::Shape,
 }
 
 /// The child's ignored set (ADR-0104 item 6): what is `SIG_IGN` now and not
@@ -1598,17 +1601,17 @@ fn child_record(
 ) -> Result<Record, i32> {
     let mut handles = inherited.message.clone();
     let mut entries = Vec::new();
-    for &(i, kind, index) in &inherited.entries {
-        let mut index = index;
-        if kind == EntryKind::Image
+    for (prefix, kind, index) in &inherited.entries {
+        let mut index = *index;
+        if *kind == EntryKind::Image
             && let Ok(dup) = zoraya_rt::handle_duplicate(image, rights_of(image))
         {
             handles.push(dup);
             index = (handles.len() - 1) as u8;
         }
         entries.push(abi::Entry {
-            prefix: &p.entries[i].prefix,
-            kind,
+            prefix,
+            kind: *kind,
             handle: index,
         });
     }
@@ -1623,8 +1626,8 @@ fn child_record(
         facts,
         flags,
         exe,
-        p.cwd.entry as u32,
-        &p.cwd.path,
+        inherited.cwd.0,
+        &inherited.cwd.1,
         &inherited.fds,
         &entries,
         handles.len(),
@@ -1644,9 +1647,24 @@ fn child_record(
     }
 }
 
-/// Writes the record, then `SELF`, on the bootstrap channel (ADR-0107 item
-/// 5), moving every handle.
-fn send_record(boot: Handle, record: Record, process: Handle) -> Result<(), i32> {
+/// Writes the record, then `SELF` (with the service connections a spawn
+/// gave, `ZPBX`), and the descriptors a record cannot hold (`ZPBF`), on the
+/// bootstrap channel (ADR-0107 item 5, ADR-0433), moving every handle.
+/// `granted`'s handles that this made are closed here if they were not sent.
+fn send_record(
+    p: &mut Posix<RtSys>,
+    boot: Handle,
+    record: Record,
+    process: Handle,
+    granted: &crate::spawn::Granted<Handle>,
+    passed: &crate::jobs::Passed<Handle>,
+) -> Result<(), (i32, bool)> {
+    // The error says whether the descriptors had been sent (and so moved).
+    let close_made = |granted: &crate::spawn::Granted<Handle>| {
+        for h in granted.made() {
+            let _ = zoraya_rt::handle_close(h);
+        }
+    };
     let entries: Vec<ChannelEntry> = record
         .handles
         .iter()
@@ -1661,17 +1679,74 @@ fn send_record(boot: Handle, record: Record, process: Handle) -> Result<(), i32>
         for h in record.handles {
             let _ = zoraya_rt::handle_close(h);
         }
-        return Err(E2BIG);
+        close_made(granted);
+        return Err((E2BIG, false));
     }
+    // Made first: a failure after the sockets moved would leave them dead.
     // TRANSFER to move it; the child receives WAIT alone.
-    let me = zoraya_rt::handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER))
-        .map_err(|_| EAGAIN)?;
-    let entry = [ChannelEntry {
+    let me = match zoraya_rt::handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
+        Ok(me) => me,
+        Err(_) => {
+            close_made(granted);
+            return Err((EAGAIN, false));
+        }
+    };
+    // The descriptors a record cannot hold go before `SELF`, all or nothing: a
+    // refusal of them (the kernel refuses a moved channel end that holds
+    // handles, or a full queue) leaves the connections of `ZPBX` unsent, so
+    // the parent still has its window and its network connection
+    // (INV-0433-2). The child, finding no message it can read, ends.
+    let mut passed_sent = false;
+    if !passed.is_empty() {
+        let third = crate::unix::encode_passed(&passed.fds, &passed.records);
+        if let Err(s) = p
+            .sys
+            .channel_send(boot, &third, &passed.handles, &passed.read_only)
+        {
+            let _ = zoraya_rt::handle_close(me);
+            close_made(granted);
+            return Err((if s == Status::BadState { EBUSY } else { EAGAIN }, false));
+        }
+        passed_sent = true;
+    }
+    let mut flags = 0u8;
+    let mut second: Vec<ChannelEntry> = vec![ChannelEntry {
         handle: me,
         rights: Rights::WAIT,
         transfer: Transfer::Move,
     }];
-    zoraya_rt::channel_write(boot, SELF_MESSAGE, &entry).map_err(|_| EAGAIN)
+    let mut extra = |h: Handle, flag: u8| {
+        second.push(ChannelEntry {
+            handle: h,
+            rights: rights_of(h),
+            transfer: Transfer::Move,
+        });
+        flags |= flag;
+    };
+    if let Some((h, _)) = granted.net {
+        extra(h, abi::EXT_NET);
+    }
+    if let Some(h) = granted.random {
+        extra(h, abi::EXT_RANDOM);
+    }
+    if let Some(h) = granted.window {
+        extra(h, abi::EXT_WINDOW);
+    }
+    let mut message = [0u8; 5];
+    let bytes: &[u8] = if flags == 0 {
+        SELF_MESSAGE
+    } else {
+        message[..4].copy_from_slice(SELF_EXT_MESSAGE);
+        message[4] = flags;
+        &message
+    };
+    if zoraya_rt::channel_write(boot, bytes, &second).is_err() {
+        // The kernel leaves the handles with the caller.
+        let _ = zoraya_rt::handle_close(me);
+        close_made(granted);
+        return Err((EAGAIN, passed_sent));
+    }
+    Ok(())
 }
 
 /// Spawns `path` with `argv` and `envp` into `job` (a new pid's, or this
@@ -1690,32 +1765,54 @@ fn spawn_into(
     start: &Start<'_>,
     suspended: bool,
 ) -> Result<Handle, i32> {
-    let inherited = p.inherit(start.actions, facts.pgid).inspect_err(|e| {
-        let at = p.stats.inherit_failed_at;
-        debug_later(p, "spawn: inherit", (e, at));
-    })?;
+    let inherited = p
+        .inherit_shaped(start.actions, facts.pgid, start.shape)
+        .inspect_err(|e| {
+            let at = p.stats.inherit_failed_at;
+            debug_later(p, "spawn: inherit", (e, at));
+        })?;
+    let granted = match p.grant_connections(start.shape.grants) {
+        Ok(g) => g,
+        Err(e) => {
+            let made: Vec<Handle> = inherited
+                .slots
+                .iter()
+                .filter(|s| s.2)
+                .map(|s| s.1)
+                .chain(inherited.message.iter().copied())
+                .collect();
+            for h in made {
+                let _ = zoraya_rt::handle_close(h);
+            }
+            p.spawn_refused(&inherited);
+            return Err(e);
+        }
+    };
     let made: Vec<Handle> = inherited
         .slots
         .iter()
         .filter(|s| s.2)
         .map(|s| s.1)
         .collect();
-    let undo_made = |made: &[Handle], message: &[Handle]| {
-        for &h in made.iter().chain(message) {
+    // What a refused spawn gives back: every handle it made, and the files
+    // `addopen` opened. What moved is the caller's again.
+    let undo_made = |p: &mut Posix<RtSys>, made: &[Handle], message: &[Handle]| {
+        for &h in made.iter().chain(message).chain(&granted.made()) {
             let _ = zoraya_rt::handle_close(h);
         }
+        p.spawn_refused(&inherited);
     };
     let record = match child_record(p, facts, exe, &inherited, image) {
         Ok(r) => r,
         Err(e) => {
-            undo_made(&made, &inherited.message);
+            undo_made(p, &made, &inherited.message);
             return Err(e);
         }
     };
     let (boot, boot_child) = match zoraya_rt::channel_create() {
         Ok(c) => c,
         Err(_) => {
-            undo_made(&made, &record.handles);
+            undo_made(p, &made, &record.handles);
             return Err(EAGAIN);
         }
     };
@@ -1757,7 +1854,7 @@ fn spawn_into(
         e.env(v);
     }
     let Some(length) = e.finish() else {
-        undo_made(&made, &record.handles);
+        undo_made(p, &made, &record.handles);
         let _ = zoraya_rt::handle_close(boot);
         let _ = zoraya_rt::handle_close(boot_child);
         return Err(E2BIG);
@@ -1770,7 +1867,7 @@ fn spawn_into(
             let seen = zoraya_rt::last_refusal();
             debug_later(p, "spawn", s);
             // A refused spawn moved nothing (INV-0042-3).
-            undo_made(&made, &record.handles);
+            undo_made(p, &made, &record.handles);
             let _ = zoraya_rt::handle_close(boot);
             let _ = zoraya_rt::handle_close(boot_child);
             return Err(match s {
@@ -1782,14 +1879,21 @@ fn spawn_into(
             });
         }
     };
-    let sent = send_record(boot, record, process);
+    let sent = send_record(p, boot, record, process, &granted, &inherited.passed);
     let _ = zoraya_rt::handle_close(boot);
-    if let Err(e) = sent {
+    if let Err((e, passed_sent)) = sent {
         // The child finds its bootstrap channel closed with no record, and
         // ends (`bootstrap`).
         let _ = zoraya_rt::handle_close(process);
+        if passed_sent {
+            // The sockets it took are gone from here.
+            p.finish_passed(&inherited.passed);
+        }
+        p.spawn_refused(&inherited);
         return Err(e);
     }
+    // The child holds what moved: the parent's table says so.
+    p.spawned(&inherited, &granted);
     Ok(process)
 }
 
@@ -1899,6 +2003,11 @@ const ATTR_FLAGS: usize = 0;
 const ATTR_PGROUP: usize = 4;
 const ATTR_DEF: usize = 8;
 const ATTR_MASK: usize = 136;
+// musl's `__prio`, `__pol` and `__fn` follow (264 to 280), which nothing here
+// uses; the 56 bytes of padding after them hold the attributes of plan part F4
+// (ADR-0433): the grant mask and a leaked list of namespace entries.
+const ATTR_GRANTS: usize = 280;
+const ATTR_NAMES: usize = 288;
 const ATTR_SIZE: usize = 336;
 
 const POSIX_SPAWN_SETPGROUP: i32 = 2;
@@ -1906,7 +2015,10 @@ const POSIX_SPAWN_SETSIGDEF: i32 = 4;
 const POSIX_SPAWN_SETSIGMASK: i32 = 8;
 /// ADR-0142: below the sign bit of the `short` `setflags` takes.
 const POSIX_SPAWN_TCSETPGRP: i32 = 0x4000;
-const FLAGS_KNOWN: i32 = 0xff | POSIX_SPAWN_TCSETPGRP;
+/// ADR-0411 item 1, ADR-0433: the child's table is the listed entries and its
+/// fds the file actions' alone.
+const POSIX_SPAWN_EMPTY_NAMESPACE: i32 = 0x2000;
+const FLAGS_KNOWN: i32 = 0xff | POSIX_SPAWN_TCSETPGRP | POSIX_SPAWN_EMPTY_NAMESPACE;
 
 #[unsafe(no_mangle)]
 extern "C" fn posix_spawnattr_init(a: *mut u8) -> i32 {
@@ -1918,8 +2030,93 @@ extern "C" fn posix_spawnattr_init(a: *mut u8) -> i32 {
     0
 }
 
+/// The list of namespace entries an attribute object holds.
+///
+/// # Safety
+///
+/// `a` is a `posix_spawnattr_t` that `init` zeroed, and the pointer at
+/// `ATTR_NAMES` is NULL or a `Box` this module leaked.
+unsafe fn names_of<'a>(a: *const u8) -> Option<&'a Vec<crate::spawn::Spec>> {
+    // SAFETY: the caller's contract; the field is inside the 336 bytes.
+    let list =
+        unsafe { (a.add(ATTR_NAMES) as *const *mut Vec<crate::spawn::Spec>).read_unaligned() };
+    // SAFETY: as above.
+    (!list.is_null()).then(|| unsafe { &*list })
+}
+
+/// Frees the list and leaves the field NULL.
+///
+/// # Safety
+///
+/// As [`names_of`].
+unsafe fn drop_names(a: *mut u8) {
+    // SAFETY: the caller's contract.
+    let list = unsafe { (a.add(ATTR_NAMES) as *mut *mut Vec<crate::spawn::Spec>).read_unaligned() };
+    if !list.is_null() {
+        // SAFETY: the `Box` `setnamespace_np` leaked, given back once.
+        drop(unsafe { Box::from_raw(list) });
+        // SAFETY: as above.
+        unsafe {
+            (a.add(ATTR_NAMES) as *mut *mut Vec<crate::spawn::Spec>)
+                .write_unaligned(ptr::null_mut())
+        };
+    }
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn posix_spawnattr_destroy(_a: *mut u8) -> i32 {
+extern "C" fn posix_spawnattr_destroy(a: *mut u8) -> i32 {
+    if !a.is_null() {
+        // SAFETY: C's contract: a `posix_spawnattr_t`, set up by `init`.
+        unsafe { drop_names(a) };
+    }
+    0
+}
+
+/// `posix_spawnattr_setnamespace_np(attr, entries)`: the table of a child
+/// started with `POSIX_SPAWN_EMPTY_NAMESPACE` (ADR-0411 item 1, ADR-0433):
+/// each entry `PATH` or `PATH:ro`, NULL-terminated; NULL or an empty list is
+/// an empty table. `EINVAL` for an entry that is not an absolute normal path.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnattr_setnamespace_np(a: *mut u8, entries: *const *const c_char) -> i32 {
+    if a.is_null() {
+        return EINVAL;
+    }
+    // SAFETY: C's contract: a NULL-terminated array of C strings or NULL.
+    let raw = match unsafe { strings(entries) } {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let mut list = Vec::new();
+    for e in &raw {
+        match crate::spawn::parse_spec(e) {
+            Ok(s) => list.push(s),
+            Err(e) => return e,
+        }
+    }
+    // SAFETY: C's contract: `a` is a `posix_spawnattr_t` that `init` set up.
+    unsafe {
+        drop_names(a);
+        (a.add(ATTR_NAMES) as *mut *mut Vec<crate::spawn::Spec>)
+            .write_unaligned(Box::into_raw(Box::new(list)));
+    }
+    0
+}
+
+/// `posix_spawnattr_setgrants_np(attr, mask)`: the service connections the
+/// child gets, `POSIX_SPAWN_GRANT_NET`, `_RANDOM`, `_WINDOW` and
+/// `POSIX_SPAWN_MOVE_NET` (ADR-0411 item 1, ADR-0433). `EINVAL` for another
+/// bit, and for `GRANT_NET` with `MOVE_NET`.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnattr_setgrants_np(a: *mut u8, grants: u32) -> i32 {
+    let shape = crate::spawn::Shape {
+        grants,
+        ..Default::default()
+    };
+    if a.is_null() || shape.check().is_err() {
+        return EINVAL;
+    }
+    // SAFETY: C's contract.
+    unsafe { (a.add(ATTR_GRANTS) as *mut u32).write_unaligned(grants) };
     0
 }
 
@@ -2041,6 +2238,183 @@ extern "C" fn posix_spawn_file_actions_addclose(fa: *mut u8, fd: i32) -> i32 {
     }
 }
 
+/// `posix_spawn_file_actions_addclosefrom_np(fa, fd)` (glibc 2.34's name,
+/// which CPython's `subprocess` asks for): the child has no fd from `fd` up
+/// but those the actions after it make.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawn_file_actions_addclosefrom_np(fa: *mut u8, fd: i32) -> i32 {
+    if fa.is_null() || fd < 0 {
+        return EBADF;
+    }
+    // SAFETY: C's contract.
+    match unsafe { actions_of(fa) } {
+        Some(l) => {
+            l.push(FileAction::CloseFrom(fd));
+            0
+        }
+        None => EINVAL,
+    }
+}
+
+/// The scheduling attributes of `posix_spawn` are not offered, as musl's
+/// are not (`ENOSYS`): CPython's `os.posix_spawn` links them and calls them
+/// only for a program that asks for a scheduler.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnattr_setschedparam(_a: *mut u8, _param: *const u8) -> i32 {
+    ENOSYS
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnattr_setschedpolicy(_a: *mut u8, _policy: i32) -> i32 {
+    ENOSYS
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawn_file_actions_addopen(
+    fa: *mut u8,
+    fd: i32,
+    path: *const c_char,
+    flags: i32,
+    mode: u32,
+) -> i32 {
+    if fa.is_null() || fd < 0 {
+        return EBADF;
+    }
+    // SAFETY: C's contract: a C string.
+    let path = match unsafe { c_str(path) } {
+        Ok(p) => p.to_vec(),
+        Err(e) => return e,
+    };
+    // SAFETY: C's contract.
+    match unsafe { actions_of(fa) } {
+        Some(l) => {
+            l.push(FileAction::Open(fd, path, flags as u32, mode));
+            0
+        }
+        None => EINVAL,
+    }
+}
+
+/// What `posix_spawn` read from its arguments, apart from the program.
+struct SpawnArgs {
+    argv: Vec<Vec<u8>>,
+    envp: Vec<Vec<u8>>,
+    actions: Vec<FileAction>,
+    flags: i32,
+    pgroup: i32,
+    defaults: u64,
+    mask: u64,
+    shape: crate::spawn::Shape,
+}
+
+/// Reads the arguments of `posix_spawn` and `posix_spawnp`.
+///
+/// # Safety
+///
+/// C's contract for `posix_spawn`: `argv` and `envp` are NULL-terminated
+/// arrays of C strings, `fa` NULL or a `posix_spawn_file_actions_t` that
+/// `init` set up, `attr` NULL or a `posix_spawnattr_t` that `init` set up.
+unsafe fn spawn_args(
+    fa: *mut u8,
+    attr: *const u8,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> Result<SpawnArgs, i32> {
+    // SAFETY: the caller's contract.
+    let (argv, envp) = match unsafe { (strings(argv), strings(envp)) } {
+        (Ok(a), Ok(e)) => (a, e),
+        _ => return Err(E2BIG),
+    };
+    let actions = if fa.is_null() {
+        Vec::new()
+    } else {
+        // SAFETY: C's contract.
+        unsafe { actions_of(fa) }.cloned().unwrap_or_default()
+    };
+    let (flags, pgroup, defaults, mask, grants, entries) = if attr.is_null() {
+        (0, 0, 0, 0, 0, Vec::new())
+    } else {
+        // SAFETY: C's contract: a `posix_spawnattr_t`.
+        unsafe {
+            (
+                (attr.add(ATTR_FLAGS) as *const i32).read_unaligned(),
+                (attr.add(ATTR_PGROUP) as *const i32).read_unaligned(),
+                (attr.add(ATTR_DEF) as *const u64).read_unaligned(),
+                (attr.add(ATTR_MASK) as *const u64).read_unaligned(),
+                (attr.add(ATTR_GRANTS) as *const u32).read_unaligned(),
+                names_of(attr).cloned().unwrap_or_default(),
+            )
+        }
+    };
+    let shape = crate::spawn::Shape {
+        empty: flags & POSIX_SPAWN_EMPTY_NAMESPACE != 0,
+        entries,
+        grants,
+    };
+    shape.check()?;
+    Ok(SpawnArgs {
+        argv,
+        envp,
+        actions,
+        flags,
+        pgroup,
+        defaults,
+        mask,
+        shape,
+    })
+}
+
+/// One `posix_spawn` of `path`: the child's pid or the error.
+fn spawn_one(path: &[u8], argv: &[Vec<u8>], a: &SpawnArgs) -> Result<u32, i32> {
+    let group = if a.flags & POSIX_SPAWN_SETPGROUP == 0 {
+        (bp::group::INHERIT, 0)
+    } else if a.pgroup == 0 {
+        (bp::group::NEW, 0)
+    } else {
+        (bp::group::JOIN, a.pgroup as u32)
+    };
+    let start = Start {
+        group,
+        defaults: if a.flags & POSIX_SPAWN_SETSIGDEF != 0 {
+            a.defaults
+        } else {
+            0
+        },
+        mask: (a.flags & POSIX_SPAWN_SETSIGMASK != 0).then_some(a.mask),
+        foreground: a.flags & POSIX_SPAWN_TCSETPGRP != 0 && a.flags & POSIX_SPAWN_SETPGROUP != 0,
+        actions: &a.actions,
+        shape: &a.shape,
+    };
+    poll();
+    let started = zoraya_rt::clock_monotonic();
+    state(|p| {
+        let r = spawn_child(p, path, argv, &a.envp, &start);
+        if r.is_ok() {
+            p.stats.spawns += 1;
+            p.stats.spawn_ns += zoraya_rt::clock_monotonic().saturating_sub(started);
+        }
+        r
+    })
+}
+
+/// Gives the pid to the caller.
+///
+/// # Safety
+///
+/// `pid` is NULL or a `pid_t` of the caller's.
+unsafe fn give_pid(pid: *mut i32, r: Result<u32, i32>) -> i32 {
+    match r {
+        Ok(child) => {
+            if !pid.is_null() {
+                // SAFETY: the caller's contract.
+                unsafe { pid.write(child as i32) };
+            }
+            0
+        }
+        Err(e) => e,
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn posix_spawn(
     pid: *mut i32,
@@ -2056,66 +2430,74 @@ extern "C" fn posix_spawn(
         Err(e) => return e,
     };
     // SAFETY: as above.
-    let (argv, envp) = match unsafe { (strings(argv), strings(envp)) } {
-        (Ok(a), Ok(e)) => (a, e),
-        _ => return E2BIG,
+    let args = match unsafe { spawn_args(fa, attr, argv, envp) } {
+        Ok(a) => a,
+        Err(e) => return e,
     };
-    let actions = if fa.is_null() {
-        Vec::new()
-    } else {
-        // SAFETY: C's contract.
-        unsafe { actions_of(fa) }.cloned().unwrap_or_default()
+    let r = spawn_one(&path, &args.argv, &args);
+    // SAFETY: as above.
+    unsafe { give_pid(pid, r) }
+}
+
+/// `posix_spawnp`: a `file` with no `/` is looked for in `$PATH` of the
+/// caller's own environment (musl's `execvpe` does the same in the child),
+/// as `execvp` does: `ENOENT`, `ENOTDIR` and `EACCES` go on to the next
+/// directory (`EACCES` is what is reported if none works), a file that is
+/// not an executable is run by `/bin/sh` (ADR-0433 item 5).
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawnp(
+    pid: *mut i32,
+    file: *const c_char,
+    fa: *mut u8,
+    attr: *const u8,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> i32 {
+    // SAFETY: C's contract for posix_spawnp.
+    let file = match unsafe { c_str(file) } {
+        Ok(f) => f.to_vec(),
+        Err(e) => return e,
     };
-    let (flags, pgroup, defaults, mask) = if attr.is_null() {
-        (0, 0, 0, 0)
-    } else {
-        // SAFETY: C's contract: a `posix_spawnattr_t`.
-        unsafe {
-            (
-                (attr.add(ATTR_FLAGS) as *const i32).read_unaligned(),
-                (attr.add(ATTR_PGROUP) as *const i32).read_unaligned(),
-                (attr.add(ATTR_DEF) as *const u64).read_unaligned(),
-                (attr.add(ATTR_MASK) as *const u64).read_unaligned(),
-            )
-        }
+    // SAFETY: as above.
+    let args = match unsafe { spawn_args(fa, attr, argv, envp) } {
+        Ok(a) => a,
+        Err(e) => return e,
     };
-    let group = if flags & POSIX_SPAWN_SETPGROUP == 0 {
-        (bp::group::INHERIT, 0)
-    } else if pgroup == 0 {
-        (bp::group::NEW, 0)
-    } else {
-        (bp::group::JOIN, pgroup as u32)
-    };
-    let start = Start {
-        group,
-        defaults: if flags & POSIX_SPAWN_SETSIGDEF != 0 {
-            defaults
-        } else {
-            0
-        },
-        mask: (flags & POSIX_SPAWN_SETSIGMASK != 0).then_some(mask),
-        foreground: flags & POSIX_SPAWN_TCSETPGRP != 0 && flags & POSIX_SPAWN_SETPGROUP != 0,
-        actions: &actions,
-    };
-    poll();
-    let started = zoraya_rt::clock_monotonic();
-    match state(|p| {
-        let r = spawn_child(p, &path, &argv, &envp, &start);
-        if r.is_ok() {
-            p.stats.spawns += 1;
-            p.stats.spawn_ns += zoraya_rt::clock_monotonic().saturating_sub(started);
-        }
-        r
-    }) {
-        Ok(child) => {
-            if !pid.is_null() {
-                // SAFETY: C's contract: `pid` is NULL or a `pid_t`.
-                unsafe { pid.write(child as i32) };
-            }
-            0
-        }
-        Err(e) => e,
+    if file.is_empty() {
+        return ENOENT;
     }
+    // SAFETY: as above.
+    let give = |r| unsafe { give_pid(pid, r) };
+    if file.contains(&b'/') {
+        return give(spawn_one(&file, &args.argv, &args));
+    }
+    // SAFETY: musl's `__environ`, set before main.
+    let caller = unsafe { strings(__environ as *const *const c_char) }.unwrap_or_default();
+    let path = caller
+        .iter()
+        .find_map(|v| v.strip_prefix(b"PATH="))
+        .map_or(b"/usr/local/bin:/bin:/usr/bin".to_vec(), <[u8]>::to_vec);
+    let mut last = ENOENT;
+    for dir in path.split(|&b| b == b':') {
+        let mut full = if dir.is_empty() {
+            b".".to_vec()
+        } else {
+            dir.to_vec()
+        };
+        full.push(b'/');
+        full.extend_from_slice(&file);
+        match spawn_one(&full, &args.argv, &args) {
+            Err(ENOEXEC) => {
+                let mut v = vec![b"sh".to_vec(), full.clone()];
+                v.extend(args.argv.iter().skip(1).cloned());
+                return give(spawn_one(b"/bin/sh", &v, &args));
+            }
+            Err(ENOENT | ENOTDIR) => {}
+            Err(EACCES) => last = EACCES,
+            r => return give(r),
+        }
+    }
+    last
 }
 
 // ------------------------------------------------------------ exec
@@ -2150,6 +2532,7 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
             mask: None,
             foreground: false,
             actions: &[],
+            shape: &crate::spawn::Shape::default(),
         };
         // The job handle moves to the new image: this one is ending.
         let r = spawn_into(

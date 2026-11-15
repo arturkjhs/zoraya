@@ -1123,6 +1123,28 @@ mod bootstrap {
         assert!(with(&[root]));
     }
 
+    /// ADR-0433: a record may have no cwd; one with no entry must not have one.
+    #[test]
+    fn a_record_may_have_no_cwd() {
+        use crate::posix::NO_ENTRY;
+        let mut b = [0; 512];
+        let root = Entry {
+            prefix: "/",
+            kind: EntryKind::Directory,
+            handle: 0,
+        };
+        // No entries: only `NO_ENTRY` and an empty cwd.
+        let n = encode(&FACTS, 0, "/bin/x", NO_ENTRY, "", &[], &[], 4, &mut b).unwrap();
+        let r = Bootstrap::decode(&b[..n], 4).unwrap();
+        assert_eq!((r.entry_count(), r.cwd_entry, r.cwd), (0, NO_ENTRY, ""));
+        assert!(encode(&FACTS, 0, "/bin/x", 0, "", &[], &[], 4, &mut b).is_none());
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "a", &[], &[], 4, &mut b).is_none());
+        // Entries: `NO_ENTRY` is no cwd, with an empty path.
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "", &[], &[root], 4, &mut b).is_some());
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "a", &[], &[root], 4, &mut b).is_none());
+        assert!(encode(&FACTS, 0, "/bin/x", 0, "", &[], &[root], 4, &mut b).is_some());
+    }
+
     #[test]
     fn a_record_round_trips() {
         let mut b = [0; 1024];

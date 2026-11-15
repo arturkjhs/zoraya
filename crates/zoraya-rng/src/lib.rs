@@ -230,12 +230,18 @@ pub enum Action {
     Close,
 }
 
-/// Connections that may make others: `init`'s (depth 0) and the shell's
-/// (depth 1). A program's own connection (depth 2) may not, so a program
-/// cannot use up the table (review finding 3).
+/// Connections that may make many others: `init`'s (depth 0) and the shell's
+/// (depth 1). A program's own connection (depth 2) may make
+/// [`PROGRAM_CHILDREN`] and one of those (depth 3) none, so a program cannot
+/// use up the table (review finding 3; ADR-0435, plan part F4).
 pub const SHARE_DEPTH: u8 = 2;
 /// Live connections one connection may have made.
 pub const MAX_CHILDREN: u16 = 64;
+/// Live connections a program's own connection (depth 2) may have made: the
+/// ones `posix_spawn` with `POSIX_SPAWN_GRANT_RANDOM` gives its children.
+pub const PROGRAM_CHILDREN: u16 = 8;
+/// Depths from which a connection makes none.
+pub const LEAF_DEPTH: u8 = 3;
 
 /// What the service keeps per connection, owned by the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,7 +277,11 @@ impl Conn {
     }
 
     fn may_share(&self) -> bool {
-        self.depth < SHARE_DEPTH && self.children < MAX_CHILDREN
+        match self.depth {
+            d if d < SHARE_DEPTH => self.children < MAX_CHILDREN,
+            d if d < LEAF_DEPTH => self.children < PROGRAM_CHILDREN,
+            _ => false,
+        }
     }
 }
 
