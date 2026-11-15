@@ -161,7 +161,7 @@ Finding nothing is a "no": status 1, nothing printed, and unlike a failure it do
 ```
 ~> more notes.txt
 zosh: more: no such command
-  hint: to print a file: cat FILE (help pages page by themselves)
+  hint: to page a file: less FILE
 ~> man cp
 zosh: man: no such command
   hint: on Zoraya this is help: help NAME

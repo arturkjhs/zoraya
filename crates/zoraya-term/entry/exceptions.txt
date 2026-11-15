@@ -13,7 +13,6 @@ XT the window title and its stack: nothing a program prints sets the title (ADR-
 kNXT Shift+Page Down scrolls the view and sends nothing (ADR-0332 item 7); the other modified forms are tested
 kPRV Shift+Page Up scrolls the view and sends nothing (ADR-0332 item 7); the other modified forms are tested
 kbeg the keypad centre with NumLock off: the keymap has no NumLock, KP5 sends kb2 (ADR-0383)
-kbs Backspace sends DEL (0x7f), ADR-0096 (the discipline's erase character); the pinned entry says ^H, ncurses' default for xterm (ADR-0383)
 km meta mode: Alt always sends an ESC prefix and never sets the eighth bit (ADR-0332 items 4 and 7); an eight-bit Alt+x to Alt+DEL would be the bytes 0xF8 to 0xFF, which the shell's key stream keeps for pastes (ADR-0383, ADR-0384)
 kp5 the keypad centre with NumLock off: the keymap has no NumLock, KP5 sends kb2 (ADR-0383)
 mc0 printing (ADR-0332 item 4)

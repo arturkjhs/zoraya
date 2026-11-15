@@ -275,7 +275,7 @@ prefix ~> more notes.txt
 type \r
 window
 screen zosh: more: no such command
-screen   hint: to print a file: cat FILE (help pages page by themselves)
+screen   hint: to page a file: less FILE
 screen ~> _
 chord ctrl l
 top ~> _

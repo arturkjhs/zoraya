@@ -47,6 +47,8 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
 	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md \
 	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0430-unix-sockets-as-built.md docs/adr/0389-the-terminal-calls-of-libposix-where-adr-0331-and-adr-0342-are-silent.md \
+	docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md docs/adr/0347-surface-for-git.md \
+	docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md \
 	docs/adr/0432-memory-descriptors-as-built.md docs/adr/0433-posix-spawn-as-built.md
 empty :=
 space := $(empty) $(empty)
@@ -64,7 +66,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
+	ncurses less db1 nvi openssh git dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -390,6 +392,153 @@ $(AWK_BIN): $(AWK) $(SYSROOT_STAMP) $(AWK_BISON)
 	@cd $(AWK) && $(call logged,sh -xc 'mkdir -p objs && for f in awkgram.tab.c proctab.c $(AWK_SRCS); do $(ZCC) $(CROSS_CFLAGS) -c -o objs/$$(basename $$f .c).o $$f || exit 1; done && $(ZCC) $(CROSS_CFLAGS) -o awk objs/*.o -lm',awk)
 	@touch $@
 
+# ---------------------------------------------------------------- curses (TASK-31 ports-early, ADR-0334)
+
+# ncurses 6.6 for the target: wide characters, the terminfo half as its own
+# archive, static, no C++ binding, no programs, no manual pages, no lookup in
+# the home directory, directories named by letters whatever the build host
+# (ADR-0334 item 1). The entries are read from /usr/share/terminfo, the
+# directory ADR-0333's `tic` fills; nothing is compiled in. The build helpers
+# (make_hash, make_keys) run on the host (--with-build-cc). Installed into
+# $(CURSES) (usr/include, usr/lib); CURSES_SYSROOT_STAMP (below) copies the two
+# archives and the headers into the sysroot, so that the image has them for
+# tcc (ADR-0334 item 3, part 10d). The host triple names musl so that config.sub
+# accepts it, as for wget; zcc defines nothing of Linux.
+CURSES := $(PORTS)/curses
+NCURSES := $(WORK)/ncurses-$(call lock_ver,ncurses)
+NCURSES_BUILD := $(WORK)/ncurses-build
+NCURSES_LIBS := $(CURSES)/usr/lib/libncursesw.a $(CURSES)/usr/lib/libtinfow.a
+NCURSES_OPTS := --prefix=/usr --without-shared --without-debug --without-ada --without-cxx --without-cxx-binding \
+	--without-manpages --without-tests --without-progs \
+	--enable-widec --with-termlib --enable-overwrite --enable-mixed-case --disable-home-terminfo \
+	--with-default-terminfo-dir=/usr/share/terminfo --with-terminfo-dirs=/usr/share/terminfo \
+	--without-pkg-config --disable-stripping --without-gpm --disable-db-install --without-fallbacks
+ncurses: $(NCURSES_LIBS)
+# The two archives and the headers in the sysroot (ADR-0334 item 3), `ncurses.h`
+# as a file of its own, not the link ncurses installs.
+CURSES_SYSROOT_STAMP := $(OBJ)/curses-sysroot.stamp
+$(CURSES_SYSROOT_STAMP): $(NCURSES_LIBS) $(SYSROOT_STAMP)
+	mkdir -p $(SYSROOT)/usr/include $(SYSROOT)/usr/lib
+	for h in curses.h term.h termcap.h unctrl.h ncurses_dll.h; do cp $(CURSES)/usr/include/$$h $(SYSROOT)/usr/include/$$h; done
+	cp $(CURSES)/usr/include/curses.h $(SYSROOT)/usr/include/ncurses.h
+	cp $(NCURSES_LIBS) $(SYSROOT)/usr/lib/
+	@mkdir -p $(dir $@) && touch $@
+$(NCURSES): $(LOCK) $(wildcard ports/patches/ncurses/*.patch)
+	$(call unpack,ncurses,ports/patches/ncurses)
+	@touch $@
+$(NCURSES_LIBS): $(NCURSES) $(SYSROOT_STAMP) ports/config.site
+	rm -rf $(NCURSES_BUILD) $(CURSES) && mkdir -p $(NCURSES_BUILD) $(CURSES)
+	@cd $(NCURSES_BUILD) && $(call logged,$(CROSS_ENV) $(NCURSES)/configure --host=aarch64-unknown-linux-musl \
+	  --build=$$($(NCURSES)/config.guess) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" --with-build-cc=$(HOSTCC) \
+	  $(NCURSES_OPTS),ncurses-configure)
+	@# Only include/ and ncurses/ (the two archives); panel, menu and form are not wanted.
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/include && $(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/ncurses -j3 V=1,ncurses)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/include install.libs DESTDIR=$(CURSES) && $(CROSS_ENV) $(MAKE) -C $(NCURSES_BUILD)/ncurses install.libs DESTDIR=$(CURSES),ncurses-install)
+	@touch $(NCURSES_LIBS)
+
+# ---------------------------------------------------------------- less (TASK-31 ports-early, ADR-0335 item 8)
+
+# less 710 under the Less License, linked with the terminfo half of ADR-0334's
+# library alone (libtinfow.a). The compiled-in defaults of ADR-0335 item 8 are
+# the patch's: no history file, no key files, no tags, no input preprocessor.
+# The terminal's names (tcsetattr, tcflush, cfgetospeed, select, ...) come
+# from libc.a since part 10c, and creat and sleep since part 10d (ADR-0391):
+# ports/apps/ttyshim.c, which stood in for them, is gone.
+GITSHIM := $(PORTS)/ttyshim/libgitshim.a
+$(GITSHIM): ports/apps/gitshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(dir $@) $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/gitshim.o ports/apps/gitshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/gitshim.o
+
+SSHSHIM := $(PORTS)/ttyshim/libsshshim.a
+$(SSHSHIM): ports/apps/sshshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(dir $@) $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/sshshim.o ports/apps/sshshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/sshshim.o
+
+LESS := $(WORK)/less-$(call lock_ver,less)
+LESS_BIN := $(LESS)/less
+less: $(LESS_BIN)
+$(LESS): $(LOCK) $(wildcard ports/patches/less/*.patch)
+	$(call unpack,less,ports/patches/less)
+	@touch $@
+# zcc also searches the sysroot's lib, where CURSES_SYSROOT_STAMP puts the same two archives: the link must
+# not see an older copy there.
+$(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(CURSES_SYSROOT_STAMP) ports/config.site
+	@cd $(LESS) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl \
+	  --with-regex=posix $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" \
+	  CPPFLAGS="-I$(CURSES)/usr/include" LDFLAGS="-L$(CURSES)/usr/lib" LIBS="-ltinfow",less-configure)
+	rm -f $(LESS_BIN) $(LESS)/*.o
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(LESS) less V=1,less)
+	@touch $@
+
+# ---------------------------------------------------------------- DB 1 and nvi (TASK-31 ports-early, ADR-0335 items 1 and 2)
+
+# Berkeley DB 1.85 (the BSD licence of the University of California), built by
+# ports/db1/build.sh into $(PORTS)/db1: nvi's buffer is its recno access
+# method. nvi2 2.2.2 is built by ports/nvi/build.sh (its own CMake is not
+# used): the list of sources, the generated headers, config.h and pathnames.h
+# are the port's, the program is patched by ports/patches/nvi2/. `ex` and
+# `view` are links to `vi` in the image (part 10d).
+DB1 := $(WORK)/db1-$(call lock_ver,db1)
+DB1_PREFIX := $(PORTS)/db1
+db1: $(DB1_PREFIX)/lib/libdb1.a
+$(DB1): $(LOCK) $(wildcard ports/patches/db1/*.patch)
+	$(call unpack,db1,ports/patches/db1)
+	@touch $@
+$(DB1_PREFIX)/lib/libdb1.a: $(DB1) ports/db1/build.sh $(SYSROOT_STAMP)
+	rm -rf $(DB1_PREFIX) $(OBJ)/db1
+	@$(call logged,sh -x ports/db1/build.sh $(DB1) $(OBJ)/db1 $(DB1_PREFIX) $(ZCC) $(TOOLBIN)/aarch64-unknown-zoraya-ar "$(APPS_CFLAGS)",db1)
+
+NVI := $(WORK)/nvi2-$(call lock_ver,nvi2)
+NVI_BIN := $(NVI)/nvi
+nvi: $(NVI_BIN)
+$(NVI): $(LOCK) $(wildcard ports/patches/nvi2/*.patch)
+	$(call unpack,nvi2,ports/patches/nvi2)
+	@touch $@
+$(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h ports/nvi/compat.c \
+	$(NCURSES_LIBS) $(DB1_PREFIX)/lib/libdb1.a $(CURSES_SYSROOT_STAMP)
+	rm -f $(NVI_BIN)
+	@$(call logged,sh -x ports/nvi/build.sh $(NVI) $(OBJ)/nvi $(NVI_BIN) $(ZCC) $(CURSES) $(DB1_PREFIX)/include \
+	  $(DB1_PREFIX)/lib "$(APPS_CFLAGS)",nvi)
+
+# ---------------------------------------------------------------- OpenSSH client (TASK-31 ports-early, ADR-0340)
+
+# OpenSSH portable 10.6p2: `ssh` and `ssh-keygen` only, on the image's OpenSSL
+# and zlib (ADR-0312; $(PORTS)/deps, as for curl and wget), static. No server,
+# no agent, no `ssh-add`, no PKCS#11 or security-key provider, no connection
+# sharing (ADR-0340 item 1), no PAM, no privilege separation sandbox, no
+# utmp or lastlog. The patches are ADR-0340 items 3 and 5. The names of the
+# terminal are libc.a's since part 10c (ports/apps/ttyshim.c is gone).
+# ac_cv_func_statvfs and fstatvfs: libc.a has neither (ADR-0343: statfs is out),
+# and OpenSSH's own `struct statvfs` then clashes with musl's header; only
+# sftp-server and the sftp client call them, and neither is built.
+OPENSSH := $(WORK)/openssh-$(call lock_ver,openssh)
+OPENSSH_BINS := $(OPENSSH)/ssh $(OPENSSH)/ssh-keygen
+OPENSSH_OPTS := --sysconfdir=/etc/ssh --with-ssl-dir=$(PORTS)/deps --with-zlib=$(PORTS)/deps \
+	--without-pam --without-selinux --without-kerberos5 --without-libedit --without-ldns --without-wtmpdb \
+	--with-sandbox=no --disable-pkcs11 --disable-security-key --disable-strip --disable-utmp --disable-utmpx \
+	--disable-wtmp --disable-wtmpx --disable-lastlog --disable-libutil --disable-pututline --disable-pututxline \
+	--without-hardening --without-stackprotect --without-rpath --without-shadow --without-openssl-header-check \
+	--with-privsep-path=/var/empty --with-pid-dir=/tmp
+# Names the headers declare and libc.a hides or lacks: configure's link test says
+# "missing" and OpenSSH's compat layer then defines a macro that clashes with the
+# declaration. They are said to exist; the link then names the ones that do not
+# (the probe of ADR-0346).
+OPENSSH_HAVE := $(addprefix ac_cv_func_,$(addsuffix =yes,setlinebuf mblen dirfd endgrent setgrent))
+openssh: $(OPENSSH_BINS)
+$(OPENSSH): $(LOCK) $(wildcard ports/patches/openssh/*.patch)
+	$(call unpack,openssh,ports/patches/openssh)
+	@touch $@
+$(OPENSSH_BINS): $(OPENSSH) $(SYSROOT_STAMP) $(SSHSHIM) $(PORTS)/deps/lib/libssl.a $(PORTS)/deps/lib/libzshim.a ports/config.site
+	@cd $(OPENSSH) && $(call logged,$(CROSS_ENV) ac_cv_func_statvfs=yes ac_cv_func_fstatvfs=yes $(OPENSSH_HAVE) \
+	  ./configure --host=aarch64-unknown-linux-musl $(OPENSSH_OPTS) \
+	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include" \
+	  LDFLAGS="-L$(PORTS)/deps/lib -Wl$(comma)--error-limit=0" LIBS="-lzshim -lsshshim",openssh-configure)
+	rm -f $(OPENSSH_BINS)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -k -C $(OPENSSH) ssh ssh-keygen V=1,openssh)
+	@touch $(OPENSSH_BINS)
+
 # ---------------------------------------------------------------- tcc
 
 # tcc for Zoraya (ADR-0109 items 6 and 7): its paths in Zoraya, static links
@@ -453,7 +602,8 @@ libc: $(SYSROOT_STAMP)
 # ADR-0336 item 8), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP)
+$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP) \
+	$(LESS_BIN) $(NVI_BIN) $(CURSES_SYSROOT_STAMP) tools/term-terminfo/terminfo.sh ports/terminfo.manifest
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh
 	cp $(GMAKE_BIN) $(ROOTFS)/bin/make
@@ -462,9 +612,14 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN
 	@# The multi-call binary is not in /bin (ADR-0336 item 8): `toybox sed ...`
 	@# is not found by name; the links in /bin point at it.
 	cp $(AWK_BIN) $(ROOTFS)/bin/awk
+	@# ADR-0335: less, and nvi as vi with ex and view as links to it (it takes the mode from its name).
+	cp $(LESS_BIN) $(ROOTFS)/bin/less
+	cp $(NVI_BIN) $(ROOTFS)/bin/vi && ln -s /bin/vi $(ROOTFS)/bin/ex && ln -s /bin/vi $(ROOTFS)/bin/view
 	mkdir -p $(ROOTFS)/usr/libexec && cp $(TOYBOX_BIN) $(ROOTFS)/usr/libexec/toybox
 	for a in $(TOYBOX_APPLETS); do ln -s /usr/libexec/toybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
+	@# The terminal's four entries, in letter-named directories (ADR-0333 item 2, ADR-0334 item 2).
+	PORTS_CACHE=$(CACHE) tools/term-terminfo/terminfo.sh compile $(ROOTFS)/usr/share/terminfo
 	@# Not the C++ runtime (ADR-0365): no compiler in the image builds C++.
 	rm -rf $(ROOTFS)/usr/include/c++ $(addprefix $(ROOTFS)/usr/,$(CXX_IMAGE_LEFT_OUT))
 	@touch $@
@@ -714,6 +869,47 @@ $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.si
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/src -j3 V=1,wget)
 	@touch $@
 
+# ---------------------------------------------------------------- git (TASK-31 ports-early, ADR-0339)
+
+# git 2.56.1, GPL-2.0-only, a separate program in the image like wget. Built
+# with the switches of ADR-0339 item 1 (no Perl, Python, Tcl/Tk, gettext, iconv,
+# expat, mmap, Unix sockets or setitimer; NO_RUST: its Rust code is optional in
+# this release and the toolchain of a port is C), with zlib, the library of the
+# pinned curl (built above, ADR-0310) and the OpenSSL of ADR-0312 behind it.
+# `git` and `git-remote-http` (which is also `git-remote-https`) only. git
+# builds in its source tree; its Makefile asks `uname` for the host, which is
+# the build host's, so the target's answers are given. Patches: ports/patches/git
+# (the system gitconfig's place, the configuration paths, certificates and the
+# environment, ADR-0339 items 4 and 8).
+GIT := $(WORK)/git-$(call lock_ver,git)
+GIT_BINS := $(GIT)/git $(GIT)/git-remote-http
+GIT_CURL := $(PORTS)/gitcurl
+GIT_OPTS := uname_S=Linux uname_M=aarch64 uname_O=GNU/Linux NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 NO_GETTEXT=1 \
+	NO_ICONV=1 NO_EXPAT=1 NO_MMAP=1 NO_UNIX_SOCKETS=1 NO_SETITIMER=1 NO_RUST=1 NO_OPENSSL=1 NO_INSTALL_HARDLINKS=1 \
+	NO_GITWEB=1 NO_PERL_CPAN_FALLBACKS=1 SKIP_DASHED_BUILT_INS=1 NO_REGEX=NeedsStartEnd \
+	NO_PREAD=1 NO_GETPAGESIZE=1 HAVE_SYNC_FILE_RANGE= HAVE_SYSINFO= \
+	prefix=/usr gitexecdir=/usr/libexec/git-core sysconfdir=/etc
+git: $(GIT_BINS)
+$(GIT): $(LOCK) $(wildcard ports/patches/git/*.patch)
+	$(call unpack,git,ports/patches/git)
+	@touch $@
+# curl's headers and static library, where git's Makefile looks for them (CURLDIR).
+$(GIT_CURL)/lib/libcurl.a: $(CURL_BIN)
+	rm -rf $(GIT_CURL) && mkdir -p $(GIT_CURL)/lib $(GIT_CURL)/include
+	cp $(CURL)/lib/.libs/libcurl.a $(GIT_CURL)/lib/
+	cp -R $(CURL)/include/curl $(GIT_CURL)/include/
+$(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a $(SSHSHIM) $(GITSHIM)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) clean,git-clean)
+	@# git has two objects named fsck.o and two named tree.o in libgit.a, and zoraya-ar names a member by its base name: ports/git/ar.sh.
+	printf '#!/bin/sh\nexec sh $(ROOT)/ports/git/ar.sh $(TOOLBIN)/aarch64-unknown-zoraya-ar "$$@"\n' > $(PORTS)/git-ar && chmod +x $(PORTS)/git-ar
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) -j3 V=1 CC=$(ZCC) AR=$(PORTS)/git-ar \
+	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib CFLAGS="$(APPS_CFLAGS)" $(GIT_OPTS) \
+	  CURLDIR=$(GIT_CURL) ZLIB_PATH=$(DEPS) \
+	  CURL_LIBCURL="-L$(GIT_CURL)/lib -lcurl -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim -lgitshim" \
+	  EXTLIBS="-L$(DEPS)/lib -lz -lzshim -lgitshim" \
+	  LDFLAGS="-Wl$(comma)--error-limit=0" git git-remote-http,git)
+	@touch $(GIT_BINS)
+
 # build/rootfs-apps: the two programs as they go into the volume's /bin
 # (ADR-0310), and nothing else. `make image EXTRA_ROOT=build/rootfs-apps`
 # (tools/run-disk.sh) is how an image takes them; their descriptions are
@@ -855,7 +1051,7 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # socketpair in F2); a part that wants _posixshmem decides it.
 PYTHON_ABSENT := chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups shm_open shm_unlink timerfd_create
 PYTHON_NO_X86_SIMD := ax_cv_check_cflags__Werror__msse__msse2__msse3__msse4_1__msse4_2=no ax_cv_check_cflags__Werror__mavx2=no
-PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
+PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a py_cv_module__curses=n/a py_cv_module__curses_panel=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
 PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \
 	--with-build-python=$(HOSTPY) --disable-shared --disable-ipv6 --without-ensurepip \
 	--with-openssl=$(DEPS) --without-system-ffi --without-readline --without-mimalloc \
@@ -1222,4 +1418,8 @@ check-ports: | tools
 	LC_ALL=C grep -a -q 'run is not available in a cross compiler' $(TCC_BIN)
 	@echo "== the userland: list, sources, busybox, surface block (INV-0336-1, -3, INV-0342-1)"
 	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK) $(AWK)/objs
+	@echo "== one terminfo reader, its configuration, the image's entries, less and vi (INV-0334-1, INV-0334-2)"
+	sh ports/check-curses.sh $(LOGS) $(SYSROOT) $(ROOTFS)
+	@echo "== the ports built ahead of their parts (ADR-0390, TASK-31 ports-early)"
+	sh ports/check-early.sh $(LOGS) $(ZCC) $(SURFACE_CHECK) $(ELF_CHECK) $(ROOT)/build $(LIBC)
 	@echo "check-ports: all passed"

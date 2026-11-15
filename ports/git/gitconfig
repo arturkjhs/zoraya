@@ -1,0 +1,11 @@
+# The system configuration of git in the image, /etc/gitconfig (ADR-0339 item 4;
+# TASK-31 ports-early writes the file, part 10h puts it in the image). Read-only,
+# in the toolchain set. It sets what the system needs and nothing a person's own
+# configuration (~/.config/git/config) should decide.
+[gc]
+	# There is no setsid (ADR-0342 item 12): a garbage collection cannot detach.
+	autoDetach = false
+[user]
+	# The user database holds one identity that is no name on any other machine:
+	# git never guesses an author from it.
+	useConfigOnly = true

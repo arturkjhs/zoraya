@@ -1293,10 +1293,12 @@ posix-image: $(KERNEL) tools-storage
 	cp -R tests/posix/rootfs/. $(POSIX_ROOT)/
 	tools/zcc -O2 -o $(POSIX_ROOT)/bin/t_posix tests/posix/t_posix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_tty tests/posix/t_tty.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_curses tests/posix/t_curses.c -lncursesw -ltinfow
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_memfd tests/posix/t_memfd.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_posix
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_tty
+	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_curses
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_memfd
 	mkdir -p $(POSIX_ROOT)/src/w10 $(POSIX_ROOT)/src/w3
 	cp -R $(BUILD)/ports/workloads/tcc $(BUILD)/ports/workloads/lua $(BUILD)/ports/workloads/sqlite \
@@ -1321,6 +1323,7 @@ posix-image: $(KERNEL) tools-storage
 	cp -R rootfs/. $(BUILD)/rootfs-posix/. $(POSIX_TOUR_ROOT)/
 	@# The terminal's test program (tests/gui/posix-terminal.script).
 	cp $(POSIX_ROOT)/bin/t_tty $(POSIX_TOUR_ROOT)/bin/t_tty
+	cp $(POSIX_ROOT)/bin/t_curses $(POSIX_TOUR_ROOT)/bin/t_curses
 
 # One boot per script under each accelerator, zoraya-fsck after each
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
@@ -1363,7 +1366,7 @@ endef
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
 	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/threads.script \
-	tests/posix/zosh.script tests/posix/zosh-userland.script tests/posix/tour.script
+	tests/posix/zosh.script tests/posix/zosh-userland.script tests/posix/zosh-curses.script tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
@@ -1458,18 +1461,18 @@ test-tour-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 # paste to it, on the tour's image at each size of POSIX_TERM_SIZES: a scale or
 # a WxH (the GUI sizes of test-gui; a big display has fewer than 24 rows, so
 # the script depends on none).
-POSIX_TERM_SCRIPT := tests/gui/posix-terminal.script
+POSIX_TERM_SCRIPTS := tests/gui/posix-terminal.script tests/gui/posix-curses.script
 POSIX_TERM_SIZES ?= 1 2 1600x1000 1920x1200
 test-tour-terminal: $(POSIX_IMAGE_DEP) $(RUNNER)
-	@for accel in $(POSIX_ACCELS); do for size in $(POSIX_TERM_SIZES); do \
-	  label=posix-terminal-$$accel-$$size; \
+	@for script in $(POSIX_TERM_SCRIPTS); do for accel in $(POSIX_ACCELS); do for size in $(POSIX_TERM_SIZES); do \
+	  label=$$(basename $$script .script)-$$accel-$$size; \
 	  case $$size in *x*) g="--gui-size $$size" ;; *) g="--gui-scale $$size" ;; esac; \
 	  timeout=1200; [ $$size = 1 ] || timeout=1800; \
 	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-term.img > /dev/null && \
-	  $(RUNNER) --timeout $$timeout --gui-script $(POSIX_TERM_SCRIPT) --qmp $(BUILD)/$$label.qmp \
+	  $(RUNNER) --timeout $$timeout --gui-script $$script --qmp $(BUILD)/$$label.qmp \
 	    --label $$label -- $(RUN_QEMU) --test --gui $$g --mem $(POSIX_MEM) --qmp $(BUILD)/$$label.qmp \
 	    --disk $(BUILD)/posix-term.img --accel $$accel $(KERNEL) && \
-	  target/debug/zoraya-fsck $(BUILD)/posix-term.img > /dev/null || exit 1; done; done
+	  target/debug/zoraya-fsck $(BUILD)/posix-term.img > /dev/null || exit 1; done; done; done
 
 # The tour's two sessions, from docs/tour.md (INV-0154-4), and INV-0155-1's
 # from the descriptions; make test-unit fails when the committed ones differ.

@@ -289,6 +289,20 @@ states, to be taken up later:
     reason begins `deferred (10b)` again.
   - **A program that sets 2026 and never ends it** has each later update held 150 ms until its line ends, whose `Restore` ends it.
   - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
+- Part 10d (TASK-31) leftovers (`docs/tasks/TASK-31-part-10d.md`, proposed ADR-0391):
+  - **Done in 10d:** the terminfo entry says `kbs=^?` (ADR-0383 Option C); `vttest` 20251205 is pinned in `ports/sources.lock` and its
+    cursor and screen menus are recorded (`crates/zoraya-term/recordings/vttest-*.session`); the xterm comparison of the vttest grids and
+    the `vi` and `less` grids is still a person's (ADR-0332 item 10).
+  - **`narrow` with a list of names** (ADR-0335 item 3, ADR-0337 item 8) is not built: `vi a.txt b.txt` is refused with the hint `+w DIR`
+    (ADR-0391 item 8), as is a `+` word. Needed before 10f's second-file case; the file protocol, `zoraya-fs-service`, `zoraya-fsclient` and the planner's merge change.
+  - **`ls | less` does not page:** a native first element of a pipeline takes the keys (ADR-0387 item 2). Choose between a description
+    key (a native command that reads no input when given a file) and the last POSIX element taking the keys.
+  - **`:e` of a name the grant does not give says "new file"** (the table has no entry, so the open says `ENOENT`); the refusal that says
+    why is 10f's status row.
+  - **A 32 KiB array on a 64 KiB stack:** ncurses had three; other ports may. A process's stack size is fixed (`USER_STACK_SIZE`); a larger one
+    for a POSIX program (or `RLIMIT_STACK`) would end the class of fault.
+  - **Not measured:** DB 1.85 on a 100 MB file (ADR-0390's open question), a second run of the GUI script under TCG, the `tools/`-level
+    mutation run (not required for 10d).
 - Part 10c (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10c.md`, notes not fixed in the fix pass):
   - **INV-0386-1 and a program's own `c_cc`:** a program may make a printable byte a signal character (`VINTR` = `[`, `~` or a
     digit); then a paste, or the shell's own bracket marks, carry signal characters for it. Only its own line is affected; the
@@ -304,6 +318,18 @@ states, to be taken up later:
     connection for each `fork` and `posix_spawn` (`share`), and a refusal fails the call, so `make &` or `sh script &` with the
     terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
     line can take; refusing it outright waits for a fork that can go on without the terminal.
+  - **A Ctrl-C typed just after a job's first output is not acted on** (`work/tcg-slow`, found from the `ports-early`
+    candidate's TCG `zosh.script` failure, run 43701741943). In `sh` in `zosh`, `/bin/sh -c 'echo go; exec /bin/sleep 20'`
+    and Ctrl-C at once after `go`: `zosh` has taken the job's `tcsetpgrp` (its notice came before the output), sends
+    `kill(-group, SIGINT)` to the job's group through the broker, and the broker's `job_signal(Interrupt)` on the group's
+    job returns `Ok` (traced), yet the job runs on: the sleep its full 20 s (HVF too, when the key lands during the job's
+    `exec` or its spawn of the sleep); under TCG, `sh -c 'echo go; read x'` is never ended. The same Ctrl-C 4 s later
+    ends the job at once, and `kill -INT %1` from `sh` on a running job works. So the request reaches the job's tree
+    and is lost by the process during or just after `exec`/`fork` (its disposition then, or `libposix` taking the request
+    and not acting on it at its wait). Not fixed: it is in `libposix`'s signal entry around `exec` and `fork` (ADR-0106,
+    ADR-0315), not in the routing of 10c. `zosh.script`'s Ctrl-C steps pass anyway, because they wait for the prompt
+    the job's end gives (30 s each under TCG, which with a slow loop overran the run's 180 s). A check: a `%` mark
+    around the Ctrl-C of `zosh.script` and a limit of a few seconds, once the cause is fixed.
   - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
     for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
     for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.

@@ -15,6 +15,8 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 
 | ADR | What | Recommendation | From |
 |---|---|---|---|
+| ADR-0392 | libposix: a signal sent during `execve` follows the new image (`exec_carry`); a handler that ran at a call's entry ends its first wait with `EINTR`; `exec_hold` marks default-terminating signals `Deliver` during the spawn | **Tension with accepted ADR-0106** (INV-0106-2: a take in every handler-less `execve`; item 2's mapping during the spawn). Recommend Option A (library route); the fallback A' is a kernel change. Yours to accept or to choose A' | sigint-exec |
+| ADR-0390, ADR-0391 | 10d: surface for curses, less and vi; the layout, descriptions and refusals of 10d | Option A both. ADR-0391 item 8 (two files of one directory) is now a refusal and an open question: should `narrow` take a list? | 10d |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 | ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
 | ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
@@ -59,6 +61,8 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 
 ## D. Open questions
 
+- **git's licence in a static program (ADR-0347, ports-early):** git is GPL-2.0-only and `git-remote-http` links libcurl with Apache-2.0 OpenSSL statically; GPL-2.0-only and Apache-2.0 are not combinable, so `git-remote-http` cannot be shipped as built (GNU wget is GPL-3.0-or-later, which is compatible). Options: git over a GPL-compatible TLS library, `git-remote-http` as a program not linked to OpenSSL (a helper process), an OpenSSL exception, or no HTTPS transport. Decide before 10h wires git into the image.
+- **DB 1 for nvi (ADR-0390):** 1.85 under the 4-clause UC licence; a maintained copy is an open question.
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
 

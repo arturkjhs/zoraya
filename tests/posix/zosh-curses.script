@@ -1,0 +1,150 @@
+# Part 10d (TASK-31, ADR-0334, ADR-0335, ADR-0383, ADR-0391) on the serial console, where the terminal
+# is `dumb`: the terminfo reader of ncurses (INV-0334-2), the grants of vi, ex, view and less
+# (INV-0335-1, INV-0335-3), an edit and a save through ex with only the one name, a sibling
+# refused, less's pager. The full-screen editor itself is tests/gui/posix-curses.script's.
+! panicked
+! ZORAYA-FAULT
+! -FAIL
+< Type help to begin
+< \r\n~>
+# INV-0334-2: setupterm of a known entry succeeds (the entry says kbs is DEL: INV-0391-2), of an
+# unknown one gives the not-found result. It runs from /usr, which covers neither the home nor ~/.terminfo,
+# so a lookup there would be refused and hinted; the hint is looked for after the prompt is back.
+> cd /usr\r
+< \r\n
+> t_curses setup\r
+< t_curses: setup passed
+< > 
+x hint:
+x refused
+> cd ~\r
+< \r\n~>
+> echo colour > notes.txt\r
+< \r\n~>
+> echo SIBLING-SECRET > sibling.txt\r
+< \r\n~>
+# ADR-0335 item 3: the one name, no other name of the directory, whatever the directory.
+> grants vi notes.txt\r
+< vi gets (a POSIX program):
+< keys                 the terminal, while this line is in front
+< create or replace notes.txt (operand FILE)
+x sibling.txt
+< /tmp
+< \r\n~>
+> grants view notes.txt\r
+< view gets (a POSIX program):
+< read notes.txt (operand FILE)
+x create or replace
+< \r\n~>
+> grants less notes.txt\r
+< less gets (a POSIX program):
+< read notes.txt (operand FILE)
+< \r\n~>
+> grants vi -R notes.txt\r
+< read notes.txt (operand FILE)
+x create or replace
+< \r\n~>
+# No file on the line: nothing of the current directory.
+> grants vi\r
+< vi gets (a POSIX program):
+< /bin /usr /etc
+x notes.txt
+< \r\n~>
+# Two files of one directory are refused until `narrow` takes a list (ADR-0391 item 8), and so is a + word.
+> grants vi notes.txt sibling.txt\r
+< two files of one directory need the whole directory
+< +w
+< \r\n~>
+> grants less notes.txt sibling.txt\r
+< two files of one directory
+< +r
+< \r\n~>
+> grants vi +10 notes.txt\r
+< a word that starts with + is not taken as a file
+< \r\n~>
+# ex edits and saves through its one name (ex is /bin/vi under another name).
+> printf 'g/colour/s//color/\\nwq\\n' | ex -s notes.txt\r
+< \r\n~>
+> cat notes.txt\r
+< \r\ncolor
+< \r\n~>
+# :w of a sibling is refused, and the directory holds the same names and contents afterwards.
+> printf 'w sibling.txt\\nq\\n' | ex -s notes.txt\r
+< sibling.txt: Permission denied
+< \r\n~>
+> cat sibling.txt\r
+< \r\nSIBLING-SECRET
+< \r\n~>
+# INV-0335-3: a program started from inside holds no entry its parent lacks: the child ran and was refused,
+# and the secret is in none of the outputs (each check follows the prompt of its own step).
+> printf '!cat sibling.txt\\nq\\n' | ex -s notes.txt\r
+< cat: sibling.txt: Permission denied
+< \r\n~>
+x SIBLING-SECRET
+> printf 'e sibling.txt\\n%%p\\nq\\n' | ex -s notes.txt\r
+< \r\n~>
+x SIBLING-SECRET
+> printf 'r sibling.txt\\nq\\n' | ex -s notes.txt\r
+< sibling.txt: Permission denied
+< \r\n~>
+x SIBLING-SECRET
+# -R gives the name to read only: a changed buffer cannot be saved (view's grant), and the file keeps its text.
+> printf 's/color/CHANGED/\\nw!\\nq!\\n' | ex -s -R notes.txt\r
+< notes.txt: Permission denied
+< \r\n~>
+> cat notes.txt\r
+< \r\ncolor
+< \r\n~>
+x CHANGED
+> ls\r
+< README
+^ \r\nnotes.txt
+^ \r\nsibling.txt
+^ \r\n~>
+# less pages a file and a pipe; on `dumb` it warns first and waits for Return.
+> less notes.txt\r
+< Press RETURN
+> \r
+< color
+< (END)
+> q
+< ~>
+# A POSIX program first in the pipeline: less reads its keys from /dev/tty. (After a native first element it
+# sees none, ADR-0387 item 2: `ls | less` does not page, a limitation recorded in ADR-0391.)
+> /bin/cat notes.txt | less\r
+< Press RETURN
+> \r
+< color
+< (END)
+> q
+< ~>
+# What less does for its prompts when its input is a pipe: keys from /dev/tty, in raw mode and together
+# with a pipe in one poll (ADR-0331 item 3, ADR-0389).
+> echo x | t_curses devtty raw\r
+< t_curses: tty waiting
+> a
+< t_curses: tty byte 0x61
+< \r\n~>
+> /bin/sleep 8 | t_curses poll2\r
+< t_curses: tty waiting
+> a\r
+< poll2 second 1 revents 0 1
+< \r\n~>
+# The hints: `less` is a program now, `more` names it.
+> more notes.txt\r
+< zosh: more: no such command
+^ \r\n  hint: to page a file: less FILE
+^ \r\n~>
+# help for each of the four.
+> help less | cat\r
+< less is a POSIX program, /bin/less
+< Lets through: -F -i -I -N -R -S -s -X
+< \r\n~>
+> help ex | cat\r
+< ex is a POSIX program, /bin/ex
+< Lets through: -R -s -c
+< \r\n~>
+> help view | cat\r
+< view is a POSIX program, /bin/view
+< \r\n~>
+> poweroff\r

@@ -246,7 +246,10 @@ w notstp: ready
 < $ 
 # Ctrl-C is for the foreground job's group: a background job of sh runs on
 # (the review of 10c, finding 2); and sh's job control outlives many jobs: 70,
-# then a program that reads the terminal still gets it (finding 1).
+# then a program that reads the terminal still gets it (finding 1). Each job
+# is a subshell, `( : )`: a group and a tcsetpgrp each, without an exec (70
+# runs of /bin/sleep took 29 s under TCG locally, more than a loaded CI
+# runner's share of the run's 180 s; 70 subshells take about 2.5 s).
 > /bin/sleep 60 &\r
 < $ 
 > /bin/sh -c 'echo g""o-c; exec /bin/sleep 30'\r
@@ -258,7 +261,7 @@ w notstp: ready
 < $ 
 > kill %1\r
 < $ 
-> i=0; while [ $i -lt 70 ]; do /bin/sleep 0; i=$((i+1)); done; echo looped $i\r
+> i=0; while [ $i -lt 70 ]; do ( : ); i=$((i+1)); done; echo looped $i\r
 < looped 70
 < $ 
 > /bin/wc -c\r
