@@ -131,6 +131,10 @@ static TESTS: &[Test] = &[
         run: frames_the_reaper_holds_are_available_and_counted,
     },
     Test {
+        name: "the_worst_single_allocation_is_bounded_by_the_machines_ram",
+        run: the_worst_single_allocation_is_bounded_by_the_machines_ram,
+    },
+    Test {
         name: "a_run_short_of_frames_waits_for_the_reaper_in_steps",
         run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
     },
@@ -2481,6 +2485,106 @@ fn frames_the_reaper_holds_are_available_and_counted() {
         QUEUED as u64 - 1 - crate::steps::STEP as u64,
         "held after a step of help"
     );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The most words of frame map a machine may have for the single-frame scan
+/// (`FrameAllocator::alloc`) to be bounded as ADR-0436 says: 8192 words are
+/// 2 GiB (ADR-0415 item 5); 16384 are 4 GiB. A machine with more RAM fails
+/// this test, which says that the scan needs a level above the map (a summary
+/// of full words) before it can be used there (INV-0436-1).
+const MAX_SCAN_WORDS: u64 = 16384;
+
+/// INV-0270-1's bound under HVF, in nanoseconds.
+const MASKED_BOUND_NS: u64 = 2_000_000;
+/// ADR-0270 Q6's limit where the host is not HVF-speed (CI's TCG runs 20 to 40
+/// times slower than a green run and the guest's clock keeps running while the
+/// host stalls a CPU): only that nothing ran masked for a second.
+const SLOW_HOST_BOUND_NS: u64 = 1_000_000_000;
+/// A host reads a word of a plain array in at most this many nanoseconds if it
+/// is HVF-speed (about 11 ns in the debug test kernel under HVF, 150 ns under
+/// TCG: measured with the scan itself, ADR-0436).
+const HVF_NS_PER_WORD: u64 = 50;
+
+/// Nanoseconds between two readings of the virtual counter of this CPU.
+fn ticks_to_ns(ticks: u64) -> u64 {
+    (u128::from(ticks) * 1_000_000_000 / u128::from(arch::timer::frequency().max(1))) as u64
+}
+
+/// The best of five reads of 8192 words of a plain array, per word, in
+/// nanoseconds: the speed of this host for the work of a scan, which is what
+/// tells an HVF-speed host from one that is not.
+fn nanoseconds_to_read_a_word() -> u64 {
+    const WORDS: usize = 8192;
+    let buffer = alloc::vec![0u64; WORDS];
+    let mut best = u64::MAX;
+    for _ in 0..5 {
+        let began = arch::timer::counter();
+        let mut full = 0u64;
+        for word in &buffer {
+            // SAFETY: a valid, aligned reference to a word of the buffer.
+            full += u64::from(unsafe { read_volatile(word) } == u64::MAX);
+        }
+        black_box(full);
+        best = best.min(ticks_to_ns(arch::timer::counter() - began));
+    }
+    (best / WORDS as u64).max(1)
+}
+
+/// INV-0436-1, INV-0270-1: the allocation that has to read the whole frame
+/// map (every frame taken but one, and that one just behind the search) reads
+/// at most `alloc_scan_bound` words and nearly all of them, which is checked
+/// on every host; its masked time, read on this CPU's counter around the
+/// call, is held to INV-0270-1's 2 ms where the host reads words at HVF's
+/// speed (94 us at 2 GiB, measured), and to ADR-0270 Q6's second elsewhere
+/// (TCG: 1.2 ms at 2 GiB, measured once). It runs at the machine's RAM
+/// (128 MiB or 2 GiB: `make test-qemu` runs both).
+fn the_worst_single_allocation_is_bounded_by_the_machines_ram() {
+    let before = frames_accounted();
+    let bound = frames::alloc_scan_bound();
+    assert!(
+        bound <= MAX_SCAN_WORDS,
+        "{bound} words of frame map: more RAM than the single-frame scan is bounded for"
+    );
+    let per_word = nanoseconds_to_read_a_word();
+    let head = hoard_frames();
+    // The search stands where the last frame of the map was taken, which is
+    // the head of the list. The frames before it in the list are the frames
+    // just below it, so the 131st is two words behind it: given back, the one
+    // free frame is found only after the search went all the way round.
+    let mut node = head;
+    for _ in 0..130 {
+        let (_, next) = unhoard_one(node).expect("a machine of more than 130 frames");
+        node = next;
+    }
+    let (frame, next) = unhoard_one(node).expect("a frame");
+    frames::free(frame);
+    let daif = arch::save_and_mask_interrupts();
+    let began = arch::timer::counter();
+    let (got, read) = frames::alloc_counted();
+    let ns = ticks_to_ns(arch::timer::counter() - began);
+    arch::restore_interrupts(daif);
+    assert_eq!(got, Ok(frame), "the one free frame");
+    // SAFETY: the frame is allocated again, so this code owns it, and the
+    // direct map holds it read-write. The list's link is put back.
+    unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(next) };
+    unhoard(head);
+    let slow = per_word > HVF_NS_PER_WORD;
+    println!(
+        "frames: the worst single allocation read {read} of {bound} words in {ns} ns masked (a word of an array: {per_word} ns, {})",
+        if slow { "not HVF-speed" } else { "HVF-speed" }
+    );
+    assert!(read <= bound, "{read} words read, bound {bound}");
+    assert!(
+        read + 4 >= bound,
+        "{read} words read: the case did not reach the worst case ({bound})"
+    );
+    let limit = if slow {
+        SLOW_HOST_BOUND_NS
+    } else {
+        MASKED_BOUND_NS
+    };
+    assert!(ns <= limit, "{ns} ns masked, limit {limit} (INV-0270-1)");
     assert_eq!(frames_accounted(), before);
 }
 

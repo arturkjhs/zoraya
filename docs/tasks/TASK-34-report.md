@@ -16,7 +16,7 @@ Updated 2026-11-16.
 | F2 | merged | stage-f2 | about 3 sessions | Sonnet implementation; Opus review (1 error, 2 warnings, all fixed) and re-check; candidate run 43681721034 green (75 jobs) |
 | F3 | merged | stage-f3 pending a green full run | about 3 sessions | Sonnet implementation; Opus review (1 error, 3 warnings, all fixed) and re-check; candidate run 43700119735 green after one rerun of the `w9-term` TCG job |
 | F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
-| F8 | not started | | | |
+| F8 | in progress on `work/f8`, not merged | | one session | Sonnet; review not yet done |
 | F5 | not started | | | |
 | F6 | not started | | | |
 | F7 | not started | | | |
@@ -55,3 +55,11 @@ Updated 2026-11-16.
 - Known limitations (ADR-0433): a child with no cwd reads relative paths from `/`; `GRANT_WINDOW` moves, it does not share; the positive network grants are tested only over a fake netd on the host (no in-QEMU program holds a connection); a connection that holds the `narrow` right can still make connections without limit through `Narrow` (older than F4, program connections lack the right); `execve` with a Unix socket open is `EBADF`.
 - Mutation: `make mutants-host CRATE=zoraya-posix --in-diff` 160 mutants, 26 missed in the first run; the holes were closed with tests, the equivalent ones (disjoint-bit `|` to `^`) remain.
 - Process note: the F4 implementer's final reports were refused by the harness three times; I read its work from the branch and commits, and I made the ADR-0433/0435 decision transcription myself.
+
+## F8 notes
+
+- Built: `FrameAllocator::alloc_counted` and `alloc_scan_bound` (a single-frame scan reads at most one word per 256 KiB, 8192 at 2 GiB; the wrap-around no longer rereads the start region whole); `crates/zoraya-pmm/tests/two_gib.rs` (counts, a full drain, exact worst case, run search in bounded steps, 128 MiB to 4 GiB in one and two regions above 4 GiB); the test kernel's `the_worst_single_allocation_is_bounded_by_the_machines_ram`; `make run-browser` (`run-gui` at `--mem $(BROWSER_MEM)`, 2G; `make run` unchanged); `tests/shell/browser-guest.script` run by `make test-keeper` at `--mem 2G` (HVF, TCG on the full set). Proposed ADR-0436 (recommended as written; **deviation for the architect:** `top --session` is not built, `top`'s session row is the check, and `room set --mem 1800M` is refused above the session's 1452930K). Nothing in the kernel assumed a RAM size (boot tables map 4 GiB, direct map from blocks, heap on demand); the 2 GiB steps already ran.
+- Measured (MacBook Air M1, 4 CPUs, debug test kernel): worst single allocation 512 words / 6.5 us at 128 MiB; 8192 words / 94 us under HVF and 1.2 ms under TCG at 2 GiB (ADR-0270's bound 2 ms). Boot to the shell script's end: 0.26 s HVF and 0.73 to 0.80 s TCG, the same at 128M and 2G. Kernel reserved: 30000 KiB at 128 MiB, 30120 KiB at 2 GiB (frame map 8 KiB against 128 KiB). Free after boot 2066388 KiB; session ceiling 1452930K.
+- Run: `cargo test -p zoraya-pmm` (17 + 5 passed); `make test-qemu-one` and `make test-qemu-auto-smp4-2g` (120 passed, 9 expected failures each); `make test-qemu-tcg-smp4-gicv3` (same, before the per-word limit replaced a fixed one; not rerun); `make test-keeper` (HVF, passed, 29 steps); `make check` (passed). Not run: the TCG keeper run (full set only), `make test-changed`.
+- Mutation: host `--in-diff` on `zoraya-pmm` 15 mutants: 10 caught, 3 unviable, 1 timeout, 1 missed (the wrap-around's end bound, equivalent while a frame is free); kernel list `tools/mutants/frames-f8.toml` 2 of 2 caught.
+- Limitations: a guest above 4 GiB needs a second level of the frame map (the test says so); the 1 us a word limit is generous under TCG (150 ns a word).

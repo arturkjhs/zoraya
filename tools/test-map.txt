@@ -131,6 +131,7 @@ user/src/bin/t_gui.rs         test-qemu
 user/src/bin/t_text.rs        test-qemu
 user/src/bin/t_storage.rs     test-qemu
 tests/shell/keeper.script     test-keeper
+tests/shell/browser-guest.script test-keeper
 tests/shell/hand-run        test-hand-run
 tests/shell/disk-filler.script test-files
 tests/shell/hostile.script    test-files
