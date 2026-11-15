@@ -331,8 +331,12 @@ states, to be taken up later:
     the job's end gives (30 s each under TCG, which with a slow loop overran the run's 180 s). A check: a `%` mark
     around the Ctrl-C of `zosh.script` and a limit of a few seconds, once the cause is fixed.
   - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
-    for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
-    for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.
+    for 10 minutes. It recurred in the scheduled run 43699859694 on `main`. **Fixed (branch `work/w9-fix`):** the
+    script's `until ls ... || ! kill -0 $(cat ...); do sleep 0.1; done` polled from the start of the build, three
+    processes ten times a second, and under TCG on one CPU starved the build. With QEMU under `taskpolicy -b` and make's
+    output on the terminal, the four `tcc -o mktab` compiles started 63 to 76 s into the run and none ended by the
+    timeout at 626 s; without the loop the same compiles ended at 301 to 307 s. The script now waits for make's own
+    `./mktab 2 > t2.h` on the terminal and only then types the kill line, whose loop ends at its first turn.
   - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): accepted
     by the architect (2026-11-15) with the System+K escape: a chord no client receives shows `kill <program>?` on the
     terminal's status row and Enter kills the line's group. **Part 10f** builds it with the status row and System+G.
@@ -536,6 +540,30 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
 harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, a part that does not touch the crate) saw
 226 against 222, and its re-run passed. The counter is now per thread (`work/alloc-flake`).
 
+## Kernel tests under TCG with four CPUs (2026-11-15, `docs/tasks/TASK-31-smp-tcg.md`, branch `work/smp-tcg`)
+
+- Run 43717763197 (attempt 1, `tcg-smp4-gicv2`): **no test failed**. The suite hit the 420 s limit in test 123 of 128
+  (`kernel_work_is_bounded`). The runner's "9 failed" are the 9 `--expect-panic` tests, and t_thread's "`8 of 8 failed`"
+  is its pass line. That runner's memory calls showed masked maxima 20 to 100 times the green re-run's (host stalls of
+  tens of ms); user code ran only 2 times slower. Green TCG kernel-test jobs take up to 375 s of the 420 s. Open: raise
+  the limit or shorten the longest tests under TCG.
+- The kernel runs on one CPU in the smp4 configurations; the earlier smp4 failures were a script order (TASK-29 F5) and a
+  `t_quota` sample taken while the reaper was still working (3d48c87f).
+- **Found and fixed in the test:** `t_cpu`'s share check failed in 2 of 20 local `tcg-smp4-gicv2` runs, and in 6 of 40
+  rounds of t_cpu alone. The kernel had charged the uncapped spinner its full time, but under TCG it counted at a
+  quarter to two thirds of its usual rate: each process executes at its own speed. Now a room of clock spinners
+  measures its own run time, which must be at most 5/4 of its charge and at most `upper`. The halved-charges mutant
+  fails it under TCG and HVF. After: 0 of 40.
+- **Fixed in the test:** t_thread's `creating_calls_leave_no_handles` assumed the sibling unmaps within one switch.
+  A success before the unmap is now a miss and is repeated; a success after it fails; one forced miss a run.
+- **Open, cause proven:** a killed room's dying threads are parked (the teardown runs on them, charged to the room), so it
+  dies in as many periods as its parks need (55 parks, nine periods; up to 12). That breaks ADR-0285 item 7. The ADR has
+  the open-question note, and the architect queue (D) a row. A proposed ADR needs a number from the architect.
+- **Done:** a red or cancelled QEMU step uploads `target/test-logs/`; the runner prints the slowest tests and the
+  running test's time at a timeout.
+- **Fixed on `work/smp-tcg`:** a failed test left its program's processes running (t_cpu's 41 spinners made `t_rooms` 35
+  times slower and failed `t_snapshot` and the big-space spawn). The harness now ends them after a failure, back to the
+  live count before the test plus the processes the panic lost for good, and fails the run if it cannot within 10 s.
 ## Sockets that survive `exec` (the architect, 2026-11-15)
 
 `execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets

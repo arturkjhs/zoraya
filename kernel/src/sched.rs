@@ -704,18 +704,22 @@ pub fn exit_current() -> ! {
 /// After a test failed on another thread, the harness goes on on the boot
 /// stack: that thread is abandoned, and the boot thread takes over. The
 /// abandoned thread is leaked, since the panic may still be running on its
-/// stack.
+/// stack. True if it was a process's thread: that process never ends (its
+/// thread never leaves), and the harness counts it as lost.
 #[cfg(feature = "qemu-test")]
-pub fn adopt_boot_thread() {
+pub fn adopt_boot_thread() -> bool {
     let mut s = SCHED.lock();
     let boot = s.boot.clone().expect("boot thread");
+    let mut lost = false;
     if !s.current.as_ref().is_some_and(|c| Arc::ptr_eq(c, &boot)) {
         boot.state.store(RUNNING, Ordering::Relaxed);
         s.ready.retain(|t| !Arc::ptr_eq(t, &boot));
         if let Some(old) = s.current.replace(boot) {
+            lost = old.process.is_some();
             core::mem::forget(old);
         }
         // SAFETY: no table is the safe value.
         unsafe { mmu::set_user_table(None) };
     }
+    lost
 }

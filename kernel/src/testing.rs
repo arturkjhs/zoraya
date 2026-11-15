@@ -55,7 +55,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 9;
+const EXPECTED_FAILURES: usize = 10;
 
 static TESTS: &[Test] = &[
     Test {
@@ -361,6 +361,14 @@ static TESTS: &[Test] = &[
         run: harness_reports_panic_as_failure,
     },
     Test {
+        name: "harness_fails_with_a_process_left",
+        run: harness_fails_with_a_process_left,
+    },
+    Test {
+        name: "nothing_is_live_after_a_failed_test",
+        run: nothing_is_live_after_a_failed_test,
+    },
+    Test {
         name: "harness_reports_exception_as_failure",
         run: harness_reports_exception_as_failure,
     },
@@ -589,6 +597,12 @@ static REARM_CANARY: AtomicBool = AtomicBool::new(false);
 static CURRENT: AtomicUsize = AtomicUsize::new(NONE);
 static PASSED: AtomicUsize = AtomicUsize::new(0);
 static FAILED: AtomicUsize = AtomicUsize::new(0);
+/// Live processes when the current test began (`run`).
+static LIVE_BEFORE: AtomicUsize = AtomicUsize::new(0);
+/// Processes the current test lost for good: their thread was abandoned on a
+/// panic (`sched::adopt_boot_thread`), as `fault_report_for_stack_overflow_from_el0`
+/// leaves `koverflow`. Those of earlier tests are in `LIVE_BEFORE`.
+static LOST: AtomicUsize = AtomicUsize::new(0);
 
 fn bump(counter: &AtomicUsize) {
     counter.store(counter.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
@@ -602,6 +616,8 @@ pub fn run(start: usize) -> ! {
     for (i, t) in TESTS.iter().enumerate().skip(start) {
         println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
+        LIVE_BEFORE.store(live_processes(), Ordering::Relaxed);
+        LOST.store(0, Ordering::Relaxed);
         sched::set_test_slice(0);
         crate::cpu::set_test_period(0);
         (t.run)();
@@ -622,7 +638,49 @@ extern "C" fn resume(next: usize) -> ! {
     if REARM_CANARY.swap(false, Ordering::Relaxed) {
         arch::stack_canary_set();
     }
+    end_what_a_failed_test_left();
     run(next)
+}
+
+fn live_processes() -> usize {
+    Job::root().map_or(0, |root| root.live())
+}
+
+/// A failed test may leave processes running: a user program that panics
+/// leaves the children it started (`t_cpu`'s 41 spinners, in a room at 25%
+/// and outside it, made `t_rooms` 35 times slower and `t_snapshot` and the
+/// big-space spawn fail after them, in a TCG run of `tcg-smp4-gicv2`). They
+/// are ended here, and the next test starts once the live count is back at
+/// what it was before the test, plus the processes it lost for good, and the
+/// reaper has given their frames back. The tree is walked again every 100 ms,
+/// for a process that started a child between a walk and its own end. A
+/// wait that runs out panics outside any test, which fails the run.
+fn end_what_a_failed_test_left() {
+    let Ok(root) = Job::root() else { return };
+    let target = LIVE_BEFORE.load(Ordering::Relaxed) + LOST.load(Ordering::Relaxed);
+    if root.live() <= target {
+        return;
+    }
+    let start = timer::now();
+    let mut walked = None;
+    while root.live() > target {
+        let now = timer::now();
+        assert!(
+            now.nanos_since(start) <= PATIENCE_NS,
+            "harness: {} processes the failed test left are still live after 10 s",
+            root.live() - target
+        );
+        if walked.is_none_or(|at: Instant| now.nanos_since(at) >= 100_000_000) {
+            root.end_every_process();
+            walked = Some(now);
+        }
+        sched::yield_now();
+    }
+    frames::settled_stats();
+    println!(
+        "harness: ended what the failed test left in {} ms",
+        timer::now().nanos_since(start) / 1_000_000
+    );
 }
 
 /// Called by the panic handler. Returns only if no test is running.
@@ -636,7 +694,11 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     let _ = write!(console::OneLine, "{}", crate::panic::Report(info));
     println!();
     crate::panic::clear();
-    crate::sched::adopt_boot_thread();
+    if crate::sched::adopt_boot_thread() {
+        // That process never ends now (the next test's LIVE_BEFORE
+        // includes it).
+        LOST.fetch_add(1, Ordering::Relaxed);
+    }
     // SAFETY: the panicking test's frames and the panic machinery's frames
     // are on the boot stack, a thread's stack, or the emergency stack after a
     // stack overflow, and none holds anything still referenced: tests keep no state outside
@@ -739,6 +801,28 @@ fn psci_system_off_available() {
 
 fn harness_reports_panic_as_failure() {
     panic!("deliberate panic to test the harness");
+}
+
+/// Fails with a process of its own still live: suspended, so it would stay
+/// so for ever if the harness did not end it (`end_what_a_failed_test_left`).
+fn harness_fails_with_a_process_left() {
+    LIVE_AT_THE_FAILURE.store(live_processes(), Ordering::Relaxed);
+    let left = process::spawn_suspended("busy").expect("busy");
+    drop(left);
+    assert!(live_processes() > LIVE_AT_THE_FAILURE.load(Ordering::Relaxed));
+    panic!("deliberate panic with a process left live");
+}
+
+/// The live processes before `harness_fails_with_a_process_left` spawned.
+static LIVE_AT_THE_FAILURE: AtomicUsize = AtomicUsize::new(0);
+
+/// After the failure above, nothing it started is live.
+fn nothing_is_live_after_a_failed_test() {
+    assert_eq!(
+        live_processes(),
+        LIVE_AT_THE_FAILURE.load(Ordering::Relaxed),
+        "a failed test's process outlived it"
+    );
 }
 
 fn harness_reports_exception_as_failure() {

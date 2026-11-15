@@ -105,6 +105,16 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
 - Whether the per-switch walk shows in `portbench` or `chanbench` (not measured here).
 - Lock order, for the reviewer: `SCHED`, then the timer queue's lock, then a job's `cpu` lock; the last is a leaf. The
   walks run in `schedule` with every exception masked and in `period_end` in the timer interrupt.
+- *Item 7 does not hold when a killed room's exits need more than one period's budget* (agent's note under ADR-0001
+  rule 6; TASK-31, `work/smp-tcg`, 2026-11-15, `docs/tasks/TASK-31-smp-tcg.md` section 4.3). The dying thread runs its
+  process's teardown itself (`process::leave_current` and `teardown`), and `schedule` charges it to the room and
+  `RunQueue::pick` parks it like any other thread of a spent job. Measured under TCG with `t_cpu`'s
+  `a_killed_room_with_parked_threads_dies` (a room at 10%, 20 spinners, a period of 100 ms), counting the room's parks
+  after the kill: none in 9 of 16 rounds, and the room was empty within one period; 1 to 9 parks, two periods; 12 parks,
+  four; 55 parks, nine. In earlier runs it took up to 1 246 ms, 12 periods, and the test failed. A killed room at a low
+  ceiling keeps its frames and charges for as many periods as its teardown needs. Options for a proposed ADR: a thread
+  whose process is ending is charged but never parked (an overrun of one teardown, whose steps ADR-0270 bounds), or the
+  teardown moves to the reaper, charged to no one. The scheduler is unchanged until the architect decides.
 
 ## Revisit triggers
 - SMP: per-CPU budgets from one pool (ADR-0264).
