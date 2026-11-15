@@ -278,7 +278,9 @@ pub struct Posix<S: Sys> {
     /// The process itself, with `WAIT`, from the bootstrap channel's second
     /// message (ADR-0107 item 5), for 6d's `REQUEST_PENDING` waits.
     pub self_handle: Option<S::H>,
-    reported: Vec<String>,
+    /// Refused paths already counted, with the access they were named for
+    /// (ADR-0337 item 1: once per path and access).
+    reported: Vec<(String, Access)>,
     report_dropped: u32,
     reports_sent: u32,
     pub(crate) scratch: Option<(S::H, u64)>,
@@ -655,7 +657,11 @@ impl<S: Sys> Posix<S> {
         let Refusal::Outside(path) = refusal else {
             return refusal.errno();
         };
-        if self.reported.contains(&path) {
+        if self
+            .reported
+            .iter()
+            .any(|(p, a)| *p == path && *a == access)
+        {
             return ENOENT;
         }
         let Some(end) = self.report else {
@@ -665,7 +671,7 @@ impl<S: Sys> Posix<S> {
             // Remembered up to a bound, so a program that names many paths
             // outside its table costs neither memory nor time without end.
             self.report_dropped = self.report_dropped.saturating_add(1);
-            self.remember(path);
+            self.remember(path, access);
             return ENOENT;
         }
         let r = Report {
@@ -685,15 +691,15 @@ impl<S: Sys> Posix<S> {
             // Never waiting: a report that does not fit is dropped, counted.
             None => self.report_dropped = self.report_dropped.saturating_add(1),
         }
-        self.remember(path);
+        self.remember(path, access);
         ENOENT
     }
 
     /// Keeps a refused path, so that it is never counted twice, up to
     /// `REMEMBERED` of them, whatever became of its report.
-    fn remember(&mut self, path: String) {
+    fn remember(&mut self, path: String, access: Access) {
         if self.reported.len() < REMEMBERED {
-            self.reported.push(path);
+            self.reported.push((path, access));
         }
     }
 

@@ -386,6 +386,30 @@ fn refused_paths_are_reported_once_and_missing_ones_never() {
     );
 }
 
+/// ADR-0337 item 1: a refusal is reported once per path *and access*, so a
+/// read refused and then a write refused of the same path are two reports.
+#[test]
+fn a_path_is_reported_once_per_access() {
+    let mut r = rig_without_root();
+    assert_eq!(open(&mut r, "/etc/x", o::RDONLY, 0), Err(ENOENT));
+    assert_eq!(open(&mut r, "/etc/x", o::RDONLY, 0), Err(ENOENT));
+    assert_eq!(
+        open(&mut r, "/etc/x", o::WRONLY | o::CREAT, 0o644),
+        Err(ENOENT)
+    );
+    assert_eq!(
+        open(&mut r, "/etc/x", o::WRONLY | o::CREAT, 0o644),
+        Err(ENOENT)
+    );
+    assert_eq!(
+        r.reports(),
+        vec![
+            (Access::Read, 0, "/etc/x".to_string()),
+            (Access::Write, 0, "/etc/x".to_string()),
+        ]
+    );
+}
+
 /// At most 16 reports a process; past that they are dropped and counted.
 #[test]
 fn reports_stop_at_sixteen() {
