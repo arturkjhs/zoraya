@@ -308,6 +308,11 @@ pub struct Posix<S: Sys> {
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
     pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
+    /// A handler without `SA_RESTART` ran at this call's entry: its next
+    /// wait point is `EINTR` instead of a wait (`Posix::wait_for`). Set and
+    /// cleared by the C boundary inside one run of the call (`pub` for the
+    /// host tests).
+    pub interrupt_wait: bool,
     /// What `Read` a terminal connection has outstanding, by connection
     /// (`pub`, like `tty_rest`, for the host tests).
     pub tty_reads: Vec<(S::H, u32)>,
@@ -390,6 +395,7 @@ impl<S: Sys> Posix<S> {
             threads: Default::default(),
             pending: None,
             resume: None,
+            interrupt_wait: false,
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),

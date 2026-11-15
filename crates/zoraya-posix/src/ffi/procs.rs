@@ -24,10 +24,10 @@ use crate::signals::{
 // ------------------------------------------------------------ delivery
 
 /// What a round of delivery did.
-struct Delivered {
-    ran: bool,
+pub(super) struct Delivered {
+    pub(super) ran: bool,
     /// Every handler that ran had `SA_RESTART`.
-    restart: bool,
+    pub(super) restart: bool,
 }
 
 /// `si_code` values.
@@ -94,14 +94,46 @@ fn stop_self(n: u32) {
 }
 
 /// The poll at a library entry (ADR-0106 item 5): only with a handler
-/// installed (INV-0106-2), or with a pending one now unblocked.
-pub(super) fn poll() {
+/// installed (INV-0106-2), or with a pending one now unblocked. Says what
+/// ran, for a call that may wait ([`waiting`], [`nanosleep_until`]).
+pub(super) fn poll() -> Delivered {
     let wanted =
         with(|p| p.signals.handlers_installed() || p.signals.pending & !p.signals.blocked != 0)
             .unwrap_or(false);
     if wanted {
-        deliver();
+        deliver()
+    } else {
+        Delivered {
+            ran: false,
+            restart: true,
+        }
     }
+}
+
+/// A call that may wait, from its entry: the poll, then [`restartable`].
+/// A signal the poll finds came before the call's wait. On Unix it would
+/// have ended that wait, or, sent a moment earlier, run its handler where
+/// the program was; here it waited for the call. So a handler without
+/// `SA_RESTART` that the poll ran makes the call's wait point `EINTR`
+/// (ADR-0106 item 6) instead of a wait that nothing ends: dash runs its
+/// `read` under `INTOFF` and acts on a `SIGINT` its handler noted only when
+/// the read returns.
+pub(super) fn waiting<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
+    let d = poll();
+    if !d.ran || d.restart {
+        return restartable(f);
+    }
+    let r = state(|p| {
+        p.interrupt_wait = true;
+        let r = f(p);
+        p.interrupt_wait = false;
+        r
+    });
+    if matches!(r, Err(EINTR)) {
+        // What else came meanwhile runs too; the call stays interrupted.
+        let _ = deliver();
+    }
+    r
 }
 
 /// Runs `f` on the state, delivering what interrupts it: again when every
@@ -178,14 +210,12 @@ pub(super) fn after_write(r: Result<usize, i32>) -> Result<usize, i32> {
 
 pub(super) fn read_fd(fd: i32, u: User) -> Result<usize, i32> {
     testcancel();
-    poll();
-    restartable(|p| p.read(fd, u))
+    waiting(|p| p.read(fd, u))
 }
 
 pub(super) fn write_fd(fd: i32, u: User) -> Result<usize, i32> {
     testcancel();
-    poll();
-    after_write(restartable(|p| p.write(fd, u)))
+    after_write(waiting(|p| p.write(fd, u)))
 }
 
 // ------------------------------------------------------------ sigaction
@@ -643,8 +673,13 @@ fn sleep_until(deadline: u64) -> Result<(), u64> {
 
 pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
     testcancel();
-    poll();
-    match sleep_until(deadline) {
+    // A handler that ran on the way in interrupted the sleep (`waiting`).
+    let early = poll().ran;
+    match if early {
+        Err(deadline.saturating_sub(zoraya_rt::clock_monotonic()))
+    } else {
+        sleep_until(deadline)
+    } {
         Ok(()) => 0,
         Err(left) => {
             if !rem.is_null() {
@@ -661,8 +696,7 @@ pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
 /// `waitpid` and its kin (ADR-0104 item 11).
 fn wait_child(pid: i32, status: *mut i32, options: i32) -> i32 {
     testcancel();
-    poll();
-    match restartable(|p| p.waitpid(pid, options)) {
+    match waiting(|p| p.waitpid(pid, options)) {
         Ok(Some((child, s))) => {
             if !status.is_null() {
                 // SAFETY: C's contract: `status` is NULL or an int.
@@ -694,9 +728,8 @@ extern "C" fn zoraya_posix_wait4(pid: i64, status: i64, options: i64, usage: i64
         // SAFETY: C's contract: `usage` is NULL or a `struct rusage`.
         unsafe { ptr::write_bytes(usage as *mut u8, 0, 144) };
     }
-    poll();
     let status = status as *mut i32;
-    match restartable(|p| p.waitpid(pid as i32, options as i32)) {
+    match waiting(|p| p.waitpid(pid as i32, options as i32)) {
         Ok(Some((child, s))) => {
             if !status.is_null() {
                 // SAFETY: C's contract: `status` is NULL or an int.
@@ -2155,15 +2188,27 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
         let r = spawn_into(
             p, job, client, &facts, image, &argv, envp, &exe, &start, false,
         );
-        let _ = zoraya_rt::handle_close(image);
         let process = match r {
             Ok(h) => h,
             Err(e) => {
+                let _ = zoraya_rt::handle_close(image);
                 let _ = zoraya_rt::handle_close(server);
                 let _ = zoraya_rt::handle_close(client);
                 return Err(e);
             }
         };
+        // What this image took in and has not acted on goes on to the new
+        // one, first thing: from the spawn on, a request reaches the new
+        // image itself, as it is in the job (`Posix::exec_carry`).
+        let carried = p.exec_carry(facts.ignored);
+        for n in 1..=zoraya_abi::posix::signal::MAX {
+            if carried & bit(n) != 0
+                && let Some(kind) = zoraya_abi::posix::signal::kind(n)
+            {
+                let _ = zoraya_rt::process_signal(process, kind, n);
+            }
+        }
+        let _ = zoraya_rt::handle_close(image);
         // The new image runs in this pid's job: from here this image ends
         // whatever happens (review R5); a failed commit leaves the broker's
         // record on the old image, which then reads as its exit.

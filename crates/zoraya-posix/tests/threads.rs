@@ -414,3 +414,51 @@ fn a_sigwait_that_ends_leaves_no_request_queued_for_the_kernel() {
     assert!(r.p.sys.requests.is_empty());
     assert_eq!(r.p.signals.pending & bit(2), bit(2));
 }
+
+#[test]
+fn an_exec_hands_on_the_signals_this_image_took_in_and_did_not_act_on() {
+    // `sh -c 'echo go; exec sleep 20'` with Ctrl-C during the exec: dash
+    // catches SIGINT, so the request waits in the old image's queue, which
+    // ends with it; the new image, made after the job signal, has none.
+    use zoraya_abi::RequestKind;
+    const INT: u32 = 2;
+    const HUP: u32 = 1;
+    const CHLD: u32 = 17;
+    let mut r = three();
+    r.p.signals.set(INT, Some(HANDLER)).unwrap();
+    r.p.sys.requests.push_back((RequestKind::Interrupt, 0));
+    // A child's end: SIGCHLD is ignored by default in the new image.
+    r.p.sys
+        .requests
+        .push_back((RequestKind::Custom(CHLD), CHLD));
+    // Ignored on entry to the new image (`SIG_IGN` is kept across exec).
+    r.p.sys.requests.push_back((RequestKind::Hangup, 0));
+    // Blocked when they came: this thread's and the process's sets.
+    r.p.signals.pending |= bit(TERM);
+    r.p.signals.shared |= bit(USR1);
+    let carried = r.p.exec_carry(1 << HUP);
+    assert!(r.p.sys.requests.is_empty(), "the whole queue is taken");
+    assert_eq!(carried, bit(INT) | bit(TERM) | bit(USR1));
+    // Nothing taken, nothing pending: nothing to hand on.
+    let mut r = three();
+    assert_eq!(r.p.exec_carry(0), 0);
+}
+
+#[test]
+fn a_handler_run_at_a_calls_entry_interrupts_its_wait_and_nothing_else() {
+    // dash reads under INTOFF: a SIGINT whose handler ran at `read`'s entry
+    // poll is acted on only when the read returns, so the read must not wait
+    // (the C boundary's `waiting` sets the flag for one run of the call).
+    let mut r = rig();
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    // No flag: the read waits (the fake kernel ends a wait nothing could end
+    // with EBUSY).
+    assert_eq!(r.read(rd, 10), Err(EBUSY), "a wait was made");
+    r.p.interrupt_wait = true;
+    assert_eq!(r.read(rd, 10), Err(EINTR), "no wait");
+    assert!(!r.p.interrupt_wait, "taken by the wait it ended");
+    // A read that does not wait is not interrupted: the data comes.
+    assert_eq!(r.write(wr, b"x"), Ok(1));
+    r.p.interrupt_wait = true;
+    assert_eq!(r.read(rd, 10).unwrap(), b"x");
+}

@@ -5,7 +5,7 @@
 //! `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `poll`,
 //! `sendmsg`/`recvmsg`, `getnameinfo`, `gethostbyname` (ADR-0287 lists them).
 
-use super::procs::{after_write, poll, restartable};
+use super::procs::{after_write, poll, restartable, waiting};
 use super::*;
 
 use crate::socket::{self as sock, Hints};
@@ -101,18 +101,16 @@ fn recv_flags(fd: i32, buf: *mut u8, n: usize, flags: i32) -> Result<usize, i32>
     crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
     let u = user(buf, n)?;
     testcancel();
-    poll();
     let dontwait = flags & sock::MSG_DONTWAIT != 0;
-    restartable(|p| p.sock_read(fd, u, dontwait))
+    waiting(|p| p.sock_read(fd, u, dontwait))
 }
 
 fn send_flags(fd: i32, buf: *const u8, n: usize, flags: i32) -> Result<usize, i32> {
     crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
     let u = user(buf, n)?;
     testcancel();
-    poll();
     let dontwait = flags & sock::MSG_DONTWAIT != 0;
-    let r = restartable(|p| p.sock_write(fd, u, dontwait));
+    let r = waiting(|p| p.sock_write(fd, u, dontwait));
     if flags & sock::MSG_NOSIGNAL != 0 {
         r
     } else {
@@ -650,8 +648,7 @@ extern "C" fn sendmsg(fd: i32, msg: *const u8, flags: i32) -> isize {
             )
         };
         testcancel();
-        poll();
-        restartable(|p| p.sendmsg(fd, &iov, &rights, flags))
+        waiting(|p| p.sendmsg(fd, &iov, &rights, flags))
     })();
     if flags & sock::MSG_NOSIGNAL != 0 {
         size(r)
@@ -686,8 +683,7 @@ extern "C" fn recvmsg(fd: i32, msg: *mut u8, flags: i32) -> isize {
         // As many descriptors as the control buffer holds beside its header.
         let max_fds = controllen.saturating_sub(CMSG_HEADER) / 4;
         testcancel();
-        poll();
-        let got = restartable(|p| p.recvmsg(fd, &iov, max_fds, flags))?;
+        let got = waiting(|p| p.recvmsg(fd, &iov, max_fds, flags))?;
         let mut used = 0;
         if !got.fds.is_empty() {
             let clen = CMSG_HEADER + 4 * got.fds.len();

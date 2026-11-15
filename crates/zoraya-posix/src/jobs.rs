@@ -174,6 +174,12 @@ impl<S: Sys> Posix<S> {
             }
             return self.finish_wait(&r.sources, r.own_len, r.result);
         }
+        if core::mem::take(&mut self.interrupt_wait) {
+            // A handler ran on the way into this call, for a signal that came
+            // before its wait: on Unix the signal would have ended that wait,
+            // so the call does not block on it (ADR-0106 item 6).
+            return Err(EINTR);
+        }
         let mut sources = Vec::with_capacity(own.len() + 4);
         sources.extend_from_slice(own);
         self.interrupt_sources(&mut sources);
@@ -292,6 +298,31 @@ impl<S: Sys> Posix<S> {
                 self.signals.pending |= crate::signals::bit(n);
             }
         }
+    }
+
+    /// `execve` (ADR-0104 item 6): the signals sent to this image that it has
+    /// not acted on, which go on to the new image (POSIX keeps a pending
+    /// signal across `execve`), in musl's form. The new image is a process of
+    /// its own in this pid's job: a `job_signal` made before the kernel put it
+    /// there reached this image only (ADR-0004 rule 3), and a handler's
+    /// request (`Deliver`; `sh -c` catches `SIGINT`) waits in this image's
+    /// queue, which ends with it. Takes the whole queue and adds the pending
+    /// sets (signals blocked when they came). Keeps only those the new image
+    /// ends on: it starts with every handler back to its default, and drops
+    /// `ignored` (the record's form, bit n) as POSIX drops an ignored pending
+    /// signal.
+    pub fn exec_carry(&mut self, ignored: u32) -> u64 {
+        let mut set = self.signals.pending | self.signals.shared;
+        while let Some((kind, detail)) = self.sys.take_request() {
+            set |= bit(signal::number(kind, detail));
+        }
+        let mut kept = 0;
+        for n in 1..=signal::MAX {
+            if set & bit(n) != 0 && signal::default_terminates(n) && ignored & (1 << n) == 0 {
+                kept |= bit(n);
+            }
+        }
+        kept
     }
 
     /// Whether a library entry polls for requests (ADR-0106 item 5): only
