@@ -1182,7 +1182,7 @@ fn closing_the_asker_does_not_reset_the_bound() {
     let mut net = Net::new(static_config());
     let mut service = Service::new();
     let root = service.add(Connection::root()).unwrap();
-    let mut ask = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
+    let ask = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
         from,
         &bytes(&Duplicate {}, n),
         1,
