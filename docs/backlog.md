@@ -318,6 +318,18 @@ states, to be taken up later:
     connection for each `fork` and `posix_spawn` (`share`), and a refusal fails the call, so `make &` or `sh script &` with the
     terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
     line can take; refusing it outright waits for a fork that can go on without the terminal.
+  - **A Ctrl-C typed just after a job's first output is not acted on** (`work/tcg-slow`, found from the `ports-early`
+    candidate's TCG `zosh.script` failure, run 43701741943). In `sh` in `zosh`, `/bin/sh -c 'echo go; exec /bin/sleep 20'`
+    and Ctrl-C at once after `go`: `zosh` has taken the job's `tcsetpgrp` (its notice came before the output), sends
+    `kill(-group, SIGINT)` to the job's group through the broker, and the broker's `job_signal(Interrupt)` on the group's
+    job returns `Ok` (traced), yet the job runs on: the sleep its full 20 s (HVF too, when the key lands during the job's
+    `exec` or its spawn of the sleep); under TCG, `sh -c 'echo go; read x'` is never ended. The same Ctrl-C 4 s later
+    ends the job at once, and `kill -INT %1` from `sh` on a running job works. So the request reaches the job's tree
+    and is lost by the process during or just after `exec`/`fork` (its disposition then, or `libposix` taking the request
+    and not acting on it at its wait). Not fixed: it is in `libposix`'s signal entry around `exec` and `fork` (ADR-0106,
+    ADR-0315), not in the routing of 10c. `zosh.script`'s Ctrl-C steps pass anyway, because they wait for the prompt
+    the job's end gives (30 s each under TCG, which with a slow loop overran the run's 180 s). A check: a `%` mark
+    around the Ctrl-C of `zosh.script` and a limit of a few seconds, once the cause is fixed.
   - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
     for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
     for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.
