@@ -153,6 +153,20 @@ fn tcflush_drops_unread_input_and_what_the_library_kept() {
     let mut r = rig();
     let t = tty_with(&mut r, tp::status::OK);
     let conn = r.p.tty_of(t.fd).unwrap();
+    // What another connection kept is not this one's to drop.
+    let (other, _other_server) = r.p.sys.channel_create().unwrap();
+    r.p.tty_stash.push((other, b"theirs".to_vec()));
+    r.p.tty_poll_ready.push(other);
+    r.p.tty_stash.push((conn, b"stashed".to_vec()));
+    r.p.tty_poll_ready.push(conn);
+    assert_eq!(r.p.tty_flush(t.fd, termios::TCIFLUSH), Ok(()));
+    assert_eq!(r.p.tty_stash, [(other, b"theirs".to_vec())]);
+    assert_eq!(
+        r.p.tty_poll_ready,
+        [other],
+        "a readiness of the flushed input goes"
+    );
+    t.log.borrow_mut().clear();
     r.p.tty_rest.push((conn, b"kept".to_vec()));
     assert_eq!(r.p.tty_flush(t.fd, termios::TCOFLUSH), Ok(()));
     assert!(

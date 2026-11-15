@@ -561,3 +561,79 @@ fn nothing_to_wait_for_and_no_timeout_blocks_instead_of_einval() {
     let mut f = [pf(-1, POLLIN), pf(-2, 0)];
     assert_eq!(r.p.poll_once(&mut f, None), Ok(Some(0)));
 }
+
+#[test]
+fn a_terminals_kept_answer_or_held_read_tells_without_a_request() {
+    // The mutants of `tty_input_ready` the 10c review found alive: a read's
+    // answer another request's wait kept (`tty_stash`), and a held `Read`
+    // whose answer is on the channel, or whose service is gone.
+    let mut r = rig();
+    let t = tty(&mut r);
+    let conn = r.p.tty_of(t.fd).unwrap();
+    r.p.tty_stash.push((conn, b"answer".to_vec()));
+    assert_eq!(revents(&mut r, t.fd, POLLIN), POLLIN);
+    assert!(
+        sent(&mut r, &t).is_empty(),
+        "no PollReadable for a kept answer"
+    );
+    r.p.tty_stash.clear();
+    // A held `Read` with nothing on the channel: not ready, and no request.
+    r.p.tty_reads.push((conn, 41));
+    assert_eq!(revents(&mut r, t.fd, POLLIN), 0);
+    assert!(sent(&mut r, &t).is_empty(), "the held Read is the request");
+    // Its answer arrives: ready.
+    answer_poll(&mut r, &t, 41);
+    assert_eq!(revents(&mut r, t.fd, POLLIN), POLLIN);
+    let mut buf = [0u8; 64];
+    let mut hs = Vec::new();
+    let _ = r.p.sys.channel_read(conn, &mut buf, &mut hs);
+    // The service is gone: a hang-up, which a read reports as end of file.
+    r.p.sys.close(t.server);
+    assert_eq!(revents(&mut r, t.fd, POLLIN), POLLIN | POLLHUP);
+}
+
+#[test]
+fn a_spent_readiness_is_not_kept_by_the_read_that_spent_it() {
+    // `read_tty` drops a readiness that another request's wait recorded:
+    // after the read the next look asks afresh (`jobs.rs` `read_tty`).
+    let mut r = rig();
+    let t = tty(&mut r);
+    let conn = r.p.tty_of(t.fd).unwrap();
+    r.p.tty_poll_ready.push(conn);
+    let server = t.server;
+    r.p.sys.meanwhile = Some(Box::new(move |net: &mut Net| {
+        if let Some((bytes, _)) = net.take_message(server) {
+            let (h, _) = zoraya_protocol::Header::decode(&bytes).unwrap();
+            let mut buf = [0u8; 64];
+            let m = zoraya_proto_tty::ReadReply {
+                bytes: zoraya_protocol::Data(b"ok\n"),
+            };
+            let n = zoraya_protocol::encode(&m, h.transaction, &mut buf).unwrap();
+            net.send_message(server, &buf[..n], &[]);
+        }
+    }));
+    let into = r.poke(0, &[0; 8]);
+    assert_eq!(r.p.read(t.fd, into), Ok(3));
+    r.p.sys.meanwhile = None;
+    assert!(r.p.tty_poll_ready.is_empty());
+    assert_eq!(revents(&mut r, t.fd, POLLIN), 0, "spent by the read");
+    assert_eq!(sent(&mut r, &t).len(), 1);
+}
+
+#[test]
+fn a_stream_marked_terminal_without_a_connection_is_a_pipe() {
+    // `probes`: only a terminal with a connection has the readiness
+    // request; one without is looked at as its stream.
+    let mut r = rig();
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    match r.p.fds.get_mut(rd) {
+        Some(process::Desc::Stream { tty, conn, .. }) => {
+            *tty = true;
+            *conn = None;
+        }
+        _ => panic!(),
+    }
+    assert_eq!(revents(&mut r, rd, POLLIN), 0);
+    r.write(wr, b"x").unwrap();
+    assert_eq!(revents(&mut r, rd, POLLIN), POLLIN);
+}

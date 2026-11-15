@@ -306,10 +306,11 @@ pub struct Posix<S: Sys> {
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
     pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
-    /// What `Read` a terminal connection has outstanding, by connection.
-    pub(crate) tty_reads: Vec<(S::H, u32)>,
+    /// What `Read` a terminal connection has outstanding, by connection
+    /// (`pub`, like `tty_rest`, for the host tests).
+    pub tty_reads: Vec<(S::H, u32)>,
     /// Answers to held terminal reads that another request's wait took.
-    pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
+    pub tty_stash: Vec<(S::H, Vec<u8>)>,
     /// What a terminal read was given beyond the buffer that asked.
     pub tty_rest: Vec<(S::H, Vec<u8>)>,
     /// The `PollReadable` each terminal connection has outstanding, by
@@ -319,7 +320,7 @@ pub struct Posix<S: Sys> {
     pub(crate) tty_polls: Vec<(S::H, u32)>,
     /// Connections whose `PollReadable` was answered while another request's
     /// wait was reading the channel: the next look says ready, once.
-    pub(crate) tty_poll_ready: Vec<S::H>,
+    pub tty_poll_ready: Vec<S::H>,
     /// The record locks of this process (ADR-0319). A `fork` child starts
     /// with none, as POSIX has it: `after_fork_in_child` clears the copy.
     pub(crate) locks: crate::records::Locks<S::H>,
