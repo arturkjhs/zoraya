@@ -1,77 +1,137 @@
 #!/bin/sh
 # The checks of the ports built ahead of their parts (TASK-31 ports-early):
 # ncurses, less, nvi2 and Berkeley DB 1 (ADR-0390), OpenSSH's client (ADR-0346)
-# and git (ADR-0347). Each is checked only when it was built: the ports are
-# not part of the image yet, so a clean `make ports` has none of them, and the
-# script says so and passes.
+# and git (ADR-0347). The ports are not part of the image yet, so CI's `make
+# ports` builds none of them; each is checked when its tree is there. A tree
+# that is there without its binaries is a failure (a half-built port), and the
+# script fails too when ports exist and nothing could be checked.
 #
-#   check-early.sh LOGS ZCC SURFACE_CHECK ELF_CHECK BUILD_DIR
+#   check-early.sh LOGS ZCC SURFACE_CHECK ELF_CHECK BUILD_DIR LIBC_A
 #
-# INV-0390-1: the block of ADR-0390 names, for each program, names its objects import.
-# INV-0390-2: every compile of a built port ran zcc and none named -D__linux.
+# INV-0390-1, INV-0346-1, INV-0347-1: each block names, for each program, a name its objects import.
+# INV-0390-2: every compile of a built port ran zcc (one line per object) and none named -D__linux.
 # INV-0390-3: the curses archives name the terminfo directory; the programs load.
-# The same three for ssh (INV-0346-*) and git (INV-0347-*) when they are built.
+# INV-0346-2: ssh and ssh-keygen name no askpass variable or configuration file.
+# INV-0347-2: no object of git imports getenv but wrapper.o (and compat/regex's locale lookups).
+# Also: libc.a defines every name of the three blocks, and no binary of the images holds an early shim's marker.
 set -eu
-logs=$1 zcc=$2 surface=$3 elfcheck=$4 build=$5
+logs=$1 zcc=$2 surface=$3 elfcheck=$4 build=$5 libc=${6:-}
+work=$build/ports/work
 fail=0
+checked=0
+exists=0
 say() { echo "check-early: $*"; fail=1; }
-checked=""
+nm_tool=$(command -v llvm-nm || command -v nm)
 
-# --- the compile logs (INV-0390-2 and its kin)
-for l in ncurses less db1 nvi openssh git; do
-  [ -f "$logs/$l.log" ] || continue
-  checked="$checked $l"
-  grep -q -e "$zcc" "$logs/$l.log" || say "$l.log shows no compile command"
-  if grep -l -e '-D__linux' -e '-D__gnu_linux' "$logs/$l.log"; then say "$l was compiled with __linux__"; fi
-done
+# The one directory of a port's tree, whatever its version.
+tree() { ls -d "$work/$1"-[0-9]* 2>/dev/null | head -1; }
+
+# Every compile of a port ran zcc, once per object, and none named __linux.
+compiles() { # LOG NAME OBJECT_COUNT
+  [ -f "$1" ] || { say "$2: no log $1"; return; }
+  n=$(grep -c -e "$zcc.* -c " "$1" || true)
+  [ "$n" -ge "$3" ] || say "$2: $n compile lines for $3 objects in $1"
+  if grep -l -e '-D__linux' -e '-D__gnu_linux' "$1"; then say "$2 was compiled with __linux__"; fi
+}
+count_o() { find "$@" -name '*.o' 2>/dev/null | wc -l | tr -d ' '; }
+
+# A block's names are defined by libc.a.
+block_in_libc() { # ADR
+  [ -n "$libc" ] && [ -f "$libc" ] || return 0
+  defined=$("$nm_tool" --defined-only "$libc" 2>/dev/null | awk '$2 ~ /^[TW]$/ { print $3 }')
+  for n in $(sed -n '/^```posix-surface-added/,/^```$/p' "$1" | awk 'NF == 2 && $1 !~ /^`/ { print $1 }'); do
+    printf '%s\n' "$defined" | grep -qx "$n" || say "$n of $1 is not defined by libc.a"
+  done
+}
 
 # --- ncurses, less, nvi (ADR-0390)
-nc=$build/ports/work/ncurses-build
-if [ -d "$nc/objects" ] && [ -x "$build/ports/work/less-710/less" ] && [ -d "$build/ports/obj/nvi" ]; then
-  "$surface" imports docs/adr/0390-surface-for-curses-less-and-vi.md \
-    "ncurses=$nc/objects" "nvi=$build/ports/obj/nvi" "less=$build/ports/work/less-710" || fail=1
-  curses=$build/ports/curses/usr
-  LC_ALL=C grep -a -q '/usr/share/terminfo' "$curses/lib/libtinfow.a" || say "libtinfow.a does not name /usr/share/terminfo"
-  # No lookup of $HOME/.terminfo: --disable-home-terminfo leaves the helper without a caller.
-  if LC_ALL=C strings -a "$curses/lib/libtinfow.a" | grep -q '\.terminfo'; then say "libtinfow.a names a .terminfo in the home directory"; fi
-  d=$build/ports/early-check
-  rm -rf "$d" && mkdir -p "$d"
-  cp "$build/ports/work/less-710/less" "$d/less"
-  cp "$build/ports/work/nvi2-"*/nvi "$d/vi"
-  "$elfcheck" "$d" || fail=1
-  rm -rf "$d"
+nc=$work/ncurses-build
+less=$(tree less)
+nvi=$(tree nvi2)
+if [ -d "$nc" ] || [ -n "$less" ] || [ -n "$nvi" ]; then
+  exists=1
+  if [ -d "$nc/objects" ] && [ -x "$less/less" ] && [ -x "$nvi/nvi" ] && [ -d "$build/ports/obj/nvi" ]; then
+    checked=1
+    "$surface" imports docs/adr/0390-surface-for-curses-less-and-vi.md \
+      "ncurses=$nc/objects" "nvi=$build/ports/obj/nvi" "less=$less" || fail=1
+    compiles "$logs/ncurses.log" ncurses "$(count_o "$nc/objects")"
+    compiles "$logs/less.log" less "$(count_o "$less" -maxdepth 1)"
+    compiles "$logs/nvi.log" nvi "$(count_o "$build/ports/obj/nvi")"
+    [ -f "$logs/db1.log" ] && compiles "$logs/db1.log" db1 "$(count_o "$build/ports/obj/db1")"
+    curses=$build/ports/curses/usr
+    LC_ALL=C grep -a -q '/usr/share/terminfo' "$curses/lib/libtinfow.a" || say "libtinfow.a does not name /usr/share/terminfo"
+    if LC_ALL=C strings -a "$curses/lib/libtinfow.a" | grep -q '\.terminfo'; then say "libtinfow.a names a .terminfo in the home directory"; fi
+    d=$build/ports/early-check
+    rm -rf "$d" && mkdir -p "$d"
+    cp "$less/less" "$d/less"
+    cp "$nvi/nvi" "$d/vi"
+    "$elfcheck" "$d" || fail=1
+    rm -rf "$d"
+    block_in_libc docs/adr/0390-surface-for-curses-less-and-vi.md
+  else
+    say "ncurses, less or nvi has a tree and not all of its products"
+  fi
 fi
 
-# --- OpenSSH and git, when built
-if [ -x "$build/ports/work/openssh-10.6p2/ssh" ] && [ -f docs/adr/0346-surface-for-ssh.md ]; then
-  "$surface" imports docs/adr/0346-surface-for-ssh.md \
-    "ssh=$build/ports/work/openssh-10.6p2" || fail=1
-  for b in ssh ssh-keygen; do
-    # INV-0346-2: no askpass program and no configuration file in the binaries.
-    if LC_ALL=C strings -a "$build/ports/work/openssh-10.6p2/$b" | grep -q -e 'SSH_ASKPASS' -e 'ssh_config' -e '\.ssh/config'; then
-      say "$b names SSH_ASKPASS or a configuration file"
-    fi
-  done
-  d=$build/ports/early-check
-  rm -rf "$d" && mkdir -p "$d"
-  cp "$build/ports/work/openssh-10.6p2/ssh" "$build/ports/work/openssh-10.6p2/ssh-keygen" "$d/"
-  "$elfcheck" "$d" || fail=1
-  rm -rf "$d"
-fi
-if [ -x "$build/ports/work/git-2.56.1/git" ] && [ -f docs/adr/0347-surface-for-git.md ]; then
-  "$surface" imports docs/adr/0347-surface-for-git.md \
-    "git=$build/ports/work/git-2.56.1" "git=$build/ports/work/git-2.56.1/compat" || fail=1
-  for b in git git-remote-http; do
-    # INV-0347-2: the patch of the environment is in the program.
-    LC_ALL=C grep -a -q 'zoraya_getenv' "$build/ports/work/git-2.56.1/$b" || say "$b has no zoraya_getenv (the patch is not applied)"
-  done
-  d=$build/ports/early-check
-  rm -rf "$d" && mkdir -p "$d"
-  cp "$build/ports/work/git-2.56.1/git" "$build/ports/work/git-2.56.1/git-remote-http" "$d/"
-  "$elfcheck" "$d" || fail=1
-  rm -rf "$d"
+# --- OpenSSH
+ssh=$(tree openssh)
+if [ -n "$ssh" ]; then
+  exists=1
+  if [ -x "$ssh/ssh" ] && [ -x "$ssh/ssh-keygen" ]; then
+    checked=1
+    "$surface" imports docs/adr/0346-surface-for-ssh.md "ssh=$ssh" || fail=1
+    compiles "$logs/openssh.log" openssh "$(count_o "$ssh")"
+    for b in ssh ssh-keygen; do
+      if LC_ALL=C strings -a "$ssh/$b" | grep -q -e 'SSH_ASKPASS' -e 'ssh_config' -e '\.ssh/config'; then
+        say "$b names SSH_ASKPASS or a configuration file"
+      fi
+    done
+    d=$build/ports/early-check
+    rm -rf "$d" && mkdir -p "$d"
+    cp "$ssh/ssh" "$ssh/ssh-keygen" "$d/"
+    "$elfcheck" "$d" || fail=1
+    rm -rf "$d"
+    block_in_libc docs/adr/0346-surface-for-ssh.md
+  else
+    say "openssh has a tree and no ssh or ssh-keygen"
+  fi
 fi
 
-if [ -z "$checked" ]; then echo "check-early: none of the early ports was built; nothing to check"; fi
+# --- git
+git=$(tree git)
+if [ -n "$git" ]; then
+  exists=1
+  if [ -x "$git/git" ] && [ -x "$git/git-remote-http" ]; then
+    checked=1
+    "$surface" imports docs/adr/0347-surface-for-git.md "git=$git" "git=$git/compat" || fail=1
+    compiles "$logs/git.log" git "$(count_o "$git")"
+    # INV-0347-2, by symbol: nothing but wrapper.o (zoraya_getenv's own call) imports getenv.
+    for o in $(find "$git" -name '*.o'); do
+      if "$nm_tool" -u "$o" 2>/dev/null | grep -qw getenv; then
+        case $o in "$git"/wrapper.o | "$git"/compat/regex/*) ;; *) say "$o imports getenv";; esac
+      fi
+    done
+    d=$build/ports/early-check
+    rm -rf "$d" && mkdir -p "$d"
+    cp "$git/git" "$git/git-remote-http" "$d/"
+    "$elfcheck" "$d" || fail=1
+    rm -rf "$d"
+    block_in_libc docs/adr/0347-surface-for-git.md
+  else
+    say "git has a tree and no git or git-remote-http"
+  fi
+fi
+
+# --- no early shim in an image
+for dir in "$build/rootfs-posix/bin" "$build/rootfs-apps/bin"; do
+  [ -d "$dir" ] || continue
+  if grep -l -a 'ZORAYA-EARLY-SHIM' "$dir"/* 2>/dev/null; then say "an image binary links an early shim ($dir)"; fi
+done
+
+if [ "$exists" = 0 ]; then
+  echo "check-early: none of the early ports was built; nothing to check"
+elif [ "$checked" = 0 ]; then
+  say "early ports exist and none could be checked"
+fi
 [ $fail = 0 ] && echo "check-early: passed"
 exit $fail

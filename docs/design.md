@@ -1071,6 +1071,10 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   2026-11-12, ADR-0228) on the source: at least 100 blocks, each a DER certificate, none repeated, none of the test PKI's, the
   header's count, source and date, and `docs/dependencies.md` agreeing; `cargo test -p zoraya-tls --test production_roots` loads every
   one into the verifier;
+- `make check-libposix-widths` (INV-0451-1): every definition libposix exports returns the width its C prototype declares (`syscall()`
+  returned `int` for `long`). `tools/check-libposix-widths.py` reads each Rust definition (and fails on any export form it does not read) against
+  `tools/libposix-widths.txt`; `make test-libposix` also runs it against the sysroot's headers and `libzoraya_posix.a`'s exports
+  (`check-libposix-widths-built`, no fallback), and `tests/posix-core/t_syscall.c` runs the 64-bit cases in the guest;
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - `make check-test-lanes`: every step `make test-changed` can select (`tools/test-map.txt`, `all` in `tools/plan-lib.sh`) and every
   test step of `make test` has a lane in `tools/test-lanes.txt` (the lanes of `tools/test-par.sh`) or a line in its skip list
@@ -2021,8 +2025,11 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   command is `ping` by name, then `fetch` by name, then the two silent names ("the name lookup timed out") and one that
   does not exist; its `netd` takes the server's port from `/config/net-test-dns-port` (feature `net-test` only; port 53
   needs root). `zoraya-test-dns --check-pcap` then reads the run's capture: one ARP request for the server before the
-  first query, and the echo request and the SYN within 0.5 s of their answers. The step runs the
-  network without `restrict=on` (`tools/run-qemu.sh --net-open`); every other step keeps it. The fuzz target
+  first query, and the echo request and the SYN within 0.5 s of their answers. The step (and `make
+  test-net-dns`, the names answered by `tools/test-dns`) needs UDP to the host, which `restrict=on` forbids: it runs inside
+  `tools/confine-loopback.sh` (macOS `sandbox-exec`, Linux `unshare -rn`; a host that cannot confine skips the two steps)
+  with `tools/run-qemu.sh --net-open`, which refuses to start outside it. Every other network step is `restrict=on` and
+  reaches the test servers only through `--net-guestfwd` relays to `127.0.0.1` (INV-0230-1, `make check-net-open`). `test-hand-run`'s person-mode network leg runs inside the same wrapper; `run-qemu.sh --net-open` verifies the confinement itself (a datagram to 198.51.100.7 must fail). Known limits: on macOS the sandbox leaves the whole host loopback reachable (SLIRP's 10.0.2.2:ANY is 127.0.0.1:ANY), so a guest of those steps could reach another local service, for example a local DNS forwarder; in Linux's empty namespace there is none. On CI `test-net-lookup`, `test-net-dns` and `test-hand-run`'s network leg are not run (`CONFINED` prints `SKIPPED:`; `CONFINE_CI=1` tries them): CI's container gave no confinement (candidate 18c10e4), so INV-0316-1 to 3's `test-net-lookup` part runs on a person's machine only (`make test-net`). `netd`'s `(dhcp)` in its configured line names the address source, not the DNS server's. The fuzz target
   `fuzz/fuzz_targets/net_dns_http.rs` was compiled and driven with 400,000 random inputs in a scratch crate (not run under
   libFuzzer: no nightly toolchain here).
 - **Measured** (`fetch --sum` against `tools/test-httpd` on the host, QEMU 11.1.2, 128 MiB, 1 CPU, normal kernel,
@@ -2320,7 +2327,7 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   not enforced, FIFOs only in `/tmp`, no hard links, lexical `..`, times that never go back, no `statvfs`; one, `weakly_canonical`
   of missing components, not analysed further)), built by `tests/cxx/libcxx-build.sh` (a test that does not compile is an
   error; patch `llvm/0004` makes the filesystem tests' helper work without a shell) and run each by `posixrun` in `/work`
-  (99 s under HVF on the Mac mini). Limit: under TCG, which is every CI job, `thread.semaphore/`, `thread.barrier/` and `thread.latch/` are left out (`tests/cxx/libcxx-tcg-excluded.txt`: libc++'s atomic wait polls with a backoff here); no CI job runs them, only HVF on the Mac does, until libc++'s wait goes over the futex (ADR-0301, `docs/backlog.md`). `make
+  (99 s under HVF on the Mac mini). Limit: under TCG, which is every CI job, `thread.semaphore/`, `thread.barrier/` and `thread.latch/` are left out of that step (`tests/cxx/libcxx-tcg-excluded.txt`: libc++'s atomic wait polls with a backoff here); the nightly run (not a push to main, not a candidate) runs them under TCG with `make test-cxx-libcxx-slow` (`tests/cxx/libcxx-slow-groups.txt`, its own timeout `CXX_LIBCXX_SLOW_TIMEOUT`, 7200 s, in a job of 150 minutes; `tools/ci-nightly-tests.txt`), and HVF on the Mac runs them in `make test-cxx-libcxx`; the polling itself goes when libc++'s wait goes over the futex (ADR-0301, `docs/backlog.md`). `make
   test-cxx-gtest`: GoogleTest's 27 self-checking test programs, death tests included (they `fork`, and the threadsafe style
   executes the program again), each through `gtrun` (`tests/cxx/gtrun.c`, `user/describe/posix/gtrun.cmd`), with the
   expectations of `tests/cxx/gtest-expect.txt`. `make ci-build` builds the runtime, GoogleTest and the libc++ subset, so that the
@@ -2678,7 +2685,22 @@ ADR-0221 items 5, 6 and 8).
   test or build reads, listed in `tools/plan-lib.sh`'s `docs_only`, and the `libc.a` surface lists and blocks) runs only the
   document checks (`doc_checks`: `adr-check`, `check-host-paths`, `check-untrusted-gate`, `check-quota-tests`,
   `check-tls-roots`), no build and no machine; every other push to `main`, the nightly run and `candidate-full/` run the full
-  set (`tools/ci-tests.txt`). `make check-ci-plan` tests the plan. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
+  set (`tools/ci-tests.txt`). A push to `main` that is not docs-only also gets the document checks only when the workflow
+  proves (`tools/ci-tree-proof.rb`, ADR-0345, proposed) that the merge commit has the tree of a run of `test.yml` that went
+  green with every job of the full set (the list of `tools/ci-tests.txt`, `build` and the checks, each `success` with its `Run` step, none skipped):
+  the commit is a merge of exactly two parents whose first is the previous head, a run's `head_sha` has the same tree (`git`
+  first, then the API), and the run's jobs are read through the API; any doubt or API error runs the full set. So the merge of a
+  candidate that passed the full set (merge `origin/main` into the branch, run `candidate-full/NAME` or
+  `gh workflow run test.yml --ref BRANCH -f full=true`, then `--no-ff` merge and nothing else) is not tested twice; if main
+  moved in between, the trees differ and the full set runs. A stage tag needs a full green run on the code commit of the tagged commit: the tagged commit itself if its change from
+  its first parent is not docs-only (`docs_only` in `tools/plan-lib.sh` judges the whole change: a posix-surface block or a doc a
+  test reads is code although under `docs/`), else the nearest such commit on its first-parent chain (not "the latest ancestor
+  whose run was the full set": a proven merge, or one whose plan job failed, has no such run); the run is on that commit or on a
+  commit with the same tree; the summary of a
+  proven `main` run names the run. By hand, for a commit: `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name>
+  tools/ci-tree-proof.rb` (it reads `tools/ci-tests.txt` and `test.yml` of that commit with `git show`, not of the checkout; the
+  runs on the commit are found by `head_sha`, others only among the 100 latest successful runs). Each API call and the whole proof
+  have a deadline: a call that does not answer runs the full set. `make check-ci-plan` tests the plan and this rule on fixtures. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
   The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
   that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
   (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".

@@ -86,3 +86,6 @@ int cfsetispeed(struct termios *t, speed_t speed)
 	(void)t;
 	return speed == 0 || (speed & ~CBAUD) == 0 ? 0 : -1;
 }
+
+/* Marker: ports/check-early.sh looks for it to prove that no image binary links this shim. */
+__attribute__((used)) const char zoraya_early_shim_ttyshim[] = "ZORAYA-EARLY-SHIM-ttyshim";

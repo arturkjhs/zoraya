@@ -8,35 +8,35 @@
 > sleep 3\r
 < \r\n~>
 # 16 MiB, five times.
-> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+> fetch --sum http://@HOST@:@PORT@/pattern/16777216\r
 < 16777216 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+> fetch --sum http://@HOST@:@PORT@/pattern/16777216\r
 < 16777216 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+> fetch --sum http://@HOST@:@PORT@/pattern/16777216\r
 < 16777216 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+> fetch --sum http://@HOST@:@PORT@/pattern/16777216\r
 < 16777216 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+> fetch --sum http://@HOST@:@PORT@/pattern/16777216\r
 < 16777216 bytes fnv1a
 < \r\n~>
 # One byte, connect to end of file, five times.
-> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+> fetch --sum http://@HOST@:@PORT@/pattern/1\r
 < 1 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+> fetch --sum http://@HOST@:@PORT@/pattern/1\r
 < 1 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+> fetch --sum http://@HOST@:@PORT@/pattern/1\r
 < 1 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+> fetch --sum http://@HOST@:@PORT@/pattern/1\r
 < 1 bytes fnv1a
 < \r\n~>
-> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+> fetch --sum http://@HOST@:@PORT@/pattern/1\r
 < 1 bytes fnv1a
 < \r\n~>
 x power off

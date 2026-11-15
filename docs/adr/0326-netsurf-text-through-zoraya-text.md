@@ -119,7 +119,7 @@ OFL 1.1 (`desktop/survey.md#the-ofl-next-to-bsd-code`). The system image has no 
   `/system/fonts` (ADR-0240's follow-up) now that the image has the directory.
 
 ## Invariants
-- **INV-0326-1.** The font library reads no path but `/system/fonts/NAME` for its own file names, and nothing gives a POSIX program `/system/fonts` but a `window` line, read only. *Check:* `cargo test -p zoraya-fontset` (a recording source) and `cargo test -p zoraya-shell` (the grant with the window and without it).
+- **INV-0326-1.** The font library reads no path but `/system/fonts/NAME` for its own file names, and nothing gives a POSIX program `/system/fonts` implicitly but a `window` line, read only. *Check:* `cargo test -p zoraya-fontset` (a recording source) and `cargo test -p zoraya-shell` (the grant with the window and without it).
 - **INV-0326-2.** Every Russian and Ukrainian letter (U+0410 to U+044F, Ё ё, Ґ ґ, Є є, І і, Ї ї) maps to a glyph of the sans faces that is not the box, and draws a non-blank glyph at the sizes of scale 1 and scale 2. *Check:* `cargo test -p zoraya-fontset`, and `make test-netsurf` (a Cyrillic page at scale 1 and at scale 2: ink where its words are, and a line of і narrower than a line of as many ж).
 
 ## Open questions

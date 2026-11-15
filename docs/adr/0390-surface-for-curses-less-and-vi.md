@@ -20,7 +20,7 @@ what only `libposix` can supply.
 
 | name | imported by | where it comes from |
 |---|---|---|
-| `iswprint`, `wmemcpy`, `wcsrtombs`, `tdelete`, `tfind`, `tsearch` | ncurses (`lib_add_wch`, `lib_cchar`, `lib_unget_wch`, `new_pair`) | musl's own code, hidden: in the block |
+| `iswprint`, `wmemcpy`, `wcsrtombs`, `tdelete`, `tfind`, `tsearch`, `twalk` | ncurses (`lib_add_wch`, `lib_cchar`, `lib_unget_wch`, `new_pair`, `lib_tparm`; `twalk` shows only when `tsearch` is exported, which configure then uses: a probe against the first `libc.a` missed it) | musl's own code, hidden: in the block |
 | `iswcntrl`, `iswgraph`, `iswlower`, `iswpunct`, `iswupper`, `iswxdigit`, `wmemset` | nvi (`v_txt`, `ex_abbrev`, `ex_subst`, `ex_usage`, `v_increment`, `v_replace`) | musl's own code, hidden: in the block |
 | `asprintf`, `strlcpy`, `strsep`, `issetugid` | nvi (`ex_cscope`, `main`, `util`) | musl's own code, hidden: in the block |
 | `catopen`, `catgets`, `catclose` | nvi (`common/msg.c`) | musl's own code, hidden: in the block; musl's `catopen` finds no catalog and nvi uses its built-in English text |
@@ -127,6 +127,7 @@ strsep nvi
 tdelete ncurses
 tfind ncurses
 tsearch ncurses
+twalk ncurses
 wcsrtombs ncurses
 wmemcpy ncurses
 wmemset nvi
@@ -158,6 +159,7 @@ wmemset nvi
   file, `:g` over it, and a write-back. Part 10d.
 - Should the `lock` option be removed from nvi's option table (ADR-0335 item 1 says removed)? A larger patch to
   `common/options.c`; 10d decides.
+- DB 1.85 is under the 4-clause UC licence (the advertising clause, withdrawn by UC in 1999, is still in the files); a maintained copy may have the 3-clause one. The pins: nvi2 is a GitHub-generated archive of a tag, DB 1.85 has one URL and no mirror, hashes are those of the first download.
 - Whether `less` and `vi` need `-g` in the image (the debug sections are 1.3 MB of each file here, from `libc.a`'s own `-g`).
 
 ## Revisit triggers

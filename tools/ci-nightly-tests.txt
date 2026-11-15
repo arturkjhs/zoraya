@@ -1,0 +1,8 @@
+# The jobs CI's nightly run (schedule) adds to the full list of tools/ci-tests.txt, one
+# a line, and no other run does: not a push to main, not a merge candidate, not
+# candidate-full/ (tools/ci-plan.sh with FULL=1 and NIGHTLY=1; make check-ci-jobs
+# checks that the other plans lack them). They are not steps of `make test`: they are
+# too slow for a person's session and for the time of the jobs of the full set.
+# make test-cxx-libcxx-slow: libc++'s thread.semaphore, thread.barrier and thread.latch
+# under TCG (tests/cxx/libcxx-slow-groups.txt), which the full set leaves out under TCG.
+make test-cxx-libcxx-slow

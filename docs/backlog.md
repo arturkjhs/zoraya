@@ -352,7 +352,7 @@ cannot be loaded (no `dlopen`), so the hook should refuse it; the `-ext` build i
 
 For the architect.
 
-- **What may `--net-open` reach (INV-0230-1, audit C3)?** The network steps of `make test` run QEMU without `restrict=on`
+- **What may `--net-open` reach (INV-0230-1, audit C3)?** *Decided 2026-11-15 and done in work/test-fixes-3: see TASK-31-part-test-fixes-3.* (The question as asked:) The network steps of `make test` run QEMU without `restrict=on`
   (`NET_FETCH_RUN`, `test-net-fetch`'s DNS leg, `test-net-lookup`, `NET_POSIX_RUN`, `APPS_RUN`, `test-python`, `NS_RUN`;
   `test-hand-run` and `make run-net` use person mode), which ADR-0230 item 2 does not describe: a script that fetches a public
   address connects out. Decide: move them to `restrict=on` with `guestfwd`, or accept `--net-open` against the host test servers
@@ -361,10 +361,11 @@ For the architect.
   name a command. Is an `abi` type a valid check (then its file may be named), or should a `check-*` script assert that
   `kernel/src` has one user-copy read of the spawn buffer and that `SpawnRequest::decode` takes `&[u8]`? The row is
   `not yet applicable` meanwhile (ADR-0042's open questions).
-- **No CI job runs libc++'s `thread.semaphore`, `thread.barrier` and `thread.latch` tests** (left out under TCG; CI is Linux, so
-  the `-tcg` script is used whatever the accelerator). Recorded in INV-0360-2 and `docs/design.md`. A separate nightly step with
-  its own timeout needs a third script and a step in `TEST_STEPS`, `ci-tests.txt` and the lanes; or libc++'s atomic wait over the
-  futex removes the polling.
+- **libc++'s `thread.semaphore`, `thread.barrier` and `thread.latch` tests** (left out of `make test-cxx-libcxx` under TCG; CI is
+  Linux, so the `-tcg` script is used whatever the accelerator). *Done in work/test-fixes-3:* the nightly run (only it) runs them
+  under TCG with `make test-cxx-libcxx-slow` (`tests/cxx/libcxx-slow-groups.txt`, `tools/ci-nightly-tests.txt`, its own runner
+  timeout and a 150-minute job); no push or candidate runs it. Not yet seen to pass on CI's runner under TCG: the first nightly
+  after the merge shows whether 7200 s and 150 minutes are enough. libc++'s atomic wait over the futex would remove the polling.
 - **Not mapped before this part, still:** `test-cxx-libcxx` now follows `kernel/` and `crates/zoraya-rt/` (the futex libc++ waits
   on), `tools/zcc` (`zc++` is a link to it), `ports/Makefile`, `ports/sources.lock`, `ports/crt/` and `ports/include/`.
 - **`t_quota` handshake:** `channel_read(...).is_ok()` retries when the peer closed, so a child that dies early costs 10 s and
@@ -406,3 +407,86 @@ command per package for now. A revoke without `--kill` says how many running cop
 - **INV-0042-1:** an `abi` type is not a check by itself; it stays `not yet applicable` until a test checks it.
 - **libc++:** add the nightly step that runs the semaphore, barrier and latch groups under TCG (no time pressure there).
   The last three are part `work/test-fixes-3`.
+
+## ADR-0450 to ADR-0455 accepted; two parts (the architect, 2026-11-15)
+
+ADR-0450 to ADR-0455 (a Rust `std` for POSIX programs, TASK-35) are accepted as recommended, including the stated limit on
+INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1;
+each change is recorded by the part that implements it, with an Opus review. Two parts:
+1. `work/syscall-long` (small, first): `syscall()` returns `long` (today a 32-bit `int` turns -1 into a success; `tee` and
+   `sendmsg` have the same defect), with a test. A defect for C programs too (ADR-0451 item 1, INV-0451-1).
+2. `work/rust-std`, in the next free slot: ADR-0451's list (the fixed `syscall` list with `futex`, `getrandom`, `gettid`;
+   `ioctl FIONBIO`; the ten exported names; `libzoraya-rust.a`; the renamed `__rustc` symbols), `tools/zcargo` (ADR-0452),
+   and a random-number connection for every POSIX child from the broker (ADR-0453 with ADR-0227 item 3), which also closes
+   the nested `python3` and fork-child randomness items above. Done when the probes of `docs/research/rust-std/probes` pass
+   in CI as `make test-rust-std`.
+
+- **CI does not run `test-net-lookup`, `test-net-dns` and test-hand-run's network leg (INV-0230-1, INV-0316-1..3; for the architect, docs/architect-queue.md).**
+  They need UDP to `tools/test-dns` or person mode's router, which `restrict=on` forbids, so they run inside
+  `tools/confine-loopback.sh`; on CI `CONFINED` prints `SKIPPED:` and does not run them (`CONFINE_CI=1` tries). Candidate
+  18c10e4 showed the container with `--cap-add=SYS_ADMIN,NET_ADMIN` did not confine; one suspect, not tested, is that
+  `--verify` lists `/sys/class/net`, which in a container shows the host's namespace (`/proc/net/dev` follows the process's).
+  Question: a runner with unprivileged user namespaces, or a container allowed `unshare -n`, would run them on CI; or accept
+  that INV-0316-1..3's wire check is local only.
+
+## From the review of `work/syscall-long` (TASK-31)
+
+For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, findings 4 to 8):
+- The 12 `-` rows (`zoraya_text_*`, `zoraya_window_*`) and the `INTERNAL` dictionary of `tools/check-libposix-widths.py` are
+  checked against no C declaration: parse musl's `src/internal`, `ports/musl/zoraya/syscall.h` and the ports' own headers in
+  `--headers` mode instead.
+- Parameter widths are not checked. `ioctl`'s `request` is `i64` in `ffi.rs` where `<sys/ioctl.h>` says `int`: make it `i32`,
+  matched as `u32`, when FIONBIO is added (ADR-0451 item 2), and extend the checker to named parameters.
+- The stubs of `libzoraya-rust.a` (C, ADR-0451 items 4 and 5) need their own width check; the checker reads Rust only.
+- ADR-0451 item 1's `REPORT` line per unanswered `syscall` number is not built.
+
+
+## Three requests from outside work: R20 to R22 (2026-11-15), for part 10j's design or right after it
+
+- **R20, the parts of a native window program as crates of their own.** The heap of a native program (`user/src/heap.rs`), the
+  platform of an application over the compositor's channel (`Gui` in `user/src/app.rs`), the file link and the chooser's
+  client, in a crate (or crates) that depends on `zoraya-rt`, `zoraya-heap` and `zoraya-app` only, with the link script
+  (`user/user.ld`) reachable from a build script; `zoraya-user` then uses them itself (R3's first half: native programs built
+  outside the image). Why: a program outside the repository can name every `crates/` crate by path, but these live inside
+  `zoraya-user`, which is every program of the ramdisk at once (network stack, TLS, drivers, the `ring` patch and the C
+  compiler wrapper). Until then the outside program carries its own copies (about 190 lines, two `unsafe` places). Minimal
+  test: a crate outside the repository with `zoraya-rt`, `zoraya-app` and the new crate as path dependencies builds for
+  `aarch64-unknown-none` a program that opens a window with one label; `zoraya-elf-check` (or the packer) accepts it; its
+  dependency tree holds no network or driver crate.
+- **R21, native programs from outside the repository in the image.** `make build EXTRA_PROGRAMS="PATH..."`: ELF files with the
+  native mark, added to the ramdisk after the repository's own under their base names (the packer already checks the mark and
+  an optional description). Later the same through the volume, as ADR-0396 installs a POSIX program. Why: the program
+  directory a launch looks in is the ramdisk inside the kernel image; `EXTRA_ROOT` adds only to the volume, where a native
+  program is never looked for. Until then: `overlay/0001-extra-programs-in-the-ramdisk.patch` on a local clone (8 lines of the
+  Makefile). Minimal test: a `hello`-like native ELF built outside and passed in `EXTRA_PROGRAMS`: the shell runs it by name;
+  the ramdisk lists it; a file without the mark fails the build with the packer's message.
+- **R22, a dock tile and a launch record for a program that is not one of the four.** The dock's list (`zoraya_panel::APPS`)
+  takes more names at build time (`EXTRA_APPS="NAME ..."`), and later from the records of installed programs (ADR-0396): each
+  gets the launch record of an application (the console, its compositor channel, the chooser, its data directory), a tile with
+  its initial, and its windows' pills. Also a way to start a window program from a terminal by its name. Why: a window program
+  is launched only by the panel, and the panel launches only what its table names. Until then:
+  `overlay/0002-extra-applications-in-the-dock.patch`. Minimal test: with `EXTRA_APPS=demo` and a `demo` program in the ramdisk,
+  the dock shows a fifth tile with `D`, a press opens its window with the pill `+w /data/home/demo`, a second press raises it,
+  and in a room it opens with the room's grants; without the variable the dock is as today.
+- **Not requested (closed outside):** `bind`, `listen`, `accept`, `sendmsg`, `in6addr_any` (client programs on an IPv4-only
+  system; ADR-0225); `__unix__` predefined by `zcc`; `getrandom` for a program another program starts (ADR-0310, by design; the
+  ADR-0453 random connection of `work/rust-std` is the broker-side answer); starting a script by its `#!` line.
+
+## Decisions of 2026-11-15 from `docs/architect-queue.md` (the architect)
+
+- **Accepted:** ADR-0280, 0281, 0285, 0286; ADR-0383 Option C (the terminfo entry has `kbs=^?`, with ADR-0333: part 10d builds
+  it before the curses programs); ADR-0384, 0385 and 0398 Option A.
+- **10c, the kill offer:** ADR-0387's removal of ADR-0158 rule 3's offer for a line with the terminal is accepted, with an
+  escape **System+K**, a chord no client receives (as System+G), that shows `kill <program>?` on the terminal's status row;
+  Enter kills the line's group. Built in 10f (the status row and System+G machinery), with a test.
+- **A refused `tcsetpgrp` returns `EPERM`, not success** (10c).
+- **Native `fetch`** follows ADR-0328 as curl and wget do. **ADR-0224 item 5's `+net` hint** is built in curl's and wget's refusal.
+- **Wording fixed:** INV-0324-2 (a public-only name rule is within a web rule), INV-0326-1 ("implicitly"), ADR-0366's count (52).
+- **CI's confined network steps:** run `test-net-lookup`, `test-net-dns` and `test-hand-run`'s network leg on the runner itself,
+  outside the job container (the runner has passwordless sudo, so `sudo unshare -n` works there), in a job of their own; if that
+  also fails, record the gap. (`tools/confine-loopback.sh --verify` may read the host's `/sys/class/net`; `/proc/net/dev` follows
+  the process.)
+- **`vttest`:** pin it in `ports/sources.lock` and build it with 10d. **Hand check done:** NetSurf on real sites (2026-11-14,
+  MacBook Air). The xterm comparison (10a) waits for 10d (with `vi`).
+- **Order (architect):** 10c (fix pass pushed), review of `work/ports-early`, 10d on top of it; then lane 1 10f, lane 2 10g, 10j,
+  10h; then `work/rust-std` in the next free slot; 10i last.

@@ -1,16 +1,16 @@
-# A name asked of SLIRP's DNS forwarder (N3; `make test-net-fetch`, not on CI
-# unless NET_DNS=1: it depends on the host's own resolver, which CI does not
-# promise; the resolver's logic is covered by `cargo test -p zoraya-net` with
-# a scripted DNS server). The guest is on QEMU's user network without
-# `restrict=on`.
+# Names asked of the runner's own DNS server (N3; `make test-net-dns`):
+# tools/test-dns on the host's 127.0.0.1 answers `localhost` with 127.0.0.1 and
+# every other name with NXDOMAIN; the disk's `net.dns = 10.0.2.2` points the
+# guest at it. The step runs inside tools/confine-loopback.sh, so no query
+# reaches an outside resolver (INV-0230-1). The resolver's logic is also covered
+# by `cargo test -p zoraya-net` with a scripted DNS server.
 ! panicked
 ! first process ended
 < Type help to begin, or help tour.
 < \r\n~>
 > sleep 3\r
 < \r\n~>
-# A name asked of SLIRP's DNS forwarder at 10.0.2.3, which answers `localhost`
-# from the host's own table (no Internet needed): the answer is 127.0.0.1, an
+# `localhost` is answered with 127.0.0.1 (no Internet needed): an
 # address of this side of the network, so the connection is refused as local
 # (ADR-0223 item 4). A name that does not exist (`.invalid`, RFC 2606) is
 # unresolvable.

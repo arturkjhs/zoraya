@@ -78,3 +78,6 @@ int initgroups(const char *user, gid_t group)
 	errno = EPERM;
 	return -1;
 }
+
+/* Marker: ports/check-early.sh looks for it to prove that no image binary links this shim. */
+__attribute__((used)) const char zoraya_early_shim_sshshim[] = "ZORAYA-EARLY-SHIM-sshshim";

@@ -26,8 +26,8 @@
 # invisible-mirror.net (the .sig the GNU mirror carries is not verified here). 10a builds `tic` and `infocmp` from it
 # for the host (tools/term-terminfo/terminfo.sh); the port for the target is 10d's.
 # less, nvi2, db1, openssh, git (TASK-31 ports-early, ahead of parts 10d, 10g and 10h): less 710 from greenwoodsoftware.com
-# (the Less License); nvi2 2.2.2 is the GitHub archive of the tag v2.2.2 (BSD-3-Clause); db1 is Berkeley DB 1.85, the
-# last release of the BSD code, from Oracle's download site (BSD-3-Clause; nvi's buffer, ADR-0335 item 2); openssh is
+# (the Less License); nvi2 2.2.2 is the GitHub archive of the tag v2.2.2 (BSD-3-Clause; an auto-generated archive, whose bytes GitHub does not promise to keep: the hash is the first download's); db1 is Berkeley DB 1.85, the
+# last release of the BSD code, from Oracle's download site (a single URL, no mirror) (the 4-clause UC licence, advertising clause withdrawn by UC in 1999; nvi's buffer, ADR-0335 item 2); openssh is
 # OpenSSH portable 10.6p2 from the OpenBSD mirror (ADR-0340); git 2.56.1 from kernel.org (GPL-2.0-only, a separate
 # program like wget, ADR-0339). The SHA-256 of each is the one of the first download (trust on first use, as for
 # ncurses above: none of the signatures these projects publish is verified here).

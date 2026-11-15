@@ -61,13 +61,11 @@ zlib. CP-27 (a name needs a program behind it) is the rule for the block. The pr
    - `0002-no-askpass-no-credential-helper.patch` (items 8 and 9): `git_prompt` runs no askpass program and
      `credential_do` runs no helper, in any scope: the prompt is git's own, on the terminal.
    - `0003-no-tls-or-proxy-configuration.patch` (item 8): `http.ssl*`, `http.proxy*`, `http.cookiefile`, `http.savecookies`,
-     `http.pinnedpubkey` and `http.extraheader` are ignored.
-   - `0004-variables-not-read.patch` (item 8): `getenv` is `zoraya_getenv`, which answers "not set" for `GIT_SSL_*`,
-     `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*`, `GIT_CONFIG_VALUE_*`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
-     `GIT_CONFIG_NOSYSTEM`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_HTTP_PROXY_AUTHMETHOD`,
+     `http.pinnedpubkey` and `http.extraheader` are ignored, and `remote.NAME.proxy` sets no proxy (libcurl's own `--disable-proxy` also stops the proxy options; the patch makes git not ask).
+   - `0004-variables-not-read.patch` (item 8): `getenv` is `zoraya_getenv` in every object (the macro follows `compat/posix.h`, outside every `#ifdef`), which answers "not set" for `GIT_SSL_*`,
+     every `GIT_CONFIG*` (`GIT_CONFIG_GLOBAL`, `_SYSTEM`, `_NOSYSTEM`, `_COUNT`, `_KEY_n`, `_VALUE_n`, the legacy `GIT_CONFIG` and `GIT_CONFIG_PARAMETERS`: a line's environment carries no configuration; the consequence is that `git -c k=v` sets nothing, in process or in a child), `GIT_EXEC_PATH` and `GIT_TEMPLATE_DIR` (the compiled-in directories are used: a variable must not name where git's programs or a new repository's hooks come from), `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_HTTP_PROXY_AUTHMETHOD`,
      `GIT_CURL_*`, the proxy variables, `CURL_CA_BUNDLE`, `SSL_CERT_*`, `GIT_EXTERNAL_DIFF` and `GIT_ALLOW_PROTOCOL`.
      `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER`, `HOME` and `GIT_DIR` stay (item 5, ADR-0335 item 10).
-     `GIT_CONFIG_PARAMETERS`, which `git -c` sets for its children, stays.
 4. **Names.** The block holds the six names that are musl's or `libposix`'s own code, hidden by the tier list: `getchar`
    (the terminal prompt), `getpgid` (progress), `memmem` (bundle), `mkdtemp` (refs), `strcasestr` (mailinfo) and `utime`
    (copy). The names `libc.a` still lacks, linked from `ports/apps/gitshim.c` in this build and each **left for part 10h**:
@@ -107,14 +105,16 @@ utime git
 
 - **INV-0347-1.** Every line of the block names a program, and that program's objects import the name. *Check:*
   `posix-surface-check imports docs/adr/0347-surface-for-git.md git=DIR` in `make check-ports` (`ports/check-early.sh`).
-- **INV-0347-2.** `git` and `git-remote-http` contain `zoraya_getenv` (the patch of item 3 is applied) and pass
-  `zoraya-elf-check`. *Check:* `ports/check-early.sh` in `make check-ports`.
+- **INV-0347-2.** No object of git imports `getenv` but `wrapper.o` (which holds `zoraya_getenv`) and `compat/regex`'s locale
+  lookups, and `git` and `git-remote-http` pass `zoraya-elf-check`. *Check:* `ports/check-early.sh` in `make check-ports`, by symbol (`nm -u` of every object).
 
 ## Open questions
 
 - Which git release when git's Rust becomes mandatory (`NO_RUST` is removed)? Pin an earlier release or accept a Rust
   step in the port.
-- Is `NO_PREAD`'s `lseek` emulation safe for git's threaded pack reads? (Git's emulation holds a lock.) 10h measures.
+- Is `NO_PREAD`'s emulation safe for git's threaded pack reads? `compat/pread.c` saves the offset, seeks, reads and seeks back with no lock, so two threads reading one descriptor can interleave: 10h measures, or sets `NO_PTHREADS`.
+- Git is GPL-2.0-only and `git-remote-http` links Apache-2.0 OpenSSL statically (through libcurl): not combinable. `docs/architect-queue.md` D has the options. Until decided git does not enter the image.
+- Pins: the git archive and the hashes are of the first download (trust on first use).
 
 ## Revisit triggers
 

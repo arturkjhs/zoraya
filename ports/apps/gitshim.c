@@ -43,3 +43,6 @@ int execlp(const char *file, const char *arg, ...)
 	errno = ENOSYS;
 	return -1;
 }
+
+/* Marker: ports/check-early.sh looks for it to prove that no image binary links this shim. */
+__attribute__((used)) const char zoraya_early_shim_gitshim[] = "ZORAYA-EARLY-SHIM-gitshim";

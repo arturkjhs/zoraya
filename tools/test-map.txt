@@ -32,6 +32,7 @@ tools/test-map.txt            check
 tools/ci-plan.sh              check
 tools/ci-tests.txt            check
 tools/plan-lib.sh             check
+tools/ci-tree-proof.rb        check
 tools/check-ci-plan.sh        check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
@@ -41,7 +42,10 @@ tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
 tools/check-net-open.sh       check
 tools/net-open-allowed.txt    check
+tools/confine-loopback.sh    check test-net
 tools/check-tls-roots.sh      check
+tools/check-libposix-widths.py check test-libposix
+tools/libposix-widths.txt     check test-libposix
 tools/test-run-disk.sh        check
 tools/run-disk.sh             check test-hand-run test-apps test-python test-python-ext test-python-regr
 rootfs/system/tls/        check test-files test-hand-run
@@ -170,7 +174,7 @@ user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
+crates/zoraya-posix/          check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
@@ -272,8 +276,8 @@ user/describe/tests/memhog.cmd test-files
 tests/shell/rooms.script      test-files
 user/describe/posix/gtrun.cmd  test-cxx-gtest test-files
 docs/adr/0343-surface-for-the-userland.md check test-libposix test-posix test-apps test-files
-docs/adr/0390-surface-for-curses-less-and-vi.md check test-libposix test-posix
-docs/adr/0346-surface-for-ssh.md check test-libposix test-posix
-docs/adr/0347-surface-for-git.md check test-libposix test-posix
+docs/adr/0390-surface-for-curses-less-and-vi.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
+docs/adr/0346-surface-for-ssh.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
+docs/adr/0347-surface-for-git.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
 tests/python-ext/            test-python-ext
 tests/shell/python-ext.script test-python-ext

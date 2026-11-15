@@ -1,0 +1,12 @@
+[package]
+name = "rprobe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Not part of the repository's workspace: a research probe of TASK-35.
+[workspace]
+
+[profile.release]
+opt-level = 2
+debug = false

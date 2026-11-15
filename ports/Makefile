@@ -460,7 +460,7 @@ $(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(TTYSHIM) ports/config.site
 	@cd $(LESS) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl \
 	  --with-regex=posix $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" \
 	  CPPFLAGS="-I$(CURSES)/usr/include" LDFLAGS="-L$(CURSES)/usr/lib -L$(dir $(TTYSHIM))" LIBS="-ltinfow -lttyshim",less-configure)
-	rm -f $(LESS_BIN)
+	rm -f $(LESS_BIN) $(LESS)/*.o
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(LESS) less V=1,less)
 	@touch $@
 
@@ -1395,5 +1395,5 @@ check-ports: | tools
 	@echo "== the userland: list, sources, busybox, surface block (INV-0336-1, -3, INV-0342-1)"
 	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK) $(AWK)/objs
 	@echo "== the ports built ahead of their parts (ADR-0390, TASK-31 ports-early)"
-	sh ports/check-early.sh $(LOGS) $(ZCC) $(SURFACE_CHECK) $(ELF_CHECK) $(ROOT)/build
+	sh ports/check-early.sh $(LOGS) $(ZCC) $(SURFACE_CHECK) $(ELF_CHECK) $(ROOT)/build $(LIBC)
 	@echo "check-ports: all passed"

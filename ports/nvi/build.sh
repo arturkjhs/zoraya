@@ -10,6 +10,8 @@
 set -eu
 src=$1 obj=$2 out=$3 zcc=$4 curses=$5 dbinc=$6 dblib=$7 cflags=$8 ttydir=$9
 here=$(pwd)/ports/nvi
+# A dedicated directory: objects of an earlier run (a source removed since) must not be linked.
+rm -rf "$obj"
 mkdir -p "$obj"
 cd "$src"
 
@@ -38,9 +40,10 @@ n=0
 for f in $CL $COMMON $EX $VI $REGEX "$here/compat.c" "$here/recover.c"; do
   o=$obj/$(echo "${f#$here/}" | tr '/' '_' | sed 's/\.c$/.o/')
   echo "$o"
-  "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" &
+  ( "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" || echo "$f" >> "$obj/failed.txt" ) &
   n=$((n + 1)); [ $((n % 3)) = 0 ] && wait
 done > "$obj/objects.txt"
 wait
+[ ! -s "$obj/failed.txt" ] || { echo "nvi: these did not compile:"; cat "$obj/failed.txt"; exit 1; }
 for o in $(cat "$obj/objects.txt"); do [ -f "$o" ] || { echo "nvi: $o was not made"; exit 1; }; done
 "$zcc" $cflags -Wl,--error-limit=0 -o "$out" $(cat "$obj/objects.txt") -L"$dblib" -L"$curses/usr/lib" -L"$ttydir" -lncursesw -ltinfow -ldb1 -lttyshim

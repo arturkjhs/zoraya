@@ -1,0 +1,28 @@
+# TASK-35 probe: files, processes, panics (see basic.script).
+! ZORAYA-PANIC
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> cxxtest fs /tmp\r
+< \r\n~>
+> +w /work/granted cxxtest fs /work/granted\r
+< \r\n~>
+> cxxtest fs /work/secret\r
+< \r\n~>
+> cxxtest panic\r
+< \r\n~>
+> cxxtest uncaught\r
+< \r\n~>
+> status\r
+< \r\n~>
+> cxxtest abort\r
+< \r\n~>
+> status\r
+< \r\n~>
+> cxxtest overflow\r
+< \r\n~>
+> status\r
+< \r\n~>
+> cxxtest process\r
+< \r\n~>
+> poweroff\r
