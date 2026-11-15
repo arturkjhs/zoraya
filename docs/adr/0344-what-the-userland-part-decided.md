@@ -1,6 +1,6 @@
 # ADR-0344: What part 10e decided where ADR-0336 and ADR-0342 are silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0153, ADR-0156, ADR-0212, ADR-0311, ADR-0336, ADR-0342, ADR-0343
 - **Evidence:** CP-27
@@ -111,3 +111,7 @@ nothing the accepted ADRs decide.
 - The names list is built (ADR-0337 item 8's part).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

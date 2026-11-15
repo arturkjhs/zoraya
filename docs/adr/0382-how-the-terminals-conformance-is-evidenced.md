@@ -1,6 +1,6 @@
 # ADR-0382: How the terminal's conformance is evidenced: a test calls the entry's capability, recordings are made on the host, and a second emulator is a text check
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0332, ADR-0333
 - **Evidence:** alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#terminfo-entries-compared, stage-10/survey.md#testing-a-terminal
@@ -94,3 +94,7 @@ stays the first-comparison gate of ADR-0332 item 10.
 - The pin moves (ADR-0333): the dump changes and the tool lists what is new.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

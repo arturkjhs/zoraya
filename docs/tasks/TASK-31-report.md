@@ -10,6 +10,8 @@ Updated 2026-11-14, after 10a and 10e.
   - `work/test-fixes-2` merged as `914cf12` (`main`'s run green); it carries no stage tag.
 - **In progress:** 10b (keys, mouse, selection, paste; `work/10b`, from 10a's head); `work/py-hook` (the python3 build
   hook, the first of the three requests from outside work; fix pass after its review, then a candidate).
+- **Added by the architect (2026-11-15):** part 10j, the implementation of ADR-0396, ADR-0397 and ADR-0399 (accepted
+  2026-11-15), after 10g in lane 2.
 - **Waiting:** 10c, 10d, 10f (lane 1); 10g, 10h (lane 2, after 10c, 10d and 10g); 10i (alone, at the end). Backlog
   requests 2 (`poll` and `ppoll`) and 3 (programs installed on the volume, design first) wait for a free slot.
 - **Proposed ADRs (all `proposed`; the architect sets statuses):**

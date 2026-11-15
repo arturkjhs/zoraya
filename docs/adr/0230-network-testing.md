@@ -171,6 +171,7 @@ GUI test can fetch through a desktop program the same way. Threads: none.
   A script in them could reach outside `127.0.0.1`. What `--net-open` may reach (or moving these runs to `restrict=on`
   with `guestfwd`, item 2) is the architect's decision. `make check-net-open` is a partial guard (each open run is
   listed in `tools/net-open-allowed.txt`; the servers bind `127.0.0.1`).
+- Decided by the architect, 2026-11-15: the network test steps may reach only the runner's own test servers (and the QEMU host address they use), never the Internet. `--net-open` is to be restricted accordingly and INV-0230-1 made `checked` again (docs/backlog.md).
 
 ## Revisit triggers
 - A network server program in scope: Option C, or `hostfwd` into a Zoraya listener from the runner.

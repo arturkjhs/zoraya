@@ -273,6 +273,7 @@ the network. Threads: none.
 - Whether the native `cat`, `cp`, `ls` and the rest should give way to toybox's for people too, or the reverse; a
   count of which scripts break under each would settle it.
 - Whether `ps`, `kill` and `top` from toybox make sense beside the shell's own, given that pids are the broker's.
+- Item 2's review of `tr`, `expr` and `diff` by someone who did not port them was done by an independent `opus-review` (TASK-31, part 10e); the architect decided on 2026-11-15 that it counts and no human review is needed.
 
 ## Revisit triggers
 

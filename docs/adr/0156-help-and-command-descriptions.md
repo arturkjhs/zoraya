@@ -207,6 +207,7 @@ description checked (operand kinds are authority); that check belongs to the lau
   *Architect, 2026-11-04 (recorded by an agent):* no new system call; the compiled-in descriptions are accepted
   for now. The target, open: `zosh` reads `NAME.cmd` as a file through a file service (a read-only service over the
   ramdisk, or the programs' directory on `fsd`), with no change to the ABI.
+- Amended by ADR-0396 (accepted 2026-11-15): the last sentence of item 2 ("Nothing on the volume is read as a description") no longer holds for an installed program. A volume description is read for help and completion only and designates nothing. The rest of this ADR stands.
 
 ## Revisit triggers
 - A program whose interface cannot be described by operands and options (a sub-command tree such as `git`): add

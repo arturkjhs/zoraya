@@ -35,6 +35,7 @@ tools/plan-lib.sh             check
 tools/check-ci-plan.sh        check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
+tools/check-workflow-syntax.rb check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check

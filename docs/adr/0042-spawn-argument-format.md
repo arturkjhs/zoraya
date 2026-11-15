@@ -66,6 +66,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
   to name a command, so the row says `not yet applicable`. A check would be a `check-*` script asserting that
   `kernel/src` has one user-copy read of the spawn buffer and that `decode` takes `&[u8]`; whether an `abi` type
   (ADR-0001 rule 6) may count as a check without a command is the architect's question (docs/backlog.md).
+- Decided by the architect, 2026-11-15: an `abi` type is not a check by itself. INV-0042-1 stays `not yet applicable` until a test checks it.
 
 ## Revisit triggers
 - A real command line that does not fit.

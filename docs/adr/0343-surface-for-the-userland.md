@@ -1,6 +1,6 @@
 # ADR-0343: The names toybox's finished commands and one-true-awk add to libc.a, and what each means
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0005, ADR-0013, ADR-0014, ADR-0100, ADR-0141, ADR-0180, ADR-0336, ADR-0342
 - **Evidence:** CP-27, stage-10/survey.md#what-the-missing-tools-need-from-libc, stage-10/survey.md#the-userland-today
@@ -127,3 +127,7 @@ strnlen toybox
 - A second program needs `statfs` or `fchdir`.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

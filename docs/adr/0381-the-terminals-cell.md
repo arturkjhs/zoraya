@@ -1,6 +1,6 @@
 # ADR-0381: The terminal's cell is 16 bytes: a character, two combining marks of the Basic Multilingual Plane, ten attribute bits and two colours
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0332
 - **Evidence:** alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#utf-8-and-character-width, stage-10/survey.md#what-a-small-terminal-implements
@@ -84,3 +84,7 @@ Option B or C is a local change.
 - Fonts with such marks are embedded (ADR-0162's follow-up).
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.

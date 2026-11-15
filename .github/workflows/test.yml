@@ -304,6 +304,7 @@ jobs:
           - make check-tokens
           - make check-fetch-ports
           - make check-ci-jobs
+          - make check-workflow-syntax
           - make check-python-cache
           - make check-charged-alloc
           - make check-untrusted-gate

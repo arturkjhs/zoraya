@@ -1,6 +1,6 @@
 # ADR-0380: The terminal's corners that ADR-0332 leaves open: the least state, and sequences that end where they are cut
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0096, ADR-0331, ADR-0332
 - **Evidence:** DM-071, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#how-the-terminal-ecosystem-is-layered, stage-10/survey.md#what-a-small-terminal-implements
@@ -122,3 +122,7 @@ out to matter to a ported program, ADR-0332's revisit trigger names it and this 
 - A second emulator is adopted as the reference and differs on a corner.
 
 ## Architect's decision
+
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+As recommended.
