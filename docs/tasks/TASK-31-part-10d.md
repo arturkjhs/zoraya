@@ -40,10 +40,11 @@ Branch `work/10d`, from `work/ports-early` at `26265ae5` (10c is on `main`). Wri
 | `cargo test -p zoraya-term`, `-p zoraya-posix --test files`, `-p zoraya-describe`, `cargo test -p zoraya-shell --lib grants_tests` | pass |
 | `make test-posix POSIX_SCRIPTS=tests/posix/zosh-curses.script POSIX_ACCELS=hvf` | PASS, 111 steps |
 | `make test-tour-terminal POSIX_TERM_SCRIPTS=tests/gui/posix-curses.script POSIX_TERM_SIZES="1 1920x1200" POSIX_ACCELS=hvf` | PASS, 74 steps at each size |
+| `make test-posix` with `tour.script`, `zosh.script`, `zosh-userland.script` (one at a time, HVF); `make test-tour-gui` (HVF); `make test-tour-terminal` at scale 1 (both scripts, HVF); `make test-libposix` (121 steps) | all exit 0 |
 | `tools/term-record/record.py` on the two vttest sessions, `ZORAYA_BLESS=1 cargo test -p zoraya-term --test replay`, then without | pass |
 
-Not run: `posix-terminal.script` after this change (the step's loop changed; the script did not), scale 2 and 1600x1000 of the new script, any TCG
-run, the rest of `make test-changed`'s steps (boot, files, tour-gui, net, keeper, hand-run, apps, netsurf), `make test`, a rebuild of OpenSSH and git
+Not run: `make test-changed` as a whole (the change to `ports/` and `libposix` maps to seventeen steps, among them apps, netsurf, the C++ lanes and the POSIX suites, which a session of this size cannot hold; the six above are the ones the change touches most directly), scale 2 and 1600x1000 of the two window scripts, any TCG
+run, `make test`, a rebuild of OpenSSH and git
 after the shim's removal (they link no `ttyshim` any more; their names are in `libc.a`, but neither was relinked here), the mutation runs (not required).
 
 ## What the programs do (from the runs)
