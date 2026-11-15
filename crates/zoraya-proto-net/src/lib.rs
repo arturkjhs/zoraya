@@ -269,6 +269,16 @@ protocol! {
         scope: Data<'a, MAX_SCOPE_BYTES>,
     }
 
+    /// Attaches a new connection with this one's own scope and rights, in its
+    /// account (ADR-0434, plan part F4): what a POSIX program's
+    /// `posix_spawn` gives a child with `POSIX_SPAWN_GRANT_NET`. Any
+    /// connection may ask: the new one is no wider. Answered with `Duplicated`;
+    /// the handle is the server end of a channel the caller made.
+    message Duplicate = 8, handles 1 {}
+    message Duplicated = 8, handles 0 {
+        status: Code,
+    }
+
     /// On a launcher's *services channel*, from `init` (ADR-0221 item 6,
     /// proposed ADR-0296): the network was restarted, and the handle is the
     /// launcher's new root connection. Not a request: `netd` never sees it.
@@ -293,13 +303,14 @@ pub const CRASH_ORDINAL: u32 = 40;
 pub const MAX_BUDGET: u32 = 4;
 
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 12] = [
+pub const ORDINALS: [(&str, u32); 13] = [
     ("status", 1),
     ("ping", 2),
     ("connect", 3),
     ("resolve", 4),
     ("narrow", 6),
     ("narrow_account", 7),
+    ("duplicate", 8),
     ("connected", 16),
     ("failed", 17),
     ("reset", 18),

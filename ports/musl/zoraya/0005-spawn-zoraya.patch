@@ -1,0 +1,21 @@
+diff -ru a/include/spawn.h b/include/spawn.h
+--- a/include/spawn.h
++++ b/include/spawn.h
+@@ -72,6 +72,17 @@
+ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
+ 
+ #if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
++/* Zoraya (ADR-0411 item 1, ADR-0433): what a child is given. The table of an
++ * empty-namespace child is the list of PATH or PATH:ro entries; the grants are
++ * connections of the parent's that the child gets. */
++#define POSIX_SPAWN_EMPTY_NAMESPACE 0x2000
++#define POSIX_SPAWN_GRANT_NET 1
++#define POSIX_SPAWN_GRANT_RANDOM 2
++#define POSIX_SPAWN_GRANT_WINDOW 4
++#define POSIX_SPAWN_MOVE_NET 8
++int posix_spawnattr_setnamespace_np(posix_spawnattr_t *, const char *const *);
++int posix_spawnattr_setgrants_np(posix_spawnattr_t *, unsigned);
++int posix_spawn_file_actions_addclosefrom_np(posix_spawn_file_actions_t *, int);
+ int posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *__restrict, const char *__restrict);
+ int posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *, int);
+ #endif

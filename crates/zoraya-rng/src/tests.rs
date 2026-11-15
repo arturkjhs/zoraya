@@ -260,7 +260,7 @@ fn from_seed_refuses_short_and_zero_seeds() {
 }
 
 #[test]
-fn only_the_first_two_levels_share_and_children_are_counted() {
+fn only_the_first_three_levels_share_and_children_are_counted() {
     let mut s = Service::new(Generator::new(b"share"), 1000);
     let mut message = [0u8; 64];
     let n = encode(&Share {}, 3, &mut message).unwrap();
@@ -283,13 +283,21 @@ fn only_the_first_two_levels_share_and_children_are_counted() {
         s.handle(&mut root, &message[..n], 1, &mut out),
         Action::Share { attach: true, .. }
     ));
-    // The shell's connection (depth 1) shares; a program's (depth 2) never.
+    // The shell's connection (depth 1) shares; a program's (depth 2) only
+    // `PROGRAM_CHILDREN` at a time (ADR-0435), and the ones it made (depth 3)
+    // never.
     let mut shell = Conn::root().child();
     assert!(matches!(
         s.handle(&mut shell, &message[..n], 1, &mut out),
         Action::Share { attach: true, .. }
     ));
     let mut program = shell.child();
+    for _ in 0..PROGRAM_CHILDREN {
+        assert!(matches!(
+            s.handle(&mut program, &message[..n], 1, &mut out),
+            Action::Share { attach: true, .. }
+        ));
+    }
     for _ in 0..300 {
         let Action::Share { reply, attach } = s.handle(&mut program, &message[..n], 1, &mut out)
         else {
@@ -301,9 +309,23 @@ fn only_the_first_two_levels_share_and_children_are_counted() {
             status::NO_SPACE
         );
     }
-    assert_eq!(program.children(), 0);
+    assert_eq!(program.children(), PROGRAM_CHILDREN);
+    // One of them closing frees one.
+    program.released();
+    assert!(matches!(
+        s.handle(&mut program, &message[..n], 1, &mut out),
+        Action::Share { attach: true, .. }
+    ));
+    let mut leaf = program.child();
+    for _ in 0..300 {
+        let Action::Share { attach, .. } = s.handle(&mut leaf, &message[..n], 1, &mut out) else {
+            panic!()
+        };
+        assert!(!attach);
+    }
+    assert_eq!(leaf.children(), 0);
     // A refused share did not count a connection.
     let before = s.connections();
-    let _ = s.handle(&mut program, &message[..n], 1, &mut out);
+    let _ = s.handle(&mut leaf, &message[..n], 1, &mut out);
     assert_eq!(s.connections(), before);
 }

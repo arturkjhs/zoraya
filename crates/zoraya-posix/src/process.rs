@@ -252,9 +252,9 @@ pub fn pack_calls(called: &[u8]) -> Vec<u8> {
 }
 
 /// An object opened, and what the open told of it.
-struct Opened<H> {
-    conn: H,
-    kind: Kind,
+pub(crate) struct Opened<H> {
+    pub(crate) conn: H,
+    pub(crate) kind: Kind,
     created: bool,
     meta: Meta,
 }
@@ -445,8 +445,14 @@ impl<S: Sys> Posix<S> {
                 handle: message.get(e.handle as usize).copied(),
             });
         }
+        // No cwd (ADR-0433) is an entry no table has: a relative path is
+        // taken from `/`, which only a table with a `/` covers.
         p.cwd = Place {
-            entry: record.cwd_entry as usize,
+            entry: if record.cwd_entry == zoraya_abi::posix::NO_ENTRY {
+                usize::MAX
+            } else {
+                record.cwd_entry as usize
+            },
             path: record.cwd.to_string(),
         };
         for fd in record.fds() {
@@ -842,7 +848,7 @@ impl<S: Sys> Posix<S> {
     }
 
     /// Resolves and opens, following links (ADR-0107 item 7).
-    fn open_resolved(
+    pub(crate) fn open_resolved(
         &mut self,
         mut r: Resolved,
         flags: u32,
@@ -905,7 +911,7 @@ impl<S: Sys> Posix<S> {
 
     /// The entry `r` lands in, if it is not a directory: those are answered
     /// here (`/dev/null`, `/proc/self/exe`, `/dev/tty`).
-    fn special(&self, r: &Resolved) -> Option<EntryKind> {
+    pub(crate) fn special(&self, r: &Resolved) -> Option<EntryKind> {
         let e = self.entries.get(r.place.entry)?;
         (!e.kind.is_directory()).then_some(e.kind)
     }

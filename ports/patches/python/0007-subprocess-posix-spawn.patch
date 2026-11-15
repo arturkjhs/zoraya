@@ -1,0 +1,16 @@
+diff -u a/Lib/subprocess.py b/Lib/subprocess.py
+--- a/Lib/subprocess.py
++++ b/Lib/subprocess.py
+@@ -838,6 +838,12 @@
+         # and properly reports errors
+         return True
+ 
++    if sys.platform == 'zoraya':
++        # Zoraya's posix_spawn finds the program, the table and the fds in
++        # the parent and reports each failure as the errno of the call
++        # (ADR-0433), and a fork copies every page (ADR-0102).
++        return True
++
+     # Check libc name and runtime libc version
+     try:
+         ver = os.confstr('CS_GNU_LIBC_VERSION')

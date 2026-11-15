@@ -336,8 +336,12 @@ states, to be taken up later:
     step V6 above (a Ctrl-C after `second`, while dash execs the last command `sleep 30`) is probably the same `exec`
     window; its late Ctrl-C was not put back into `scenarios.script` here.
   - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
-    for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
-    for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.
+    for 10 minutes. It recurred in the scheduled run 43699859694 on `main`. **Fixed (branch `work/w9-fix`):** the
+    script's `until ls ... || ! kill -0 $(cat ...); do sleep 0.1; done` polled from the start of the build, three
+    processes ten times a second, and under TCG on one CPU starved the build. With QEMU under `taskpolicy -b` and make's
+    output on the terminal, the four `tcc -o mktab` compiles started 63 to 76 s into the run and none ended by the
+    timeout at 626 s; without the loop the same compiles ended at 301 to 307 s. The script now waits for make's own
+    `./mktab 2 > t2.h` on the terminal and only then types the kill line, whose loop ends at its first turn.
   - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): accepted
     by the architect (2026-11-15) with the System+K escape: a chord no client receives shows `kill <program>?` on the
     terminal's status row and Enter kills the line's group. **Part 10f** builds it with the status row and System+G.
@@ -540,3 +544,9 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
 `crates/zoraya-events/tests/no_allocation.rs` counted allocations in one process-wide counter, so allocations by the
 harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, a part that does not touch the crate) saw
 226 against 222, and its re-run passed. The counter is now per thread (`work/alloc-flake`).
+
+## Sockets that survive `exec` (the architect, 2026-11-15)
+
+`execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets
+across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its streams and ancillary channel) crosses
+`exec`, and lift the limit.
