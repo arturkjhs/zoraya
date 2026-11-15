@@ -232,6 +232,27 @@ pub fn metadata() -> Range {
     METADATA.lock().expect("frame allocator is up")
 }
 
+/// [`alloc`] without the reaper's fallback, with the words of the frame map
+/// the search read (`FrameAllocator::alloc_counted`), for the test that holds
+/// the worst scan to its bound.
+#[cfg(feature = "qemu-test")]
+pub fn alloc_counted() -> (Result<Frame, OutOfFrames>, u64) {
+    FRAMES
+        .lock()
+        .as_mut()
+        .map_or((Err(OutOfFrames), 0), FrameAllocator::alloc_counted)
+}
+
+/// The most words of the frame map one allocation reads
+/// (`FrameAllocator::alloc_scan_bound`).
+#[cfg(feature = "qemu-test")]
+pub fn alloc_scan_bound() -> u64 {
+    FRAMES
+        .lock()
+        .as_ref()
+        .map_or(0, FrameAllocator::alloc_scan_bound)
+}
+
 /// [`stats`] once the reaper has freed what was queued (ADR-0270): for a test
 /// that compares counts with its starting values. Not for code that holds a
 /// lock, since it yields.
