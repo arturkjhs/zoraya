@@ -415,6 +415,16 @@ fn process(me: &str) {
         Err(x) => Ok(format!("{:?}: {x}", x.kind())),
         Ok(s) => Err(format!("ran: {s}")),
     });
+    check("child-hashmap", || {
+        // A child gets no random service by default (INV-0411-4).
+        let o = Command::new(me).args(["child", "hash"]).output().map_err(e)?;
+        Ok(format!(
+            "{} stdout {:?} stderr {:?}",
+            o.status,
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr).chars().take(200).collect::<String>()
+        ))
+    });
     check("current_dir", || {
         let o = Command::new(me).args(["child", "cwd"]).current_dir("/tmp").output().map_err(e)?;
         Ok(format!("{} {:?}", o.status, String::from_utf8_lossy(&o.stdout)))
@@ -437,6 +447,12 @@ fn child(args: &[String]) {
         }
         Some("sleep") => {
             thread::sleep(Duration::from_secs(30));
+            std::process::exit(0);
+        }
+        Some("hash") => {
+            let mut m = HashMap::new();
+            m.insert(1, 2);
+            print!("hashmap {}", m[&1]);
             std::process::exit(0);
         }
         Some("cwd") => {
