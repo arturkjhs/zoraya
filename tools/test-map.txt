@@ -32,9 +32,11 @@ tools/test-map.txt            check
 tools/ci-plan.sh              check
 tools/ci-tests.txt            check
 tools/plan-lib.sh             check
+tools/ci-tree-proof.rb        check
 tools/check-ci-plan.sh        check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
+tools/check-workflow-syntax.rb check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check

@@ -14,7 +14,10 @@
 #       a push to main: if only docs/ changed between the two commits
 #       (plan-lib.sh's docs_only) the plan is `docs_only=1`, no tests, no
 #       build, and `doc_checks` names the checks to run; any other change, or
-#       an unusable BEFORE, gives the full set.
+#       an unusable BEFORE, gives the full set, unless tools/ci-tree-proof.rb
+#       proves that a run of the full set went green on a commit with the same
+#       tree (ADR-0345: the merge commit of a candidate that merged nothing
+#       new); then the plan is `docs_only=1` as well.
 #
 # Prints key=value lines for $GITHUB_OUTPUT: `tests` (a JSON array of the
 # make commands of tools/ci-tests.txt, the full list or a part of it),
@@ -57,6 +60,17 @@ if [ -n "${DOCS_AFTER:-}" ]; then
         echo "doc_checks=$doc_checks"
         echo "summary=docs only: the document checks ($doc_checks), 0 jobs"
         echo "ci-plan: docs only: $doc_checks" >&2
+    elif proof=$(SHA=$DOCS_AFTER BEFORE=${DOCS_BEFORE:-} ${CI_TREE_PROOF:-tools/ci-tree-proof.rb} </dev/null) && proof_run=$(echo "$proof" | sed -n 's/^proof_run=//p') && [ -n "$proof_run" ]; then
+        # The merge commit has the tree of a candidate whose run went green
+        # with every job of the full set (ADR-0345): what the merge changed
+        # was tested as it stands. Only the document checks run again.
+        proof_tree=$(echo "$proof" | sed -n 's/^proof_tree=//p')
+        echo "tests=[]"
+        echo "build=false"
+        echo "docs_only=1"
+        echo "doc_checks=$doc_checks"
+        echo "summary=tree $proof_tree already ran the full set green (run $proof_run): the document checks ($doc_checks), 0 jobs"
+        echo "ci-plan: tree $proof_tree proven by run $proof_run: document checks only" >&2
     else
         jobs | emit "full set (push to main)"
         echo "docs_only=0"

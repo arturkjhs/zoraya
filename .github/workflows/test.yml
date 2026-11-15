@@ -18,7 +18,10 @@
 # orchestrator pushes before a stage's tag. The one exception: a push to main
 # whose every changed path is under docs/ and that changes no posix-surface
 # block of an ADR (tools/plan-lib.sh, docs_only) runs only the document checks
-# (the plan's doc_checks); build and tests are skipped, so the run is green. A manual run without full=true is planned like
+# (the plan's doc_checks); build and tests are skipped, so the run is green.
+# So does a push to main whose merge commit has the tree of a run of the full
+# set that went green, every job of it present (tools/ci-tree-proof.rb: the
+# plan job compares the trees and reads the run's jobs through the API; ADR-0345). A manual run without full=true is planned like
 # a candidate. A new push to a branch cancels its older run; on main every
 # merge keeps its own run, since a stage's tag waits for that run.
 #
@@ -95,6 +98,11 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/candidate/') || startsWith(github.ref, 'refs/tags/candidate-full/') || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.event_name == 'schedule' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # actions: read, for tools/ci-tree-proof.rb (the runs of this workflow and
+    # their jobs, through the job's own token).
+    permissions:
+      contents: read
+      actions: read
     outputs:
       tests: ${{ steps.plan.outputs.tests }}
       build: ${{ steps.plan.outputs.build }}
@@ -111,6 +119,10 @@ jobs:
         env:
           FULL_INPUT: ${{ inputs.full }}
           BEFORE: ${{ github.event.before }}
+          # tools/ci-tree-proof.rb: the lookup of a green full run on the
+          # same tree (a push to main that merged a tested candidate).
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           full=0
           case "$GITHUB_REF" in
@@ -249,7 +261,7 @@ jobs:
             !build/ports/work/hostpython-build
             !build/ports/work/python-build
             !build/ports/work/googletest-build
-          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0317-*.md', 'docs/adr/0320-*.md', 'docs/adr/0326-*.md', 'docs/adr/0366-*.md', 'docs/adr/0398-*.md' 'docs/adr/0430-*.md') }}
+          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**', 'tests/python/regr-*.txt', 'docs/adr/posix-surface-T*.txt', 'docs/adr/0142-*.md', 'docs/adr/0144-*.md', 'docs/adr/0210-*.md', 'docs/adr/0287-*.md', 'docs/adr/0310-*.md', 'docs/adr/0317-*.md', 'docs/adr/0320-*.md', 'docs/adr/0326-*.md', 'docs/adr/0366-*.md', 'docs/adr/0398-*.md', 'docs/adr/0430-*.md') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -304,6 +316,7 @@ jobs:
           - make check-tokens
           - make check-fetch-ports
           - make check-ci-jobs
+          - make check-workflow-syntax
           - make check-python-cache
           - make check-charged-alloc
           - make check-untrusted-gate

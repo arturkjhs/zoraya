@@ -56,3 +56,21 @@ Updated 2026-11-14, after 10a and 10e.
 | 10a | Sonnet (implementation), Opus (review, changed-lines check) | 2026-11-14 | 2026-11-14 (`stage-10a`) | 4 candidate runs (a, b failed; c green) |
 | 10e | Sonnet (implementation), Opus (review, fix passes, gate review) | 2026-11-14 | 2026-11-14 (`stage-10e`) | 4 candidate runs (a, b failed; d green; c green before the gate fixes) |
 | test-fixes-2 | Sonnet, Opus (review) | 2026-11-14 | 2026-11-14 (`914cf12`) | 2 candidate runs, both green |
+
+## Handoff at the usage limit (2026-11-15)
+
+Merged and tagged: `stage-10a`, `stage-10b`, `stage-10e`. Merged without a stage tag: `test-fixes-2`, `py-hook`, `poll`,
+`ci-expr` (main green on each), the volume-programs design, ADR-0450 to ADR-0455 (docs).
+
+In flight (each on its own branch; the reviews are local branches `docs/review-*` not yet merged as records):
+- `work/10c`: opus-review fix pass (job control after 63 commands, Ctrl-C to the chosen group, mode 2004 only when not
+  canonical, INV-0172-4 check, mutation holes); then a changed-lines check, a candidate (`candidate/work-10c-a` ran on the
+  old head) and the merge.
+- `work/test-fixes-3`: candidate `candidate/work-test-fixes-3-c` (head 18c10e4) running; the earlier two failed on CI's QEMU
+  refusing a guestfwd on 10.0.2.2 (fixed); the `unshare -n` container options are still unverified on CI.
+- `work/ci-once`: candidate `candidate/work-ci-once-a` (efdf63d) running; a changed-lines check running.
+- `work/syscall-long`: candidate `candidate/work-syscall-long-a` (5f49dfe) running; opus-review running.
+- `work/ports-early`: C port builds (ncurses, less, nvi2, git, OpenSSH) in progress, no result yet.
+Next: 10d, 10f, 10g, 10h, 10j, 10i, `work/rust-std` (ADR-0450 to 0455), `work/test-fixes-2`'s leftovers. The cleanup of merged
+branches and worktrees was refused by an automated check and is not done (disk was 45 GB free). `docs/architect-queue.md`
+lists what waits for the architect.
