@@ -37,13 +37,21 @@ cp "$here/config.h" "$here/pathnames.h" "$here/bitstring.h" "$obj/"; mkdir -p "$
 DEFS="-include $here/compat.h -D_GNU_SOURCE -D_XOPEN_SOURCE_EXTENDED -D__REGEX_PRIVATE -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
 INC="-I$obj -I$src/common -Iregex -I$curses/usr/include -I$dbinc -I."
 n=0
+# `sh -x` (the Makefile's way to log) writes each trace line in several pieces, and three compiles run at
+# once: their traces interleave and a compile line is lost from the log, which ports/check-early.sh counts
+# (nvi: 113 compile lines for 115 objects, candidate-full/10g-a). So the trace is off here and each compile
+# is logged by one whole line, written by the loop itself.
+traced=0; case $- in *x*) traced=1;; esac
+set +x
 for f in $CL $COMMON $EX $VI $REGEX "$here/compat.c" "$here/recover.c"; do
   o=$obj/$(echo "${f#$here/}" | tr '/' '_' | sed 's/\.c$/.o/')
   echo "$o"
+  echo "$zcc $cflags $DEFS $INC -c -o $o $f" >&2
   ( "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" || echo "$f" >> "$obj/failed.txt" ) &
   n=$((n + 1)); [ $((n % 3)) = 0 ] && wait
 done > "$obj/objects.txt"
 wait
+[ "$traced" = 0 ] || set -x
 [ ! -s "$obj/failed.txt" ] || { echo "nvi: these did not compile:"; cat "$obj/failed.txt"; exit 1; }
 for o in $(cat "$obj/objects.txt"); do [ -f "$o" ] || { echo "nvi: $o was not made"; exit 1; }; done
 "$zcc" $cflags -Wl,--error-limit=0 -o "$out" $(cat "$obj/objects.txt") -L"$dblib" -L"$curses/usr/lib" -lncursesw -ltinfow -ldb1
