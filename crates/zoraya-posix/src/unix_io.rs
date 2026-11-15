@@ -49,6 +49,10 @@ struct Prepared<H> {
     created: Vec<H>,
     /// The fds of sockets that move: closed by the send.
     moved: Vec<i32>,
+    /// Handles of the sender's that stay behind when the send happens and
+    /// are closed then: the ancillary channel of a socket sent from a `fork`
+    /// parent (the receiver holds streams alone, `shared`).
+    close_after: Vec<H>,
 }
 
 fn total(iov: &[User]) -> usize {
@@ -185,6 +189,7 @@ impl<S: Sys> Posix<S> {
             handles: Vec::new(),
             created: Vec::new(),
             moved: Vec::new(),
+            close_after: Vec::new(),
         };
         if fds.len() > MAX_HANDLES {
             return Err(ETOOMANYREFS);
@@ -282,6 +287,7 @@ impl<S: Sys> Posix<S> {
                 }
                 let mut r = Record::one(Kind::Packet, 0, s.nonblock);
                 let mut hs: Vec<(S::H, bool)> = Vec::new();
+                let mut leftover: Option<S::H> = None;
                 if s.kind == SOCK_STREAM {
                     // What the library holds (descriptors that came before
                     // their bytes, bytes past a tag) cannot go with it.
@@ -293,15 +299,22 @@ impl<S: Sys> Posix<S> {
                     r.shared = u.shared;
                     r.read_off = u.book.read_off;
                     r.write_off = u.book.write_off;
-                    for (h, flag) in [
-                        (s.read, &mut r.has_read),
-                        (s.write, &mut r.has_write),
-                        (s.ctl, &mut r.has_anc),
-                    ] {
+                    for (h, flag) in [(s.read, &mut r.has_read), (s.write, &mut r.has_write)] {
                         if let Some(h) = h {
                             *flag = true;
                             hs.push((h, false));
                         }
+                    }
+                    // A socket whose streams another process holds too goes
+                    // as its streams alone, marked shared; the ancillary
+                    // channel stays behind and is closed with the send.
+                    match s.ctl {
+                        Some(c) if u.shared => leftover = Some(c),
+                        Some(c) => {
+                            r.has_anc = true;
+                            hs.push((c, false));
+                        }
+                        None => {}
                     }
                     if r.handles() == 0 {
                         return Err(EINVAL);
@@ -321,6 +334,7 @@ impl<S: Sys> Posix<S> {
                     return Err(EBUSY);
                 }
                 p.handles.extend(hs);
+                p.close_after.extend(leftover);
                 p.records.push(r);
                 p.moved.push(fd);
             }
@@ -329,7 +343,10 @@ impl<S: Sys> Posix<S> {
     }
 
     /// The send happened: the sockets that moved are gone from this process.
-    fn finish_moves(&mut self, moved: &[i32]) {
+    fn finish_moves(&mut self, moved: &[i32], close_after: Vec<S::H>) {
+        for h in close_after {
+            self.sys.close(h);
+        }
         for &fd in moved {
             if let Some(Desc::Socket(s)) = self.fds.get_mut(fd) {
                 s.read = None;
@@ -504,8 +521,8 @@ impl<S: Sys> Posix<S> {
             self.drop_prepared(prepared);
             return Err(e);
         }
-        let moved = prepared.moved;
-        self.finish_moves(&moved);
+        let (moved, after) = (prepared.moved, prepared.close_after);
+        self.finish_moves(&moved, after);
         // The descriptors are queued; their byte follows at once.
         self.write_pieces(fd, write, iov, nonblock, true)
     }
@@ -607,6 +624,7 @@ impl<S: Sys> Posix<S> {
                 handles: Vec::new(),
                 created: Vec::new(),
                 moved: Vec::new(),
+                close_after: Vec::new(),
             }
         } else {
             self.prepare_rights(fd, rights)?
@@ -617,8 +635,8 @@ impl<S: Sys> Posix<S> {
             self.drop_prepared(prepared);
             return Err(e);
         }
-        let moved = prepared.moved;
-        self.finish_moves(&moved);
+        let (moved, after) = (prepared.moved, prepared.close_after);
+        self.finish_moves(&moved, after);
         Ok(size)
     }
 
@@ -900,6 +918,21 @@ impl<S: Sys> Posix<S> {
             // A tag may have come while the bytes were taken: the bytes past
             // it are kept, to be given with the next call.
             self.drain_tags(fd)?;
+            // A tag at the offset of this read that came meanwhile: if the
+            // table has no room for its descriptors the message stays queued
+            // (ADR-0412 item 3): the bytes go back to the library.
+            let due = self
+                .unix_socket(fd)?
+                .unix
+                .as_ref()
+                .map_or(0, |u| u.book.due_at_read(max_fds));
+            if due > self.free_fds() {
+                let all = self.gather_range(iov, 0, got);
+                if let Some(u) = self.unix_mut(fd)?.unix.as_mut() {
+                    u.book.rest.extend(all);
+                }
+                return Err(EMFILE);
+            }
             let excess = self
                 .unix_socket(fd)?
                 .unix
@@ -1106,16 +1139,28 @@ impl<S: Sys> Posix<S> {
     /// held for it are the parent's (a channel end cannot be duplicated,
     /// ADR-0102 item 3); the byte streams are the child's own handles.
     pub(crate) fn unix_after_fork_in_child(&mut self) {
+        let mut closing: Vec<S::H> = Vec::new();
         for d in self.fds.descriptions_mut() {
             if let Desc::Socket(s) = d
                 && let Some(u) = s.unix.as_mut()
             {
                 u.shared = true;
-                // Not the child's: no close.
+                // A channel end is not the child's (no close); a stream end
+                // is, at the parent's slot: what the library held of those
+                // is closed here, once (INV-0430-2).
                 s.ctl = None;
-                u.book.after_fork();
-                u.held = None;
+                closing.extend(u.book.after_fork());
+                if let Some(h) = u.held.take() {
+                    let mut it = h.handles.into_iter();
+                    for r in &h.records {
+                        let hs: Vec<S::H> = it.by_ref().take(r.handles()).collect();
+                        closing.extend(unix::child_keeps(r, &hs));
+                    }
+                }
             }
+        }
+        for h in closing {
+            self.sys.close(h);
         }
     }
 }

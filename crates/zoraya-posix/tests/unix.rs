@@ -861,3 +861,109 @@ fn recv_on_a_file_or_a_pipe_is_not_a_socket() {
     assert_eq!(r.p.recvmsg(pr, &[u], 0, 0).map(|_| ()), Err(ENOTSOCK));
     assert_eq!(r.p.sendmsg(55, &[u], NONE, 0), Err(EBADF));
 }
+
+// ------------------------------------------------------------ review of part F2
+
+/// Review finding 1: a stream socket sent from a `fork` parent (its streams are in two
+/// processes, `shared`, and it still holds the ancillary channel) arrives, with the other
+/// descriptors of its message, and works; the parent's ancillary channel is closed by the send.
+#[test]
+fn a_shared_stream_socket_is_sent_as_its_streams_alone() {
+    let mut r = rig();
+    let (x, y) = pair(&mut r, SOCK_SEQPACKET);
+    let (a, b) = pair(&mut r, SOCK_STREAM);
+    let (pr, pw) = r.p.pipe(0).unwrap();
+    r.p.after_fork_in_parent();
+    r.settle();
+    let before = r.handles();
+    assert_eq!(send(&mut r, x, b"s", &[a, pr]), Ok(1));
+    assert!(r.p.fds.get(a).is_none(), "the sender's fd is closed");
+    // The parent's ancillary channel (and its peer's) went with it: one handle less than
+    // the three the socket held, plus the pipe's copy now in the message.
+    let (_, fds, flags) = recv(&mut r, y, 5, 2, 0).unwrap();
+    assert_eq!((fds.len(), flags), (2, 0), "both descriptors arrived");
+    r.write(b, b"to the sent one").unwrap();
+    assert_eq!(r.read(fds[0], 40).unwrap(), b"to the sent one");
+    r.write(fds[0], b"back").unwrap();
+    assert_eq!(r.read(b, 10).unwrap(), b"back");
+    r.write(pw, b"p").unwrap();
+    assert_eq!(r.read(fds[1], 10).unwrap(), b"p");
+    // Rights stay refused on it in its new holder.
+    assert_eq!(send(&mut r, x, b"t", &[pr]), Ok(1));
+    assert_eq!(send(&mut r, fds[0], b"u", &[pr]), Err(EOPNOTSUPP));
+    let _ = before;
+}
+
+/// The same from the child: it holds no ancillary channel.
+#[test]
+fn a_stream_socket_sent_from_a_fork_child_arrives() {
+    let mut r = rig();
+    let (a, b) = pair(&mut r, SOCK_STREAM);
+    r.p.after_fork_in_child(77, 77);
+    // A packet socket cannot exist across a fork: this one is the child's own.
+    let (x, y) = pair(&mut r, SOCK_SEQPACKET);
+    assert_eq!(send(&mut r, x, b"s", &[a]), Ok(1));
+    let (_, fds, _) = recv(&mut r, y, 5, 1, 0).unwrap();
+    assert_eq!(fds.len(), 1);
+    r.write(b, b"hi").unwrap();
+    assert_eq!(r.read(fds[0], 10).unwrap(), b"hi");
+}
+
+/// Review finding 2: what the library held of a stream end when the child was made is the
+/// child's duplicate, and is closed there; channel ends are not.
+#[test]
+fn a_fork_child_closes_the_stream_ends_the_library_held() {
+    let mut r = rig();
+    let (a, b) = pair(&mut r, SOCK_STREAM);
+    let (pr, pw) = r.p.pipe(0).unwrap();
+    r.write(a, b"AAAA").unwrap();
+    send(&mut r, a, b"BBBB", &[pw]).unwrap();
+    // The first read looks at the tags, so the pipe end of the second message is held.
+    assert_eq!(recv(&mut r, b, 100, 1, 0).unwrap().0, b"AAAA");
+    r.p.close(pw).unwrap();
+    r.settle();
+    let held = r.handles();
+    r.p.after_fork_in_child(77, 77);
+    assert_eq!(r.handles(), held - 1, "the held write end is closed, once");
+    // The pipe now ends for its reader.
+    assert_eq!(r.read(pr, 10).unwrap(), b"");
+}
+
+/// Review finding 5: a tag at the offset that the reader first saw when its bytes were
+/// already taken, with the table full: the message stays queued (`EMFILE`).
+#[test]
+fn a_tag_seen_after_the_bytes_were_taken_keeps_its_message_when_the_table_is_full() {
+    let mut r = rig();
+    let (a, b) = pair(&mut r, SOCK_STREAM);
+    let (pr, _pw) = r.p.pipe(0).unwrap();
+    r.write(a, b"CCCC").unwrap();
+    let Some(Desc::Socket(sock)) = r.p.fds.get(a) else {
+        panic!()
+    };
+    let anc = sock.ctl.unwrap();
+    let h = match r.p.fds.get(pr) {
+        Some(Desc::Stream { read: Some(h), .. }) => *h,
+        _ => panic!(),
+    };
+    let copy = r.p.sys.duplicate(h).unwrap();
+    let message = zoraya_posix::unix::encode_anc(
+        0,
+        &[zoraya_posix::unix::Record::one(
+            zoraya_posix::unix::Kind::PipeRead,
+            0,
+            false,
+        )],
+    );
+    r.p.sys.after_stream_read = Some(Box::new(move |net: &mut Net| {
+        assert!(net.send_message(anc, &message, &[copy]));
+    }));
+    let mut extra = vec![];
+    while let Ok(fd) = r.p.fds.dup(a, 0, false) {
+        extra.push(fd as i32);
+    }
+    assert_eq!(recv(&mut r, b, 100, 1, 0), Err(EMFILE));
+    // Room again: the bytes and the descriptor come together.
+    r.p.close(extra.pop().unwrap()).unwrap();
+    let (got, fds, flags) = recv(&mut r, b, 100, 1, 0).unwrap();
+    assert_eq!((got.as_slice(), fds.len(), flags), (&b"CCCC"[..], 1, 0));
+}

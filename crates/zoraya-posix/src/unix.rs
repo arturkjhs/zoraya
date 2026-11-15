@@ -198,6 +198,21 @@ pub fn handle_count(records: &[Record]) -> usize {
     records.iter().map(Record::handles).sum()
 }
 
+/// Of the handles of one descriptor, those a `fork` child holds too (ADR-0102
+/// item 3 duplicates stream ends and cannot duplicate channel ends or file
+/// connections): a pipe end, and a stream socket's read and write streams.
+pub fn child_keeps<H: Copy>(r: &Record, handles: &[H]) -> Vec<H> {
+    match r.kind {
+        Kind::PipeRead | Kind::PipeWrite => handles.to_vec(),
+        Kind::Stream => handles
+            .iter()
+            .take(usize::from(r.has_read) + usize::from(r.has_write))
+            .copied()
+            .collect(),
+        Kind::File | Kind::Dir | Kind::Packet => Vec::new(),
+    }
+}
+
 // ------------------------------------------------------------ packets
 
 /// The most payload a packet message carries beside `descriptors` records
@@ -360,9 +375,20 @@ impl<H> StreamBook<H> {
 
     /// In a `fork` child: what the library held is the parent's (its
     /// descriptors' handles are the parent's, its bytes are given there).
-    pub fn after_fork(&mut self) {
-        self.pending.clear();
+    /// The handles the child duplicated, which it must close (stream ends:
+    /// see [`child_keeps`]); the channel ends are the parent's alone.
+    pub fn after_fork(&mut self) -> Vec<H>
+    where
+        H: Copy,
+    {
+        let mut out = Vec::new();
+        for t in self.pending.drain(..) {
+            for (r, hs) in &t.items {
+                out.extend(child_keeps(r, hs));
+            }
+        }
         self.rest.clear();
+        out
     }
 
     /// Bytes the library holds, which a read gives before any stream byte.
