@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -823,6 +823,9 @@ NS_TLS_READY := $(BUILD)/netsurf-tlsd.ports
 # (`must-not-reach`, 9f-net review finding 3). The other refused legs (10.0.2.2,
 # 127.0.0.1, the gateway's port 80, lan.web.test's private answer) cannot be
 # routed to the server by SLIRP: they rest on the refusal page's colour alone.
+# The network is `restrict=on` (INV-0230-1), whose DHCP lease has no router: the
+# disk gives the static address and the gateway (.2) that the lease gave, so that
+# the web rule still refuses the gateway (ADR-0223 item 4).
 NS_NET := 203.0.113
 NS_RELAY = $(CURDIR)/$(HTTPD) --relay 127.0.0.1:$$port
 NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --gui-scale $(5) --net \
@@ -835,7 +838,7 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
 	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
-	printf 'net.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
+	printf 'net.address = static\nnet.ip = $(NS_NET).15/24\nnet.gateway = $(NS_NET).2\nnet.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
@@ -1123,7 +1126,7 @@ CXX_LIBCXX_TCG = { [ $$accel = tcg ] || [ "$$(uname -s)" != Darwin ]; }
 cxx-libcxx-tests:
 	@$(MAKE) -s -f ports/Makefile cxx
 	@$(MAKE) --no-print-directory $(CXX_LIBCXX_STAMP)
-$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt tests/cxx/libcxx-tcg-excluded.txt \
+$(CXX_LIBCXX_STAMP): tests/cxx/libcxx-build.sh tests/cxx/libcxx-groups.txt tests/cxx/libcxx-excluded.txt tests/cxx/libcxx-tcg-excluded.txt tests/cxx/libcxx-slow-groups.txt \
 	  $(BUILD)/sysroot/usr/lib/libc++.a $(BUILD)/sysroot/usr/lib/libc++abi.a $(BUILD)/sysroot/usr/lib/libunwind.a $(BUILD)/sysroot/usr/lib/libc.a
 	rm -rf $(CXX_LIBCXX)/lct && mkdir -p $(CXX_LIBCXX)/lct
 	tests/cxx/libcxx-build.sh $(LLVM_TREE)/libcxx $(CXX_LIBCXX)/lct
@@ -1139,6 +1142,24 @@ test-cxx-libcxx: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
 	  $(RUNNER) --timeout $(CXX_LIBCXX_TIMEOUT) --script $(CXX_LIBCXX)/lct/script$$($(CXX_LIBCXX_TCG) && echo -tcg) --label cxx-libcxx-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(CXX_LIBCXX)/disk.img --mem 512M --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(CXX_LIBCXX)/disk.img || exit 1; done
+
+# The groups test-cxx-libcxx leaves out under TCG (tests/cxx/libcxx-slow-groups.txt:
+# thread.semaphore, thread.barrier, thread.latch), run under TCG with a timeout of their
+# own: no time pressure in the nightly run, which is the only one that runs this
+# (tools/ci-nightly-tests.txt; it is not a step of `make test`). It needs nothing but the
+# build of test-cxx-libcxx, whose OUT/script-slow it runs. Locally: `make test-cxx-libcxx-slow`
+# (TCG on any host; the Mac's took the time INV-0360-2 gives).
+CXX_LIBCXX_SLOW_TIMEOUT ?= 7200
+test-cxx-libcxx-slow: $(KERNEL) $(RUNNER) tools-storage cxx-libcxx-tests
+	rm -rf $(CXX_LIBCXX)/root-slow && mkdir -p $(CXX_LIBCXX)/root-slow/bin/lc $(CXX_LIBCXX)/root-slow/work $(CXX_LIBCXX)/root-slow/tmp
+	cp -R rootfs/. $(CXX_LIBCXX)/root-slow/
+	cp $(CXX_LIBCXX)/lct/bin/* $(CXX_LIBCXX)/root-slow/bin/lc/
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(CXX_LIBCXX)/root-slow/bin/lc
+	target/debug/zoraya-mkfs --size 256M --from $(CXX_LIBCXX)/root-slow $(CXX_LIBCXX)/disk-slow.img
+	$(RUNNER) --timeout $(CXX_LIBCXX_SLOW_TIMEOUT) --script $(CXX_LIBCXX)/lct/script-slow --label cxx-libcxx-slow-tcg -- \
+	  $(RUN_QEMU) --test --keys --disk $(CXX_LIBCXX)/disk-slow.img --mem 512M --accel tcg $(KERNEL)
+	target/debug/zoraya-fsck $(CXX_LIBCXX)/disk-slow.img
 
 # GoogleTest's own tests (make -f ports/Makefile gtest: CMake with
 # ports/cmake/zoraya.cmake), death tests among them (they fork, and the

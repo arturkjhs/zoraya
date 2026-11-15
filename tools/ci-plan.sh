@@ -43,6 +43,12 @@ emit() { # the jobs on stdin, why
 }
 
 if [ "${FULL:-0}" = 1 ]; then
+    # The nightly run (NIGHTLY=1) adds the jobs of tools/ci-nightly-tests.txt, and no other plan does.
+    if [ "${NIGHTLY:-0}" = 1 ]; then
+        { jobs; grep -v -E '^#|^$' tools/ci-nightly-tests.txt; } | emit "full set and the nightly's own jobs"
+        echo "docs_only=0"
+        exit 0
+    fi
     jobs | emit "full set"
     echo "docs_only=0"
     exit 0
