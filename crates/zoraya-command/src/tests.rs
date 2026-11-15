@@ -394,3 +394,53 @@ fn only_an_option_mistake_is_an_option_error() {
     assert!(!e(&["-c"]).is_option_error(), "missing operand");
     assert!(!e(&[]).is_option_error());
 }
+
+const SSH: &str = "name ssh
+summary s
+usage ssh [-p PORT] [-v] HOST [COMMAND...]
+operand HOST host the machine
+operand [COMMAND...] rest the far side's command
+option -p --port PORT text the port
+option -v --verbose say more
+";
+
+// ADR-0340 item 4: every word after HOST belongs to the far side, whatever it
+// looks like (INV-0340-2's host test).
+#[test]
+fn words_after_the_host_are_not_options() {
+    let d = zoraya_describe::parse(SSH.as_bytes()).unwrap();
+    fn run<'a>(d: &Description, args: &[&'a str]) -> Parsed<'a> {
+        match parse(d, args).unwrap() {
+            Outcome::Run(p) => p,
+            Outcome::Help => panic!("help"),
+        }
+    }
+    let run = |args: &[&'static str]| run(&d, args);
+    let p = run(&["-p", "2222", "-v", "h", "ls", "-l"]);
+    assert_eq!(p.options.len(), 2);
+    assert_eq!(p.operands, [(0, "h"), (1, "ls"), (1, "-l")]);
+    for words in [
+        ["-o", "ProxyCommand=x"],
+        ["-J", "jump"],
+        ["-F", "/x"],
+        ["-i", "/key"],
+    ] {
+        let mut args = vec!["h"];
+        args.extend(words);
+        let p = run(&args);
+        assert!(p.options.is_empty(), "{words:?}");
+        assert_eq!(p.operands.len(), 3, "{words:?}");
+        assert_eq!(p.operands[1], (1, words[0]));
+    }
+    // `--help` and `--` after the host are the far side's too.
+    let p = run(&["h", "--help", "--", "x"]);
+    assert_eq!(p.operands, [(0, "h"), (1, "--help"), (1, "--"), (1, "x")]);
+    // Before the host they are the shell's.
+    assert_eq!(parse(&d, &["--help", "h"]).unwrap(), Outcome::Help);
+    assert_eq!(parse(&d, &["-v", "--help"]).unwrap(), Outcome::Help);
+    // An option the description lacks, before the host, is refused.
+    assert!(parse(&d, &["-o", "x", "h"]).unwrap_err().is_option_error());
+    assert!(parse(&d, &["-J", "x", "h"]).unwrap_err().is_option_error());
+    // No host: missing operand.
+    assert!(parse(&d, &[]).is_err());
+}

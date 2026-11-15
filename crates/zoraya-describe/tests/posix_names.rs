@@ -18,7 +18,17 @@ use zoraya_describe::{Kind, parse};
 zoraya_test_alloc::cap_memory!();
 
 /// The programs `ports/Makefile` puts in `/bin` besides the toybox commands.
-const BIN_PROGRAMS: &[&str] = &["dash", "sh", "make", "pdpmake", "tcc", "cc", "awk"];
+const BIN_PROGRAMS: &[&str] = &[
+    "dash",
+    "sh",
+    "make",
+    "pdpmake",
+    "tcc",
+    "cc",
+    "awk",
+    "ssh",
+    "ssh-keygen",
+];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")

@@ -160,7 +160,13 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
         None
     };
     if let Some((Kind::Host, text)) = operand {
-        host_operand(line, text, &mut words)?;
+        // `reach` (ADR-0340 item 4): TCP to the host on the description's
+        // port or the one its option gives, instead of an echo.
+        let tcp = d
+            .reach
+            .filter(|_| line.base_system)
+            .map(|r| reach_port(line, &r));
+        host_operand(line, text, &mut words, tcp)?;
     }
     let operand = operand
         .filter(|(kind, _)| *kind == Kind::Url)
@@ -258,33 +264,89 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
 /// that came from a value only designates inside a `+net` word of the line.
 /// A `+net HOST:PORT` word does not cover this rule (it has a port, the echo
 /// none): the person writes `+net HOST` (ADR-0330, known limits).
-fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result<(), Refused> {
+fn host_operand(
+    line: &Line<'_>,
+    text: &str,
+    words: &mut Vec<NetWord>,
+    tcp: Option<Option<u16>>,
+) -> Result<(), Refused> {
     let literal = value_of(line.args, text).is_some_and(|v| v.literal);
-    let host = text.to_ascii_lowercase();
+    // `USER@HOST`: the host is what follows the last `@` (ADR-0340 item 5).
+    let host = if tcp.is_some() {
+        text.rsplit_once('@').map_or(text, |(_, h)| h)
+    } else {
+        text
+    }
+    .to_ascii_lowercase();
+    // A port that is no number from 1 to 65535 gives nothing: the program
+    // says what is wrong with it.
+    let port = match tcp {
+        Some(None) => return Ok(()),
+        other => other.flatten(),
+    };
     let target = match zoraya_http::parse_ipv4(&host) {
         Some(a) => Named::Address(a),
         None if valid_name(&host) => Named::Name(host.clone()),
         // The command says what is wrong with it.
         None => return Ok(()),
     };
-    let word = NetWord {
-        target,
-        ports: Ports::ANY,
-        protocols: Protocols::ECHO,
+    let word = match port {
+        Some(port) => NetWord {
+            target,
+            ports: Ports::one(port),
+            protocols: Protocols::TCP,
+        },
+        None => NetWord {
+            target,
+            ports: Ports::ANY,
+            protocols: Protocols::ECHO,
+        },
     };
     let covered = words.iter().any(|outer| word.rule().within(&outer.rule()));
     if covered {
         return Ok(());
     }
     if !literal {
+        let hint = match port {
+            Some(port) => alloc::format!("if that is meant: +net {host}:{port} COMMAND"),
+            None => alloc::format!("if that is meant: +net {host} COMMAND"),
+        };
         return Err(Refused {
             subject: text.into(),
             problem: "from a value, outside the line's network grants".into(),
-            hint: Some(alloc::format!("if that is meant: +net {host} COMMAND")),
+            hint: Some(hint),
         });
     }
+    // A program of the image takes a name with its public answers only, as
+    // for a URL (the architect's decision of 2026-11-14); an address keeps
+    // its own rule.
+    let word = match word.target {
+        Named::Name(name) if port.is_some() && line.description.program.is_some() => NetWord {
+            target: Named::PublicName(name),
+            ..word
+        },
+        _ => word,
+    };
     words.push(word);
     Ok(())
+}
+
+/// The port a `reach` line gives this line: the option's value when the line
+/// has the option, else the description's. `None` when the option's value is
+/// no number from 1 to 65535 (the command refuses it itself).
+fn reach_port(line: &Line<'_>, reach: &zoraya_describe::Reach) -> Option<u16> {
+    let given = reach.option.and_then(|o| {
+        line.parsed
+            .options
+            .iter()
+            .rev()
+            .find(|(i, _)| *i == o)
+            .and_then(|(_, v)| *v)
+    });
+    match given {
+        None => Some(reach.port),
+        Some(v) => v.parse::<u16>().ok().filter(|p| *p != 0),
+    }
 }
 
 /// Whether a line for a POSIX program may run (ADR-0317 item 6, INV-0312-1).

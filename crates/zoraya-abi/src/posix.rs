@@ -204,6 +204,10 @@ pub enum EntryKind {
     Terminal = 3,
     /// The process's own image (`/proc/self/exe`).
     Image = 4,
+    /// The program's own directory (ADR-0341): a directory connection that
+    /// `libposix` hands a child as a second connection with read rights only
+    /// (item 7), and whose contents a link outside it does not lead into.
+    Own = 5,
 }
 
 impl EntryKind {
@@ -214,13 +218,14 @@ impl EntryKind {
             2 => EntryKind::Null,
             3 => EntryKind::Terminal,
             4 => EntryKind::Image,
+            5 => EntryKind::Own,
             _ => return None,
         })
     }
 
     /// True if the entry names a directory a path can go on into.
     pub const fn is_directory(self) -> bool {
-        matches!(self, EntryKind::Directory | EntryKind::Tmp)
+        matches!(self, EntryKind::Directory | EntryKind::Tmp | EntryKind::Own)
     }
 }
 

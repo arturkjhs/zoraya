@@ -895,6 +895,24 @@ impl<S: Sys> Posix<S> {
         Err(EACCES)
     }
 
+    /// A fresh connection to `conn`'s object with reading alone (ADR-0341
+    /// item 7): what a child gets of its parent's own directory. The file
+    /// service enforces it: the connection holds no write, create, remove or
+    /// rename right, and a clone of it cannot have more.
+    pub fn clone_read_only(&mut self, conn: S::H) -> Result<S::H, i32> {
+        let (mine, theirs) = self.sys.channel_create().map_err(|_| EMFILE)?;
+        let m = fp::Clone {
+            rights: Flags(rights::READ | rights::CLONE),
+        };
+        match self.done(conn, &m, &[theirs]) {
+            Ok(_) => Ok(mine),
+            Err(e) => {
+                self.sys.close(mine);
+                Err(e)
+            }
+        }
+    }
+
     /// A terminal connection for a child tagged with `group` (ADR-0105 item
     /// 4).
     pub fn clone_tty(&mut self, conn: S::H, group: u32) -> Result<S::H, i32> {
@@ -1074,6 +1092,9 @@ impl<S: Sys> Posix<S> {
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
             let made = match (kind, handle) {
                 (EntryKind::Directory | EntryKind::Tmp, Some(h)) => Some(self.clone_conn(h)?),
+                // ADR-0341 item 7: a child never holds a connection to the
+                // program's own directory that can write.
+                (EntryKind::Own, Some(h)) => Some(self.clone_read_only(h)?),
                 (EntryKind::Terminal, Some(h)) => Some(self.clone_tty(h, group)?),
                 _ => None,
             };
@@ -1180,6 +1201,7 @@ impl<S: Sys> Posix<S> {
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
             let made = match (kind, handle) {
                 (EntryKind::Directory | EntryKind::Tmp, Some(h)) => Some((h, self.clone_conn(h)?)),
+                (EntryKind::Own, Some(h)) => Some((h, self.clone_read_only(h)?)),
                 (EntryKind::Terminal, Some(h)) => Some((h, self.clone_tty(h, group)?)),
                 _ => None,
             };

@@ -821,3 +821,119 @@ fn net_web_is_a_flag_given_once_for_commands() {
         "a topic has only a summary and a body"
     );
 }
+
+const SSH: &str = "name ssh
+summary log in to another machine
+usage ssh [-p PORT] [-l USER] HOST [COMMAND...]
+program /bin/ssh
+cwd none
+operand HOST host the machine
+operand [COMMAND...] rest the command for the far side
+reach HOST tcp 22 -p
+option -p --port PORT text the port, if not 22
+option -l --login USER text the name to log in as
+data ssh as ~/.ssh
+---
+";
+
+/// ADR-0340 item 4 and ADR-0341 item 1: `reach`, `data` and the `rest` kind.
+#[test]
+fn reach_data_and_rest_parse() {
+    let d = parse(SSH.as_bytes()).unwrap();
+    assert_eq!(d.operands[1].kind, Kind::Rest);
+    assert!(!Kind::Rest.is_path());
+    assert_eq!(Kind::parse("rest"), Some(Kind::Rest));
+    let r = d.reach.unwrap();
+    assert_eq!((r.operand, r.port, r.option), (0, 22, Some(0)));
+    assert_eq!(
+        d.data,
+        Some(Data {
+            name: "ssh".into(),
+            path: "~/.ssh".into(),
+            read: false
+        })
+    );
+    let r = header("data git as ~/.config/git read\n---\n")
+        .data
+        .unwrap();
+    assert!(r.read);
+    assert_eq!(r.path, "~/.config/git");
+    assert!(header("---\n").data.is_none());
+    assert!(header("---\n").reach.is_none());
+    // A reach without an option.
+    let d = parse(SSH.replace(" -p\n", "\n").as_bytes()).unwrap();
+    assert_eq!(d.reach.unwrap().option, None);
+}
+
+#[test]
+fn reach_data_and_rest_are_checked() {
+    let host = "operand H host h\n";
+    assert_eq!(problem("data a\n---\n"), "data needs NAME as PATH [read]");
+    assert_eq!(
+        problem("data A as ~/.a\n---\n"),
+        "a data name is lower-case letters, digits and -"
+    );
+    for bad in [
+        "/etc", "~", "~/", "~/..", "~/a/../b", "~/a//b", "~/./a", "a/b", "~/a b", "~/a*",
+    ] {
+        assert_eq!(
+            problem(&format!("data a as {bad}\n---\n")),
+            if bad.contains(' ') {
+                "data needs NAME as PATH [read]"
+            } else {
+                "a data path is ~/ and plain names"
+            },
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        problem("data a as ~/a\ndata b as ~/b\n---\n"),
+        "data is given once"
+    );
+    assert_eq!(
+        problem("data a as ~/a write\n---\n"),
+        "data needs NAME as PATH [read]"
+    );
+    assert_eq!(
+        problem("reach H tcp 22\n---\n"),
+        "reach names an operand the description lacks"
+    );
+    assert_eq!(
+        problem(&format!("{host}reach H udp 22\n---\n")),
+        "reach needs OPERAND tcp PORT [OPTION]"
+    );
+    assert_eq!(
+        problem(&format!("{host}reach H tcp 0\n---\n")),
+        "a port is 1 to 65535"
+    );
+    assert_eq!(
+        problem(&format!("{host}reach H tcp 65536\n---\n")),
+        "a port is 1 to 65535"
+    );
+    assert_eq!(
+        problem(&format!("{host}reach H tcp 22 -p\n---\n")),
+        "reach names an option the description lacks"
+    );
+    assert_eq!(
+        problem(&format!(
+            "{host}option -v --verbose v\nreach H tcp 22 -v\n---\n"
+        )),
+        "reach needs an option that takes a value"
+    );
+    assert_eq!(
+        problem(&format!("{host}reach H tcp 22\nreach H tcp 22\n---\n")),
+        "reach is given once"
+    );
+    assert_eq!(
+        problem("operand F read f\nreach F tcp 22\n---\n"),
+        "reach needs a host operand that takes one word"
+    );
+    assert_eq!(
+        problem("operand R rest r\n---\n"),
+        "a rest operand takes several: NAME... or [NAME...]"
+    );
+    for key in ["reach H tcp 22", "data a as ~/a"] {
+        let t = refused(&format!("topic t\nsummary s\n{key}\n---\n"));
+        assert_eq!(t.problem, "a topic has only a summary and a body", "{key}");
+    }
+}

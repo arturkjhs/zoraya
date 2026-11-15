@@ -882,3 +882,118 @@ fn curl_and_wget_take_a_url_name_with_public_answers_only() {
         assert!(go(d, &[("http://test.zoraya/", false)], true).is_err());
     }
 }
+
+const SSH: &str = include_str!("../../../user/describe/posix/ssh.cmd");
+
+/// ADR-0340 item 4, INV-0340-1: ssh's network scope is the host its operand
+/// names, on port 22 or the port `-p` gives, and nothing else.
+#[test]
+fn ssh_reaches_the_host_it_names_on_port_22_or_the_ports_option() {
+    use zoraya_abi::net::Target;
+    // An address keeps its own rule; the word after HOST is the far side's.
+    let ok = go(
+        SSH,
+        &[
+            ("-l", true),
+            ("ada", true),
+            ("10.0.2.50", true),
+            ("ls", true),
+        ],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert_eq!(ok.0, rights::REACH);
+    let s = Scope::decode(&ok.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 23, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::UDP));
+    assert!(!s.names_address([10, 0, 2, 51], 22, Protocols::TCP));
+    assert!(!s.allows_echo_address([10, 0, 2, 50]));
+    // -p replaces the port.
+    let ok = go(
+        SSH,
+        &[("-p", true), ("2222", true), ("ada@10.0.2.50", true)],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    let s = Scope::decode(&ok.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 2222, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    // A name: public answers only, as for curl; USER@ is not part of it.
+    let ok = go(SSH, &[("ada@Build.Example.ORG", true)], true)
+        .unwrap()
+        .unwrap();
+    let s = Scope::decode(&ok.1).unwrap();
+    let rules: Vec<_> = s.reach_rules().collect();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].target, Target::PublicName("build.example.org"));
+    assert_eq!(rules[0].ports.list(), &[(22, 22)]);
+    assert_eq!(rules[0].protocols, Protocols::TCP);
+    // Words after the host never add a host: `-J` and `-o` are the far
+    // side's words, and the host stays the one typed.
+    let ok = go(
+        SSH,
+        &[
+            ("10.0.2.50", true),
+            ("-J", true),
+            ("evil.example.org", true),
+            ("-o", true),
+            ("x", true),
+        ],
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let s = Scope::decode(&ok.1).unwrap();
+    assert_eq!(s.reach_rules().count(), 1);
+    assert!(!s.allows_name("evil.example.org", 22, Protocols::TCP));
+}
+
+#[test]
+fn ssh_from_a_value_needs_a_net_word_and_a_bad_port_gives_nothing() {
+    let r = go(
+        SSH,
+        &[("-l", true), ("ada", true), ("other.example.org", false)],
+        true,
+    )
+    .unwrap_err();
+    assert!(r.problem.contains("from a value"), "{}", r.problem);
+    assert_eq!(
+        r.hint.as_deref(),
+        Some("if that is meant: +net other.example.org:22 COMMAND")
+    );
+    // A `+net HOST:22` word covers it; one for another port does not.
+    let covered = go_nets(
+        SSH,
+        &[("other.example.org", false)],
+        &["other.example.org:22"],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert!(Scope::decode(&covered.1).unwrap().allows_name(
+        "other.example.org",
+        22,
+        Protocols::TCP
+    ));
+    assert!(
+        go_nets(
+            SSH,
+            &[("other.example.org", false)],
+            &["other.example.org:80"],
+            true
+        )
+        .is_err()
+    );
+    // A port that is no number: no grant, ssh says so itself.
+    for bad in ["0", "65536", "x", "-1"] {
+        let r = go(SSH, &[("-p", true), (bad, true), ("10.0.2.50", true)], true);
+        assert!(matches!(r, Ok(None)), "-p {bad}: {r:?}");
+    }
+    // Only the system image's description reaches (INV-0224-1).
+    assert!(go(SSH, &[("10.0.2.50", true)], false).unwrap().is_none());
+    // A name that is no host.
+    assert!(go(SSH, &[("a b", true)], true).unwrap().is_none());
+}
