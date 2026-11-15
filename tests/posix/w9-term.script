@@ -3,6 +3,15 @@
 # tools/posix-surface/remote/w9_session.py sent it, once a table exists (the
 # time TASK-02b's 1.5 s reached; review R1); status 143, a target deleted,
 # no partial target and no process left.
+#
+# The wait for the tables is the runner's, on an event: make writes to the
+# terminal, as in w9-int.script, and the kill line is typed once a leaf has
+# begun its second table (a job slot came back, so a table is written). The
+# guest's loop then only checks that a table exists and ends at once. It
+# used to poll from the start of the build: under TCG on one CPU its ls,
+# cat and sleep, three processes ten times a second, took most of the CPU
+# from the build, whose first table then did not come within the run's
+# 600 s (scheduled run 43699859694, candidate run 43686441057).
 ! -FAIL
 ! panicked
 ! ZORAYA-FAULT
@@ -12,15 +21,13 @@
 > cd /work/w9-term\r
 % boot
 < PSURF> 
-> make -j4 > /tmp/w9.log 2>&1 & echo $! > /tmp/make.pid\r
-< PSURF> 
+> make -j4 2>&1 & echo $! > /tmp/make.pid\r
+< ./mktab 2 > t2.h
 > until ls */*/t?.h > /dev/null 2>&1 || ! kill -0 $(cat /tmp/make.pid); do sleep 0.1; done; kill -TERM $(cat /tmp/make.pid); wait $(cat /tmp/make.pid); echo W9-STATUS $?\r
+< Deleting file 't
 < W9-STATUS 143
 < PSURF> 
 % w9-term
-> cat /tmp/w9.log\r
-< Deleting file 't
-< PSURF> 
 > sh /tests/w9-check.sh /work/w9-term\r
 < W9-PARTIAL 0
 < PSURF> 
