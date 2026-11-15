@@ -206,6 +206,7 @@ test-unit:
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
 # a Mac both accelerators are exercised.
 EXPECT := --expect-panic harness_reports_panic_as_failure \
+	--expect-panic harness_fails_with_a_process_left \
 	--expect-panic harness_reports_exception_as_failure \
 	--expect-panic fault_report_for_brk \
 	--expect-panic fault_report_for_unmapped_access \
