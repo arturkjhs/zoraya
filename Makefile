@@ -1010,8 +1010,10 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	cp -R rootfs/. $(POSIX_CORE)/root/
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_poll tests/posix-core/t_poll.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_syscall tests/posix-core/t_syscall.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_syscall
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_poll
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
@@ -1473,7 +1475,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-run-disk check-test-lanes check-python-cache
+.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-run-disk check-test-lanes check-python-cache
 fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -1584,6 +1586,16 @@ check-ethd-maps:
 check-tls-roots:
 	tools/check-tls-roots.sh
 
+# INV-0451-1: every libposix definition returns the width its C prototype
+# declares (`syscall()` returned `int` where the prototype says `long`). The
+# table of prototypes (tools/libposix-widths.txt) is checked against the
+# definitions offline; against the sysroot's headers too when they are built.
+check-libposix-widths:
+	python3 -I tools/check-libposix-widths.py --selftest
+	@if [ -d $(BUILD)/sysroot/usr/include ] && command -v clang >/dev/null 2>&1; then \
+	  python3 -I tools/check-libposix-widths.py --headers $(BUILD)/sysroot/usr/include; \
+	else python3 -I tools/check-libposix-widths.py; fi
+
 # INV-0325-1 and INV-0325-2: the page NetSurf shows for a refused host, built
 # with the host's C compiler and run (ports/netsurf/test_refusal.c).
 HOST_C ?= cc
@@ -1644,7 +1656,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1686,7 +1698,7 @@ check-workflow-syntax:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 
