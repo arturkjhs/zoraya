@@ -25,6 +25,7 @@ pub mod read;
 mod screen;
 pub mod select;
 pub mod session;
+pub mod status;
 mod term;
 
 use alloc::vec;
@@ -38,6 +39,7 @@ pub use keys::{KeyModes, MAX_KEY_BYTES, Mods, key_bytes};
 pub use mouse::{Pointer, PointerEvent, focus_bytes};
 pub use queue::{Next, SendQueue};
 pub use session::{Outgoing, Session};
+pub use status::StatusRow;
 pub use term::{Modes, Restored, Term};
 
 /// Lines of scrollback kept by default: the setting `term.scrollback`
@@ -473,6 +475,8 @@ mod tests_keys;
 mod tests_parser;
 #[cfg(test)]
 mod tests_session;
+#[cfg(test)]
+mod tests_status;
 #[cfg(test)]
 mod tests_total;
 

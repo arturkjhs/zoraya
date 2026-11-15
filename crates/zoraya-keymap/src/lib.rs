@@ -62,6 +62,10 @@ pub mod code {
     pub const X: u32 = 45;
     pub const V: u32 = 47;
     pub const R: u32 = 19;
+    /// The attention keys of ADR-0337 (System+G, the grant line) and ADR-0387
+    /// (System+K, the kill offer).
+    pub const G: u32 = 34;
+    pub const K: u32 = 37;
     pub const M: u32 = 50;
     pub const SLASH: u32 = 53;
     /// The system key of ADR-0160 (Super; the Command keys on a Mac

@@ -87,7 +87,7 @@ pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
 /// ADR-0163, ADR-0168, ADR-0170, ADR-0172): with the system key, every other
 /// key reaches the focused client (ADR-0248, INV-0248-1). A new
 /// chord goes here, and is checked against the applications' keys.
-pub const TAKEN_CHORDS: [u32; 11] = [
+pub const TAKEN_CHORDS: [u32; 13] = [
     code::ENTER,
     code::SLASH,
     code::SPACE,
@@ -99,6 +99,8 @@ pub const TAKEN_CHORDS: [u32; 11] = [
     code::LEFT,
     code::RIGHT,
     code::R,
+    code::G,
+    code::K,
 ];
 
 /// How long a new sheet ignores the keyboard and the pointer's buttons, so
@@ -1258,6 +1260,21 @@ impl<P: Platform> Compositor<P> {
                 };
                 self.send_event_plain(f.client, &m);
             }
+            return;
+        }
+        // The attention keys (ADR-0337 item 4, ADR-0387 item 4): to the
+        // focused window as a message of their own, as System+C is, never as
+        // a key; a client that does not know them ignores them.
+        if let (Some(f), code::G | code::K) = (self.focus, code_) {
+            let m = gui::Attention {
+                window: f.id,
+                kind: Below(if code_ == code::K {
+                    gui::ATTENTION_KILL
+                } else {
+                    gui::ATTENTION_GIVE
+                }),
+            };
+            self.send_event_plain(f.client, &m);
             return;
         }
         let Some(mut focus) = self.focus else { return };
