@@ -2138,7 +2138,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): a memory descriptor does not cross `spawn`
   or `exec` (`EBADF` without `O_CLOEXEC`) until plan part F4 changes the bootstrap record, so the plan's "a child reads what the
   parent wrote" is checked with a `fork` child and in one process over a socketpair, and the two-process half over a fake kernel;
-  seals are the holder's own, not shared as Linux's are; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
+  seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
   `mlock`; `MAP_SHARED` of a regular file and `MAP_SHARED|MAP_ANONYMOUS` stay `ENODEV`; `memfd_create` no longer survives `exec` or
   backs a tmpd file. CPython's `_posixshmem` stays unbuilt (`ports/Makefile`'s `PYTHON_ABSENT`). Tests:
   `crates/zoraya-posix/tests/memfd.rs` (INV-0413-1 over every order of four of nine steps, -2, -3, -5), `tests/posix/t_memfd.c`

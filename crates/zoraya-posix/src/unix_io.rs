@@ -19,7 +19,7 @@ use crate::errno::{
     Call, EAFNOSUPPORT, EAGAIN, EBADF, EBUSY, EDESTADDRREQ, EINVAL, EMFILE, EMSGSIZE, ENOMEM,
     ENOTCONN, ENOTSOCK, EOPNOTSUPP, EPIPE, EPROTONOSUPPORT,
 };
-use crate::memfd::Memory;
+use crate::memfd::{Memory, seal};
 use crate::process::{Desc, Listing, Posix, native, o};
 use crate::socket::{Held, Socket, State};
 use crate::stat::Kind as FileKind;
@@ -870,7 +870,17 @@ impl<S: Sys> Posix<S> {
             }
             Kind::Memory => {
                 let access = if r.access == 2 { o::RDWR } else { o::RDONLY };
-                let seals = (r.write_off & unix::MEMORY_SEALS) as u32;
+                // What the receiver can check: the object's size never
+                // changes (`SHRINK`, `GROW`) and a seal against sealing only
+                // takes from the receiver. `F_SEAL_WRITE` is the peer's word
+                // that nobody writes, which the receiver cannot check: never
+                // reported. `F_SEAL_FUTURE_WRITE` only if this handle is
+                // read-only, which the kernel enforces.
+                let mut seals = (r.write_off & unix::MEMORY_SEALS) as u32
+                    & (seal::SEAL | seal::SHRINK | seal::GROW);
+                if access == o::RDONLY {
+                    seals |= seal::FUTURE_WRITE;
+                }
                 let sealable = r.write_off & unix::MEMORY_SEALABLE != 0;
                 let id = self.memory_id();
                 Desc::Memory(Box::new(Memory::received(

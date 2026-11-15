@@ -49,7 +49,7 @@ Nothing is closed when a seal is added. Rejected as the default: the program kee
    (read-only), `read_off` the size in bytes, `write_off` the seals (bits 0 to 4) and bit 8 for "accepts seals". A decoder takes
    any bytes: access 1 or 3, a nonzero field a memory descriptor has no use for, a size above 1 TiB or a seal bit above 4 drops
    the message and closes its handles. The receiver's descriptor is fixed in size (item 3), is sealable as the sender's was, and
-   has the seals the sender had *at the send*: a seal is the holder's, not shared (a limit: Linux shares one set). A descriptor
+   has only the seals it can check: `F_SEAL_SHRINK`, `F_SEAL_GROW` and `F_SEAL_SEAL` as the sender had them *at the send* (the size never changes; a seal against sealing only takes from the receiver), and `F_SEAL_FUTURE_WRITE` if its own handle is read-only. `F_SEAL_WRITE` and a `F_SEAL_FUTURE_WRITE` over a handle that can write are the sender's word, which the receiver cannot check, and are not reported; a seal is the holder's, not shared (a limit: Linux shares one set). A descriptor
    whose size is 0 has no object and is `EINVAL` to send. A record that says read-write over a handle that is not still cannot
    map writable: the kernel refuses (`EACCES`, INV-0413-2).
 2. **Seals are handle rights.** `F_SEAL_FUTURE_WRITE` and `F_SEAL_WRITE` replace the library's writable handle by one

@@ -929,6 +929,45 @@ fn seals_and_the_right_to_add_them_travel_with_a_descriptor() {
     );
 }
 
+/// Review F3 finding 4: a seal the receiver cannot check is not reported.
+#[test]
+fn a_forged_seal_on_a_received_descriptor_is_not_reported() {
+    use zoraya_posix::unix::{Kind, Record, encode_packet};
+    let mut r = rig();
+    let (a, b) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
+    let fd = sized(&mut r, PAGE);
+    let Some(Desc::Socket(sock)) = r.p.fds.get(a) else {
+        panic!("socket");
+    };
+    let end = sock.ctl.unwrap();
+    // A writable handle with every seal claimed: only the ones that hold.
+    let all = u64::from(seal::ALL) | zoraya_posix::unix::MEMORY_SEALABLE;
+    let mut forged = Record::one(Kind::Memory, 2, false);
+    forged.read_off = PAGE as u64;
+    forged.write_off = all;
+    let h = r.p.sys.duplicate(object(&r, fd)).unwrap();
+    r.p.sys
+        .channel_write(end, &encode_packet(&[forged], b"x"), &[h])
+        .unwrap();
+    let got = receive(&mut r, b)[0];
+    assert_eq!(
+        r.p.fcntl(got, F_GET_SEALS, 0),
+        Ok((seal::SEAL | seal::SHRINK | seal::GROW) as i32),
+        "no F_SEAL_WRITE, no F_SEAL_FUTURE_WRITE over a writable handle"
+    );
+    // A read-only handle: FUTURE_WRITE holds, WRITE is still not claimed.
+    let ro = r.p.sys.duplicate_read_only(object(&r, fd)).unwrap();
+    forged.access = 0;
+    r.p.sys
+        .channel_write(end, &encode_packet(&[forged], b"x"), &[ro])
+        .unwrap();
+    let got = receive(&mut r, b)[0];
+    assert_eq!(
+        r.p.fcntl(got, F_GET_SEALS, 0),
+        Ok((seal::SEAL | seal::SHRINK | seal::GROW | seal::FUTURE_WRITE) as i32)
+    );
+}
+
 /// Review F3 finding 3: the rights a channel entry names come from the
 /// library's state (the fake kernel checks the list of each send), never from
 /// a probe that spends a handle slot, so a send with no free slot still names
