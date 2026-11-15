@@ -158,3 +158,90 @@ Severities: **must-fix** (wrong before merge), **should-fix** (fix in this part 
 - **`zosh.script`.** The `x ended-*` lines fail under the old behaviour: the job's `ended-a=0` comes before the
   prompt after 10 s, and `go-r`'s read never ends, so the run hits its limit. The echoed command line cannot match,
   because of the `end""ed` quoting.
+
+## Check of the changed lines
+
+The `opus-review` subagent read `git diff eddfd477..origin/work/sigint-exec -- crates tests tools user kernel` at
+c9c56942 (the fix pass), with the code around it, on 2026-11-15. Line numbers are those of c9c56942. It ran
+`cargo test -p zoraya-posix` in a throwaway worktree (exit 0, 279 tests in 10 suites, including the three `an_exec_*`
+tests) and `make check` on this branch. It made no QEMU run. The `zosh.rs` and `zosh.script` hunks come from the merge
+of `origin/main` (`work/tcg-slow`), not from this fix pass.
+
+### Findings
+
+10. **must-fix** `docs/adr/0392-signals-across-exec-and-at-the-entry-of-a-wait.md:1` and `:84`, `docs/adr/0106-signals-in-libposix.md`
+    (Open questions), and `docs/architect-queue.md` (section A): the hold breaks two parts of accepted ADR-0106, and
+    the branch states this in only one sentence of a Cost bullet. The title still says "where ADR-0106 is silent".
+    (a) INV-0106-2: a handler-less `execve` now always makes at least one `process_take_request`, because `held != 0`
+    (`jobs.rs:359`). The ADR says so at `:84`. The row in `docs/adr/invariants.md` and INV-0304-5, which cites the
+    list, are unchanged. (b) Item 2's mapping from a POSIX action to a kernel disposition: during the spawn, every
+    `SIG_DFL` signal whose default terminates is `Deliver`. The ADR does not name this deviation. It is the same kind
+    of deviation as ADR-0315 item 10, which has a rule-6 note in ADR-0106's open questions. This one has none. (c)
+    ADR-0392 is not in `docs/architect-queue.md`, so the architect has no entry for accepting either deviation.
+    *Scenario:* the branch merges, and on `main` ADR-0106 and the invariants table still say that a handler-less
+    process takes no request outside seven functions, while every `execve` takes one. The architect learns this only
+    from a Cost bullet in a proposed ADR. *Fix (documents only):* give ADR-0392 a "Tensions with accepted ADRs"
+    paragraph that names INV-0106-2, ADR-0106 item 2 and INV-0304-5, and says that the architect accepts the
+    deviations or asks for a superseding ADR. Drop "where ADR-0106 is silent" from the title, the index and the
+    invariants heading, or make it say that ADR-0392 also amends ADR-0106. Add a rule-6 note to ADR-0106's open
+    questions like the one for ADR-0315. Add an ADR-0392 row to section A of `docs/architect-queue.md`.
+
+11. **should-fix** `docs/adr/invariants.md:641` (INV-0392-1, Status `checked`) and `tools/mutants/sigint-exec.toml:17`:
+    the clause "a signal sent while the new image is made is held for that" has no check. `S-exec-holds-nothing` is a
+    known survivor. The host test `an_exec_holds_*` tests `Posix::exec_hold` on its own, and no test sees that
+    `exec()` calls it. The same is true of the failure path: deleting `p.exec_release(held);` (`procs.rs:2197`) is
+    not in the mutation list, and it would survive every test too. *Scenario for the second:* a spawn fails after the
+    load (`E2BIG`, `EAGAIN`, an inherit failure) in a program with no handler, and `execve` returns -1. `SIGINT`,
+    `SIGTERM` and about 20 other signals stay `Deliver` with no handler, and `poll` never looks
+    (`handlers_installed` is false). From then on, every Ctrl-C and `kill` to the process is silently ignored. *Fix:*
+    in the row's Status, say that the hold is not checked (ADR-0392 open question). Add `S-exec-never-releases`
+    (`find = 'p.exec_release(held);'`, `replace = ''`) to `sigint-exec.toml` as a known survivor. A test that is
+    cheap to write: a `t_posix` case whose `execve` fails at the spawn, which then sends itself a `SIGTERM` with
+    `kill` and must end with it.
+
+12. **note** `docs/adr/0392-…md:81-83` (Cost): the cost is an estimate, not a measurement, and two of its figures are
+    wrong. The count is 22, not "about 25": `default_terminates` covers 1-8, 10-16, 24-27 and 29-31. On a failed
+    spawn the calls happen twice. The per-call figure cites INV-0006-3, which is the latency of `port_wait`, not of
+    `process_set_disposition`. Nothing measured `exec` with and without the hold, although `stats.exec_ns` exists
+    (`procs.rs:2223`) and `ZORAYA_POSIX_STATS=1` would show it. Against the measured job cost, the estimate is small:
+    70 `/bin/sleep` jobs took 29 s under TCG (`zosh.script:262`), about 400 ms each, so 22 calls at 0.3 ms total
+    are under 0.1 %. The shell's 70-job loop no longer `exec`s at all (`( : )`, from `work/tcg-slow`), so no
+    exec-heavy loop in the test set exercises the hold's cost. *Fix:* correct the count and the cited figure, and
+    either measure `exec_ns` once with and without the hold (HVF, `ZORAYA_POSIX_STATS=1`), or keep `[estimate]` and
+    leave the revisit trigger as it is.
+
+13. **note** ADR-0392 Follow-up (`:144`): the gap recorded for `fork` has a second case, `posix_spawn`. Its child
+    goes into the parent's group job (`bp::group::INHERIT`), so it is also a process made during a job signal's walk
+    (ADR-0004 rule 3). Nothing hands it a signal it missed, and it is not recorded. `make` and other spawn users
+    reach it. *Fix:* say "`fork` and `posix_spawn`" in the follow-up and in `docs/design.md`.
+
+14. **note** numbering: 0392 is still free on every `origin/` branch. The index, the invariants rows and the
+    per-ADR count (2, Total 822 for 822 rows; `make check` passes) agree. `docs/tasks/TASK-31-report.md:22` still
+    does not list 0392 among the numbers handed out (finding 9). The `test-map.txt` line was added.
+
+### Checked and found sound
+
+- **The new image's dispositions.** The new image's dispositions do not depend on the hold. `spawn_into` writes them
+  into the spawn record (`start_dispositions`, `procs.rs:1760`): `Ignore` for the carried `SIG_IGN` set and for
+  signals whose default ignores, `Terminate` for every other signal. So a held signal is back at its default, an
+  ignored one stays ignored, and handlers start as `SIG_DFL`. A held signal that was carried ends the new image with
+  that signal, which is the POSIX outcome of a signal pending across `execve` with its default action.
+- **No stale value is put back, and no other thread interferes.** `exec` runs the hold, the spawn, the release or the
+  carry, and the exit inside one `state` closure, which holds the library lock until `process_exit`. The broker
+  calls inside it use `call` (`process.rs:523`), which waits on the connection only. Nothing in the window takes a
+  request or runs `deliver`. Another thread cannot run `sigaction`, `sigwait_begin` or a poll until the process has
+  ended. `exec_release` does not restore a saved value: it recomputes `effective_disposition`. A thread already in
+  `sigwait`, outside the lock, has its signals at `Deliver` through `effective_disposition`, and the hold skips them.
+  A woken waiter cannot take the queue without the lock.
+- **Killed between the hold and the carry.** Every POSIX signal the broker sends is a `job_signal`
+  (`zoraya-broker/src/lib.rs:1327-1405`). Before the spawn, a signal reaches only the old image, which queues it.
+  After the spawn, it reaches both images. `job_kill` is not a request and is not held. Its own rule-3 window for a
+  new image made during the kill's walk existed before this change and is unchanged.
+- **No silent loss (check 3).** Whenever the hold set any disposition, `held != 0` and the carry takes the queue
+  (`jobs.rs:359`). With `held == 0`, no handler and no `sigwait`, no disposition is `Deliver`, so the queue is empty.
+  A `set_disposition` that fails leaves its signal as `Terminate`, which is the behaviour from before. A request that
+  reaches the old image after the carry has a copy in the new image, which is in the job.
+- **The `ignored` test in `exec_hold`** is redundant: `ignored_for` is the old image's `SIG_IGN` set, whose kernel
+  disposition is `Ignore`, not `Terminate`. It is harmless.
+- **The host tests** assert what they claim: `stats.takes` is counted per take, there is no take without a handler
+  or a hold, and a held signal's disposition is set to `Deliver` and then put back.
