@@ -191,10 +191,16 @@ fn refusals_are_counted_per_path_and_access_and_restart_after_a_grant() {
     assert!(p.note("/a", true, 0), "a write is another report");
     assert!(p.note("/a", false, 1), "so is another element's");
     assert_eq!(p.more(), 2);
-    for i in 0..(MAX_PENDING + 10) {
-        p.note(&alloc::format!("/f{i}"), false, 0);
+    p.clear();
+    // The bound: what a program can make the row redraw is limited, and the
+    // rest is only counted (the review of 10f, finding 9).
+    for i in 0..MAX_PENDING {
+        assert!(p.note(&alloc::format!("/f{i}"), false, 0), "{i}");
     }
-    assert!(p.more() >= MAX_PENDING, "overflow is still counted");
+    assert!(!p.note("/past", false, 0), "the 65th is not new");
+    assert!(!p.note("/past2", false, 0));
+    assert_eq!(p.more(), MAX_PENDING - 1 + 2, "and is counted");
+    assert_eq!(p.latest().unwrap().path.as_deref(), Some("/f63"));
     p.clear();
     assert!(p.is_empty() && p.latest().is_none() && p.more() == 0);
 }
@@ -493,6 +499,7 @@ mod delivery_tests {
         Held {
             wholes: vec![("/etc".into(), READ), ("/usr".into(), READ)],
             names: vec![("/home/u".into(), "notes.txt".into(), CHANGE)],
+            fixed: vec![],
         }
     }
 
@@ -531,11 +538,42 @@ mod delivery_tests {
     }
 
     #[test]
-    fn a_directory_is_whole_and_takes_the_names_given_in_it() {
+    fn a_directory_is_given_whole_with_the_rights_typed_and_never_more() {
+        // The review of 10f, finding 1: `vi notes.txt` holds `~` narrowed to
+        // `notes.txt` with CHANGE; `+r ~` must not make the tree writable.
         let mut h = vi_notes();
-        let specs = h
+        let before = h.clone();
+        let read = Wanted {
+            path: "/home/u".into(),
+            dir: true,
+            write: false,
+        };
+        assert!(h.give(std::slice::from_ref(&read)).is_err());
+        assert_eq!(h, before, "nothing changed");
+        // `+w ~` over a name held for change is what was typed, and takes it in.
+        let write = Wanted {
+            path: "/home/u".into(),
+            dir: true,
+            write: true,
+        };
+        let specs = h.give(&[write]).unwrap();
+        assert_eq!(
+            specs,
+            vec![Spec::Whole {
+                prefix: "/home/u".into(),
+                rights: TREE
+            }]
+        );
+        assert!(h.names.is_empty());
+        // A name held for reading only is taken into a `+r DIR`, with no more.
+        let mut g = Held {
+            wholes: vec![],
+            names: vec![("/d".into(), "f.txt".into(), READ)],
+            fixed: vec![],
+        };
+        let specs = g
             .give(&[Wanted {
-                path: "/home/u".into(),
+                path: "/d".into(),
                 dir: true,
                 write: false,
             }])
@@ -543,12 +581,55 @@ mod delivery_tests {
         assert_eq!(
             specs,
             vec![Spec::Whole {
-                prefix: "/home/u".into(),
-                rights: CHANGE | READ
+                prefix: "/d".into(),
+                rights: READ
             }]
         );
-        assert!(h.names.is_empty());
-        assert!(h.wholes.contains(&("/home/u".to_string(), CHANGE | READ)));
+    }
+
+    #[test]
+    fn a_directory_above_a_narrower_entry_is_refused_and_so_is_a_program_s_own_place() {
+        // The review of 10f, findings 6 and 3: a deeper entry would still decide
+        // its paths, and an entry the shell did not make is never touched.
+        let mut h = Held {
+            wholes: vec![("/home/u/a".into(), READ)],
+            names: vec![("/home/u/b".into(), "n.txt".into(), CHANGE)],
+            fixed: vec!["/home/.ssh".into()],
+        };
+        let before = h.clone();
+        for w in [
+            Wanted {
+                path: "/home/u".into(),
+                dir: true,
+                write: true,
+            },
+            Wanted {
+                path: "/home".into(),
+                dir: true,
+                write: false,
+            },
+            // At, above, below the program's own place, a file in it.
+            Wanted {
+                path: "/home/.ssh".into(),
+                dir: true,
+                write: false,
+            },
+            Wanted {
+                path: "/home/.ssh/known_hosts".into(),
+                dir: false,
+                write: false,
+            },
+            Wanted {
+                path: "/home/.ssh/keys".into(),
+                dir: true,
+                write: true,
+            },
+        ] {
+            assert!(h.give(std::slice::from_ref(&w)).is_err(), "{w:?}");
+            assert_eq!(h, before);
+        }
+        // Elsewhere still works.
+        assert!(h.give(&[file("/home/u/c/new.txt", false)]).is_ok());
     }
 
     #[test]
@@ -582,7 +663,7 @@ mod delivery_tests {
         // Rights of a directory held whole grow only at that directory.
         let mut g = Held {
             wholes: vec![("/w".into(), READ)],
-            names: vec![],
+            ..Held::default()
         };
         let specs = g
             .give(&[Wanted {
@@ -598,6 +679,47 @@ mod delivery_tests {
                 rights: TREE | READ
             }]
         );
+    }
+
+    #[test]
+    fn an_entry_the_plan_does_not_list_is_fixed_not_assumed_read_only() {
+        // The review of 10f, finding 3: after 10g the table holds a program's
+        // own directory (`~/.ssh` of the view) that is no entry of the plan. It is
+        // never replaced or widened, whatever its rights.
+        use crate::delivery::TableKind::*;
+        let merged = vec![crate::grants::Merged {
+            path: "/home/u/proj".into(),
+            rights: TREE,
+            name: None,
+            lines: vec![],
+        }];
+        let entries = vec![
+            ("/home/u/proj", Directory, true),
+            ("/home/u/.ssh", Directory, true),
+            ("/etc", Directory, true),
+            ("/home/u/placeholder", Directory, false),
+            ("/tmp", Tmp, true),
+            ("/dev/null", Other, false),
+        ];
+        let mut h = Held::from_table(entries.into_iter(), &merged);
+        assert_eq!(h.fixed, vec!["/home/u/.ssh".to_string()]);
+        assert!(h.wholes.contains(&("/etc".to_string(), READ)));
+        assert!(h.wholes.contains(&("/tmp".to_string(), TREE)));
+        for w in [
+            Wanted {
+                path: "/home/u/.ssh".into(),
+                dir: true,
+                write: true,
+            },
+            file("/home/u/.ssh/id", true),
+            Wanted {
+                path: "/home/u".into(),
+                dir: true,
+                write: false,
+            },
+        ] {
+            assert!(h.give(std::slice::from_ref(&w)).is_err(), "{w:?}");
+        }
     }
 
     #[test]

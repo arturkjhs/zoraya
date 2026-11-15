@@ -1800,6 +1800,19 @@ mod grants_message {
     }
 
     #[test]
+    fn only_a_directory_entry_is_added() {
+        // The review of 10f, finding 9: any other kind byte is refused.
+        let mut out = [0u8; 256];
+        let n = Grants::encode(&[("/home/u", 0)], 1, &mut out).unwrap();
+        assert!(Grants::decode(&out[..n], 1).is_some());
+        for kind in [1u8, 2, 3, 4, 5, 0xff] {
+            let mut m = out;
+            m[8] = kind;
+            assert!(Grants::decode(&m[..n], 1).is_none(), "kind {kind}");
+        }
+    }
+
+    #[test]
     fn decoding_is_total_on_truncations_and_mutations() {
         let mut out = [0u8; 256];
         let n = Grants::encode(&[("/home/u", 0), ("/work", 1)], 2, &mut out).unwrap();

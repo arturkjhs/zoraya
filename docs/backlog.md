@@ -311,6 +311,9 @@ states, to be taken up later:
   - **`/data` in `Grants`' prefix check** (ADR-0341 item 3, ADR-0393): add when 10f rebases on 10g.
   - **Not tested:** the write end closing with the job (`Job`'s `Drop`), a pipeline of two programs with a grant to one, a fuzz target of `term`'s input
     with the row compared before and after; no mutation run (`tools/mutants/shell-10f.toml` is written).
+  - **From the review of 10f (notes, not fixed):** an Escape followed by a key in one read is taken as Alt+key and skipped by the field; only `open` and
+    `stat` retry after a grant (`access`, `chdir`, `opendir`, `rename`, `execve` fail once); the `GRANTS` end is two-way, so a program can queue messages
+    at the shell's end for the life of the job; a program can report a path it never opened and paint a look-alike row in its own last row.
   - **At 1920x1200 the compositor fits a window above the dock:** the grid has one row fewer than `grid_for` says (21, not 22); the status row is the last.
 - Part 10c (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10c.md`, notes not fixed in the fix pass):
   - **INV-0386-1 and a program's own `c_cc`:** a program may make a printable byte a signal character (`VINTR` = `[`, `~` or a

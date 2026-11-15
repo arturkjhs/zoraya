@@ -127,3 +127,27 @@ fn drawing_the_row_touches_only_its_own_row() {
     r.set(STATUS_PLAIN, b"");
     assert!(r.render(&mut look, &mut pixels, w, columns, rows));
 }
+
+#[test]
+fn an_empty_row_is_drawn_once_on_a_ground_of_its_own() {
+    // The review of 10f, finding 7: an empty row can be told from no row.
+    let mut look = Look::new(Scale::ONE, Appearance::Light);
+    let (columns, rows) = (20, 3);
+    let (w, h) = look.surface_size(columns, rows + 1);
+    let mut pixels = vec![0xdead_beefu32; w * h];
+    let mut r = StatusRow::default();
+    assert!(r.is_empty());
+    assert!(
+        r.render(&mut look, &mut pixels, w, columns, rows),
+        "drawn at first"
+    );
+    assert!(
+        !r.render(&mut look, &mut pixels, w, columns, rows),
+        "and once"
+    );
+    let y = look.pad + rows * look.cell_height() + 1;
+    let corner = pixels[y * w + look.pad + 1];
+    assert_eq!(corner, empty_ground(&look).pixel());
+    assert_ne!(corner, look.bg.pixel(), "not the window's own ground");
+    assert_ne!(corner, look.sel_bg.pixel(), "nor the text's");
+}

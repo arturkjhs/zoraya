@@ -32,6 +32,11 @@ pub const CHANGE: u32 = rights::READ | rights::WRITE | rights::SYNC | rights::CL
 pub struct Held {
     pub wholes: Vec<(String, u32)>,
     pub names: Vec<(String, String, u32)>,
+    /// Entries of the table the shell did not make from the line (a program's
+    /// own directory, ADR-0341 item 3) or whose rights it cannot know: never
+    /// replaced, widened or shadowed, and nothing is given at, above or below
+    /// them.
+    pub fixed: Vec<String>,
 }
 
 /// One thing the person gave: an absolute normal path, whether the shell
@@ -62,7 +67,53 @@ fn parent_and_name(path: &str) -> Option<(&str, &str)> {
     (!name.is_empty()).then(|| (if cut == 0 { "/" } else { &path[..cut] }, name))
 }
 
+/// What kind of entry a program's table has, for [`Held::from_table`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableKind {
+    /// A directory connection.
+    Directory,
+    /// The temporary directory.
+    Tmp,
+    /// Anything else (`/dev/null`, the image).
+    Other,
+}
+
+/// The system directories every POSIX program is given read only.
+const SYSTEM: [&str; 3] = ["/bin", "/usr", "/etc"];
+
 impl Held {
+    /// What a table holds: `entries` are its prefix, kind and whether it has a
+    /// connection; `merged` is the plan the shell made them from. An entry with
+    /// no connection holds nothing; a directory the plan does not list and that
+    /// is not a system directory is **fixed** (a program's own directory, ADR-0341
+    /// item 3, or any entry whose rights the shell cannot know): it is never
+    /// assumed to be read only, and nothing is given at, above or below it.
+    pub fn from_table<'a>(
+        entries: impl Iterator<Item = (&'a str, TableKind, bool)>,
+        merged: &[crate::grants::Merged],
+    ) -> Held {
+        let mut held = Held::default();
+        for (prefix, kind, connected) in entries {
+            if !connected {
+                continue;
+            }
+            let found = merged.iter().find(|m| m.path == prefix);
+            match (kind, found) {
+                (TableKind::Directory, Some(m)) => match &m.name {
+                    Some(name) => held.names.push((m.path.clone(), name.clone(), m.rights)),
+                    None => held.wholes.push((m.path.clone(), m.rights)),
+                },
+                (TableKind::Directory, None) if SYSTEM.contains(&prefix) => {
+                    held.wholes.push((prefix.into(), READ));
+                }
+                (TableKind::Directory, None) => held.fixed.push(prefix.into()),
+                (TableKind::Tmp, _) => held.wholes.push((prefix.into(), TREE)),
+                (TableKind::Other, _) => {}
+            }
+        }
+        held
+    }
+
     /// The grant of `wanted` to a program holding `self`: the entries to
     /// send, and `self` as it is then. All or nothing: on `Err` nothing is
     /// changed, and the text says why (and what to do).
@@ -79,6 +130,27 @@ impl Held {
             specs.push(s);
         };
         for w in wanted {
+            let place = if w.dir {
+                Some(w.path.as_str())
+            } else {
+                parent_and_name(&w.path).map(|(p, _)| p)
+            };
+            if let Some(place) = place
+                && let Some(f) = next
+                    .fixed
+                    .iter()
+                    .find(|f| covers(f, place) || covers(place, f))
+            {
+                return Err(format!(
+                    "{}: the program has its own place at {f}; start it again with the grant",
+                    w.path
+                ));
+            }
+            if w.dir && w.path == "/" {
+                return Err(String::from(
+                    "/: the whole volume cannot be given to a running program",
+                ));
+            }
             if w.dir {
                 let want = if w.write { TREE } else { READ };
                 if let Some((q, _)) = next
@@ -91,13 +163,34 @@ impl Held {
                         w.path
                     ));
                 }
+                // A deeper entry decides every path below it: giving this
+                // directory would leave it as it was, not as the row says.
+                if let Some(q) = next
+                    .wholes
+                    .iter()
+                    .map(|(q, _)| q)
+                    .chain(next.names.iter().map(|(p, _, _)| p))
+                    .find(|q| covers(&w.path, q) && **q != w.path)
+                {
+                    return Err(format!(
+                        "{}: the program holds {q} already, a narrower place; start it again with the grant",
+                        w.path
+                    ));
+                }
                 let held = next.wholes.iter().position(|(q, _)| *q == w.path);
                 let mut all = want;
-                // What was given under this directory by name is now part
-                // of it, with its rights.
-                for (p, _, r) in next.names.iter().filter(|(p, _, _)| *p == w.path) {
-                    let _ = p;
-                    all |= r;
+                // Names the program holds here with more rights than the
+                // typed word gives would be widened to the whole directory:
+                // never more than was typed.
+                if next
+                    .names
+                    .iter()
+                    .any(|(p, _, r)| *p == w.path && r & !want != 0)
+                {
+                    return Err(format!(
+                        "{}: the program holds files there with more rights than that; start it again with the grant",
+                        w.path
+                    ));
                 }
                 match held {
                     Some(i) => {

@@ -39,7 +39,7 @@ pub use keys::{KeyModes, MAX_KEY_BYTES, Mods, key_bytes};
 pub use mouse::{Pointer, PointerEvent, focus_bytes};
 pub use queue::{Next, SendQueue};
 pub use session::{Outgoing, Session};
-pub use status::StatusRow;
+pub use status::{StatusRow, empty_ground};
 pub use term::{Modes, Restored, Term};
 
 /// Lines of scrollback kept by default: the setting `term.scrollback`

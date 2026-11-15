@@ -21,7 +21,7 @@ item 9 are gaps in the build, not deviations.
    desktop/survey.md#spoofing-and-the-trusted-path, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks).
 2. The person sees the truth, and is never shown a grant that did not happen (ADR-0337 driver 2;
    stage-10/survey.md#pattern-e-refusal-and-what-the-person-sees).
-3. Reversible and small: one more row, three more ordinals, no change to the grid the parser writes (INV-0096-1 to -3;
+3. Reversible and small: one more row, four more ordinals (two in the terminal's protocol, one in the compositor's, one in the file protocol) and one slot, no change to the grid the parser writes (INV-0096-1 to -3;
    CP-01 least authority is not touched, CP-02 rights only narrow: the grant line gives no more than the shell holds,
    CP-05 an untrusted room's grant line is refused).
 
@@ -77,7 +77,9 @@ What this part decided where ADR-0337 is silent (all reversible):
 2. **The chords.** System+G and System+K join `TAKEN_CHORDS` (13 keys). The compositor sends the focused window
    `Attention`, as it sends `Copy`; no key reaches any client. A client that does not know the message ignores it.
 3. **The row.** `term` makes its window one row taller than the grid (80 x 24 grid, 25-row surface) and keeps the last row
-   that fits for the status; on a resize the grid is one row less than the window had. The row is drawn in the selection's
+   that fits for the status (an empty row is drawn on a ground of its own, between the window's and the selection's, so that a
+   test can tell an empty row from none; a program can paint either colour in its own rows, and can draw a look-alike of the
+   row: the real row is always the lowest, which is the only tell, ADR-0337's first open question stands); on a resize the grid is one row less than the window had. The row is drawn in the selection's
    colours so that it does not look like the program's screen. Its text is the shell's, cleaned again by `term`: a control
    character is a space, bidirectional and zero-width characters are dropped, a character of other than one column is
    `?`, and a text past the row is cut. The shell cuts a shown path at 60 bytes (ADR-0337 item 2: "fits the row whole").
@@ -101,7 +103,11 @@ What this part decided where ADR-0337 is silent (all reversible):
    the recommendation says. A grant below a directory the program holds whole, or at a system directory it holds, is refused
    (`the program holds PATH already; start it again with the grant`): the new entry would shadow, or replace, a wider one,
    and widening it would give more than the person typed. A path that does not exist is refused (`does not exist`, only after
-   the shell found it inside its own reach). **Not built:** a `+net` word and a native program (no `Startup` index) are
+   the shell found it inside its own reach). A directory is given with exactly the rights typed: if the program holds files
+   in it with more, or holds a deeper entry, or has an entry the plan does not list (a program's own directory, ADR-0341 item
+   3: never assumed read only, never replaced), the grant is refused with the same text, and a grant is one message of at most
+   4 places, whole or not at all. The shell's lookup of a refused path opens it with no rights through its own root (there is
+   no stat by name in the file protocol): ADR-0337 INV-0337-6's "opens nothing" is not met, and the Status says so. **Not built:** a `+net` word and a native program (no `Startup` index) are
    refused on the row; a write refused inside a read-only entry is reported only when the service answers `EACCES`;
    `user/src/namespace.rs` still reports once per path, not per path and access; the report limit of 16 restarts after a
    grant only in `libposix`; datagram and listen refusals are not reported; the planner (`grants.rs`) still refuses two files
@@ -137,8 +143,9 @@ What this part decided where ADR-0337 is silent (all reversible):
   refused grant changes nothing. *Check:* `cargo test -p zoraya-shell delivery`.
 - **INV-0395-5.** A `GRANTS` message decodes totally, adds only directory entries, and never `/`, `/dev`, `/proc`, `/tmp` or
   a name below them. *Check:* `cargo test -p zoraya-abi grants_message`.
-- **INV-0395-6.** A connection narrowed to a list of names opens each with at most its own rights, nothing else, and cannot
-  list or widen. *Check:* `cargo test -p zoraya-fs-service a_connection_narrowed_to_a_list`.
+- **INV-0395-6.** A connection narrowed to a list of names has each right on a name only if that name's own entry holds it, for
+  every request that names something, and it cannot list or widen. *Check:* `cargo test -p zoraya-fs-service
+  a_connection_narrowed_to_a_list a_list_gives_remove_rename`.
 
 
 ## Open questions

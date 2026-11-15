@@ -462,6 +462,28 @@ fn a_grant_is_read_on_a_refusal_and_the_path_resolved_again() {
     assert!(r.p.entry_count() <= zoraya_abi::posix::MAX_TABLE);
 }
 
+/// ADR-0337 item 1 (the review of 10f, finding 9): the limit of 16 counts the
+/// reports since the program last received a grant, so after one the next is sent.
+#[test]
+fn the_limit_of_sixteen_reports_restarts_after_a_grant() {
+    let mut r = rig_without_root();
+    let net = r.net.clone();
+    let (service, other) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    let (end, far) = r.p.sys.channel_create().unwrap();
+    r.p.set_grants(Some(end));
+    for i in 0..20 {
+        let _ = open(&mut r, &format!("/outside/{i}"), o::RDONLY, 0);
+    }
+    assert_eq!(r.reports().len(), 16, "the limit");
+    // A grant that arrives with the next refusal restarts the count.
+    give(&mut r, far, &[("/elsewhere", 0)], &[other]);
+    let _ = open(&mut r, "/outside/again", o::RDONLY, 0);
+    let got = r.reports();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].2, "/outside/again");
+}
+
 /// At most 16 reports a process; past that they are dropped and counted.
 #[test]
 fn reports_stop_at_sixteen() {

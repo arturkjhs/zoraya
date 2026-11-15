@@ -19,11 +19,29 @@ use crate::cell::Cell;
 pub const HINT: &str = "System+G: give";
 
 /// The row's text and how it is drawn.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusRow {
     kind: u32,
     text: String,
     dirty: bool,
+}
+
+impl Default for StatusRow {
+    /// An empty row, to be drawn once: an empty row has a ground of its own
+    /// (see [`empty_ground`]), so that it can be told from no row.
+    fn default() -> StatusRow {
+        StatusRow {
+            kind: 0,
+            text: String::new(),
+            dirty: true,
+        }
+    }
+}
+
+/// The ground of an empty status row: the window's, a little toward the
+/// selection's, so that the row is there to be seen and to be found by a test.
+pub fn empty_ground(look: &Look) -> zoraya_tokens::Color {
+    look.bg.blend(look.sel_bg, 64)
 }
 
 /// Whether `c` is dropped from the text: bidirectional controls and
@@ -73,6 +91,19 @@ impl StatusRow {
     /// The text as it is (cleaned).
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Draws the row whether it changed or not (a surface that was cleared).
+    pub fn redraw_and_render(
+        &mut self,
+        look: &mut Look,
+        pixels: &mut [u32],
+        stride: usize,
+        columns: usize,
+        y: usize,
+    ) -> bool {
+        self.dirty = true;
+        self.render(look, pixels, stride, columns, y)
     }
 
     /// Marks the row to be drawn again (the window changed size).
@@ -135,9 +166,9 @@ impl StatusRow {
         self.dirty = false;
         let chars = self.chars(columns);
         let cursor = self.cursor(columns);
-        // An empty row is the window's background, as the padding is.
+        // An empty row is on its own ground, so that it can be told from no row.
         let (fg, bg) = if self.text.is_empty() {
-            (look.fg, look.bg)
+            (look.fg, empty_ground(look))
         } else {
             (look.sel_fg, look.sel_bg)
         };

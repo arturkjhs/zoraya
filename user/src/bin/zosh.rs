@@ -208,6 +208,13 @@ fn term_message<'m, M: Message<'m>>(m: &M) {
     }
 }
 
+/// An error written for the screen (`zosh: SUBJECT: PROBLEM` and hint lines)
+/// as one line for the status row: its first line without the `zosh: ` prefix.
+fn one_line(text: &str) -> String {
+    let first = text.lines().next().unwrap_or("");
+    String::from(first.strip_prefix("zosh: ").unwrap_or(first))
+}
+
 /// The status row's text, out of band (ADR-0337 items 3 and 5): at most
 /// `MAX_STATUS` bytes, cut at a character.
 fn send_status(kind: u32, text: &str) {
@@ -266,8 +273,8 @@ impl grantline::Held for Holds<'_> {
         self.0.root.as_ref().is_some_and(|h| h.covers(path, write))
     }
     fn net(&self, _word: &str) -> bool {
-        // The network scope's own check is `+net`'s at the prompt; until the
-        // `GRANTS` channel exists nothing is given, so nothing is claimed.
+        // A host is not delivered to a running program (`give` says so before
+        // anything is checked), so the shell claims to hold none here.
         false
     }
 }
@@ -541,6 +548,8 @@ const STREAM_KEY: u64 = 1 << 32;
 const REPORT_KEY: u64 = 1 << 24;
 /// The most elements of a line whose reports are read live.
 const LIVE_ELEMENTS: usize = 16;
+/// The most report messages read from one element's channel in one wake.
+const MAX_REPORTS_PER_WAKE: usize = 32;
 /// Port keys of the terminal connections of POSIX programs: above every
 /// stream's (ADR-0331 item 2).
 const TTY_KEY: u64 = 1 << 48;
@@ -1774,28 +1783,18 @@ impl Z {
         plan: &[grants::Planned],
     ) -> zoraya_shell::delivery::Held {
         use zoraya_abi::posix::EntryKind as P;
-        let merged = grants::merge(plan);
-        let mut held = zoraya_shell::delivery::Held::default();
-        for e in entries {
-            if e.handle.is_none() {
-                continue;
-            }
-            let found = merged.iter().find(|m| m.path == e.prefix);
-            match (e.kind, found) {
-                (P::Directory, Some(m)) => match &m.name {
-                    Some(name) => held.names.push((m.path.clone(), name.clone(), m.rights)),
-                    None => held.wholes.push((m.path.clone(), m.rights)),
-                },
-                (P::Directory, None) => held
-                    .wholes
-                    .push((e.prefix.clone(), zoraya_shell::delivery::READ)),
-                (P::Tmp, _) => held
-                    .wholes
-                    .push((e.prefix.clone(), zoraya_shell::delivery::TREE)),
-                _ => {}
-            }
-        }
-        held
+        use zoraya_shell::delivery::TableKind;
+        let kind = |k: P| match k {
+            P::Directory => TableKind::Directory,
+            P::Tmp => TableKind::Tmp,
+            _ => TableKind::Other,
+        };
+        zoraya_shell::delivery::Held::from_table(
+            entries
+                .iter()
+                .map(|e| (e.prefix.as_str(), kind(e.kind), e.handle.is_some())),
+            &grants::merge(plan),
+        )
     }
 
     /// Whether a line for a POSIX program the image describes may run: a
@@ -3462,7 +3461,10 @@ impl Z {
         let mut bytes = alloc::vec![0u8; 8192];
         for (element, end) in ends {
             let mut handles = [end; 1];
-            loop {
+            // At most this many a wake: a program writing as fast as it can
+            // must not keep the shell from its keys (the review of 10f,
+            // finding 4); the subscription wakes the loop again.
+            for _ in 0..MAX_REPORTS_PER_WAKE {
                 match channel_read(end, &mut bytes, &mut handles) {
                     Ok(sizes) => {
                         for h in &handles[..sizes.handles as usize] {
@@ -3640,6 +3642,14 @@ impl Z {
             ));
         };
         let specs = trial.give(&wanted)?;
+        // One message at most: a grant is made whole or not at all, so the row
+        // and the record never differ from what the program holds (the review
+        // of 10f, finding 5).
+        if specs.len() > zoraya_abi::posix::MAX_GRANTED {
+            return Err(format!(
+                "{words}: too many places for one line; give fewer at a time"
+            ));
+        }
         // The connections: each directory opened from this shell's own root,
         // whole or narrowed to its names, so that nothing is given that the
         // shell does not hold.
@@ -3653,6 +3663,7 @@ impl Z {
                         name: None,
                         lines: Vec::new(),
                     })
+                    .map_err(|e| one_line(&e))
                     .and_then(|o| match o {
                         Some((f, native::EntryKind::Directory)) => Ok((prefix.clone(), f)),
                         _ => Err(format!("{prefix}: not a directory")),
@@ -3680,32 +3691,28 @@ impl Z {
             .and_then(|e| e.payload.granted.get(element))
             .and_then(|g| g.as_ref().map(|g| g.tx))
             .ok_or_else(|| String::from("the program has ended"))?;
-        while !files.is_empty() {
-            let take = files.len().min(zoraya_abi::posix::MAX_GRANTED);
-            let chunk: Vec<(String, File)> = files.drain(..take).collect();
-            let prefixes: Vec<(&str, u8)> = chunk
-                .iter()
-                .enumerate()
-                .map(|(i, (p, _))| (p.as_str(), i as u8))
-                .collect();
-            let mut bytes = [0u8; 4096];
-            let Some(n) = posix::Grants::encode(&prefixes, chunk.len(), &mut bytes) else {
-                return Err(format!("{words}: cannot be sent"));
-            };
-            let entries: Vec<ChannelEntry> = chunk
-                .iter()
-                .map(|(_, f)| ChannelEntry {
-                    handle: f.end,
-                    rights: ChannelObject::RIGHTS,
-                    transfer: Transfer::Move,
-                })
-                .collect();
-            if channel_write(tx, &bytes[..n], &entries).is_err() {
-                return Err(format!("{words}: the program does not take it"));
-            }
-            // Moved: these handles are the program's now.
-            core::mem::forget(chunk);
+        let prefixes: Vec<(&str, u8)> = files
+            .iter()
+            .enumerate()
+            .map(|(i, (p, _))| (p.as_str(), i as u8))
+            .collect();
+        let mut bytes = [0u8; 4096];
+        let Some(n) = posix::Grants::encode(&prefixes, files.len(), &mut bytes) else {
+            return Err(format!("{words}: cannot be sent"));
+        };
+        let entries: Vec<ChannelEntry> = files
+            .iter()
+            .map(|(_, f)| ChannelEntry {
+                handle: f.end,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            })
+            .collect();
+        if channel_write(tx, &bytes[..n], &entries).is_err() {
+            return Err(format!("{words}: the program does not take it"));
         }
+        // Moved: these handles are the program's now.
+        core::mem::forget(files);
         if let Some(g) = self
             .jobs
             .get_mut(line)
