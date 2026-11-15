@@ -461,7 +461,9 @@ less: $(LESS_BIN)
 $(LESS): $(LOCK) $(wildcard ports/patches/less/*.patch)
 	$(call unpack,less,ports/patches/less)
 	@touch $@
-$(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(SYSROOT_STAMP) ports/config.site
+# zcc also searches the sysroot's lib, where CURSES_SYSROOT_STAMP puts the same two archives: the link must
+# not see an older copy there.
+$(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(CURSES_SYSROOT_STAMP) ports/config.site
 	@cd $(LESS) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl \
 	  --with-regex=posix $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" \
 	  CPPFLAGS="-I$(CURSES)/usr/include" LDFLAGS="-L$(CURSES)/usr/lib" LIBS="-ltinfow",less-configure)
@@ -494,7 +496,7 @@ $(NVI): $(LOCK) $(wildcard ports/patches/nvi2/*.patch)
 	$(call unpack,nvi2,ports/patches/nvi2)
 	@touch $@
 $(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h ports/nvi/compat.c \
-	$(NCURSES_LIBS) $(DB1_PREFIX)/lib/libdb1.a $(SYSROOT_STAMP)
+	$(NCURSES_LIBS) $(DB1_PREFIX)/lib/libdb1.a $(CURSES_SYSROOT_STAMP)
 	rm -f $(NVI_BIN)
 	@$(call logged,sh -x ports/nvi/build.sh $(NVI) $(OBJ)/nvi $(NVI_BIN) $(ZCC) $(CURSES) $(DB1_PREFIX)/include \
 	  $(DB1_PREFIX)/lib "$(APPS_CFLAGS)",nvi)

@@ -1,0 +1,12 @@
+--- a/common/main.c
++++ b/common/main.c
+@@ -52,6 +52,9 @@
+ 	CHAR_T *w, path[256];
+ 	size_t wlen;
+ 
++	/* Zoraya: the program name is argv[0]'s (ports/nvi/compat.c); ex and view are links to vi. */
++	zoraya_setprogname(argv[0]);
++
+ 	/* Initialize the busy routine, if not defined by the screen. */
+ 	if (gp->scr_busy == NULL)
+ 		gp->scr_busy = vs_busy;

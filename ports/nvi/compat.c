@@ -2,9 +2,27 @@
  * and strlcat are musl's). Not a name of libc.a: it is part of the program. */
 #include <stdlib.h>
 
+/* The name nvi was run by, from argv[0] (patches/nvi2/0004): `ex` and `view` are links to `vi`
+ * and the program takes its mode and its messages' prefix from this name. */
+#include <string.h>
+static char progname[32] = "vi";
+
+void zoraya_setprogname(const char *argv0)
+{
+	const char *p;
+	if (argv0 == NULL)
+		return;
+	p = strrchr(argv0, '/');
+	p = p ? p + 1 : argv0;
+	if (*p != '\0') {
+		strncpy(progname, p, sizeof(progname) - 1);
+		progname[sizeof(progname) - 1] = '\0';
+	}
+}
+
 const char *getprogname(void)
 {
-	return "vi";
+	return progname;
 }
 
 /* The BSD error functions, which musl does not have (libbsd's on Linux). */

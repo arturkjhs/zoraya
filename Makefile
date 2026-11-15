@@ -1291,9 +1291,11 @@ posix-image: $(KERNEL) tools-storage
 	cp -R tests/posix/rootfs/. $(POSIX_ROOT)/
 	tools/zcc -O2 -o $(POSIX_ROOT)/bin/t_posix tests/posix/t_posix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_tty tests/posix/t_tty.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_curses tests/posix/t_curses.c -lncursesw -ltinfow
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_posix
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_tty
+	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_curses
 	mkdir -p $(POSIX_ROOT)/src/w10 $(POSIX_ROOT)/src/w3
 	cp -R $(BUILD)/ports/workloads/tcc $(BUILD)/ports/workloads/lua $(BUILD)/ports/workloads/sqlite \
 	  $(BUILD)/ports/workloads/hello $(POSIX_ROOT)/src/
@@ -1317,6 +1319,7 @@ posix-image: $(KERNEL) tools-storage
 	cp -R rootfs/. $(BUILD)/rootfs-posix/. $(POSIX_TOUR_ROOT)/
 	@# The terminal's test program (tests/gui/posix-terminal.script).
 	cp $(POSIX_ROOT)/bin/t_tty $(POSIX_TOUR_ROOT)/bin/t_tty
+	cp $(POSIX_ROOT)/bin/t_curses $(POSIX_TOUR_ROOT)/bin/t_curses
 
 # One boot per script under each accelerator, zoraya-fsck after each
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
@@ -1359,7 +1362,7 @@ endef
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
 	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/threads.script \
-	tests/posix/zosh.script tests/posix/zosh-userland.script tests/posix/tour.script
+	tests/posix/zosh.script tests/posix/zosh-userland.script tests/posix/zosh-curses.script tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
