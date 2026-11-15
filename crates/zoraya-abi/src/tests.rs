@@ -1717,6 +1717,6 @@ fn memory_map_flags_are_zero_to_three() {
             "{raw:#x}"
         );
     }
-    assert_eq!(MapFlags::WRITE.union(MapFlags::SHARED).is_shared(), true);
+    assert!(MapFlags::WRITE.union(MapFlags::SHARED).is_shared());
     assert!(!MapFlags::WRITE.is_shared() && !MapFlags::SHARED.is_write());
 }
