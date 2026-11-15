@@ -2406,6 +2406,9 @@ fn fork_locked() -> Result<i32, i32> {
                     return Err(e);
                 }
                 let _ = zoraya_rt::handle_close(process);
+                // The byte streams of Unix stream sockets are the child's too
+                // now (ADR-0412 items 2 and 6).
+                p.after_fork_in_parent();
                 p.stats.forks += 1;
                 p.stats.snapshot_ns += snapshot_ns;
                 p.stats.fork_ns += zoraya_rt::clock_monotonic().saturating_sub(started);

@@ -62,6 +62,21 @@ pub trait Sys {
         bytes: &[u8],
         moved: &[Self::H],
     ) -> Result<(), Status>;
+    /// Sends a message that carries handles, all or nothing (INV-0050-1): each
+    /// of `handles` is moved (`false`) or copied (`true`, the caller keeps its
+    /// own), in this order. On any error nothing happened and every handle is
+    /// still the caller's, unlike [`Sys::channel_write`], which takes what it
+    /// is given whatever happens. `BadState` is a channel end that holds
+    /// handles queued, or the end the message travels on (ADR-0050).
+    fn channel_send(
+        &mut self,
+        end: Self::H,
+        bytes: &[u8],
+        handles: &[(Self::H, bool)],
+    ) -> Result<(), Status> {
+        let _ = (end, bytes, handles);
+        Err(Status::BadSyscall)
+    }
     /// Takes the next message into `bytes`, its handles onto `handles`, and
     /// gives its size; `WouldBlock` when there is none.
     fn channel_read(

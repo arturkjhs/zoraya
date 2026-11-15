@@ -104,6 +104,31 @@ x missing.h
 < t_poll: mask passed
 < posixrun: exit 0
 < \r\n~> 
+# AF_UNIX (ADR-0412, plan part F2): socketpair, SCM_RIGHTS in one process, and pread, pwrite, usleep.
+> posixrun /bin/t_unix pair\r
+< t_unix: pair passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_unix rights\r
+< t_unix: rights passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_unix refused\r
+< t_unix: refused passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_unix stream\r
+< t_unix: stream passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_unix poll\r
+< t_unix: poll passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_unix calls\r
+< t_unix: calls passed
+< posixrun: exit 0
+< \r\n~> 
 # The measurements: through libposix, from C.
 > posixrun -e ZORAYA_POSIX_STATS=1 /bin/t_libposix bench\r
 < t_libposix: bench

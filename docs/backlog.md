@@ -218,8 +218,8 @@ From the "Not done" and limits lists of `docs/tasks/TASK-27-report.md` that no r
   only by the marker script (the refusal is unreachable while an untrusted room cannot be entered). `docs/design.md` has the section on the window of a POSIX
   program and NetSurf (9f-ci).
 - **CPython (9c).** `make test-python-long` (`test_queue`, `test_threading`) runs only by hand: too long for CI's 45-minute jobs under
-  TCG; `test_threading` ends "env changed" because `os.fork` runs out of memory (no copy-on-write). No `socketpair`, `AF_UNIX`,
-  server sockets, `posix_spawn`, shared modules or `ctypes`. The archive's Sigstore bundle is not checked. The cold-cache time of CI's
+  TCG; `test_threading` ends "env changed" because `os.fork` runs out of memory (no copy-on-write). `socketpair` works since plan part F2; no
+  `AF_UNIX` server sockets, TCP server sockets, `posix_spawn`, shared modules or `ctypes`. The archive's Sigstore bundle is not checked. The cold-cache time of CI's
   `build` job with NetSurf and CPython is not measured (the job has 60 minutes).
 - **Compositor (9e).** The session's 20 clients are not carved per room; a client with no window keeps its slot (ADR-0323's open
   questions). The scale-2 and TCG GUI runs of 9e's scripts ran only in CI.

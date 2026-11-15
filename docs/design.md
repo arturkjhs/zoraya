@@ -2127,17 +2127,32 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   16 MiB 1,305 ms (1,299 to 1,354) against 1,380 ms (1,338 to 1,397); one byte 23.1 ms (6.6 to 32.3) against 20.5 ms (1.9 to
   29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
   and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
-- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `sendmsg`/`recvmsg`,
-  `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
+- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, TCP datagram sockets (`AF_UNIX` pairs: next bullets), `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
   curl and wget (W11, W13) were built in stage 9 (see "TLS for C programs, curl and wget"), which needed `select` and TLS.
 - **`poll` and `ppoll`** (ADR-0398, proposed; ADR-0342 item 5, ADR-0414 item 1): `Posix::poll_once` (`crates/zoraya-posix/src/poll.rs`) reports
   readiness per descriptor from the handle signals over the same `wait_for` as `pselect`, so a threaded process defers the wait (ADR-0315);
   `ffi/procs.rs` owns the timeout, the mask (`ppoll`) and `EINTR`. `POLLIN` with `POLLHUP` at end of file, `POLLERR` on a write end with no
   reader, `POLLNVAL` for a closed fd, `nfds` above `OPEN_MAX` is `EINVAL`. Limits: a terminal and a file are ready at once (as `select`;
-  the terminal's true readiness is stage 10 part 10c), `select` is still `ports/apps/zshim.c`'s, there is no `eventfd`, no Unix socket and no
-  listener to poll yet (plan parts F1 and F2). Tests: `crates/zoraya-posix/tests/poll.rs` and `net.rs`, `tests/posix-core/t_poll.c` (in
+  the terminal's true readiness is stage 10 part 10c), `select` is still `ports/apps/zshim.c`'s, there is no `eventfd` and no
+  listener to poll yet (plan parts F1 and F7); a Unix socket joined with plan part F2 (next bullet). Tests: `crates/zoraya-posix/tests/poll.rs` and `net.rs`, `tests/posix-core/t_poll.c` (in
   `make test-libposix` and `make test-posix-threads`).
+- **`AF_UNIX` sockets** (plan part F2, ADR-0412 items 1 to 4, 6, 7; ADR-0430, proposed, records what the code decided):
+  `socketpair`, `socket(AF_UNIX)` (no peer yet), `send`/`recv`, `sendmsg`/`recvmsg` with `SCM_RIGHTS`, in
+  `crates/zoraya-posix/src/unix.rs` (the wire form, the stream's tag book: pure, host tested) and `unix_io.rs` (the calls on handles).
+  A `SOCK_SEQPACKET` or `SOCK_DGRAM` pair is one channel (a message of at most 65,535 bytes less 24 for each descriptor, 64 queued); a
+  `SOCK_STREAM` pair is two byte streams and an ancillary channel that carries each `SCM_RIGHTS` descriptor ahead of its byte, with the
+  stream offset, so that a `recvmsg` returns it with that byte (it cuts its reads at the next tag, and keeps what it had read past a late
+  one). A descriptor becomes a handle: a file or directory a `share`d connection with the same rights or fewer, a pipe end a copy, a
+  Unix socket moved (its sender's description is left dead); at most 64 handles a message (`ETOOMANYREFS`); a TCP socket, a terminal and
+  `/dev/null` are `EINVAL`; an end with handles queued is `EBUSY`; a refused send changes nothing (`Sys::channel_send` is the kernel's
+  all-or-nothing write). A full fd table leaves the message queued (`EMFILE`). After `fork` a stream socket's byte streams are in two
+  processes and `SCM_RIGHTS` on it is `EOPNOTSUPP` in both; a packet socket does not fork (`ENOTSUP`). **Limits** (recorded, not
+  hidden): a Unix socket does not cross `spawn` or `exec` (`EBADF` without `SOCK_CLOEXEC`, as a TCP socket) until plan part F4 changes
+  the bootstrap record, so the two-process half of INV-0412-1 is the host tests' over a fake kernel; no `bind`, `listen`, `accept` or
+  socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
+  part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
+  splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 
@@ -2264,7 +2279,7 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   Built in: `_socket`, `select`, `_ssl` and `_hashlib` (OpenSSL), `_sqlite3`, `zlib`, `_asyncio`, `_thread`. No shared modules
   (no `dlopen`), `ctypes`, `readline`, `curses`, `tkinter`, `bz2`, `lzma`.
 - **Patches** (`ports/patches/python/`): `_ssl` uses a file-descriptor BIO (OpenSSL has no sockets); the environment, byte code
-  files and the per-user site directory are off; `asyncio`'s self-pipe is `os.pipe()` (no `socketpair`); `main` runs the interpreter
+  files and the per-user site directory are off; `asyncio`'s self-pipe is a real `socketpair` since plan part F2 (the old patch 0003, which used `os.pipe()`, is gone, and `configure` no longer says `socketpair` is absent); `main` runs the interpreter
   on a thread with a 2 MiB stack (committed in full, copied by every `fork` child; measured 8, 2 and 1 MiB, ADR-0320 item 5) and ends the process with `exit(status)` from it, because a process starts on 64 KiB and CPython's overflow guard keeps 32 KiB (the main thread blocks every signal, so Ctrl-C reaches the interpreter's thread); no `pyvenv.cfg`
   search; `-c`, `-m` and a program read from standard input put no directory on `sys.path`; `urllib` takes no proxy from the environment. `configure` is told there is no `<sys/ioctl.h>` (libposix's `ioctl` serves terminals only), so `set_blocking` uses `fcntl`, and `_PYTHREAD_NAME_MAXLEN` is 15 (configure does not know the platform), so a long thread name is truncated, not refused.
 - **The description** (`user/describe/posix/python3.cmd`): a POSIX program with the toolchain set; the network only with a
@@ -2301,8 +2316,8 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   the hash at each rebuild; modules are built in, never shared (no `dlopen`), and C++ modules need their runtime library named in
   the `Setup` line.
 - **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
-  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). No `socketpair`, `AF_UNIX`,
-  `bind`/`listen`/`accept` (a client only), `posix_spawn`; the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
+  `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). `socketpair` and `sendmsg`/`recvmsg` work (plan part F2); no
+  `bind`/`listen`/`accept` (a client only), `posix_spawn`, and a Unix socket does not cross `spawn` (ADR-0430); the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
   (`VERIFY_X509_STRICT`): the test client clears that flag alone, because the test PKI has none.
 
