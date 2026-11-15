@@ -46,7 +46,7 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
 	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md \
-	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md
+	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md docs/adr/0347-surface-for-git.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -437,6 +437,12 @@ $(TTYSHIM): ports/apps/ttyshim.c $(SYSROOT_STAMP)
 	@mkdir -p $(dir $@) $(OBJ)/apps
 	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/ttyshim.o ports/apps/ttyshim.c
 	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/ttyshim.o
+
+GITSHIM := $(PORTS)/ttyshim/libgitshim.a
+$(GITSHIM): ports/apps/gitshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(dir $@) $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/gitshim.o ports/apps/gitshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/gitshim.o
 
 SSHSHIM := $(PORTS)/ttyshim/libsshshim.a
 $(SSHSHIM): ports/apps/sshshim.c $(SYSROOT_STAMP)
@@ -844,6 +850,47 @@ $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.si
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/lib -j3,wget-lib)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/src -j3 V=1,wget)
 	@touch $@
+
+# ---------------------------------------------------------------- git (TASK-31 ports-early, ADR-0339)
+
+# git 2.56.1, GPL-2.0-only, a separate program in the image like wget. Built
+# with the switches of ADR-0339 item 1 (no Perl, Python, Tcl/Tk, gettext, iconv,
+# expat, mmap, Unix sockets or setitimer; NO_RUST: its Rust code is optional in
+# this release and the toolchain of a port is C), with zlib, the library of the
+# pinned curl (built above, ADR-0310) and the OpenSSL of ADR-0312 behind it.
+# `git` and `git-remote-http` (which is also `git-remote-https`) only. git
+# builds in its source tree; its Makefile asks `uname` for the host, which is
+# the build host's, so the target's answers are given. Patches: ports/patches/git
+# (the system gitconfig's place, the configuration paths, certificates and the
+# environment, ADR-0339 items 4 and 8).
+GIT := $(WORK)/git-$(call lock_ver,git)
+GIT_BINS := $(GIT)/git $(GIT)/git-remote-http
+GIT_CURL := $(PORTS)/gitcurl
+GIT_OPTS := uname_S=Linux uname_M=aarch64 uname_O=GNU/Linux NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 NO_GETTEXT=1 \
+	NO_ICONV=1 NO_EXPAT=1 NO_MMAP=1 NO_UNIX_SOCKETS=1 NO_SETITIMER=1 NO_RUST=1 NO_OPENSSL=1 NO_INSTALL_HARDLINKS=1 \
+	NO_GITWEB=1 NO_PERL_CPAN_FALLBACKS=1 SKIP_DASHED_BUILT_INS=1 NO_REGEX=NeedsStartEnd \
+	NO_PREAD=1 NO_GETPAGESIZE=1 HAVE_SYNC_FILE_RANGE= HAVE_SYSINFO= \
+	prefix=/usr gitexecdir=/usr/libexec/git-core sysconfdir=/etc
+git: $(GIT_BINS)
+$(GIT): $(LOCK) $(wildcard ports/patches/git/*.patch)
+	$(call unpack,git,ports/patches/git)
+	@touch $@
+# curl's headers and static library, where git's Makefile looks for them (CURLDIR).
+$(GIT_CURL)/lib/libcurl.a: $(CURL_BIN)
+	rm -rf $(GIT_CURL) && mkdir -p $(GIT_CURL)/lib $(GIT_CURL)/include
+	cp $(CURL)/lib/.libs/libcurl.a $(GIT_CURL)/lib/
+	cp -R $(CURL)/include/curl $(GIT_CURL)/include/
+$(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a $(TTYSHIM) $(SSHSHIM) $(GITSHIM)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) clean,git-clean)
+	@# git has two objects named fsck.o and two named tree.o in libgit.a, and zoraya-ar names a member by its base name: ports/git/ar.sh.
+	printf '#!/bin/sh\nexec sh $(ROOT)/ports/git/ar.sh $(TOOLBIN)/aarch64-unknown-zoraya-ar "$$@"\n' > $(PORTS)/git-ar && chmod +x $(PORTS)/git-ar
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) -j3 V=1 CC=$(ZCC) AR=$(PORTS)/git-ar \
+	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib CFLAGS="$(APPS_CFLAGS)" $(GIT_OPTS) \
+	  CURLDIR=$(GIT_CURL) ZLIB_PATH=$(DEPS) \
+	  CURL_LIBCURL="-L$(GIT_CURL)/lib -lcurl -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim -L$(dir $(TTYSHIM)) -lttyshim -lgitshim" \
+	  EXTLIBS="-L$(DEPS)/lib -lz -lzshim -L$(dir $(TTYSHIM)) -lttyshim -lgitshim" \
+	  LDFLAGS="-Wl$(comma)--error-limit=0" git git-remote-http,git)
+	@touch $(GIT_BINS)
 
 # build/rootfs-apps: the two programs as they go into the volume's /bin
 # (ADR-0310), and nothing else. `make image EXTRA_ROOT=build/rootfs-apps`

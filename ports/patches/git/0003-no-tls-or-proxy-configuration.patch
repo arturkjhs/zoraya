@@ -1,0 +1,17 @@
+--- a/http.c	2026-11-15 04:04:19
++++ b/http.c	2026-11-15 04:04:20
+@@ -393,6 +393,14 @@
+ static int http_options(const char *var, const char *value,
+ 			const struct config_context *ctx, void *data)
+ {
++	/*
++	 * Zoraya (ADR-0339 item 8, ADR-0310 item 6): no key decides what is
++	 * trusted or through which proxy a connection goes.
++	 */
++	if (starts_with(var, "http.ssl") || starts_with(var, "http.proxy") ||
++	    !strcmp(var, "http.cookiefile") || !strcmp(var, "http.savecookies") ||
++	    starts_with(var, "http.pinnedpubkey") || starts_with(var, "http.extraheader"))
++		return 0;
+ 	if (!strcmp("http.version", var)) {
+ 		return git_config_string(&curl_http_version, var, value);
+ 	}

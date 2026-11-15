@@ -23,3 +23,7 @@ BSD-2-Clause `LICENSE`**.
 | `openssh/0002-no-configuration-files-no-options-after-host.patch` | OpenSSH portable 10.6p2 (BSD) | `ssh.c` | no configuration file is read, `-o` and `-F` are fatal, options are not read again after the host, and a user name is required (ADR-0340 items 3 to 5). |
 | `openssh/0003-no-askpass.patch` | OpenSSH portable 10.6p2 (BSD) | `readpass.c` | `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `DISPLAY` and `WAYLAND_DISPLAY` are not read and no askpass program runs (ADR-0340 item 3). |
 | `openssh/0004-no-host-key-dns.patch` | OpenSSH portable 10.6p2 (BSD) | `dns.c` | `verify_host_key_dns` returns at once: the resolver's names are not in `libc.a`. |
+| `git/0001-configuration-paths-and-variables.patch` | git 2.56.1 (GPL-2.0-only) | `config.c` | the global configuration is `~/.config/git/config` always; `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM` decide nothing (ADR-0339 item 4). |
+| `git/0002-no-askpass-no-credential-helper.patch` | git 2.56.1 (GPL-2.0-only) | `prompt.c`, `credential.c` | no askpass program, no credential helper in any scope (ADR-0339 items 8 and 9). |
+| `git/0003-no-tls-or-proxy-configuration.patch` | git 2.56.1 (GPL-2.0-only) | `http.c` | the `http.ssl*`, `http.proxy*` and kindred keys are ignored (ADR-0339 item 8). |
+| `git/0004-variables-not-read.patch` | git 2.56.1 (GPL-2.0-only) | `git-compat-util.h`, `wrapper.c` | `getenv` is `zoraya_getenv`, which answers "not set" for the variables that would decide trust, a program to run or the configuration (ADR-0339 item 8). |

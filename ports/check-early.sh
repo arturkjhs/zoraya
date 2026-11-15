@@ -60,7 +60,16 @@ if [ -x "$build/ports/work/openssh-10.6p2/ssh" ] && [ -f docs/adr/0346-surface-f
 fi
 if [ -x "$build/ports/work/git-2.56.1/git" ] && [ -f docs/adr/0347-surface-for-git.md ]; then
   "$surface" imports docs/adr/0347-surface-for-git.md \
-    "git=$build/ports/work/git-2.56.1" || fail=1
+    "git=$build/ports/work/git-2.56.1" "git=$build/ports/work/git-2.56.1/compat" || fail=1
+  for b in git git-remote-http; do
+    # INV-0347-2: the patch of the environment is in the program.
+    LC_ALL=C grep -a -q 'zoraya_getenv' "$build/ports/work/git-2.56.1/$b" || say "$b has no zoraya_getenv (the patch is not applied)"
+  done
+  d=$build/ports/early-check
+  rm -rf "$d" && mkdir -p "$d"
+  cp "$build/ports/work/git-2.56.1/git" "$build/ports/work/git-2.56.1/git-remote-http" "$d/"
+  "$elfcheck" "$d" || fail=1
+  rm -rf "$d"
 fi
 
 if [ -z "$checked" ]; then echo "check-early: none of the early ports was built; nothing to check"; fi
