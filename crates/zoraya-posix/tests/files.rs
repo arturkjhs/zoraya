@@ -2032,3 +2032,51 @@ fn a_link_from_outside_does_not_lead_into_the_own_directory() {
     assert!(open(&mut r, "/own/inside", o::RDONLY, 0).is_ok());
     assert!(open(&mut r, "/own/key", o::RDONLY, 0).is_ok());
 }
+
+/// ADR-0341 item 7, INV-0341-6 for `fork`: the connection a fork gives the
+/// child for the own directory reads and cannot write; an ordinary directory
+/// keeps what it had (review of 10g, finding 4).
+#[test]
+fn a_fork_gives_the_child_the_own_directory_to_read_only() {
+    use proto::rights::*;
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"own", 0o755).unwrap();
+    let full = narrowed(&mut r, ALL);
+    r.p.add_entry("/own", EntryKind::Own, Some(full));
+    let fd = open(&mut r, "/own/config", RW_CREATE, 0o600).unwrap();
+    assert_eq!(r.write(fd, b"keep"), Ok(4));
+    r.p.close(fd).unwrap();
+    let plain = narrowed(&mut r, ALL);
+    r.p.add_entry("/plain", EntryKind::Directory, Some(plain));
+    let (broker, _b) = r.p.sys.channel_create().unwrap();
+    let (job, _j) = r.p.sys.channel_create().unwrap();
+    let (cj, _c) = r.p.sys.channel_create().unwrap();
+    let (be, _e) = r.p.sys.channel_create().unwrap();
+    let (pj, _p) = r.p.sys.channel_create().unwrap();
+    r.p.broker = Some(broker);
+    r.p.process_job = Some(job);
+    let prepared = zoraya_posix::jobs::Prepared {
+        pid: 2,
+        pgid: 2,
+        sid: 1,
+        parent_job: pj,
+        child_job: cj,
+        broker_end: be,
+    };
+    let moves = r.p.fork_moves(1, &prepared).unwrap();
+    // The fake's `slot_of` is 0 for every handle, so the moves are read in
+    // the order of the table: `/`, `/own`, `/plain`, then the broker
+    // and the job.
+    assert_eq!(moves.len(), 5);
+    let theirs = |at: usize| moves[at].1;
+    let own_child = theirs(1);
+    r.p.add_entry("/child", EntryKind::Directory, Some(own_child));
+    let fd = open(&mut r, "/child/config", o::RDONLY, 0).unwrap();
+    assert_eq!(r.read(fd, 16).unwrap(), b"keep");
+    r.p.close(fd).unwrap();
+    assert_eq!(open(&mut r, "/child/config", o::WRONLY, 0), Err(EACCES));
+    assert_eq!(open(&mut r, "/child/new", RW_CREATE, 0o600), Err(EACCES));
+    let plain_child = theirs(2);
+    r.p.add_entry("/c2", EntryKind::Directory, Some(plain_child));
+    assert!(open(&mut r, "/c2/x", RW_CREATE, 0o600).is_ok());
+}

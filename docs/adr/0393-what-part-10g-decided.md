@@ -54,28 +54,45 @@ simplest, safest and most reversible choice, so that the architect can accept or
    grant. `rest` stops option reading (including `--help` and `--`) once the operands before it are in; the shell writes
    `--` before the host (not doubled). A description with `reach` or `data` is held to its options as the userland's
    are.
-7. **No surface change for ssh.** The link probe of OpenSSH 10.6p2 found nineteen names `libc.a` lacks (`sleep`,
-   `initgroups`, `execl`, `execlp`, `madvise`, `getifaddrs`, `freeifaddrs`, `getservbyname`, `gethostbyaddr`,
-   `openlog`, `closelog`, `syslog`, `__res_state`, `__h_errno_location`, `res_init`, `res_query`, `dn_expand`,
-   `ns_get16`, `ns_get32`). `ports/apps/sshshim.c` supplies them (`sleep` over `nanosleep`; the others fail with an errno
-   or do nothing), as `zshim.c` does for curl; none is reached on a path a Zoraya ssh takes. ADR-0342 item 11's
-   `getnameinfo` and `getservbyname` were not needed (OpenSSH's own numeric `getnameinfo` replacement is used), so no
-   `posix-surface-added` block is written and the number 0346 is unused.
-8. **The port.** OpenSSH portable 10.6p2, configured as `--host=aarch64-unknown-elf` (no Linux defaults), with three
-   patches under `__zoraya__` (no configuration files; only `-T -V -t -v -l -p`; the options end at the host; a user
-   name is needed; no askpass variables; no agent). `ssh` and `ssh-keygen` only.
+7. **No surface change for ssh from 10g.** ADR-0346 (ports-early) holds the block (`openlog`, `closelog`, `syslog`
+   from musl) and `ports/apps/sshshim.c` supplies the other names OpenSSH's link probe finds missing
+   (`getservbyname`, `socketpair`, `getifaddrs`, `freeifaddrs`, `execlp`, `madvise`, `gethostbyaddr`, `initgroups`);
+   10g keeps that one shim (without its early-build marker, since the programs are now in the apps' image) and finds no
+   other name undefined after the merge. None is reached on a path a Zoraya ssh takes.
+8. **The port.** OpenSSH portable 10.6p2 and ADR-0346's four patches (`0001` to `0004`: the include, no configuration
+   file and no `-o`/`-F`, no options after the host, a user name needed, no askpass, no DNS host-key check) plus three
+   of 10g under `__zoraya__`: `0005` (`getopt` offers only `-T -V -t -v -l -p`), `0006` (no agent), `0007` (no hard
+   links: `known_hosts.old` is a copy and `known_hosts` stays until replaced; `ssh-keygen -R` renames). The message of
+   a missing user name is ADR-0346's.
 9. **The test server** is the host's own `sshd` on the loopback with throwaway keys (`tools/test-sshd.sh`), reached
    through `--net-guestfwd` relays; the guest's client key is placed on the test disk with mode 600. CI's image and
    fallback step install `openssh-server`. The ssh script is part of `make test-apps`, not `test-net`, because only that
    step has the apps' image.
 10. **Not built** (open): the storage limit on `/data/ROOM` (ADR-0341 item 6; the creating shell holds no
-    connection to `/data` to set it, so it needs the keeper or a `/data` hold); `scp` and `sftp` with a `HOST:PATH`
-    kind; the `help` FILES list names both paths by hand, not from the description.
+    connection to `/data` to set it, so it needs the keeper or a `/data` hold). Until then a line in a `--disk` room can
+    write `/data/ROOM` beyond the limit: recorded in `docs/design.md` and ADR-0341's open questions. `scp` and `sftp`
+    with a `HOST:PATH` kind; the `help` FILES list names both paths by hand, not from the description.
+11. **A room's own directory is made below the shell's hold.** A room's terminal shell holds `/data/ROOM` and nothing
+    above; `own_connection` finds the deepest level that opens and makes only the levels below it. The first
+    terminal's shell, after `room r`, does not hold `/data/r`: ssh and ssh-keygen are refused there with a hint that
+    says so and names a terminal in the room (the alternative, a hold on all of `/data`, would reach every room's and
+    every application's files).
+12. **Options.** A description with `data` or `reach` is held to its options; the program reads short options only, so a
+    long form is refused with the short one named; `--help` with other words is refused; the first `-p` is the port, as
+    OpenSSH reads it; `ssh://...` is refused as a host. A room's grant on the view path is refused like a line's.
+13. **Inherited open files.** A file inside the own directory that the program holds open for writing stays writable
+    in a child that inherits the descriptor (`share_rights`): ADR-0341 item 7 says a child "never holds a handle that
+    can write". Not reachable with ssh (it starts no child); to be closed before 10h's git starts hooks (a descriptor
+    remembering its entry, or `O_CLOEXEC` on files of the own directory). INV-0341-6's Status says so.
+14. **ADR-0341's tensions.** `/data/ROOM` also holds the applications' directories (`/data/ROOM/APP`, ADR-0245): the
+    shell can now name them to read and write; recorded here for the architect, not changed.
+15. **The test server** forwards nothing and runs nothing of the guest's (`DisableForwarding`, `ForceCommand` that
+    prints the command), and makes `/run/sshd` when it runs as root (CI).
 
 ## Consequences
 
 - **Positive.** ssh and ssh-keygen run with their own directory; no accepted ADR changed.
-- **Negative.** A new ABI value; a shim of 19 names; a CI package.
+- **Negative.** A new ABI value; a CI package.
 - **Follow-up.** The quota; 10f's planner changes rebase on `grants.rs`; 10h's `repository` key.
 
 ## Invariants

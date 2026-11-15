@@ -1,0 +1,27 @@
+# ssh from a room's own terminal window (review of 10g, finding 1; ADR-0341 item 2): the shell of a
+# terminal in a room is a table of the room's grants and `/data/ROOM` and nothing above, so the
+# own directory `/data/ROOM/ssh` is made below the entry that holds it and never from `/data`.
+# `tools/test-apps-ssh.sh` turns @HOST@, @PB@ and @USER@ into values. A terminal the panel starts has no
+# network connection and no random service (only init's first shell gets them: ADR-0221 item 4), so ssh
+# cannot connect here and stops at once; what this run shows is that its own directory is made, which
+# the old code refused ("not granted") before the program started. Open question in ADR-0393.
+serial init: gui: gpu on its own page
+serial init: device slot
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+type mkdir project\r
+screen ~> _
+type room new project +w ~/project\r
+screen project --colour 1 +w ~/project
+screen ~> _
+clickc 2f7f8f 300 719 600 7
+chord meta ret
+origin 105 138
+screen Type help to begin, or help tour.
+screen project ~/project> _
+click 400 120
+type ssh -p @PB@ -l @USER@ @HOST@ true\r
+pause 4000
+type ls /data/project/ssh; echo made-$status\r
+screen made-0

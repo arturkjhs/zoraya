@@ -34,6 +34,9 @@ from the stored one is refused with ssh's warning and nothing on the line overri
 the old one. A passphrase or password is asked on the terminal each time: there is no agent. `~.` ends a stuck
 session.
 
+The program reads short options only: write -p, -l, -t and the rest, not their long names, which the
+description keeps for `help`; the shell refuses a long form and says the short one.
+
 EXAMPLES
   ssh -l ada build.example.org
   ssh -l ada build.example.org ls -l

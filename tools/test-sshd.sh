@@ -11,7 +11,9 @@
 #
 # Server A shows the key `host_a`; B shows `host_b`. DIR/wrong.pub is a key
 # neither shows, for the test that stores a key for A's address that is not A's
-# (a changed host key, INV-0340-3). DIR/client is the key the guest's tests use:
+# (a changed host key, INV-0340-3).
+# Neither server forwards, tunnels or runs the user's own commands: a forced command prints the one
+# the client sent, and nothing else. DIR/client is the key the guest's tests use:
 # both servers take it for the user running this script, and nothing else (no
 # password, no other key). Each server logs at VERBOSE level to DIR/sshd-a.log
 # and DIR/sshd-b.log, which the test reads for what was attempted. LIFETIME
@@ -61,9 +63,19 @@ start)
 	for k in host_a host_b wrong client; do
 		ssh-keygen -q -t ed25519 -N '' -C "throwaway-$k" -f "$dir/$k" >/dev/null
 	done
+	# The far side runs nothing of the guest's: ForceCommand only prints what was asked, so a client
+	# (or a regression in the one under test) cannot run a command or tunnel as the user running
+	# the tests (review of 10g, finding 2).
+	cat > "$dir/force.sh" <<'FORCE'
+#!/bin/sh
+printf '%s\n' "${SSH_ORIGINAL_COMMAND:-no command given}"
+FORCE
+	chmod 700 "$dir/force.sh"
 	cp "$dir/client.pub" "$dir/authorized_keys"
 	chmod 600 "$dir/authorized_keys" "$dir/client"
 	user=$(id -un)
+	# A root sshd (CI's container) wants its privilege separation directory.
+	if [ "$(id -u)" = 0 ]; then mkdir -p /run/sshd /var/empty; chmod 755 /run/sshd; fi
 	pa=$(free_port)
 	pb=$(free_port)
 	[ "$pa" != "$pb" ] || pb=$(free_port)
@@ -85,6 +97,11 @@ AllowUsers $user
 LogLevel VERBOSE
 PrintMotd no
 PermitUserEnvironment no
+PermitUserRC no
+PermitTunnel no
+DisableForwarding yes
+X11Forwarding no
+ForceCommand $dir/force.sh
 CONF
 		perl -e 'alarm shift; exec @ARGV' "$life" "$sshd" -D -e -f "$dir/sshd_$s.conf" > "$dir/sshd-$s.log" 2>&1 &
 		echo $! > "$dir/sshd_$s.wrapper"

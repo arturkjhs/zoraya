@@ -33,7 +33,7 @@
 < \r\n~>
 # No user name: ssh's own refusal (ADR-0340 item 5), before any connection.
 > ssh -p @PB@ @HOST@ true\r
-< no user name: write -l USER or USER@HOST
+< no user name: give one with -l USER or as USER@HOST
 < \r\n~>
 > status\r
 < exit status 255

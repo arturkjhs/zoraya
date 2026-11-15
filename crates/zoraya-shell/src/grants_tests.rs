@@ -1161,8 +1161,8 @@ fn a_grant_cannot_name_the_own_directory() {
     use crate::grants::{own_conflict, own_directory};
     let own = own_directory(&d(SSH_CMD), true, None).unwrap();
     let w = |p: &str| vec![(true, Value::literal(p))];
-    assert!(own_conflict(&own, "/u", &w("/u/other")).is_ok());
-    assert!(own_conflict(&own, "/u", &w("/home")).is_ok());
+    assert!(own_conflict(&own, "/u", &w("/u/other"), &[]).is_ok());
+    assert!(own_conflict(&own, "/u", &w("/home"), &[]).is_ok());
     for p in [
         "/home/.ssh",
         "/home/.ssh/known_hosts",
@@ -1176,7 +1176,7 @@ fn a_grant_cannot_name_the_own_directory() {
         } else {
             "/u"
         };
-        let r = own_conflict(&own, cwd, &w(p)).unwrap_err();
+        let r = own_conflict(&own, cwd, &w(p), &[]).unwrap_err();
         assert!(r.problem.contains("own directory"), "{p}: {}", r.problem);
     }
 }
@@ -1352,4 +1352,49 @@ fn a_cluster_with_r_still_reads_only() {
     let m = merge(&p);
     assert_eq!(m.len(), 1, "{m:?}");
     assert_eq!(m[0].rights & (rights::WRITE | rights::CREATE), 0, "{m:?}");
+}
+
+/// A room's grant on the view path is refused as a line's is (review of 10g,
+/// finding 20).
+#[test]
+fn a_room_grant_cannot_name_the_own_directory_either() {
+    use crate::grants::{own_conflict, own_directory};
+    let own = own_directory(&d(SSH_CMD), true, Some("r")).unwrap();
+    let room = |p: &str| vec![String::from(p)];
+    assert!(own_conflict(&own, "/u", &[], &room("/u/work")).is_ok());
+    for p in ["/home/.ssh", "/home/.ssh/keys"] {
+        assert!(own_conflict(&own, "/u", &[], &room(p)).is_err(), "{p}");
+    }
+}
+
+/// The program reads short options only: the shell names the short form
+/// (review of 10g, finding 7).
+#[test]
+fn a_long_option_of_ssh_is_a_usage_mistake_with_the_short_form_named() {
+    use crate::grants::long_option_used;
+    let ssh = d(SSH_CMD);
+    let keygen = d(KEYGEN_CMD);
+    let used = |d: &zoraya_describe::Description, a: &[&str]| long_option_used(d, a);
+    assert_eq!(
+        used(&ssh, &["--port", "2222", "host"]),
+        Some(("--port".into(), "-p".into()))
+    );
+    assert_eq!(
+        used(&ssh, &["-l", "ada", "--login=ada", "host"]),
+        Some(("--login=ada".into(), "-l".into()))
+    );
+    assert_eq!(
+        used(&keygen, &["--type", "ed25519"]),
+        Some(("--type".into(), "-t".into()))
+    );
+    // Short forms, `--help`, and words after the host (the far side's) pass.
+    assert_eq!(used(&ssh, &["-p", "22", "host", "--port", "x"]), None);
+    assert_eq!(used(&ssh, &["--help"]), None);
+    assert_eq!(used(&ssh, &["-l", "ada", "host", "ls", "--color"]), None);
+    assert_eq!(used(&keygen, &["-t", "ed25519", "--", "--x"]), None);
+    // An unknown long option has no short form to name.
+    assert_eq!(
+        used(&ssh, &["--nope", "host"]),
+        Some(("--nope".into(), String::new()))
+    );
 }

@@ -1,0 +1,19 @@
+# A program's own directory (ADR-0341, INV-0341-6, INV-0393-1) and ssh's grant (ADR-0340): host tests only.
+# Found by hand in the review of 10g, then killed by the test named; the fork arm survived until
+# `a_fork_gives_the_child_the_own_directory_to_read_only`.
+tests = ["cargo test -q -p zoraya-posix --test files"]
+timeout = 600
+
+[[mutant]]
+id = "O-fork-own-arm-full"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "(EntryKind::Own, Some(h)) => Some((h, self.clone_read_only(h)?)),"
+replace = "(EntryKind::Own, Some(h)) => Some((h, self.clone_conn(h)?)),"
+note = "a forked child gets the own directory with every right"
+
+[[mutant]]
+id = "O-spawn-own-arm-full"
+file = "crates/zoraya-posix/src/jobs.rs"
+find = "(EntryKind::Own, Some(h)) => Some(self.clone_read_only(h)?),"
+replace = "(EntryKind::Own, Some(h)) => Some(self.clone_conn(h)?),"
+note = "a spawned child gets the own directory with every right"

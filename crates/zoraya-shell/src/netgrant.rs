@@ -271,6 +271,16 @@ fn host_operand(
     tcp: Option<Option<u16>>,
 ) -> Result<(), Refused> {
     let literal = value_of(line.args, text).is_some_and(|v| v.literal);
+    // OpenSSH also reads `ssh://[USER@]HOST[:PORT]`, a form that takes user
+    // and port from the word itself; the grant is made from what is written
+    // as a host, so the form is a usage mistake (ADR-0340 item 4).
+    if tcp.is_some() && text.starts_with("ssh://") {
+        return Err(Refused {
+            subject: text.into(),
+            problem: "a URI is not a host: ssh takes HOST or USER@HOST".into(),
+            hint: Some("write the host, with -l USER and -p PORT".into()),
+        });
+    }
     // `USER@HOST`: the host is what follows the last `@` (ADR-0340 item 5).
     let host = if tcp.is_some() {
         text.rsplit_once('@').map_or(text, |(_, h)| h)
@@ -339,7 +349,7 @@ fn reach_port(line: &Line<'_>, reach: &zoraya_describe::Reach) -> Option<u16> {
         line.parsed
             .options
             .iter()
-            .rev()
+            // The first, as OpenSSH's own option reading takes it.
             .find(|(i, _)| *i == o)
             .and_then(|(_, v)| *v)
     });

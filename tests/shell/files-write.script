@@ -13,8 +13,12 @@
 < \r\n~> 
 > cd /\r
 < \r\n/> 
-# ADR-0341 item 8: at `/` the current directory gives nothing, so the
-# directory is named.
+# ADR-0341 item 8: at `/` the current directory gives nothing: a bare `ls`
+# is refused with the hint, and the directory is named instead.
+> ls\r
+< ls: .: not granted
+< to allow it: +r / ls
+< \r\n/> 
 > ls /\r
 < README\r\nconfig/\r\ndocs/\r\nhello.txt\r\nhome/
 < \r\n/> 

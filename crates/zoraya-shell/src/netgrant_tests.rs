@@ -910,6 +910,23 @@ fn ssh_reaches_the_host_it_names_on_port_22_or_the_ports_option() {
     assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::UDP));
     assert!(!s.names_address([10, 0, 2, 51], 22, Protocols::TCP));
     assert!(!s.allows_echo_address([10, 0, 2, 50]));
+    // The first -p is the port, as OpenSSH reads it (review of 10g, finding 6).
+    let first = go(
+        SSH,
+        &[
+            ("-p", true),
+            ("2222", true),
+            ("-p", true),
+            ("22", true),
+            ("10.0.2.50", true),
+        ],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    let s = Scope::decode(&first.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 2222, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
     // -p replaces the port.
     let ok = go(
         SSH,
@@ -996,6 +1013,9 @@ fn ssh_from_a_value_needs_a_net_word_and_a_bad_port_gives_nothing() {
         let r = go(SSH, &[("-p", true), (bad, true), ("10.0.2.50", true)], true);
         assert!(matches!(r, Ok(None)), "-p {bad}: {r:?}");
     }
+    // `ssh://` names user and port by itself: a usage mistake (finding 14).
+    let r = go(SSH, &[("ssh://ada@10.0.2.50:2222", true)], true).unwrap_err();
+    assert!(r.problem.contains("not a host"), "{}", r.problem);
     // Only the system image's description reaches (INV-0224-1).
     assert!(go(SSH, &[("10.0.2.50", true)], false).unwrap().is_none());
     // A name that is no host.

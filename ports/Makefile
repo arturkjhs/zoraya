@@ -513,6 +513,8 @@ $(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h p
 # ac_cv_func_statvfs and fstatvfs: libc.a has neither (ADR-0343: statfs is out),
 # and OpenSSH's own `struct statvfs` then clashes with musl's header; only
 # sftp-server and the sftp client call them, and neither is built.
+# IP_TOS_IS_BROKEN: libposix has no IP_TOS socket option, and OpenSSH's own setsockopt of it
+# would print `setsockopt ... IP_TOS: Protocol not available` on every connection (10g).
 OPENSSH := $(WORK)/openssh-$(call lock_ver,openssh)
 OPENSSH_BINS := $(OPENSSH)/ssh $(OPENSSH)/ssh-keygen
 OPENSSH_OPTS := --sysconfdir=/etc/ssh --with-ssl-dir=$(PORTS)/deps --with-zlib=$(PORTS)/deps \
@@ -533,7 +535,7 @@ $(OPENSSH): $(LOCK) $(wildcard ports/patches/openssh/*.patch)
 $(OPENSSH_BINS): $(OPENSSH) $(SYSROOT_STAMP) $(SSHSHIM) $(PORTS)/deps/lib/libssl.a $(PORTS)/deps/lib/libzshim.a ports/config.site
 	@cd $(OPENSSH) && $(call logged,$(CROSS_ENV) ac_cv_func_statvfs=yes ac_cv_func_fstatvfs=yes $(OPENSSH_HAVE) \
 	  ./configure --host=aarch64-unknown-linux-musl $(OPENSSH_OPTS) \
-	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include" \
+	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include -DIP_TOS_IS_BROKEN" \
 	  LDFLAGS="-L$(PORTS)/deps/lib -L$(PORTS)/ttyshim -Wl$(comma)--error-limit=0" LIBS="-lzshim -lsshshim",openssh-configure)
 	rm -f $(OPENSSH_BINS)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -k -C $(OPENSSH) ssh ssh-keygen V=1,openssh)

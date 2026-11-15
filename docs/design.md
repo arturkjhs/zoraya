@@ -2307,6 +2307,39 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
+## A program's own directory, and ssh (stage 10, 10g)
+
+- **The `data` key** (ADR-0341, ADR-0156): a system-image description may say `data NAME as ~/PATH [read]`. The shell
+  makes `/data/ROOM/NAME` (`/data/home/NAME` outside a room) when the program first runs and puts it in the program's
+  table as an `EntryKind::Own` entry at the path the program sees under the user database's home (`/home`); `HOME` is
+  `/home` for it, a line that sets `HOME` or names that path in `+r`/`+w` is refused (also a room's grant on it).
+  `user/describe/data-names.txt` lists the names with their programs; `cargo test -p zoraya-describe --test
+  data_names` keeps the descriptions and the panel's applications to it. `grants` shows both paths. A child of such a
+  program gets the directory to read only (`libposix` `clone_read_only`, spawn and fork), and a link outside it is not
+  followed into it. Proposed ADR-0393 holds the shapes.
+- **The shell's own hold.** A terminal's shell holds `/data/home` (first terminal) or `/data/ROOM` (a room's) to change
+  anything in, as its own entry: not a room grant, not in `/config/rooms`, not a pill, not listed by `room`. A room's
+  shell makes its own directories below that hold only. The first terminal's shell, after `room r`, holds nothing of
+  `/data/r`: ssh there says so and names the way (a terminal in the room).
+- **The current directory** at `/`, `/data`, `/data/ROOM` or inside a listed own directory gives every described
+  command no current-directory entry (ADR-0341 item 8): a bare `ls` or `find` there is refused with the hint, and a
+  named directory is given as always.
+- **`reach` and `rest`** (ADR-0340): `ssh`'s HOST operand reaches that host on port 22 or the first `-p`, over TCP, a name
+  with its public answers only (`+net HOST:PORT` for another); every word after the host is the far side's and the shell
+  writes `--` before the host; `ssh://` and the long forms of the options are usage mistakes (the program reads short
+  options only).
+- **ssh** is OpenSSH portable 10.6p2's client and `ssh-keygen`, in the apps' `/bin` with `/etc/passwd` and `group`
+  (`make apps`; patches `ports/patches/openssh/`, no configuration file, askpass, agent, DNS key check or hard link,
+  only the options of `ssh.cmd`; `ports/apps/sshshim.c` for names `libc.a` lacks). No server, `scp` or `sftp`. Tests:
+  `tools/test-sshd.sh` starts two sshd of the host on the loopback with throwaway keys, forwarding off and a forced
+  command that only prints what was asked; `tools/test-apps-ssh.sh` (in `make test-apps`) runs
+  `tests/shell/apps-ssh.script` on the console and `tests/gui/ssh-room.script` in a room's terminal window.
+- **Known limits.** *Storage:* `--disk` limits a room's `+w` grants only; `/data/ROOM` is not limited (ADR-0341 item 6 is
+  not built), so a line in a limited room can write there beyond the limit; the room's panel applications' directories
+  (`/data/ROOM/APP`) are reachable by its shell. *Open files:* a file inside the own directory that the program has open
+  for writing stays writable in a child that inherits the descriptor (not reachable with ssh; to be closed before 10h's
+  git hooks). *Tests:* the INV-0340-2/-0341-4 lints run in `make test-unit`, not `make check`; no askpass prompt is run.
+
 ## CPython (stage 9, 9c)
 
 `python3` runs inside Zoraya (proposed ADR-0320): CPython 3.15.2 cross-built static with `zcc`, as a POSIX program from the

@@ -1768,7 +1768,12 @@ impl Z {
                 &["write the line without HOME="],
             ));
         }
-        grants::own_conflict(&own, &self.cwd, exec.grants).map_err(|r| {
+        let room_paths: Vec<String> = self
+            .room
+            .as_ref()
+            .map(|r| r.grants.iter().map(|g| self.room_path(&g.path)).collect())
+            .unwrap_or_default();
+        grants::own_conflict(&own, &self.cwd, exec.grants, &room_paths).map_err(|r| {
             let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
             refuse(&r.subject, &r.problem, &hints)
         })?;
@@ -1802,28 +1807,35 @@ impl Z {
             .root
             .as_ref()
             .ok_or_else(|| fail(zoraya_command::FILE_GONE))?;
-        if let Some(hint) = self.not_given(who, &own.real, true, None) {
-            return Err(hint);
+        // A shell that holds `/data/home` and entered a room holds nothing
+        // of `/data/ROOM`: the hint says what would work (ADR-0341 item 2:
+        // the directory is given by whoever starts the shell).
+        if self.not_given(who, &own.real, true, None).is_some() {
+            let room = self.room.as_ref().map_or("home", |r| r.name.as_str());
+            return Err(format!(
+                "zosh: {}: not given to this shell\n  hint: {who} keeps its files there, and this shell does not hold it\n  to use {who} in room {room}: open a terminal in the room (its shell holds the room's directory)\n",
+                own.real
+            ));
         }
         let rel = own.real.trim_start_matches('/');
-        let mut at = String::new();
-        for part in rel.split('/') {
-            if !at.is_empty() {
-                at.push('/');
-            }
-            at.push_str(part);
-            let all = file_rights::ALL & !file_rights::PUBLISH;
-            if root.open(&at, OPEN_DIRECTORY, all).is_err() {
-                let (parent, name) = at.rsplit_once('/').unwrap_or(("", at.as_str()));
-                let made = if parent.is_empty() {
-                    root.open("", OPEN_DIRECTORY, all)
-                        .and_then(|d| d.make_directory(name))
-                } else {
-                    root.open(parent, OPEN_DIRECTORY, all)
-                        .and_then(|d| d.make_directory(name))
-                };
-                made.map_err(fail)?;
-            }
+        let all = file_rights::ALL & !file_rights::PUBLISH;
+        // Only the levels below the entry that covers the path are made: a
+        // room's shell holds `/data/ROOM` and nothing above it, and must not
+        // touch `/data` (review of 10g, finding 1). The first level that
+        // opens, from the deepest, is where making starts.
+        let parts: Vec<&str> = rel.split('/').collect();
+        let mut have = parts.len();
+        while have > 0
+            && root
+                .open(&parts[..have].join("/"), OPEN_DIRECTORY, all)
+                .is_err()
+        {
+            have -= 1;
+        }
+        for i in have..parts.len() {
+            let parent = parts[..i].join("/");
+            let dir = root.open(&parent, OPEN_DIRECTORY, all).map_err(fail)?;
+            dir.make_directory(parts[i]).map_err(fail)?;
         }
         root.open(rel, OPEN_DIRECTORY, wanted).map_err(fail)
     }
@@ -1871,7 +1883,34 @@ impl Z {
             return Ok(());
         }
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        let Err(why) = zoraya_command::parse(d, &texts) else {
+        // The program reads short options only: a long form is refused with
+        // the short one named, so `grants` never states what the program
+        // would not do (review of 10g, finding 7).
+        if !userland && let Some((word, short)) = grants::long_option_used(d, &texts) {
+            let hint = if short.is_empty() {
+                format!("help {} lists what its description lets through", d.name)
+            } else {
+                format!("write {short}")
+            };
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                &format!("{word}: the program reads short options only"),
+                &[hint.as_str()],
+            ));
+        }
+        let parsed = zoraya_command::parse(d, &texts);
+        // `--help` with other words reaches the program, whose own option
+        // reading refuses them: not the shell's refusal (finding 13).
+        if !userland && matches!(parsed, Ok(zoraya_command::Outcome::Help)) && texts.len() > 1 {
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                "--help takes no other words",
+                &["write --help alone"],
+            ));
+        }
+        let Err(why) = parsed else {
             return Ok(());
         };
         if !why.is_option_error() {

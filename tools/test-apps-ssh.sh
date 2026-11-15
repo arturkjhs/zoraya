@@ -11,6 +11,9 @@ ACCEL=${ACCEL:-auto}
 template=tests/shell/apps-ssh.script
 sshd_dir=$BUILD/apps-sshd
 root=$BUILD/apps-ssh-root
+root_gui=$BUILD/apps-ssh-gui-root
+disk_gui=$BUILD/apps-ssh-gui-disk.img
+gui_script=$BUILD/apps-ssh-room.script
 disk=$BUILD/apps-ssh-disk.img
 script=$BUILD/apps-ssh.script
 fail() { echo "[apps-ssh] FAIL: $*"; exit 1; }
@@ -40,24 +43,59 @@ chmod 600 "$root/data/home/ssh/id_ed25519"
 wrong=$(awk '{ print $1, $2 }' "$sshd_dir/wrong.pub")
 echo "[$NET_HOST]:$pa $wrong" > "$root/data/home/ssh/known_hosts"
 chmod 600 "$root/data/home/ssh/known_hosts"
+# INV-0340-1: configuration files that name another host and port, in ssh's own directory and in
+# /etc/ssh. ssh reads neither: the logins to B in the script still go where the line says.
+cfg='Host *
+  Hostname 10.0.2.99
+  Port 1
+  ProxyCommand false'
+printf '%s\n' "$cfg" > "$root/data/home/ssh/config"
+chmod 600 "$root/data/home/ssh/config"
+mkdir -p "$root/etc/ssh"
+printf '%s\n' "$cfg" > "$root/etc/ssh/ssh_config"
+# The room terminal's disk (tests/gui/ssh-room.script) is the same root without the settings below.
+rm -rf "$root_gui" && cp -R "$root" "$root_gui"
+# INV-0341-5: `shell.home` is another directory than the image user's home: the own directory and the
+# program's HOME do not follow it.
+mkdir -p "$root/u"
+printf 'shell.home = /u\n' >> "$root/config/settings"
 target/debug/zoraya-mkfs --size 64M --from "$root" "$disk"
+target/debug/zoraya-mkfs --size 64M --from "$root_gui" "$disk_gui"
 sed -e "s/@HOST@/$NET_HOST/g" -e "s/@PA@/$pa/g" -e "s/@PB@/$pb/g" -e "s/@USER@/$user/g" -e "s|@FPB@|$fpb|g" \
 	"$template" > "$script"
 
+# APPS_SSH_ONLY=gui skips the console run (for work on the window's script).
 set +e
+if [ "${APPS_SSH_ONLY:-}" = gui ]; then
+	rc=0
+else
 $RUNNER --timeout "$TIMEOUT" --script "$script" --label apps-ssh -- \
 	$RUN_QEMU --test --keys --net --net-guestfwd "$NET_HOST:$pa=$PWD/$HTTPD --relay 127.0.0.1:$pa" \
 	--net-guestfwd "$NET_HOST:$pb=$PWD/$HTTPD --relay 127.0.0.1:$pb" --disk "$disk" --mem 512M --accel "$ACCEL" "$KERNEL"
 rc=$?
+fi
 set -e
 [ "$rc" = 0 ] || exit "$rc"
 
-# INV-0340-3: A's log shows the connection and no attempt to authenticate.
-if grep -q -e 'Accepted' -e 'Failed' -e 'Invalid user' -e 'userauth' "$sshd_dir/sshd-a.log"; then
+# The same from a room's terminal window, whose shell holds the room's directory and nothing above it.
+sed -e "s/@HOST@/$NET_HOST/g" -e "s/@PB@/$pb/g" -e "s/@USER@/$user/g" tests/gui/ssh-room.script > "$gui_script"
+set +e
+$RUNNER --timeout "$TIMEOUT" --gui-script "$gui_script" --qmp "$BUILD/apps-ssh-room.qmp" --label apps-ssh-room -- \
+	$RUN_QEMU --test --gui --gui-scale 1 --net --net-guestfwd "$NET_HOST:$pb=$PWD/$HTTPD --relay 127.0.0.1:$pb" \
+	--disk "$disk_gui" --mem 512M --qmp "$BUILD/apps-ssh-room.qmp" --accel "$ACCEL" "$KERNEL"
+rc=$?
+set -e
+[ "$rc" = 0 ] || exit "$rc"
+
+if [ "${APPS_SSH_ONLY:-}" = gui ]; then echo "[apps-ssh] ok: the room terminal only"; exit 0; fi
+# INV-0340-3: A's log shows the guest's connection (a second one: the first is test-sshd.sh's readiness
+# probe) and no attempt to authenticate.
+connections=$(grep -c 'Connection from' "$sshd_dir/sshd-a.log" || true)
+[ "$connections" -ge 2 ] || { cat "$sshd_dir/sshd-a.log"; fail "server A saw $connections connection(s): the changed-key run did not reach it"; }
+if grep -q -e 'Accepted' -e 'Failed' -e 'Invalid user' -e 'userauth' -e 'Postponed' "$sshd_dir/sshd-a.log"; then
 	cat "$sshd_dir/sshd-a.log"
 	fail "INV-0340-3: server A saw an authentication attempt after a changed host key"
 fi
-grep -q 'Connection' "$sshd_dir/sshd-a.log" || fail "server A saw no connection: the changed-key run did not reach it"
 # B took the key and ran the commands: the guest's words after the host were
 # the far side's, and a login is a public-key login with the throwaway key.
 grep -q "Accepted publickey for $user" "$sshd_dir/sshd-b.log" || { cat "$sshd_dir/sshd-b.log"; fail "server B saw no public-key login"; }

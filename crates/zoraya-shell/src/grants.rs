@@ -246,8 +246,7 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             let narrows = matches!(
                 kind,
                 Kind::Create | Kind::Remove | Kind::RemoveTree | Kind::Rename
-            ) || ((d.cwd == Cwd::None || into_data)
-                && matches!(kind, Kind::Read | Kind::Write));
+            ) || (d.cwd == Cwd::None && matches!(kind, Kind::Read | Kind::Write));
             let within = |base: &str| covers(base, &abs) && !(narrows && abs == base);
             // A value inside a current directory that gives nothing is not
             // inside anything (ADR-0341 item 8).
@@ -854,12 +853,22 @@ pub fn cwd_reaches_data(cwd: &str) -> bool {
 /// ADR-0341 item 3: the own-directory entry is never merged with a grant of
 /// the line. A `+r` or `+w` at or inside the path the program sees it at is
 /// refused.
-pub fn own_conflict(own: &Own, cwd: &str, grants: &[(bool, Value)]) -> Result<(), Refused> {
-    for (_, value) in grants {
-        let abs = join(cwd, 0, &value.text);
+pub fn own_conflict(
+    own: &Own,
+    cwd: &str,
+    grants: &[(bool, Value)],
+    room_paths: &[String],
+) -> Result<(), Refused> {
+    // A room's grants too (absolute): a room entry on the view path would
+    // sit beside the own entry with the same prefix.
+    let room = room_paths.iter().map(|p| (p.clone(), p.clone()));
+    let line = grants
+        .iter()
+        .map(|(_, v)| (join(cwd, 0, &v.text), v.text.clone()));
+    for (abs, shown_as) in line.chain(room) {
         if covers(&own.view, &abs) {
             return Err(Refused {
-                subject: value.text.clone(),
+                subject: shown_as,
                 problem: format!(
                     "is {}'s own directory, which its description gives and a grant cannot name",
                     own.name
@@ -901,4 +910,34 @@ pub fn end_of_options_at(d: &Description, args: &[&str]) -> Option<usize> {
         .iter()
         .position(|a| core::ptr::eq(a.as_ptr(), first.as_ptr()) && a.len() == first.len())?;
     (at == 0 || args[at - 1] != "--").then_some(at)
+}
+
+/// ADR-0340 item 4 and ADR-0341: a description with a `data` or `reach` line
+/// is held to its options as the shell reads them, but the program parses
+/// short options only (OpenSSH's `getopt`): a long form of a listed option
+/// would be granted by the shell and be a usage error of the program. The word
+/// and the short form to write instead, for the first long option among the
+/// words the shell reads (those before the host, or before `--`).
+pub fn long_option_used(d: &Description, args: &[&str]) -> Option<(String, String)> {
+    let end = args.iter().position(|a| *a == "--").unwrap_or(args.len());
+    let end = end_of_options_at(d, args).map_or(end, |host| host.min(end));
+    let mut i = 0;
+    while i < end {
+        let word = args[i];
+        i += 1;
+        let Some(long) = word.strip_prefix("--").filter(|l| !l.is_empty()) else {
+            continue;
+        };
+        let name = long.split_once('=').map_or(long, |(n, _)| n);
+        if name == "help" {
+            continue;
+        }
+        let short = d
+            .option_by_long(name)
+            .and_then(|o| d.options[o].short)
+            .map(|c| alloc::format!("-{c}"))
+            .unwrap_or_default();
+        return Some((word.into(), short));
+    }
+    None
 }

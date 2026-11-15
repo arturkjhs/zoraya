@@ -21,6 +21,9 @@ twice (empty for none) on the terminal, and prints the fingerprint. The default 
 not offered in stage 10. `-R HOST` removes HOST's key from known_hosts, which is what a person does who knows a host's
 key has rightly changed; the next `ssh` to it asks as for a new host.
 
+The program reads short options only: write -t, -b, -C, -R and -q, not their long names, which the
+description keeps for `help`; the shell refuses a long form and says the short one.
+
 EXAMPLES
   ssh-keygen -t ed25519
   ssh-keygen -R build.example.org

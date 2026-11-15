@@ -244,3 +244,62 @@ Not run: `make test-apps`, any GUI run, a terminal window's shell, CI.
   loopback only, accept one throwaway key for one user, no password; `perl alarm` survives the `exec`.
 - `make apps` refuses `sshd` and the other tools in the image and a `listen`/`accept` export (INV-0340-4).
 - Invariants: 816 rows, Total 816, INV-0390-1 and -2 counted.
+
+## Dispositions (fix pass)
+
+Each finding, with what was done. Commands named were run unless marked "not run".
+
+1. **Fixed.** `own_connection` makes only the levels below the deepest entry that opens, so a room's terminal shell
+   never touches `/data`. The first terminal's shell after `room r` is refused with a true hint (it holds no
+   `/data/r`; open a terminal in the room), recorded in ADR-0393 item 11. `tests/gui/ssh-room.script` (in
+   `tools/test-apps-ssh.sh`, so in `make test-apps`) runs `ssh` in a room's terminal window and checks that
+   `/data/project/ssh` is made: with the old `own_connection` it failed at that step (`zosh: /data/project/ssh: not
+   granted`), with the fix it passes. **Found on the way, not fixed:** a terminal the panel starts has no network
+   connection and no random service (only `init`'s first shell gets them), so `ssh` there stops with "PRNG is not
+   seeded" and cannot connect, and `ssh-keygen` would too; the window test therefore checks the directory, not a
+   login. Recorded in ADR-0393 and `docs/design.md`; it needs the panel to give its terminals the two services, an
+   architect's decision.
+2. **Fixed.** `tools/test-sshd.sh`: `DisableForwarding yes`, `PermitTunnel no`, `PermitUserRC no`, `X11Forwarding no`
+   and a `ForceCommand` that prints `$SSH_ORIGINAL_COMMAND` and runs nothing; `AllowUsers` kept.
+3. **Fixed.** ADR-0390 became ADR-0393 (free after `git ls-tree` of `origin/work/ports-early`, `10d`, `sigint-exec` and
+   `main`: 0390, 0391, 0392, 0346 and 0347 are taken); index, invariants rows (INV-0393-1, -2), docs and
+   `ports/` comments follow. ADR-0346 is ports-early's and is used.
+4. **Fixed.** `a_fork_gives_the_child_the_own_directory_to_read_only` in `crates/zoraya-posix/tests/files.rs`; with the
+   `Own` arm of `fork_moves_into` on `clone_conn` it fails (run). The mutants are in `tools/mutants/own-directory.toml`
+   (`make check-mutant-lists` applies them).
+5. **Recorded as a limit** (not fixed): a file open for writing in the own directory stays writable in a child that
+   inherits the descriptor; ADR-0393 item 13, INV-0341-6's Status, `docs/design.md`, ADR-0341's open questions. Not
+   reachable with ssh; to be closed before 10h.
+6. **Fixed.** `reach_port` takes the first `-p`; case added to `ssh_reaches_the_host_it_names_on_port_22_or_the_ports_option`.
+7. **Fixed.** `grants::long_option_used`: the shell refuses a long form for a description with `data` or `reach` and
+   names the short one; both help texts say it; host tests in `grants_tests.rs`.
+8. **Fixed / noted.** The two cheap halves run in `tools/test-apps-ssh.sh`: configuration files naming another host and
+   port in `/data/home/ssh/config` and `/etc/ssh/ssh_config` (INV-0340-1), and `shell.home = /u` for the whole script
+   (INV-0341-5). Statuses of INV-0340-1, -2, INV-0341-4, -5, -6 now say what is and is not run; the rule-6 notes are in
+   ADR-0340's and ADR-0341's open questions. The two lints stay in `make test-unit` (a `make check` step needs lane
+   and CI files).
+9. **Recorded** in `docs/design.md` (known limits) and ADR-0341's open questions, and ADR-0393 item 10; not refused
+   in a `--disk` room: refusing `+w /data/ROOM` would also refuse the panel's applications' directories, and the
+   quota is the fix (it needs a `/data` connection for the creating shell or the keeper).
+10. **Fixed.** `docs/design.md` has a section "A program's own directory, and ssh (stage 10, 10g)".
+11. **Fixed.** `test-sshd.sh` makes `/run/sshd` and `/var/empty` when it runs as root. Not run on CI (no root here);
+    a candidate run is the check.
+12. **Fixed.** `tools/test-apps-ssh.sh` requires at least two `Connection from` lines in A's log (the readiness probe is
+    the first) and refuses `Postponed`.
+13. **Fixed.** `--help` with other words is a usage mistake for a description with `data` or `reach`.
+14. **Fixed.** `ssh://...` as a host is refused by the planner (test in `netgrant_tests.rs`).
+15. **Fixed.** `files-write.script` keeps one step: `cd /`, a bare `ls`, the refusal and its hint.
+16. **Recorded** in ADR-0393 item 14 for the architect; nothing changed.
+17. **Fixed.** ADR-0393 text rewritten (patch count, numbers).
+18. **Fixed.** The `|| into_data` in the narrowing rule is removed (a `Read` entry at `/` is not narrowed; the rule
+    changed nothing observable).
+19. **Fixed.** Patch `0007-no-hard-links`: `known_hosts.old` is a copy and `known_hosts` stays in place until the new
+    file replaces it; `ssh-keygen -R` still renames its `.old` (it runs once, by a person).
+20. **Fixed.** `own_conflict` also takes the room's grants (`room_paths`); test `a_room_grant_cannot_name_the_own_directory_either`.
+
+**The merge.** `origin/work/10d` (with ports-early) is merged: one OpenSSH port (its patches `0001` to `0004`, shim,
+`openssh` target and sources.lock row; 10g's `0005` to `0007`; the shim loses its early-build marker since the
+programs are in the apps' image; ADR-0346's syslog block is kept, so 10g's own syslog shims are gone). Its
+`LDFLAGS` lacked `-L$(PORTS)/ttyshim` (configure could not find `-lsshshim`; fixed for ssh; `git`'s link has the same
+line and is not touched here). `IP_TOS_IS_BROKEN` is defined so that ssh prints no `setsockopt IP_TOS` line per
+connection. The user-name message is ADR-0346's. The invariants Total is recomputed from the rows.
