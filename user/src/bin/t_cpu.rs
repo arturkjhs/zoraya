@@ -70,6 +70,44 @@ fn factor() -> u64 {
     FACTOR.load(Ordering::Relaxed)
 }
 
+/// The best rate of the count loop on this host: counts per millisecond of
+/// the CPU time the kernel charged, from `calibrate_counts`.
+static BEST_RATE: AtomicU64 = AtomicU64::new(0);
+
+/// Counts per millisecond of charged CPU time.
+fn rate(counts: u64, charged_ns: u64) -> u64 {
+    (u128::from(counts) * 1_000_000 / u128::from(charged_ns.max(1))) as u64
+}
+
+/// The count loop alone, uncapped, three times 200 ms, each in a process of
+/// its own: the best rate is the one `check_share` takes as the most a
+/// process can count in a millisecond of CPU. Under TCG a process's rate
+/// varies by 4 times (0.25 to 1.08 counts a nanosecond on the development
+/// host, in `-smp 1` and `-smp 4`, with the kernel's charges, its idle time
+/// and its interrupts as usual), and only downwards from this best.
+fn calibrate_counts() {
+    let mut best = 0;
+    for _ in 0..3 {
+        let page = Page::new();
+        let (job, process) = free_spinner(&page);
+        nap(20);
+        let (u0, c0) = (
+            job_get_usage(job, false).expect("u").cpu.used_ns,
+            page.sum(0, 1),
+        );
+        nap(200);
+        let (u1, c1) = (
+            job_get_usage(job, false).expect("u").cpu.used_ns,
+            page.sum(0, 1),
+        );
+        best = best.max(rate(c1 - c0, u1 - u0));
+        end(job, &[process]);
+        page.close();
+    }
+    BEST_RATE.store(best, Ordering::Relaxed);
+    println!("t_cpu: the count loop alone: at best {best} counts a millisecond of CPU");
+}
+
 fn set_period(ns: u64) {
     raw_syscall(SET_CPU_PERIOD, [ns, 0, 0, 0, 0, 0]);
 }
@@ -238,19 +276,38 @@ fn free_spinner(page: &Page) -> (Handle, Handle) {
     (job, start(job, b"count", 0, Some((page.object, 0))))
 }
 
-/// The room's share of all counts, in per mille, must be the ceiling's plus
-/// the overrun allowance (and a quarter for the host) at most, and half of it at least.
-fn check_share(room: u64, free: u64, per_mille: u64) {
+/// The independent half of a ceiling's check (review W4): the spinners' own
+/// counts against the kernel's charges. A kernel that let a room run longer
+/// than it charged would show as the room counting more per charged
+/// millisecond than the count loop can: so the room's rate may be at most
+/// 5/4 of the best rate seen, its uncapped neighbour's in the same window or
+/// `calibrate_counts`'s. A slow vCPU only lowers a rate, so it cannot fail
+/// this. Off HVF it replaces the share of all counts as the upper check:
+/// under TCG the share measured QEMU's speed for each process (an uncapped
+/// spinner that got all its 1 243 ms counted a quarter of its usual, and the
+/// share passed twice the ceiling, in 2 of 20 local runs of
+/// `tcg-smp4-gicv2`). Under HVF (factor 1) the share's upper bound stays as
+/// well: there a lone spinner counts about 2.3 times as fast per CPU
+/// nanosecond as a room's, so the rate check is loose and the share is the
+/// tighter one. The share is the check that the room is not starved too, at
+/// a quarter of the ceiling, which a slow room does not reach.
+fn check_share(room: u64, room_ns: u64, free: u64, free_ns: u64, per_mille: u64) {
     let share = room as u128 * 1000 / (room + free).max(1) as u128;
-    // The counts of a duty-cycled load and of a continuous one differ with
-    // the host's clock and load: the same 25% room was seen at 165 to 338 per
-    // mille. So this is a check for a gross error only: up to twice the
-    // ceiling and down to a quarter of it; the exact check is `used_ns`.
-    let high = per_mille as u128 * 2;
+    let reference = rate(free, free_ns).max(BEST_RATE.load(Ordering::Relaxed));
+    let room_rate = rate(room, room_ns);
     println!(
-        "t_cpu: the room counted {room}, an uncapped spinner {free}: {share} per mille (ceiling {per_mille}, at most {high})"
+        "t_cpu: the room counted {room} in {} ms, an uncapped spinner {free} in {} ms: {share} per mille (ceiling {per_mille}); {room_rate} a ms, at most 5/4 of {reference}",
+        room_ns / MS,
+        free_ns / MS
     );
-    assert!(share <= high, "share {share} per mille, at most {high}");
+    assert!(
+        room_rate * 4 <= reference * 5,
+        "the room counted {room_rate} a ms of its charge, the best is {reference}: it ran longer than it was charged"
+    );
+    if factor() == 1 {
+        let high = per_mille as u128 * 2;
+        assert!(share <= high, "share {share} per mille, at most {high}");
+    }
     assert!(
         share * 4 >= per_mille as u128,
         "share {share} per mille: starved"
@@ -276,9 +333,11 @@ fn a_room_at_a_quarter_gets_a_quarter(n: usize) {
     nap(100);
     let (t0, u0) = (clock_monotonic(), job_get_usage(room, false).expect("u"));
     let (c0, f0) = (page.sum(1, 1 + n), page.sum(0, 1));
+    let free0 = job_get_usage(free.0, false).expect("u").cpu.used_ns;
     nap(2000);
     let (t1, u1) = (clock_monotonic(), job_get_usage(room, false).expect("u"));
     let (counted, uncapped) = (page.sum(1, 1 + n) - c0, page.sum(0, 1) - f0);
+    let free_ns = job_get_usage(free.0, false).expect("u").cpu.used_ns - free0;
     let (elapsed, used) = (t1 - t0, u1.cpu.used_ns - u0.cpu.used_ns);
     let budget = elapsed / 4;
     let periods = elapsed / 20_000_000 + 2;
@@ -293,7 +352,7 @@ fn a_room_at_a_quarter_gets_a_quarter(n: usize) {
     assert!(used * 5 >= budget * 4, "{used} ns of {budget}: starved");
     assert!(u1.cpu.parked > u0.cpu.parked);
     assert_eq!(u1.cpu.limit, Some(250));
-    check_share(counted, uncapped, 250);
+    check_share(counted, used, uncapped, free_ns, 250);
     end(room, &spinners);
     end(free.0, &[free.1]);
     page.close();
@@ -332,9 +391,11 @@ fn rooms_together_stay_under_their_parent() {
         .collect();
     let total0 = job_get_usage(untrusted, false).expect("u").cpu.used_ns;
     let (c0, f0) = (page.sum(1, 25), page.sum(0, 1));
+    let free0 = job_get_usage(free.0, false).expect("u").cpu.used_ns;
     nap(2000);
     let elapsed = clock_monotonic() - t0;
     let (counted, uncapped) = (page.sum(1, 25) - c0, page.sum(0, 1) - f0);
+    let free_ns = job_get_usage(free.0, false).expect("u").cpu.used_ns - free0;
     let total = job_get_usage(untrusted, false).expect("u").cpu.used_ns - total0;
     let periods = elapsed / 20_000_000 + 2;
     println!(
@@ -345,7 +406,7 @@ fn rooms_together_stay_under_their_parent() {
     );
     assert!(total <= upper(elapsed / 2, periods), "{total} ns together");
     assert!(total * 5 >= elapsed / 2 * 4, "{total} ns: starved");
-    check_share(counted, uncapped, 500);
+    check_share(counted, total, uncapped, free_ns, 500);
     for (room, was) in rooms.iter().zip(before) {
         let used = job_get_usage(*room, false).expect("u").cpu.used_ns - was;
         assert!(used <= upper(elapsed / 4, periods), "a room used {used} ns");
@@ -678,6 +739,7 @@ fn main() -> i32 {
         _ => {}
     }
     calibrate();
+    calibrate_counts();
     a_room_at_a_quarter_gets_a_quarter(8);
     // More than the 16 parks one pick may make (review W1).
     a_room_at_a_quarter_gets_a_quarter(40);
