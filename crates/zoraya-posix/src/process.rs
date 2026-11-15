@@ -1086,7 +1086,7 @@ impl<S: Sys> Posix<S> {
 
     /// Ends a description entry's handles; for a file written through, asks
     /// the service's `status` first (ADR-0103 item 6, ADR-0010).
-    fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
+    pub(crate) fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
         match desc {
             Desc::Object { conn, written, .. } => {
                 self.locks.release_description(conn);
@@ -1116,9 +1116,19 @@ impl<S: Sys> Posix<S> {
                 Ok(())
             }
             Desc::Null { .. } => Ok(()),
-            Desc::Socket(s) => {
+            Desc::Socket(mut s) => {
                 for h in [s.read, s.write, s.ctl].into_iter().flatten() {
                     self.sys.close(h);
+                }
+                // What a Unix socket held in the library (ADR-0412).
+                if let Some(u) = s.unix.as_mut() {
+                    let mut more = u.book.drain();
+                    if let Some(h) = u.held.take() {
+                        more.extend(h.handles);
+                    }
+                    for h in more {
+                        self.sys.close(h);
+                    }
                 }
                 Ok(())
             }

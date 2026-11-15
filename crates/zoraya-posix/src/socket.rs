@@ -7,8 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use crate::unix::{Record, StreamBook};
 
 use crate::errno::{
     EACCES, EAFNOSUPPORT, ECONNABORTED, ECONNREFUSED, ECONNRESET, EHOSTUNREACH, EINVAL, ENETDOWN,
@@ -542,9 +545,49 @@ pub struct Socket<H> {
     pub error: i32,
     pub peer: Option<([u8; 4], u16)>,
     pub options: Options,
+    /// What an `AF_UNIX` socket adds (ADR-0412); `None` for TCP. A Unix
+    /// stream socket keeps its byte streams in `read` and `write` and its
+    /// ancillary channel in `ctl`; a packet socket keeps its channel in `ctl`.
+    pub unix: Option<Box<UnixPart<H>>>,
+}
+
+/// An `AF_UNIX` socket's own state (ADR-0412 items 2, 3 and 6).
+#[derive(Debug)]
+pub struct UnixPart<H> {
+    /// The offsets and tags of a stream socket.
+    pub book: StreamBook<H>,
+    /// A stream socket whose byte streams another process holds too (after
+    /// `fork`): `SCM_RIGHTS` on it is `EOPNOTSUPP`, and `ctl` is gone.
+    pub shared: bool,
+    /// A packet message read and not delivered, because the table was full
+    /// (`EMFILE`): its payload, descriptors and handles.
+    pub held: Option<Held<H>>,
+    pub shut_rd: bool,
+    pub shut_wr: bool,
+}
+
+/// A packet message waiting for room in the fd table.
+#[derive(Debug)]
+pub struct Held<H> {
+    pub payload: Vec<u8>,
+    pub records: Vec<Record>,
+    pub handles: Vec<H>,
 }
 
 impl<H> Socket<H> {
+    /// A Unix socket of `kind` (`SOCK_STREAM`, `SOCK_SEQPACKET`, `SOCK_DGRAM`).
+    pub fn fresh_unix(kind: i32, nonblock: bool) -> Socket<H> {
+        let mut s = Socket::fresh(kind, nonblock);
+        s.unix = Some(Box::new(UnixPart {
+            book: StreamBook::default(),
+            shared: false,
+            held: None,
+            shut_rd: false,
+            shut_wr: false,
+        }));
+        s
+    }
+
     pub fn fresh(kind: i32, nonblock: bool) -> Socket<H> {
         Socket {
             kind,
@@ -556,6 +599,7 @@ impl<H> Socket<H> {
             error: 0,
             peer: None,
             options: Options::default(),
+            unix: None,
         }
     }
 }
@@ -568,6 +612,30 @@ impl<H: Copy> Socket<H> {
     /// its read end has bytes or an end, or its write end has room.
     pub fn wait_source(&self, writing: bool) -> Option<(H, u32)> {
         use crate::sys::signals::{PEER_CLOSED, READABLE, WRITABLE};
+        if let Some(u) = &self.unix {
+            // A Unix socket: a packet one is one channel, a stream one the
+            // two byte streams; what the library already holds is ready.
+            if self.state != State::Connected {
+                return None;
+            }
+            if self.kind == crate::unix::SOCK_STREAM {
+                if !writing && u.book.has_rest() {
+                    return None;
+                }
+            } else if writing {
+                return if u.shut_wr {
+                    None
+                } else {
+                    self.ctl.map(|c| (c, WRITABLE | PEER_CLOSED))
+                };
+            } else {
+                return if u.shut_rd || u.held.is_some() {
+                    None
+                } else {
+                    self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
+                };
+            }
+        }
         match self.state {
             State::Fresh | State::Dead => None,
             State::Connecting => self.ctl.map(|c| (c, READABLE | PEER_CLOSED)),
