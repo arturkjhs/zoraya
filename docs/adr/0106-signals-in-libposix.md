@@ -283,6 +283,11 @@ the three named.
   `process_take_request` calls and `process_set_disposition` calls while a thread is in the wait, and item 2's mapping is deviated from for the signals of a
   waiting thread whose action is `SIG_DFL` (kernel disposition `Deliver` for the length of the wait). The host test of INV-0106-2 does not call them; the
   architect accepts the deviation or asks for a superseding ADR.
+- Note (ADR-0001 rule 6, `work/sigint-exec`; ADR-0392, proposed): INV-0106-2's list is extended by `execve` (and `execv`,
+  `execvp`, `execl`), which takes `process_take_request` calls after the spawn of the new image to carry what the old one
+  was sent, and item 2's mapping is deviated from for the length of that spawn: every `SIG_DFL` signal whose default
+  terminates has the kernel disposition `Deliver`, put back if the spawn fails. INV-0304-5 cites the same list. The
+  architect accepts the deviations or asks for a superseding ADR.
 
 ## Revisit triggers
 

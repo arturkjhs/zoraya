@@ -1,4 +1,4 @@
-# ADR-0392: Signals across `exec` and at the entry of a call that waits, where ADR-0106 is silent
+# ADR-0392: Signals across `exec` and at the entry of a call that waits, amending ADR-0106
 
 - **Status:** proposed
 - **Date:** 2026-11-15
@@ -11,7 +11,8 @@ In `sh` inside `zosh`, a Ctrl-C typed right after a job's first line was lost (`
 part 10c, "A Ctrl-C typed just after a job's first output"): `/bin/sh -c 'echo go; exec /bin/sleep 20'` ran its 20 s
 under HVF, and under TCG `/bin/sh -c 'echo go; read x'` never ended. `zosh` had the job's `tcsetpgrp`, sent `SIGINT`
 to the job's group, and the broker's `job_signal(Interrupt)` returned `Ok`. Two library paths lost the signal; both
-are places where ADR-0106 says nothing.
+are places where ADR-0106 says nothing, and the fix of the `exec` path deviates from two of its rules ("Tensions"
+under Consequences).
 
 **Measured (traces in the kernel's `Process::signal` and `take_request` and in `libposix`'s delivery, since removed).**
 
@@ -79,10 +80,12 @@ parent dash, which then waits for a child that runs its 20 s.
   included, even for a zero sleep; a program with a periodic handler (make's `SIGCHLD`) sees more `EINTR`s from
   `usleep` loops.
 - **Cost:** About 120 lines in `libposix` and host tests. Per `exec` that reaches its spawn: one
-  `process_set_disposition` per held signal (about 25 for a handler-less process, about 25 µs under HVF and 0.3 ms
-  under TCG at INV-0006-3's per-call figure `[estimate]`), and at least one `process_take_request`, in every process.
-  This extends INV-0106-2's list of the functions that may call `process_take_request` in a handler-less process by
-  `execve` (and so `execv`, `execvp`, `execl`), as ADR-0315 item 10 extended it by `sigwait`.
+  `process_set_disposition` per held signal (22 for a handler-less process: `default_terminates` covers 1 to 8, 10 to
+  16, 24 to 27 and 29 to 31; twice that on a failed spawn), and at least one `process_take_request`, in every
+  process. Not measured (`ZORAYA_POSIX_STATS`' `exec_ns` with and without the hold would show it); by estimate, at the
+  order of a short system call (the 1 µs under HVF and 13 µs under TCG that ADR-0106 Option C used for a poll, from
+  INV-0006-3's `port_wait` as a proxy), 22 calls are about 0.3 ms under TCG, under 0.1 % of a job's cost there (70
+  `/bin/sleep` jobs took 29 s under TCG in `zosh.script`, about 400 ms each) `[estimate]`.
 - **Precedent:** Linux keeps a pending signal across `execve` (the same task) and makes an interruptible sleep that
   a signal preceded return `-EINTR` `[outside evidence]`.
 
@@ -141,18 +144,29 @@ fallback, with the kernel route.
 - **Negative.** The duplicate and the blocked-signal rule of Option A's "evidence against"; `nanosleep`'s extra
   `EINTR`s; a stop signal is not carried (the broker stops by its own record, ADR-0106 item 9); a request to the old
   image after the carry is the new image's already.
-- **Follow-up (kernel).** `fork`: a child made during a job signal's walk misses it (ADR-0004 rule 3), and the library
-  cannot hand it on, since the child must not inherit the parent's pending signals. Closing it needs the kernel
+- **Follow-up (kernel).** `fork` and `posix_spawn`: a child made during a job signal's walk misses it (ADR-0004 rule
+  3); a `posix_spawn` child goes into the parent's group job (`bp::group::INHERIT`) unless it has a group of its own,
+  so `make` and other spawners reach it too. The library cannot hand the signal on: the child must not inherit the
+  parent's pending signals, and the parent cannot tell which signal the walk missed. Closing it needs the kernel
   (Linux restarts `fork` when a group signal comes during it `[outside evidence]`), a question for ADR-0004's owner.
   `zosh.script` has no step with a forked command for this reason.
+- **Tensions with accepted ADRs.** Option A deviates from accepted ADR-0106 in two places, and the architect accepts
+  the deviations or asks for a superseding ADR: (a) **INV-0106-2** (and INV-0304-5, which cites its list): a
+  handler-less process now makes `process_take_request` calls in `execve` (and `execv`, `execvp`, `execl`), at least
+  one per `exec` that reaches its spawn, because the hold may have queued a request; the list of seven functions
+  grows by `execve`, as ADR-0315 item 10 grew it by `sigwait`. (b) **ADR-0106 item 2's mapping**: for the length of
+  the spawn, every `SIG_DFL` signal whose default terminates has the kernel disposition `Deliver`, not `Terminate`;
+  nothing of the old image runs a handler or a default action then, and a failed spawn puts each one back. A note in
+  ADR-0106's open questions (ADR-0001 rule 6) points here.
 
 ## Invariants
 
 - **INV-0392-1.** `execve` hands on to the new image every signal its old image was sent and did not act on (the
   kernel's queue, and the pending sets with blocked signals included) whose default action ends a process and which
   the new image does not ignore; a signal sent while the new image is made is held for that, not acted on by the old
-  image; the queue is taken only by a process with a handler, a `sigwait` or a hold. *Check:* `cargo test -p
-  zoraya-posix --test threads` (`an_exec_*`) and `make test-posix` (`zosh.script`, the `go-a` and `go-c` steps).
+  image, and a failed spawn puts the held dispositions back; the queue is taken only by a process with a handler, a
+  `sigwait` or a hold. *Check:* `cargo test -p zoraya-posix --test threads` (`an_exec_*`) and `make test-posix`
+  (`zosh.script`, the `go-a` and `go-c` steps; `t_posix execfail`).
 - **INV-0392-2.** A call that may wait, whose entry poll ran a handler without `SA_RESTART`, is `EINTR` at its first
   wait point instead of waiting (with `SA_RESTART` handlers only it waits), a call that does not reach a wait returns
   its result, and `nanosleep` whose entry poll ran any handler is `EINTR` with its time left. *Check:* `cargo test -p
@@ -163,9 +177,10 @@ fallback, with the kernel route.
 
 - Whether `connect` and `getrandom`, which wait but are not in the list, should join it; neither is on a measured
   path with a handler.
-- The kernel half for `fork` (the follow-up above).
-- No test forces the handler-less `exec` window (the hold): it needs a signal to land during the spawn system call
-  (`tools/mutants/sigint-exec.toml`, `S-exec-holds-nothing`, is a known survivor).
+- The kernel half for `fork` and `posix_spawn` (the follow-up above).
+- No test forces the handler-less `exec` window (the hold itself): it needs a signal to land during the spawn
+  system call (`tools/mutants/sigint-exec.toml`, `S-exec-holds-nothing`, is a known survivor). The hold's failure
+  path is checked (`t_posix execfail`).
 
 ## Revisit triggers
 

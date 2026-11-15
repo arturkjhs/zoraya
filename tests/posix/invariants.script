@@ -56,6 +56,10 @@
 > t_posix entryintr\r
 < t_posix: entryintr passed
 < PSURF>
+# INV-0392-1: a failed execve puts its held dispositions back.
+> t_posix execfail\r
+< t_posix: execfail passed
+< PSURF>
 # INV-0104-5 and INV-0106-2: no broker message and no request taken on the
 # file paths of a process with no handler.
 > ZORAYA_POSIX_STATS=1 t_posix files\r

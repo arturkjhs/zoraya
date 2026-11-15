@@ -19,7 +19,7 @@ Updated 2026-11-14, after 10a and 10e.
     silent): recommend accepting both.
   - ADR-0380 (terminal behaviour where ADR-0332 is silent), ADR-0381 (the 16-byte cell), ADR-0382 (how conformance is
     evidenced): recommend accepting all three.
-  - ADR numbers handed out: 10a 0380 to 0382; 10b 0383 to 0385; the python hook 0396 (unused).
+  - ADR numbers handed out: 10a 0380 to 0382; 10b 0383 to 0385; the python hook 0396 (unused); `work/sigint-exec` 0392.
 - **Decisions for the architect (nobody was asked; these were decided to continue, each reversible):**
   - ADR-0336 item 2's review gate for `tr`, `expr` and `diff` was met by an independent `opus-review` (it did not port
     them), with a toybox patch (`ports/patches/toybox/0003`) for five defects it found. Overrule if you want a human.

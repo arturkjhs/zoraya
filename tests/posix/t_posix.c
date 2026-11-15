@@ -30,6 +30,9 @@
  *                      call's entry; a read that would wait is then EINTR
  *                      without SA_RESTART and completes with it; nanosleep
  *                      is EINTR with its time left either way
+ *   t_posix execfail   INV-0392-1's hold: an execve that fails at the spawn
+ *                      (an argument past the spawn record, E2BIG) leaves a
+ *                      process with no handler that SIGTERM still ends
  *   t_posix files      a file workload (INV-0104-5, INV-0106-2 with
  *                      ZORAYA_POSIX_STATS: broker=0 takes=0)
  *   t_posix time       INV-0191-1: a file in /tmp after one on the root volume is
@@ -625,6 +628,39 @@ static pid_t signal_then_flag(pid_t to, volatile int *flag, int fd, long ms)
 	while (*flag != 2)
 		;
 	return pid;
+}
+
+/*
+ * INV-0392-1, the hold's failure path: execve holds SIGTERM and the rest as
+ * Deliver for its spawn; a spawn that fails must put them back, or a process
+ * with no handler never acts on a signal again.
+ */
+static void execfail(const char *self)
+{
+	int p[2];
+	CHECK(pipe(p) == 0);
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		static char big[70 * 1024];
+		memset(big, 'x', sizeof big - 1);
+		char *argv[] = { "t_posix", big, NULL };
+		int r = execve(self, argv, environ);
+		char c = (r == -1 && errno == E2BIG) ? 'e' : 'n';
+		if (write(p[1], &c, 1) != 1)
+			_exit(2);
+		pause_ms(5000);
+		_exit(0);
+	}
+	close(p[1]);
+	char c;
+	CHECK(read(p[0], &c, 1) == 1);
+	CHECK(c == 'e');
+	CHECK(kill(pid, SIGTERM) == 0);
+	int status = reap(pid);
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+	close(p[0]);
+	passed();
 }
 
 static void entryintr(void)
@@ -2006,6 +2042,8 @@ int main(int argc, char **argv)
 		raise_self();
 	else if (!strcmp(argv[1], "eintr"))
 		eintr();
+	else if (!strcmp(argv[1], "execfail"))
+		execfail(SELF);
 	else if (!strcmp(argv[1], "entryintr"))
 		entryintr();
 	else if (!strcmp(argv[1], "files"))

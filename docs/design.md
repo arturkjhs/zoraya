@@ -2790,8 +2790,8 @@ ADR-0221 items 5, 6 and 8).
   it; a handler without `SA_RESTART` run at a call's entry makes that call's wait `EINTR`, and `nanosleep` `EINTR`
   after any handler (proposed ADR-0392). The new image gets a carried signal a moment after it starts, so one that
   installs a handler at once may handle it (twice, for a signal sent between the spawn and the carry); a carried
-  blocked signal ends it at once. A `fork` child made during a job signal's walk misses it (ADR-0004 rule 3; ADR-0392's
-  follow-up, a kernel question). A stopped
+  blocked signal ends it at once. A `fork` or `posix_spawn` child made during a job signal's walk misses it (ADR-0004 rule 3;
+  ADR-0392's follow-up, a kernel question). A stopped
   child sends no `SIGCHLD` (ADR-0190 item 19). `pselect` reports a terminal ready at once (`poll_readable` is deferred, ADR-0105). Non-canonical
   mode exists but nothing sets it; no `TOSTOP`, no `SIGTTOU`. The shell's fds 0 to 2 are three descriptions (ADR-0190
   item 7). A FIFO fd passed by `spawn` is not counted as a side by `tmpd` (item 12), and a FIFO opened after its
