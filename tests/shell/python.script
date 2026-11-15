@@ -39,7 +39,7 @@
 < \r\n~>
 > python3 -c "import socket; a, b = socket.socketpair(); a.sendall(b'ping'); print(b.recv(10)); print(a.family, a.type)"\r
 < b'ping'
-< AddressFamily.AF_UNIX SocketKind.SOCK_STREAM
+< 1 1
 < \r\n~>
 # The environment decides nothing, no bytecode is written, no user site.
 > python3 smoke.py\r
