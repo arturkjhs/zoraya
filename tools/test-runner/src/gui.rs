@@ -546,7 +546,14 @@ impl Screen {
         // The row is drawn on the selection's ground, where the reader reads a
         // blank cell as `_` (its mark for a cell with a ground of its own).
         // A script's expected text has none (an underscore in it is a space).
-        all.last()
+        // The window may be shorter than the grid `grid_for` assumes (the
+        // compositor makes a toplevel fit above the dock, and the terminal
+        // then has fewer rows, the status row still its last): the row is
+        // the last one inside the window, and a row past its bottom reads
+        // as nothing but the no-match mark.
+        all.iter()
+            .rev()
+            .find(|r| !r.chars().all(|c| c == zoraya_term::read::NO_MATCH))
             .map(|r| r.replace('_', " ").trim_end().to_string())
             .unwrap_or_default()
     }
@@ -1765,6 +1772,65 @@ mod tests {
             "{got:?}"
         );
         assert!(got.ends_with("System+G: give"), "{got:?}");
+    }
+
+    /// ADR-0337: when the compositor made the window shorter than the grid
+    /// `grid_for` assumes (1920x1200 at scale 2: a toplevel fits above the
+    /// dock), the terminal's last row, the status row, is the one read.
+    #[test]
+    fn the_status_row_is_the_last_row_inside_a_shorter_window() {
+        let (w, h) = (1024usize, 768usize);
+        let mut look = Look::new(Scale::ONE, Appearance::Light);
+        let (columns, rows) = look.grid_for(w as u32, h as u32);
+        let grid = rows - 2;
+        let (sw, sh) = look.surface_size(columns, grid + 1);
+        let mut surface = vec![0u32; sw * sh];
+        look.clear(&mut surface);
+        let mut row = zoraya_term::StatusRow::default();
+        row.set(
+            zoraya_proto_term::STATUS_PLAIN,
+            b"given until vi ends: +r ~/o",
+        );
+        assert!(row.render(&mut look, &mut surface, sw, columns, grid));
+        // What lies below the window (the dock, the wallpaper) is not flat.
+        let mut pixels: Vec<u32> = (0..w * h)
+            .map(|i| 0x0020_3040 ^ ((i as u32).wrapping_mul(2_654_435_761) & 0x00ff_ffff))
+            .collect();
+        let (ox, oy) = zoraya_compositor::first_body(Scale::ONE);
+        for y in 0..sh {
+            for x in 0..sw {
+                pixels[(oy as usize + y) * w + ox as usize + x] = surface[y * sw + x];
+            }
+        }
+        let screen = Screen {
+            width: w,
+            height: h,
+            pixels,
+        };
+        let mut reader = reader();
+        assert_eq!(
+            screen.status_at(&mut reader, (ox, oy)),
+            "given until vi ends: +r ~/o"
+        );
+        // And an empty row inside the window reads as empty, not as the
+        // wallpaper below it.
+        let mut look2 = Look::new(Scale::ONE, Appearance::Light);
+        let mut empty: Vec<u32> = (0..w * h)
+            .map(|i| 0x0020_3040 ^ ((i as u32).wrapping_mul(2_654_435_761) & 0x00ff_ffff))
+            .collect();
+        let mut surface = vec![0u32; sw * sh];
+        look2.clear(&mut surface);
+        for y in 0..sh {
+            for x in 0..sw {
+                empty[(oy as usize + y) * w + ox as usize + x] = surface[y * sw + x];
+            }
+        }
+        let screen = Screen {
+            width: w,
+            height: h,
+            pixels: empty,
+        };
+        assert_eq!(screen.status_at(&mut reader, (ox, oy)), "");
     }
 
     /// The screen reader against the real terminal's rendering, placed as
