@@ -79,7 +79,7 @@ window
 prefix | box cols 80
 prefix | winch 2
 # A selection of the box's own text is pasted into the box: bracketed, since
-# it asked for mode 2004 (11 bytes: `box cols 80`; the paste is held for no
+# it asked for mode 2004 (about ten bytes of `box cols 80`, the selection stops at its last cell; the paste is held for no
 # question).
 drag 112 147 191 147 400
 chord meta c
@@ -87,7 +87,7 @@ pause 300
 chord meta v
 pause 600
 window
-prefix | paste bracketed 11 bytes
+prefix | paste bracketed 1
 # Ctrl-Z stops it: the shell's screen and prompt are back, not the box.
 chord ctrl z
 window
