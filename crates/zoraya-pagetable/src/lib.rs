@@ -552,12 +552,58 @@ impl PageTable {
         from: u64,
         f: &mut impl FnMut(Mapping) -> bool,
     ) -> bool {
+        self.for_each_mapping_bounded(mem, from, usize::MAX, f).done
+    }
+
+    /// As [`PageTable::for_each_mapping_from`], and it stops, too, once it has
+    /// read `max_reads` descriptors (valid or not): a walk of a space of
+    /// mostly empty tables is as much work as one of mapped pages, and a
+    /// caller that holds a lock for a step counts it (ADR-0270, INV-0270-1).
+    /// `Walked::resume` is where the next walk starts then. At least the
+    /// descriptors of the path down to `from` (a level each) are read, so
+    /// `max_reads` must exceed 4 for a walk to go on.
+    pub fn for_each_mapping_bounded<M: TableMemory>(
+        &self,
+        mem: &M,
+        from: u64,
+        max_reads: usize,
+        f: &mut impl FnMut(Mapping) -> bool,
+    ) -> Walked {
         let base = match self.half {
             Half::Lower => 0,
             Half::Upper => 0xffff << VA_BITS,
         };
-        walk_from(mem, self.root, 0, base, from, f)
+        let mut budget = Budget {
+            reads: 0,
+            max: max_reads,
+            resume: None,
+        };
+        let done = walk_from(mem, self.root, 0, base, from, &mut budget, f);
+        Walked {
+            done,
+            resume: budget.resume,
+            reads: budget.reads,
+        }
     }
+}
+
+/// How a bounded walk ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Walked {
+    /// The walk reached the end of the table.
+    pub done: bool,
+    /// Where to resume if the walk stopped because it had read `max_reads`
+    /// descriptors: the address of the first entry it did not read. `None` if
+    /// it ended or the caller's function stopped it.
+    pub resume: Option<u64>,
+    /// Descriptors read, valid or not.
+    pub reads: usize,
+}
+
+struct Budget {
+    reads: usize,
+    max: usize,
+    resume: Option<u64>,
 }
 
 fn walk_from<M: TableMemory>(
@@ -566,6 +612,7 @@ fn walk_from<M: TableMemory>(
     level: usize,
     base: u64,
     from: u64,
+    budget: &mut Budget,
     f: &mut impl FnMut(Mapping) -> bool,
 ) -> bool {
     for index in 0..ENTRIES {
@@ -574,12 +621,25 @@ fn walk_from<M: TableMemory>(
         if va.wrapping_add(size) <= from && va.wrapping_add(size) > va {
             continue;
         }
+        if budget.reads >= budget.max {
+            budget.resume = Some(va);
+            return false;
+        }
+        budget.reads += 1;
         let descriptor = mem.read(table, index);
         if !is_valid(descriptor) {
             continue;
         }
         if is_table(descriptor, level) {
-            if !walk_from(mem, descriptor & ADDRESS_MASK, level + 1, va, from, f) {
+            if !walk_from(
+                mem,
+                descriptor & ADDRESS_MASK,
+                level + 1,
+                va,
+                from,
+                budget,
+                f,
+            ) {
                 return false;
             }
         } else if !f(Mapping {

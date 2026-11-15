@@ -567,6 +567,46 @@ fn random_sequences_match_a_model() {
     }
 }
 
+/// A bounded walk: steps of at most `max_reads` descriptors, resumed where
+/// they stopped, see every leaf once and in order, whatever the layout, and a
+/// step reads no more than its limit.
+#[test]
+fn a_bounded_walk_sees_every_leaf_once_and_reads_no_more_than_its_limit() {
+    let (mut m, mut t) = setup();
+    // Sparse: one page in each of 12 tables of 2 MiB, 3 pages together,
+    // and one far away.
+    let mut pages: Vec<u64> = (0..12)
+        .map(|i| HIGH + 0x10_0000 + i * MIB2 * 3)
+        .collect();
+    pages.extend([HIGH + 0x2000 + MIB2 * 40, HIGH + 0x3000 + MIB2 * 40, HIGH + GIB / 2]);
+    for &va in &pages {
+        t.map(&mut m, va, 0x4000_0000 + (va & 0xff_ffff), PAGE_SIZE, Attributes::KERNEL_DATA)
+            .unwrap();
+    }
+    let all = mappings(&m, &t);
+    for max in [6usize, 9, 40, 512, usize::MAX] {
+        let mut seen = Vec::new();
+        let mut from = 0;
+        let mut steps = 0;
+        loop {
+            let walked = t.for_each_mapping_bounded(&m, from, max, &mut |x| {
+                seen.push(x);
+                from = x.va + x.size;
+                true
+            });
+            assert!(walked.reads <= max, "{} reads of {max}", walked.reads);
+            steps += 1;
+            assert!(steps < 100_000, "no progress at {max}");
+            if walked.done {
+                assert_eq!(walked.resume, None);
+                break;
+            }
+            from = from.max(walked.resume.expect("stopped for reads"));
+        }
+        assert_eq!(seen, all, "max {max}");
+    }
+}
+
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
 

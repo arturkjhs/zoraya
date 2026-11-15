@@ -38,6 +38,11 @@ pub const MAX_MAPPINGS: usize = zoraya_abi::MAPPING_SLOTS;
 /// search of the 4096 of a full list is 32 units, under half a step.
 pub const RECORDS_PER_UNIT: usize = 128;
 
+/// Page-table descriptors one step of a snapshot's walk may read, and how many
+/// are one unit of work (ADR-0270): 8 units.
+pub const WALK_READS: usize = 1024;
+pub const READS_PER_UNIT: usize = 128;
+
 /// Records a step of the plan of a snapshot copies (16 units).
 pub const PLAN_STEP: usize = 1024;
 /// Where mappings of objects go: the kernel chooses inside this range.
@@ -634,9 +639,11 @@ impl AddressSpace {
         let mark = build.child.memory.frames.len();
         let grown = |build: &SnapshotBuild| build.child.memory.frames.len() - mark;
         let mut next = build.next;
-        let reached_end = self
-            .table
-            .for_each_mapping_from(&self.memory, build.next, &mut |leaf| {
+        let walked = self.table.for_each_mapping_bounded(
+            &self.memory,
+            build.next,
+            WALK_READS,
+            &mut |leaf| {
                 for offset in (0..leaf.size).step_by(FRAME_SIZE as usize) {
                     let (va, pa) = (leaf.va + offset, leaf.pa + offset);
                     // Mappings are kept by address, and do not overlap; the
@@ -685,12 +692,18 @@ impl AddressSpace {
                 }
                 next = leaf.va + leaf.size;
                 taken + grown(build) < STEP
-            });
+            },
+        );
+        // The descriptors the walk read, whatever they held: a space of
+        // mostly empty tables (a mapping of 24 MiB unmapped leaves its 12
+        // tables) is walked in steps too.
+        steps::count(walked.reads.div_ceil(READS_PER_UNIT));
         if let Some(e) = failed {
             return Err(e);
         }
-        build.next = next;
-        Ok(reached_end)
+        // Stopped for reads: resume at the first entry not read.
+        build.next = walked.resume.map_or(next, |at| at.max(next));
+        Ok(walked.done)
     }
 
     /// Maps a new frame at `va` for [`AddressSpace::snapshot_step`] to fill: not
