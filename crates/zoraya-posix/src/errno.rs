@@ -35,6 +35,7 @@ pub const ENFILE: i32 = 23;
 pub const EMFILE: i32 = 24;
 pub const ENOTTY: i32 = 25;
 pub const ENOSPC: i32 = 28;
+pub const EFBIG: i32 = 27;
 pub const ESPIPE: i32 = 29;
 pub const EPIPE: i32 = 32;
 pub const ERANGE: i32 = 34;
@@ -286,6 +287,7 @@ mod tests {
             (EISDIR, 21),
             (EINVAL, 22),
             (EMFILE, 24),
+            (EFBIG, 27),
             (ESPIPE, 29),
             (EPIPE, 32),
             (ENOSYS, 38),

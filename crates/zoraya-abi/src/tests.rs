@@ -1731,3 +1731,26 @@ fn zpbx_flags_count_the_handles_after_self() {
         assert_eq!(ext_handles(flags), None, "{flags:#x}");
     }
 }
+
+/// INV-0431-3: `memory_map` accepts the flag values 0 to 3 (read, write,
+/// shared, both) and refuses any other, including a high word.
+#[test]
+fn memory_map_flags_are_zero_to_three() {
+    for raw in 0..=3u64 {
+        let f = <MapFlags as Arg>::decode(&[raw]).expect("a valid flag set");
+        assert_eq!(f.is_write(), raw & 1 != 0);
+        assert_eq!(f.is_shared(), raw & 2 != 0);
+        let mut out = [0u64];
+        f.encode(&mut out);
+        assert_eq!(out[0], raw);
+    }
+    for raw in [4u64, 5, 8, 0x100, 1 << 32, u64::MAX] {
+        assert_eq!(
+            <MapFlags as Arg>::decode(&[raw]),
+            Err(Status::InvalidArgument),
+            "{raw:#x}"
+        );
+    }
+    assert!(MapFlags::WRITE.union(MapFlags::SHARED).is_shared());
+    assert!(!MapFlags::WRITE.is_shared() && !MapFlags::SHARED.is_write());
+}

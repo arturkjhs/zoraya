@@ -55,7 +55,19 @@ pub enum Kind {
     Stream = 5,
     /// A `SOCK_SEQPACKET` or `SOCK_DGRAM` Unix socket: its channel end.
     Packet = 6,
+    /// A memory descriptor (ADR-0413): its memory object. The record's
+    /// `read_off` is the descriptor's size and `write_off` its seals (bits 0
+    /// to 4) and `MEMORY_SEALABLE`.
+    Memory = 7,
 }
+
+/// In a memory record's `write_off`: the descriptor accepts `F_ADD_SEALS`.
+pub const MEMORY_SEALABLE: u64 = 1 << 8;
+/// The seal bits a memory record can carry (`F_SEAL_SEAL` to `F_SEAL_FUTURE_WRITE`).
+pub const MEMORY_SEALS: u64 = 0x1f;
+/// The largest size a memory record can claim (the descriptor's own limit,
+/// `memfd::MAX_SIZE`).
+pub const MEMORY_MAX_SIZE: u64 = 1 << 40;
 
 impl Kind {
     fn from_byte(b: u8) -> Option<Kind> {
@@ -66,6 +78,7 @@ impl Kind {
             4 => Kind::PipeWrite,
             5 => Kind::Stream,
             6 => Kind::Packet,
+            7 => Kind::Memory,
             _ => return None,
         })
     }
@@ -178,6 +191,19 @@ impl Record {
                     && r.read_off == 0
                     && r.write_off == 0
             }
+            // Read-only or read-write, a size, the known seals: how big and
+            // what the object really is, the handle says.
+            Kind::Memory => {
+                matches!(r.access, 0 | 2)
+                    && r.sock_type == 0
+                    && !r.nonblock
+                    && !r.has_read
+                    && !r.has_write
+                    && !r.has_anc
+                    && !r.shared
+                    && r.read_off <= MEMORY_MAX_SIZE
+                    && r.write_off & !(MEMORY_SEALS | MEMORY_SEALABLE) == 0
+            }
             Kind::File | Kind::Dir | Kind::PipeRead | Kind::PipeWrite => {
                 r.access <= 2
                     && r.sock_type == 0
@@ -203,7 +229,9 @@ pub fn handle_count(records: &[Record]) -> usize {
 /// connections): a pipe end, and a stream socket's read and write streams.
 pub fn child_keeps<H: Copy>(r: &Record, handles: &[H]) -> Vec<H> {
     match r.kind {
-        Kind::PipeRead | Kind::PipeWrite => handles.to_vec(),
+        // A memory object is duplicable: the snapshot gave the child its own
+        // handle at the same slot.
+        Kind::PipeRead | Kind::PipeWrite | Kind::Memory => handles.to_vec(),
         Kind::Stream => handles
             .iter()
             .take(usize::from(r.has_read) + usize::from(r.has_write))
@@ -443,6 +471,42 @@ mod tests {
         let anc = encode_anc(1234, &rs);
         assert_eq!(decode_anc(&anc, 10), Some((1234, rs.to_vec())));
         assert_eq!(decode_anc(&anc, 11), None);
+    }
+
+    /// A memory descriptor's record carries its size and seals, and says
+    /// nothing a memory descriptor cannot have (ADR-0413).
+    #[test]
+    fn a_memory_record_round_trips_and_a_lie_about_its_kind_is_refused() {
+        let mut m = Record::one(Kind::Memory, 2, false);
+        m.read_off = 4 * 1024 * 1024;
+        m.write_off = 0x12 | MEMORY_SEALABLE;
+        let bytes = encode_packet(&[m], b"x");
+        assert_eq!(decode_packet(&bytes, 1), Some((vec![m], 1 + RECORD)));
+        assert_eq!(m.handles(), 1);
+        let mut ro = m;
+        ro.access = 0;
+        assert!(decode_packet(&encode_packet(&[ro], b""), 1).is_some());
+        let breaks: [fn(&mut Record); 9] = [
+            |r| r.access = 1,
+            |r| r.access = 3,
+            |r| r.nonblock = true,
+            |r| r.sock_type = 1,
+            |r| r.has_read = true,
+            |r| r.has_anc = true,
+            |r| r.shared = true,
+            |r| r.read_off = MEMORY_MAX_SIZE + 1,
+            |r| r.write_off = 0x20,
+        ];
+        for (i, f) in breaks.iter().enumerate() {
+            let mut odd = m;
+            f(&mut odd);
+            assert!(
+                decode_packet(&encode_packet(&[odd], b""), odd.handles()).is_none(),
+                "break {i}"
+            );
+        }
+        // A memory record is one handle, which a fork child keeps.
+        assert_eq!(child_keeps(&m, &[7u8]), vec![7u8]);
     }
 
     #[test]

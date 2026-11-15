@@ -900,9 +900,21 @@ pub struct MapFlags(u32);
 impl MapFlags {
     pub const READ: MapFlags = MapFlags(0);
     pub const WRITE: MapFlags = MapFlags(1);
+    /// The mapping stays shared with the object across `snapshot_process`:
+    /// the child maps the same frames instead of a copy (ADR-0431, for
+    /// `MAP_SHARED` of a memory descriptor, ADR-0413 item 3).
+    pub const SHARED: MapFlags = MapFlags(2);
 
     pub const fn is_write(self) -> bool {
         self.0 & 1 != 0
+    }
+
+    pub const fn is_shared(self) -> bool {
+        self.0 & 2 != 0
+    }
+
+    pub const fn union(self, other: MapFlags) -> MapFlags {
+        MapFlags(self.0 | other.0)
     }
 }
 
@@ -911,7 +923,7 @@ impl Arg for MapFlags {
 
     fn decode(r: &[u64]) -> Result<MapFlags, Status> {
         match word(r[0])? {
-            raw @ (0 | 1) => Ok(MapFlags(raw)),
+            raw @ (0..=3) => Ok(MapFlags(raw)),
             _ => Err(Status::InvalidArgument),
         }
     }
