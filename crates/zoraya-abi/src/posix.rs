@@ -30,6 +30,10 @@
 //!
 //! A handle index names a handle of the message the record came in, in the
 //! order of its handle list; `NO_HANDLE` is none.
+//!
+//! A child started with a chosen table (ADR-0433, plan part F4) may have no
+//! cwd: the cwd entry is [`NO_ENTRY`] and the cwd empty, the only form a table
+//! of no entries has. Any other cwd entry is a directory of the table.
 
 use crate::Handle;
 
@@ -47,6 +51,8 @@ pub const MAX_PATH: usize = 4096;
 pub const MAX_MESSAGE_HANDLES: usize = 64;
 /// No handle.
 pub const NO_HANDLE: u8 = 0xff;
+/// The cwd entry of a record whose process has no current directory (ADR-0433).
+pub const NO_ENTRY: u32 = u32::MAX;
 
 /// The fixed slots, all above the fd numbers (ADR-0107 item 5, ADR-0153 rule
 /// 11). The fds are at their numbers.
@@ -141,7 +147,6 @@ pub const EXT_RANDOM: u8 = 2;
 /// The client end of a window channel follows, after the others (proposed
 /// ADR-0317): the compositor's, for a program whose description has `window`.
 pub const EXT_WINDOW: u8 = 4;
-
 /// The handles after `SELF` that a `ZPBX` message with `flags` carries, or
 /// `None` for a flag this library does not know.
 pub const fn ext_handles(flags: u8) -> Option<usize> {
@@ -420,11 +425,13 @@ impl<'a> Bootstrap<'a> {
         let cwd_entry = word(9)?;
         let fd_count = word(10)? as usize;
         let entry_count = word(11)? as usize;
+        // The cwd is in one of the entries, or there is none (ADR-0433).
+        let cwd_ok = cwd_entry == NO_ENTRY || (cwd_entry as usize) < entry_count;
         if facts.umask > 0o777
             || word(15)? != 0
             || flags & !FLAGS != 0
             || fd_count > OPEN_MAX as usize
-            || cwd_entry as usize >= entry_count
+            || !cwd_ok
         {
             return None;
         }
@@ -491,7 +498,12 @@ impl<'a> Bootstrap<'a> {
             previous = Some(prefix);
             at = end;
         }
-        if at != bytes.len() || !cwd_kind.is_some_and(EntryKind::is_directory) {
+        let cwd_good = if cwd_entry == NO_ENTRY {
+            cwd.is_empty()
+        } else {
+            cwd_kind.is_some_and(EntryKind::is_directory)
+        };
+        if at != bytes.len() || !cwd_good {
             return None;
         }
         Some(Bootstrap {

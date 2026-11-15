@@ -149,6 +149,9 @@ This part adds no authority: a program can pass only what it holds, and a refuse
 - Whether a Unix socket in a `fork` child should keep working for packet sockets (copy the channel is impossible; an
   ancillary-less shared form is what a stream socket gets). The plan's browser launcher spawns, it does not fork.
 
+- **Closed by plan part F4 (2026-11-15).** Item 7's deferral: a Unix socket now crosses `spawn` and `exec` (ADR-0433 item 6, proposed),
+  and the in-QEMU half of INV-0412-1 between two processes runs (`t_spawn unix`).
+
 ## Revisit triggers
 
 - A port that sends more than 64 handles in a message, or needs `SCM_CREDENTIALS` (ADR-0412's triggers).
