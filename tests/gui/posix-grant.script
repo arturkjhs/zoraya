@@ -14,6 +14,7 @@ type echo mine > notes.txt\r
 # 1. The refusal is on the row at once, and `vi` is given one file only.
 type vi notes.txt\r
 pause 1500
+shot vi-open
 status -
 type :e! other.txt\r
 pause 1000
