@@ -165,6 +165,17 @@ adv "a make word the tool cannot resolve" "steps: test-a" 'F = $(MAKE) $(1)\ntes
 adv "a tab comment that continues into a command" "steps: test-a" 'test-a:\n\t# c \\\n\techo one\n' 'test-a:\n\t# c \\\n\techo two\n'
 adv "\${MAKE}" "steps: test-a" 'test-a:\n\t+${MAKE} h\nh:\n\tx\ntest-b:\n\tb\n' 'test-a:\n\t+${MAKE} h\nh:\n\ty\ntest-b:\n\tb\n'
 
+adv "a helper reached through a call that holds \$(MAKE)" "steps: test-a" 'ZR = $(MAKE) $(1)\ntest-a:\n\t$(call ZR,h)\nh:\n\tx\ntest-b:\n\tb\n' 'ZR = $(MAKE) $(1)\ntest-a:\n\t$(call ZR,h)\nh:\n\ty\ntest-b:\n\tb\n'
+adv "a helper reached through a variable that holds \$(MAKE)" "steps: test-a" 'ZSUB = $(MAKE) -s\ntest-a:\n\t$(ZSUB) h\nh:\n\tx\ntest-b:\n\tb\n' 'ZSUB = $(MAKE) -s\ntest-a:\n\t$(ZSUB) h\nh:\n\ty\ntest-b:\n\tb\n'
+# On the real Makefile: an orphan rule is the full set, and one recipe line of test-boot is exactly test-boot.
+cp "$here/Makefile" "$aux/real.old"
+{ cat "$here/Makefile"; printf 'orphan-for-check-ci-plan:\n\techo x\n'; } > "$aux/real.new"
+got=$(ruby tools/ci-makefile-steps.rb --files "$aux/real.old" "$aux/real.new" "$ALL" 2>/dev/null) || got=ERROR
+[ "$got" = full ] || { echo "check-ci-plan: the real Makefile: an orphan rule is '$got', expected full" >&2; fail=$((fail + 1)); }
+awk 'f && /^\t/ { print $0 " "; f = 0; next } /^test-boot:/ { f = 1 } { print }' "$here/Makefile" > "$aux/real.new"
+got=$(ruby tools/ci-makefile-steps.rb --files "$aux/real.old" "$aux/real.new" "$ALL" 2>/dev/null) || got=ERROR
+[ "$got" = "steps: test-boot" ] || { echo "check-ci-plan: the real Makefile: a recipe line of test-boot is '$got', expected steps: test-boot" >&2; fail=$((fail + 1)); }
+
 # Through the plan: the one recipe's step and the smoke set; not test-net; not the full set.
 mk_edit recipe 's/) files$/) files2/'
 out=$(sh tools/ci-plan.sh "$base" 2>"$aux/plan.err")
@@ -510,6 +521,17 @@ nightly_cron=$(sed -n "s/^NIGHTLY_CRON='\(.*\)'$/\1/p" tools/ci-plan-step.sh)
 ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green" SCHEDULE="$nightly_cron" step_plan "the nightly never skips" 0 "nightly's own jobs"
 ev="GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/work/x FULL_INPUT=true" step_plan "a manual full run" 0 '^summary=full set: [0-9]+ jobs'
 grep -q 'merges since' "$aux/summary" || { echo "check-ci-plan: plan step: the summary of a scheduled run lists the merges" >&2; fail=$((fail + 1)); }
+
+# A plan that fails fails the step (a stub tools/ci-plan.sh that exits 3, and one that prints nothing).
+cp tools/ci-plan.sh "$aux/ci-plan.real"
+for stub in 'exit 3' 'exit 0'; do
+	printf '#!/bin/sh\n%s\n' "$stub" > tools/ci-plan.sh
+	if env GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main sh tools/ci-plan-step.sh >/dev/null 2>&1; then
+		echo "check-ci-plan: plan step: a plan that fails ('$stub') leaves the step green" >&2; fail=$((fail + 1))
+	fi
+done
+cp "$aux/ci-plan.real" tools/ci-plan.sh
+git checkout -q -- tools/ci-plan.sh 2>/dev/null || true
 
 # The plan job reads the runs through its token (INV-0345-2).
 awk '/^  plan:/ { inplan = 1; next } /^  [a-z]+:/ { inplan = 0 } inplan && /^      actions: read/ { ok = 1 } END { exit !ok }' .github/workflows/test.yml ||

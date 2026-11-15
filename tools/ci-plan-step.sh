@@ -46,12 +46,18 @@ if [ "$event" = schedule ]; then
     fi
 fi
 
+# A failing plan is a failing step: a run that planned nothing must not read as green.
+planned=0
 if [ "$event" = push ] && [ "$ref" = refs/heads/main ]; then
-    PUSH_MAIN=1 tools/ci-plan.sh origin/main > plan.txt
+    PUSH_MAIN=1 tools/ci-plan.sh origin/main > plan.txt && planned=1
 elif [ -n "$skip" ]; then
-    CI_PLAN_SKIP="$skip" tools/ci-plan.sh origin/main > plan.txt
+    CI_PLAN_SKIP="$skip" tools/ci-plan.sh origin/main > plan.txt && planned=1
 else
-    NIGHTLY=$nightly FULL=$full tools/ci-plan.sh origin/main > plan.txt
+    NIGHTLY=$nightly FULL=$full tools/ci-plan.sh origin/main > plan.txt && planned=1
+fi
+if [ "$planned" != 1 ] || ! grep -q '^tests=' plan.txt; then
+    echo "::error::tools/ci-plan.sh failed or gave no plan" >&2
+    exit 1
 fi
 cat plan.txt
 grep '^summary=' plan.txt | sed 's/^summary=//' >> "$summary_file"
@@ -60,7 +66,7 @@ if [ "$event" = schedule ]; then
     { echo; $lastfull --merges "$(echo "$last" | sed -n 's/^green_sha=//p')"; } >> "$summary_file"
 fi
 if [ -n "$red" ]; then
-    echo "::error::$red"
+    echo "::error::$red" >&2
     echo "$red" >> "$summary_file"
     exit 1
 fi

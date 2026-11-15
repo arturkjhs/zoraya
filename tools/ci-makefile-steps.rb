@@ -85,7 +85,7 @@ class Mk
         if first.strip.start_with?('#') && i == j
           mark.call(:ignore)
         elsif cur
-          @rules[cur][:text] << ' ' << stmt.join(' ')
+          @rules[cur][:text] << "\n" << stmt.join(' ')
           mark.call([:r, cur])
         else
           mark.call(:unknown)
@@ -187,7 +187,10 @@ class Mk
   # cannot be resolved ($(2), $(foreach ...), $$X) stands for every rule ('$(?)').
   def makes(text)
     out = []
-    text.scan(/(?:\$[({]MAKE[)}]|(?<![\w$-])make(?![\w-]))((?:\s+[^;&|\n]*)?)/) do |(args)|
+    text = expand(expand_calls(text))
+    # `$(MAKE) ...` is a call; a bare `make` may be prose in an echo, so its unresolvable words are dropped.
+    text.scan(/(\$[({]MAKE[)}]|(?<![\w$-])make(?![\w-]))((?:\s+[^;&|\n]*)?)/) do |(who, args)|
+      real = who != 'make'
       toks = words(expand(args))
       skip = false
       toks.each do |w|
@@ -197,17 +200,48 @@ class Mk
         next if w.include?('=') && !w.include?('$')
         w = w.gsub(/\A["']|["']\z/, '')
         next if w.empty? || w == '\\'
-        if w.include?('$$')
-          pre = w.split('$$').first.to_s
+        if w.include?('$$') || w.include?('$(') || w.include?('${')
+          next unless real
+          next if w =~ /\$\(\d\)/ # a call's parameter: resolved at the call site (expand_calls)
+          pre = w.include?('$$') ? w.split('$$').first.to_s : w[0...w.index(/\$[({]/)]
           out << "#{pre}$(?)"
-        elsif w.include?('$(') || w.include?('${')
-          out << "#{w[0...w.index(/\$[({]/)]}$(?)"
         else
           out << w
         end
       end
     end
     out
+  end
+
+  # $(call NAME,a,b) replaced by NAME's value with $(1), $(2) ... filled in.
+  def expand_calls(str, depth = 0)
+    return str if depth > 4
+    out = +''
+    i = 0
+    while (j = str.index('$(call ', i))
+      out << str[i...j]
+      k = j + 2
+      d = 1
+      while k < str.size && d > 0
+        d += 1 if str[k] == '(' || str[k] == '{'
+        d -= 1 if str[k] == ')' || str[k] == '}'
+        k += 1
+      end
+      name, _, rest = str[(j + 7)...(k - 1)].to_s.partition(',')
+      args = []
+      cur = +''
+      dd = 0
+      rest.each_char do |c|
+        dd += 1 if c == '(' || c == '{'
+        dd -= 1 if c == ')' || c == '}'
+        if c == ',' && dd.zero? then args << cur; cur = +''; else cur << c end
+      end
+      args << cur
+      body = @vars[name.strip].join(' ').gsub(/\$\((\d)\)/) { args[Regexp.last_match(1).to_i - 1].to_s }
+      out << expand_calls(body, depth + 1)
+      i = k
+    end
+    out << str[i..].to_s
   end
 
   def rules_for(word)
@@ -254,7 +288,10 @@ class Mk
         makes(rule[:text]).each { |w| todo.concat(rules_for(w).map { |i| [:r, i] }) }
         (refs(rule[:text]) + refs(rule[:prereq]) + refs(rule[:raw].to_s)).uniq.each { |v| todo.concat(var_nodes(v)) }
       else
-        @vars[n[1]].each { |val| refs(val).each { |v| todo.concat(var_nodes(v)) } }
+        @vars[n[1]].each do |val|
+          refs(val).each { |v| todo.concat(var_nodes(v)) }
+          makes(val).each { |w| todo.concat(rules_for(w).map { |i| [:r, i] }) }
+        end
       end
     end
     seen

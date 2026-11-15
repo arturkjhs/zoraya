@@ -108,6 +108,8 @@ if ARGV[0] == '--green-for'
   found = nil
   each_full_run(runs, repo, this) do |r|
     next unless r['conclusion'] == 'success'
+    # The run's head may not be in this checkout: fetch it; a failed fetch means it does not count (fail safe).
+    git('fetch', '-q', 'origin', r['head_sha']) unless git('cat-file', '-e', "#{r['head_sha']}^{commit}")
     next unless git('merge-base', '--is-ancestor', want, r['head_sha']) # unknown commits do not count
     found = r
     break
