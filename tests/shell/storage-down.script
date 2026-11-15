@@ -13,7 +13,7 @@
 x init: storage failed
 < zosh: there is no volume
 < \r\n/> 
-> ls\r
+> ls /\r
 < ls: there is no volume
 < \r\n/> 
 > poweroff\r

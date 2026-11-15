@@ -764,6 +764,8 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BIN)
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
 	cp $(OPENSSH_BIN) $(APPS_ROOT)/bin/ssh
 	cp $(OPENSSH_KEYGEN) $(APPS_ROOT)/bin/ssh-keygen
+	@# OpenSSH's client needs a user-database entry (ADR-0342 item 7, ADR-0340 item 5): the image's one identity.
+	mkdir -p $(APPS_ROOT)/etc && cp ports/apps/etc/passwd ports/apps/etc/group $(APPS_ROOT)/etc/
 	$(ELF_CHECK) $(APPS_ROOT)/bin
 	@echo "== no ssh server, agent or other OpenSSH tool in the image, and no listener imported (INV-0340-4)"
 	@for b in sshd sshd-session sshd-auth ssh-agent ssh-add ssh-keyscan ssh-keysign sftp scp sftp-server; do \

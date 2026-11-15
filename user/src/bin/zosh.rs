@@ -3862,8 +3862,11 @@ impl Z {
                     untrusted: false,
                     colour: 0,
                     limits: zoraya_settings::rooms::Limits::default(),
+                    // Not the shell's own `/data/ROOM` (ADR-0341 item 2): it is
+                    // no grant of the room.
                     grants: entries
                         .iter()
+                        .filter(|e| e.path != format!("/data/{name}"))
                         .map(|e| zoraya_settings::rooms::Grant {
                             write: e.rights & file_rights::WRITE != 0,
                             path: grants::shown(&e.path, &home),
