@@ -214,6 +214,7 @@ name ends in `zfetch`). Scripts: [`scripts/basic.script`](probes/scripts/basic.s
 | process | `Child::kill` | signal 9 | signal 9 |
 | process | a missing program | `NotFound` | `NotFound` |
 | process | `Command::current_dir` | `ENOSYS` (no `addchdir`) | `ENOSYS` |
+| process | a child that makes a `HashMap` | (not reached: `output` panics first) | **exit 101**: "failed to generate random data: ... NotFound" (a child has no random connection, INV-0411-4, and `std` falls back to `/dev/urandom`) |
 | net | `ToSocketAddrs` of `10.0.2.2:PORT` and of `test.zoraya:PORT` (`net.hosts`) | works | works |
 | net | `TcpStream` GET of a page; of 1,000,090 bytes by name | works; 205 ms and 46 ms in two runs | works; 51 ms |
 | net | `TcpStream::connect_timeout` | **fails**: `ENOTTY` from `FIONBIO` | `EACCES` (the port is not the URL's: the grant's answer) |
@@ -230,7 +231,8 @@ and threads, but every blocking wait of `std`'s synchronisation spins (correct b
 waits for the next scheduler tick), `HashMap::new` panics, `fs::copy` is wrong and `Command::output` and
 `connect_timeout` panic or fail. All of those come from two causes, `syscall()`'s return type and missing answers,
 and `FIONBIO`; with both emulated (**fixed**), every check passes except `Command::current_dir`, which needs
-`posix_spawn_file_actions_addchdir`, and the platform's own refusals (hard links, ungranted paths and ports).
+`posix_spawn_file_actions_addchdir`, a child's `HashMap` (a spawned child has no random connection), and the
+platform's own refusals (hard links, ungranted paths and ports).
 
 ### What libposix would have to add
 
@@ -256,6 +258,9 @@ From the two sections above and the **fixed** run:
    `std` collides with them.
 6. **`std`'s probes of `/proc/self/cgroup` and `/proc/self/mountinfo`** answered `ENOENT` without the shell's hint,
    or the hint stays as visible noise once per program.
+7. **Randomness for spawned children.** A `posix_spawn` child has no random connection (INV-0411-4), so a Rust child
+   that makes a `HashMap` panics (measured); either the child gets a connection made from its parent's, or every
+   `Command` user must pass ADR-0411's grant mask, which `std` cannot.
 
 ### Crates that bypass libc
 
