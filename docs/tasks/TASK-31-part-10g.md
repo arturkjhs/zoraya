@@ -1,7 +1,7 @@
 # TASK-31 part 10g: a program's own directory, and ssh (report)
 
-Branch `work/10g`, from `main` at `47f59d26`. Written by an agent (Sonnet). ADR numbers used: 0390 (proposed); 0346
-(a surface block for ssh) is not needed and stays unused.
+Branch `work/10g`, from `main` at `47f59d26`. Written by an agent (Sonnet). ADR numbers used: 0393 (proposed; it was 0390 until the review, the number is 10d's); ADR-0346 (ports-early's surface for ssh)
+is used as it stands.
 
 ## Done
 
@@ -80,3 +80,12 @@ host. In a room (`room new r +net build.example.org:22`): the same line, an empt
 ## Proposed ADRs
 
 - ADR-0393 (what 10g decided): recommends Option A (as built).
+
+## Fix pass after the review (docs/tasks/TASK-31-review-10g.md, "Dispositions")
+
+`origin/work/10d` (with ports-early) is merged: one OpenSSH port. The review's must-fix and should-fix findings are
+fixed or recorded; the room-terminal test (`tests/gui/ssh-room.script`, run by `tools/test-apps-ssh.sh` in
+`make test-apps`) fails with the old `own_connection` and passes with the fix. Found and left open: a terminal the
+panel starts has no network and no random service, so ssh and ssh-keygen cannot run in it (architect's decision).
+Run: `make check`, `make test-changed` (all steps green but the skipped `test-python*`), `make test-apps`'s ssh steps
+(console 102 steps, room window 20 steps). Not run: CI, `FULL=1`, mutation runs, a root sshd (`/run/sshd`).
