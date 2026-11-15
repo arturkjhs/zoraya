@@ -12,9 +12,9 @@
 < \r\n~>
 # Plan part F2: CPython's test_socket over a Unix pair (socketpair and the
 # sendmsg/recvmsg cases that need no socket file; the rest of the module needs
-# bind, listen and accept: plan part F7), with test.support's helpers.
-> python3 regr.py regr-unix.txt -m BasicSocketPairTest -m PurePythonSocketPairTest\r
-< Result: SUCCESS
+# bind, listen and accept: plan part F7); unixpair.py loads the two classes.
+> python3 unixpair.py\r
+< unixpair: ok
 < \r\n~>
 x power off
 > poweroff\r
