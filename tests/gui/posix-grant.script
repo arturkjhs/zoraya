@@ -44,7 +44,8 @@ status -
 type :e! other.txt\r
 pause 1000
 status vi was not given ~/other.txt (to read)
-# 5. A grant outside what the shell holds, and a variable, give nothing.
+# 5. A variable gives nothing; a path the shell holds and cannot find is said not to exist (a path outside what
+# it holds is refused first, as "this shell does not hold it", before anything is looked up: nothing leaks).
 chord meta g
 pause 800
 type +r $HOME/x
@@ -54,7 +55,7 @@ chord meta g
 pause 800
 type +r /nowhere
 type \r
-status /nowhere: this shell does not hold it
+status /nowhere: does not exist
 # 6. The kill offer: Escape keeps, Enter ends the line.
 chord meta k
 status kill vi? Enter kills, Escape keeps
