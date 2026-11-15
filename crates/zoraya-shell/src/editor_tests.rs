@@ -1139,7 +1139,7 @@ fn the_paste_path_end_to_end_waits_for_enter() {
                     ran.push(l);
                 }
             }
-            Routed::Dropped => panic!("the paste is there"),
+            Routed::Dropped | Routed::Attention(_) => panic!("the paste is there"),
         }
     }
     assert!(ran.is_empty(), "nothing ran before the person's Enter");
