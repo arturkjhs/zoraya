@@ -560,3 +560,8 @@ harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, 
 - **Fixed on `work/smp-tcg`:** a failed test left its program's processes running (t_cpu's 41 spinners made `t_rooms` 35
   times slower and failed `t_snapshot` and the big-space spawn). The harness now ends them after a failure, back to the
   live count before the test plus the processes the panic lost for good, and fails the run if it cannot within 10 s.
+## Sockets that survive `exec` (the architect, 2026-11-15)
+
+`execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets
+across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its streams and ancillary channel) crosses
+`exec`, and lift the limit.

@@ -10,8 +10,9 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE, Narrow, NarrowAccount,
-    Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source, status as code,
+    Address, Connect, Connecting, Duplicate, Duplicated, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE,
+    Narrow, NarrowAccount, Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source,
+    status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
@@ -81,8 +82,20 @@ struct PingStart {
     timeout_us: i64,
 }
 
+/// The live connections one connection (with the ones made from it) may have
+/// made with `Duplicate` (ADR-0434): what a program's `posix_spawn` needs for
+/// its helpers, and small enough that no program fills the table.
+pub const MAX_DUPLICATES: usize = 8;
+
 pub struct Service {
     connections: Vec<Option<Connection>>,
+    /// Each connection's family token (never a slot id, so a closed slot's reuse
+    /// joins nothing) and whether `Duplicate` made it. A connection `add`ed from
+    /// outside starts a family; its duplicates, and theirs, share the token for
+    /// as long as they live, whatever closes, so the family's duplicates are
+    /// counted against [`MAX_DUPLICATES`] however the asker comes and goes.
+    families: Vec<(u64, bool)>,
+    next_family: u64,
     accounts: Accounts,
     lookups: Vec<Lookup>,
     next_token: u32,
@@ -128,6 +141,8 @@ impl Service {
     pub fn new() -> Service {
         Service {
             connections: Vec::new(),
+            families: Vec::new(),
+            next_family: 0,
             accounts: Accounts::new(),
             lookups: Vec::new(),
             next_token: 0,
@@ -148,6 +163,11 @@ impl Service {
             self.connections.len() - 1
         };
         self.accounts.join(account);
+        if self.families.len() <= id {
+            self.families.resize(id + 1, (0, false));
+        }
+        self.next_family += 1;
+        self.families[id] = (self.next_family, false);
         Some(id)
     }
 
@@ -168,6 +188,9 @@ impl Service {
             && let Some(c) = slot.take()
         {
             self.accounts.leave(c.account());
+        }
+        if let Some(f) = self.families.get_mut(id) {
+            *f = (0, false);
         }
         // A lookup of this connection still runs; its charge goes with its
         // answer.
@@ -487,6 +510,39 @@ impl Service {
                             }
                         }
                     }
+                }
+            }
+            8 => {
+                // Another connection of this one's own rights and scope
+                // (ADR-0434): never wider, so no right is asked for.
+                let Ok((_, _)) = decode::<Duplicate>(message, handles) else {
+                    return Action::Close;
+                };
+                let answer = |c| Action::Reply(reply(&Duplicated { status: Below(c) }, t));
+                let family = self.families.get(id).map_or(0, |f| f.0);
+                let live = self
+                    .connections
+                    .iter()
+                    .zip(&self.families)
+                    .filter(|(c, f)| c.is_some() && f.1 && f.0 == family)
+                    .count();
+                if live >= MAX_DUPLICATES {
+                    return answer(code::BUSY);
+                }
+                match self.add(connection.clone()) {
+                    Some(new) => {
+                        self.families[new] = (family, true);
+                        Action::Narrowed {
+                            id: new,
+                            reply: reply(
+                                &Duplicated {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            ),
+                        }
+                    }
+                    None => answer(code::BUSY),
                 }
             }
             _ => Action::Reply(reply(

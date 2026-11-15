@@ -40,7 +40,11 @@ n=0
 for f in $CL $COMMON $EX $VI $REGEX "$here/compat.c" "$here/recover.c"; do
   o=$obj/$(echo "${f#$here/}" | tr '/' '_' | sed 's/\.c$/.o/')
   echo "$o"
-  ( "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" || echo "$f" >> "$obj/failed.txt" ) &
+  # One line a compile, written whole: three compiles run at once, and the `sh -x` trace of
+  # concurrent subshells is written in pieces, so two of its lines can run together (CI saw
+  # 114 compile lines for 115 objects, which check-early.sh counts, ADR-0390 INV-0390-2).
+  ( { set +x; } 2>/dev/null; printf '%s\n' "$zcc $cflags $DEFS $INC -c -o $o $f" >&2
+    "$zcc" $cflags $DEFS $INC -c -o "$o" "$f" || echo "$f" >> "$obj/failed.txt" ) &
   n=$((n + 1)); [ $((n % 3)) = 0 ] && wait
 done > "$obj/objects.txt"
 wait

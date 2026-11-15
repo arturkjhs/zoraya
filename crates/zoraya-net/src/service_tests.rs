@@ -6,7 +6,8 @@ use crate::connection::{ConnectTarget, Request, Verdict};
 use crate::service::{Action, MAX_CONNECTIONS, Service};
 use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode as encode_scope, rights};
 use zoraya_proto_net::{
-    GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, render, source, status,
+    Duplicate, Duplicated, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, render,
+    source, status,
 };
 use zoraya_protocol::{Below, Data, ErrorReply, decode, encode};
 
@@ -209,6 +210,63 @@ fn a_connection_that_goes_while_its_run_goes_loses_only_the_reply() {
     assert_eq!(
         service.handle(b, &ping_message(SERVER_IP, 1), 0, &mut net.client, net.now),
         Action::Deferred
+    );
+}
+
+/// ADR-0434: `Duplicate` makes a connection of the caller's own rights and
+/// scope, also for one that cannot `narrow`, never a wider one, and it counts
+/// against the bound of connections.
+#[test]
+fn duplicate_gives_the_same_rights_and_scope_and_nothing_more() {
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let root = service.add(Connection::root()).unwrap();
+    // A connection that can reach and cannot narrow: a program's.
+    let program = {
+        let Action::Narrowed { id, .. } = service.handle(
+            root,
+            &bytes(
+                &Narrow {
+                    rights: rights::STATUS | rights::REACH,
+                    scope: Data(Scope::EMPTY.as_bytes()),
+                },
+                3,
+            ),
+            1,
+            &mut net.client,
+            0,
+        ) else {
+            panic!("narrowed");
+        };
+        id
+    };
+    let before = service.connection(program).unwrap().clone();
+    let Action::Narrowed { id, reply } =
+        service.handle(program, &bytes(&Duplicate {}, 4), 1, &mut net.client, 0)
+    else {
+        panic!("duplicated");
+    };
+    assert_eq!(
+        decode::<Duplicated>(&reply, 0).unwrap().1.status.0,
+        status::OK
+    );
+    assert_eq!(service.connection(id).unwrap(), &before);
+    assert_ne!(id, program);
+    // A message without its handle ends the connection, as `Narrow` does.
+    assert_eq!(
+        service.handle(program, &bytes(&Duplicate {}, 5), 0, &mut net.client, 0),
+        Action::Close
+    );
+    // The table's own bound: `BUSY` and nothing attached (the family's bound
+    // is tested apart, `duplicates_are_bounded_per_family`).
+    while service.add(before.clone()).is_some() {}
+    let Action::Reply(r) = service.handle(program, &bytes(&Duplicate {}, 6), 1, &mut net.client, 0)
+    else {
+        panic!("busy");
+    };
+    assert_eq!(
+        decode::<Duplicated>(&r, 0).unwrap().1.status.0,
+        status::BUSY
     );
 }
 
@@ -1073,4 +1131,86 @@ fn a_public_name_lookup_with_mixed_answers_gives_the_public_ones_only() {
         ask(&[private, [10, 1, 2, 3], [127, 0, 0, 1], SERVER_IP]),
         (status::NOT_GRANTED, vec![])
     );
+}
+
+/// ADR-0434: a connection and the ones made from it may have `MAX_DUPLICATES`
+/// live at once; one that closes frees a place; another connection's family
+/// is counted apart; a duplicate's own duplicates count against its family.
+#[test]
+fn duplicates_are_bounded_per_family() {
+    use crate::service::MAX_DUPLICATES;
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let a = service.add(Connection::root()).unwrap();
+    let b = service.add(Connection::root()).unwrap();
+    let dup = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
+        from,
+        &bytes(&Duplicate {}, n),
+        1,
+        &mut net.client,
+        0,
+    ) {
+        Action::Narrowed { id, .. } => Ok(id),
+        Action::Reply(r) => Err(decode::<Duplicated>(&r, 0).unwrap().1.status.0),
+        other => panic!("{other:?}"),
+    };
+    let mut made = Vec::new();
+    for i in 0..MAX_DUPLICATES {
+        made.push(dup(&mut service, &mut net, a, i as u32 + 1).unwrap());
+    }
+    // Exactly at the bound: the next is refused, by `a` and by its duplicate.
+    assert_eq!(dup(&mut service, &mut net, a, 100), Err(status::BUSY));
+    assert_eq!(dup(&mut service, &mut net, made[0], 101), Err(status::BUSY));
+    // Another family has its own count.
+    assert!(dup(&mut service, &mut net, b, 102).is_ok());
+    // One closing frees one place.
+    service.remove(made.pop().unwrap());
+    let again = dup(&mut service, &mut net, made[0], 103).unwrap();
+    assert_eq!(dup(&mut service, &mut net, a, 104), Err(status::BUSY));
+    // A reused slot starts a family of its own.
+    service.remove(again);
+    let c = dup(&mut service, &mut net, a, 105).unwrap();
+    assert!(dup(&mut service, &mut net, c, 106).is_err());
+}
+
+/// Review of F4, R1: closing the connection that asked does not give its
+/// duplicates a new allowance. A program that asks 8, closes the asker, asks
+/// from a duplicate, and so on, never holds more than 8 of the family.
+#[test]
+fn closing_the_asker_does_not_reset_the_bound() {
+    use crate::service::MAX_DUPLICATES;
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let root = service.add(Connection::root()).unwrap();
+    let ask = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
+        from,
+        &bytes(&Duplicate {}, n),
+        1,
+        &mut net.client,
+        0,
+    ) {
+        Action::Narrowed { id, .. } => Some(id),
+        Action::Reply(_) => None,
+        other => panic!("{other:?}"),
+    };
+    let mut live: Vec<usize> = (0..MAX_DUPLICATES)
+        .map(|i| ask(&mut service, &mut net, root, i as u32 + 1).unwrap())
+        .collect();
+    assert_eq!(ask(&mut service, &mut net, root, 50), None);
+    // Close the asker; a duplicate asks: still the same family, still full.
+    service.remove(root);
+    assert_eq!(ask(&mut service, &mut net, live[0], 51), None);
+    // One closes: one more, and no more. Repeat: the count never passes 8.
+    for round in 0..40u32 {
+        let gone = live.remove(0);
+        service.remove(gone);
+        let from = live[0];
+        let new = ask(&mut service, &mut net, from, 100 + round).expect("a place was freed");
+        assert_eq!(ask(&mut service, &mut net, from, 200 + round), None);
+        live.push(new);
+        assert_eq!(live.len(), MAX_DUPLICATES);
+    }
+    // Another program's family is its own, and the table holds only the 8.
+    let other = service.add(Connection::root()).unwrap();
+    assert!(ask(&mut service, &mut net, other, 300).is_some());
 }
