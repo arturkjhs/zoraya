@@ -89,10 +89,13 @@ pub const MAX_DUPLICATES: usize = 8;
 
 pub struct Service {
     connections: Vec<Option<Connection>>,
-    /// For a connection made by `Duplicate`, the connection it descends from
-    /// (the first of its family): its family is counted against
-    /// [`MAX_DUPLICATES`].
-    origins: Vec<Option<usize>>,
+    /// Each connection's family token (never a slot id, so a closed slot's reuse
+    /// joins nothing) and whether `Duplicate` made it. A connection `add`ed from
+    /// outside starts a family; its duplicates, and theirs, share the token for
+    /// as long as they live, whatever closes, so the family's duplicates are
+    /// counted against [`MAX_DUPLICATES`] however the asker comes and goes.
+    families: Vec<(u64, bool)>,
+    next_family: u64,
     accounts: Accounts,
     lookups: Vec<Lookup>,
     next_token: u32,
@@ -138,7 +141,8 @@ impl Service {
     pub fn new() -> Service {
         Service {
             connections: Vec::new(),
-            origins: Vec::new(),
+            families: Vec::new(),
+            next_family: 0,
             accounts: Accounts::new(),
             lookups: Vec::new(),
             next_token: 0,
@@ -159,10 +163,11 @@ impl Service {
             self.connections.len() - 1
         };
         self.accounts.join(account);
-        if self.origins.len() <= id {
-            self.origins.resize(id + 1, None);
+        if self.families.len() <= id {
+            self.families.resize(id + 1, (0, false));
         }
-        self.origins[id] = None;
+        self.next_family += 1;
+        self.families[id] = (self.next_family, false);
         Some(id)
     }
 
@@ -184,12 +189,8 @@ impl Service {
         {
             self.accounts.leave(c.account());
         }
-        if let Some(o) = self.origins.get_mut(id) {
-            *o = None;
-        }
-        // What descended from it no longer counts against it.
-        for o in self.origins.iter_mut().filter(|o| **o == Some(id)) {
-            *o = None;
+        if let Some(f) = self.families.get_mut(id) {
+            *f = (0, false);
         }
         // A lookup of this connection still runs; its charge goes with its
         // answer.
@@ -518,14 +519,19 @@ impl Service {
                     return Action::Close;
                 };
                 let answer = |c| Action::Reply(reply(&Duplicated { status: Below(c) }, t));
-                let family = self.origins.get(id).copied().flatten().unwrap_or(id);
-                let live = self.origins.iter().filter(|o| **o == Some(family)).count();
+                let family = self.families.get(id).map_or(0, |f| f.0);
+                let live = self
+                    .connections
+                    .iter()
+                    .zip(&self.families)
+                    .filter(|(c, f)| c.is_some() && f.1 && f.0 == family)
+                    .count();
                 if live >= MAX_DUPLICATES {
                     return answer(code::BUSY);
                 }
                 match self.add(connection.clone()) {
                     Some(new) => {
-                        self.origins[new] = Some(family);
+                        self.families[new] = (family, true);
                         Action::Narrowed {
                             id: new,
                             reply: reply(

@@ -1172,3 +1172,45 @@ fn duplicates_are_bounded_per_family() {
     let c = dup(&mut service, &mut net, a, 105).unwrap();
     assert!(dup(&mut service, &mut net, c, 106).is_err());
 }
+
+/// Review of F4, R1: closing the connection that asked does not give its
+/// duplicates a new allowance. A program that asks 8, closes the asker, asks
+/// from a duplicate, and so on, never holds more than 8 of the family.
+#[test]
+fn closing_the_asker_does_not_reset_the_bound() {
+    use crate::service::MAX_DUPLICATES;
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let root = service.add(Connection::root()).unwrap();
+    let mut ask = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
+        from,
+        &bytes(&Duplicate {}, n),
+        1,
+        &mut net.client,
+        0,
+    ) {
+        Action::Narrowed { id, .. } => Some(id),
+        Action::Reply(_) => None,
+        other => panic!("{other:?}"),
+    };
+    let mut live: Vec<usize> = (0..MAX_DUPLICATES)
+        .map(|i| ask(&mut service, &mut net, root, i as u32 + 1).unwrap())
+        .collect();
+    assert_eq!(ask(&mut service, &mut net, root, 50), None);
+    // Close the asker; a duplicate asks: still the same family, still full.
+    service.remove(root);
+    assert_eq!(ask(&mut service, &mut net, live[0], 51), None);
+    // One closes: one more, and no more. Repeat: the count never passes 8.
+    for round in 0..40u32 {
+        let gone = live.remove(0);
+        service.remove(gone);
+        let from = live[0];
+        let new = ask(&mut service, &mut net, from, 100 + round).expect("a place was freed");
+        assert_eq!(ask(&mut service, &mut net, from, 200 + round), None);
+        live.push(new);
+        assert_eq!(live.len(), MAX_DUPLICATES);
+    }
+    // Another program's family is its own, and the table holds only the 8.
+    let other = service.add(Connection::root()).unwrap();
+    assert!(ask(&mut service, &mut net, other, 300).is_some());
+}

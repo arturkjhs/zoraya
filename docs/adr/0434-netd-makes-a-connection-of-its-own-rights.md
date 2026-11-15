@@ -53,7 +53,7 @@ program can fill `netd`'s table of 64 (review of plan part F4, finding 3); a dup
 
 ## Invariants
 
-- **INV-0434-1.** The connection `Duplicate` makes has exactly the rights and the scope of the connection that asked, and a connection with the ones made from it has at most 8 live at once (`BUSY` past that). *Check:* `cargo test -p zoraya-net` (`duplicate_gives_the_same_rights_and_scope_and_nothing_more`, `duplicates_are_bounded_per_family`).
+- **INV-0434-1.** The connection `Duplicate` makes has exactly the rights and the scope of the connection that asked, and a connection with the ones made from it has at most 8 live at once (`BUSY` past that). *Check:* `cargo test -p zoraya-net` (`duplicate_gives_the_same_rights_and_scope_and_nothing_more`, `duplicates_are_bounded_per_family`, `closing_the_asker_does_not_reset_the_bound`).
 
 ## Open questions
 
