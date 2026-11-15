@@ -471,14 +471,7 @@ impl<S: Sys> Posix<S> {
             _ => return Err(EBADF),
         };
         if out.handles.len() + handles.len() > MAX_HANDLES {
-            // Rolled back: nothing of this one stays in the bookkeeping.
-            out.sent_memory.retain(|&f| f != parent);
-            out.moved_packets.retain(|&f| f != parent);
-            if let Some(Desc::Socket(sock)) = self.fds.get(parent)
-                && let Some(c) = sock.ctl
-            {
-                out.close_after.retain(|&h| h != c);
-            }
+            // The whole `Inherit` is dropped on this error: nothing to roll back.
             return Err(crate::errno::E2BIG);
         }
         out.fds.push(child);
