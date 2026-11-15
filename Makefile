@@ -385,6 +385,11 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 # (net.hosts), so that a name is resolved too; the script's checksums come
 # from the server's own pattern function (`--checksum`).
 HTTPD := target/debug/zoraya-test-httpd
+# The address the guest reaches the test server at: a guestfwd address in QEMU's network that is
+# not the host (.2), the DNS server (.3) or the first lease (.15), which QEMU refuses for a rule
+# (CI's QEMU: "Conflicting/invalid host:port in guest forwarding rule"). 10.0.2.2 stays the host
+# alias for `ping`, as net.hosts' gw.zoraya.
+NET_HOST := 10.0.2.50
 # INV-0230-1 (ADR-0230 item 2): a network test's QEMU is `restrict=on`, and the
 # guest reaches the runner's test server only through these `guestfwd` rules:
 # a connection to ADDRESS:PORT (10.0.2.2, the host's address in the guest's network) runs
@@ -398,7 +403,7 @@ NET_FETCH_ROOT := $(BUILD)/net-fetch-root
 NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
 NET_FETCH_TEMPLATE := tests/shell/net-fetch.script
 NET_FETCH_SCRIPT := $(BUILD)/net-fetch.script
-NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAYS,10.0.2.2) --disk $(NET_FETCH_DISK) --accel $(3) $(NET_TEST_KERNEL)
+NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAYS,$(NET_HOST)) --disk $(NET_FETCH_DISK) --accel $(3) $(NET_TEST_KERNEL)
 
 $(HTTPD): tools/test-httpd/src/main.rs
 	$(CARGO) build -q -p zoraya-test-httpd
@@ -408,7 +413,7 @@ test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		grep -a -q "$$s" $(NET_TEST_USER_DIR)/$$f || { echo "[net-fetch] FAIL: INV-0296-1's check is blind: $$f holds no '$$s'"; exit 1; }; done
 	@$(call NET_OR_SKIP,net-fetch,skipped) \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NET_HOST) expired.zoraya=$(NET_HOST) wrong.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
 	mkdir -p $(NET_FETCH_ROOT)/etc/zoraya && : > $(NET_FETCH_ROOT)/etc/zoraya/net-crash && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
@@ -420,7 +425,7 @@ test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	port=$$(cat $(NET_HTTP_READY)); \
 	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[net-fetch] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
 		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
@@ -517,7 +522,7 @@ test-net-lookup-run:
 		echo "$$dnsport" > $(NET_LOOKUP_ROOT)/config/net-test-dns-port && \
 		target/debug/zoraya-mkfs --size 16M --from $(NET_LOOKUP_ROOT) $(NET_LOOKUP_DISK); }; then \
 		echo "[net-lookup] FAIL: the disk was not made"; kill $$httpd $$dns 2>/dev/null; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@SUM1K@/$$($(HTTPD) --checksum 1000)/" tests/shell/net-lookup.script > $(NET_LOOKUP_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" -e "s/@SUM1K@/$$($(HTTPD) --checksum 1000)/" tests/shell/net-lookup.script > $(NET_LOOKUP_SCRIPT); \
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_LOOKUP_SCRIPT) --label net-lookup-auto -- \
 		$(RUN_QEMU) --test --keys --net --net-open --net-pcap $(NET_LOOKUP_PCAP) --disk $(NET_LOOKUP_DISK) --accel auto $(NET_TEST_KERNEL); rc=$$?; \
 	kill $$httpd $$dns 2>/dev/null; wait $$httpd $$dns 2>/dev/null; \
@@ -537,7 +542,7 @@ NET_BENCH_SCRIPT := $(BUILD)/net-bench.script
 bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@$(call NET_OR_SKIP,bench-net,skipped) \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
 	: > $(NET_HTTP_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-bench.log 2>&1 & echo $$! > $(BUILD)/net-httpd-bench.pid; } && \
@@ -545,11 +550,11 @@ bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
 	port=$$(cat $(NET_HTTP_READY)); \
 	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then echo "[bench-net] FAIL: the test server did not start"; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" tests/shell/net-bench.script > $(NET_BENCH_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" tests/shell/net-bench.script > $(NET_BENCH_SCRIPT); \
 	for accel in auto $(if $(filter 1,$(FULL)),tcg); do \
 	  log=target/test-logs/bench-net-$$accel.log; \
 	  $(RUNNER) --timeout $(if $(filter 1,$(FULL)),400,$(QEMU_TIMEOUT)) --script $(NET_BENCH_SCRIPT) --label bench-net-$$accel -- \
-	    $(RUN_QEMU) --test --keys --net $(call NET_RELAY,10.0.2.2,$$port) --disk $(NET_FETCH_DISK) --accel $$accel $(KERNEL) > $$log 2>&1; rc=$$?; \
+	    $(RUN_QEMU) --test --keys --net $(call NET_RELAY,$(NET_HOST),$$port) --disk $(NET_FETCH_DISK) --accel $$accel $(KERNEL) > $$log 2>&1; rc=$$?; \
 	  if [ $$rc != 0 ]; then echo "[bench-net] FAIL ($$accel), log $$log"; tail -20 $$log; kill $$httpd 2>/dev/null; exit $$rc; fi; \
 	  for size in 16777216 1; do \
 	    echo "[bench-net] $$accel $$size bytes, ms:" $$(grep -a "^$$size bytes fnv1a" $$log | sed -e 's/.* in \([0-9.]*\) ms.*/\1/' | tr '\n' ' '); \
@@ -567,13 +572,13 @@ NET_POSIX_ROOT := $(BUILD)/net-posix-root
 NET_POSIX_DISK := $(BUILD)/net-posix-disk.img
 NET_POSIX_TEMPLATE := tests/shell/net-posix.script
 NET_POSIX_SCRIPT := $(BUILD)/net-posix.script
-NET_POSIX_RUN = $(RUNNER) --timeout $(1) --script $(NET_POSIX_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAY,10.0.2.2,$$port) --disk $(NET_POSIX_DISK) --accel $(3) $(KERNEL)
+NET_POSIX_RUN = $(RUNNER) --timeout $(1) --script $(NET_POSIX_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAY,$(NET_HOST),$$port) --disk $(NET_POSIX_DISK) --accel $(3) $(KERNEL)
 
 test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@$(call NET_OR_SKIP,net-posix,skipped) \
 	$(MAKE) -s -f ports/Makefile libc && $(MAKE) -s -f ports/Makefile check-libc && \
 	mkdir -p $(NET_POSIX_ROOT) target/test-logs && cp -R rootfs/. $(NET_POSIX_ROOT)/ && mkdir -p $(NET_POSIX_ROOT)/bin && \
-	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
 	tools/zcc -O2 -o $(NET_POSIX_ROOT)/bin/zfetch tests/posix-net/zfetch.c && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NET_POSIX_ROOT)/bin/zfetch && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_POSIX_ROOT) $(NET_POSIX_DISK) && \
@@ -584,7 +589,7 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	port=$$(cat $(NET_HTTP_READY)); \
 	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[net-posix] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-posix.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" \
 		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
 		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
@@ -637,7 +642,7 @@ APPS_HTTP_READY := $(BUILD)/apps-httpd.port
 APPS_TLS_READY := $(BUILD)/apps-tlsd.ports
 # QEMU options; 512 MiB for the reason RUN_NET_CMD's comment gives.
 APPS_QEMU ?= --mem 512M
-APPS_RUN = $(RUNNER) --timeout $(1) --script $(4) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAYS,10.0.2.2) --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
+APPS_RUN = $(RUNNER) --timeout $(1) --script $(4) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAYS,$(NET_HOST)) --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
 # The runs of a program from the volume give their memory back: 16 `curl`s on
 # 128 MiB, where 8 fitted while each run kept its image (TASK-27 9a item 2).
 APPS_LAUNCHES := tests/shell/apps-launches.script
@@ -647,7 +652,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	@$(call NET_OR_SKIP,apps,skipped) \
 	rm -rf $(APPS_TEST_ROOT) && mkdir -p $(APPS_TEST_ROOT) target/test-logs && cp -R rootfs/. $(APPS_TEST_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(APPS_TEST_ROOT)/ && cp $(TLSTHREADS_BIN) $(APPS_TEST_ROOT)/bin/tlsthreads && cp $(CRYPTOTHREADS_BIN) $(APPS_TEST_ROOT)/bin/cryptothreads && \
-	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NET_HOST) expired.zoraya=$(NET_HOST) wrong.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(APPS_TEST_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(APPS_TEST_ROOT)/system/tls/roots && \
 	mkdir -p $(APPS_TEST_ROOT)/etc/test-pki/hashed && cp tests/net/tls/other-root.pem $(APPS_TEST_ROOT)/etc/test-pki/ && \
 	cp tests/net/tls/hashed/24824ecf.0 $(APPS_TEST_ROOT)/etc/test-pki/hashed/ && \
@@ -661,7 +666,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	port=$$(cat $(APPS_HTTP_READY)); \
 	if [ -z "$$port" ] || [ -z "$$tlswrong" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[apps] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-apps.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		$(APPS_TEMPLATE) > $(APPS_SCRIPT); \
 	sed -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		$(APPS_REFUSALS_TEMPLATE) > $(APPS_REFUSALS_SCRIPT); \
@@ -759,7 +764,7 @@ test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tool
 	rm -rf $(PY_ROOT) && mkdir -p $(PY_ROOT) target/test-logs && cp -R rootfs/. $(PY_ROOT)/ && \
 	cp -R $(PYTHON_ROOT)/. $(PY_ROOT)/ && mkdir -p $(PY_ROOT)/home && cp tests/python/*.py tests/python/regr-*.txt $(PY_ROOT)/home/ && \
 	mkdir -p $(PY_ROOT)/usr/lib/python3.15/test && cp -R $(PYTHON_TESTLIB)/. $(PY_ROOT)/usr/lib/python3.15/test/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(PY_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=$(NET_HOST) expired.zoraya=$(NET_HOST) wrong.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(PY_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(PY_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PY_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 256M --from $(PY_ROOT) $(PY_DISK) && \
@@ -771,10 +776,10 @@ test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tool
 	port=$$(cat $(PY_READY)); \
 	if [ -z "$$port" ] || [ -z "$$tlswrong" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[$@] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat $(PY_HTTPD_LOG); exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		-e "s/@REGRLIST@/$(PY_LIST)/g" -e "s/@REGRARGS@/$(PYTHON_REGR_ARGS)/g" $(PY_TEMPLATE) > $(PY_SCRIPT); \
 	$(RUNNER) --timeout $(PY_TIMEOUT) --script $(PY_SCRIPT) --label $(@:test-%=%)-$(PYTHON_ACCEL) -- \
-		$(RUN_QEMU) --test --keys --net $(call NET_RELAYS,10.0.2.2) --disk $(PY_DISK) $(PYTHON_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL); rc=$$?; \
+		$(RUN_QEMU) --test --keys --net $(call NET_RELAYS,$(NET_HOST)) --disk $(PY_DISK) $(PYTHON_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ] && [ $@ = test-python ]; then \
 		if grep -q -e '^tls \(expired\|wrong\): request of' -e '^tls \(expired\|wrong\): ended after [1-9]' $(PY_HTTPD_LOG) || ! grep -q '^tls valid: request of' $(PY_HTTPD_LOG) \
@@ -837,14 +842,14 @@ NS_RELAY = $(CURDIR)/$(HTTPD) --relay 127.0.0.1:$$port
 NS_RUN = $(RUNNER) --timeout $(1) --gui-script $(4) --qmp $(BUILD)/netsurf-$(2).qmp --label netsurf-$(2) -- $(RUN_QEMU) --test --gui --gui-scale $(5) --net \
 	--net-subnet $(NS_NET).0/24 --net-guestfwd "$(NS_NET).10:80=$(NS_RELAY)" --net-guestfwd "$(NS_NET).11:80=$(NS_RELAY)" \
 	--net-guestfwd "$(NS_NET).11:8080=$(NS_RELAY)" \
-	$(call NET_RELAY,$(NS_NET).2,$$port) $(call NET_RELAY,$(NS_NET).2,$$tlsvalid) $(call NET_RELAY,$(NS_NET).2,$$tlsexpired) \
+	$(call NET_RELAY,$(NS_NET).50,$$port) $(call NET_RELAY,$(NS_NET).50,$$tlsvalid) $(call NET_RELAY,$(NS_NET).50,$$tlsexpired) \
 	--mem 768M --qmp $(BUILD)/netsurf-$(2).qmp --disk $(NS_DISK) --accel $(3) $(KERNEL)
 test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	@$(call NET_OR_SKIP,netsurf,skipped) \
 	rm -rf $(NS_ROOT) && mkdir -p $(NS_ROOT) target/test-logs && cp -R rootfs/. $(NS_ROOT)/ && \
 	cp -R $(APPS_ROOT)/. $(NS_ROOT)/ && \
 	mkdir -p $(NS_ROOT)/system/fonts && cp -R fonts/. $(NS_ROOT)/system/fonts/ && \
-	printf 'net.address = static\nnet.ip = $(NS_NET).15/24\nnet.gateway = $(NS_NET).2\nnet.hosts = test.zoraya=$(NS_NET).2 expired.zoraya=$(NS_NET).2 wrong.zoraya=$(NS_NET).2 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
+	printf 'net.address = static\nnet.ip = $(NS_NET).15/24\nnet.gateway = $(NS_NET).2\nnet.hosts = test.zoraya=$(NS_NET).50 expired.zoraya=$(NS_NET).50 wrong.zoraya=$(NS_NET).50 one.web.test=$(NS_NET).10 two.web.test=$(NS_NET).11 lan.web.test=10.0.2.2\n' > $(NS_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NS_ROOT)/system/tls/roots && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NS_ROOT)/bin && \
 	target/debug/zoraya-mkfs --size 64M --from $(NS_ROOT) $(NS_DISK) && \
@@ -856,8 +861,8 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	port=$$(cat $(NS_HTTP_READY)); \
 	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[netsurf] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-netsurf.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).2/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
-	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).2/g" $(NS_TEXT_TEMPLATE) > $(NS_TEXT_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).50/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NS_NET).50/g" $(NS_TEXT_TEMPLATE) > $(NS_TEXT_SCRIPT); \
 	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto,$(NS_SCRIPT),1); rc=$$?; \
 	if [ $$rc = 0 ]; then $(call NS_RUN,$(QEMU_SLOW_TIMEOUT),text-2,auto,$(NS_TEXT_SCRIPT),2); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
@@ -956,7 +961,7 @@ test-hand-run-net-run:
 	set -- $$(cat $(HAND_TLS_READY)); tlsvalid=$${1:-}; port=$$(cat $(HAND_HTTP_READY)); \
 	if [ -z "$$port" ] || [ -z "$$tlsvalid" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[hand-run] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-hand-run.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" $(HAND_NET_TEMPLATE) > $(HAND_NET_SCRIPT); \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" -e "s/@TLSVALID@/$$tlsvalid/g" $(HAND_NET_TEMPLATE) > $(HAND_NET_SCRIPT); \
 	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(HAND_NET_SCRIPT) --label hand-run-net -- $(call RUN_NET_CMD,$(HAND_DISK)); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(HAND_DISK); rc=$$?; fi; \

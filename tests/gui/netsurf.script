@@ -22,8 +22,8 @@ shot netsurf-http
 # padding column is the pill fill.
 region 893 117 1 6 fcfcfc
 region 788 116 4 8 f1f1f3
-# Measured on a screendump of this step: the net pill 467..623 (its text is
-# monospace, `+net 203.0.113.2:PORT`), `web` 630..661, the fonts pill 668..785,
+# Measured on a screendump of this step: the net pill 460..623 (its text is
+# monospace, `+net 203.0.113.50:PORT`, 7 pixels a character: the guestfwd host is .50), `web` 630..661, the fonts pill 668..785,
 # the gaps at 624..629, 662..667 and 786..791 the title bar's colour.
 region 663 116 4 8 f1f1f3
 region 625 116 4 8 f1f1f3
@@ -32,9 +32,9 @@ region 656 117 2 6 fcfcfc
 # The fonts pill itself (T5 of the 9f-text review): its first padding columns
 # are the pill fill, and so are the net pill's. Without the fonts pill, `web`
 # and the net pill move right by 124 pixels (the net pill onto 591..747), so
-# 470 is the title bar and 671 is inside the net pill: both lines fail.
+# 463 is the title bar and 671 is inside the net pill: both lines fail.
 region 671 116 3 8 fcfcfc
-region 470 116 3 8 fcfcfc
+region 463 117 2 6 fcfcfc
 # The form: type into the field, submit with Return; the result page is yellow.
 click 160 302
 type zoraya\r

@@ -93,3 +93,14 @@ Branch `work/test-fixes-3`, from `origin/main` f969cf4. Machine: Mac mini, `CARG
   `unshare(CLONE_NEWNET)` even with the capability, the two UDP steps and the hand-run leg fail visibly on the first CI run of
   those jobs, and the fallback is C (record the gap; the failure there is the signal).
 - Run: `make check`; `make test-net-dns`, `test-net-lookup`, `test-net-fetch` (with `ipv6=off`), `test-hand-run`: PASS.
+
+## CI's QEMU refuses a guestfwd on the host address (candidate 6dbc70e)
+
+CI's QEMU rejected `guestfwd=tcp:10.0.2.2:PORT-cmd:...` ("Conflicting/invalid host:port in guest forwarding rule"); the Mac's
+11.1.2 accepted it. A guestfwd address must be in the network and not one of its own (.0, host .2, DNS .3, first lease .15,
+broadcast .255). The relay steps now use `NET_HOST := 10.0.2.50` (`203.0.113.50` in `test-netsurf`); `net.hosts`, the scripts
+(`@HOST@`) and the checks follow; 10.0.2.2 stays the host alias for `ping` (`gw.zoraya` in `net.hosts`). `run-qemu.sh` refuses a
+`--net-guestfwd` on one of those addresses, and `make check-net-open` checks that (each address, and `NET_HOST` and the
+netsurf relays), shown failing with `NET_HOST := 10.0.2.2` and with a netsurf relay on `.2`. `test-netsurf`'s title-bar pixel
+line moved with the longer `+net 203.0.113.50:PORT` pill. Not read from CI's QEMU source; reasoned from the error and fixed by
+the address rule. Run: `make check`; `test-net-fetch`, `test-net-posix`, `test-apps`, `test-python`, `test-netsurf` PASS.

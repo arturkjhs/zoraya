@@ -42,11 +42,23 @@ need() { # what, arguments...: the netdev must have restrict=on and ipv6=off
 	case $nd in *,ipv6=off*) ;; *) fail "$what has no ipv6=off ($nd)" ;; esac
 }
 need "a test with --net" --test --net
-need "a test with --net and guestfwd" --test --net --net-guestfwd 10.0.2.2:80=/bin/true
+need "a test with --net and guestfwd" --test --net --net-guestfwd 10.0.2.50:80=/bin/true
 need "a test with --net and --net-forward" --test --net --net-forward 47015
 need "a test with --net and --net-pcap" --test --net --net-pcap /dev/null
-need "a test with --net, a subnet and guestfwd" --test --net --net-subnet 203.0.113.0/24 --net-guestfwd 203.0.113.2:80=/bin/true
-need "a GUI test with --net" --test --gui --net --net-guestfwd 10.0.2.2:80=/bin/true
+need "a test with --net, a subnet and guestfwd" --test --net --net-subnet 203.0.113.0/24 --net-guestfwd 203.0.113.50:80=/bin/true
+need "a GUI test with --net" --test --gui --net --net-guestfwd 10.0.2.50:80=/bin/true
+# A guestfwd on the network's own addresses (the host .2, DNS .3, lease .15) is refused by QEMU on CI.
+for a in 10.0.2.2 10.0.2.3 10.0.2.15 10.0.2.0 10.0.2.255; do
+	if QEMU=/bin/echo tools/run-qemu.sh --test --net --net-guestfwd "$a:80=/bin/true" --accel tcg Makefile >/dev/null 2>&1; then
+		fail "run-qemu.sh takes a --net-guestfwd on $a, which QEMU refuses"
+	fi
+done
+host=$(sed -n 's/^NET_HOST := //p' Makefile)
+case $host in 10.0.2.*) ;; *) fail "NET_HOST is not an address of 10.0.2.0/24 ($host)" ;; esac
+case ${host##*.} in 0 | 2 | 3 | 15 | 255) fail "NET_HOST $host is one of the network's own addresses" ;; esac
+if grep -n -e 'NET_RELAYS\?,10\.0\.2\.2\b' -e 'NET_RELAY,10\.0\.2\.2\b' -e 'NS_NET)\.2,' Makefile | grep -v '^[0-9]*:#'; then
+	fail "a guestfwd on the host address of its network"
+fi
 nd=$(cmd --net); [ -n "$nd" ] || fail "a person's run printed no -netdev"
 case $nd in *restrict=on*) fail "a person's run has restrict=on" ;; esac
 nd=$( (unset CI; cmd --test --net --net-internet) )

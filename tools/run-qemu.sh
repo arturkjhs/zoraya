@@ -157,6 +157,13 @@ while [ $# -gt 0 ]; do
                 [0-9]*.[0-9]*.[0-9]*.[0-9]*:[0-9]*=?*) ;;
                 *) die "--net-guestfwd needs A.B.C.D:PORT=COMMAND" ;;
             esac
+            # QEMU refuses a rule on the network's own addresses (CI's QEMU: "Conflicting/invalid
+            # host:port in guest forwarding rule"): the host (.2), the DNS server (.3), the first
+            # lease (.15), the network and the broadcast address.
+            fwd_addr=${2%%:*}
+            case ${fwd_addr##*.} in
+                0 | 2 | 3 | 15 | 255) die "--net-guestfwd address $fwd_addr is one of the network's own (.0 .2 .3 .15 .255): QEMU refuses it" ;;
+            esac
             net_guestfwd="$net_guestfwd,guestfwd=tcp:${2%%=*}-cmd:${2#*=}"; shift 2 ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
