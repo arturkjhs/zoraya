@@ -1031,6 +1031,9 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     let report = zoraya_rt::handle_type(slot::REPORT)
         .ok()
         .map(|_| slot::REPORT);
+    let grants = zoraya_rt::handle_type(slot::GRANTS)
+        .ok()
+        .map(|_| slot::GRANTS);
     let facts = abi::Facts::default();
     let had_channel = zoraya_rt::handle_type(slot::BOOTSTRAP).is_ok();
     let Some(n) = read(sys, &mut record, &mut handles) else {
@@ -1103,6 +1106,7 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     match decoded {
         Some(record) => {
             let mut p = Posix::from_bootstrap(sys, &record, &handles, at_slot, report);
+            p.set_grants(grants);
             p.self_handle = kept;
             // Only a channel is taken for a connection; anything else
             // that arrived in its place is closed.

@@ -1754,3 +1754,82 @@ fn memory_map_flags_are_zero_to_three() {
     assert!(MapFlags::WRITE.union(MapFlags::SHARED).is_shared());
     assert!(!MapFlags::WRITE.is_shared() && !MapFlags::SHARED.is_write());
 }
+
+/// INV-0337-4's wire (ADR-0337 item 7, ADR-0395): the `GRANTS` message is
+/// total, and refuses what no grant may be.
+mod grants_message {
+    use std::vec::Vec;
+    use crate::posix::*;
+
+    #[test]
+    fn a_message_round_trips_and_refuses_what_it_must() {
+        let mut out = [0u8; 256];
+        let n = Grants::encode(&[("/home/u", 0), ("/data/x", 1)], 2, &mut out).unwrap();
+        let g = Grants::decode(&out[..n], 2).unwrap();
+        let got: Vec<(&str, u8)> = g.entries().map(|e| (e.prefix, e.handle)).collect();
+        assert_eq!(got, [("/home/u", 0), ("/data/x", 1)]);
+        assert!(g.entries().all(|e| e.kind == EntryKind::Directory));
+        // Fewer handles than indexes, a handle used twice, none, too many.
+        assert!(Grants::decode(&out[..n], 1).is_none());
+        assert!(Grants::encode(&[("/a", 0), ("/b", 0)], 1, &mut out).is_none());
+        assert!(Grants::encode(&[], 0, &mut out).is_none());
+        let many = ["/a", "/b", "/c", "/d", "/e"];
+        let list: Vec<(&str, u8)> = many
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (*p, i as u8))
+            .collect();
+        assert!(Grants::encode(&list, 5, &mut out).is_none());
+        // Never the process's own names, nor `/`, nor a prefix not normal.
+        for bad in [
+            "/",
+            "/dev",
+            "/dev/null",
+            "/proc/self/exe",
+            "/tmp",
+            "/tmp/x",
+            "a",
+            "/a/../b",
+            "/a/",
+            "//a",
+        ] {
+            assert!(Grants::encode(&[(bad, 0)], 1, &mut out).is_none(), "{bad}");
+        }
+        assert!(Grants::encode(&[("/devx", 0)], 1, &mut out).is_some());
+        assert!(Grants::encode(&[("/tmpx/y", 0)], 1, &mut out).is_some());
+    }
+
+    #[test]
+    fn decoding_is_total_on_truncations_and_mutations() {
+        let mut out = [0u8; 256];
+        let n = Grants::encode(&[("/home/u", 0), ("/work", 1)], 2, &mut out).unwrap();
+        let b = out;
+        for cut in 0..n {
+            assert!(Grants::decode(&b[..cut], 2).is_none(), "cut {cut}");
+        }
+        assert!(Grants::decode(&b[..n + 1], 2).is_none());
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            x
+        };
+        let mut accepted = 0;
+        for _ in 0..200_000 {
+            let mut m = b;
+            for _ in 0..=next() % 3 {
+                m[next() as usize % n] = next() as u8;
+            }
+            let handles = (next() % 70) as usize;
+            if let Some(g) = Grants::decode(&m[..n], handles) {
+                accepted += 1;
+                for e in g.entries() {
+                    assert!(is_absolute_normal(e.prefix) && e.prefix != "/");
+                    assert!((e.handle as usize) < handles);
+                }
+            }
+        }
+        assert!(accepted > 0);
+    }
+}

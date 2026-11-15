@@ -410,6 +410,58 @@ fn a_path_is_reported_once_per_access() {
     );
 }
 
+/// A message of the `GRANTS` channel with `handles`, entries `(prefix, index)`.
+fn give(r: &mut Rig, far: H, entries: &[(&str, u8)], handles: &[H]) {
+    let mut out = [0u8; 512];
+    let n = zoraya_abi::posix::Grants::encode(entries, handles.len(), &mut out).unwrap();
+    r.p.sys.channel_write(far, &out[..n], handles).unwrap();
+}
+
+/// ADR-0337 item 7, INV-0337-4's library half: the `GRANTS` channel is read
+/// only when a path is refused, then the path is resolved once more; what it
+/// carries is added to the table (or replaces an entry of its prefix); a
+/// malformed message adds nothing; and the refusals start to be counted again.
+#[test]
+fn a_grant_is_read_on_a_refusal_and_the_path_resolved_again() {
+    let mut r = rig_without_root();
+    let net = r.net.clone();
+    let (service, other) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    let (end, far) = r.p.sys.channel_create().unwrap();
+    r.p.set_grants(Some(end));
+    give(&mut r, far, &[("/elsewhere", 0)], &[other]);
+    // A path the table covers does not read the channel.
+    assert_eq!(
+        open(&mut r, "/work/x", o::RDWR | o::CREAT, 0o644).map(|_| ()),
+        Ok(())
+    );
+    assert!(r.reports().is_empty());
+    // A refused path does: it is reported, the grant is taken, and the open
+    // that was refused succeeds.
+    let fd = open(&mut r, "/elsewhere/c", o::RDWR | o::CREAT, 0o644).unwrap();
+    assert_eq!(r.write(fd, b"given"), Ok(5));
+    assert_eq!(
+        r.reports(),
+        vec![(Access::Write, 0, "/elsewhere/c".to_string())]
+    );
+    // It stays given: the next open needs no read of the channel.
+    assert!(open(&mut r, "/elsewhere/d", o::RDONLY | o::CREAT, 0o644).is_ok());
+    // A message that is no grant adds nothing, and its handle is closed.
+    let (end2, far2) = r.p.sys.channel_create().unwrap();
+    r.p.sys.channel_write(far, b"garbage", &[end2]).unwrap();
+    let _ = far2;
+    assert_eq!(open(&mut r, "/nowhere/z", o::RDONLY, 0), Err(ENOENT));
+    // The table is bounded.
+    for i in 0..70 {
+        let (e, f) = r.p.sys.channel_create().unwrap();
+        let prefix = format!("/p{i}");
+        give(&mut r, far, &[(prefix.as_str(), 0)], &[e]);
+        let _ = f;
+        let _ = open(&mut r, "/nowhere/y", o::RDONLY, 0);
+    }
+    assert!(r.p.entry_count() <= zoraya_abi::posix::MAX_TABLE);
+}
+
 /// At most 16 reports a process; past that they are dropped and counted.
 #[test]
 fn reports_stop_at_sixteen() {
