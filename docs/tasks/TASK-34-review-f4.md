@@ -180,3 +180,46 @@ Severities: **error** (wrong; fix before merge), **warning** (fix in this part o
 **Fix first.** Findings 1 to 3 are errors: 1 gives a child the wrong file (reproduced), 2 changes what a default
 spawn does to the parent's sockets against accepted ADR-0412 item 6 without an ADR, 3 lets one program deny the
 network to all. Findings 4 to 7 need a fix or a record in this part; 4 is the architect's call on ADR-0433 item 6.
+
+## Re-check (2026-11-15, head 09b9c876)
+
+Re-check by the `opus-review` subagent of `git diff f2348e91 origin/work/f4` (bd2fea0e, 22c35974, 8a49df1b, c37628b7,
+9d0da4c2, 497d0693, 09b9c876). `origin/main` (514b7d42) is an ancestor of the head (merged before f2348e91; no merge
+since). Run on the worktree, one at a time, `CARGO_BUILD_JOBS=2`: `make check` exit 0 (adr-check: 838 rows, Total
+matches); `cargo test -p zoraya-posix -p zoraya-net -p zoraya-rng -p zoraya-abi` exit 0, 520 passed, 0 failed; clippy
+`-D warnings` on the four crates for the host (`--all-targets`) and `aarch64-unknown-none` exit 0; `make test-libposix`
+exit 0, `PASS: 159 steps`, every `t_spawn` case passed (`inherited` and `queued` new). Two temporary tests (run, then
+removed with `git checkout`) reproduce R1 and R2. Not run: `make test-python` (CPython is not built in this worktree;
+a cross build of it next to QEMU does not fit this 8 GB host safely), so the candidate run must show the python lanes.
+
+Fixed and sound: 1 (`FileAction::Opened(parent, child)` is never looked up in the child's map; both scenarios are
+tests; `O_CLOEXEC` becomes `Close`, which ignores an absent fd), 2 (only targets of `dup2`/`addopen` move; an
+unlisted Unix socket is `EBADF` with the parent's socket untouched, host test and `t_spawn inherited`; no action
+sequence puts an unlisted socket at a listed number), 4 (every handle of a stream moves, the parent's is `EPIPE`, no
+shared counts), 5 for a refused `ZPBF` (`t_queued`), 6, 7 (fork-shared stream: no channel, the parent's closed), 8
+(entries before `addopen`; `posix_spawnp` recorded), 9 (dead roll-back and `child_fds` gone), 10 (`me` closed). ADR
+edits touch only proposed ADR-0433/0434 and ADR-0412's own rule-6 note; no status or decision section changed.
+
+R1. **error** (finding 3 not fixed): the `Duplicate` bound is bypassed by closing the connection that asked.
+`crates/zoraya-net/src/service.rs:187-193` clears `origins` of every descendant when their origin closes, so each
+becomes a family of its own with 8 more places. Reproduced: one program asks 8, closes the asker, asks 8 from a
+duplicate, and so on: it holds 63 of the 64 slots. A child given `GRANT_NET` whose parent exits does the same without
+trying. ADR-0434 and INV-0434-1 ("at most 8 live at once") are false as built. Fix: a family token that is not a slot
+id (assigned to a connection made by `add` from outside, inherited by its duplicates, counted while any member
+lives), or `rngd`'s depth rule; test: close the root, ask from a duplicate, still `BUSY`.
+
+R2. **error** (new, INV-0433-2): with `POSIX_SPAWN_EMPTY_NAMESPACE`, the entries are made first
+(`spawn.rs:163-174`), and the two later early returns, a failed `addopen` (`:195-198`) and a failed `child_fds_with`
+(`:204-209`), close the temps but not `out.message`. Reproduced: entry `/d` and `addopen(7, "/gone")`: `ENOENT`,
+live handles 5 before, 7 after. `posix_spawnp` repeats this per `$PATH` directory; a terminal entry also leaves its
+clone at the tty service. Fix: close `out.message` on both paths (one helper for all three), with that test.
+
+R3. **note**: `send_record` duplicates `me` after `ZPBF` is sent (`procs.rs:1703-1708`), so a failed duplicate (or a
+failed `SELF` write) is a refused spawn whose sockets are dead in the parent. Duplicate `me` before `ZPBF`; record the
+`SELF`-write case in ADR-0433 item 6.
+
+R4. **note**: an `exec` has no file actions, so an image holding a non-close-on-exec Unix socket now gets `EBADF` from
+`execve` (a child given a socket that runs `sh -c 'exec prog'` fails). ADR-0433 item 6's "`exec` takes the same path"
+should say so. Stale text: "third message" in `docs/design.md:2214` and `unix_io.rs:503`.
+
+**Verdict: fix first** (R1, R2).
