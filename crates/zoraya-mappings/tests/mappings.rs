@@ -213,6 +213,44 @@ fn room_made_for_a_record_that_does_not_come_is_given_back() {
 }
 
 #[test]
+fn the_chunk_is_charged_at_its_full_size_and_lookups_agree_with_the_model() {
+    let mut list: Mappings<u32> = Mappings::new();
+    assert!(list.is_empty());
+    assert_eq!(
+        Mappings::<u32>::CHUNK_BYTES,
+        (CHUNK * core::mem::size_of::<zoraya_mappings::Entry<u32>>() + 24) as u64
+    );
+    assert_eq!(list.max_growth(), Mappings::<u32>::CHUNK_BYTES);
+    let mut model = Model(Vec::new());
+    for n in 0..200u32 {
+        add(&mut list, &mut model, PAGE * (1 + u64::from(n % 3)), n).expect("a gap");
+    }
+    assert!(!list.is_empty());
+    for &(va, length) in &model.0 {
+        let e = list.get_exact(va, length).expect("exact");
+        assert_eq!((e.va, e.length), (va, length));
+        assert!(list.get_exact(va, length + PAGE).is_none());
+        assert!(list.get_exact(va + PAGE, length).is_none());
+    }
+    // `iter_from` starts at the first record at or above the address, from
+    // anywhere in the list, between records and past the end too.
+    let top = model.0.last().expect("records").0 + 10 * PAGE;
+    for from in [
+        0,
+        LOW,
+        model.0[0].0 + 1,
+        model.0[99].0,
+        model.0[99].0 + 1,
+        model.0[199].0,
+        top,
+    ] {
+        let got: Vec<u64> = list.iter_from(from).map(|e| e.va).collect();
+        let want: Vec<u64> = model.0.iter().map(|m| m.0).filter(|&v| v >= from).collect();
+        assert_eq!(got, want, "from {from:#x}");
+    }
+}
+
+#[test]
 fn growth_is_bounded_by_what_max_growth_says() {
     let mut list = Mappings::new();
     let mut model = Model(Vec::new());
