@@ -673,8 +673,8 @@ CURL_OPTS := --disable-shared --enable-static --with-openssl=$(DEPS) --with-zlib
 	--without-libpsl --without-brotli --without-zstd --without-nghttp2 --without-nghttp3 --without-ngtcp2 \
 	--without-libidn2 --without-librtmp --without-libssh2 --without-libssh --without-gssapi --without-winidn
 $(CURL_BIN): $(CURL) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
-	@cd $(CURL) && $(call logged,$(CROSS_ENV) ac_cv_func_getpwuid=no ac_cv_func_getpwuid_r=no ac_cv_func_socketpair=no ./configure --host=aarch64-unknown-zoraya \
-	  $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-DCURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
+	@cd $(CURL) && $(call logged,$(CROSS_ENV) ac_cv_func_getpwuid=no ac_cv_func_getpwuid_r=no ./configure --host=aarch64-unknown-zoraya \
+	  --disable-socketpair $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-DCURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
 	rm -f $(CURL_BIN)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL) -j3 V=1,curl)
 	@touch $@
@@ -692,7 +692,7 @@ $(WGET): $(LOCK) $(wildcard ports/patches/wget/*.patch)
 # answers its run tests (mbrtowc and the like) by the C library's name when it
 # cannot run them, and Zoraya's libc is musl's; the compiler is still zcc,
 # which defines nothing of Linux (INV-0143-1). ac_cv_func_usleep=no (wget) and
-# ac_cv_func_socketpair=no (curl) keep the results the ports had before libposix
+# --disable-socketpair (curl) keep the results the ports had before libposix
 # had usleep and socketpair (plan part F2): wget's usleep branch calls sleep(), which
 # libc.a does not export, and curl's wakeup stays on its pipe until a test covers the pair.
 # ac_cv_func_sigsetjmp=no:
