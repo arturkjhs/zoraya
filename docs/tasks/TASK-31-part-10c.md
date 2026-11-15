@@ -70,32 +70,45 @@ Files of 10a or 10b touched: `crates/zoraya-shell/src/crlf.rs` (a test message r
 `crates/zoraya-shell/src/lib.rs` (one `pub mod`), `crates/zoraya-shell/Cargo.toml` and `Cargo.lock`/`fuzz/Cargo.lock`
 (two path dependencies), `docs/adr/invariants.md` (Status of eight rows), `docs/design.md`.
 
+## Third agent (Sonnet): the library and test half (ADR-0389, proposed)
+
+Merged `origin/main` into the branch first (poll and ppoll, for the readiness request). What was done, each with the command run in this session:
+
+- **Readiness request** (`jobs.rs` `tty_input_ready`, `poll.rs`, `select` in `ffi/procs.rs`): one `PollReadable` per connection, idempotent across deferred waits; replaces the interim arm. `cargo test -p zoraya-posix` (tests/poll.rs: 7 terminal tests), `t_tty poll` in QEMU.
+- **`tcsetattr`'s actions, `tcflush`, `tcdrain`, `IO` as `EIO`, `open("/dev/tty")`, `ttyname(_r)`, `ctermid`, `cf*`, `tcflow`, `tcsendbreak`, `tcgetwinsize`, `tcsetwinsize`, `TIOCSWINSZ` (`EPERM`), `TIOCSTI` (`ENOTTY`), `select`**: `tests/tty.rs`, `termios.rs`; `t_tty names` in QEMU. The shim's `select` and `tcsetattr` are gone; the deny list (23 names) and "a block naming a guarded name fails" are in `posix-surface-check`. `t_posix rawkeys` uses `tcsetattr`.
+- **`sh` has job control in a window**: found on the way that Ctrl-Z went to the line (sh ignores it); `zosh` now sends `SIGTSTP` to the group `sh` chose with `tcsetpgrp`. `zosh.script`: Ctrl-C, Ctrl-Z, `jobs`, `kill`, `exit` in `sh` (PASS, 194 steps, HVF).
+- **`grants` `keys` line, `TERM`, `console.term`, dash.cmd and sh.cmd, `term.scrollback`** (`Scrollback` ordinal 8, `term` applies it): `zoraya_shell::terminal`, host-tested; `TERM` and the `keys` line in QEMU.
+- **GUI**: `tests/gui/posix-terminal.script`, `make test-tour-terminal` (a new step: map, lanes, ci-tests, plan-lib): `sh` with Ctrl-C and Ctrl-Z; `t_tty box` (alternate screen, raw mode, box on the border) follows a drag of the window's edge (90 then 80 columns, `winch 1`, `winch 2`), prints the bytes of F5, F1 and Ctrl+Right (they equal `kf5`, `kf1`, `kRIT5` of the pinned entry), takes a bracketed paste (mode 2004), stops with Ctrl-Z, and `fg` puts it back (`winch 3`, keys still raw). PASS at scale 1, scale 2, 1600x1000 and 1920x1200 under HVF. Rows are never counted (24 rows here, fewer on large displays: the program prints them).
+- **Invariants**: INV-0331-1, -3, -6, INV-0333-2, -3, INV-0338-1, INV-0342-3, INV-0389-3 `checked`; INV-0331-4, INV-0332-5, INV-0338-2, INV-0342-2 `checked (partly: ...)` with what is missing; INV-0331-2, -5, -7 unchanged.
+
+### Relay measurement (ADR-0331 item 14; HVF, one run, 1024x768, `t_tty bench`, result read from the window's screen)
+
+| path | result |
+|---|---|
+| `t_tty bench bytes 4 \| wc -c` (a pipe between two programs, no shell relay) | 4 MiB in 12 ms (350 MB/s) |
+| `t_tty bench bytes 1` to the window (relay by `zosh`, drawn by `term`) | 1 MiB in 457 ms (2.3 MB/s) |
+| 100 repaints of 80x24 (2,079 bytes each) to the window | 57 ms, 0.57 ms a repaint (3.6 MB/s) |
+| `write` of one byte then `tcdrain` (time until the shell has shown it), 200 times | mean 133 us, worst 351 us |
+
+Not measured: a second and third run (the GUI step takes minutes per run; the numbers are one run, not a distribution), TCG, the share of CPU spent in `zosh` as against `term` (the guest has no per-process CPU read for a native program here: `CLOCK_PROCESS_CPUTIME_ID` of the writer equals its wall time), and `ttyd` per window. Reading: a full repaint costs 0.6 ms and a drained byte 0.13 ms, which a person cannot see; a 1 MiB `cat` takes 0.46 s, of which the window's drawing is a share that this run cannot separate from the shell's copy. **Recommendation: keep the shell (ADR-0331 Option B).** Option C would move the same copy and the same drawing behind one more process and one more hop; the numbers give no sign that the copy through `zosh` is more than half of either case, but they do not prove it either: the ADR's own condition ("more than half") needs the split, which is a follow-up (a counter of the time `pump_relay` spends, read by `statistics`). Recorded for the architect.
+
+### Same discipline features in `ttyd`
+
+None added: `ttyd` is `zoraya-tty`'s host for the session, so `VMIN`/`VTIME`, `Flush`, `Drain`, `PollReadable` and the line tag are the same code. It ignores `Restore`, `Reinstate`, `Scrollback`, as ADR-0331 item 1 says. `t_tty` and the sh job-control script run under `zosh` only; the session's `ttyd` was not exercised with the new calls (no script runs `t_tty` there).
+
+### Mutation run
+
+See the end of this file.
+
 ## Remains (in this order)
 
-1. **GUI checks of the wiring** (the old REMAINS 5's GUI half): GUI scripts at 1920x1200, 1600x1000, scales 1 and 2
-   (fewer than 24 rows) for `sh` in a window with Ctrl-C and Ctrl-Z, a resize reaching a raw-mode program
-   (`SIGWINCH`, INV-0331-6), the screen's modes after a stop and `fg` (INV-0331-4), a paste to a program with and
-   without 2004 (INV-0332-5's program half). Not written: no GUI run was made in this session.
-2. **`libposix`** (the old REMAINS 3, unchanged): the readiness request, `Flush`, the three `tcsetattr` actions, `IO`
-   as `EIO`, `open("/dev/tty")`, `ttyname`, the terminal names with a committed C test program, the shim's two names,
-   the deny list, `TIOCSTI`, INV-0338-2's table. Until `open("/dev/tty")` works dash has no job control, so a POSIX
-   shell's `tcsetpgrp` through ADR-0388 is host-tested only. `t_posix rawkeys` uses `ioctl(TCGETS/TCSETS)` because
-   `tcsetattr` is not a name of `libc.a`; change it to `tcsetattr` then.
-3. **`grants`' `keys` line, `TERM`, `dash.cmd`** (the old REMAINS 4, unchanged), and `console.term`.
-4. **`term.scrollback`**: `term` cannot read the settings; it needs a message from `zosh` (a new `zoraya-proto-term`
-   ordinal) or a setting given at launch. Not done; no ADR written for it.
-5. **The relay measurement** (the old REMAINS 6, unchanged; nothing measured).
-6. **The same features in `ttyd`** (the old REMAINS 7, unchanged).
-7. **Mutation run** of `tty_host.rs` and of the broker's new code (`make mutants-host CRATE=zoraya-shell` and
-   `CRATE=zoraya-broker`, `--in-diff`); not run.
-8. **The Ctrl-C defect on a continued job** (`docs/backlog.md`, found in the POSIX session with `ttyd`): not
-   reproduced or looked into in this session. What was read: the broker resumes a suspended group job as a whole
-   (`signal_pids`, review R1) and the kernel's `Job::signal` walks the whole tree, so a later child of the group
-   should be reached; the next step is the slow-host reproduction of `scenarios.script` step V6 under TCG with a
-   print of the job handle `ttyd` signals.
-9. Not done in `zosh`: a line whose first element is native and reads the keys keeps them (ADR-0387 item 2); no kill
-   offer for a line with the terminal (item 4); the serial console's discipline echo goes through the kernel's
-   carriage return (ADR-0331 item 13).
+1. GUI: the kill of a raw-mode program followed by a typed command (INV-0331-4's wording), the paste to a program without mode 2004 (held, question in the title, Enter sends), and INV-0331-7 in a window are not read; the last line of `t_tty box` starts where the shell's cursor was after the alternate screen (a leading run of blanks): the cursor position `Restore` leaves is worth a look.
+2. INV-0331-2's password case (a background program tries to turn echo on while another reads a password) and INV-0331-5 in QEMU; `select`/`pselect` are not host-tested (FFI file).
+3. The relay measurement's split of CPU between `zosh` and `term`, more runs, and TCG; `ttyd` runs of `t_tty`.
+4. The Ctrl-C defect on a continued job (`docs/backlog.md`), not looked into.
+5. Not done in `zosh`: a native first element that reads the keys keeps them (ADR-0387 item 2); no kill offer for a line with the terminal; the serial console's carriage return (ADR-0331 item 13).
+6. A `tcsetpgrp` to the line's own group and a later `Ctrl-Z` while `sh` is itself foreground still says `did not stop: sh` (sh ignores `SIGTSTP`), which is what ADR-0200 prescribes.
+7. `make test-changed` was not run (it selects every step); `make check`, `cargo test` of the changed crates, `make test-posix` (zosh.script only) and `make test-tour-terminal` (four sizes) were.
 
 ## Decisions taken where the ADRs are silent (ADR-0386)
 
