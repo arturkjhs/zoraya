@@ -78,7 +78,7 @@ change; the existing all-or-nothing write (INV-0050-1) is enough once the librar
    `SCM_RIGHTS` on a shared socket is `EOPNOTSUPP` in both; a peer that still sends descriptors to a shared holder has them closed
    as they arrive, so that its ancillary queue never fills. A packet or datagram socket open in a `fork` is `ENOTSUP` (ADR-0412
    item 6). Bytes the library held for a socket go to the parent only.
-7. **`spawn` and `exec` do not carry a Unix socket yet.** An open socket without `SOCK_CLOEXEC` makes them fail with `EBADF`,
+7. **`spawn` and `exec` do not carry a Unix socket yet (a deviation from ADR-0412 item 6, for the architect to accept before this part merges).** An open socket without `SOCK_CLOEXEC` makes them fail with `EBADF`,
    as a TCP socket does (ADR-0287 item 3). ADR-0412 item 6 moves a socket to a spawned child; that needs the bootstrap
    record to carry two or three handles for one fd, which is the record plan part F4 (`posix_spawn` with a grant list,
    ADR-0411 item 1) changes. **This part does not build it.** The consequence for the checks: the in-QEMU half of INV-0412-1
@@ -139,10 +139,13 @@ This part adds no authority: a program can pass only what it holds, and a refuse
 
 ## Open questions
 
+- **For the architect (deviation from ADR-0412 item 6).** F2 does not move a socket to a spawned child (item 7). The decision this ADR asks for: accept that the move waits for plan part F4, which changes the bootstrap record and the spawn inheritance code anyway. Until then the in-QEMU half of INV-0412-1 between two processes is not built; INV-0412-1's status says what is checked.
+- **Not fixed in this part (review notes 6, 8, 9, 10, 11):** a shared stream socket's ancillary channel is drained only while its holder reads that socket, so a peer's rights can fill it (64 messages) if only the other holder reads; no test shows the service refusing a write on a read-only connection received by a receiver that does not use this library; `t_unix block` covers plain `send`/`recv` from a thread, not `SCM_RIGHTS`; the property tests use one iovec; the record carries neither `O_SYNC` nor both ends of a `Stream` description (a two-ended one sends its read end).
+
 - The window of item 4 (a peer closing between the check and the write): closing it needs the kernel to report a closed peer
   from `channel_write` before it moves anything (it does: `PeerClosed` with no effect), and the library to treat that as a
   refusal with the moved sockets intact. The ancillary message of a stream is sent before its bytes, so a refusal there is
-  already clean; a failure of the *bytes* after it is not. Measure whether a case exists in the engines' use.
+  already clean; any error of the *bytes* after it (not only `EPIPE`: also `EAGAIN` on a socket made non-blocking meanwhile) reports a failed send whose descriptors were delivered or, for a moved socket, lost, and a retry sends them twice. Measure whether a case exists in the engines' use.
 - Whether a Unix socket in a `fork` child should keep working for packet sockets (copy the channel is impossible; an
   ancillary-less shared form is what a stream socket gets). The plan's browser launcher spawns, it does not fork.
 
