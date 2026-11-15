@@ -70,7 +70,11 @@ fn fills_to_the_limit_and_empties() {
     // at most one chunk's room.
     let entry = core::mem::size_of::<zoraya_mappings::Entry<u32>>() as u64;
     let bound = (LIMIT + CHUNK) as u64 * entry + (LIMIT / CHUNK + 1) as u64 * 24;
-    assert!(list.bytes_held() <= bound, "{} > {bound}", list.bytes_held());
+    assert!(
+        list.bytes_held() <= bound,
+        "{} > {bound}",
+        list.bytes_held()
+    );
     // Pop from the top until empty: every chunk goes back but one.
     let mut last = u64::MAX;
     while let Some(e) = list.pop_last() {
@@ -180,7 +184,7 @@ fn a_record_added_and_removed_leaves_the_charge_as_it_was() {
     for n in 0..=(4 * CHUNK) as u32 {
         let before = list.bytes_held();
         let va = add(&mut list, &mut model, PAGE, n).expect("a gap");
-        let (_, len) = model.0.pop().map(|(v, l)| (v, l)).expect("one");
+        let (_, len) = model.0.pop().expect("one");
         let removed = list.remove_exact(va, len).expect("exact");
         assert_eq!(removed.value, n);
         assert_eq!(list.bytes_held(), before, "after {n} records");
