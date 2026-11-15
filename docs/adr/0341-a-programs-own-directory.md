@@ -281,6 +281,11 @@ shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340).
   the descriptor (INV-0341-6); the git hook script waits for part 10h; INV-0341-4's lint runs in `make test-unit`, not
   `make check`.
 
+- **Amended by ADR-0411 (accepted 2026-11-14), recorded by plan part F4 (as built: ADR-0433, proposed).** Item 7's "children get a program's
+  own directory read-only" becomes: read-only unless the parent lists a subtree of it without `:ro` in the namespace list of a spawn
+  with `POSIX_SPAWN_EMPTY_NAMESPACE`; the file service refuses it if the parent's connection to that subtree is read-only.
+  A spawn without the attributes is as written.
+
 ## Revisit triggers
 
 - A second program wants to read another's own files routinely (an editor for git's configuration): a grant word

@@ -1073,12 +1073,14 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_poll tests/posix-core/t_poll.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_unix tests/posix-core/t_unix.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_spawn tests/posix-core/t_spawn.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_syscall tests/posix-core/t_syscall.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_syscall
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_poll
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_unix
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_spawn
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
@@ -1587,7 +1589,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-libposix-widths-built check-run-disk check-test-lanes check-python-cache
+.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-port-logs check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-libposix-widths-built check-run-disk check-test-lanes check-python-cache
 fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -1608,6 +1610,10 @@ check-term-width:
 check-fetch-ports:
 	ports/test-fetch.sh
 	tools/check-fetch-cache.sh
+
+# INV-0390-2: nvi's build log has one zcc line per object under dash's `sh -x` (check-early.sh counts them).
+check-port-logs:
+	ports/tests/nvi-build-log.sh
 
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
@@ -1822,7 +1828,7 @@ check-workflow-syntax:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-port-logs check-ci-jobs check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

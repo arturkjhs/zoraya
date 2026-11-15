@@ -166,6 +166,11 @@ tzset
   `--no-check-certificate` took effect. It now holds in the programs (curl's and wget's option handling refuses them): the
   proposed ADR-0321 states the options and its invariants. The invariants of this ADR are unchanged.
 
+- **Amended by ADR-0411 (accepted 2026-11-14), recorded by plan part F4 (as built: ADR-0433 and ADR-0435, proposed).** Item 3's "a POSIX child
+  gets no random service" becomes: none unless its parent passes one with `POSIX_SPAWN_GRANT_RANDOM`, which asks the service for a
+  new connection; a program's own connection may make eight (the service's depth rule was: none). Without the attribute, and for
+  `exec` and `fork`, it is as written.
+
 ## Revisit triggers
 - A program that needs `bind`, `listen` or `accept` (a server): the shim's refusals become real calls in `libc.a`.
 - OpenSSL 3.5 reaching end of support, or a vulnerability with no 3.5 fix.

@@ -322,6 +322,7 @@ jobs:
           - make check-test-caps
           - make check-tokens
           - make check-fetch-ports
+          - make check-port-logs
           - make check-ci-jobs
           - make check-workflow-syntax
           - make check-python-cache

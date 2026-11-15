@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use zoraya_abi::posix::{EntryKind, FD_NONBLOCK, FD_READ, FD_WRITE, Fd, FdKind, NO_HANDLE};
@@ -939,12 +940,21 @@ impl<S: Sys> Posix<S> {
 
     /// The child's fds after the file actions: child fd → parent fd, each
     /// without `FD_CLOEXEC` at the end (POSIX: the actions run in the child
-    /// before the exec).
-    pub fn child_fds(&self, actions: &[FileAction]) -> Result<BTreeMap<u32, u32>, i32> {
+    /// before the exec); with `empty` (ADR-0433) the fds the actions
+    /// make alone: a `dup2` takes its source from the parent's table and
+    /// nothing else is inherited. An `Open` action is `Opened`: the file
+    /// the caller opened for it, at the parent's own fd.
+    pub fn child_fds_with(
+        &self,
+        actions: &[FileAction],
+        empty: bool,
+    ) -> Result<BTreeMap<u32, u32>, i32> {
         let mut map: BTreeMap<u32, (u32, bool)> = BTreeMap::new();
-        for fd in self.fds.fds() {
-            let cloexec = self.fds.cloexec(fd as i32).unwrap_or(true);
-            map.insert(fd, (fd, cloexec));
+        if !empty {
+            for fd in self.fds.fds() {
+                let cloexec = self.fds.cloexec(fd as i32).unwrap_or(true);
+                map.insert(fd, (fd, cloexec));
+            }
         }
         for a in actions {
             match *a {
@@ -952,7 +962,12 @@ impl<S: Sys> Posix<S> {
                     let (Ok(from), Ok(to)) = (u32::try_from(from), u32::try_from(to)) else {
                         return Err(EBADF);
                     };
-                    let (source, _) = *map.get(&from).ok_or(EBADF)?;
+                    let source = match map.get(&from) {
+                        Some(&(source, _)) => source,
+                        // In an empty child the parent's own fd is the source.
+                        None if empty && self.fds.get(from as i32).is_some() => from,
+                        None => return Err(EBADF),
+                    };
                     map.insert(to, (source, false));
                 }
                 FileAction::Close(fd) => {
@@ -960,6 +975,18 @@ impl<S: Sys> Posix<S> {
                         map.remove(&fd);
                     }
                 }
+                FileAction::Opened(parent, to) => {
+                    let (Ok(parent), Ok(to)) = (u32::try_from(parent), u32::try_from(to)) else {
+                        return Err(EBADF);
+                    };
+                    map.insert(to, (parent, false));
+                }
+                FileAction::CloseFrom(fd) => {
+                    let first = u32::try_from(fd).map_err(|_| EBADF)?;
+                    map.retain(|&child, _| child < first);
+                }
+                // Opened by the caller first (`inherit_shaped`).
+                FileAction::Open(..) => return Err(EINVAL),
             }
         }
         Ok(map
@@ -971,34 +998,18 @@ impl<S: Sys> Posix<S> {
 
     /// What a child spawned in `group` inherits (ADR-0103 item 7): every fd
     /// left by the file actions, and the namespace table (ADR-0107). On an
-    /// error every handle made for it is closed.
+    /// error every handle made for it is closed. With no attribute of plan
+    /// part F4 (`Posix::inherit_shaped` takes them).
     pub fn inherit(&mut self, actions: &[FileAction], group: u32) -> Result<Inherit<S::H>, i32> {
-        let map = self.child_fds(actions)?;
-        let mut out = Inherit {
-            slots: Vec::new(),
-            fds: Vec::new(),
-            message: Vec::new(),
-            entries: Vec::new(),
-        };
-        let r = self.inherit_into(&map, group, &mut out);
-        if let Err(e) = r {
-            let made: Vec<S::H> = out
-                .slots
-                .iter()
-                .filter(|s| s.2)
-                .map(|s| s.1)
-                .chain(out.message.iter().copied())
-                .collect();
-            self.close_all(made);
-            return Err(e);
-        }
-        Ok(out)
+        self.inherit_shaped(actions, group, &crate::spawn::Shape::default())
     }
 
-    fn inherit_into(
+    pub(crate) fn inherit_into(
         &mut self,
         map: &BTreeMap<u32, u32>,
         group: u32,
+        shape: &crate::spawn::Shape,
+        listed: &[u32],
         out: &mut Inherit<S::H>,
     ) -> Result<(), i32> {
         for (&child, &parent) in map {
@@ -1033,6 +1044,22 @@ impl<S: Sys> Posix<S> {
                         },
                     tty: NO_HANDLE,
                 });
+                continue;
+            }
+            // A Unix socket or a memory descriptor goes in the third
+            // message (ADR-0433); a TCP socket cannot go.
+            let unix =
+                matches!(self.fds.get(parent as i32), Some(Desc::Socket(s)) if s.unix.is_some());
+            // A socket moves only when the spawn's file actions name it
+            // (ADR-0412 item 6): an inherited one stays with the parent and
+            // is refused as a TCP socket is (`system()` of a program that holds
+            // one fails, as it always did). A memory object is copied, so
+            // it goes either way.
+            if unix && !listed.contains(&child) {
+                return Err(EBADF);
+            }
+            if unix || matches!(self.fds.get(parent as i32), Some(Desc::Memory(_))) {
+                self.pass_to_child(child, parent as i32, &mut out.passed)?;
                 continue;
             }
             let (read, write, nonblock, tty, conn) = match self.fds.get(parent as i32) {
@@ -1087,6 +1114,10 @@ impl<S: Sys> Posix<S> {
                 });
             }
         }
+        if shape.empty {
+            // `inherit_shaped` made them first.
+            return Ok(());
+        }
         for i in 0..self.entries.len() {
             self.stats.inherit_failed_at = 1000 + i as u32;
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
@@ -1110,7 +1141,8 @@ impl<S: Sys> Posix<S> {
                 None => NO_HANDLE,
             };
             // An image entry is the spawner's to fill (it holds the image).
-            out.entries.push((i, kind, index));
+            out.entries
+                .push((self.entries[i].prefix.clone(), kind, index));
         }
         Ok(())
     }
@@ -1294,11 +1326,19 @@ impl<S: Sys> Posix<S> {
     }
 }
 
-/// A `posix_spawn` file action (`adddup2`, `addclose`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A `posix_spawn` file action (`adddup2`, `addclose`, `addopen`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileAction {
     Dup2(i32, i32),
     Close(i32),
+    /// `addopen(fd, path, flags, mode)`: the parent opens `path` as it would
+    /// itself, and the child's `fd` is that file (ADR-0433).
+    Open(i32, Vec<u8>, u32, u32),
+    /// What `Open` became once the parent opened it: the parent's own `fd`
+    /// (never looked up among the child's) is the child's `fd`.
+    Opened(i32, i32),
+    /// `addclosefrom_np(fd)`: every fd from `fd` up is closed in the child.
+    CloseFrom(i32),
 }
 
 /// What a spawned child inherits (ADR-0103 item 7, ADR-0107): handles for
@@ -1312,8 +1352,78 @@ pub struct Inherit<H> {
     pub fds: Vec<Fd>,
     /// The message's handles: terminal connections and entries' handles.
     pub message: Vec<H>,
-    /// `(index of the entry, kind, handle index or NO_HANDLE)`.
-    pub entries: Vec<(usize, EntryKind, u8)>,
+    /// `(prefix, kind, handle index or NO_HANDLE)`, longest prefix first: the
+    /// parent's table, or the one a spawn chose (ADR-0433).
+    pub entries: Vec<(String, EntryKind, u8)>,
+    /// The child's working directory: an index into `entries` or `NO_ENTRY`,
+    /// and the path in it.
+    pub cwd: (u32, String),
+    /// The Unix sockets and memory descriptors the child gets (the third
+    /// bootstrap message, ADR-0433).
+    pub passed: Passed<H>,
+    /// The fds `addopen` opened in the parent for the child, to close once
+    /// the spawn is over.
+    pub temps: Vec<i32>,
+}
+
+impl<H> Inherit<H> {
+    /// Nothing inherited (for a bookkeeping call that needs none).
+    pub fn empty() -> Inherit<H> {
+        Inherit {
+            slots: Vec::new(),
+            fds: Vec::new(),
+            message: Vec::new(),
+            entries: Vec::new(),
+            cwd: (zoraya_abi::posix::NO_ENTRY, String::new()),
+            passed: Passed::default(),
+            temps: Vec::new(),
+        }
+    }
+}
+
+/// The descriptors a child gets that no slot can hold: for each, its fd, its
+/// record and its handles, whether a handle is copied (`true`) or moved
+/// (`false`) by the message that carries it. Nothing here is the child's
+/// until the spawn happened: the parent's table is changed by
+/// `Posix::spawned` alone.
+#[derive(Debug)]
+pub struct Passed<H> {
+    pub fds: Vec<u32>,
+    pub records: Vec<crate::unix::Record>,
+    pub handles: Vec<(H, bool)>,
+    /// The memory handles among `handles` that lost `WRITE` to a seal.
+    pub read_only: Vec<H>,
+    /// The parent's fds the descriptors come from, to refuse one description
+    /// given twice.
+    pub sources: Vec<i32>,
+    /// Sockets that move (all kinds): dead in the parent afterwards.
+    pub moved_packets: Vec<i32>,
+    /// The parent's handles that stay behind and are closed once the spawn
+    /// happened (the ancillary channel of a socket a `fork` shared).
+    pub close_after: Vec<H>,
+    /// Memory descriptors that go: their size stays (INV-0413-1).
+    pub sent_memory: Vec<i32>,
+}
+
+impl<H> Default for Passed<H> {
+    fn default() -> Self {
+        Passed {
+            fds: Vec::new(),
+            records: Vec::new(),
+            handles: Vec::new(),
+            read_only: Vec::new(),
+            sources: Vec::new(),
+            moved_packets: Vec::new(),
+            close_after: Vec::new(),
+            sent_memory: Vec::new(),
+        }
+    }
+}
+
+impl<H> Passed<H> {
+    pub fn is_empty(&self) -> bool {
+        self.fds.is_empty()
+    }
 }
 
 /// The rights a shared connection keeps, by its access.
