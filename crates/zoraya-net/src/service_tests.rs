@@ -257,7 +257,8 @@ fn duplicate_gives_the_same_rights_and_scope_and_nothing_more() {
         service.handle(program, &bytes(&Duplicate {}, 5), 0, &mut net.client, 0),
         Action::Close
     );
-    // At the bound the answer is `BUSY` and nothing is attached.
+    // The table's own bound: `BUSY` and nothing attached (the family's bound
+    // is tested apart, `duplicates_are_bounded_per_family`).
     while service.add(before.clone()).is_some() {}
     let Action::Reply(r) = service.handle(program, &bytes(&Duplicate {}, 6), 1, &mut net.client, 0)
     else {
@@ -1130,4 +1131,44 @@ fn a_public_name_lookup_with_mixed_answers_gives_the_public_ones_only() {
         ask(&[private, [10, 1, 2, 3], [127, 0, 0, 1], SERVER_IP]),
         (status::NOT_GRANTED, vec![])
     );
+}
+
+/// ADR-0434: a connection and the ones made from it may have `MAX_DUPLICATES`
+/// live at once; one that closes frees a place; another connection's family
+/// is counted apart; a duplicate's own duplicates count against its family.
+#[test]
+fn duplicates_are_bounded_per_family() {
+    use crate::service::MAX_DUPLICATES;
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let a = service.add(Connection::root()).unwrap();
+    let b = service.add(Connection::root()).unwrap();
+    let mut dup = |service: &mut Service, net: &mut Net, from: usize, n: u32| match service.handle(
+        from,
+        &bytes(&Duplicate {}, n),
+        1,
+        &mut net.client,
+        0,
+    ) {
+        Action::Narrowed { id, .. } => Ok(id),
+        Action::Reply(r) => Err(decode::<Duplicated>(&r, 0).unwrap().1.status.0),
+        other => panic!("{other:?}"),
+    };
+    let mut made = Vec::new();
+    for i in 0..MAX_DUPLICATES {
+        made.push(dup(&mut service, &mut net, a, i as u32 + 1).unwrap());
+    }
+    // Exactly at the bound: the next is refused, by `a` and by its duplicate.
+    assert_eq!(dup(&mut service, &mut net, a, 100), Err(status::BUSY));
+    assert_eq!(dup(&mut service, &mut net, made[0], 101), Err(status::BUSY));
+    // Another family has its own count.
+    assert!(dup(&mut service, &mut net, b, 102).is_ok());
+    // One closing frees one place.
+    service.remove(made.pop().unwrap());
+    let again = dup(&mut service, &mut net, made[0], 103).unwrap();
+    assert_eq!(dup(&mut service, &mut net, a, 104), Err(status::BUSY));
+    // A reused slot starts a family of its own.
+    service.remove(again);
+    let c = dup(&mut service, &mut net, a, 105).unwrap();
+    assert!(dup(&mut service, &mut net, c, 106).is_err());
 }

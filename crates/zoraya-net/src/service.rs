@@ -82,8 +82,17 @@ struct PingStart {
     timeout_us: i64,
 }
 
+/// The live connections one connection (with the ones made from it) may have
+/// made with `Duplicate` (ADR-0434): what a program's `posix_spawn` needs for
+/// its helpers, and small enough that no program fills the table.
+pub const MAX_DUPLICATES: usize = 8;
+
 pub struct Service {
     connections: Vec<Option<Connection>>,
+    /// For a connection made by `Duplicate`, the connection it descends from
+    /// (the first of its family): its family is counted against
+    /// [`MAX_DUPLICATES`].
+    origins: Vec<Option<usize>>,
     accounts: Accounts,
     lookups: Vec<Lookup>,
     next_token: u32,
@@ -129,6 +138,7 @@ impl Service {
     pub fn new() -> Service {
         Service {
             connections: Vec::new(),
+            origins: Vec::new(),
             accounts: Accounts::new(),
             lookups: Vec::new(),
             next_token: 0,
@@ -149,6 +159,10 @@ impl Service {
             self.connections.len() - 1
         };
         self.accounts.join(account);
+        if self.origins.len() <= id {
+            self.origins.resize(id + 1, None);
+        }
+        self.origins[id] = None;
         Some(id)
     }
 
@@ -169,6 +183,13 @@ impl Service {
             && let Some(c) = slot.take()
         {
             self.accounts.leave(c.account());
+        }
+        if let Some(o) = self.origins.get_mut(id) {
+            *o = None;
+        }
+        // What descended from it no longer counts against it.
+        for o in self.origins.iter_mut().filter(|o| **o == Some(id)) {
+            *o = None;
         }
         // A lookup of this connection still runs; its charge goes with its
         // answer.
@@ -497,16 +518,24 @@ impl Service {
                     return Action::Close;
                 };
                 let answer = |c| Action::Reply(reply(&Duplicated { status: Below(c) }, t));
+                let family = self.origins.get(id).copied().flatten().unwrap_or(id);
+                let live = self.origins.iter().filter(|o| **o == Some(family)).count();
+                if live >= MAX_DUPLICATES {
+                    return answer(code::BUSY);
+                }
                 match self.add(connection.clone()) {
-                    Some(new) => Action::Narrowed {
-                        id: new,
-                        reply: reply(
-                            &Duplicated {
-                                status: Below(code::OK),
-                            },
-                            t,
-                        ),
-                    },
+                    Some(new) => {
+                        self.origins[new] = Some(family);
+                        Action::Narrowed {
+                            id: new,
+                            reply: reply(
+                                &Duplicated {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            ),
+                        }
+                    }
                     None => answer(code::BUSY),
                 }
             }

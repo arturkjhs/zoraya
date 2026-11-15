@@ -40,24 +40,24 @@ network process; `GRANT_NET` would then be `EACCES` always.
 **Recommendation (not a decision): Option A.** Message 8, `Duplicate` (a request with one handle), answered by `Duplicated` with
 a status: `OK` and the new connection attached, or `BUSY` when `netd` has no room for another connection (the bound of
 ADR-0222). Any connection may ask: the new one is a copy, so it has no right and no scope the asker lacked, and it joins the same
-account, so the budget of ADR-0262 counts it as it counts a `Narrow`. A request without its handle ends the connection, as
+account, so the budget of ADR-0262 counts it as it counts a `Narrow`. A connection and everything made from it by
+`Duplicate` may have `MAX_DUPLICATES` (8) live at once, as `rngd` bounds a program's connection (ADR-0435), so that no
+program can fill `netd`'s table of 64 (review of plan part F4, finding 3); a duplicate that closes frees a place. A request without its handle ends the connection, as
 `Narrow` does. Nothing else of `netd` changes.
 
 ## Consequences
 
 - **Positive.** `GRANT_NET` gives a child a connection as wide as the parent's.
-- **Negative.** A program can fill `netd`'s connection table by asking; the bound is `netd`'s (the same as for a shell that narrows
-  in a loop) and each connection counts in the program's account.
-- **Follow-up.** A per-connection bound on duplicates, if a program abuses it.
+- **Negative.** Eight programs that each hold eight duplicates fill `netd`'s table of 64 (the same arithmetic as ADR-0435's);
+  a launcher with more than eight helpers that all need the network is refused (`EAGAIN`).
 
 ## Invariants
 
-- **INV-0434-1.** The connection `Duplicate` makes has exactly the rights and the scope of the connection that asked, and the
-  request is refused only by `BUSY` at the table's bound. *Check:* `cargo test -p zoraya-net` (`duplicate_gives_the_same_rights_and_scope_and_nothing_more`).
+- **INV-0434-1.** The connection `Duplicate` makes has exactly the rights and the scope of the connection that asked, and a connection with the ones made from it has at most 8 live at once (`BUSY` past that). *Check:* `cargo test -p zoraya-net` (`duplicate_gives_the_same_rights_and_scope_and_nothing_more`, `duplicates_are_bounded_per_family`).
 
 ## Open questions
 
-- Whether `Duplicate` should be limited per connection as the random service's `Share` is (ADR-0435).
+- Whether 8 is enough for the engine (one network process, a few helpers).
 
 ## Revisit triggers
 
