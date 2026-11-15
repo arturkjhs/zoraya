@@ -131,6 +131,10 @@ static TESTS: &[Test] = &[
         run: frames_the_reaper_holds_are_available_and_counted,
     },
     Test {
+        name: "the_worst_single_allocation_is_bounded_by_the_machines_ram",
+        run: the_worst_single_allocation_is_bounded_by_the_machines_ram,
+    },
+    Test {
         name: "a_run_short_of_frames_waits_for_the_reaper_in_steps",
         run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
     },
@@ -2397,6 +2401,62 @@ fn frames_the_reaper_holds_are_available_and_counted() {
         QUEUED as u64 - 1 - crate::steps::STEP as u64,
         "held after a step of help"
     );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The most RAM, in frames' words of the frame map, that the bound below
+/// holds for: 2 GiB is 8192 words (ADR-0415 item 5); 16384 is 4 GiB, twice
+/// the machine the browser's guest is. A machine with more RAM fails this
+/// test, which says that the single-frame scan (`FrameAllocator::alloc`)
+/// needs a level above the map (a summary of full words) before it can be
+/// used there (INV-0436-1).
+const MAX_SCAN_WORDS: u64 = 16384;
+
+/// The masked time one word of the frame map may cost on any host: a word is
+/// read in about 11 ns under HVF and 150 ns under TCG (2 GiB, measured, ADR-0436);
+/// a limit per word and not a fixed one keeps the check on every host and finds a
+/// scan that is not linear.
+const NS_PER_WORD: u64 = 1_000;
+/// What the lock, the mask and the allocation itself may add.
+const SCAN_FIXED_NS: u64 = 200_000;
+
+/// INV-0436-1, INV-0270-1: the allocation that has to read the whole frame
+/// map (every frame taken but one, and that one just behind the search) holds
+/// the allocator's lock with IRQ masked for no more than `NS_PER_WORD` a word
+/// of the map (94 us at 2 GiB under HVF, 1.2 ms under TCG, against INV-0270-1's
+/// 2 ms), and the map has no more words than `MAX_SCAN_WORDS`, on the machine
+/// this runs on (128 MiB or 2 GiB: `make test-qemu` runs both).
+fn the_worst_single_allocation_is_bounded_by_the_machines_ram() {
+    let before = frames_accounted();
+    let words = frames::stats().total.div_ceil(64);
+    assert!(
+        words <= MAX_SCAN_WORDS,
+        "{words} words of frame map: more RAM than the single-frame scan is bounded for"
+    );
+    let head = hoard_frames();
+    // The search stands at the top of RAM. Take a frame two words below it
+    // (the last word may hold few frames) and give it back, so that the
+    // search goes all the way round to find it.
+    let mut node = head;
+    for _ in 0..130 {
+        let (_, next) = unhoard_one(node).expect("a machine of more than 130 frames");
+        node = next;
+    }
+    let (frame, next) = unhoard_one(node).expect("a frame");
+    frames::free(frame);
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_ns(true);
+    let got = frames::alloc();
+    arch::restore_interrupts(daif);
+    let ns = crate::steps::masked_max_ns(true);
+    assert_eq!(got, Ok(frame), "the one free frame");
+    // SAFETY: the frame is allocated again, so this code owns it, and the
+    // direct map holds it read-write. The list's link is put back.
+    unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(next) };
+    unhoard(head);
+    println!("frames: the longest single allocation scanned {words} words in {ns} ns masked");
+    let limit = words * NS_PER_WORD + SCAN_FIXED_NS;
+    assert!(ns <= limit, "{ns} ns masked, limit {limit} (INV-0436-1)");
     assert_eq!(frames_accounted(), before);
 }
 

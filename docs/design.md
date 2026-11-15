@@ -216,6 +216,13 @@ TTBR0 is disabled (`TCR_EL1.EPD0`) and holds 0. The layout is stated only in `ke
   Reserved: the image with stacks and boot tables, the blob, `/memreserve/` entries, `/reserved-memory` children,
   the metadata, and frame 0. A device tree with more reservations than `zoraya-dtb` records stops the boot.
   Exhaustion is a return value. A bad free panics in the kernel (the crate returns an error).
+  **Sizes (F8, proposed ADR-0436).** Nothing in the kernel states a RAM size: the boot tables map the first 4 GiB in 1 GiB
+  blocks, the direct map is built from blocks, the heap grows on demand. Tested up to 2 GiB (`tests/two_gib.rs` on the host,
+  the 2 GiB steps in QEMU). One loop scales with RAM: `FrameAllocator::alloc` reads at most one word of the map per 256 KiB
+  (8192 at 2 GiB) with the lock held and IRQ masked, 94 us under HVF and 1.2 ms under TCG at 2 GiB; a machine above 4 GiB
+  (16384 words) fails `the_worst_single_allocation_is_bounded_by_the_machines_ram` and needs a second level of the map.
+  Known limitation: `top --session` is not built, `top`'s `session` row shows the use and `room set --mem` refuses above the
+  session's ceiling (1452930K on a 2 GiB guest). `make run-browser` is `run-gui` at `--mem $(BROWSER_MEM)` (2G); there is no browser yet.
 - **Heap.** `zoraya-heap` behind `GlobalAlloc`: power-of-two classes from 16 bytes to 2 KiB, carved from 64 KiB
   chunks, and a coalescing span list above that. It grows by at least 1 MiB, mapping one frame per page in the heap
   window, and never shrinks. `Box::new` and `Vec::push` panic on exhaustion, so they are allowed only at boot and at

@@ -1,0 +1,31 @@
+# Plan part F8 (ADR-0436, INV-0436-1): the frame allocator's scan at the machine's
+# size. The host half (`crates/zoraya-pmm/tests/two_gib.rs`) is run by
+# `make mutants-host CRATE=zoraya-pmm`; this list is the kernel half: the test
+# kernel's `the_worst_single_allocation_is_bounded_by_the_machines_ram`, one
+# QEMU configuration per mutant.
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "F8-scan-bound-too-low"
+file = "kernel/src/testing.rs"
+find = 'const MAX_SCAN_WORDS: u64 = 16384;'
+replace = 'const MAX_SCAN_WORDS: u64 = 256;'
+note = "INV-0436-1: the limit on the map's words is checked on this machine (512 words at 128 MiB)"
+
+[[mutant]]
+id = "F8-one-frame-never-freed"
+file = "kernel/src/testing.rs"
+find = '''    let (frame, next) = unhoard_one(node).expect("a frame");
+    frames::free(frame);'''
+replace = '''    let (frame, next) = unhoard_one(node).expect("a frame");'''
+note = "the allocation then has nothing to find: the case must see the one free frame come back"
+
+[[mutant]]
+id = "F8-alloc-ends-late"
+file = "crates/zoraya-pmm/src/lib.rs"
+find = '''            let end_word = if step == self.region_count {
+                (first_index / WORD_BITS) as usize'''
+replace = '''            let end_word = if step == self.region_count {
+                region.words()'''
+note = "the wrap-around reads the start region again whole (the old scan): the host test counts exactly 8192 words; in the guest only the time shows it"

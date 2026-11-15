@@ -320,13 +320,26 @@ impl<'m> FrameAllocator<'m> {
 
     /// Allocates one frame. Next-fit: the search continues after the last
     /// frame returned. The frame's contents are whatever was left in it.
+    ///
+    /// The search reads at most one word of the frame map per 64 frames of
+    /// RAM (`FrameAllocator::alloc_scan_bound`): 8192 words at 2 GiB,
+    /// whatever the state of the map. The kernel holds the
+    /// allocator's lock for it with interrupts masked (ADR-0270, INV-0270-1).
     pub fn alloc(&mut self) -> Result<Frame, OutOfFrames> {
+        self.alloc_counted().0
+    }
+
+    /// [`FrameAllocator::alloc`] and the number of words of the frame map the
+    /// search read, so that a test can hold it to
+    /// [`FrameAllocator::alloc_scan_bound`].
+    pub fn alloc_counted(&mut self) -> (Result<Frame, OutOfFrames>, u64) {
         if self.stats.free == 0 {
-            return Err(OutOfFrames);
+            return (Err(OutOfFrames), 0);
         }
+        let mut read = 0;
         let (first_region, first_index) = self.hint;
-        // One extra step: the wrap-around revisits the start word of the
-        // region the search began in.
+        // One extra step: the wrap-around returns to the start region, from
+        // its first word to the start word.
         for step in 0..=self.region_count {
             let ri = (first_region + step) % self.region_count;
             let region = self.regions[ri];
@@ -335,18 +348,38 @@ impl<'m> FrameAllocator<'m> {
             } else {
                 0
             };
-            for w in start_word..region.words() {
+            // The wrap-around ends before the word the search began in, which
+            // it read whole first: no word of the map is read twice.
+            let end_word = if step == self.region_count {
+                (first_index / WORD_BITS) as usize
+            } else {
+                region.words()
+            };
+            for w in start_word..end_word.min(region.words()) {
+                read += 1;
                 let word = self.storage[region.used + w];
                 if word != u64::MAX {
                     let index = w as u64 * WORD_BITS + u64::from((!word).trailing_zeros());
                     self.storage[region.used + w] |= 1 << (index % WORD_BITS);
                     self.stats.free -= 1;
                     self.hint = (ri, index);
-                    return Ok(Frame((region.first + index) * FRAME_SIZE));
+                    return (Ok(Frame((region.first + index) * FRAME_SIZE)), read);
                 }
             }
         }
-        Err(OutOfFrames)
+        (Err(OutOfFrames), read)
+    }
+
+    /// The most words of the frame map one [`FrameAllocator::alloc`] reads:
+    /// every word of every region, once. It grows with the RAM (one word per
+    /// 256 KiB),
+    /// so the kernel's range of RAM (up to 2 GiB, ADR-0415 item 5) bounds the
+    /// masked time of an allocation.
+    pub fn alloc_scan_bound(&self) -> u64 {
+        self.regions[..self.region_count]
+            .iter()
+            .map(|r| r.words() as u64)
+            .sum::<u64>()
     }
 
     /// Allocates `count` contiguous frames starting at a frame number that

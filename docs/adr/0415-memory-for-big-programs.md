@@ -172,7 +172,7 @@ home  browser                412M     3
   `[unverified]`); the first build answers it and item 3 is built only then.
 - The sizes: text and data of each engine program, mappings in use by a Web process with a page, memory of one tab.
   Measured by the first engine part (`make test-browser` with the runner's memory report).
-- Whether the frame allocator's bitmap and next-fit search stay fast at 2 GiB under TCG.
+- Whether the frame allocator's bitmap and next-fit search stay fast at 2 GiB under TCG. *Note (F8, 2026-11-16, ADR-0436, proposed):* measured, the worst single allocation reads 8192 words and keeps IRQ masked 94 us under HVF and 1.2 ms under TCG at 2 GiB with 4 CPUs.
 
 ## Revisit triggers
 
