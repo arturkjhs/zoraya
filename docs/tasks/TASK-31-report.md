@@ -20,6 +20,7 @@ Updated 2026-11-15, after 10d.
 - **Proposed ADRs (all `proposed`; the architect sets statuses; the table is in `docs/architect-queue.md`):** ADR-0386 to
   0389 (10c), 0390 surface for curses (10d/ports-early), 0391 (10d), 0392 (sigint-exec, **a tension with ADR-0106's
   INV-0106-2**), ADR-0410, 10g's ADR (renumbered in its fix pass).
+  ADR numbers handed out: 10a 0380 to 0382; 10b 0383 to 0385; the python hook 0396 (unused); `work/sigint-exec` 0392.
 - **Hand checks for the architect:** section C of `docs/architect-queue.md`: 10a's xterm comparison and `vttest` (now
   pinned by 10d; the grids are frozen from `zoraya-term`, not compared with xterm by a person), 10g's login to a real
   host (exact commands in `docs/tasks/TASK-31-part-10g.md`). 10f and 10h are not built yet.

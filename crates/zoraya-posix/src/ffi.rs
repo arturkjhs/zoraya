@@ -1919,8 +1919,7 @@ extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
 extern "C" fn pread(fd: i32, buf: *mut u8, n: usize, offset: i64) -> isize {
     size(user(buf, n).and_then(|u| {
         testcancel();
-        procs::poll();
-        procs::restartable(|p| p.pread(fd, u, offset))
+        procs::waiting(|p| p.pread(fd, u, offset))
     }))
 }
 
@@ -1928,8 +1927,7 @@ extern "C" fn pread(fd: i32, buf: *mut u8, n: usize, offset: i64) -> isize {
 extern "C" fn pwrite(fd: i32, buf: *const u8, n: usize, offset: i64) -> isize {
     size(user(buf, n).and_then(|u| {
         testcancel();
-        procs::poll();
-        procs::after_write(procs::restartable(|p| p.pwrite(fd, u, offset)))
+        procs::after_write(procs::waiting(|p| p.pwrite(fd, u, offset)))
     }))
 }
 

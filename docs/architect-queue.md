@@ -22,6 +22,7 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 | ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
 | ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
 | ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
+| ADR-0392 | `work/sigint-exec`: signals across `exec` (the old image's queued and pending signals carried to the new one, the default-terminating ones held as `Deliver` during the spawn) and a handler run at a call's entry making the call's wait `EINTR`. **Tension:** amends accepted ADR-0106 (INV-0106-2 gains `execve`, also cited by INV-0304-5; item 2's mapping during the spawn); note in ADR-0106's open questions | Option A (Option A', no hold, if its 22 calls per `exec` are measured to matter); accept the deviations or ask for a superseding ADR | `work/sigint-exec` |
 
 ## B. Decisions taken to continue (the architect may overrule)
 

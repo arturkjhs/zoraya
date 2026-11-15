@@ -14,7 +14,9 @@ use zoraya_proto_file::{self as fp, rights};
 use zoraya_protocol::Flags;
 
 use zoraya_abi::posix::signal::{self, SIGCHLD, SIGTTIN};
-use zoraya_abi::{ExitReason, ExitRecord, RequestKind, Status, job_signals, process_signals};
+use zoraya_abi::{
+    Disposition, ExitReason, ExitRecord, RequestKind, Status, job_signals, process_signals,
+};
 use zoraya_proto_posix as bp;
 use zoraya_proto_tty as tp;
 use zoraya_protocol::{Below, ERROR_ORDINAL, ErrorReply, Header, Message, decode, encode};
@@ -175,6 +177,12 @@ impl<S: Sys> Posix<S> {
             }
             return self.finish_wait(&r.sources, r.own_len, r.result);
         }
+        if core::mem::take(&mut self.interrupt_wait) {
+            // A handler ran on the way into this call, for a signal that came
+            // before its wait: on Unix the signal would have ended that wait,
+            // so the call does not block on it (ADR-0106 item 6).
+            return Err(EINTR);
+        }
         let mut sources = Vec::with_capacity(own.len() + 4);
         sources.extend_from_slice(own);
         self.interrupt_sources(&mut sources);
@@ -293,6 +301,78 @@ impl<S: Sys> Posix<S> {
                 self.signals.pending |= crate::signals::bit(n);
             }
         }
+    }
+
+    /// `execve`, before the spawn of the new image (ADR-0392 item 2): every
+    /// signal whose kernel disposition is now `Terminate`, that ends a process
+    /// by default and that the new image does not ignore (`ignored`, the
+    /// record's form, bit n), is set to `Deliver`. A job signal that reaches
+    /// this image while the kernel makes the new one then waits in this
+    /// image's queue for [`Posix::exec_carry`], instead of ending this image
+    /// before the new one, made after the walk (ADR-0004 rule 3), got it.
+    /// Gives the signals held, in musl's form.
+    pub fn exec_hold(&mut self, ignored: u32) -> u64 {
+        let mut held = 0;
+        for n in 1..=signal::MAX {
+            let Some(kind) = signal::kind(n) else {
+                continue;
+            };
+            if signal::default_terminates(n)
+                && ignored & (1 << n) == 0
+                && self.effective_disposition(n) == Disposition::Terminate
+                && self.sys.set_disposition(kind, Disposition::Deliver).is_ok()
+            {
+                held |= bit(n);
+            }
+        }
+        held
+    }
+
+    /// A spawn that failed after [`Posix::exec_hold`]: each held signal gets
+    /// its disposition back. One queued meanwhile then ends this image at
+    /// once (ADR-0004 rule 2), as it would have without the hold.
+    pub fn exec_release(&mut self, held: u64) {
+        for n in 1..=signal::MAX {
+            if held & bit(n) != 0
+                && let Some(kind) = signal::kind(n)
+            {
+                let _ = self
+                    .sys
+                    .set_disposition(kind, self.effective_disposition(n));
+            }
+        }
+    }
+
+    /// `execve`, just after the spawn of the new image (ADR-0392 item 1): the
+    /// signals sent to this image that it has not acted on, which go on to
+    /// the new image (POSIX keeps a pending signal across `execve`), in
+    /// musl's form. The new image is a process of its own in this pid's job:
+    /// a `job_signal` made before the kernel put it there reached this image
+    /// only (ADR-0004 rule 3), and a request this image takes by `Deliver`
+    /// (`sh -c` catches `SIGINT`, or [`Posix::exec_hold`] held it) waits in
+    /// its queue, which ends with it. Takes the queue only when something
+    /// can be in it (a handler, a `sigwait`, a hold: INV-0106-2), and adds the
+    /// pending sets, blocked ones included. Keeps only those the new image
+    /// ends on: it starts with every handler back to its default, and drops
+    /// `ignored` as POSIX drops an ignored pending signal.
+    pub fn exec_carry(&mut self, ignored: u32, held: u64) -> u64 {
+        let mut set = self.signals.pending | self.signals.shared;
+        if held != 0 || self.signals.handlers_installed() || self.sigwait_union() != 0 {
+            loop {
+                self.stats.takes += 1;
+                let Some((kind, detail)) = self.sys.take_request() else {
+                    break;
+                };
+                set |= bit(signal::number(kind, detail));
+            }
+        }
+        let mut kept = 0;
+        for n in 1..=signal::MAX {
+            if set & bit(n) != 0 && signal::default_terminates(n) && ignored & (1 << n) == 0 {
+                kept |= bit(n);
+            }
+        }
+        kept
     }
 
     /// Whether a library entry polls for requests (ADR-0106 item 5): only

@@ -1,0 +1,43 @@
+# work/sigint-exec (proposed ADR-0392): the review's hand mutations of the
+# C boundary, which no host test sees (finding 4). Each is killed by
+# invariants.script's `t_posix entryintr` (INV-0392-2) or `t_posix execfail`
+# (INV-0392-1, the release) or zosh.script's
+# Ctrl-C steps (INV-0392-1). Minutes per mutant: the ports relink and two
+# QEMU runs.
+tests = ["make -s test-posix POSIX_SCRIPTS='tests/posix/invariants.script tests/posix/zosh.script' POSIX_ACCELS=auto"]
+timeout = 2400
+
+[[mutant]]
+id = "S-exec-carries-nothing"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'let carried = p.exec_carry(facts.ignored, held);'
+replace = 'let carried = 0u64;'
+note = "INV-0392-1: zosh.script's go-a and go-c print their ended- line after the sleep"
+
+[[mutant]]
+id = "S-exec-holds-nothing"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'let held = p.exec_hold(facts.ignored);'
+replace = 'let held = 0u64;'
+note = "INV-0392-1, the hold during a spawn that succeeds: a known survivor (no test makes a signal land during the spawn call; ADR-0392 open question)"
+
+[[mutant]]
+id = "S-exec-never-releases"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'p.exec_release(held);'
+replace = ''
+note = "INV-0392-1, a failed spawn puts the held dispositions back: t_posix execfail's child survives its SIGTERM"
+
+[[mutant]]
+id = "S-waiting-never-interrupts"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'if !d.ran || d.restart {'
+replace = 'if true || !d.ran || d.restart {'
+note = "INV-0392-2: t_posix entryintr's first read returns the child's byte instead of EINTR"
+
+[[mutant]]
+id = "S-nanosleep-not-interrupted"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'let early = poll().ran;'
+replace = 'let early = { let _ = poll(); false };'
+note = "INV-0392-2: t_posix entryintr's nanosleep sleeps its 2 s and returns 0"

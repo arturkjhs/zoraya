@@ -2824,7 +2824,13 @@ ADR-0221 items 5, 6 and 8).
   `EFAULT`); listings have no `.` or `..` (`d_ino` is the object's id, as `st_ino`); `O_TRUNC` of an existing non-empty file is a
   second request; `st_blocks` comes from the size; times before 1970 cannot be set (ADR-0180).
 - **Processes and the terminal (stage 6d).** A blocked signal whose default terminates still ends the process
-  (ADR-0106 item 2); the mask itself is carried across `exec` and `posix_spawn` (ADR-0190's Decision). A stopped
+  (ADR-0106 item 2); the mask itself is carried across `exec` and `posix_spawn` (ADR-0190's Decision), and so are
+  the signals the old image was sent and had not acted on, held during the spawn and sent to the new image just after
+  it; a handler without `SA_RESTART` run at a call's entry makes that call's wait `EINTR`, and `nanosleep` `EINTR`
+  after any handler (proposed ADR-0392). The new image gets a carried signal a moment after it starts, so one that
+  installs a handler at once may handle it (twice, for a signal sent between the spawn and the carry); a carried
+  blocked signal ends it at once. A `fork` or `posix_spawn` child made during a job signal's walk misses it (ADR-0004 rule 3;
+  ADR-0392's follow-up, a kernel question). A stopped
   child sends no `SIGCHLD` (ADR-0190 item 19). `pselect` reports a terminal ready at once (`poll_readable` is deferred, ADR-0105). Non-canonical
   mode exists but nothing sets it; no `TOSTOP`, no `SIGTTOU`. The shell's fds 0 to 2 are three descriptions (ADR-0190
   item 7). A FIFO fd passed by `spawn` is not counted as a side by `tmpd` (item 12), and a FIFO opened after its
