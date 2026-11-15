@@ -195,6 +195,29 @@ mod tests {
     }
 
     #[test]
+    fn make_raw_clears_exactly_musls_bits_and_nothing_else() {
+        // Every other bit of every word, and the other bytes, stay.
+        let mut t = [0xffu8; SIZE];
+        make_raw(&mut t);
+        let w = |at| word(&t, at);
+        assert_eq!(
+            w(IFLAG),
+            !(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON)
+        );
+        assert_eq!(w(OFLAG), !OPOST);
+        assert_eq!(w(LFLAG), !(ECHO | ECHONL | ICANON | ISIG | IEXTEN));
+        assert_eq!(w(CFLAG), !(CSIZE | PARENB) | CS8);
+        for (i, b) in t.iter().enumerate() {
+            match i {
+                0..=3 | 4..=7 | 8..=11 | 12..=15 => {}
+                x if x == CC + VMIN => assert_eq!(*b, 1),
+                x if x == CC + VTIME => assert_eq!(*b, 0),
+                _ => assert_eq!(*b, 0xff, "byte {i}"),
+            }
+        }
+    }
+
+    #[test]
     fn speeds_are_stored_and_a_bad_one_is_refused() {
         let mut t = [0u8; SIZE];
         assert_eq!(set_speed(&mut t, 0o15), Ok(()));

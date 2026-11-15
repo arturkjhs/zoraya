@@ -261,3 +261,68 @@ fn a_terminal_refuses_input_injection_and_a_size_change() {
 fn ioctl_free_names_of_the_terminal() {
     assert_eq!(termios::TTY_NAME, b"/dev/tty\0");
 }
+
+/// A service that answers `GetAttr` with distinct words and bytes and keeps the
+/// `SetAttr` it is sent: the layout of musl's `struct termios` both ways.
+#[test]
+fn the_termios_layout_goes_to_the_service_and_comes_back() {
+    let mut r = rig();
+    let (conn, server) = r.p.sys.channel_create().unwrap();
+    let (_out, wr) = r.p.sys.stream_create().unwrap();
+    let fd =
+        r.p.fds
+            .install(
+                0,
+                process::Desc::Stream {
+                    read: None,
+                    write: Some(wr),
+                    nonblock: false,
+                    tty: true,
+                    conn: Some(conn),
+                },
+                false,
+            )
+            .unwrap() as i32;
+    let cc: Vec<u8> = (0..32).map(|i| i as u8 + 100).collect();
+    let sent: Rc<RefCell<Option<(u32, u32, u32, u32, Vec<u8>)>>> = Rc::new(RefCell::new(None));
+    let (seen, reply_cc) = (sent.clone(), cc.clone());
+    r.p.sys.meanwhile = Some(Box::new(move |net: &mut Net| {
+        while let Some((bytes, handles)) = net.take_message(server) {
+            let (h, _) = Header::decode(&bytes).unwrap();
+            let mut buf = [0u8; 256];
+            let n = if h.ordinal == tp::GetAttr::ORDINAL {
+                let m = tp::Attr {
+                    iflag: 0x11,
+                    oflag: 0x2222,
+                    cflag: 0x333333,
+                    lflag: 0x44444444,
+                    cc: zoraya_protocol::Data(&reply_cc),
+                };
+                encode(&m, h.transaction, &mut buf).unwrap()
+            } else {
+                let (_, m) = zoraya_protocol::decode::<tp::SetAttr>(&bytes, handles.len()).unwrap();
+                *seen.borrow_mut() = Some((m.iflag, m.oflag, m.cflag, m.lflag, m.cc.0.to_vec()));
+                let m = tp::SetAttrReply {
+                    status: Below(tp::status::OK),
+                };
+                encode(&m, h.transaction, &mut buf).unwrap()
+            };
+            net.send_message(server, &buf[..n], &[]);
+        }
+    }));
+    let t = r.p.tty_get_attr(fd).unwrap();
+    let word = |at: usize| u32::from_le_bytes([t[at], t[at + 1], t[at + 2], t[at + 3]]);
+    assert_eq!(
+        (word(0), word(4), word(8), word(12)),
+        (0x11, 0x2222, 0x333333, 0x44444444)
+    );
+    assert_eq!(&t[17..49], &cc[..]);
+    assert_eq!(t[16], 0, "c_line");
+    assert_eq!((word(52), word(56)), (15, 15), "B38400 both ways");
+    // And back, unchanged.
+    assert_eq!(r.p.tty_set_attr(fd, termios::TCSANOW, &t), Ok(()));
+    assert_eq!(
+        sent.borrow().clone().unwrap(),
+        (0x11, 0x2222, 0x333333, 0x44444444, cc)
+    );
+}

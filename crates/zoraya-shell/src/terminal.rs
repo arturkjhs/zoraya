@@ -139,6 +139,12 @@ mod tests {
             terminal_fds(0, 2, true, false, true, true, true, &[]),
             [true, false, false]
         );
+        // `a |& sh`: the last element's error stream is not piped by `|&`
+        // (that is the one before it), so it is the terminal.
+        assert_eq!(
+            terminal_fds(1, 2, false, false, true, true, true, &[]),
+            [false, true, true]
+        );
         // A middle element has neither end.
         assert_eq!(
             terminal_fds(1, 3, false, false, true, true, false, &[]),
