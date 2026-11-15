@@ -307,6 +307,132 @@ fn snapshot_of(size: u64, shared: bool) -> u64 {
     ns
 }
 
+/// Mappings the process holds in the cases of 4096 (ADR-0415 item 1,
+/// INV-0415-1): the limit less the few the program, its stack and the case's
+/// own take.
+const MANY: usize = zoraya_abi::MAPPING_SLOTS - 64;
+
+/// The cases of a process with the most mappings it may hold, each a step's
+/// work between two step points (INV-0270-1, ADR-0415 item 1): `memory_map`
+/// that searches all of them, `memory_unmap` that ends one, `snapshot_process`
+/// that plans, copies and records them, and the process's exit and kill that
+/// drop them one by one. Then the same with every mapping in a page-table of
+/// its own (the layout that makes one table frame for each page), and
+/// the refusal at the limit with nothing changed.
+fn many_mappings_sites() {
+    let small = snapshot_with();
+    let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let mut places = alloc::vec::Vec::new();
+    let (mut first, mut worst) = (u64::MAX, 0);
+    for _ in 0..MANY {
+        let (at, ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ).expect("map"));
+        first = first.min(ns);
+        worst = worst.max(ns);
+        places.push(at);
+    }
+    check("memory_map, up to 4032 mappings", first, worst);
+    // A hole in the middle: the next map finds it by the walk from the top.
+    let hole = places.swap_remove(MANY / 2);
+    let (_, unmap_ns) = measure(|| memory_unmap(hole, PAGE).expect("unmap"));
+    let (again, map_ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ).expect("map"));
+    assert_eq!(again, hole, "the lowest place is the hole");
+    places.push(again);
+    check("memory_unmap of one of 4032", unmap_ns, unmap_ns);
+    check("memory_map into a hole of 4032", map_ns, map_ns);
+    // Up to the limit: the next is refused, and nothing is left behind.
+    let mut at_limit = alloc::vec::Vec::new();
+    let refused = loop {
+        match memory_map(object, 0, PAGE, MapFlags::READ) {
+            Ok(at) => at_limit.push(at),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(refused, Status::LimitReached, "the limit");
+    assert!(
+        at_limit.len() <= 64,
+        "{} mappings besides the {MANY}: the program's own are few",
+        at_limit.len()
+    );
+    let (r, ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ));
+    assert_eq!(r.err(), Some(Status::LimitReached), "still the limit");
+    assert!(ns <= bound_ns(), "the refusal took {ns} ns masked");
+    for at in at_limit.drain(..) {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+
+    // A snapshot of the process with the mappings of the plan, the copy and
+    // the record, and the end of the child that drops them.
+    let large = snapshot_with();
+    check("snapshot_process, 4032 mappings", small, large);
+    for at in places.drain(..) {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    handle_close(object).expect("close");
+
+    // The same, one mapping in each table of the page-table: every page of
+    // the copy brings its own table frames (INV-0270-1: a step is 64 frames,
+    // not 64 pages).
+    let (spread, spacers) = spread_mappings(MANY / 2);
+    let large = snapshot_with();
+    check(
+        "snapshot_process, a table for each of 2016 pages",
+        small,
+        large,
+    );
+    for at in spread {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    for object in spacers {
+        handle_close(object).expect("close");
+    }
+}
+
+/// `count` one-page mappings, each in its own 2 MiB of address space: a page,
+/// then a spacer of 510 pages (mapped, so that the next page lands after it,
+/// then unmapped). Gives the pages and the spacer's object, which the caller
+/// closes.
+fn spread_mappings(count: usize) -> (alloc::vec::Vec<u64>, alloc::vec::Vec<Handle>) {
+    const SPACER: u64 = 510 * PAGE;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
+    let mut pages = alloc::vec::Vec::new();
+    let mut spacers = alloc::vec::Vec::new();
+    for _ in 0..count {
+        pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
+        spacers.push(memory_map(spacer, 0, SPACER, MapFlags::READ).expect("spacer"));
+    }
+    for at in spacers {
+        memory_unmap(at, SPACER).expect("unmap spacer");
+    }
+    handle_close(page).expect("close");
+    (pages, alloc::vec![spacer])
+}
+
+/// A snapshot of this process into a suspended child, and its end: the longest
+/// masked interval of the call (the units of every interval are checked by
+/// `measure`).
+fn snapshot_with() -> u64 {
+    let job = job_create(JOB, JobFlags::POSIX).expect("job");
+    let mut buffer = alloc::vec![0u8; 512];
+    let mut e = SnapshotEncoder::new(&mut buffer, job);
+    e.suspended();
+    let length = e.finish().expect("room");
+    let (child, ns) = measure(|| snapshot_process(&buffer[..length]).expect("snapshot"));
+    let Some(child) = child else { process_exit(0) };
+    // The child's end drops every mapping it was given, one by one.
+    let (_, end_ns) = measure(|| {
+        job_kill(job).expect("kill");
+        wait_exit(child);
+    });
+    assert!(
+        end_ns <= bound_ns(),
+        "the child's end took {end_ns} ns masked"
+    );
+    handle_close(child).expect("close");
+    handle_close(job).expect("job");
+    ns
+}
+
 /// More mappings of one shared object than a limited job's tables would
 /// allow it to copy.
 const SHARED_COPIES: usize = 40;
@@ -954,11 +1080,25 @@ fn many_subscriptions_sites() {
 fn teardown_sites() {
     teardown("a process holding 24 MiB", b"hold-short", b"hold-long");
     teardown("400 objects of 256 KiB", b"crowd-short", b"crowd-long");
+    teardown("4000 mappings of 4000 objects", b"maps-short", b"maps-long");
     teardown(
         "256 mappings and 1024 handles",
         b"crowd-mapped-short",
         b"crowd-mapped-long",
     );
+}
+
+/// A child that maps 4000 objects of one page each and closes their handles
+/// (ADR-0415 item 1: what holds each object is its mapping), then waits, to end
+/// by itself or to be killed.
+fn maps(wait_ms: u64) -> i32 {
+    for _ in 0..4000 {
+        let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+        memory_map(object, 0, PAGE, MapFlags::WRITE).expect("map");
+        handle_close(object).expect("close");
+    }
+    nap(wait_ms);
+    0
 }
 
 /// A child that holds many objects of 64 pages (256 KiB), up to 400 or as
@@ -1029,6 +1169,7 @@ fn inner() -> i32 {
         large <= 10 * small.max(floor),
         "shared snapshot grows with the pages: {small} ns, {large} ns"
     );
+    many_mappings_sites();
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();
@@ -1047,6 +1188,8 @@ fn main() -> i32 {
     match startup().argv.next() {
         Some(b"hold-short") => hold(50),
         Some(b"hold-long") => hold(30_000),
+        Some(b"maps-short") => maps(50),
+        Some(b"maps-long") => maps(30_000),
         Some(b"crowd-short") => crowd(false, 50),
         Some(b"crowd-long") => crowd(false, 30_000),
         Some(b"crowd-mapped-short") => crowd(true, 50),

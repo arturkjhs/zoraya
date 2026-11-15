@@ -321,7 +321,7 @@ The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zor
   `crates/zoraya-posix/src/ffi.rs`) makes the thread with `thread_create`, `SYS_futex` is `futex_wait`/`futex_wake`
   (`zoraya_posix_futex`), `SYS_exit` is `thread_exit` and `__unmapself` gives a detached thread's stack and object back. Two
   futex locks (`crates/zoraya-posix/src/lock.rs`): the library lock around `Posix`, the memory lock around the heap and the
-  mapping table (256 entries). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
+  mapping table (4096 entries, one memory object mapped on the first private `mmap`). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
   condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio).
 - **`libposix`, waits, signals, cancellation, `fork` (ADR-0315).** A call that waits long returns `PENDING` inside the library
   and waits on a port of its own with the library lock free, then runs again with the outcome. A thread table
@@ -1217,6 +1217,16 @@ deterministic random mutations.
 - **Memory objects (`kernel/src/memory/object.rs`, ADR-0051).** Frames committed and zeroed at creation, contiguous on
   request, held by handles, mappings and pins. The kernel chooses addresses in a window of the user range, with an
   unmapped page between mappings. `memory_unmap` ends one whole mapping: the range must be exactly that mapping's.
+  **Mappings per process (F5, ADR-0415 item 1, proposed ADR-0437).** A process holds 4096 mappings (`zoraya_abi::MAPPING_SLOTS`,
+  the kernel's limit and `libposix`'s table). The list is `zoraya-mappings`: sorted chunks of 64 records, room made before
+  a change (`reserve_for`), the heap's bytes for it charged to the space's job as kernel memory (about 70 bytes a mapping at
+  4096; a process with ten pays under 1 KiB). The search for a place visits every record below it (one unit of work for 128);
+  a snapshot's plan is made in steps of 1024 records, the objects of its copy with step points between them, and its steps
+  count the child's page-table frames (a sparse space makes one for each page). A space dropped with mappings drops them in
+  steps. `libposix` closes a private mapping's and a heap step's object handle once it is mapped: a mapping costs one slot of
+  the kernel's and no handle. Known limitations: the search for a place is linear in the records below it; a snapshot's
+  walk reads every entry of each page-table it meets without counting them; `memory_map`'s copy of the frame list
+  (ADR-0436) is as before.
 - **Channels (`crates/zoraya-channel`, `kernel/src/channel.rs`, ADR-0050).** Two ends with bounded queues, all or
   nothing on write, a message left in place on any refused read. An end has one handle. Closing runs a work list
   through the messages, so a deep chain takes no stack.
@@ -2386,7 +2396,7 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   CI job that wanted a cached `-ext` build would add DIR's hash to its key; a library built from an `ar` that stamps times changes
   the hash at each rebuild; modules are built in, never shared (no `dlopen`), and C++ modules need their runtime library named in
   the `Setup` line.
-- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ended a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); since F5 (ADR-0415 item 1, ADR-0437) the limit is 4096 and a mapping holds no handle (the `t_maps` step holds 3,000 one-page mappings and 900 MiB of heap, and 400 arenas and 5,000,000 small allocations, in a 2 GiB guest; CPython's own command is shown by CI's python step); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
   `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). `socketpair` and `sendmsg`/`recvmsg` work (plan part F2); no
   `bind`/`listen`/`accept` (a client only), `posix_spawn`, and a Unix socket does not cross `spawn` (ADR-0430); the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
@@ -2918,6 +2928,7 @@ crates/                   no_std, host-tested
   zoraya-pmm/             physical frame allocator and range sets
   zoraya-heap/            kernel heap logic
   zoraya-pagetable/       translation table building and editing
+  zoraya-mappings/        a process's list of mappings: sorted chunks, room made ahead
   zoraya-time/            clock arithmetic and the deadline queue
   zoraya-abi/             the native ABI, with its checks
   zoraya-elf/, zoraya-ramdisk/  total parsers for programs and the ramdisk

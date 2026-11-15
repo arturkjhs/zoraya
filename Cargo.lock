@@ -643,6 +643,7 @@ dependencies = [
  "zoraya-events",
  "zoraya-handle",
  "zoraya-heap",
+ "zoraya-mappings",
  "zoraya-pagetable",
  "zoraya-pmm",
  "zoraya-ramdisk",
@@ -653,6 +654,13 @@ dependencies = [
 
 [[package]]
 name = "zoraya-keymap"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-mappings"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",

@@ -31,7 +31,9 @@ use crate::device::Pin;
 use crate::job::Job;
 use crate::memory::heap;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{AddressSpace, Copied, Holder, MappingError, SnapshotBuild, USER_HIGH};
+use crate::memory::user::{
+    AddressSpace, Copied, Holder, MappingError, PlanItem, SnapshotBuild, USER_HIGH,
+};
 use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
@@ -394,6 +396,12 @@ impl Calls<'_> {
                 .unmap_commit(va, length)
                 .map_err(|_| Status::InvalidArgument)?
         };
+        // The holder may be the last of its object, whose frames (a step of
+        // them, more go to the reaper) are freed here: a step point of its
+        // own first, so that they do not add to the work of the last
+        // unmapping and the list (INV-0270-1).
+        steps::before(holder.weight());
+        steps::count(1);
         drop(holder);
         Ok(())
     }
@@ -843,7 +851,10 @@ impl Handlers for Calls<'_> {
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
         let share = flags.is_shared().then_some(offset);
-        space.map_commit(va, length, attributes, Holder::Memory(object), share);
+        if let Err(e) = space.map_commit(va, length, attributes, Holder::Memory(object), share) {
+            space.unmap_range(va, 0, length);
+            return Err(to_status(e));
+        }
         Ok(va)
     }
 
@@ -1340,10 +1351,34 @@ impl Handlers for Calls<'_> {
         // with no lock held, then up to `STEP` pages at a time under the
         // parent's lock, with the call open to a `job_kill` between them. The
         // child is in no table until the end; a cancelled call drops it.
-        let plan = {
+        let mappings = {
             let space = self.process.space.lock();
-            space.as_ref().ok_or(Status::BadState)?.snapshot_plan()?
+            space.as_ref().ok_or(Status::BadState)?.mapping_count()
         };
+        // The plan is as long as the list (up to 4096 mappings), made in
+        // steps with a step point between them (INV-0270-1); its room is
+        // mapped ahead with no lock held.
+        heap::prepare(mappings.saturating_mul(size_of::<PlanItem>()));
+        let mut plan = Vec::new();
+        plan.try_reserve_exact(mappings)
+            .map_err(|_| Status::NoMemory)?;
+        let mut from = 0;
+        loop {
+            let next = {
+                let space = self.process.space.lock();
+                space
+                    .as_ref()
+                    .ok_or(Status::BadState)?
+                    .snapshot_plan_step(&mut plan, from)?
+            };
+            match next {
+                Some(at) => {
+                    from = at;
+                    steps::between()?;
+                }
+                None => break,
+            }
+        }
         let mut build = SnapshotBuild::new(plan, Some(&job))?;
         loop {
             build.prepare_step();

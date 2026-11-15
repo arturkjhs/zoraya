@@ -1,0 +1,86 @@
+# Plan part F5 (ADR-0415 item 1, proposed ADR-0437, INV-0415-1, INV-0437-1,
+# INV-0437-2): 4096 mappings per process, the list charged by what the heap
+# holds, and each walk of it bounded. One QEMU configuration per mutant; the
+# tests are the in-kernel `a_space_holds_4096_mappings_and_pays_for_the_list`,
+# `t_memory`'s `mapping_limit` and `t_bound`'s cases of 4032 mappings. The host
+# half (`zoraya-mappings`, `zoraya-posix`'s `maptab`) is run by
+# `make mutants-host CRATE=zoraya-mappings` and `CRATE=zoraya-posix`.
+tests = ["make -s test-qemu-one"]
+timeout = 1500
+
+[[mutant]]
+id = "F5-limit-one-too-many"
+file = "kernel/src/memory/user.rs"
+find = 'pub const MAX_MAPPINGS: usize = zoraya_abi::MAPPING_SLOTS;'
+replace = 'pub const MAX_MAPPINGS: usize = zoraya_abi::MAPPING_SLOTS + 1;'
+note = "INV-0415-1: the 4097th mapping is refused (the kernel test and t_memory)"
+
+[[mutant]]
+id = "F5-removal-keeps-the-charge"
+file = "kernel/src/memory/user.rs"
+find = '''        self.release_records(before);
+        Ok(entry.value.holder)'''
+replace = '''        let _ = before;
+        Ok(entry.value.holder)'''
+note = "INV-0437-1: the charge follows the list down after an unmap"
+
+[[mutant]]
+id = "F5-exit-keeps-the-charge"
+file = "kernel/src/memory/user.rs"
+find = '''        self.release_records(before);
+        Some(entry.value.holder)'''
+replace = '''        let _ = before;
+        Some(entry.value.holder)'''
+note = "INV-0437-1: the charge follows the list down as an exit drops the mappings"
+
+[[mutant]]
+id = "F5-worst-growth-kept"
+file = "kernel/src/memory/user.rs"
+find = 'self.memory.paid.release_kernel(worst - grown.min(worst));'
+replace = 'let _ = (worst, grown);'
+note = "INV-0437-1: only what the list grew by stays charged"
+
+[[mutant]]
+id = "F5-quota-not-asked"
+file = "kernel/src/memory/user.rs"
+find = '''        self.memory
+            .paid
+            .kernel(worst)
+            .map_err(|_| MappingError::Quota)?;'''
+replace = '''        let _ = self.memory.paid.kernel(worst);'''
+note = "INV-0437-1: a job that cannot take the list's growth refuses the mapping"
+
+[[mutant]]
+id = "F5-plan-in-one-step"
+file = "kernel/src/memory/user.rs"
+find = 'if taken == PLAN_STEP {'
+replace = 'if taken == usize::MAX {'
+note = "INV-0437-2: the plan of a snapshot is made in steps of PLAN_STEP records"
+
+[[mutant]]
+id = "F5-snapshot-objects-without-step-points"
+file = "kernel/src/memory/user.rs"
+find = 'if pending + units > STEP {'
+replace = 'if false && pending + units > STEP {'
+note = "INV-0437-2: 4032 one-page objects are not one interval (t_bound, snapshot_process, 4032 mappings)"
+
+[[mutant]]
+id = "F5-snapshot-step-ignores-tables"
+file = "kernel/src/memory/user.rs"
+find = 'taken + grown(build) < STEP'
+replace = 'taken < STEP'
+note = "INV-0437-2: a step is 64 frames, not 64 pages (t_bound, a table for each of 2016 pages)"
+
+[[mutant]]
+id = "F5-finish-ignores-tables"
+file = "kernel/src/memory/user.rs"
+find = 'if pages == 0 || pages >= STEP || tables >= STEP / 2 {'
+replace = 'if pages == 0 || pages >= STEP {'
+note = "INV-0437-2: the child's tables end a step of `finish` (t_bound, a table for each of 2016 pages)"
+
+[[mutant]]
+id = "F5-space-drops-its-mappings-at-once"
+file = "kernel/src/memory/user.rs"
+find = 'steps::before(entry.value.holder.weight());'
+replace = 'let _ = entry.value.holder.weight();'
+note = "INV-0437-2: a space dropped with 4096 mappings frees them a step at a time"

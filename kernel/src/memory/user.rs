@@ -19,6 +19,7 @@ use crate::reaper;
 use crate::steps::{self, STEP};
 use crate::sync::SpinLock;
 use zoraya_abi::Status;
+use zoraya_mappings::Mappings;
 
 /// Lowest address a user mapping may have.
 pub const USER_LOW: u64 = 0x40_0000;
@@ -29,8 +30,16 @@ pub const USER_HIGH: u64 = 1 << 47;
 /// map them (a step of 64 pages crosses at most one boundary of each level).
 pub const STEP_FRAMES: usize = STEP + 8;
 
-/// Mappings a process may hold (ADR-0051).
-pub const MAX_MAPPINGS: usize = 256;
+/// Mappings a process may hold (ADR-0051, ADR-0415 item 1): `libposix`'s table
+/// has the same number (INV-0415-1).
+pub const MAX_MAPPINGS: usize = zoraya_abi::MAPPING_SLOTS;
+
+/// Records of the list of mappings one unit of work visits (ADR-0270): a
+/// search of the 4096 of a full list is 32 units, under half a step.
+pub const RECORDS_PER_UNIT: usize = 128;
+
+/// Records a step of the plan of a snapshot copies (16 units).
+pub const PLAN_STEP: usize = 1024;
 /// Where mappings of objects go: the kernel chooses inside this range.
 pub const MAP_LOW: u64 = 1 << 46;
 pub const MAP_HIGH: u64 = 3 << 45;
@@ -172,9 +181,8 @@ pub enum Holder {
     Device(DeviceMapping),
 }
 
-struct Mapping {
-    va: u64,
-    length: u64,
+/// What the list of mappings keeps with each range.
+struct Record {
     attributes: Attributes,
     holder: Holder,
     /// For a mapping made `SHARED` (ADR-0431): the object's offset of its
@@ -199,8 +207,10 @@ pub enum MappingError {
 pub struct AddressSpace {
     table: PageTable,
     memory: UserMemory,
-    /// By address.
-    mappings: Vec<Mapping>,
+    /// By address, in chunks (ADR-0415 item 1). What the heap holds for it is
+    /// charged to the space's job as kernel memory: the list grows with the
+    /// mappings, a process with none pays for none.
+    mappings: Mappings<Record>,
     /// The transport devices this process holds (INV-0295-3): one entry
     /// each, ended when it holds no handle that can write one, or ends.
     claims: Vec<DeviceClaim>,
@@ -228,6 +238,13 @@ impl AddressSpace {
             self.memory.count_list_copy();
             let _ = self.memory.frames.try_reserve_exact(more);
         }
+    }
+
+    /// What the heap holds for the list of mappings, which the space's job
+    /// is charged (kernel bytes), for the test kernel.
+    #[cfg(feature = "qemu-test")]
+    pub fn mapping_bytes_held(&self) -> u64 {
+        self.mappings.bytes_held()
     }
 
     /// The length and capacity of the list of frames, for the test kernel.
@@ -264,7 +281,7 @@ impl AddressSpace {
             Ok(table) => Ok(AddressSpace {
                 table,
                 memory,
-                mappings: Vec::new(),
+                mappings: Mappings::new(),
                 claims: Vec::new(),
             }),
             Err(_) => {
@@ -309,16 +326,51 @@ impl AddressSpace {
     }
 
     /// The lowest place for `length` bytes, with an unmapped page after what
-    /// comes before it, so that running off a mapping faults.
-    fn find_gap(&self, length: u64) -> Option<(usize, u64)> {
-        let mut at = MAP_LOW;
-        for (i, m) in self.mappings.iter().enumerate() {
-            if at.checked_add(length)? < m.va {
-                return Some((i, at));
-            }
-            at = m.va + m.length + FRAME_SIZE;
-        }
-        (at.checked_add(length)? <= MAP_HIGH).then_some((self.mappings.len(), at))
+    /// comes before it, so that running off a mapping faults. The search
+    /// visits every mapping that lies below the place: counted as work.
+    fn find_gap(&self, length: u64) -> Option<u64> {
+        let (at, visited) = self
+            .mappings
+            .find_gap(length, MAP_LOW, MAP_HIGH, FRAME_SIZE);
+        steps::count(visited.div_ceil(RECORDS_PER_UNIT));
+        at
+    }
+
+    /// Makes room for the record of a mapping at `va` and pays for it: what
+    /// the list can grow by is charged first and what it did not grow by given
+    /// back, so a refusal allocates nothing (ADR-0261 point 6).
+    fn reserve_record(&mut self, va: u64) -> Result<(), MappingError> {
+        let before = self.mappings.bytes_held();
+        let worst = self.mappings.max_growth();
+        self.memory
+            .paid
+            .kernel(worst)
+            .map_err(|_| MappingError::Quota)?;
+        let room = self.mappings.reserve_for(va);
+        let grown = self.mappings.bytes_held().saturating_sub(before);
+        self.memory.paid.release_kernel(worst - grown.min(worst));
+        steps::count(1);
+        room.map_err(|_| MappingError::Memory)
+    }
+
+    /// Gives back what the list no longer holds, after a removal, from
+    /// `before` (its `bytes_held` then).
+    fn release_records(&mut self, before: u64) {
+        let after = self.mappings.bytes_held();
+        self.memory
+            .paid
+            .release_kernel(before.saturating_sub(after));
+    }
+
+    /// Records the mapping, in the room `reserve_record` made. Gives the
+    /// holder back if there was none (a bug in the caller, which undoes what
+    /// it mapped and fails).
+    fn record(&mut self, va: u64, length: u64, record: Record) -> Result<(), MappingError> {
+        // The most one insertion moves is a chunk: a unit.
+        steps::count(1);
+        self.mappings
+            .insert(va, length, record)
+            .map_err(|_| MappingError::Memory)
     }
 
     /// Maps pages given by `page`, a function of their offset, and keeps
@@ -333,10 +385,8 @@ impl AddressSpace {
         if self.mappings.len() >= MAX_MAPPINGS {
             return Err(MappingError::Limit);
         }
-        self.mappings
-            .try_reserve(1)
-            .map_err(|_| MappingError::Memory)?;
-        let (index, va) = self.find_gap(length).ok_or(MappingError::Memory)?;
+        let va = self.find_gap(length).ok_or(MappingError::Memory)?;
+        self.reserve_record(va)?;
         for offset in (0..length).step_by(FRAME_SIZE as usize) {
             let mapped = self.table.map_pages(
                 &mut self.memory,
@@ -355,16 +405,15 @@ impl AddressSpace {
                 });
             }
         }
-        self.mappings.insert(
-            index,
-            Mapping {
-                va,
-                length,
-                attributes,
-                holder,
-                share: None,
-            },
-        );
+        let record = Record {
+            attributes,
+            holder,
+            share: None,
+        };
+        if let Err(e) = self.record(va, length, record) {
+            let _ = self.table.unmap(&mut self.memory, va, length);
+            return Err(e);
+        }
         Ok(va)
     }
 
@@ -374,10 +423,8 @@ impl AddressSpace {
         if self.mappings.len() >= MAX_MAPPINGS {
             return Err(MappingError::Limit);
         }
-        self.mappings
-            .try_reserve(1)
-            .map_err(|_| MappingError::Memory)?;
-        let (_, va) = self.find_gap(length).ok_or(MappingError::Memory)?;
+        let va = self.find_gap(length).ok_or(MappingError::Memory)?;
+        self.reserve_record(va)?;
         Ok(va)
     }
 
@@ -416,6 +463,8 @@ impl AddressSpace {
     }
 
     /// The third part: the range is mapped; records it and keeps `holder`.
+    /// On failure (the room `map_reserve` made is gone, which the mapping lock
+    /// prevents) the caller unmaps the range and fails.
     ///
     /// `share` is the offset in the object of the range's first page for a
     /// `SHARED` mapping (ADR-0431), which a snapshot keeps shared.
@@ -426,21 +475,16 @@ impl AddressSpace {
         attributes: Attributes,
         holder: Holder,
         share: Option<u64>,
-    ) {
-        let index = self.mappings.partition_point(|m| m.va < va);
-        // `map_reserve` reserved the list's room (it records no mapping), and
-        // nothing else maps in between: the caller holds the process's
-        // mapping lock (ADR-0301 item 6).
-        self.mappings.insert(
-            index,
-            Mapping {
-                va,
-                length,
+    ) -> Result<(), MappingError> {
+        self.record(
+            va,
+            length,
+            Record {
                 attributes,
                 holder,
                 share,
             },
-        );
+        )
     }
 
     /// Whether the page holding `va` is mapped writable for EL0 (ADR-0300
@@ -456,20 +500,21 @@ impl AddressSpace {
 
     /// Whether a mapping is exactly `[va, va + length)`.
     pub fn is_mapped_exactly(&self, va: u64, length: u64) -> bool {
-        self.mappings
-            .iter()
-            .any(|m| m.va == va && m.length == length)
+        self.mappings.contains_exact(va, length)
     }
 
     /// Removes the record of the mapping that is exactly `[va, va + length)`
     /// after its pages were unmapped, and gives its holder back.
     pub fn unmap_commit(&mut self, va: u64, length: u64) -> Result<Holder, MappingError> {
-        let index = self
+        let before = self.mappings.bytes_held();
+        // One chunk's records move at most: a unit.
+        steps::count(1);
+        let entry = self
             .mappings
-            .iter()
-            .position(|m| m.va == va && m.length == length)
+            .remove_exact(va, length)
             .ok_or(MappingError::NotMapped)?;
-        Ok(self.mappings.remove(index).holder)
+        self.release_records(before);
+        Ok(entry.value.holder)
     }
 
     /// Makes this process the holder of transport device `device`, if it
@@ -506,38 +551,56 @@ impl AddressSpace {
     /// that drops them in steps. The pages stay in the table, which nothing
     /// runs on again: the table goes with the space.
     pub fn pop_mapping(&mut self) -> Option<Holder> {
-        self.mappings.pop().map(|m| m.holder)
+        let before = self.mappings.bytes_held();
+        let entry = self.mappings.pop_last()?;
+        self.release_records(before);
+        Some(entry.value.holder)
     }
 
-    /// True if any mapping is of a device window (ADR-0054).
-    pub fn has_device_mapping(&self) -> bool {
-        self.mappings
-            .iter()
-            .any(|m| matches!(m.holder, Holder::Device(_)))
+    /// How many mappings the space holds.
+    pub fn mapping_count(&self) -> usize {
+        self.mappings.len()
     }
 
-    /// What a snapshot of this space needs to know before it starts: the
-    /// range, length and attributes of each mapping of an object, and for a
-    /// `SHARED` one (ADR-0431) its object and offset, which the child maps
-    /// as they are. A device mapping refuses it with `BadState` (ADR-0102
-    /// item 2).
-    pub fn snapshot_plan(&self) -> Result<Vec<PlanItem>, Status> {
-        if self.has_device_mapping() {
-            return Err(Status::BadState);
+    /// What a snapshot of this space needs to know before it starts, in steps
+    /// of [`PLAN_STEP`] mappings (ADR-0270): appends to `plan` the range,
+    /// length and attributes of each mapping of an object that starts at or
+    /// above `from`, and for a `SHARED` one (ADR-0431) its object and offset,
+    /// which the child maps as they are. A device mapping refuses it with
+    /// `BadState` (ADR-0102 item 2). Gives where the next step starts, or
+    /// `None` when the whole list is in the plan. `plan` has room for
+    /// [`AddressSpace::mapping_count`] items (`NoMemory` if not, which the
+    /// mapping lock the caller holds prevents).
+    pub fn snapshot_plan_step(
+        &self,
+        plan: &mut Vec<PlanItem>,
+        from: u64,
+    ) -> Result<Option<u64>, Status> {
+        let mut taken = 0;
+        for m in self.mappings.iter_from(from) {
+            if taken == PLAN_STEP {
+                steps::count(PLAN_STEP.div_ceil(RECORDS_PER_UNIT));
+                return Ok(Some(m.va));
+            }
+            if matches!(m.value.holder, Holder::Device(_)) {
+                return Err(Status::BadState);
+            }
+            if plan.len() == plan.capacity() {
+                return Err(Status::NoMemory);
+            }
+            plan.push(PlanItem {
+                va: m.va,
+                length: m.length,
+                attributes: m.value.attributes,
+                share: match (&m.value.holder, m.value.share) {
+                    (Holder::Memory(object), Some(offset)) => Some((object.clone(), offset)),
+                    _ => None,
+                },
+            });
+            taken += 1;
         }
-        let mut plan = Vec::new();
-        plan.try_reserve_exact(self.mappings.len())
-            .map_err(|_| Status::NoMemory)?;
-        plan.extend(self.mappings.iter().map(|m| PlanItem {
-            va: m.va,
-            length: m.length,
-            attributes: m.attributes,
-            share: match (&m.holder, m.share) {
-                (Holder::Memory(object), Some(offset)) => Some((object.clone(), offset)),
-                _ => None,
-            },
-        }));
-        Ok(plan)
+        steps::count(taken.div_ceil(RECORDS_PER_UNIT));
+        Ok(None)
     }
 
     /// One step of a snapshot's copy (ADR-0102 item 2, ADR-0270): up to
@@ -551,26 +614,36 @@ impl AddressSpace {
         copied: &mut Copied,
     ) -> Result<bool, Status> {
         let mut failed = None;
+        // Units of the step: a shared page skipped and a page copied into an
+        // object of the copy count one each; the child's own pages count
+        // with the page-table frames they bring, which a sparse space makes
+        // one or more per page (the growth of the child's list of frames,
+        // `grown`), so that a step is `STEP` frames whatever the layout
+        // (INV-0270-1).
         let mut taken = 0;
+        let mark = build.child.memory.frames.len();
+        let grown = |build: &SnapshotBuild| build.child.memory.frames.len() - mark;
         let mut next = build.next;
         let reached_end = self
             .table
             .for_each_mapping_from(&self.memory, build.next, &mut |leaf| {
                 for offset in (0..leaf.size).step_by(FRAME_SIZE as usize) {
                     let (va, pa) = (leaf.va + offset, leaf.pa + offset);
-                    // Mappings are kept by address, and do not overlap.
-                    let i = self.mappings.partition_point(|m| m.va + m.length <= va);
-                    let target = match self.mappings.get(i) {
+                    // Mappings are kept by address, and do not overlap; the
+                    // plan is the list as it was when the copy began, which
+                    // the mapping lock keeps the list as.
+                    let i = build.plan.partition_point(|m| m.va + m.length <= va);
+                    let target = match build.plan.get(i) {
                         // A shared mapping is not copied: the child maps the
                         // same frames when the snapshot finishes (ADR-0431).
-                        Some(m) if m.va <= va && build.plan[i].share.is_some() => {
+                        Some(m) if m.va <= va && m.share.is_some() => {
                             // Not copied, but a unit of the step all the
                             // same: a step stays bounded however many
                             // shared pages the walk meets (INV-0270-1).
                             taken += 1; // a shared page
                             continue;
                         }
-                        Some(m) if m.va <= va => build.objects[i].page(va - m.va),
+                        Some(m) if m.va <= va => build.objects.0[i].page(va - m.va),
                         _ => match build.child.copy_page(va, leaf.attributes) {
                             Ok(pa) => pa,
                             Err(e) => {
@@ -596,10 +669,12 @@ impl AddressSpace {
                         build.executable = true;
                     }
                     copied.pages += 1;
-                    taken += 1;
+                    if build.plan.get(i).is_some_and(|m| m.va <= va) {
+                        taken += 1;
+                    }
                 }
                 next = leaf.va + leaf.size;
-                taken < STEP
+                taken + grown(build) < STEP
             });
         if let Some(e) = failed {
             return Err(e);
@@ -650,8 +725,16 @@ impl AddressSpace {
 impl Drop for AddressSpace {
     fn drop(&mut self) {
         mmu::invalidate_asid(self.memory.asid);
-        // Only now can nothing reach what the mappings held.
-        self.mappings.clear();
+        // Only now can nothing reach what the mappings held. An exit has
+        // dropped them in steps already (`process::exit_current`); a space
+        // that never ran (a failed spawn, a cancelled snapshot) drops its
+        // few, or its many, in steps here: each one's frames count, and a
+        // step point comes between them (INV-0270-1).
+        while let Some(entry) = self.mappings.pop_last() {
+            steps::before(entry.value.holder.weight());
+            steps::count(1);
+            drop(entry);
+        }
         // A large space's frames go to the reaper with the charge, which
         // stays until they are freed (ADR-0270 point 4); the ASID is free
         // at once, since its entries are gone and nothing runs on the root.
@@ -668,10 +751,25 @@ impl Drop for AddressSpace {
 pub struct SnapshotBuild {
     child: AddressSpace,
     plan: Vec<PlanItem>,
-    objects: Vec<Arc<MemoryObject>>,
+    objects: HeldObjects,
     /// The address the next step of the copy resumes at.
     next: u64,
     executable: bool,
+}
+
+/// The copies of a snapshot's mapped objects, which go in steps when the
+/// build is dropped: a cancelled snapshot of a process with many small
+/// mappings would free all their frames in one interval (INV-0270-1).
+struct HeldObjects(Vec<Arc<MemoryObject>>);
+
+impl Drop for HeldObjects {
+    fn drop(&mut self) {
+        while let Some(object) = self.0.pop() {
+            steps::before(super::object::weight(&object));
+            steps::count(1);
+            drop(object);
+        }
+    }
 }
 
 /// One mapping of the parent, as a snapshot plans it.
@@ -686,22 +784,32 @@ pub struct PlanItem {
 impl SnapshotBuild {
     /// The child and a fresh object, not zeroed, for every mapping of `plan`
     /// that is not shared (a shared one keeps its object). The objects are
-    /// made in steps (`MemoryObject::new_for_copy`).
+    /// made in steps (`MemoryObject::new_for_copy`), and a step point comes
+    /// between mappings once a step's pages are made: many small objects are
+    /// as much work as one large (INV-0270-1). No lock is held.
     pub fn new(plan: Vec<PlanItem>, payer: Option<&Arc<Job>>) -> Result<SnapshotBuild, Status> {
-        let mut child = AddressSpace::new(payer)?;
-        child
-            .mappings
-            .try_reserve_exact(plan.len())
-            .map_err(|_| Status::NoMemory)?;
-        let mut objects = Vec::new();
+        let child = AddressSpace::new(payer)?;
+        let mut objects = HeldObjects(Vec::new());
+        heap::prepare(plan.len().saturating_mul(size_of::<Arc<MemoryObject>>()));
         objects
+            .0
             .try_reserve_exact(plan.len())
             .map_err(|_| Status::NoMemory)?;
+        let mut pending = 0;
         for item in &plan {
-            objects.push(match &item.share {
+            objects.0.push(match &item.share {
                 Some((object, _)) => object.clone(),
-                // Every page is written by the copy before the child exists.
-                None => MemoryObject::new_for_copy(item.length, payer)?,
+                None => {
+                    // Every page is written by the copy before the child
+                    // exists.
+                    let units = ((item.length / FRAME_SIZE) as usize).min(STEP) + 1;
+                    if pending + units > STEP {
+                        steps::between()?;
+                        pending = 0;
+                    }
+                    pending += units;
+                    MemoryObject::new_for_copy(item.length, payer)?
+                }
             });
         }
         Ok(SnapshotBuild {
@@ -727,10 +835,18 @@ impl SnapshotBuild {
             // see the copies (Arm ARM D7.5.9).
             mmu::invalidate_instruction_cache();
         }
+        // A step is `STEP` pages, or fewer when the pages bring page-table
+        // frames (a sparse space makes one or more for each page): half a
+        // step of them ends it too (INV-0270-1).
         let mut pages = 0usize;
+        let mut mark = self.child.memory.frames.len();
         let plan = core::mem::take(&mut self.plan);
-        let objects = core::mem::take(&mut self.objects);
-        for (item, object) in plan.into_iter().zip(objects) {
+        let mut objects = HeldObjects(core::mem::take(&mut self.objects.0));
+        // The copies go to the child from the end, so that what an error
+        // leaves in `objects` (dropped in steps) is the unplaced ones.
+        objects.0.reverse();
+        for item in plan {
+            let object = objects.0.pop().expect("an object for each mapping");
             let PlanItem {
                 va,
                 length,
@@ -739,11 +855,14 @@ impl SnapshotBuild {
             } = item;
             let base = share.as_ref().map_or(0, |&(_, offset)| offset);
             for offset in (0..length).step_by(FRAME_SIZE as usize) {
-                if pages.is_multiple_of(STEP) {
+                let tables = self.child.memory.frames.len() - mark;
+                if pages == 0 || pages >= STEP || tables >= STEP / 2 {
                     if pages > 0 {
                         steps::between()?;
                     }
                     self.child.prepare_step();
+                    pages = 0;
+                    mark = self.child.memory.frames.len();
                 }
                 pages += 1;
                 self.child
@@ -757,13 +876,26 @@ impl SnapshotBuild {
                     )
                     .map_err(|_| self.child.memory.failure())?;
             }
-            self.child.mappings.push(Mapping {
-                va,
-                length,
-                attributes,
-                holder: Holder::Memory(object),
-                share: share.map(|(_, offset)| offset),
-            });
+            let failed = |e: MappingError| match e {
+                MappingError::Quota => Status::OverQuota,
+                _ => Status::NoMemory,
+            };
+            // Paid by the child's job, as the parent's records were.
+            self.child.reserve_record(va).map_err(failed)?;
+            self.child
+                .record(
+                    va,
+                    length,
+                    Record {
+                        attributes,
+                        holder: Holder::Memory(object),
+                        share: share.map(|(_, offset)| offset),
+                    },
+                )
+                .map_err(failed)?;
+            // Making room for the record and recording it count two units
+            // (`reserve_record`, `record`): two pages of the step.
+            pages += 2;
         }
         Ok(self.child)
     }

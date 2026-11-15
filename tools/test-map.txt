@@ -64,6 +64,7 @@ crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-lib
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
+crates/zoraya-mappings/       test-qemu
 crates/zoraya-heap/           test-qemu
 crates/zoraya-handle/         test-qemu
 crates/zoraya-charge/         test-qemu
