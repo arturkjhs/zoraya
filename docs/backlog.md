@@ -413,3 +413,16 @@ command per package for now. A revoke without `--kill` says how many running cop
 - **INV-0042-1:** an `abi` type is not a check by itself; it stays `not yet applicable` until a test checks it.
 - **libc++:** add the nightly step that runs the semaphore, barrier and latch groups under TCG (no time pressure there).
   The last three are part `work/test-fixes-3`.
+
+## ADR-0450 to ADR-0455 accepted; two parts (the architect, 2026-11-15)
+
+ADR-0450 to ADR-0455 (a Rust `std` for POSIX programs, TASK-35) are accepted as recommended, including the stated limit on
+INV-0109-2 for Rust programs and the changes to ADR-0418 item 4, ADR-0288 item 6, INV-0411-4, ADR-0310 item 3 and INV-0310-1;
+each change is recorded by the part that implements it, with an Opus review. Two parts:
+1. `work/syscall-long` (small, first): `syscall()` returns `long` (today a 32-bit `int` turns -1 into a success; `tee` and
+   `sendmsg` have the same defect), with a test. A defect for C programs too (ADR-0451 item 1, INV-0451-1).
+2. `work/rust-std`, in the next free slot: ADR-0451's list (the fixed `syscall` list with `futex`, `getrandom`, `gettid`;
+   `ioctl FIONBIO`; the ten exported names; `libzoraya-rust.a`; the renamed `__rustc` symbols), `tools/zcargo` (ADR-0452),
+   and a random-number connection for every POSIX child from the broker (ADR-0453 with ADR-0227 item 3), which also closes
+   the nested `python3` and fork-child randomness items above. Done when the probes of `docs/research/rust-std/probes` pass
+   in CI as `make test-rust-std`.
