@@ -178,7 +178,8 @@ RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
 # test on 256 MiB refused a menu). No smaller size has been measured (docs/backlog.md,
 # "Memory of the run machines").
 RUN_NET_CMD = $(RUN_QEMU) --net --mem 512M --disk $(1) $(KERNEL)
-RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
+# $(3) is the memory, 512M by default.
+RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem $(or $(3),512M) --disk $(1) $(2) $(KERNEL)
 
 run: $(KERNEL) $(DISK)
 	$(call RUN_CMD,$(DISK))
@@ -194,11 +195,12 @@ run-gui: $(KERNEL) $(DISK)
 # The guest of the browser's steps (ADR-0415 item 5): 2 GiB, with the desktop,
 # the network and the disk of run-gui, so that `top` in a terminal shows the
 # room keeper's session of that size. `make run` and `make run-gui` stay at
-# their own sizes (the architect, 2026-11-14); there is no browser to start
-# yet (plan part E2), so this is the machine it will run on.
+# their own sizes (ADR-0415; ADR-0436 asks the architect about its sentence on a
+# 2 GiB default); no step boots this line, and there is no browser to start yet
+# (plan part E2).
 BROWSER_MEM ?= 2G
 run-browser: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem $(BROWSER_MEM) --disk $(DISK) $(KERNEL)
+	$(call RUN_GUI_CMD,$(DISK),,$(BROWSER_MEM))
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
@@ -1555,10 +1557,10 @@ test-keeper: $(NET_TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # The 2 GiB guest (F8, ADR-0415 item 5): the keeper sizes the session from RAM.
 	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
-	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(BROWSER_SCRIPT) --label browser-guest --expect-line "2048 MiB  RAM" -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --mem $(BROWSER_MEM) --accel auto $(KERNEL)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(BROWSER_SCRIPT) --label browser-guest --expect-line "2048 MiB  RAM" -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --mem 2G --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(FULL_ONLY) target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE) && \
-		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(BROWSER_SCRIPT) --label browser-guest-tcg --expect-line "2048 MiB  RAM" -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --mem $(BROWSER_MEM) --accel tcg $(KERNEL) && \
+		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(BROWSER_SCRIPT) --label browser-guest-tcg --expect-line "2048 MiB  RAM" -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --mem 2G --accel tcg $(KERNEL) && \
 		target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(FULL_ONLY) target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE) && \
 		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper-tcg -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel tcg $(NET_TEST_KERNEL) && \
