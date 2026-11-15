@@ -100,15 +100,59 @@ None added: `ttyd` is `zoraya-tty`'s host for the session, so `VMIN`/`VTIME`, `F
 
 See the end of this file.
 
+## The review and its fix pass (opus-review)
+
+The independent review is `docs/tasks/TASK-31-review-10c.md` (findings and dispositions). The same reviewer then fixed
+what it found, on this branch, after merging `origin/main` (the invariants Total recomputed: 787):
+
+- **Finding 1 (must-fix), sh's job control ended after 63 jobs:** `ForegroundAsked` carries the root of the caller's line
+  (the group `zosh` started); `Host::foreground_asked` accepts it for the line in front by that root, and keeps no list of
+  the groups made since (the 64-entry cap is gone, `GroupMade` decides nothing, so a dropped notice loses no group).
+  Tests: `a_shell_that_made_seventy_jobs_still_gives_the_next_one_the_terminal`, the broker's notice test with a nested
+  group, and in QEMU `zosh.script`: 70 jobs in `sh`, then `/bin/wc -c` reads the terminal.
+- **Finding 2 (must-fix), Ctrl-C killed sh's background jobs:** with a chosen group, Ctrl-C and Ctrl-\ are
+  `kill(-group)` through the broker (`Effect::GroupSignal`), as Ctrl-Z was; the broker signals a group that has groups
+  made inside its job member by member. Tests: `signal_characters_go_to_the_chosen_group_once_there_is_one`,
+  `a_signal_to_a_group_with_groups_made_inside_it_reaches_its_members_only`, and in `zosh.script` a background
+  `sleep 60` is still `Running` after a Ctrl-C of a foreground `sleep 30`.
+- **Finding 3, SIGWINCH ended native elements:** it goes to the chosen group or to each group the shell started, never to
+  the line's job (`sigwinch_goes_to_each_group_the_shell_started_and_never_to_the_job`). Not run in a window with a native
+  element.
+- **Finding 4, 2004 from any output:** believed only out of canonical mode, cleared on a new chosen group
+  (`mode_2004_is_believed_only_for_a_reader_out_of_canonical_mode`; ADR-0386 amended).
+- **Finding 5, the connection table:** at most 64 connections per line (`one_line_cannot_take_the_whole_table_of_connections`).
+  A `Clone` from a line not in front is still answered: refusing it fails `fork` in a background line (`docs/backlog.md`).
+- **Finding 6, survivors:** tests for `leave`, `end_line`'s `retain`, `front`, `has_line`, several 2004 parameters, the
+  question's count, and the libposix ones (`jobs.rs` `read_tty` readiness, `tty_input_ready`'s kept answer and held read,
+  `tty_flush_conn`, `poll.rs` `probes`). The hand mutations are `tools/mutants/terminal-10c.toml`: `make mutants
+  MUTANTS_ARGS=tools/mutants/terminal-10c.toml`, 13 mutants, 0 survived.
+- **Finding 9, an arrow key on a held paste:** the whole key is taken.
+- **Finding 13, INV-0172-4:** built: inside an entered room `room new` refuses a path the room does not cover;
+  `tests/shell/rooms.script` (`make test-files`, PASS).
+- **Notes 8, 10, 12, 14:** the kill offer in `docs/architect-queue.md` (ADR-0387's row); the rest in `docs/backlog.md`.
+
+Run in the fix pass: `make check` before each commit; `cargo test -p zoraya-tty -p zoraya-shell -p zoraya-broker -p
+zoraya-posix`; the hand mutations above; `make test-files` (PASS, `[rooms] PASS: 79 steps`); `make test-posix
+POSIX_SCRIPTS=tests/posix/zosh.script POSIX_ACCELS=auto` (PASS, 214 steps); `make test-tour-terminal POSIX_ACCELS=auto` (PASS, 79 steps at scale 1, scale 2, 1600x1000 and 1920x1200, HVF).
+
 ## Remains (in this order)
 
-1. GUI: the kill of a raw-mode program followed by a typed command (INV-0331-4's wording), the paste to a program without mode 2004 (held, question in the title, Enter sends), and INV-0331-7 in a window are not read; the last line of `t_tty box` starts where the shell's cursor was after the alternate screen (a leading run of blanks): the cursor position `Restore` leaves is worth a look.
-2. INV-0331-2's password case (a background program tries to turn echo on while another reads a password) and INV-0331-5 in QEMU; `select`/`pselect` are not host-tested (FFI file).
+1. GUI: the kill of a raw-mode program followed by a typed command (INV-0331-4's wording), the paste to a program without
+   mode 2004 (held, question in the title, Enter sends), a resize with a native element in a POSIX line, and INV-0331-7 in a
+   window are not read; the last line of `t_tty box` starts where the shell's cursor was after the alternate screen (a
+   leading run of blanks): the cursor position `Restore` leaves is worth a look.
+2. INV-0331-2's password case (a background program tries to turn echo on while another reads a password) and INV-0331-5 in
+   QEMU; `select`/`pselect` are not host-tested (FFI file).
 3. The relay measurement's split of CPU between `zosh` and `term`, more runs, and TCG; `ttyd` runs of `t_tty`.
 4. The Ctrl-C defect on a continued job (`docs/backlog.md`), not looked into.
-5. Not done in `zosh`: a native first element that reads the keys keeps them (ADR-0387 item 2); no kill offer for a line with the terminal; the serial console's carriage return (ADR-0331 item 13).
-6. A `tcsetpgrp` to the line's own group and a later `Ctrl-Z` while `sh` is itself foreground still says `did not stop: sh` (sh ignores `SIGTSTP`), which is what ADR-0200 prescribes.
-7. `make test-changed` was not run (it selects every step); `make check`, `cargo test` of the changed crates, `make test-posix` (zosh.script only) and `make test-tour-terminal` (four sizes) were.
+5. Not done in `zosh`: a native first element that reads the keys keeps them (ADR-0387 item 2); no kill offer for a line
+   with the terminal (the architect's, `docs/architect-queue.md`); the serial console's carriage return (ADR-0331 item 13).
+6. A `tcsetpgrp` to the line's own group and a later `Ctrl-Z` while `sh` is itself foreground still says `did not stop: sh`
+   (sh ignores `SIGTSTP`), which is what ADR-0200 prescribes.
+7. The review's notes left in `docs/backlog.md` (part 10c leftovers): a program's own `c_cc` and INV-0386-1, `poll` on two
+   descriptors of one connection, the notices' order on a slow host, `Clone` from a background line.
+8. INV-0172-4's host tests of the table building over rooms (ADR-0172's open question).
+9. `make test-changed` was not run (it selects every step); the steps above were.
 
 ## Decisions taken where the ADRs are silent (ADR-0386)
 
