@@ -53,6 +53,7 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | less | 710 | the Less License (`LICENSE`: a BSD-2-clause-style licence; the release is also offered under GPL-3.0-or-later, which is not used) | `patches/less/0001-zoraya-compiled-in-defaults.patch` (no key files, no tags, no history file, `LESSOPEN` ignored; ADR-0335 item 8) |
 | nvi2 | 2.2.2 | BSD-3-Clause (`LICENSE`) | `patches/nvi2/0001-no-startup-files.patch`, `0002-no-script.patch`, `0003-no-flock.patch` (ADR-0335 items 1 and 6); `nvi/` holds the port's own files: `build.sh` (its build, instead of CMake), `config.h`, `pathnames.h`, `recover.c` (replaces `common/recover.c`: no recovery), `compat.c`, `compat.h`, `bitstring.h` and `sys/queue.h` (musl has neither header) under the repository's licence |
 | Berkeley DB (DB 1) | 1.85 | BSD-3-Clause (the notice in each file) | `patches/db1/0001-hash-errno-field.patch` (a structure field named `errno`, which musl's `<errno.h>` makes a macro); `db1/build.sh` builds `libdb1.a` |
+| OpenSSH portable | 10.6p2 | BSD and ISC (`LICENCE`; a few files public domain) | `patches/openssh/0001-fake-rfc2553-stdio.patch`, `0002-no-configuration-files-no-options-after-host.patch`, `0003-no-askpass.patch`, `0004-no-host-key-dns.patch` (ADR-0340 items 3 to 5, ADR-0346); the client `ssh` and `ssh-keygen` only |
 
 `make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
 `build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and

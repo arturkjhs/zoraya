@@ -46,6 +46,17 @@ fi
 if [ -x "$build/ports/work/openssh-10.6p2/ssh" ] && [ -f docs/adr/0346-surface-for-ssh.md ]; then
   "$surface" imports docs/adr/0346-surface-for-ssh.md \
     "ssh=$build/ports/work/openssh-10.6p2" || fail=1
+  for b in ssh ssh-keygen; do
+    # INV-0346-2: no askpass program and no configuration file in the binaries.
+    if LC_ALL=C strings -a "$build/ports/work/openssh-10.6p2/$b" | grep -q -e 'SSH_ASKPASS' -e 'ssh_config' -e '\.ssh/config'; then
+      say "$b names SSH_ASKPASS or a configuration file"
+    fi
+  done
+  d=$build/ports/early-check
+  rm -rf "$d" && mkdir -p "$d"
+  cp "$build/ports/work/openssh-10.6p2/ssh" "$build/ports/work/openssh-10.6p2/ssh-keygen" "$d/"
+  "$elfcheck" "$d" || fail=1
+  rm -rf "$d"
 fi
 if [ -x "$build/ports/work/git-2.56.1/git" ] && [ -f docs/adr/0347-surface-for-git.md ]; then
   "$surface" imports docs/adr/0347-surface-for-git.md \

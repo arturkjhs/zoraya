@@ -46,7 +46,7 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
 	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md \
-	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0390-surface-for-curses-less-and-vi.md
+	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -438,6 +438,12 @@ $(TTYSHIM): ports/apps/ttyshim.c $(SYSROOT_STAMP)
 	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/ttyshim.o ports/apps/ttyshim.c
 	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/ttyshim.o
 
+SSHSHIM := $(PORTS)/ttyshim/libsshshim.a
+$(SSHSHIM): ports/apps/sshshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(dir $@) $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/sshshim.o ports/apps/sshshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/sshshim.o
+
 LESS := $(WORK)/less-$(call lock_ver,less)
 LESS_BIN := $(LESS)/less
 less: $(LESS_BIN)
@@ -481,6 +487,43 @@ $(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h p
 	rm -f $(NVI_BIN)
 	@$(call logged,sh -x ports/nvi/build.sh $(NVI) $(OBJ)/nvi $(NVI_BIN) $(ZCC) $(CURSES) $(DB1_PREFIX)/include \
 	  $(DB1_PREFIX)/lib "$(APPS_CFLAGS)" $(dir $(TTYSHIM)),nvi)
+
+# ---------------------------------------------------------------- OpenSSH client (TASK-31 ports-early, ADR-0340)
+
+# OpenSSH portable 10.6p2: `ssh` and `ssh-keygen` only, on the image's OpenSSL
+# and zlib (ADR-0312; $(PORTS)/deps, as for curl and wget), static. No server,
+# no agent, no `ssh-add`, no PKCS#11 or security-key provider, no connection
+# sharing (ADR-0340 item 1), no PAM, no privilege separation sandbox, no
+# utmp or lastlog. The patches are ADR-0340 items 3 and 5. The names of the
+# terminal that libc.a lacks before part 10c come from ports/apps/ttyshim.c.
+# ac_cv_func_statvfs and fstatvfs: libc.a has neither (ADR-0343: statfs is out),
+# and OpenSSH's own `struct statvfs` then clashes with musl's header; only
+# sftp-server and the sftp client call them, and neither is built.
+OPENSSH := $(WORK)/openssh-$(call lock_ver,openssh)
+OPENSSH_BINS := $(OPENSSH)/ssh $(OPENSSH)/ssh-keygen
+OPENSSH_OPTS := --sysconfdir=/etc/ssh --with-ssl-dir=$(PORTS)/deps --with-zlib=$(PORTS)/deps \
+	--without-pam --without-selinux --without-kerberos5 --without-libedit --without-ldns --without-wtmpdb \
+	--with-sandbox=no --disable-pkcs11 --disable-security-key --disable-strip --disable-utmp --disable-utmpx \
+	--disable-wtmp --disable-wtmpx --disable-lastlog --disable-libutil --disable-pututline --disable-pututxline \
+	--without-hardening --without-stackprotect --without-rpath --without-shadow --without-openssl-header-check \
+	--with-privsep-path=/var/empty --with-pid-dir=/tmp
+# Names the headers declare and libc.a hides or lacks: configure's link test says
+# "missing" and OpenSSH's compat layer then defines a macro that clashes with the
+# declaration. They are said to exist; the link then names the ones that do not
+# (the probe of ADR-0346).
+OPENSSH_HAVE := $(addprefix ac_cv_func_,$(addsuffix =yes,setlinebuf mblen dirfd endgrent setgrent))
+openssh: $(OPENSSH_BINS)
+$(OPENSSH): $(LOCK) $(wildcard ports/patches/openssh/*.patch)
+	$(call unpack,openssh,ports/patches/openssh)
+	@touch $@
+$(OPENSSH_BINS): $(OPENSSH) $(SYSROOT_STAMP) $(TTYSHIM) $(SSHSHIM) $(PORTS)/deps/lib/libssl.a $(PORTS)/deps/lib/libzshim.a ports/config.site
+	@cd $(OPENSSH) && $(call logged,$(CROSS_ENV) ac_cv_func_statvfs=yes ac_cv_func_fstatvfs=yes $(OPENSSH_HAVE) \
+	  ./configure --host=aarch64-unknown-linux-musl $(OPENSSH_OPTS) \
+	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include" \
+	  LDFLAGS="-L$(PORTS)/deps/lib -L$(dir $(TTYSHIM)) -Wl$(comma)--error-limit=0" LIBS="-lzshim -lttyshim -lsshshim",openssh-configure)
+	rm -f $(OPENSSH_BINS)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -k -C $(OPENSSH) ssh ssh-keygen V=1,openssh)
+	@touch $(OPENSSH_BINS)
 
 # ---------------------------------------------------------------- tcc
 

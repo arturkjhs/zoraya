@@ -5,13 +5,15 @@
  * image: the surface of libc.a changes only by ADR (INV-0005-1). Each
  * does what the unoffered call does in libposix: fails with an errno
  * and changes nothing, so a program built with them links and can be sized
- * but is not a working terminal program. Part 10c adds the real names to
+ * but is not a working terminal program. `tcsetattr` and `select` are weak:
+ * zshim.c, which curl, wget, OpenSSH and git also link, defines the same two
+ * names, and its definition wins. Part 10c adds the real names to
  * libposix and deletes this file and its rule in ports/Makefile.
  */
 #include <errno.h>
 #include <termios.h>
 
-int tcsetattr(int fd, int action, const struct termios *t)
+__attribute__((weak)) int tcsetattr(int fd, int action, const struct termios *t)
 {
 	(void)fd; (void)action; (void)t;
 	errno = ENOTTY;
@@ -41,7 +43,7 @@ speed_t cfgetispeed(const struct termios *t)
 #include <sys/select.h>
 #include <time.h>
 
-int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
+__attribute__((weak)) int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
 {
 	struct timespec ts;
 	if (tv) {
@@ -70,4 +72,17 @@ unsigned int sleep(unsigned int seconds)
 {
 	struct timespec ts = { seconds, 0 };
 	return nanosleep(&ts, &ts) ? (unsigned int)ts.tv_sec : 0;
+}
+
+/* The speed setters of OpenSSH's ttymodes.c (ADR-0342 item 4: stored, without effect). */
+int cfsetospeed(struct termios *t, speed_t speed)
+{
+	t->c_cflag = (t->c_cflag & ~CBAUD) | (speed & CBAUD);
+	return 0;
+}
+
+int cfsetispeed(struct termios *t, speed_t speed)
+{
+	(void)t;
+	return speed == 0 || (speed & ~CBAUD) == 0 ? 0 : -1;
 }

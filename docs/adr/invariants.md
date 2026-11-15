@@ -632,6 +632,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0342-5 | [ADR-0342](0342-the-posix-surface-of-stage-10.md) | A program started by `zosh` gets an entry from `getpwuid(getuid())`, and `link`, and `mknod` of anything but a FIFO, fail with `EPERM`. | a C test in the in-QEMU POSIX script. | checked: `make test-posix` (`tests/posix/zosh-userland.script`) |
 | INV-0343-1 | [ADR-0343](0343-surface-for-the-userland.md) | Every line of the block names a program, and that program's objects import the name. | `posix-surface-check imports docs/adr/0343-surface-for-the-userland.md toybox=DIR` in `make check-ports` (INV-0342-1's second half). | checked: `make check-ports` |
 | INV-0344-1 | [ADR-0344](0344-what-the-userland-part-decided.md) | A `cwd none` description's file operand is planned as one narrowed name, never as the current directory. | the host tests of `zoraya-shell`'s `grants` (`a_file_of_a_cwd_none_program_is_given_as_one_narrowed_name`). | checked: `cargo test -p zoraya-shell` |
+| INV-0346-1 | [ADR-0346](0346-surface-for-ssh.md) | Every line of the block names a program, and that program's objects import the name. | `posix-surface-check imports docs/adr/0346-surface-for-ssh.md ssh=DIR` in `make check-ports` (`ports/check-early.sh`). | checked: `make check-ports` (`ports/check-early.sh`, when OpenSSH is built) |
+| INV-0346-2 | [ADR-0346](0346-surface-for-ssh.md) | The `ssh` and `ssh-keygen` binaries contain no `SSH_ASKPASS` string and no name of a configuration file (`ssh_config`, `.ssh/config`). | `ports/check-early.sh` in `make check-ports`. | checked: `make check-ports` (`ports/check-early.sh`, when OpenSSH is built) |
 | INV-0390-1 | [ADR-0390](0390-surface-for-curses-less-and-vi.md) | Every line of the block names a program, and that program's objects import the name. | `posix-surface-check imports docs/adr/0390-surface-for-curses-less-and-vi.md ncurses=DIR nvi=DIR less=DIR` in `make check-ports` (`ports/check-early.sh`, INV-0342-1's second half). | checked: `make check-ports` (`ports/check-early.sh`, when the three are built) |
 | INV-0390-2 | [ADR-0390](0390-surface-for-curses-less-and-vi.md) | The compile commands of ncurses, less, DB 1 and nvi in `build/ports/logs/` run `zcc` and none names `-D__linux`. | `ports/check-early.sh` in `make check-ports`. | checked: `make check-ports` (`ports/check-early.sh`, when the three are built) |
 | INV-0390-3 | [ADR-0390](0390-surface-for-curses-less-and-vi.md) | `libtinfow.a` names `/usr/share/terminfo`, and the three programs pass `zoraya-elf-check`. | `ports/check-early.sh` in `make check-ports`. | checked: `make check-ports` (`ports/check-early.sh`, when the three are built) |
@@ -989,6 +991,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0342](0342-the-posix-surface-of-stage-10.md) The POSIX surface stage 10 adds: names enter by a link probe of each port, under meanings fixed here | 5 |
 | [ADR-0343](0343-surface-for-the-userland.md) The names toybox's finished commands add to libc.a, and what each means | 1 |
 | [ADR-0344](0344-what-the-userland-part-decided.md) What part 10e decided where ADR-0336 and ADR-0342 are silent | 1 |
+| [ADR-0346](0346-surface-for-ssh.md) The names OpenSSH's client adds to libc.a, the patches that make it ADR-0340's, and what is left for part 10g | 2 |
 | [ADR-0390](0390-surface-for-curses-less-and-vi.md) The names ncurses, less and nvi add to libc.a, what is left for the terminal part, and how the three were built | 3 |
 | [ADR-0380](0380-terminal-behaviour-where-adr-0332-is-silent.md) The terminal's corners that ADR-0332 leaves open: the least state, and sequences that end where they are cut | 1 |
 | [ADR-0381](0381-the-terminals-cell.md) The terminal's cell is 16 bytes: a character, two combining marks of the Basic Multilingual Plane, ten attribute bits and two colours | 1 |
@@ -1018,4 +1021,4 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0419](0419-the-engines-window.md) The engine's window: a WPEPlatform backend over the window channel, chrome drawn by the browser, the clipboard and files only by gesture | 3 |
 | [ADR-0420](0420-the-engines-http-stack.md) The engine's HTTP stack: libsoup 3 over GIO with glib-networking's OpenSSL backend linked in | 3 |
 | [ADR-0421](0421-lgpl-libraries-in-static-programs.md) LGPL libraries in a ported program: allowed when the program's whole build is in `ports/` and can be relinked from it | 1 |
-| **Total** | **782** |
+| **Total** | **784** |

@@ -19,3 +19,7 @@ BSD-2-Clause `LICENSE`**.
 | `nvi2/0002-no-script.patch` | nvi2 2.2.2 (BSD-3-Clause) | `ex/ex_script.c` | `:script` says it is not available: it needs a pseudo-terminal (ADR-0338); the code that opened one is removed. |
 | `nvi2/0003-no-flock.patch` | nvi2 2.2.2 (BSD-3-Clause) | `common/exf.c` | the `flock` call is removed; the `lock` option is accepted and locks nothing (ADR-0342 item 8: no `flock`). |
 | `db1/0001-hash-errno-field.patch` | Berkeley DB 1.85 (BSD-3-Clause) | `hash/hash.c`, `hash/hash.h`, `hash/ndbm.c` | the field `errno` of the hash table's structure is renamed `dberrno`: musl's `<errno.h>` makes `errno` a macro. |
+| `openssh/0001-fake-rfc2553-stdio.patch` | OpenSSH portable 10.6p2 (BSD) | `openbsd-compat/fake-rfc2553.c` | the `#include <stdio.h>` its `getnameinfo` needs (`snprintf` is an error without it in clang 17 and later). |
+| `openssh/0002-no-configuration-files-no-options-after-host.patch` | OpenSSH portable 10.6p2 (BSD) | `ssh.c` | no configuration file is read, `-o` and `-F` are fatal, options are not read again after the host, and a user name is required (ADR-0340 items 3 to 5). |
+| `openssh/0003-no-askpass.patch` | OpenSSH portable 10.6p2 (BSD) | `readpass.c` | `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `DISPLAY` and `WAYLAND_DISPLAY` are not read and no askpass program runs (ADR-0340 item 3). |
+| `openssh/0004-no-host-key-dns.patch` | OpenSSH portable 10.6p2 (BSD) | `dns.c` | `verify_host_key_dns` returns at once: the resolver's names are not in `libc.a`. |
