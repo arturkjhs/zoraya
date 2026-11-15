@@ -1,0 +1,70 @@
+# Part 10f (ADR-0337, ADR-0395, ADR-0387 item 4) in a terminal window, on the tour's image: a refusal of a
+# running program is shown on the window's status row, System+G opens the grant line (the row says
+# `give vi:`), `+r other.txt` gives that one file to that one `vi`, and the editor reads it; a second `vi`
+# is refused again (nothing was stored); System+K offers to kill the line and Enter does. The row is the
+# line below the grid: `status TEXT` reads it. A big display has fewer than 24 rows, so no step depends on
+# the rows. A grant needs half a second between the key and Enter (the guard), so each is typed after one.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+chord ctrl l
+top ~> _
+type echo secret > other.txt\r
+type echo mine > notes.txt\r
+# 1. The refusal is on the row at once, and `vi` is given one file only.
+type vi notes.txt\r
+pause 1500
+status -
+type :e! other.txt\r
+pause 1000
+status vi was not given ~/other.txt (to read)
+shot grant-refused
+# 2. System+G opens the line; the field is the shell's, so the program sees none of it.
+chord meta g
+status give vi:
+type +r other.txt
+pause 800
+status give vi: +r other.txt
+shot grant-line
+type \r
+status given until vi ends: +r ~/other.txt
+# 3. The file is there now.
+type :e! other.txt\r
+pause 1000
+window
+screen secret
+# 4. Not stored: a second vi is refused the same file again.
+type :q!\r
+pause 800
+window
+screen ~> _
+type vi notes.txt\r
+pause 1500
+status -
+type :e! other.txt\r
+pause 1000
+status vi was not given ~/other.txt (to read)
+# 5. A grant outside what the shell holds, and a variable, give nothing.
+chord meta g
+pause 800
+type +r $HOME/x
+type \r
+status +r $HOME/x: only plain words are given
+chord meta g
+pause 800
+type +r /nowhere
+type \r
+status /nowhere: this shell does not hold it
+# 6. The kill offer: Escape keeps, Enter ends the line.
+chord meta k
+status kill vi? Enter kills, Escape keeps
+key esc
+status -
+chord meta k
+pause 800
+key ret
+pause 1500
+window
+screen ~> _
+type poweroff\r
+exit

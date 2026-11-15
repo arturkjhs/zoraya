@@ -570,7 +570,7 @@ mod delivery_tests {
                 write: false,
             },
         ] {
-            assert!(h.give(&[w.clone()]).is_err(), "{w:?}");
+            assert!(h.give(std::slice::from_ref(&w)).is_err(), "{w:?}");
             assert_eq!(h, before, "nothing changed");
         }
         // All or nothing.

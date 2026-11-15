@@ -3672,10 +3672,7 @@ impl Z {
                     })
                     .map(|f| (prefix.clone(), f)),
             };
-            match made {
-                Ok(x) => files.push(x),
-                Err(e) => return Err(e),
-            }
+            files.push(made?);
         }
         let tx = self
             .jobs

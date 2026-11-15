@@ -180,6 +180,9 @@ pub enum Step {
     Then(String),
     Screen(String),
     Prefix(String),
+    /// The terminal's status row (ADR-0337), the row below the grid, starts
+    /// with this text; `-` is an empty row.
+    Status(String),
     Pause(u64),
     Type(Vec<u8>),
     Key(String),
@@ -239,6 +242,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "then" => Step::Then(rest.to_string()),
             "screen" => Step::Screen(rest.to_string()),
             "prefix" => Step::Prefix(rest.to_string()),
+            "status" => Step::Status(rest.to_string()),
             "pause" => Step::Pause(
                 rest.parse()
                     .map_err(|_| bad("not a number of milliseconds"))?,
@@ -524,6 +528,22 @@ impl Screen {
     /// compositor puts it, with the terminal's padding and grid.
     pub fn rows(&self, reader: &mut Reader) -> Vec<String> {
         self.rows_at(reader, zoraya_compositor::first_body(self.scale()))
+    }
+
+    /// The status row of a terminal whose body is at `(ox, oy)`, physical:
+    /// the row below its grid (ADR-0337), trimmed.
+    pub fn status_at(&self, reader: &mut Reader, (ox, oy): (i64, i64)) -> String {
+        let (columns, rows) = reader
+            .look()
+            .grid_for(self.width as u32, self.height as u32);
+        let all = reader.rows(
+            columns,
+            rows + 1,
+            (ox.max(0) as usize, oy.max(0) as usize),
+            (self.width, self.height),
+            |x, y| self.at(x, y),
+        );
+        all.last().cloned().unwrap_or_default()
     }
 
     /// The rows of a terminal whose body is at `(ox, oy)`, physical.
@@ -900,6 +920,45 @@ impl Run {
         self.wait_row_at(text, prefix, SCREEN_POLL)
     }
 
+    /// Waits until the status row below the first terminal's grid starts with
+    /// `text` (ADR-0337): `-` waits for an empty row.
+    fn wait_status(&mut self, text: &str) -> Result<(), String> {
+        let want = if text == "-" {
+            String::new()
+        } else {
+            self.reader.canonical(text)
+        };
+        loop {
+            if Instant::now() <= self.deadline {
+                self.pump()?;
+            }
+            let screen = self.qmp.screen()?;
+            self.rescale(&screen);
+            let origin = match self.origin {
+                Some((x, y)) => {
+                    let k = i64::from(screen.scale().factor());
+                    (x * k, y * k)
+                }
+                None => zoraya_compositor::first_body(screen.scale()),
+            };
+            let row = screen.status_at(&mut self.reader, origin);
+            let hit = if want.is_empty() {
+                row.is_empty()
+            } else {
+                row.starts_with(&want)
+            };
+            if hit {
+                return Ok(());
+            }
+            if Instant::now() > self.deadline {
+                return Err(format!(
+                    "timeout waiting for the status row to start with {text:?}; it reads {row:?}"
+                ));
+            }
+            std::thread::sleep(SCREEN_POLL);
+        }
+    }
+
     /// `wait_row`, reading the screen every `poll`.
     fn wait_row_at(
         &mut self,
@@ -1017,6 +1076,7 @@ impl Run {
             },
             Step::Screen(text) => self.wait_screen(text).map(|_| ()),
             Step::Prefix(text) => self.wait_row(text, true).map(|_| ()),
+            Step::Status(text) => self.wait_status(text),
             Step::Pause(ms) => {
                 let until = Instant::now() + Duration::from_millis(*ms);
                 while Instant::now() < until {
