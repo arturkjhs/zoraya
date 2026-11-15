@@ -285,6 +285,7 @@ tests/shell/rooms.script      test-files
 user/describe/posix/gtrun.cmd  test-cxx-gtest test-files
 docs/adr/0343-surface-for-the-userland.md check test-libposix test-posix test-apps test-files
 docs/adr/0390-surface-for-curses-less-and-vi.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
+docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
 docs/adr/0346-surface-for-ssh.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
 docs/adr/0347-surface-for-git.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-netsurf
 tests/python-ext/            test-python-ext

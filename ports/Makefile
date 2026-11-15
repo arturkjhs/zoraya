@@ -47,7 +47,8 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md docs/adr/0320-cpython-port.md \
 	docs/adr/0326-netsurf-text-through-zoraya-text.md docs/adr/0366-surface-for-cxx.md docs/adr/0343-surface-for-the-userland.md \
 	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0430-unix-sockets-as-built.md docs/adr/0389-the-terminal-calls-of-libposix-where-adr-0331-and-adr-0342-are-silent.md \
-	docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md docs/adr/0347-surface-for-git.md
+	docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md docs/adr/0347-surface-for-git.md \
+	docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -398,9 +399,9 @@ $(AWK_BIN): $(AWK) $(SYSROOT_STAMP) $(AWK_BISON)
 # (ADR-0334 item 1). The entries are read from /usr/share/terminfo, the
 # directory ADR-0333's `tic` fills; nothing is compiled in. The build helpers
 # (make_hash, make_keys) run on the host (--with-build-cc). Installed into
-# $(CURSES) (usr/include, usr/lib), not into the sysroot: part 10d copies the
-# two archives and the headers into the sysroot (and so into the image) when
-# `vi` and `less` need them. The host triple names musl so that config.sub
+# $(CURSES) (usr/include, usr/lib); CURSES_SYSROOT_STAMP (below) copies the two
+# archives and the headers into the sysroot, so that the image has them for
+# tcc (ADR-0334 item 3, part 10d). The host triple names musl so that config.sub
 # accepts it, as for wget; zcc defines nothing of Linux.
 CURSES := $(PORTS)/curses
 NCURSES := $(WORK)/ncurses-$(call lock_ver,ncurses)
@@ -412,6 +413,15 @@ NCURSES_OPTS := --prefix=/usr --without-shared --without-debug --without-ada --w
 	--with-default-terminfo-dir=/usr/share/terminfo --with-terminfo-dirs=/usr/share/terminfo \
 	--without-pkg-config --disable-stripping --without-gpm --disable-db-install --without-fallbacks
 ncurses: $(NCURSES_LIBS)
+# The two archives and the headers in the sysroot (ADR-0334 item 3), `ncurses.h`
+# as a file of its own, not the link ncurses installs.
+CURSES_SYSROOT_STAMP := $(OBJ)/curses-sysroot.stamp
+$(CURSES_SYSROOT_STAMP): $(NCURSES_LIBS) $(SYSROOT_STAMP)
+	mkdir -p $(SYSROOT)/usr/include $(SYSROOT)/usr/lib
+	for h in curses.h term.h termcap.h unctrl.h ncurses_dll.h; do cp $(CURSES)/usr/include/$$h $(SYSROOT)/usr/include/$$h; done
+	cp $(CURSES)/usr/include/curses.h $(SYSROOT)/usr/include/ncurses.h
+	cp $(NCURSES_LIBS) $(SYSROOT)/usr/lib/
+	@mkdir -p $(dir $@) && touch $@
 $(NCURSES): $(LOCK) $(wildcard ports/patches/ncurses/*.patch)
 	$(call unpack,ncurses,ports/patches/ncurses)
 	@touch $@
@@ -430,15 +440,9 @@ $(NCURSES_LIBS): $(NCURSES) $(SYSROOT_STAMP) ports/config.site
 # less 710 under the Less License, linked with the terminfo half of ADR-0334's
 # library alone (libtinfow.a). The compiled-in defaults of ADR-0335 item 8 are
 # the patch's: no history file, no key files, no tags, no input preprocessor.
-# The names of the terminal (tcsetattr, tcflush, cfgetospeed) are not in
-# libc.a before part 10c: ports/apps/ttyshim.c stands in for them in these
-# early builds (the same pattern as zshim.c) and is not part of any image.
-TTYSHIM := $(PORTS)/ttyshim/libttyshim.a
-$(TTYSHIM): ports/apps/ttyshim.c $(SYSROOT_STAMP)
-	@mkdir -p $(dir $@) $(OBJ)/apps
-	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/ttyshim.o ports/apps/ttyshim.c
-	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/ttyshim.o
-
+# The terminal's names (tcsetattr, tcflush, cfgetospeed, select, ...) come
+# from libc.a since part 10c, and creat and sleep since part 10d (ADR-0391):
+# ports/apps/ttyshim.c, which stood in for them, is gone.
 GITSHIM := $(PORTS)/ttyshim/libgitshim.a
 $(GITSHIM): ports/apps/gitshim.c $(SYSROOT_STAMP)
 	@mkdir -p $(dir $@) $(OBJ)/apps
@@ -457,10 +461,10 @@ less: $(LESS_BIN)
 $(LESS): $(LOCK) $(wildcard ports/patches/less/*.patch)
 	$(call unpack,less,ports/patches/less)
 	@touch $@
-$(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(TTYSHIM) ports/config.site
+$(LESS_BIN): $(LESS) $(NCURSES_LIBS) $(SYSROOT_STAMP) ports/config.site
 	@cd $(LESS) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-linux-musl \
 	  --with-regex=posix $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" \
-	  CPPFLAGS="-I$(CURSES)/usr/include" LDFLAGS="-L$(CURSES)/usr/lib -L$(dir $(TTYSHIM))" LIBS="-ltinfow -lttyshim",less-configure)
+	  CPPFLAGS="-I$(CURSES)/usr/include" LDFLAGS="-L$(CURSES)/usr/lib" LIBS="-ltinfow",less-configure)
 	rm -f $(LESS_BIN) $(LESS)/*.o
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(LESS) less V=1,less)
 	@touch $@
@@ -490,10 +494,10 @@ $(NVI): $(LOCK) $(wildcard ports/patches/nvi2/*.patch)
 	$(call unpack,nvi2,ports/patches/nvi2)
 	@touch $@
 $(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h ports/nvi/compat.c \
-	$(NCURSES_LIBS) $(DB1_PREFIX)/lib/libdb1.a $(TTYSHIM)
+	$(NCURSES_LIBS) $(DB1_PREFIX)/lib/libdb1.a $(SYSROOT_STAMP)
 	rm -f $(NVI_BIN)
 	@$(call logged,sh -x ports/nvi/build.sh $(NVI) $(OBJ)/nvi $(NVI_BIN) $(ZCC) $(CURSES) $(DB1_PREFIX)/include \
-	  $(DB1_PREFIX)/lib "$(APPS_CFLAGS)" $(dir $(TTYSHIM)),nvi)
+	  $(DB1_PREFIX)/lib "$(APPS_CFLAGS)",nvi)
 
 # ---------------------------------------------------------------- OpenSSH client (TASK-31 ports-early, ADR-0340)
 
@@ -502,7 +506,7 @@ $(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h p
 # no agent, no `ssh-add`, no PKCS#11 or security-key provider, no connection
 # sharing (ADR-0340 item 1), no PAM, no privilege separation sandbox, no
 # utmp or lastlog. The patches are ADR-0340 items 3 and 5. The names of the
-# terminal that libc.a lacks before part 10c come from ports/apps/ttyshim.c.
+# terminal are libc.a's since part 10c (ports/apps/ttyshim.c is gone).
 # ac_cv_func_statvfs and fstatvfs: libc.a has neither (ADR-0343: statfs is out),
 # and OpenSSH's own `struct statvfs` then clashes with musl's header; only
 # sftp-server and the sftp client call them, and neither is built.
@@ -523,11 +527,11 @@ openssh: $(OPENSSH_BINS)
 $(OPENSSH): $(LOCK) $(wildcard ports/patches/openssh/*.patch)
 	$(call unpack,openssh,ports/patches/openssh)
 	@touch $@
-$(OPENSSH_BINS): $(OPENSSH) $(SYSROOT_STAMP) $(TTYSHIM) $(SSHSHIM) $(PORTS)/deps/lib/libssl.a $(PORTS)/deps/lib/libzshim.a ports/config.site
+$(OPENSSH_BINS): $(OPENSSH) $(SYSROOT_STAMP) $(SSHSHIM) $(PORTS)/deps/lib/libssl.a $(PORTS)/deps/lib/libzshim.a ports/config.site
 	@cd $(OPENSSH) && $(call logged,$(CROSS_ENV) ac_cv_func_statvfs=yes ac_cv_func_fstatvfs=yes $(OPENSSH_HAVE) \
 	  ./configure --host=aarch64-unknown-linux-musl $(OPENSSH_OPTS) \
 	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include" \
-	  LDFLAGS="-L$(PORTS)/deps/lib -L$(dir $(TTYSHIM)) -Wl$(comma)--error-limit=0" LIBS="-lzshim -lttyshim -lsshshim",openssh-configure)
+	  LDFLAGS="-L$(PORTS)/deps/lib -Wl$(comma)--error-limit=0" LIBS="-lzshim -lsshshim",openssh-configure)
 	rm -f $(OPENSSH_BINS)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -k -C $(OPENSSH) ssh ssh-keygen V=1,openssh)
 	@touch $(OPENSSH_BINS)
@@ -595,7 +599,8 @@ libc: $(SYSROOT_STAMP)
 # ADR-0336 item 8), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP)
+$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP) \
+	$(LESS_BIN) $(NVI_BIN) $(CURSES_SYSROOT_STAMP) tools/term-terminfo/terminfo.sh ports/terminfo.manifest
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh
 	cp $(GMAKE_BIN) $(ROOTFS)/bin/make
@@ -604,9 +609,14 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN
 	@# The multi-call binary is not in /bin (ADR-0336 item 8): `toybox sed ...`
 	@# is not found by name; the links in /bin point at it.
 	cp $(AWK_BIN) $(ROOTFS)/bin/awk
+	@# ADR-0335: less, and nvi as vi with ex and view as links to it (it takes the mode from its name).
+	cp $(LESS_BIN) $(ROOTFS)/bin/less
+	cp $(NVI_BIN) $(ROOTFS)/bin/vi && ln -s /bin/vi $(ROOTFS)/bin/ex && ln -s /bin/vi $(ROOTFS)/bin/view
 	mkdir -p $(ROOTFS)/usr/libexec && cp $(TOYBOX_BIN) $(ROOTFS)/usr/libexec/toybox
 	for a in $(TOYBOX_APPLETS); do ln -s /usr/libexec/toybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
+	@# The terminal's four entries, in letter-named directories (ADR-0333 item 2, ADR-0334 item 2).
+	PORTS_CACHE=$(CACHE) tools/term-terminfo/terminfo.sh compile $(ROOTFS)/usr/share/terminfo
 	@# Not the C++ runtime (ADR-0365): no compiler in the image builds C++.
 	rm -rf $(ROOTFS)/usr/include/c++ $(addprefix $(ROOTFS)/usr/,$(CXX_IMAGE_LEFT_OUT))
 	@touch $@
@@ -885,15 +895,15 @@ $(GIT_CURL)/lib/libcurl.a: $(CURL_BIN)
 	rm -rf $(GIT_CURL) && mkdir -p $(GIT_CURL)/lib $(GIT_CURL)/include
 	cp $(CURL)/lib/.libs/libcurl.a $(GIT_CURL)/lib/
 	cp -R $(CURL)/include/curl $(GIT_CURL)/include/
-$(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a $(TTYSHIM) $(SSHSHIM) $(GITSHIM)
+$(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a $(SSHSHIM) $(GITSHIM)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) clean,git-clean)
 	@# git has two objects named fsck.o and two named tree.o in libgit.a, and zoraya-ar names a member by its base name: ports/git/ar.sh.
 	printf '#!/bin/sh\nexec sh $(ROOT)/ports/git/ar.sh $(TOOLBIN)/aarch64-unknown-zoraya-ar "$$@"\n' > $(PORTS)/git-ar && chmod +x $(PORTS)/git-ar
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) -j3 V=1 CC=$(ZCC) AR=$(PORTS)/git-ar \
 	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib CFLAGS="$(APPS_CFLAGS)" $(GIT_OPTS) \
 	  CURLDIR=$(GIT_CURL) ZLIB_PATH=$(DEPS) \
-	  CURL_LIBCURL="-L$(GIT_CURL)/lib -lcurl -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim -L$(dir $(TTYSHIM)) -lttyshim -lgitshim" \
-	  EXTLIBS="-L$(DEPS)/lib -lz -lzshim -L$(dir $(TTYSHIM)) -lttyshim -lgitshim" \
+	  CURL_LIBCURL="-L$(GIT_CURL)/lib -lcurl -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim -lgitshim" \
+	  EXTLIBS="-L$(DEPS)/lib -lz -lzshim -lgitshim" \
 	  LDFLAGS="-Wl$(comma)--error-limit=0" git git-remote-http,git)
 	@touch $(GIT_BINS)
 
@@ -1032,7 +1042,7 @@ $(DEPS)/lib/libpyshim.a: ports/apps/pyshim.c $(SYSROOT_STAMP)
 # Hacl_Hash_Blake2b_Simd256.c failed to compile (ADR-0320).
 PYTHON_ABSENT := posix_spawn posix_spawnp chroot epoll_create epoll_create1 eventfd fchdir fdatasync getpagesize link prlimit setgroups timerfd_create
 PYTHON_NO_X86_SIMD := ax_cv_check_cflags__Werror__msse__msse2__msse3__msse4_1__msse4_2=no ax_cv_check_cflags__Werror__mavx2=no
-PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
+PYTHON_CACHE := ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no ac_cv_header_libintl_h=no ac_cv_header_sys_ioctl_h=no py_cv_module_syslog=n/a py_cv_module__curses=n/a py_cv_module__curses_panel=n/a $(addsuffix =no,$(addprefix ac_cv_func_,$(PYTHON_ABSENT))) $(PYTHON_NO_X86_SIMD)
 PYTHON_OPTS := --host=aarch64-unknown-linux-musl --build=$(shell $(HOSTCC) -dumpmachine) --prefix=/usr \
 	--with-build-python=$(HOSTPY) --disable-shared --disable-ipv6 --without-ensurepip \
 	--with-openssl=$(DEPS) --without-system-ffi --without-readline --without-mimalloc \
@@ -1399,6 +1409,8 @@ check-ports: | tools
 	LC_ALL=C grep -a -q 'run is not available in a cross compiler' $(TCC_BIN)
 	@echo "== the userland: list, sources, busybox, surface block (INV-0336-1, -3, INV-0342-1)"
 	sh ports/check-userland.sh $(TOYBOX) $(ROOTFS) $(SURFACE_CHECK) $(AWK)/objs
+	@echo "== one terminfo reader, its configuration, the image's entries, less and vi (INV-0334-1, INV-0334-2)"
+	sh ports/check-curses.sh $(LOGS) $(SYSROOT) $(ROOTFS)
 	@echo "== the ports built ahead of their parts (ADR-0390, TASK-31 ports-early)"
 	sh ports/check-early.sh $(LOGS) $(ZCC) $(SURFACE_CHECK) $(ELF_CHECK) $(ROOT)/build $(LIBC)
 	@echo "check-ports: all passed"

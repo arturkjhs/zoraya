@@ -34,6 +34,7 @@ clock_gettime int 4
 close int 4
 closedir int 4
 connect int 4
+creat int 4
 ctermid char_* 8
 dup int 4
 dup2 int 4
@@ -170,6 +171,7 @@ sigsuspend int 4
 sigtimedwait int 4
 sigwait int 4
 sigwaitinfo int 4
+sleep unsigned_int 4
 socket int 4
 socketpair int 4
 stat int 4

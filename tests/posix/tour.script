@@ -124,7 +124,7 @@
 ^ \r\n~>
 > more notes.txt\r
 < \r\nzosh: more: no such command
-^ \r\n  hint: to print a file: cat FILE (help pages page by themselves)
+^ \r\n  hint: to page a file: less FILE
 ^ \r\n~>
 > man cp\r
 < \r\nzosh: man: no such command

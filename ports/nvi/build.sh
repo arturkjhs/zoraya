@@ -4,11 +4,11 @@
 # item 1): this is its list of sources and its generated headers, compiled by
 # zcc, linked with the ncurses archives and DB 1.
 #
-#   build.sh SRC OBJDIR OUT ZCC CURSES_PREFIX DB1_INCLUDE DB1_LIB CFLAGS TTYSHIM_DIR
+#   build.sh SRC OBJDIR OUT ZCC CURSES_PREFIX DB1_INCLUDE DB1_LIB CFLAGS
 #
 # SRC is the unpacked, patched nvi2 tree, run from the repository's root.
 set -eu
-src=$1 obj=$2 out=$3 zcc=$4 curses=$5 dbinc=$6 dblib=$7 cflags=$8 ttydir=$9
+src=$1 obj=$2 out=$3 zcc=$4 curses=$5 dbinc=$6 dblib=$7 cflags=$8
 here=$(pwd)/ports/nvi
 # A dedicated directory: objects of an earlier run (a source removed since) must not be linked.
 rm -rf "$obj"
@@ -46,4 +46,4 @@ done > "$obj/objects.txt"
 wait
 [ ! -s "$obj/failed.txt" ] || { echo "nvi: these did not compile:"; cat "$obj/failed.txt"; exit 1; }
 for o in $(cat "$obj/objects.txt"); do [ -f "$o" ] || { echo "nvi: $o was not made"; exit 1; }; done
-"$zcc" $cflags -Wl,--error-limit=0 -o "$out" $(cat "$obj/objects.txt") -L"$dblib" -L"$curses/usr/lib" -L"$ttydir" -lncursesw -ltinfow -ldb1 -lttyshim
+"$zcc" $cflags -Wl,--error-limit=0 -o "$out" $(cat "$obj/objects.txt") -L"$dblib" -L"$curses/usr/lib" -lncursesw -ltinfow -ldb1
