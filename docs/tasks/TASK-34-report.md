@@ -4,9 +4,9 @@
 
 Updated 2026-11-16.
 
-- Merged and tagged: F2 (`stage-f2`, merge b2fb7c55). F3 merged (db938461) and **not tagged yet**: CLAUDE.md now needs a green scheduled full run of `main` that includes the commit before a stage tag (`tools/ci-last-full.rb --green-for SHA`); I tag `stage-f3` when it names one. `stage-f2` was tagged before that rule and has no such run yet. F1 (`poll`) was merged before this task.
-- In progress: F4 (`posix_spawn` with what each child is given).
-- Proposed ADRs: ADR-0430, Unix sockets as built; recommended as written. **Needs your decision:** item 7 defers ADR-0412 item 6 (a Unix socket crossing `spawn`) to F4, which deviates from the task's assignment of item 6 to F2; INV-0412-1 is `not yet applicable (until F4)` for its two-process in-QEMU half. ADR-0431 (a `SHARED` mapping stays shared across `snapshot_process`, kernel ABI) and ADR-0432 (memory descriptors as built), both proposed, recommended as written (F3). Numbers 0433 to 0449 are free.
+- Merged: F2 (merge b2fb7c55, tagged `stage-f2`), F3 (db938461) and F4 (2955dcea). **`stage-f3` and `stage-f4` are not tagged**: CLAUDE.md needs a green scheduled full run of `main` that includes the commit (`tools/ci-last-full.rb --green-for SHA`); the `w9-term` red scheduled runs are TASK-31's to fix and the stage tags wait for them (architect, 2026-11-15). `stage-f2` was tagged before that rule. F1 (`poll`) was merged before this task.
+- In progress: F8 (the 2 GiB guest), then F5, F6, F7.
+- ADRs: ADR-0430 (item 7), ADR-0433 and ADR-0435 were accepted by the architect on 2026-11-15 and recorded; sockets surviving `exec` (`execve` with a Unix socket open is `EBADF`) are in the backlog. ADR-0431 (a `SHARED` bit in `memory_map`, kernel ABI), ADR-0432 (memory descriptors as built) and ADR-0434 (netd `Duplicate` makes a connection of the caller's own rights, bounded to 8 live per family) are **proposed**, each recommended as written; ADR-0431 first, as a kernel ABI change. Numbers 0436 to 0449 are free.
 - Machine: MacBook Air M1, 8 GB, so `CARGO_BUILD_JOBS=2`, one part with builds and one QEMU guest at a time.
 
 ## Parts
@@ -15,7 +15,7 @@ Updated 2026-11-16.
 |------|-------|-----|------|-------|
 | F2 | merged | stage-f2 | about 3 sessions | Sonnet implementation; Opus review (1 error, 2 warnings, all fixed) and re-check; candidate run 43681721034 green (75 jobs) |
 | F3 | merged | stage-f3 pending a green full run | about 3 sessions | Sonnet implementation; Opus review (1 error, 3 warnings, all fixed) and re-check; candidate run 43700119735 green after one rerun of the `w9-term` TCG job |
-| F4 | not started | | | |
+| F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
 | F8 | in progress on `work/f8`, not merged | | one session | Sonnet; review not yet done |
 | F5 | not started | | | |
 | F6 | not started | | | |
@@ -45,6 +45,16 @@ Updated 2026-11-16.
 - CI: `quotas_from_a_process` failed under TCG/EL2/SMP4 because F3's own new `t_quota` case was too tight for slow machines (fixed). The `w9-term` TCG job timed out in two F3 runs and also in `main`'s scheduled run 43699859694 (without F3); its step time moves between 262 s and 589 s against a 600 s runner limit. **For the architect:** raise the limit, shrink the build tree in `w9-term`, or poll less often than every 0.1 s (each poll forks `ls` under one-CPU TCG). I changed no timeout.
 - Mutation: host run cut at 30 minutes (about 60 of 388 mutants never run; later re-check: 14 of the 20 misses in new code are equivalent or untestable); 7 kernel hand mutants all caught. The never-run host mutants were not run afterwards (about 35 minutes).
 - The merge into `main` had conflicts in `Makefile`, `ports/Makefile` and `invariants.md` (Total 820 recomputed from rows); the combined `t_tty` plus `t_memfd` lines were not run in CI before the merge.
+
+## F4 notes
+
+- Review: `docs/tasks/TASK-34-review-f4.md`. Errors found and fixed: `addopen` gave the child the wrong file (parent fd read as a child fd); a spawn with no attributes moved inherited Unix sockets (now only a socket the file actions list moves, and a stream socket moves whole); netd `Duplicate` had no bound, and the first bound reset when the asker closed (now a family token, 8 live per family); a refused spawn leaked entry handles (one `abandon()` closes them on every refusal path).
+- Closes what F2 and F3 left: a Unix socket and a memory descriptor now cross `spawn` (`t_spawn`, `t_memfd` as real two-process tests); INV-0412-1, INV-0413-2 and INV-0432-2 are `checked`.
+- CI effects found: `nvi`'s compile log lost a line to interleaved `sh -x` traces (one whole log line per compile now); `posix_spawn_file_actions_addclose` was outside the tier list, so CPython's `posixmodule.c` failed to link (it joins ADR-0433's surface block). The python lanes (`test-python`, `-ext`, `-regr`) pass with the new `subprocess` path.
+- The `test-tour-terminal` TCG job (`posix-curses.script`, new on `main`, one earlier TCG pass) hung at step 55 in the first run and passed on rerun; the slow runner (about 2x the frame time of the one earlier pass) and the script's fixed pauses before typing into `vi` are the likely cause, not F4. **Follow-up for stage 10:** wait for `vi`'s screen with a `screen` step after `vi notes.txt` instead of fixed pauses.
+- Known limitations (ADR-0433): a child with no cwd reads relative paths from `/`; `GRANT_WINDOW` moves, it does not share; the positive network grants are tested only over a fake netd on the host (no in-QEMU program holds a connection); a connection that holds the `narrow` right can still make connections without limit through `Narrow` (older than F4, program connections lack the right); `execve` with a Unix socket open is `EBADF`.
+- Mutation: `make mutants-host CRATE=zoraya-posix --in-diff` 160 mutants, 26 missed in the first run; the holes were closed with tests, the equivalent ones (disjoint-bit `|` to `^`) remain.
+- Process note: the F4 implementer's final reports were refused by the harness three times; I read its work from the branch and commits, and I made the ADR-0433/0435 decision transcription myself.
 
 ## F8 notes
 
