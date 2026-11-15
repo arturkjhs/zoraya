@@ -266,8 +266,9 @@ states, to be taken up later:
   parallel load on the Mac (work/test-fixes, 2026-11-14): a timing-sensitive CPU-ceiling check when three QEMU guests and host jobs
   share the machine. Not a regression of that part. Decide whether the check needs a deterministic form like `t_cpu`'s `MAX_UNITS`
   fix (ADR-0270), or a lane of its own that does not share the machine.
-- `kernel_work_is_bounded` timed out once under TCG with smp4 and gicv2 in run 43717763197 (candidate `-c` of `work/sigint-exec`,
-  420 s limit, 113 of 128 passed) and passed on re-run: a slow-runner flake, not a regression of that branch.
+- Run 43717763197 (candidate `-c` of `work/sigint-exec`): `make test-qemu-tcg-smp4-gicv2` failed once (timeout at 420 s in
+  `kernel_work_is_bounded`, 113 of 128 passed, 9 failed, `t_thread` `stream_create` and `channel_create` 8 of 8 failed) and
+  passed on re-run; cause unknown, being investigated.
 
 ## Left by part 10e and its reviews (TASK-31)
 
