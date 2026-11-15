@@ -289,6 +289,23 @@ states, to be taken up later:
     reason begins `deferred (10b)` again.
   - **A program that sets 2026 and never ends it** has each later update held 150 ms until its line ends, whose `Restore` ends it.
   - `check-term-conformance` runs inside `check-test-caps`; a `check-*` target of its own needs a CI job (`check-ci-jobs`).
+- Part 10c (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10c.md`, notes not fixed in the fix pass):
+  - **INV-0386-1 and a program's own `c_cc`:** a program may make a printable byte a signal character (`VINTR` = `[`, `~` or a
+    digit); then a paste, or the shell's own bracket marks, carry signal characters for it. Only its own line is affected; the
+    invariant now says "with the default control characters".
+  - **`poll`/`select` on two descriptors of one connection** (`dup`): `tty_input_ready` spends one answer per connection, so the
+    first descriptor is ready and the second sends a new `PollReadable` and is not. Linux reports both. Fix: one look per
+    connection per call.
+  - **The order of the broker's notices and a child's first read:** `ForegroundAsked` is written before the broker answers
+    `tcsetpgrp`, and the child reads after that answer, so `zosh` sees it first as long as its port gives packets in the order
+    their sources became readable. Not tested on a slow host: run `zosh.script`'s `sh` section with QEMU on the efficiency cores
+    (`taskpolicy -b`); a spurious `Stopped (tty input)` would show the order broken.
+  - **`Clone` from a line not in front is still answered** (the review's finding 5 asked to refuse it): `libposix` clones the
+    connection for each `fork` and `posix_spawn` (`share`), and a refusal fails the call, so `make &` or `sh script &` with the
+    terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
+    line can take; refusing it outright waits for a fork that can go on without the terminal.
+  - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): in the
+    architect's queue.
 - Part 10b (TASK-31) leftovers (`docs/tasks/TASK-31-part-10b.md`):
   - **`kbs`, to settle before part 10d (the architect):** build the entry with `kbs=^?` (ADR-0383 Option C) or accept the exception, and
     have 10d's curses test program press Backspace; whether ncurses maps the erase character to `KEY_BACKSPACE` was not checked. The pinned entry says Backspace is `^H`; the terminal sends `0x7f` (ADR-0096). Proposed ADR-0383 lists it as an exception;
@@ -363,11 +380,10 @@ For the architect.
   on), `tools/zcc` (`zc++` is a link to it), `ports/Makefile`, `ports/sources.lock`, `ports/crt/` and `ports/include/`.
 - **`t_quota` handshake:** `channel_read(...).is_ok()` retries when the peer closed, so a child that dies early costs 10 s and
   says "no message"; wait for `READABLE | PEER_CLOSED` instead.
-- **INV-0172-4:** the console's shell creating a wider room from inside an entered room follows ADR-0172 point 3 (the shell
-  keeps the volume root; the room's grants are added to each line it launches). The refusal guards a shell that holds a table.
-  Test: launch `zosh` as a line inside an entered room (it starts with the room's table through `namespace::take`) and type
-  `room new wide +w /etc`, expecting `outside what this shell holds`, in `tests/shell/rooms.script` under `make test-files`.
-  Not done yet. Whether entering a room should narrow the person's own `room new` is a UX question (ADR-0172 point 3).
+- **INV-0172-4:** done in part 10c (the review's fix pass): a shell that entered a room cannot `room new` a room with a
+  path its room does not cover (`+w` needs a `+w` grant above it), `tests/shell/rooms.script` under `make test-files`. Left:
+  the host tests of the shell's table building over rooms (ADR-0172's open question), and the case of a `zosh` launched as a
+  line inside an entered room (it holds the room's table, and the older refusal, `outside what this shell holds`, covers it).
 - **The `libc.a` stamp on CI:** the first run after merge that hits the new ports cache key should have no `libc.a: hid` line.
 
 ## Open items from the review of `work/poll` (2026-11-14)
@@ -392,9 +408,6 @@ command per package for now. A revoke without `--kill` says how many running cop
 
 - ADR-0343, ADR-0344, ADR-0380, ADR-0381 and ADR-0382 accepted as recommended. ADR-0336 item 2's independent review of `tr`,
   `expr` and `diff` counts; no human review needed.
-- **INV-0172-4:** entering a room narrows `room new`: a room's shell cannot create a room with more than the room holds.
-  Make it a check, in part 10c or the next part that touches `zosh`'s rooms (the test: launch `zosh` as a line inside an
-  entered room and type `room new wide +w /etc`; see `docs/tasks/TASK-31-review-test-fixes-2.md`).
 - **INV-0230-1:** the network test steps may reach only the runner's own test servers (and the QEMU host address they use),
   never the Internet; restrict `--net-open` accordingly and make INV-0230-1 `checked` again.
 - **INV-0042-1:** an `abi` type is not a check by itself; it stays `not yet applicable` until a test checks it.

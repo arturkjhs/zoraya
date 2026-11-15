@@ -720,7 +720,8 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
 - **`room` in `zosh`**: `room` lists (the current one marked `*`), `room NAME` enters (the prompt shows the name, the
   current directory becomes the room's first `+w` directory, every line gets the room's grants, which `grants` shows
   as `(room NAME)`), `room --leave`, `room new NAME +w PATH...` (a path under home is written with `~`), `room remove
-  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. The panel starts a shell in a room with
+  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. Inside an entered room, `room new` gives no path
+  the room does not cover (the architect, 2026-11-15; INV-0172-4). The panel starts a shell in a room with
   `zosh --room NAME`.
 - **The panel** (`panel`, ADR-0168; `zoraya-panel` holds its logic): `init` starts it once per GUI with the client
   manager (`AttachClientManager`), a clone of the root, the console to write, its job and the image directory. It
@@ -1352,9 +1353,12 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `Flush` from a line not in front is refused and changes nothing, and with no line in front nobody reads;
   `set_foreground`, `end_line` and `continue_line` for the shell's host. `zoraya_shell::tty_host::Host` is the shell's
   rules around it, host-tested: the line in front, stop, `fg` and end (`Restore { keep }`, `Reinstate`, the attributes
-  kept and restored, one `SIGWINCH`), `tcsetpgrp` only for a group created inside the front line, the relay's carriage
-  return from the attributes, and the paste to a program (mode 2004 read from its output, a newline held for Enter
-  with the question in the window title, nothing in it that ends the bracket). `zosh` uses it: a POSIX program gets a
+  kept and restored, one `SIGWINCH`), `tcsetpgrp` only for a group made inside the front line (the broker names the
+  line by the root group the shell started), the signal characters and `SIGWINCH` to the group a `tcsetpgrp` chose, or
+  `SIGWINCH` to each group the shell started, never to a native element, the relay's carriage return from the
+  attributes, and the paste to a program (mode 2004 read from its output and believed only out of canonical mode, a
+  newline held for Enter with the question in the window title, nothing in it that ends the bracket). A line has at
+  most 64 terminal connections. `zosh` uses it: a POSIX program gets a
   tty description on each of fds 0 to 2 that is the terminal (neither redirected nor piped; a background line's fd 0
   stays empty) and `/dev/tty` in its table, its connections are served on the shell's port and closed at the line's
   end, keys of a line with the terminal go through the discipline, `Size` is one `SIGWINCH`, the output of such a
@@ -1362,13 +1366,14 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   line's before the next prompt). The
   whole line in front reads until a `tcsetpgrp` chooses a group (`Terminal::set_foreground_line`); there is no kill
   offer for a line with the terminal (ADR-0387). The broker beside `zosh` gives it a notice channel
-  (`HostTerminal`): `GroupMade` and `ForegroundAsked`, with no reply, and a group made inside a line stays inside its
-  job (ADR-0388). `libposix` (ADR-0389): `poll`, `ppoll` and `select` wait for a terminal's input with one `PollReadable`
+  (`HostTerminal`): `GroupMade` and `ForegroundAsked` (with the line's root), with no reply, and a group made inside a
+  line stays inside its job; a signal to a group that has groups made inside it goes to its members one by one
+  (ADR-0388). `libposix` (ADR-0389): `poll`, `ppoll` and `select` wait for a terminal's input with one `PollReadable`
   outstanding per connection (idempotent across deferred waits), `tcsetattr` has its three actions (`Drain`, `Flush`,
   `SetAttr`) and the service's `IO` is `EIO`, `tcflush`, `tcdrain`, `tcflow`, `tcsendbreak`, `cfmakeraw` and the speed
   functions, `ctermid`, `ttyname`, `ttyname_r`, `tcgetwinsize` and `tcsetwinsize` exist, and `open("/dev/tty")` clones the
-  entry's connection for the caller's group, so dash has job control in a window: Ctrl-C and Ctrl-Z reach the group it
-  chose with `tcsetpgrp` and `sh` goes on. `TIOCSWINSZ` is `EPERM`, `TIOCSTI` `ENOTTY`; the guarded names of ADR-0342
+  entry's connection for the caller's group, so dash has job control in a window: Ctrl-C, Ctrl-\ and Ctrl-Z reach the
+  group it chose with `tcsetpgrp` and no other of its jobs, and `sh` goes on. `TIOCSWINSZ` is `EPERM`, `TIOCSTI` `ENOTTY`; the guarded names of ADR-0342
   item 12 are on `posix-surface-check`'s table. `zosh` sets `TERM` for a program with the terminal (`xterm-256color`
   in a window, `console.term` on the serial console), `grants` prints the `keys` line, and `term.scrollback` reaches
   `term` as a `Scrollback` message. Tests: `tests/posix/t_tty.c` (`names`, `poll`, `box`, `lines`, `bench`) in

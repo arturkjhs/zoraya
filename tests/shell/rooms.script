@@ -65,6 +65,17 @@
 > grants probe\r
 < limits --mem 68M --cpu 25% --procs 16  (room agent-1)
 < agent-1 /t/w> 
+# INV-0172-4 (the architect, 2026-11-15): entering a room narrows `room new`:
+# a room made from inside this one holds no more than this one does.
+> room new wide +w /etc\r
+< outside what room agent-1 holds
+< agent-1 /t/w> 
+> room new narrow +w /t/w/sub +r /t/w\r
+< narrow --colour
+< agent-1 /t/w> 
+> room new wider +r /t\r
+< outside what room agent-1 holds
+< agent-1 /t/w> 
 # Above the session's ceiling: the keeper refuses, the line is put back.
 > room set agent-1 --mem 90G\r
 < --mem 90G: above the session's
@@ -76,6 +87,8 @@
 # The prompt outside the room starts its line; "agent-1 /t/w> " would also
 # hold "/t/w> " (TASK-29, V14).
 < \r\n/t/w> 
+> room remove narrow\r
+< /t/w> 
 > room remove agent-1 --kill\r
 < /t/w> 
 > room\r

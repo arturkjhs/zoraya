@@ -40,7 +40,11 @@ act on it.
   program's output on its way to `term` and keeps one bit per line. `zoraya-proto-term` gains `Restore { keep }`
   (ordinal 6) and `Reinstate` (ordinal 7). A paste with a newline for a program without 2004 is held and the question
   `paste N lines? Enter sends, any other key drops` is sent as the window's title (out of band, ADR-0168); the title
-  returns to the directory when it is answered or its line ends.
+  returns to the directory when it is answered or its line ends. The bit is believed only while the discipline is
+  out of canonical mode (a reader in canonical mode, such as a POSIX shell at its prompt, cannot take the marks for
+  what they are), and it is cleared when a `tcsetpgrp` chooses another group: a `cat` of a file holding the sequence
+  inside `sh` must not turn the question off for `sh` (the review of 10c, finding 4). Dismissing the question with a
+  key of several bytes (an arrow) takes the whole key.
 - **Evidence for:** Drivers 1 to 4: the recognizer has no way to send anything, the title never comes from output, and
   the shell's whole state is a bit per line.
 - **Evidence against:** The recognizer can disagree with `term` when a sequence sits inside a string that `term`
@@ -111,8 +115,9 @@ pasted; it cannot make input. Target 3: nothing here is per-machine.
 
 ## Invariants
 
-- **INV-0386-1.** A paste to a program contains no byte that a program could take for the end of the bracket or for a
-  signal character, and is bracketed exactly when the program set 2004. *Check:* `cargo test -p zoraya-shell` (the
+- **INV-0386-1.** A paste to a program contains no byte that a program could take for the end of the bracket or, with
+  the default control characters, for a signal character (a program's own `c_cc` applies to a paste as to typed
+  keys), and is bracketed exactly when the program set 2004 and is out of canonical mode. *Check:* `cargo test -p zoraya-shell` (the
   `tty_host` paste tests with hostile text).
 - **INV-0386-2.** With no line in front the discipline answers no read, and a request from a line not in front changes
   nothing. *Check:* `cargo test -p zoraya-shell` and `cargo test -p zoraya-tty`.

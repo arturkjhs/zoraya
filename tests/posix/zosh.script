@@ -240,6 +240,29 @@ w notstp: ready
 > jobs\r
 < Killed
 < $ 
+# Ctrl-C is for the foreground job's group: a background job of sh runs on
+# (the review of 10c, finding 2); and sh's job control outlives many jobs: 70,
+# then a program that reads the terminal still gets it (finding 1).
+> /bin/sleep 60 &\r
+< $ 
+> /bin/sleep 30\r
+~ 700 zzz
+> \x03
+< $ 
+> jobs\r
+< Running
+< $ 
+> kill %1\r
+< $ 
+> i=0; while [ $i -lt 70 ]; do /bin/sleep 0; i=$((i+1)); done; echo looped $i\r
+< looped 70
+< $ 
+> /bin/wc -c\r
+~ 700 zzz
+> abc\r
+> \x04
+< 4
+< $ 
 > exit\r
 < \r\n~> 
 > poweroff\r

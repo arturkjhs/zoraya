@@ -3663,6 +3663,19 @@ impl Z {
         }
     }
 
+    /// Whether `room`'s grants cover the absolute path `abs` (for writing
+    /// when `write`): a grant covers itself and what is below it.
+    fn room_covers(&self, room: &zoraya_settings::rooms::Room, abs: &str, write: bool) -> bool {
+        room.grants.iter().any(|g| {
+            let base = self.room_path(&g.path);
+            let base = base.trim_end_matches('/');
+            (g.write || !write)
+                && (base.is_empty()
+                    || abs == base
+                    || abs.strip_prefix(base).is_some_and(|r| r.starts_with('/')))
+        })
+    }
+
     /// In a room, every line receives the room's grants as if written
     /// before the command (ADR-0172 point 3), shown by `grants` with
     /// `(room NAME)`.
@@ -4246,6 +4259,19 @@ impl Z {
                             Some(pair[1]),
                             "outside what this shell holds",
                             &["grants shows what a line here is given"],
+                        );
+                    }
+                    // Entering a room narrows `room new` (the architect,
+                    // 2026-11-15): a room made from inside one holds no more
+                    // than the room does.
+                    if let Some(room) = &self.room
+                        && !self.room_covers(room, &abs, write)
+                    {
+                        return fail(
+                            io,
+                            Some(pair[1]),
+                            &format!("outside what room {} holds", room.name),
+                            &["room --leave first to give more"],
                         );
                     }
                     given.push(Grant { write, path });

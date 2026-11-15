@@ -41,18 +41,25 @@ which way the channel is made, whether the broker waits for the shell's answer, 
   2. `Join` outside the session is allowed only within the caller's line.
   3. `zosh` sends `HostTerminal` (ordinal 16 of `zoraya-proto-posix`) once on its client connection and receives the
      client end of a channel. On it the broker sends, with no reply, `GroupMade { group, by }` (17) when a process
-     of group `by` makes `group`, and `ForegroundAsked { group, by }` (18) when a process of group `by` asks
-     `tcsetpgrp(group)` for a group of its own line. The broker answers that `tcsetpgrp` at once with success,
+     of group `by` makes `group`, and `ForegroundAsked { group, by, root }` (18) when a process of group `by`, of
+     the line whose root is `root`, asks `tcsetpgrp(group)` for a group of its own line. The broker answers that `tcsetpgrp` at once with success,
      remembers the group for the line, and answers `tcgetpgrp` from it (the caller's own group until one is
      asked). A `tcsetpgrp` for a group of another line, or of the session, is `EPERM`.
-  4. `zosh` adds `group` to the line that holds `by` (`Host::group_created`), and gives `ForegroundAsked` to
-     `Host::tcsetpgrp`, which refuses it unless `by`'s line is in front and `group` is of it.
-  5. A notice the channel cannot take is dropped; the broker does not wait.
+  4. `zosh` knows each line's roots (the groups it started the line's POSIX programs in) and gives `ForegroundAsked`
+     to `Host::foreground_asked`, which refuses it unless the line with that root is in front; that `group` is of
+     the line the broker has checked. `GroupMade` decides nothing (it is informative): the review of 10c (finding 1)
+     found that a list of the groups made, capped at 64 and never pruned, ended an interactive `sh`'s job control
+     after 63 commands, and that one dropped notice did the same for good.
+  5. A notice the channel cannot take is dropped; the broker does not wait. A dropped `ForegroundAsked` leaves that
+     job stopped on its first read; `sh`'s `fg` asks again.
+  6. A signal to a group that has groups made inside its job (a POSIX shell with jobs) goes to its members one by
+     one, not to its job, which holds those groups too; once a group is chosen, the shell sends the signal
+     characters and `SIGWINCH` to it through the broker (`kill(-group)`), not to the line's job (the review of 10c,
+     findings 2 and 3).
 - **Evidence for:** Drivers 1 to 4. The client end travels on the connection `zosh` already has.
 - **Evidence against:** The caller hears success even when `zosh` refuses (a background line's shell): its
   `tcgetpgrp` then names a group that cannot read, and its reads stop it on `SIGTTIN`, which is what POSIX gives a
-  background job anyway. A notice dropped on a full channel loses a group: its reads are refused until the line
-  ends.
+  background job anyway. A `ForegroundAsked` dropped on a full channel stops that one job until it is asked again.
 - **Cost:** *(measured)* about 120 lines in `zoraya-broker` and its test, 25 in the broker's binary, 30 in `zosh`,
   three messages.
 - **Precedent:** ADR-0105's control connection, turned around: the broker tells, the terminal decides.
@@ -88,8 +95,10 @@ decides what reads the keys. Target 3: nothing here is per-machine.
 ## Invariants
 
 - **INV-0388-1.** A group made by a process of a client's line is inside that line's job; a process of one line
-  cannot join, or ask the foreground for, a group of another line or of the session. *Check:* `cargo test -p
-  zoraya-broker` (`a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines`).
+  cannot join, or ask the foreground for, a group of another line or of the session; a signal to a group reaches no
+  group made inside it. *Check:* `cargo test -p zoraya-broker`
+  (`a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines`,
+  `a_signal_to_a_group_with_groups_made_inside_it_reaches_its_members_only`).
 
 ## Open questions
 
