@@ -59,7 +59,7 @@ x missing.h
 < \r\n~> 
 # INV-0451-1: libposix's definitions return the width their prototypes declare
 # (syscall() is a long, tee and sendmsg ssize_t, off_t past 4 GiB survives).
-> posixrun -m /work=/work /bin/t_syscall syscall\r
+> posixrun /bin/t_syscall syscall\r
 < t_syscall: syscall passed
 < posixrun: exit 0
 < \r\n~> 
@@ -67,7 +67,7 @@ x missing.h
 < t_syscall: stubs passed
 < posixrun: exit 0
 < \r\n~> 
-> posixrun -m /work=/work /bin/t_syscall wide\r
+> posixrun -m /work=/work -C /work /bin/t_syscall wide\r
 < t_syscall: wide passed
 < posixrun: exit 0
 < \r\n~> 

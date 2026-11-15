@@ -7,7 +7,10 @@
  *   t_syscall syscall   syscall() is a long; a number it does not answer gives
  *                       -1 and ENOSYS, as a 64-bit -1 (also with a number
  *                       whose low 32 bits are a valid number)
- *   t_syscall stubs     tee and sendmsg return ssize_t: -1 and ENOSYS
+ *   t_syscall stubs     tee returns ssize_t: -1 and ENOSYS (sendmsg is outside the
+ *                       tier list: libc.a hides it as __zoraya_sendmsg, so only its
+ *                       prototype is checked here, and its definition by
+ *                       make check-libposix-widths)
  *   t_syscall wide      a result above 2^32 survives: lseek's off_t past 4 GiB
  *
  * What syscall() answers beyond that (ADR-0451's fixed list) is a later part;
@@ -68,7 +71,6 @@ static void numbers(void)
 static void stubs(void)
 {
 	ENOSYS64(tee(-1, -1, 4096, 0));
-	ENOSYS64(sendmsg(-1, NULL, 0));
 	printf("t_syscall: stubs passed (%d checks)\n", checks);
 }
 

@@ -46,14 +46,15 @@ reverted, it passes.
 
 `tests/posix-core/t_syscall.c` (built by `make test-libposix`, run by `libposix.script`): `syscall` with unanswered
 numbers (9999, 4096 with six arguments, -1, 0x7fffffff, `(1<<32)|98`, `(1<<40)+1`) gives the 64-bit `-1` and `ENOSYS`;
-`tee` and `sendmsg` the same; `lseek` to 5 GiB returns it whole; compile-time `sizeof` of the three results is 8.
+`tee` the same (`sendmsg` is hidden from `libc.a`, outside the tier list: the checker covers it); `lseek` to 5 GiB returns it whole; compile-time `sizeof` of the three results is 8.
 The invariant's Status row is `checked: make check-libposix-widths` with `partly`: the fixed list, the futex forms and
 the host tests per answered number are not built here.
 
 ## Run
 
-See the commit message and the report of the session for the results of `make check`, `cargo test -p zoraya-posix`
-and `make test-libposix`.
+`make check` (all steps ok, with the table also checked against the built sysroot's headers), `cargo test -p zoraya-posix`
+(all pass), `make test-libposix` under HVF (`PASS: 97 steps`, with `t_syscall` syscall, stubs and wide, fsck clean).
+The `build/ports/src` tarballs were copied from a sibling worktree.
 
 ## Known limits
 
