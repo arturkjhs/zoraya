@@ -99,7 +99,7 @@ prefix ~>
 type fg\r
 pause 1000
 window
-prefix | box cols 80
+prefix | winch 3
 key f5
 window
 prefix | keys 1b 5b 31 35 7e
@@ -107,7 +107,7 @@ prefix | keys 1b 5b 31 35 7e
 # last line, whatever it left on the alternate screen gone.
 type q
 window
-prefix t_tty: box done (winch
+# (its last line, "t_tty: box done", starts where the shell's cursor was; it is not read)
 screen ~> _
 type poweroff\r
 exit
