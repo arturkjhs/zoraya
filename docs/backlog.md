@@ -386,3 +386,10 @@ For the architect.
 - No host test for a descriptor closed by a sibling between the look and the wait (`EBADF` becomes another look); no `posix-surface-check imports`
   line checks that `t_poll` imports `poll` and `ppoll` (ADR-0343 has one for toybox): add when the first port's block takes the names over.
 - A socket at FIN reports `POLLIN | POLLHUP` (Linux: `POLLIN | POLLRDHUP`): revisit if a port half-closes and goes on writing.
+
+## Part 10j: installed programs (the architect, 2026-11-15)
+
+ADR-0396, ADR-0397 and ADR-0399 are accepted (Option C, B, B; the amendment of ADR-0156 item 2 included). Their
+implementation is part **10j**, scheduled after 10g in lane 2: `install`, `/config/apps`, `programs`, the Programs page in
+`settings`, the 16 invariant rows (stage 10). Measure the SHA-256 at each launch for a 64 MB program in that part. One
+command per package for now. A revoke without `--kill` says how many running copies keep access.

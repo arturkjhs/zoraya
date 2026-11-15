@@ -1,6 +1,6 @@
 # ADR-0399: Seeing and revoking installed programs and their saved grants: the `programs` builtin, what revoking reaches, and a log
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0153, ADR-0155, ADR-0169, ADR-0172, ADR-0267, ADR-0337, ADR-0396, ADR-0397
 - **Evidence:** CP-01, CP-23, DM-087, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks
@@ -184,4 +184,6 @@ person sees every word they ever gave a program, in the words they typed.
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option B. A revoke edits the record at once. Without `--kill`, running copies keep their handles, and the revoke says so with the count ("N running copies keep access until they exit; --kill to stop them"). Live revocation is not needed for the browser engine. The 16 invariant rows belong to stage 10; the implementation is scheduled as part 10j, after 10g.

@@ -1,6 +1,6 @@
 # ADR-0396: Programs installed on the volume: the package, who installs it, and the description it carries
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0107, ADR-0108, ADR-0153, ADR-0155, ADR-0156, ADR-0157, ADR-0212, ADR-0336, ADR-0337, ADR-0341
 - **Evidence:** CP-01, CP-21, CP-23, DM-010, DM-087, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#genode, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks
@@ -237,4 +237,6 @@ sees every program that can ever receive something beyond its line.
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C, including the amendment of ADR-0156 item 2: a volume description is read for help and completion only and designates nothing.

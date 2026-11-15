@@ -1,6 +1,6 @@
 # ADR-0397: Saved grants of an installed program: typed once at install, kept in the record, never more than the shell holds
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0153, ADR-0172, ADR-0224, ADR-0324, ADR-0337, ADR-0341, ADR-0396
 - **Evidence:** CP-01, CP-23, DM-009, DM-014, DM-039, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#pattern-a-grants-fixed-at-start, stage-10/survey.md#pattern-b-a-trusted-intermediary-that-asks
@@ -203,4 +203,6 @@ exactly that to a supervisor. An agent in an untrusted room never inherits them.
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Option B. An upgrade drops saved grants unless `--keep`, and says which grants it dropped. Saved words never apply in an untrusted room. `+web` may be saved. The SHA-256 at each launch stands; it is to be measured for a 64 MB program in the implementing part. One command per package for now.
