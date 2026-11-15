@@ -1,0 +1,121 @@
+# `ssh` and `ssh-keygen` (TASK-31 10g, ADR-0340, ADR-0341; `make test-apps`,
+# which turns @HOST@, the ports @PA@ and @PB@, the user @USER@ and the
+# fingerprint @FPB@ of server B's key into values). OpenSSH's client on
+# OpenSSL, in a program's own directory /data/home/ssh (seen as ~/.ssh),
+# against two servers of the host that the test started with throwaway keys
+# (tools/test-sshd.sh). The disk holds the client key (mode 600) and a
+# known_hosts that stores a key for server A's address that is not A's.
+! panicked
+! first process ended
+! was not given
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+# What the line gives ssh, with the directory in both names (INV-0341-3).
+> grants ssh -l @USER@ @HOST@\r
+< ssh gets (a POSIX program):
+< /data/home/ssh
+< its own files (it sees them as ~/.ssh)
+< net: @HOST@:22
+< \r\n~>
+# Options the description does not give are a usage mistake, before anything runs
+# (INV-0340-2): the shell refuses them, ssh never starts.
+> ssh -J jump.example.org -l @USER@ @HOST@\r
+< -J: not an option its description lets through
+< \r\n~>
+> ssh -F /etc/passwd -l @USER@ @HOST@\r
+< -F: not an option its description lets through
+< \r\n~>
+> ssh -o StrictHostKeyChecking=no -l @USER@ @HOST@\r
+< -o: not an option its description lets through
+< \r\n~>
+# No user name: ssh's own refusal (ADR-0340 item 5), before any connection.
+> ssh -p @PB@ @HOST@ true\r
+< no user name: write -l USER or USER@HOST
+< \r\n~>
+> status\r
+< exit status 255
+< \r\n~>
+# A host from a value is not reached without a +net word (INV-0340-1).
+> set h @HOST@\r
+< \r\n~>
+> ssh -p @PB@ -l @USER@ $h true\r
+< from $h, outside the line's network grants
+< \r\n~>
+# The first connection to B: the question with the key's fingerprint, on the
+# terminal, with SSH_ASKPASS and SSH_ASKPASS_REQUIRE on the line (INV-0340-2:
+# no program is started to ask). `yes` stores the key in known_hosts.
+> SSH_ASKPASS=/bin/echo SSH_ASKPASS_REQUIRE=force ssh -p @PB@ -l @USER@ @HOST@ echo far-side-says-hi\r
+< key fingerprint is
+< SHA256:@FPB@
+< Are you sure you want to continue connecting
+> yes\r
+< far-side-says-hi
+< \r\n~>
+> status\r
+< succeeded (exit status 0)
+< \r\n~>
+# The key is stored in ssh's directory, a file like any other, and the second
+# connection does not ask.
+> cat /data/home/ssh/known_hosts\r
+< [@HOST@]:@PB@ ssh-ed25519
+< \r\n~>
+> ssh -p @PB@ -l @USER@ @HOST@ echo again\r
+< again
+< \r\n~>
+# Words after the host belong to the far side: each is sent as the command and
+# runs there (the far shell does not find it), nothing starts here, and the
+# host-key check is what it was.
+> ssh -p @PB@ -l @USER@ @HOST@ -o ProxyCommand=true\r
+< -o
+< \r\n~>
+> ssh -p @PB@ -l @USER@ @HOST@ -J jump.example.org\r
+< -J
+< \r\n~>
+# The USER@HOST form.
+> ssh -p @PB@ @USER@@@HOST@ echo by-form\r
+< by-form
+< \r\n~>
+# A changed host key: A's stored key is not the one it shows. ssh ends with
+# status 255 before any credential is sent (INV-0340-3; the test reads A's log).
+> ssh -p @PA@ -l @USER@ @HOST@ echo never\r
+< REMOTE HOST IDENTIFICATION HAS CHANGED
+< Host key verification failed.
+< \r\n~>
+> status\r
+< exit status 255
+< \r\n~>
+# ssh-keygen in a room: the room's own empty directory (INV-0341-2), the
+# path in the program's words, and no refused path.
+> mkdir ~/k2\r
+< \r\n~>
+> room new keys +w ~/k2\r
+< keys
+< \r\n~>
+> room keys\r
+< keys
+> ssh-keygen -t ed25519\r
+< Enter passphrase
+> \r
+< Enter same passphrase again
+> \r
+< Your identification has been saved in /home/.ssh/id_ed25519
+< \r\n
+> ls /data/keys/ssh\r
+< id_ed25519
+< id_ed25519.pub
+> room --leave\r
+> ssh-keygen -R @HOST@:@PB@\r
+< \r\n~>
+> ls /data/home/ssh\r
+< id_ed25519
+< id_ed25519.pub
+< known_hosts
+< \r\n~>
+# The directory is the person's own to read as files: named, it is given.
+> cd /data/home/ssh\r
+< \r\n/data/home/ssh>
+> cat known_hosts\r
+< \r\n/data/home/ssh>

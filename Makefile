@@ -647,6 +647,9 @@ APPS_QEMU ?= --mem 512M
 APPS_RUN = $(RUNNER) --timeout $(1) --script $(4) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAYS,$(NET_HOST)) --disk $(APPS_DISK) $(APPS_QEMU) --accel $(3) $(KERNEL)
 # The runs of a program from the volume give their memory back: 16 `curl`s on
 # 128 MiB, where 8 fitted while each run kept its image (TASK-27 9a item 2).
+# ssh and ssh-keygen against two servers of the host (TASK-31 10g; ADR-0340 item 10): tools/test-apps-ssh.sh.
+APPS_SSH_RUN = RUNNER="$(RUNNER)" RUN_QEMU="$(RUN_QEMU)" HTTPD="$(HTTPD)" KERNEL="$(KERNEL)" NET_HOST=$(NET_HOST) \
+	ROOT_FROM=$(APPS_TEST_ROOT) TIMEOUT=$(QEMU_SLOW_TIMEOUT) BUILD=$(BUILD) ACCEL=auto tools/test-apps-ssh.sh
 APPS_LAUNCHES := tests/shell/apps-launches.script
 APPS_LAUNCHES_RUN = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(APPS_LAUNCHES) --label apps-launches -- $(RUN_QEMU) --test --keys --disk $(APPS_DISK) --mem 128M --accel auto $(KERNEL)
 
@@ -678,6 +681,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	if [ $$rc = 0 ] && [ "$(TCG_TOO)" = 1 ]; then $(call APPS_RUN,$(APPS_TCG_TIMEOUT),apps-refusals-tcg,tcg,$(APPS_REFUSALS_SCRIPT)); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then $(APPS_LAUNCHES_RUN); rc=$$?; fi; \
+	if [ $$rc = 0 ]; then $(APPS_SSH_RUN); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \
 		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd-apps.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-apps.log \
 		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-apps.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-apps.log \
