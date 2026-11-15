@@ -470,8 +470,22 @@ fn mapping_a_foreign_object_at_the_limit_is_refused() {
 /// page tables alone. Closing the object returns the maker's use.
 fn a_shared_object_is_charged_to_its_creator_only() {
     const SIZE: u64 = 4 * MIB;
-    const TABLES: u64 = 64 << 10;
-    let before = job_get_usage(JOB, false).expect("usage").memory.used;
+    // What a second process and its tables may add to the subtree's use, far
+    // under the object's size: the room's child is in this job's subtree.
+    const TABLES: u64 = MIB;
+    // The reaper returns the frames of earlier tests' objects some time after
+    // they were closed (more slowly under TCG or with several CPUs), which
+    // lowers `used` under a measurement: wait until it is steady.
+    let used = || job_get_usage(JOB, false).expect("usage").memory.used;
+    let mut before = used();
+    for _ in 0..200 {
+        nap(20);
+        let now = used();
+        if now == before {
+            break;
+        }
+        before = now;
+    }
     let object = memory_create(SIZE, MemoryFlags::NONE).expect("made by this job");
     let created = job_get_usage(JOB, false).expect("usage").memory.used;
     assert!(
