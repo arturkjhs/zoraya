@@ -38,7 +38,7 @@ id = "F5-worst-growth-kept"
 file = "kernel/src/memory/user.rs"
 find = 'self.memory.paid.release_kernel(worst - grown.min(worst));'
 replace = 'let _ = (worst, grown);'
-note = "INV-0437-1: only what the list grew by stays charged (the kernel test's exact check at the first mapping)"
+note = "equivalent since `growth_for` predicts the growth exactly (the difference to give back is always 0); the release stays as the guard if the prediction and `reserve_for` ever differ (the host test asserts they agree)"
 
 [[mutant]]
 id = "F5-quota-not-asked"
