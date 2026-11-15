@@ -288,6 +288,121 @@ fn unmapping_and_mapping_again_keeps_the_chunks_few() {
     }
 }
 
+/// Two full chunks, then room in one of them: a record for the other one goes
+/// to its neighbour, no chunk is made, and the order holds.
+#[test]
+fn a_full_chunk_gives_a_record_to_a_neighbour_with_room() {
+    let fill = |list: &mut Mappings<u32>, model: &mut Model| {
+        // 2 full chunks, with a gap after each record for a record between.
+        for n in 0..(2 * CHUNK) as u32 {
+            add(list, model, PAGE, n).expect("a gap");
+        }
+        assert_eq!(list.chunk_count(), 2);
+    };
+    // Room in the second: a record inside the first spills its last record.
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    fill(&mut list, &mut model);
+    for _ in 0..3 {
+        let (va, length) = model.0.remove(2 * CHUNK - 1 - 3);
+        list.remove_exact(va, length).expect("exact");
+    }
+    let held = list.bytes_held();
+    // A place inside the first chunk: free one record there and take its place.
+    let (hole, length) = model.0.remove(5);
+    list.remove_exact(hole, length).expect("exact");
+    assert_eq!(list.growth_for(hole), 0);
+    list.reserve_for(hole).expect("room");
+    list.insert(hole, length, 99).expect("room");
+    model.0.insert(5, (hole, length));
+    assert_eq!(list.chunk_count(), 2);
+    assert_eq!(list.bytes_held(), held);
+    same(&list, &model);
+    // Room in the first: a record inside the second spills its first one.
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    fill(&mut list, &mut model);
+    for _ in 0..3 {
+        let (va, length) = model.0.remove(7);
+        list.remove_exact(va, length).expect("exact");
+    }
+    let held = list.bytes_held();
+    let (hole, length) = model.0.remove(CHUNK);
+    list.remove_exact(hole, length).expect("exact");
+    assert_eq!(list.growth_for(hole), 0);
+    list.reserve_for(hole).expect("room");
+    list.insert(hole, length, 99).expect("room");
+    model.0.insert(CHUNK, (hole, length));
+    assert_eq!(list.chunk_count(), 2);
+    assert_eq!(list.bytes_held(), held);
+    same(&list, &model);
+}
+
+/// Two small neighbours become one, and a chunk's last record leaving merges
+/// it with the one before or after.
+#[test]
+fn small_neighbours_merge_and_the_charge_follows() {
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    for n in 0..(3 * CHUNK) as u32 {
+        add(&mut list, &mut model, PAGE, n).expect("a gap");
+    }
+    assert_eq!(list.chunk_count(), 3);
+    // Empty the middle chunk but 10 records, and the last but 10: the three
+    // chunks (32, 10, 10) become two (32, 20).
+    for _ in 0..22 {
+        let (va, length) = model.0.remove(CHUNK);
+        list.remove_exact(va, length).expect("exact");
+    }
+    same(&list, &model);
+    assert_eq!(list.chunk_count(), 3, "32 + 10 does not fit one chunk");
+    for _ in 0..12 {
+        let (va, length) = model.0.pop().expect("one");
+        list.remove_exact(va, length).expect("exact");
+    }
+    same(&list, &model);
+    assert_eq!(list.chunk_count(), 2, "10 and 10 are one");
+    assert_eq!(list.bytes_held(), 2 * Mappings::<u32>::CHUNK_BYTES);
+}
+
+/// Random maps and unmaps of random sizes: what `growth_for` says is what
+/// `reserve_for` adds, and the list stays valid and few.
+#[test]
+fn random_use_keeps_the_prediction_and_the_bounds() {
+    let mut rng = Rng(11);
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    for round in 0..30_000u32 {
+        let r = rng.next();
+        if r % 7 < 4 && model.0.len() < LIMIT {
+            let length = PAGE * (1 + (r >> 8) % 6);
+            let Some(va) = list.find_gap(length, LOW, HIGH, PAGE).0 else {
+                continue;
+            };
+            let (before, said) = (list.bytes_held(), list.growth_for(va));
+            list.reserve_for(va).expect("room");
+            assert_eq!(list.bytes_held() - before, said, "round {round}");
+            list.insert(va, length, round).expect("room after reserve");
+            let at = model.0.partition_point(|&(v, _)| v < va);
+            model.0.insert(at, (va, length));
+        } else if !model.0.is_empty() {
+            // Bursts: now and then a run of neighbours leaves together.
+            let n = if r % 31 == 0 { 40 } else { 1 };
+            for _ in 0..n.min(model.0.len()) {
+                let i = (r >> 8) as usize % model.0.len();
+                let (va, length) = model.0.remove(i);
+                list.remove_exact(va, length).expect("exact");
+            }
+        }
+        assert_eq!(list.len(), model.0.len());
+        assert!(list.chunk_count() <= 2 * list.len() / CHUNK + 2);
+        if round % 211 == 0 {
+            same(&list, &model);
+        }
+    }
+    same(&list, &model);
+}
+
 #[test]
 fn growth_is_bounded_by_what_max_growth_says() {
     let mut list = Mappings::new();

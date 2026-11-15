@@ -609,9 +609,16 @@ fn a_bounded_walk_sees_every_leaf_once_and_reads_no_more_than_its_limit() {
                 assert_eq!(walked.resume, None);
                 break;
             }
+            // Stopped for reads: it read exactly its limit.
+            assert_eq!(walked.reads, max);
             from = from.max(walked.resume.expect("stopped for reads"));
         }
         assert_eq!(seen, all, "max {max}");
+        // A small limit stops the walk, more than once.
+        assert!(
+            max == usize::MAX || max > 100 || steps > 3,
+            "{steps} steps of {max}"
+        );
     }
 }
 
