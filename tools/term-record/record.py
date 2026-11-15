@@ -14,9 +14,9 @@ SESSION is a script, one command a line:
     wait SECONDS               read until the output has been idle for 0.4 s, at most SECONDS
     mark LABEL                 a point at which the grid is checked, at the offset so far
 
-In `run` and `env`, @curses@ is build/ports/host/curses-tests/bin (tools/term-record/build-curses-tests.sh)
-and @terminfo@ the directory `tools/term-terminfo/terminfo.sh compile` fills, both
-made absolute from the repository's root, which the script must be run from: a
+In `run` and `env`, @curses@ is build/ports/host/curses-tests/bin (tools/term-record/build-curses-tests.sh),
+@vttest@ build/ports/host/vttest/bin (tools/term-record/build-vttest.sh) and @terminfo@ the directory
+`tools/term-terminfo/terminfo.sh compile` fills, all made absolute from the repository's root, which the script must be run from: a
 session file names no path of the host.
 
 It writes OUTDIR/NAME.rec (the program's output, byte for byte, which the
@@ -61,6 +61,7 @@ def main():
     tokens = {
         "@curses@": os.path.join(root, "build/ports/host/curses-tests/bin"),
         "@terminfo@": os.path.join(root, "build/ports/host/terminfo"),
+        "@vttest@": os.path.join(root, "build/ports/host/vttest/bin"),
     }
 
     def expand(text):

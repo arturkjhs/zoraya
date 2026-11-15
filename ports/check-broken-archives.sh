@@ -31,10 +31,10 @@ expect() {
     echo "check-broken: $case: fails as it should ($want)"
 }
 
-printf 'int strlcpy(char *d, const char *s, unsigned long n) { return 0; }\n' > extra.c
+printf 'int zoraya_not_a_libc_name(void) { return 0; }\n' > extra.c
 "$zcc" -w -c -o extra.o extra.c
 cp "$libc" extra.a && "$ar" r extra.a extra.o
-expect extra "export outside the tier list (INV-0100-1): strlcpy"
+expect extra "export outside the tier list (INV-0100-1): zoraya_not_a_libc_name"
 
 # With the call log (ADR-0110 item 7) the export is the wrapper zw-puts.o and
 # puts.o holds __zoraya_real_puts: both go.

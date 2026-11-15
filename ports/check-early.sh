@@ -8,7 +8,7 @@
 #
 #   check-early.sh LOGS ZCC SURFACE_CHECK ELF_CHECK BUILD_DIR LIBC_A
 #
-# INV-0390-1, INV-0346-1, INV-0347-1: each block names, for each program, a name its objects import.
+# INV-0390-1, INV-0391-1, INV-0346-1, INV-0347-1: each block names, for each program, a name its objects import.
 # INV-0390-2: every compile of a built port ran zcc (one line per object) and none named -D__linux.
 # INV-0390-3: the curses archives name the terminfo directory; the programs load.
 # INV-0346-2: ssh and ssh-keygen name no askpass variable or configuration file.
@@ -54,6 +54,9 @@ if [ -d "$nc" ] || [ -n "$less" ] || [ -n "$nvi" ]; then
     checked=1
     "$surface" imports docs/adr/0390-surface-for-curses-less-and-vi.md \
       "ncurses=$nc/objects" "nvi=$build/ports/obj/nvi" "less=$less" || fail=1
+    # ADR-0391's block (creat, sleep): the same programs' objects import them (INV-0391-1).
+    "$surface" imports docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md \
+      "ncurses=$nc/objects" "less=$less" || fail=1
     compiles "$logs/ncurses.log" ncurses "$(count_o "$nc/objects")"
     compiles "$logs/less.log" less "$(count_o "$less" -maxdepth 1)"
     compiles "$logs/nvi.log" nvi "$(count_o "$build/ports/obj/nvi")"
@@ -68,6 +71,7 @@ if [ -d "$nc" ] || [ -n "$less" ] || [ -n "$nvi" ]; then
     "$elfcheck" "$d" || fail=1
     rm -rf "$d"
     block_in_libc docs/adr/0390-surface-for-curses-less-and-vi.md
+    block_in_libc docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md
   else
     say "ncurses, less or nvi has a tree and not all of its products"
   fi
