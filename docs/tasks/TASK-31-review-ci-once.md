@@ -211,3 +211,142 @@ No way to a false "proven" was found on CI's own path. Merge after finding 2 (a 
 set) and the fixtures of findings 3 to 5; finding 1 must be fixed in the wording before the architect adopts it into
 CLAUDE.md, and the orchestrator's tag check must follow it. Findings 6 and 7 before anyone relies on the by-hand lookup
 for a stage tag.
+
+## Check of the fix pass
+
+The same reviewer, on `git diff 216afbd3 efdf63d4` (the fix commit; the merge of `origin/main` before it not reviewed), in a
+scratch clone of `work/ci-once` at `efdf63d4`. Severities as above, plus **error** for a fix that is not what it claims.
+
+### What was run
+
+| Command | Result |
+|---|---|
+| `make check-ci-plan` | exit 0, "the docs-only rule and the tree-proof rule hold" (12 s) |
+| `make check-workflow-syntax` | exit 0, 2 files; the fix commit changes no workflow file |
+| candidate run 43670093247 (`gh run view`, read-only) | `success` on `efdf63d4` (tag push); it ran the fixtures with the same gaps (finding 13) |
+| `make adr-check` | 0 errors; `invariants.md` Total 793, 793 `INV-` rows; the two INV-0345 rows equal the ADR's text |
+| `CI_TREE_PROOF_ANY_COMMIT=1 SHA=85b4bdad76 tools/ci-tree-proof.rb`, real API (read-only `gh`) | proven by run 43649520010, 71 jobs: the real jobs have steps `Run` and `make ci-build`, so the step check matches the API |
+| the same for `23b338db0e` / `f3da42ce96` | proven by 43645322051 (71 jobs; a 48-job run on the same tree rejected) / not proven (`make test-unit` missing; 48 missing) |
+| `CI_API` whose child sleeps holding stdout, call 2 s, proof 5 s | exit 1 after 4 s, "a call did not answer", the sleeping child killed with its group |
+| `CI_API` that closes stdout and then sleeps | **hangs**: killed by the outer `alarm` at 40 s (exit 142): new finding 15 |
+
+Hand breaks of `tools/ci-tree-proof.rb`, each alone in the scratch clone, then `sh tools/check-ci-plan.sh`:
+
+| Break | Result |
+|---|---|
+| the event filter admits `pull_request` (old survivor) | killed ("a pull_request run") |
+| the checks matrix not expected (old survivor) | killed, but only by "a checks job whose Run step was skipped" (see finding 13) |
+| the jobs read from the first page only (old survivor) | killed ("the jobs in two pages") |
+| of two jobs of one name, the first conclusion wins (old survivor) | killed ("two jobs of one name") |
+| the step check removed (conclusion only) | killed (3 fixtures) |
+| the `head_sha` query removed (`heads = []`) | killed ("found by head_sha") |
+| the tests list not expected | killed |
+| **the list and workflow read from the checkout (`File.read`), not `git show SHA:`** | **survives**: finding 14 |
+| **the matrix entry `make check-extra` dropped from what is expected** | **survives**: finding 13 |
+| **the guard "the full list is empty" removed** | **survives**: finding 13 |
+| **`IO.select` without a timeout (no per-call deadline)** | **survives**: finding 16 |
+| of two jobs of one name, the last conclusion wins | survives; the fixture has only the order success then failure (note) |
+
+### Status of findings 1 to 7
+
+1. **Fixed in substance, two gaps in the wording** (finding 17). The scenario asked about: `main` is P (full, green), the code
+   merge M's plan job timed out (or M was proven by a run later re-run to red), then the docs-only D, tag on D. Under the
+   new wording the nearest code ancestor of D is M, whatever M's run was; the tag needs a green full run on M or on a commit
+   with M's tree. If M was a clean `--no-ff` merge of a candidate that passed the full set, that run tests M's content and
+   the tag is rightly accepted; otherwise it is refused. A proving run re-run to red is not returned by the by-hand lookup
+   (`status=success`), so the tag is refused unless another green same-tree full run exists. Sound.
+2. **Fixed for a call that does not answer**; the fixture does not show it (finding 16), and one path still hangs (finding 15).
+3. **Fixed**: `pull_request`, an unknown event, `workflow_dispatch` and `schedule` fixtures; the filter break is killed.
+4. **Fixed**: the `Run` / `make ci-build` step must be `success`, three fixtures; the real API carries the steps.
+5. **Not fixed**: the matrix-entry and empty-list fixtures pass for the wrong reason (finding 13). The list-line fixture works.
+6. **Fixed in code, untested** (finding 14).
+7. **Fixed**: the second parent and the commit are queried by `head_sha` first. Every run, from either query, still has to
+   pass `t == tree` on its own `head_sha` (`tools/ci-tree-proof.rb:147-153`), so a run on the second parent whose tree
+   differs is never selected; the `seen` dedup keeps the first copy of identical data.
+
+`CI_TREE_PROOF_ANY_COMMIT`: no workflow, Makefile or tool sets it; the plan step's `env:` has only `FULL_INPUT`, `BEFORE`,
+`GH_TOKEN` and `RUN_ID`, and the steps before it (checkout, `rustup toolchain install`) write no `GITHUB_ENV`. Only a
+person, by hand, or a change to `main`'s own tree (which can change the proof itself anyway) can set it.
+
+### 13. error: the matrix-entry and empty-list fixtures never reach the proof: the fake API is gone
+
+*Where:* `tools/check-ci-plan.sh:10-13` (the scratch repository is `$tmp` itself), `:53-55` (`step` commits with
+`git add -A`), `:160-162` (`$tmp/fixtures`, `$tmp/fakeapi` inside the repository), `:311-342`.
+
+*What:* the fixtures and the fake API live in the scratch repository's working tree. `step list-line` (cand3) commits
+`fakeapi`, `fixtures/` and `plan.err` with `git add -A`. The next `git checkout -q -f -B tp "$base"` (`:321`) removes these now
+tracked files because `$base` lacks them; cand4 and its merge are made without `fakeapi`. From then on every API call fails
+("ci-tree-proof: not proven: no list of runs can be read", traced in the matrix-entry case), so "a checks matrix entry the
+run lacks", "an empty list of tests" and "main moved" give `docs_only=0` whatever the proof does with names. Shown: a proof
+that ignores the entry `make check-extra`, and a proof without the empty-list guard, both pass `make check-ci-plan`. INV-0345-2's
+Status `checked: make check-ci-plan` and the part file's "seven breaks each fail" are therefore not true for the half that
+matters (a matrix entry of the tested tree that the run lacks). The checks-not-expected break is caught only by accident,
+by the step fixture that happens to name `make adr-check`.
+
+*Fix:* keep the fixtures, `fakeapi` and `plan.err` outside the repository (`repo=$tmp/repo`, the rest in `$tmp`), or in
+`.git/info/exclude` before the first `step`. And make each negative proof fixture assert its reason, not only `docs_only=0`
+(e.g. grep `plan.err` for "not the full set (1 jobs ... first: make check-extra)", "the full list is empty", "a different
+tree"), so that a fixture that fails for another reason fails the check.
+
+### 14. warning: reading the names at the commit (finding 6) has no fixture
+
+*Where:* `tools/ci-tree-proof.rb:113-114`; `tools/check-ci-plan.sh` (every `proof_expect` runs with the checkout at `$merge`
+= `SHA`).
+
+*What:* reverting to `File.read("tools/ci-tests.txt")` and the checkout's `test.yml` passes every fixture, because the
+checkout is always the commit asked about. The by-hand lookup that finding 6 was about is exactly the case where they differ.
+
+*Fix:* one fixture with `CI_TREE_PROOF_ANY_COMMIT=1`, `SHA=$cand3` (whose list has `make test-extra`) and the checkout at
+`$base`, the run lacking `make test-extra`: expect not proven, with that name as the reason.
+
+### 15. warning: a call that closes its stdout and does not exit hangs the proof without limit
+
+*Where:* `tools/ci-tree-proof.rb:69` and `:81` (`rescue EOFError` then `Process.wait(pid)` with no deadline).
+
+*What:* the deadline covers only the reading. After EOF the script waits for the child without limit. Measured: a `CI_API`
+that does `exec >/dev/null; sleep 98` held the script until the outer alarm (40 s, exit 142). With `gh` this needs a `gh`
+that closes stdout and then blocks (unlikely), but the ADR's text says "never a plan job that hangs", and this path is the
+plan job's 10-minute timeout and a red run, the case of finding 2.
+
+*Fix:* after EOF, poll `Process.wait(pid, Process::WNOHANG)` until `stop`, then kill the group and return nil as on a timeout;
+a fixture `CI_API` that closes stdout and sleeps.
+
+### 16. warning: the deadline fixture does not test the deadline
+
+*Where:* `tools/check-ci-plan.sh:166-167, 295-300`.
+
+*What:* the fake answers after 5 s; the check allows 15 s. With the per-call deadline removed (`IO.select([rd])`), the first
+call takes 5 s, after which the whole-proof deadline (2 s) makes every later `api` return nil at once: about 5 s, under 15,
+so the break survives. The kill of the process group, the fix of finding 2, is not exercised.
+
+*Fix:* let `SLOW=1` sleep far longer than the bound (e.g. `exec sleep 60`) and require the run to finish in under 10 s;
+then only a working kill passes.
+
+### 17. warning: the proposed stage-tag wording leaves two ways to pick the wrong commit
+
+*Where:* `docs/adr/0345-one-full-run-per-tree.md`, Consequences 3; `docs/design.md` (CI section, the stage-tag sentence).
+
+*What:* (a) "on the tagged commit or on its nearest code ancestor": when the tagged commit changed code itself and its run
+is red (plan job timed out), a reader who takes "ancestor" as a strict ancestor finds an older green code commit and
+accepts the tag. `docs/design.md` drops "the tagged commit or", which reads better but differs from the ADR. (b) "the latest
+ancestor commit that changed a path ...": "latest" and "changed" are not anchored. Branch commits are ancestors too, and
+`git log -1 -- PATHS` with default history simplification skips a merge that is TREESAME to its second parent. And
+`docs_only` is not a rule on paths alone: a change of a posix-surface block of an ADR, or of a doc a test reads, is under
+`docs/` but not docs-only.
+
+*Fix:* "the tagged commit itself, if its change from its first parent is not docs-only (`tools/plan-lib.sh`'s
+`docs_only`), else the nearest such commit on its first-parent chain", in both files.
+
+### Notes
+
+- The last-conclusion-wins order of duplicate names is not covered (fixture: failure then success); with `filter=latest`
+  duplicates do not occur.
+- The fixture commits since cand3 carry `fixtures.old.N/` and `wf` in their trees; harmless once finding 13 moves them out.
+
+### Recommendation
+
+Do not merge yet. Finding 13 is a test that claims INV-0345-2 and does not check it. The fix is small: move the fixtures
+out of the scratch repository, and assert each negative fixture's reason. Fix 14 to 16 in the same pass (one fixture each,
+plus a `WNOHANG` wait). Then re-run the survivor breaks above. Finding 17 is wording for the architect and does not block the
+merge. No path to a false "proven" on CI's own path was found: every run still needs the same tree, the full set's names
+from the commit's own files, a known event and each job's step `success`.
