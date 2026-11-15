@@ -55,6 +55,11 @@ reverted, it passes.
 3. The Status row no longer says `t_syscall` covers `sendmsg` (the checker alone does); ADR-0451's open questions record why
    (rule 6). `docs/design.md` names the check; findings 4 to 8 are in `docs/backlog.md`.
 
+CI fix (candidate b): the header scan also walked LLVM's libunwind headers (`unwind*.h`, `libunwind*.h`, `__*.h`), which the
+C++ runtime installs in the same directory and two of which conflict; they are skipped (not a libc ABI). A clang error in any
+other scanned header still fails. Checked on a clean sysroot (`rm -rf build/sysroot build/ports/obj`, rebuilt by
+`make test-libposix`: widths step ok, `PASS: 97 steps`) and on a copy with conflicting unwind headers added.
+
 ## Tests
 
 `tests/posix-core/t_syscall.c` (built by `make test-libposix`, run by `libposix.script`): `syscall` with unanswered

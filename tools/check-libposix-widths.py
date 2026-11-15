@@ -213,6 +213,9 @@ def c_class(qt):
 # Headers that include a Linux kernel header the sysroot does not carry; they
 # declare no function libposix defines.
 SKIP_HEADERS = {"sys/kd.h", "sys/vt.h", "sys/soundcard.h"}
+# Compiler-runtime headers the C++ runtime puts in the same directory (LLVM's
+# libunwind, ports/Makefile): not a libc ABI, and two of them conflict.
+SKIP_PATTERN = re.compile(r"^(unwind.*|libunwind.*|__.*)\.h$")
 
 
 def header_prototypes(inc):
@@ -223,7 +226,8 @@ def header_prototypes(inc):
     for sub in ("", "sys", "arpa", "net", "netinet"):
         d = os.path.join(inc, sub)
         if os.path.isdir(d):
-            heads += [os.path.join(sub, h) for h in sorted(os.listdir(d)) if h.endswith(".h") and os.path.join(sub, h) not in SKIP_HEADERS]
+            heads += [os.path.join(sub, h) for h in sorted(os.listdir(d)) if h.endswith(".h") and os.path.join(sub, h) not in SKIP_HEADERS
+                       and not (sub == "" and SKIP_PATTERN.match(h))]
     try:
         with open(tu, "w") as fh:
             fh.write("".join("#include <%s>\n" % h for h in heads))
