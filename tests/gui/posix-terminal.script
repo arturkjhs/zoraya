@@ -91,8 +91,9 @@ prefix | paste bracketed 1
 # Ctrl-Z stops it: the shell's screen and prompt are back, not the box.
 chord ctrl z
 window
-screen [1] stopped: t_tty box
-screen ~> _
+prefix [1] stopped:
+# (the selection of the paste still marks two cells here, so the cursor is not read)
+prefix ~>
 # fg: the box is back on the alternate screen, and its raw mode with it (a key
 # is read as typed and not echoed); the shell told it the size again.
 type fg\r
