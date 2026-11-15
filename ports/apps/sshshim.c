@@ -1,63 +1,41 @@
-/* Names that OpenSSH's client and ssh-keygen reference and Zoraya's libc.a does
- * not export (TASK-31 10g, proposed ADR-0393). They are linked into those two
- * programs from libsshshim.a, as libzshim.a is into curl and wget, not into
- * libc.a: the surface of libc.a changes only by ADR (INV-0005-1), and a program
- * that does not call these names never links them. The link probe of the port
- * (build/ports/logs/openssh.log) found exactly these; none is reached on a path
- * a Zoraya ssh takes: the configuration file, ProxyCommand, LocalCommand, the
- * agent, the syslog, DNS host-key records and the interface list are all
- * compiled out or unreachable (ports/patches/openssh/, ADR-0340 item 3).
- * Each does what the unoffered call does in libposix (ADR-0287 item 9): fails
- * with an errno and changes nothing, so that a caller that tries one reports an
- * error instead of crashing. `sleep` is real, over `nanosleep`: ssh waits
- * between connection attempts.
+/* The names OpenSSH's client reaches that libc.a does not export (TASK-31
+ * ports-early; ADR-0346 lists them for part 10g). Like zshim.c and ttyshim.c,
+ * they are linked from a separate archive, after everything else, and are not
+ * part of libc.a or of any image: the surface of libc.a changes only by ADR
+ * (INV-0005-1). Each fails the way an unoffered call fails in libposix
+ * (ADR-0287 item 9) and changes nothing, so a caller that tries one reports an
+ * error. None is reached on the paths a Zoraya ssh takes: each belongs to a
+ * feature the description does not offer (a proxy command or jump host, an
+ * interface to bind, a security-key or PKCS#11 helper, a privilege change).
+ * Part 10g (ADR-0393) keeps it: ssh and ssh-keygen are in the apps' /bin since
+ * then, so the file carries no marker (ports/check-early.sh looks for one only
+ * in what must not reach an image). The link probe of 10g
+ * (build/ports/logs/openssh.log) finds no other name undefined.
  */
 #include <errno.h>
 #include <netdb.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <sys/socket.h>
 #include <sys/types.h>
-#include <time.h>
-#include <unistd.h>
 
-unsigned int sleep(unsigned int seconds)
+/* readconf.c: a service name in a port number (`-p ssh`). */
+struct servent *getservbyname(const char *name, const char *proto)
 {
-	struct timespec left = { .tv_sec = (time_t)seconds, .tv_nsec = 0 };
-	if (nanosleep(&left, &left) == 0)
-		return 0;
-	return (unsigned int)left.tv_sec;
+	(void)name; (void)proto;
+	return NULL;
 }
 
-int initgroups(const char *user, gid_t group)
+/* sshconnect.c: ProxyCommand, ProxyJump. */
+int socketpair(int domain, int type, int protocol, int sv[2])
 {
-	(void)user; (void)group;
+	(void)domain; (void)type; (void)protocol; (void)sv;
 	errno = ENOSYS;
 	return -1;
 }
 
-int execl(const char *path, const char *arg, ...)
-{
-	(void)path; (void)arg;
-	errno = ENOSYS;
-	return -1;
-}
-
-int execlp(const char *file, const char *arg, ...)
-{
-	(void)file; (void)arg;
-	errno = ENOSYS;
-	return -1;
-}
-
-int madvise(void *addr, size_t length, int advice)
-{
-	(void)addr; (void)length; (void)advice;
-	errno = ENOSYS;
-	return -1;
-}
-
+/* sshconnect.c: BindInterface. */
 struct ifaddrs;
-
 int getifaddrs(struct ifaddrs **ifap)
 {
 	(void)ifap;
@@ -70,75 +48,35 @@ void freeifaddrs(struct ifaddrs *ifa)
 	(void)ifa;
 }
 
-/* `ssh` finds the default port in the services table, and takes 22 when there
- * is no entry. */
-struct servent *getservbyname(const char *name, const char *proto)
+/* ssh-sk-client.c, ssh-pkcs11-client.c: the helper programs of security keys
+ * and PKCS#11, which are not built. */
+int execlp(const char *file, const char *arg, ...)
 {
-	(void)name; (void)proto;
-	return NULL;
+	(void)file; (void)arg;
+	errno = ENOSYS;
+	return -1;
 }
 
+/* sshkey.c: advice about a buffer's core dump; there are no cores. */
+int madvise(void *addr, size_t len, int advice)
+{
+	(void)addr; (void)len; (void)advice;
+	errno = ENOSYS;
+	return -1;
+}
+
+/* fake-rfc2553.c's getnameinfo, for a reverse lookup that `ssh` does not ask for. */
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type)
 {
 	(void)addr; (void)len; (void)type;
 	return NULL;
 }
 
-void openlog(const char *ident, int option, int facility)
+/* misc.c: the privilege change of a subprocess (ProxyCommand and kin);
+ * `setuid` and the rest stay unexported (ADR-0005). */
+int initgroups(const char *user, gid_t group)
 {
-	(void)ident; (void)option; (void)facility;
-}
-
-void closelog(void)
-{
-}
-
-void syslog(int priority, const char *format, ...)
-{
-	(void)priority; (void)format;
-}
-
-/* The resolver's records (VerifyHostKeyDNS, which no line can turn on): none.
- * `__res_state` hands out zeroed memory big enough for musl's struct. */
-void *__res_state(void)
-{
-	static long long state[512];
-	return state;
-}
-
-int __h_errno_dummy;
-
-int *__h_errno_location(void)
-{
-	return &__h_errno_dummy;
-}
-
-int res_init(void)
-{
+	(void)user; (void)group;
+	errno = EPERM;
 	return -1;
-}
-
-int res_query(const char *name, int class, int type, unsigned char *answer, int len)
-{
-	(void)name; (void)class; (void)type; (void)answer; (void)len;
-	return -1;
-}
-
-int dn_expand(const unsigned char *msg, const unsigned char *eom, const unsigned char *src,
-	char *dst, int space)
-{
-	(void)msg; (void)eom; (void)src; (void)dst; (void)space;
-	return -1;
-}
-
-unsigned int ns_get16(const unsigned char *src)
-{
-	(void)src;
-	return 0;
-}
-
-unsigned long ns_get32(const unsigned char *src)
-{
-	(void)src;
-	return 0;
 }

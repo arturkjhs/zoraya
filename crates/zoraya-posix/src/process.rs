@@ -51,6 +51,20 @@ pub mod o {
     pub const TMPFILE: u32 = 0o20040000;
 }
 
+/// `creat(path, mode)` is `open(path, CREAT_FLAGS, mode)` (POSIX.1; less's
+/// log file, ADR-0390's block).
+pub const CREAT_FLAGS: u32 = o::WRONLY | o::CREAT | o::TRUNC;
+
+/// What `sleep` returns when a handler interrupted it: the seconds left,
+/// rounded up (musl's `sleep` truncates; POSIX allows both), so that a program that sleeps again for
+/// the result never sleeps too little. `sleep` returns 0 when it slept all it
+/// was asked to.
+#[must_use]
+pub fn unslept_seconds(left_nanoseconds: u64) -> u32 {
+    let s = left_nanoseconds.div_ceil(1_000_000_000);
+    u32::try_from(s).unwrap_or(u32::MAX)
+}
+
 pub const AT_FDCWD: i32 = -100;
 pub const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
 pub const AT_REMOVEDIR: u32 = 0x200;
@@ -125,6 +139,8 @@ pub enum Desc<H> {
     Null { access: u32 },
     /// A socket (ADR-0225 item 2; `crate::net`).
     Socket(Box<crate::socket::Socket<H>>),
+    /// A memory descriptor (ADR-0413; `crate::memfd`).
+    Memory(Box<crate::memfd::Memory<H>>),
 }
 
 /// A namespace entry (ADR-0107 item 4).
@@ -324,6 +340,10 @@ pub struct Posix<S: Sys> {
     /// The record locks of this process (ADR-0319). A `fork` child starts
     /// with none, as POSIX has it: `after_fork_in_child` clears the copy.
     pub(crate) locks: crate::records::Locks<S::H>,
+    /// The mappings of memory descriptors (ADR-0413) and the count that
+    /// numbers the descriptors.
+    pub(crate) memory_maps: Vec<crate::memfd::MemMap<S::H>>,
+    pub(crate) memory_ids: u64,
 }
 
 pub(crate) fn native(s: Status, call: Call) -> i32 {
@@ -390,6 +410,8 @@ impl<S: Sys> Posix<S> {
             tty_polls: Vec::new(),
             tty_poll_ready: Vec::new(),
             locks: crate::records::Locks::new(),
+            memory_maps: Vec::new(),
+            memory_ids: 0,
         }
     }
 
@@ -1115,6 +1137,7 @@ impl<S: Sys> Posix<S> {
                     .map(|_| ())
                     .map_err(|_| EIO)
             }
+            Some(Desc::Memory(_)) => Ok(()),
             Some(Desc::Stream { .. } | Desc::Null { .. } | Desc::Socket(_)) => Err(EINVAL),
         }
     }
@@ -1153,6 +1176,12 @@ impl<S: Sys> Posix<S> {
                 Ok(())
             }
             Desc::Null { .. } => Ok(()),
+            Desc::Memory(m) => {
+                if let Some(h) = m.object() {
+                    self.sys.close(h);
+                }
+                Ok(())
+            }
             Desc::Socket(mut s) => {
                 for h in [s.read, s.write, s.ctl].into_iter().flatten() {
                     self.sys.close(h);
@@ -1214,6 +1243,7 @@ impl<S: Sys> Posix<S> {
     pub fn read(&mut self, fd: i32, into: User) -> Result<usize, i32> {
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_read(fd, into, None),
             Some(Desc::Null { access }) => {
                 if *access == o::WRONLY {
                     Err(EBADF)
@@ -1276,6 +1306,7 @@ impl<S: Sys> Posix<S> {
         let start = u64::try_from(offset).map_err(|_| EINVAL)?;
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_read(fd, into, Some(start)),
             Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
             Some(Desc::Null { access }) => {
                 if *access == o::WRONLY {
@@ -1325,6 +1356,7 @@ impl<S: Sys> Posix<S> {
         let start = u64::try_from(offset).map_err(|_| EINVAL)?;
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_write(fd, from, Some(start)),
             Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
             Some(Desc::Null { access }) => {
                 if *access == o::RDONLY {
@@ -1395,6 +1427,7 @@ impl<S: Sys> Posix<S> {
     pub fn write(&mut self, fd: i32, from: User) -> Result<usize, i32> {
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_write(fd, from, None),
             Some(Desc::Null { access }) => {
                 if *access == o::RDONLY {
                     Err(EBADF)
@@ -1517,6 +1550,7 @@ impl<S: Sys> Posix<S> {
         };
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_lseek(fd, offset, from),
             Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
             Some(Desc::Null { .. }) => Ok(0),
             Some(&Desc::Object { conn, .. }) => {
@@ -1534,6 +1568,7 @@ impl<S: Sys> Posix<S> {
         let size = u64::try_from(length).map_err(|_| EINVAL)?;
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_ftruncate(fd, size),
             Some(&Desc::Object { conn, access, .. }) if access != o::RDONLY => {
                 self.done(conn, &proto::SetSize { size }, &[]).map(|_| ())
             }
@@ -1546,6 +1581,7 @@ impl<S: Sys> Posix<S> {
         let (uid, gid) = (self.facts.uid, self.facts.gid);
         match self.fds.get(fd) {
             None => Err(EBADF),
+            Some(Desc::Memory(_)) => self.memory_fstat(fd),
             Some(Desc::Stream { tty, .. }) => {
                 let kind = if *tty { Kind::Character } else { Kind::Fifo };
                 Ok(stat::encode(
@@ -2113,6 +2149,7 @@ impl<S: Sys> Posix<S> {
                 let (access, nonblock, conn) = match self.fds.get(fd) {
                     None => return Err(EBADF),
                     Some(Desc::Null { access }) => (*access, false, None),
+                    Some(Desc::Memory(m)) => (m.access(), false, None),
                     Some(Desc::Socket(s)) => (o::RDWR, s.nonblock, None),
                     Some(Desc::Stream { read, nonblock, .. }) => (
                         if read.is_some() { o::RDONLY } else { o::WRONLY },
@@ -2144,7 +2181,7 @@ impl<S: Sys> Posix<S> {
                 let flags = argument as u32;
                 let conn = match self.fds.get_mut(fd) {
                     None => return Err(EBADF),
-                    Some(Desc::Null { .. }) => None,
+                    Some(Desc::Null { .. } | Desc::Memory(_)) => None,
                     Some(Desc::Socket(s)) => {
                         s.nonblock = flags & o::NONBLOCK != 0;
                         None
@@ -2174,6 +2211,10 @@ impl<S: Sys> Posix<S> {
                 }
                 Ok(0)
             }
+            crate::memfd::F_ADD_SEALS => self
+                .memory_add_seals(fd, u32::try_from(argument).map_err(|_| EINVAL)?)
+                .map(|()| 0),
+            crate::memfd::F_GET_SEALS => self.memory_get_seals(fd).map(|s| s as i32),
             _ => Err(EINVAL),
         }
     }

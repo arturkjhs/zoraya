@@ -1235,3 +1235,121 @@ fn the_shell_ends_ssh_s_options_before_the_host() {
     let refs: Vec<&str> = words.iter().map(String::as_str).collect();
     assert_eq!(at(&refs), Some(2));
 }
+
+// INV-0335-1 (the plan's half) and INV-0335-4: the real descriptions of the pager and the editor, ADR-0335 item 3.
+const VI: &str = include_str!("../../../user/describe/posix/vi.cmd");
+const EX: &str = include_str!("../../../user/describe/posix/ex.cmd");
+const VIEW: &str = include_str!("../../../user/describe/posix/view.cmd");
+const LESS: &str = include_str!("../../../user/describe/posix/less.cmd");
+
+#[test]
+fn vi_is_given_its_one_name_and_not_the_directory() {
+    use zoraya_proto_file::rights;
+    for desc in [VI, EX] {
+        let p = go(desc, &["notes.txt"], &[], &[], true, "/w").unwrap();
+        let m = merge(&p);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].path, "/w");
+        assert_eq!(m[0].name.as_deref(), Some("notes.txt"), "{m:?}");
+        // To create or replace that name, and to read it first (ADR-0335 item 3).
+        assert_ne!(m[0].rights & rights::READ, 0);
+        assert_ne!(m[0].rights & rights::WRITE, 0);
+        assert_ne!(m[0].rights & rights::CREATE, 0);
+        // Nothing of the directory itself, whether or not it is the current one.
+        assert!(p.iter().all(|e| e.reason != "current directory"), "{p:?}");
+        // A file elsewhere is its own directory narrowed to the name.
+        let q = go(desc, &["/x/other.txt"], &[], &[], true, "/w").unwrap();
+        let m = merge(&q);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].path, "/x");
+        assert_eq!(m[0].name.as_deref(), Some("other.txt"));
+        assert!(q.iter().all(|e| e.path != "/w"), "{q:?}");
+    }
+}
+
+#[test]
+fn vi_with_no_file_is_given_no_directory_and_a_read_only_name_is_read_only() {
+    use zoraya_proto_file::rights;
+    let p = go(VI, &[], &[], &[], true, "/w").unwrap();
+    assert!(
+        p.iter().all(|e| e.path != "/w"),
+        "no file: the current directory is not given: {p:?}"
+    );
+    for (desc, args) in [
+        (VI, &["-R", "notes.txt"][..]),
+        (VIEW, &["notes.txt"][..]),
+        (LESS, &["notes.txt"][..]),
+    ] {
+        let p = go(desc, args, &[], &[], true, "/w").unwrap();
+        let m = merge(&p);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert_eq!(m[0].name.as_deref(), Some("notes.txt"));
+        assert_ne!(m[0].rights & rights::READ, 0);
+        assert_eq!(
+            m[0].rights & (rights::WRITE | rights::CREATE | rights::REMOVE | rights::RENAME),
+            0,
+            "{m:?}"
+        );
+    }
+}
+
+#[test]
+fn the_editor_and_the_pager_let_through_only_what_their_descriptions_list() {
+    let d = |t| zoraya_describe::parse(t).unwrap();
+    for (text, shorts) in [(VI, "Rc"), (EX, "Rsc"), (VIEW, "c"), (LESS, "FiINRSsX")] {
+        let desc = d(text.as_bytes());
+        let got: Vec<char> = desc.options.iter().filter_map(|o| o.short).collect();
+        let mut want: Vec<char> = shorts.chars().collect();
+        want.sort_unstable();
+        let mut got = got;
+        got.sort_unstable();
+        assert_eq!(got, want, "{}", desc.name);
+        assert_eq!(desc.cwd, zoraya_describe::Cwd::None, "{}", desc.name);
+    }
+}
+
+// Review of 10d, findings 1, 2 and 11: a `+` word is never a file, two names of one directory are
+// refused for the editor and the pager (with the way to say it), and `-R` in a cluster still reads.
+#[test]
+fn a_plus_word_is_refused_and_never_gives_the_directory() {
+    for desc in [VI, EX, VIEW, LESS] {
+        for words in [
+            &["+10", "notes.txt"][..],
+            &["notes.txt", "+G"][..],
+            &["+", "notes.txt"][..],
+        ] {
+            let r = go(desc, words, &[], &[], true, "/w");
+            let e = r.expect_err("a + word is refused");
+            assert!(e.problem.contains("starts with +"), "{e:?}");
+        }
+    }
+    // A file of that name is written as a path.
+    let p = go(VI, &["./+10"], &[], &[], true, "/w").unwrap();
+    assert_eq!(merge(&p)[0].name.as_deref(), Some("+10"));
+}
+
+#[test]
+fn two_files_of_one_directory_are_refused_for_the_editor_and_the_pager() {
+    for (desc, marker) in [(VI, "+w"), (EX, "+w"), (VIEW, "+r"), (LESS, "+r")] {
+        let e = go(desc, &["a.txt", "b.txt"], &[], &[], true, "/w").expect_err("refused");
+        assert!(e.problem.contains("two files of one directory"), "{e:?}");
+        assert!(
+            e.hint.as_deref().unwrap().contains(&format!("{marker} /w")),
+            "{e:?}"
+        );
+    }
+    // Two directories are two connections; one file is one.
+    assert!(go(VI, &["a.txt", "/x/b.txt"], &[], &[], true, "/w").is_ok());
+    assert!(go(VI, &["a.txt"], &[], &[], true, "/w").is_ok());
+    // Not the other `cwd none` programs: sed's two files keep ADR-0344's rule.
+    assert!(go(SED, &["-i", "x", "a", "b"], &[], &[], true, "/w").is_ok());
+}
+
+#[test]
+fn a_cluster_with_r_still_reads_only() {
+    use zoraya_proto_file::rights;
+    let p = go(EX, &["-Rs", "notes.txt"], &[], &[], true, "/w").unwrap();
+    let m = merge(&p);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].rights & (rights::WRITE | rights::CREATE), 0, "{m:?}");
+}

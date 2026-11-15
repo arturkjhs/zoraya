@@ -3,5 +3,5 @@
 # checked by terminfo.sh check (make check-terminfo, part of make check-ports).
 123c85a2812a517d967db5f31660db0e6aded4a0b95ed943c5ab435368e7a25c  d/dumb
 779a219d6ed2ed282f9416ee04fe65f92a1c90606cf6e93a61cebfc3aa96c982  v/vt100
-2297ef68a12c679eeeb13e4e28b8536113cbba54d3bd506793c4f0ef8c1fef59  x/xterm
-d99d67da666c615e66948bf5998e2f0b90db569dc4a3fed13cabd7dfd5a91aa9  x/xterm-256color
+258dbccf3cb114079baf5d3f870fbe0b6b1470303fa8399d2fca1dc56e9527c1  x/xterm
+1eb6ddea79d7512693e3be76ee66939984d134b5ad179b9418e73a651df9e5ef  x/xterm-256color

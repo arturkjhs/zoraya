@@ -3208,6 +3208,15 @@ impl Z {
                 // attributes say (ADR-0331 item 10), and a paste is its
                 // (ADR-0386 item 4). No kill is offered: the program decides
                 // what Ctrl-C does (ADR-0387 item 4).
+                //
+                // The broker's notices first: a job's `tcsetpgrp` is on the
+                // notice channel before the broker answers it, so before
+                // anything the job prints after it, and so before any key
+                // typed in answer to that output. Taken now, the signal
+                // characters go to the group that is in front when they are
+                // typed, whatever order the port gives the two packets in
+                // (the review of 10c, note 14).
+                self.host_notices();
                 for (i, &key) in keys.iter().enumerate() {
                     self.tty.tty.set_time(now_ms());
                     let effects = match self.paste.route(key, Reading::Program) {

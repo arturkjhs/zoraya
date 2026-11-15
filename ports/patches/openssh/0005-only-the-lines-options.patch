@@ -1,0 +1,23 @@
+diff --git a/ssh.c b/ssh.c
+index c5889c2..a4aab2b 100644
+--- a/ssh.c
++++ b/ssh.c
+@@ -683,8 +683,18 @@ main(int ac, char **av)
+ 
+  again:
+ 	/* remaining: HUdhjruz */
++#ifdef __zoraya__
++	/*
++	 * Zoraya (ADR-0340 item 4): a second guard behind the shell: only the
++	 * options ssh.cmd lists. -o, -F, -J, -W, -L, -R, -D, -A, -E, -S, -w, -I
++	 * and -i, which could name another host, run a program, listen or read
++	 * a file, are not in the string.
++	 */
++	while ((opt = getopt(ac, av, "TVtv" "l:p:")) != -1) {
++#else
+ 	while ((opt = getopt(ac, av, "1246ACGKMNTVXYZafgknqstvxy"
+ 	    "B:D:E:F:I:J:L:O:P:Q:R:S:W:b:c:e:i:l:m:o:p:w:")) != -1) {
++#endif
+ 		switch (opt) {
+ 		case '1':
+ 			fatal("SSH protocol v.1 is no longer supported");

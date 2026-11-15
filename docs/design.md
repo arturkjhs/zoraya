@@ -498,7 +498,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   table (`keys.rs`) is the entry's `k*` strings: F1 to F12, Alt as an `ESC` prefix, xterm's modifier parameter on cursor
   keys, Home, End, Insert, Delete, Page keys and F-keys, `SS3` forms while DECCKM is set, the keypad as characters or, in
   keypad application mode, `SS3` letters, Ctrl+Space and Ctrl+@ as NUL, Ctrl+^ and Ctrl+_ as their codes in every
-  layout, Shift+Tab as `CSI Z`; Backspace stays `0x7f` (ADR-0096, the entry's `kbs=^H` is an exception) and Shift+Page
+  layout, Shift+Tab as `CSI Z`; Backspace is `0x7f` (ADR-0096) and the entry says `kbs=^?` (ADR-0383 Option C: `tools/term-terminfo/terminfo.sh` compiles it from a copy of `terminfo.src` with the one line of the `xterm+kbs` fragment changed) and Shift+Page
   Up and Down scroll the view. A drag selects text (linear, in reading order, ended by any change to a row it covers, a
   scroll of the view or a resize); with a program holding the mouse (1000, 1002) Shift+drag selects and the pointer is
   reported in the SGR form, the wheel as buttons 64 and 65 (at most 8 a turn), focus as `CSI I` and `CSI O` (1004).
@@ -511,7 +511,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   output changes a row it covers or the view moves (no selection across a scroll); a row that wrapped is copied as two
   lines (no wrap flag); no word or line selection and no primary selection; in the session's `ttyd` a paste does nothing; the pointer is seen only at frames (a drag's selection is still the
   whole stretch between its ends), and a button released outside the window is seen at the next event;
-  no hover (1003), no other mouse encoding; Backspace sends `0x7f` where the pinned entry says `^H`; the keypad has no
+  no hover (1003), no other mouse encoding; the keypad has no
   NumLock; F12 is the compositor's and never reaches the terminal. *Known limits (10a):* a combining mark outside the Basic
   Multilingual Plane, and a third on one cell, are dropped; wide characters are drawn as boxes (no font has them);
   the grid is not reflowed when the window's width changes; the title and the clipboard are ignored by design.
@@ -1000,7 +1000,7 @@ stage 6c `libc.a` holds the real `zoraya-posix` ("`libposix` core (as built)" be
 it run in Zoraya; the ported programs need 6d's process functions. `ports/README.md` has the details.
 
 - **The terminal's entry and tools (TASK-31 10a, ADR-0332, ADR-0333).** `ports/sources.lock` pins ncurses 6.6 (the
-  port for the target is part 10d's). `tools/term-terminfo/terminfo.sh` builds `tic` and `infocmp` from it for the host
+  port for the target is in the image since part 10d, below). `tools/term-terminfo/terminfo.sh` builds `tic` and `infocmp` from it for the host
   (into `build/ports/host/ncurses`, configured with `--enable-mixed-case` so that the directory layout does not depend
   on the host's file system) and compiles exactly `x/xterm-256color`, `x/xterm`, `v/vt100` and `d/dumb`;
   `ports/terminfo.manifest` holds their SHA-256 and `make check-terminfo` (in `make check-ports`) compares
@@ -1011,8 +1011,9 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   `zoraya-term` nor a reason in `entry/exceptions.txt` (INV-0332-1; in `make check`). `tools/term-record/` records
   programs on a pseudo-terminal on the host (`record.py`), builds ncurses' own test programs from the pinned archive
   (`build-curses-tests.sh`) and compares the replayed grids with tmux (`compare-tmux.py`); the recordings are
-  `crates/zoraya-term/recordings/` (`vi`, `less` and four ncurses programs), replayed by `tests/replay.rs`
-  (INV-0332-6).
+  `crates/zoraya-term/recordings/` (`vi`, `less`, four ncurses programs and `vttest`'s cursor and screen menus, the pinned vttest 20251205 built for
+  the host by `build-vttest.sh`), replayed by `tests/replay.rs` (INV-0332-6; the vttest grids are frozen from `zoraya-term` and
+  not yet compared with xterm by a person).
 
 - **`make fetch-ports`** downloads the archives of `ports/sources.lock` (TASK-02's pins and hashes, musl 1.2.5 added,
   tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. Each archive
@@ -1243,7 +1244,8 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   memory object for every mapped one, data cache cleaned to the point of unification for executable pages and the
   instruction cache invalidated once. A device mapping or a pin refuses it. The child's thread starts from a copy of
   the caller's exception frame with x0 `Ok` and x1 0, and its `TPIDR_EL0`; dispositions are copied, the request queue
-  is empty. Only after the child exists do the moved handles leave the caller.
+  is empty. Only after the child exists do the moved handles leave the caller. A mapping made `SHARED` (ADR-0431) is not copied:
+  the child maps the same frames with the same attributes.
 - **`image_create` (ADR-0108).** `zoraya-elf` parses an ELF in a memory object in two steps (header, then table)
   with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table and the object.
   `spawn` copies each segment's bytes from the object then. Rewriting the object after the call harms only the
@@ -1383,6 +1385,24 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `term` as a `Scrollback` message. Tests: `tests/posix/t_tty.c` (`names`, `poll`, `box`, `lines`, `bench`) in
   `tests/posix/zosh.script` and, in a window at each GUI size, `tests/gui/posix-terminal.script` (`make
   test-tour-terminal`). Not yet: see `docs/tasks/TASK-31-part-10c.md`. INV-0331-8 is a lint in `make check-kernel-tty`.
+- **ncurses, `less` and `vi` (TASK-31 10d, ADR-0334, ADR-0335, ADR-0383, proposed ADR-0391).** The image (`build/rootfs-posix`)
+  holds `/bin/less`, `/bin/vi` (nvi2 2.2.2, with `/bin/ex` and `/bin/view` as absolute links to it: it takes its mode from
+  the name it is run by, `patches/nvi2/0004`), the four terminfo entries in `/usr/share/terminfo` (compiled on the host by
+  `tools/term-terminfo/terminfo.sh`, which changes the one `kbs=^H` line of the `xterm+kbs` fragment in a copy of the pinned
+  `terminfo.src` to `kbs=^?`, so the entry says what the terminal sends: ADR-0383 Option C) and ncurses' two archives and
+  headers in `/usr/lib` and `/usr/include`, for programs built inside Zoraya (`tcc life.c -lncursesw -ltinfow`). Each has a
+  description with `cwd none` (`user/describe/posix/{vi,ex,view,less}.cmd`): `vi FILE` is given that one name, to create or
+  replace; `view` and `less` read it; two files of one directory, and a word that starts with `+`, are refused (the list in
+  `narrow` is not built, ADR-0391 item 8: say `+w DIR`). Saving is in place and not atomic, there is no recovery and no start-up file. A process starts on 64 KiB of
+  stack, which ncurses' reading of an entry overflowed (three 32 KiB arrays, three calls deep): `patches/ncurses/0001` takes
+  them from the heap. `creat` and `sleep` are `libposix`'s (ADR-0391 item 1); `ports/apps/ttyshim.c` is gone. The hint for
+  `less` is gone and `more` says `to page a file: less FILE`. Tests: `tests/posix/t_curses.c` (`setup`, `keys`, `devtty`,
+  `poll2`) in `tests/posix/zosh-curses.script` (`make test-posix`) and, in a window at each GUI size,
+  `tests/gui/posix-curses.script` (`make test-tour-terminal`: the size at start and after each `KEY_RESIZE`, Backspace as
+  `KEY_BACKSPACE`, F1, an edit and a save with `vi`, the refusal of a sibling, `tcc -v &| less`). *Known limits:* a native
+  first element of a pipeline reads the keys (ADR-0387 item 2), so `ls | less` does not page (`/bin/cat f | less` and
+  `tcc -v &| less` do); `:e` of a name the grant does not give says "new file" (the refusal that says why is part 10f's);
+  `view` is a read-only grant, narrower than ADR-0335 item 9; DB 1.85 and nvi's `lock` option are as ADR-0390 left them.
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).
@@ -2153,6 +2173,28 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
   part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
   splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
+- **Memory descriptors** (plan part F3, ADR-0413; ADR-0431 and ADR-0432, proposed, record what the code decided):
+  `memfd_create` and `shm_open(SHM_ANON)` make a descriptor of size 0 (`crates/zoraya-posix/src/memfd.rs`, the state in the
+  description entry); its first `ftruncate` makes the memory object, committed at once and paid by the creator's job for its life.
+  `mmap(MAP_SHARED)` maps the object (`Sys::memory_map_at`; the kernel's `memory_map` takes a new `SHARED` flag, ADR-0431, so
+  that `snapshot_process` maps a shared mapping's pages into the child as they are and copies nothing for them: `fork` after
+  `mmap(MAP_SHARED)` has POSIX's meaning); `MAP_PRIVATE` is a copy; `PROT_EXEC` on any `mmap` is `EACCES`, and `mprotect` with it too
+  (INV-0413-5). Seals are rights: `F_SEAL_FUTURE_WRITE` and `F_SEAL_WRITE` replace the library's handle by one without `WRITE` (the
+  old one is closed), so every later mapping, copy sent and fork child is read-only in the kernel (a sealed descriptor's `write`
+  and writable `mmap` are `EPERM`); `F_SEAL_WRITE` is `EBUSY` once a writable handle has left (a send, a `fork`, an arrival) or the
+  descriptor has a writable mapping. The size is fixed from the first shared `mmap`, send, `fork` or arrival (`EBUSY` for another
+  size, `EFBIG` for a write past the end); before that an `ftruncate` or a `write` past the end replaces the object, in doubling
+  steps. A descriptor travels in `SCM_RIGHTS` as a copy of the object handle with its size and seals (a record of kind 7). `shm_open`
+  of any name is `EACCES`, `shm_unlink` `ENOENT`; `SHM_ANON` is `((char *)1)` in `<zoraya/shm.h>`, which musl's `<sys/mman.h>`
+  includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): a memory descriptor does not cross `spawn`
+  or `exec` (`EBADF` without `O_CLOEXEC`) until plan part F4 changes the bootstrap record, so the plan's "a child reads what the
+  parent wrote" is checked with a `fork` child and in one process over a socketpair, and the two-process half over a fake kernel;
+  seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
+  `mlock`; `MAP_SHARED` of a regular file and `MAP_SHARED|MAP_ANONYMOUS` stay `ENODEV`; `memfd_create` no longer survives `exec` or
+  backs a tmpd file. CPython's `_posixshmem` stays unbuilt (`ports/Makefile`'s `PYTHON_ABSENT`). Tests:
+  `crates/zoraya-posix/tests/memfd.rs` (INV-0413-1 over every order of four of nine steps, -2, -3, -5), `tests/posix/t_memfd.c`
+  (`make test-posix`: the 4 MiB memfd and the fork child, the seal and the read-only child's `SIGSEGV`), `tests/posix-core/t_unix.c`
+  (`memfd`, `make test-libposix`), `t_snapshot` and `t_quota` (`make test-qemu`: INV-0431-1 to -3 and INV-0413-4).
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 

@@ -1,0 +1,99 @@
+--- a/ssh.c	2026-11-15 03:56:14
++++ b/ssh.c	2026-11-15 03:56:14
+@@ -564,33 +564,15 @@
+ process_config_files(const char *host_name, struct passwd *pw,
+     int final_pass, int *want_final_pass)
+ {
+-	char *cmd, buf[PATH_MAX];
+-	int r;
+-
+-	if ((cmd = sshbuf_dup_string(command)) == NULL)
+-		fatal_f("sshbuf_dup_string failed");
+-	if (config != NULL) {
+-		if (strcasecmp(config, "none") != 0 &&
+-		    !read_config_file(config, pw, host, host_name, cmd,
+-		    &options,
+-		    SSHCONF_USERCONF | (final_pass ? SSHCONF_FINAL : 0),
+-		    want_final_pass))
+-			fatal("Can't open user config file %.100s: "
+-			    "%.100s", config, strerror(errno));
+-	} else {
+-		r = snprintf(buf, sizeof buf, "%s/%s", pw->pw_dir,
+-		    _PATH_SSH_USER_CONFFILE);
+-		if (r > 0 && (size_t)r < sizeof(buf))
+-			(void)read_config_file(buf, pw, host, host_name, cmd,
+-			    &options, SSHCONF_CHECKPERM | SSHCONF_USERCONF |
+-			    (final_pass ? SSHCONF_FINAL : 0), want_final_pass);
+-
+-		/* Read systemwide configuration file after user config. */
+-		(void)read_config_file(_PATH_HOST_CONFIG_FILE, pw,
+-		    host, host_name, cmd, &options,
+-		    final_pass ? SSHCONF_FINAL : 0, want_final_pass);
+-	}
+-	free(cmd);
++	/*
++	 * Zoraya (ADR-0340 item 3): no configuration file is read, neither the
++	 * user's nor the system's. What a person would put in a `Host` block
++	 * goes into a shell function, where `help` shows it.
++	 */
++	(void)host_name;
++	(void)pw;
++	(void)final_pass;
++	(void)want_final_pass;
+ }
+ 
+ /* Rewrite the port number in an addrinfo list of addresses */
+@@ -1037,12 +1019,8 @@
+ 			options.request_tty = REQUEST_TTY_NO;
+ 			break;
+ 		case 'o':
+-			line = xstrdup(optarg);
+-			if (process_config_line(&options, pw,
+-			    host ? host : "", host ? host : "", "", line,
+-			    "command-line", 0, NULL, SSHCONF_USERCONF) != 0)
+-				exit(255);
+-			free(line);
++			/* Zoraya (ADR-0340 item 3): no -o, no configuration reader. */
++			fatal("option -o is not available");
+ 			break;
+ 		case 's':
+ 			if (options.session_type != -1 &&
+@@ -1061,7 +1039,8 @@
+ 			options.bind_interface = optarg;
+ 			break;
+ 		case 'F':
+-			config = optarg;
++			/* Zoraya (ADR-0340 item 3): no configuration files. */
++			fatal("option -F is not available");
+ 			break;
+ 		default:
+ 			usage();
+@@ -1109,10 +1088,10 @@
+ 				host = p;
+ 			break;
+ 		}
+-		if (ac > 1 && !opt_terminated) {
+-			optind = optreset = 1;
+-			goto again;
+-		}
++		/*
++		 * Zoraya (ADR-0340 item 4): every word after the host belongs to
++		 * the far side's command; options are not read again.
++		 */
+ 		ac--, av++;
+ 	}
+ 
+@@ -1268,8 +1247,11 @@
+ 		cleanup_exit(255);
+ 
+ 	if (options.user == NULL) {
+-		user_was_default = 1;
+-		options.user = xstrdup(pw->pw_name);
++		/*
++		 * Zoraya (ADR-0340 item 5): the one identity of the image's
++		 * user database is not a name on any other machine.
++		 */
++		fatal("no user name: give one with -l USER or as USER@HOST");
+ 	}
+ 
+ 	/*

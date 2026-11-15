@@ -43,6 +43,7 @@ make test-posix POSIX_SCRIPTS="tests/posix/scenarios.script" POSIX_ACCELS="tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/threads.script" POSIX_ACCELS="tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/zosh.script" POSIX_ACCELS="tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/zosh-userland.script" POSIX_ACCELS="tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/zosh-curses.script" POSIX_ACCELS="tcg"
 make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="tcg"
 make test-keeper
 make test-hand-run

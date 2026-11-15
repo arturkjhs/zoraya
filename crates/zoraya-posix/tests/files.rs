@@ -108,6 +108,34 @@ fn owner_bits_are_applied_as_posix_would() {
     assert_eq!(open(&mut r, "wo", o::RDWR, 0), Err(EACCES));
 }
 
+/// `creat` is `open` with `O_WRONLY | O_CREAT | O_TRUNC` (ADR-0391): it makes
+/// the file, cuts a file that is there, and does not read.
+#[test]
+fn creat_makes_and_cuts_and_does_not_read() {
+    let mut r = rig();
+    let fd = open(&mut r, "log", process::CREAT_FLAGS, 0o644).unwrap();
+    r.write(fd, b"first run").unwrap();
+    r.p.close(fd).unwrap();
+    let fd = open(&mut r, "log", process::CREAT_FLAGS, 0o644).unwrap();
+    assert_eq!(r.read(fd, 10), Err(EBADF), "write only");
+    r.write(fd, b"2nd").unwrap();
+    r.p.close(fd).unwrap();
+    let fd = open(&mut r, "log", o::RDONLY, 0).unwrap();
+    assert_eq!(r.read(fd, 20).unwrap(), b"2nd", "the old text is cut");
+}
+
+/// `sleep`'s result: 0 for a whole sleep, the seconds left rounded up
+/// otherwise (ADR-0391).
+#[test]
+fn sleep_reports_the_seconds_left_rounded_up() {
+    use process::unslept_seconds as left;
+    assert_eq!(left(0), 0);
+    assert_eq!(left(1), 1);
+    assert_eq!(left(1_000_000_000), 1);
+    assert_eq!(left(1_000_000_001), 2);
+    assert_eq!(left(u64::MAX), u32::MAX);
+}
+
 #[test]
 fn truncate_append_and_exclusive_create() {
     let mut r = rig();

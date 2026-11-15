@@ -1,0 +1,22 @@
+--- a/dns.c	2026-11-15 03:56:14
++++ b/dns.c	2026-11-15 03:56:14
+@@ -204,6 +204,19 @@
+ 
+ 	*flags = 0;
+ 
++	/*
++	 * Zoraya: no host key verification through DNS (the resolver's
++	 * res_query and dn_expand are not names of libc.a). With the
++	 * configuration reader gone VerifyHostKeyDNS was never on.
++	 */
++	(void)hostname; (void)address; (void)hostkey; (void)flags;
++	(void)counter; (void)result; (void)fingerprints;
++	(void)hostkey_algorithm; (void)hostkey_digest; (void)hostkey_digest_len;
++	(void)dnskey_algorithm; (void)dnskey_digest_type; (void)dnskey_digest;
++	(void)dnskey_digest_len;
++	if (1)
++		return -1;
++
+ 	debug3("verify_host_key_dns");
+ 	if (hostkey == NULL)
+ 		fatal("No key to look up!");

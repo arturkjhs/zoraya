@@ -261,6 +261,11 @@ them; a batch `share` if the `fork` cost shows (ADR-0102).
 - Whether `lseek(SEEK_CUR, 0)` should be answered from a cached position; POSIX allows no divergence, so only with
   a stated rule.
 
+- Amended by ADR-0413 (accepted 2026-11-14), recorded by plan part F3 (as built: ADR-0432): item 12's `MAP_SHARED` is no longer
+  `ENODEV` for a memory descriptor (`memfd_create` and `shm_open(SHM_ANON)`; `ftruncate` makes its memory object, `mmap` maps it,
+  `PROT_EXEC` is `EACCES` on every `mmap`); `MAP_SHARED` of a file and `MAP_SHARED|MAP_ANONYMOUS` stay `ENODEV`. `memfd_create` is
+  no longer an unnamed file of the temporary service (`tmpfile` still is). The rest of this ADR stands.
+
 ## Revisit triggers
 
 - `lseek` or `share` traffic measured to matter in W1 to W3: a cached position with invalidation, or a batch form.

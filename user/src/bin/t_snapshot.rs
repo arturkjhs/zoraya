@@ -206,6 +206,114 @@ fn both_halves_run_with_their_own_memory() {
     println!("t_snapshot: both halves ran, each with its own memory and handles");
 }
 
+/// ADR-0431 and INV-0413-2: a mapping made `SHARED` stays shared with the
+/// child (each half sees the other's writes; a mapping through a read-only
+/// handle is made and read in the child, its refusal to write is `t_memfd
+/// seal`'s), a mapping that is not shared is copied,
+/// and sharing takes no frame for the object's pages.
+fn a_shared_mapping_stays_shared() {
+    const PAGES: u64 = 8;
+    let size = PAGES * 4096;
+    let object = memory_create(size, MemoryFlags::NONE).expect("object");
+    let flags = MapFlags::WRITE.union(MapFlags::SHARED);
+    let whole = memory_map(object, 0, size, flags).expect("shared map");
+    // A second, partial mapping of the same object, at an offset.
+    let part = memory_map(object, 2 * 4096, 2 * 4096, flags).expect("partial shared map");
+    // A read-only shared mapping through a read-only handle.
+    let read_only = handle_duplicate(object, Rights::DUPLICATE.union(Rights::READ)).expect("dup");
+    assert_err!(
+        memory_map(read_only, 0, size, MapFlags::WRITE.union(MapFlags::SHARED)),
+        Status::AccessDenied
+    );
+    let reading = memory_map(read_only, 0, size, MapFlags::SHARED).expect("read-only shared");
+    // A shared mapping needs DUPLICATE too: a fork child could not be given
+    // the handle (ADR-0431 item 4); a private one does not.
+    let no_dup = handle_duplicate(object, Rights::READ.union(Rights::WRITE)).expect("dup");
+    assert_err!(
+        memory_map(no_dup, 0, size, MapFlags::SHARED),
+        Status::AccessDenied
+    );
+    let private_view = memory_map(no_dup, 0, size, MapFlags::READ).expect("not shared");
+    memory_unmap(private_view, size).expect("unmap");
+    handle_close(no_dup).expect("close");
+    // A mapping that is not shared.
+    let private_object = memory_create(size, MemoryFlags::NONE).expect("private object");
+    let private = memory_map(private_object, 0, size, MapFlags::WRITE).expect("private map");
+    // SAFETY: the four mappings just made, each `size` bytes (the partial one
+    // two pages), written by this thread alone.
+    let (whole_bytes, part_bytes, reading_bytes, private_bytes) = unsafe {
+        (
+            core::slice::from_raw_parts_mut(whole as *mut u8, size as usize),
+            core::slice::from_raw_parts_mut(part as *mut u8, 2 * 4096),
+            core::slice::from_raw_parts(reading as *const u8, size as usize),
+            core::slice::from_raw_parts_mut(private as *mut u8, size as usize),
+        )
+    };
+    fill(whole_bytes, 0x10);
+    fill(private_bytes, 0x20);
+    let child = snap(JOB, &[], SELF_SLOT, true).expect("snapshot");
+    let Some(child) = child else {
+        // The parent wrote 0x11 into the shared mappings after the snapshot,
+        // and 0x21 into the private one: the child sees the first, and its
+        // copy of the second as it was (0x20). The partial mapping is the
+        // third and fourth page of the object.
+        let mut ok = all(whole_bytes, 0x11) && all(part_bytes, 0x11) && all(private_bytes, 0x20);
+        fill(part_bytes, 0x30);
+        fill(private_bytes, 0x40);
+        // Through the whole mapping, pages 2 and 3 are the partial one's.
+        ok &= all(&whole_bytes[2 * 4096..4 * 4096], 0x30);
+        ok &= all(&whole_bytes[..2 * 4096], 0x11);
+        // The read-only mapping sees the same frames.
+        ok &= all(&reading_bytes[2 * 4096..4 * 4096], 0x30);
+        child_exit(ok, 5);
+    };
+    fill(whole_bytes, 0x11);
+    fill(private_bytes, 0x21);
+    process_resume(child).expect("resume");
+    assert_eq!(wait_exit(child).code, 0, "the child saw the shared pages");
+    assert!(
+        all(&whole_bytes[2 * 4096..4 * 4096], 0x30),
+        "the child's write is ours"
+    );
+    assert!(all(&whole_bytes[..2 * 4096], 0x11) && all(&whole_bytes[4 * 4096..], 0x11));
+    assert!(all(part_bytes, 0x30));
+    assert!(
+        all(private_bytes, 0x21),
+        "a private mapping is the child's own copy"
+    );
+    // The frames: a snapshot with the object shared takes fewer than one
+    // that copies it, by about the object's pages.
+    let before = test_call(FREE_FRAMES, 0);
+    let shared_child = snap(JOB, &[], SELF_SLOT, true).expect("snapshot");
+    let Some(shared_child) = shared_child else {
+        child_exit(true, 0);
+    };
+    let shared_cost = before - test_call(FREE_FRAMES, 0);
+    process_resume(shared_child).expect("resume");
+    wait_exit(shared_child);
+    memory_unmap(whole, size).expect("unmap");
+    memory_unmap(part, 2 * 4096).expect("unmap");
+    memory_unmap(reading, size).expect("unmap");
+    let flags = MapFlags::WRITE;
+    let again = memory_map(object, 0, size, flags).expect("map not shared");
+    let before = test_call(FREE_FRAMES, 0);
+    let copying_child = snap(JOB, &[], SELF_SLOT, true).expect("snapshot");
+    let Some(copying_child) = copying_child else {
+        child_exit(true, 0);
+    };
+    let copying_cost = before - test_call(FREE_FRAMES, 0);
+    process_resume(copying_child).expect("resume");
+    wait_exit(copying_child);
+    assert!(
+        copying_cost >= shared_cost + PAGES,
+        "sharing {PAGES} pages saved frames: {shared_cost} against {copying_cost}"
+    );
+    memory_unmap(again, size).expect("unmap");
+    memory_unmap(private, size).expect("unmap");
+    close(&[object, read_only, private_object]);
+    println!("t_snapshot: shared mappings stay shared across a snapshot, others are copied");
+}
+
 /// The registers right after the `svc`, the vector registers v16 to v31 and
 /// `TPIDR_EL0`, as each half sees them.
 #[repr(C, align(16))]
@@ -1104,6 +1212,7 @@ fn inner() -> i32 {
     // refused.
     devices_refuse_a_snapshot();
     both_halves_run_with_their_own_memory();
+    a_shared_mapping_stays_shared();
     the_child_starts_with_the_parents_registers();
     the_childs_table_mirrors_the_parents();
     the_move_list_is_all_or_nothing();

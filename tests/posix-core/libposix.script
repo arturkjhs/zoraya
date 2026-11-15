@@ -129,6 +129,10 @@ x missing.h
 < t_unix: calls passed
 < posixrun: exit 0
 < \r\n~> 
+> posixrun /bin/t_unix memfd\r
+< t_unix: memfd passed
+< posixrun: exit 0
+< \r\n~> 
 # The measurements: through libposix, from C.
 > posixrun -e ZORAYA_POSIX_STATS=1 /bin/t_libposix bench\r
 < t_libposix: bench

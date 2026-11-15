@@ -282,6 +282,10 @@ would give it to `spawn` too).
   (W4 runs `/bin/sh` 136 times).
 - As of TASK-16 (ADR-0001 rule 6): every INV-0102 check exists in `t_snapshot`. INV-0102-7's "`self_slot` handle reports the child's own `TERMINATED`" is checked as far as a process can see itself: the child sees `TERMINATED` clear and its own `REQUEST_PENDING` through the self slot, and the parent sees `TERMINATED` through the handle the call returned; a process cannot observe its own end. Choices the ADR leaves open are in ADR-0130 (proposed).
 
+- Amended by ADR-0431 (proposed), recorded by plan part F3: item 2's copy of every mapped object skips a mapping made with
+  `MapFlags::SHARED`, which the child maps as it is (same object, offset and attributes, no frame); every other mapping is copied
+  as before.
+
 ## Revisit triggers
 
 - The W4 measurement exceeds the architect's threshold: Option A (copy-on-write, with the superseding ADRs for

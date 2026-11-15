@@ -26,6 +26,10 @@ const BIN_PROGRAMS: &[&str] = &[
     "tcc",
     "cc",
     "awk",
+    "less",
+    "vi",
+    "ex",
+    "view",
     "ssh",
     "ssh-keygen",
 ];

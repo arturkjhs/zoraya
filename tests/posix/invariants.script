@@ -9,6 +9,22 @@
 > t_posix forkpos\r
 < t_posix: forkpos passed
 < PSURF>
+# Memory descriptors (ADR-0413, plan part F3): the 4 MiB memfd and the fork child, seals as rights, shm_open(SHM_ANON), no executable mapping.
+> t_memfd fork\r
+< t_memfd: fork passed
+< PSURF>
+> t_memfd seal\r
+< t_memfd: seal passed
+< PSURF>
+> t_memfd shm\r
+< t_memfd: shm passed
+< PSURF>
+> t_memfd exec\r
+< t_memfd: exec passed
+< PSURF>
+> t_memfd grow\r
+< t_memfd: grow passed
+< PSURF>
 > t_posix cloexec\r
 < t_posix: cloexec passed
 < PSURF>
@@ -35,6 +51,9 @@
 < PSURF>
 > t_posix eintr\r
 < t_posix: eintr passed
+< PSURF>
+> t_posix sleepintr\r
+< t_posix: sleepintr passed
 < PSURF>
 # INV-0104-5 and INV-0106-2: no broker message and no request taken on the
 # file paths of a process with no handler.

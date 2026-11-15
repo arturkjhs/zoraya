@@ -25,6 +25,16 @@
 # ncurses (TASK-31 10a, ADR-0333, ADR-0334): 6.6's release tarball; the SHA-256 is the same from ftp.gnu.org and
 # invisible-mirror.net (the .sig the GNU mirror carries is not verified here). 10a builds `tic` and `infocmp` from it
 # for the host (tools/term-terminfo/terminfo.sh); the port for the target is 10d's.
+# less, nvi2, db1, openssh, git (TASK-31 ports-early, ahead of parts 10d, 10g and 10h): less 710 from greenwoodsoftware.com
+# (the Less License); nvi2 2.2.2 is the GitHub archive of the tag v2.2.2 (BSD-3-Clause; an auto-generated archive, whose bytes GitHub does not promise to keep: the hash is the first download's); db1 is Berkeley DB 1.85, the
+# last release of the BSD code, from Oracle's download site (a single URL, no mirror) (the 4-clause UC licence, advertising clause withdrawn by UC in 1999; nvi's buffer, ADR-0335 item 2); openssh is
+# OpenSSH portable 10.6p2 from the OpenBSD mirror (ADR-0340); git 2.56.1 from kernel.org (GPL-2.0-only, a separate
+# program like wget, ADR-0339). The SHA-256 of each is the one of the first download (trust on first use, as for
+# ncurses above: none of the signatures these projects publish is verified here).
+# vttest (TASK-31 10d, ADR-0332 item 10, ADR-0391 item 10): the terminal test program, release 20251205 (the newest
+# on the author's site on 2026-11-15; a MIT-style notice, Thomas E. Dickey), the same bytes from both of his hosts. It
+# is built for the host by tools/term-record/build-vttest.sh to record sessions; it is not built for the target and
+# is not in any image.
 #
 # name    version                                    sha256                                                            file                                                   url
 musl      1.2.5                                      a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4  musl-1.2.5.tar.gz                                      https://musl.libc.org/releases/musl-1.2.5.tar.gz https://sources.buildroot.net/musl/musl-1.2.5.tar.gz
@@ -52,8 +62,9 @@ llvm      20.1.8                                     6898f963c8e938981e6c4a302e8
 googletest 1.18.0                                    6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5 googletest-1.18.0.tar.gz                               https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
 awk       72e9b56caddb4a6f8d1405315a5183c26b8650a4   b59f2ec3f40e7446d2ca3793c829800834faf95d929eafb623c5331238eb8c9e  awk-72e9b56caddb4a6f8d1405315a5183c26b8650a4.tar.gz   https://github.com/onetrueawk/awk/archive/72e9b56caddb4a6f8d1405315a5183c26b8650a4.tar.gz
 ncurses   6.6                                        355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11  ncurses-6.6.tar.gz                                     https://ftp.gnu.org/gnu/ncurses/ncurses-6.6.tar.gz https://invisible-mirror.net/archives/ncurses/ncurses-6.6.tar.gz
-# openssh (TASK-31 10g, ADR-0340): OpenSSH portable 10.6p2, the newest release when 10g started (2026-11-15). The
-# SHA-256 is the one of the download from cdn.openbsd.org over https (the project publishes no .sha256 file beside
-# the archive; the .asc signature is not verified here, as for ncurses). Its client and ssh-keygen are built for the
-# image; no server, agent or other tool.
-openssh   10.6p2                                     9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b  openssh-10.6p2.tar.gz                                 https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz
+less      710                                        d1008fb78dcae1323ddab664bcb352a61f022b1b131bd8018548e021d975ec7a  less-710.tar.gz                                        https://www.greenwoodsoftware.com/less/less-710.tar.gz
+nvi2      2.2.2                                      a1ad5d7c880913992a116cba56e28ee8e7d1f59a7f10e5a9b2ce6d105decb59c  nvi2-2.2.2.tar.gz                                      https://github.com/lichray/nvi2/archive/refs/tags/v2.2.2.tar.gz
+db1       1.85                                       4220d4ddeb77fb57ba2f37c1aa105d561d3ef85a6fb89c79c3edd735d0e193c6  db.1.85.tar.gz                                         https://download.oracle.com/berkeley-db/db.1.85.tar.gz
+openssh   10.6p2                                     9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b  openssh-10.6p2.tar.gz                                  https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz
+git       2.56.1                                     f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f  git-2.56.1.tar.xz                                      https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz
+vttest    20251205                                   cd6886f9aefe6a3f6c566fa61271a55710901a71849c630bf5376aa984bf77cc  vttest-20251205.tgz                                    https://invisible-mirror.net/archives/vttest/vttest-20251205.tgz https://invisible-island.net/archives/vttest/vttest-20251205.tgz

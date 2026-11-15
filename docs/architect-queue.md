@@ -59,6 +59,8 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 
 ## D. Open questions
 
+- **git's licence in a static program (ADR-0347, ports-early):** git is GPL-2.0-only and `git-remote-http` links libcurl with Apache-2.0 OpenSSL statically; GPL-2.0-only and Apache-2.0 are not combinable, so `git-remote-http` cannot be shipped as built (GNU wget is GPL-3.0-or-later, which is compatible). Options: git over a GPL-compatible TLS library, `git-remote-http` as a program not linked to OpenSSL (a helper process), an OpenSSL exception, or no HTTPS transport. Decide before 10h wires git into the image.
+- **DB 1 for nvi (ADR-0390):** 1.85 under the 4-clause UC licence; a maintained copy is an open question.
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
 
