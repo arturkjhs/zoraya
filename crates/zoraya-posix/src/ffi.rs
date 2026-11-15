@@ -63,18 +63,6 @@ fn buffer(user: User) -> Bytes {
 /// The rights a handle of `h`'s type can have: what a moved entry names.
 fn rights_of(h: Handle) -> zoraya_abi::Rights {
     let name = zoraya_rt::handle_type(h).unwrap_or("");
-    if name == "memory" {
-        // A memory handle may have lost `WRITE` (a seal, ADR-0413 item 4): a
-        // channel entry may name no more than the handle has, and the kernel
-        // has no call that says what that is, so ask for a copy with them all.
-        return match zoraya_rt::handle_duplicate(h, MemoryObject::RIGHTS) {
-            Ok(copy) => {
-                let _ = zoraya_rt::handle_close(copy);
-                MemoryObject::RIGHTS
-            }
-            Err(_) => MemoryObject::RIGHTS.without(zoraya_abi::Rights::WRITE),
-        };
-    }
     OBJECT_TYPES
         .iter()
         .find(|t| t.name == name)
@@ -128,12 +116,19 @@ impl Sys for RtSys {
         end: Handle,
         bytes: &[u8],
         handles: &[(Handle, bool)],
+        read_only: &[Handle],
     ) -> Result<(), Status> {
         let entries: Vec<ChannelEntry> = handles
             .iter()
             .map(|&(h, copy)| ChannelEntry {
                 handle: h,
-                rights: rights_of(h),
+                // The library says which memory handles lost `WRITE` (a seal,
+                // ADR-0413 item 4); no probe, no guess from an error.
+                rights: if read_only.contains(&h) {
+                    rights_of(h).without(zoraya_abi::Rights::WRITE)
+                } else {
+                    rights_of(h)
+                },
                 transfer: if copy {
                     zoraya_abi::spawn::Transfer::Duplicate
                 } else {

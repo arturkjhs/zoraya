@@ -63,13 +63,17 @@ pub trait Sys {
     /// still the caller's, unlike [`Sys::channel_write`], which takes what it
     /// is given whatever happens. `BadState` is a channel end that holds
     /// handles queued, or the end the message travels on (ADR-0050).
+    /// `read_only` names the handles among `handles` that are memory handles
+    /// without `WRITE`, which the library knows and the kernel cannot be
+    /// asked: an entry may name no more rights than its handle has.
     fn channel_send(
         &mut self,
         end: Self::H,
         bytes: &[u8],
         handles: &[(Self::H, bool)],
+        read_only: &[Self::H],
     ) -> Result<(), Status> {
-        let _ = (end, bytes, handles);
+        let _ = (end, bytes, handles, read_only);
         Err(Status::BadSyscall)
     }
     /// Takes the next message into `bytes`, its handles onto `handles`, and

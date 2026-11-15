@@ -57,6 +57,8 @@ struct Prepared<H> {
     /// The fds of memory descriptors that go: their size is fixed once the
     /// send happens (INV-0413-1).
     sent_memory: Vec<i32>,
+    /// The memory handles of `handles` that have no `WRITE`.
+    read_only: Vec<H>,
 }
 
 fn total(iov: &[User]) -> usize {
@@ -195,6 +197,7 @@ impl<S: Sys> Posix<S> {
             moved: Vec::new(),
             close_after: Vec::new(),
             sent_memory: Vec::new(),
+            read_only: Vec::new(),
         };
         if fds.len() > MAX_HANDLES {
             return Err(ETOOMANYREFS);
@@ -288,6 +291,9 @@ impl<S: Sys> Posix<S> {
                 // A copy of the handle, with the rights the descriptor has:
                 // after a seal, none to write (INV-0413-2).
                 p.handles.push((h, true));
+                if access == 0 {
+                    p.read_only.push(h);
+                }
                 let mut r = Record::one(Kind::Memory, access, false);
                 r.read_off = size;
                 r.write_off = flags;
@@ -434,10 +440,11 @@ impl<S: Sys> Posix<S> {
         end: S::H,
         bytes: &[u8],
         handles: &[(S::H, bool)],
+        read_only: &[S::H],
         nonblock: bool,
     ) -> Result<(), i32> {
         loop {
-            match self.sys.channel_send(end, bytes, handles) {
+            match self.sys.channel_send(end, bytes, handles, read_only) {
                 Ok(()) => return Ok(()),
                 Err(Status::WouldBlock) => {
                     if nonblock {
@@ -538,7 +545,13 @@ impl<S: Sys> Posix<S> {
             .as_ref()
             .map_or(0, |u| u.book.write_off);
         let message = unix::encode_anc(offset, &prepared.records);
-        if let Err(e) = self.send_on_channel(anc, &message, &prepared.handles, nonblock) {
+        if let Err(e) = self.send_on_channel(
+            anc,
+            &message,
+            &prepared.handles,
+            &prepared.read_only,
+            nonblock,
+        ) {
             self.drop_prepared(prepared);
             return Err(e);
         }
@@ -648,13 +661,20 @@ impl<S: Sys> Posix<S> {
                 moved: Vec::new(),
                 close_after: Vec::new(),
                 sent_memory: Vec::new(),
+                read_only: Vec::new(),
             }
         } else {
             self.prepare_rights(fd, rights)?
         };
         let payload = self.gather(iov);
         let message = unix::encode_packet(&prepared.records, &payload);
-        if let Err(e) = self.send_on_channel(ctl, &message, &prepared.handles, nonblock) {
+        if let Err(e) = self.send_on_channel(
+            ctl,
+            &message,
+            &prepared.handles,
+            &prepared.read_only,
+            nonblock,
+        ) {
             self.drop_prepared(prepared);
             return Err(e);
         }

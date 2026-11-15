@@ -929,6 +929,27 @@ fn seals_and_the_right_to_add_them_travel_with_a_descriptor() {
     );
 }
 
+/// Review F3 finding 3: the rights a channel entry names come from the
+/// library's state (the fake kernel checks the list of each send), never from
+/// a probe that spends a handle slot, so a send with no free slot still names
+/// the right rights.
+#[test]
+fn a_send_names_the_rights_the_library_knows_without_a_probe() {
+    let mut r = rig();
+    let (a, b) = r.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
+    let writable = sized(&mut r, PAGE);
+    let sealed = sized(&mut r, PAGE);
+    r.p.fcntl(sealed, F_ADD_SEALS, i64::from(seal::FUTURE_WRITE))
+        .unwrap();
+    let before = r.handles();
+    send(&mut r, a, &[writable, sealed]).unwrap();
+    // Two copies made for the message and nothing else: no probe handle.
+    assert_eq!(r.handles(), before + 2);
+    let got = receive(&mut r, b);
+    assert!(!r.net.borrow().is_read_only(object(&r, got[0])));
+    assert!(r.net.borrow().is_read_only(object(&r, got[1])));
+}
+
 /// ADR-0432 item 5, INV-0432-2: until plan part F4, a spawn cannot be given
 /// a memory descriptor.
 #[test]

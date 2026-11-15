@@ -651,7 +651,26 @@ impl Sys for Fake {
     /// The kernel's all-or-nothing write (INV-0050-1): a refused one changes
     /// nothing, a moved channel end may not hold queued handles or be one of
     /// the channel the message travels on (ADR-0050).
-    fn channel_send(&mut self, end: H, bytes: &[u8], handles: &[(H, bool)]) -> Result<(), Status> {
+    fn channel_send(
+        &mut self,
+        end: H,
+        bytes: &[u8],
+        handles: &[(H, bool)],
+        read_only: &[H],
+    ) -> Result<(), Status> {
+        // As the kernel: an entry names no more rights than its handle has,
+        // so a handle that is read-only is listed, and a listed one is.
+        {
+            let n = self.net.borrow();
+            for &h in read_only {
+                assert!(n.is_read_only(h), "{h} is listed read-only but is not");
+            }
+            for &(h, _) in handles {
+                if n.is_read_only(h) {
+                    assert!(read_only.contains(&h), "{h} is read-only and not listed");
+                }
+            }
+        }
         let mut n = self.net.borrow_mut();
         let object = n.object(end).ok_or(Status::BadHandle)?;
         let peer = match n.objects.get(&object) {
