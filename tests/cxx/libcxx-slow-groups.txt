@@ -1,0 +1,10 @@
+# The libc++ groups that make test-cxx-libcxx leaves out under TCG
+# (tests/cxx/libcxx-tcg-excluded.txt: libc++'s atomic wait polls with a backoff over
+# Zoraya's futex, and under the emulated CPU the polling takes minutes) and that
+# `make test-cxx-libcxx-slow` runs under TCG, with a timeout of its own, in the
+# nightly run (tools/ci-nightly-tests.txt): no time pressure there. A name ends in
+# "/": every test built from the directory. Each must also be in libcxx-tcg-excluded.txt
+# (tests/cxx/libcxx-build.sh checks), so that the two lists cannot drift apart.
+std/thread/thread.semaphore/
+std/thread/thread.barrier/
+std/thread/thread.latch/

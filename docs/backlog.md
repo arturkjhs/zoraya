@@ -352,7 +352,7 @@ cannot be loaded (no `dlopen`), so the hook should refuse it; the `-ext` build i
 
 For the architect.
 
-- **What may `--net-open` reach (INV-0230-1, audit C3)?** The network steps of `make test` run QEMU without `restrict=on`
+- **What may `--net-open` reach (INV-0230-1, audit C3)?** *Decided 2026-11-15 and done in work/test-fixes-3: see TASK-31-part-test-fixes-3.* (The question as asked:) The network steps of `make test` run QEMU without `restrict=on`
   (`NET_FETCH_RUN`, `test-net-fetch`'s DNS leg, `test-net-lookup`, `NET_POSIX_RUN`, `APPS_RUN`, `test-python`, `NS_RUN`;
   `test-hand-run` and `make run-net` use person mode), which ADR-0230 item 2 does not describe: a script that fetches a public
   address connects out. Decide: move them to `restrict=on` with `guestfwd`, or accept `--net-open` against the host test servers
@@ -361,10 +361,11 @@ For the architect.
   name a command. Is an `abi` type a valid check (then its file may be named), or should a `check-*` script assert that
   `kernel/src` has one user-copy read of the spawn buffer and that `SpawnRequest::decode` takes `&[u8]`? The row is
   `not yet applicable` meanwhile (ADR-0042's open questions).
-- **No CI job runs libc++'s `thread.semaphore`, `thread.barrier` and `thread.latch` tests** (left out under TCG; CI is Linux, so
-  the `-tcg` script is used whatever the accelerator). Recorded in INV-0360-2 and `docs/design.md`. A separate nightly step with
-  its own timeout needs a third script and a step in `TEST_STEPS`, `ci-tests.txt` and the lanes; or libc++'s atomic wait over the
-  futex removes the polling.
+- **libc++'s `thread.semaphore`, `thread.barrier` and `thread.latch` tests** (left out of `make test-cxx-libcxx` under TCG; CI is
+  Linux, so the `-tcg` script is used whatever the accelerator). *Done in work/test-fixes-3:* the nightly run (only it) runs them
+  under TCG with `make test-cxx-libcxx-slow` (`tests/cxx/libcxx-slow-groups.txt`, `tools/ci-nightly-tests.txt`, its own runner
+  timeout and a 150-minute job); no push or candidate runs it. Not yet seen to pass on CI's runner under TCG: the first nightly
+  after the merge shows whether 7200 s and 150 minutes are enough. libc++'s atomic wait over the futex would remove the polling.
 - **Not mapped before this part, still:** `test-cxx-libcxx` now follows `kernel/` and `crates/zoraya-rt/` (the futex libc++ waits
   on), `tools/zcc` (`zc++` is a link to it), `ports/Makefile`, `ports/sources.lock`, `ports/crt/` and `ports/include/`.
 - **`t_quota` handshake:** `channel_read(...).is_ok()` retries when the peer closed, so a child that dies early costs 10 s and
@@ -419,3 +420,11 @@ each change is recorded by the part that implements it, with an Opus review. Two
    and a random-number connection for every POSIX child from the broker (ADR-0453 with ADR-0227 item 3), which also closes
    the nested `python3` and fork-child randomness items above. Done when the probes of `docs/research/rust-std/probes` pass
    in CI as `make test-rust-std`.
+
+- **CI does not run `test-net-lookup`, `test-net-dns` and test-hand-run's network leg (INV-0230-1, INV-0316-1..3; for the architect, docs/architect-queue.md).**
+  They need UDP to `tools/test-dns` or person mode's router, which `restrict=on` forbids, so they run inside
+  `tools/confine-loopback.sh`; on CI `CONFINED` prints `SKIPPED:` and does not run them (`CONFINE_CI=1` tries). Candidate
+  18c10e4 showed the container with `--cap-add=SYS_ADMIN,NET_ADMIN` did not confine; one suspect, not tested, is that
+  `--verify` lists `/sys/class/net`, which in a container shows the host's namespace (`/proc/net/dev` follows the process's).
+  Question: a runner with unprivileged user namespaces, or a container allowed `unshare -n`, would run them on CI; or accept
+  that INV-0316-1..3's wire check is local only.

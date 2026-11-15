@@ -42,6 +42,7 @@ tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
 tools/check-net-open.sh       check
 tools/net-open-allowed.txt    check
+tools/confine-loopback.sh    check test-net
 tools/check-tls-roots.sh      check
 tools/test-run-disk.sh        check
 tools/run-disk.sh             check test-hand-run test-apps test-python test-python-ext test-python-regr

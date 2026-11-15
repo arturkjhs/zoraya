@@ -2021,8 +2021,11 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   command is `ping` by name, then `fetch` by name, then the two silent names ("the name lookup timed out") and one that
   does not exist; its `netd` takes the server's port from `/config/net-test-dns-port` (feature `net-test` only; port 53
   needs root). `zoraya-test-dns --check-pcap` then reads the run's capture: one ARP request for the server before the
-  first query, and the echo request and the SYN within 0.5 s of their answers. The step runs the
-  network without `restrict=on` (`tools/run-qemu.sh --net-open`); every other step keeps it. The fuzz target
+  first query, and the echo request and the SYN within 0.5 s of their answers. The step (and `make
+  test-net-dns`, the names answered by `tools/test-dns`) needs UDP to the host, which `restrict=on` forbids: it runs inside
+  `tools/confine-loopback.sh` (macOS `sandbox-exec`, Linux `unshare -rn`; a host that cannot confine skips the two steps)
+  with `tools/run-qemu.sh --net-open`, which refuses to start outside it. Every other network step is `restrict=on` and
+  reaches the test servers only through `--net-guestfwd` relays to `127.0.0.1` (INV-0230-1, `make check-net-open`). `test-hand-run`'s person-mode network leg runs inside the same wrapper; `run-qemu.sh --net-open` verifies the confinement itself (a datagram to 198.51.100.7 must fail). Known limits: on macOS the sandbox leaves the whole host loopback reachable (SLIRP's 10.0.2.2:ANY is 127.0.0.1:ANY), so a guest of those steps could reach another local service, for example a local DNS forwarder; in Linux's empty namespace there is none. On CI `test-net-lookup`, `test-net-dns` and `test-hand-run`'s network leg are not run (`CONFINED` prints `SKIPPED:`; `CONFINE_CI=1` tries them): CI's container gave no confinement (candidate 18c10e4), so INV-0316-1 to 3's `test-net-lookup` part runs on a person's machine only (`make test-net`). `netd`'s `(dhcp)` in its configured line names the address source, not the DNS server's. The fuzz target
   `fuzz/fuzz_targets/net_dns_http.rs` was compiled and driven with 400,000 random inputs in a scratch crate (not run under
   libFuzzer: no nightly toolchain here).
 - **Measured** (`fetch --sum` against `tools/test-httpd` on the host, QEMU 11.1.2, 128 MiB, 1 CPU, normal kernel,
@@ -2320,7 +2323,7 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   not enforced, FIFOs only in `/tmp`, no hard links, lexical `..`, times that never go back, no `statvfs`; one, `weakly_canonical`
   of missing components, not analysed further)), built by `tests/cxx/libcxx-build.sh` (a test that does not compile is an
   error; patch `llvm/0004` makes the filesystem tests' helper work without a shell) and run each by `posixrun` in `/work`
-  (99 s under HVF on the Mac mini). Limit: under TCG, which is every CI job, `thread.semaphore/`, `thread.barrier/` and `thread.latch/` are left out (`tests/cxx/libcxx-tcg-excluded.txt`: libc++'s atomic wait polls with a backoff here); no CI job runs them, only HVF on the Mac does, until libc++'s wait goes over the futex (ADR-0301, `docs/backlog.md`). `make
+  (99 s under HVF on the Mac mini). Limit: under TCG, which is every CI job, `thread.semaphore/`, `thread.barrier/` and `thread.latch/` are left out of that step (`tests/cxx/libcxx-tcg-excluded.txt`: libc++'s atomic wait polls with a backoff here); the nightly run (not a push to main, not a candidate) runs them under TCG with `make test-cxx-libcxx-slow` (`tests/cxx/libcxx-slow-groups.txt`, its own timeout `CXX_LIBCXX_SLOW_TIMEOUT`, 7200 s, in a job of 150 minutes; `tools/ci-nightly-tests.txt`), and HVF on the Mac runs them in `make test-cxx-libcxx`; the polling itself goes when libc++'s wait goes over the futex (ADR-0301, `docs/backlog.md`). `make
   test-cxx-gtest`: GoogleTest's 27 self-checking test programs, death tests included (they `fork`, and the threadsafe style
   executes the program again), each through `gtrun` (`tests/cxx/gtrun.c`, `user/describe/posix/gtrun.cmd`), with the
   expectations of `tests/cxx/gtest-expect.txt`. `make ci-build` builds the runtime, GoogleTest and the libc++ subset, so that the
