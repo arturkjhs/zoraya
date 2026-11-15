@@ -365,6 +365,80 @@ fn small_neighbours_merge_and_the_charge_follows() {
     assert_eq!(list.bytes_held(), 2 * Mappings::<u32>::CHUNK_BYTES);
 }
 
+/// Chunks of 32, 32 and 1 records, then two records leave the middle one: it
+/// holds 30 and the next 1, which are less than a chunk and become one (the
+/// merge with the chunk after); and the mirror, 1, 32 and 32 (the merge with
+/// the chunk before). Without either the neighbours hold less than a chunk's
+/// worth and the bound on the chunks fails (`check`).
+#[test]
+fn a_chunk_that_falls_under_half_merges_with_the_next_and_with_the_one_before() {
+    for forward in [true, false] {
+        let mut list = Mappings::new();
+        let mut model = Model(Vec::new());
+        for n in 0..(3 * CHUNK) as u32 {
+            add(&mut list, &mut model, PAGE, n).expect("a gap");
+        }
+        assert_eq!(list.chunk_count(), 3);
+        // Cut the end that is to stay small to one record.
+        let doomed: Vec<(u64, u64)> = if forward {
+            model.0[2 * CHUNK + 1..].to_vec()
+        } else {
+            model.0[..CHUNK - 1].to_vec()
+        };
+        for &(va, length) in &doomed {
+            list.remove_exact(va, length).expect("exact");
+        }
+        model.0.retain(|r| !doomed.contains(r));
+        same(&list, &model);
+        // Two from the middle chunk.
+        let middle = if forward { CHUNK } else { 1 };
+        for _ in 0..2 {
+            let (va, length) = model.0.remove(middle + 8);
+            list.remove_exact(va, length).expect("exact");
+        }
+        same(&list, &model);
+        assert_eq!(list.chunk_count(), 2, "forward {forward}");
+        assert_eq!(list.bytes_held(), 2 * Mappings::<u32>::CHUNK_BYTES);
+    }
+}
+
+/// The merge is for neighbours that hold less than a chunk together, not
+/// for exactly a chunk: 24 and 8 stay two, 22 and 8 become one; both ways.
+#[test]
+fn neighbours_merge_when_they_hold_less_than_a_chunk_and_not_at_exactly_one() {
+    for forward in [true, false] {
+        let mut list = Mappings::new();
+        let mut model = Model(Vec::new());
+        for n in 0..(3 * CHUNK) as u32 {
+            add(&mut list, &mut model, PAGE, n).expect("a gap");
+        }
+        let doomed: Vec<(u64, u64)> = if forward {
+            model.0[2 * CHUNK + 8..].to_vec()
+        } else {
+            model.0[..CHUNK - 8].to_vec()
+        };
+        for &(va, length) in &doomed {
+            list.remove_exact(va, length).expect("exact");
+        }
+        model.0.retain(|r| !doomed.contains(r));
+        assert_eq!(list.chunk_count(), 3);
+        let middle = if forward { CHUNK } else { 8 };
+        for n in 0..10 {
+            let (va, length) = model.0.remove(middle + 3);
+            list.remove_exact(va, length).expect("exact");
+            same(&list, &model);
+            // 32 - n - 1 and 8: 32 records together at n = 7, 31 at n = 8.
+            let want = if n < 8 { 3 } else { 2 };
+            assert_eq!(
+                list.chunk_count(),
+                want,
+                "forward {forward}, after {}",
+                n + 1
+            );
+        }
+    }
+}
+
 /// Random maps and unmaps of random sizes: what `growth_for` says is what
 /// `reserve_for` adds, and the list stays valid and few.
 #[test]

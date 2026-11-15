@@ -38,7 +38,7 @@ id = "F5-worst-growth-kept"
 file = "kernel/src/memory/user.rs"
 find = 'self.memory.paid.release_kernel(worst - grown.min(worst));'
 replace = 'let _ = (worst, grown);'
-note = "equivalent since `growth_for` predicts the growth exactly (the difference to give back is always 0); the release stays as the guard if the prediction and `reserve_for` ever differ (the host test asserts they agree)"
+note = "survives, not equivalent: when `reserve_for` fails (`NoRoom`) nothing grew and the whole chunk charged first must be given back; the mutant keeps it charged until the space is reaped. No test can reach it without a heap failure injected. When a chunk is made the difference is 0, because `growth_for` predicts the growth exactly (a host test asserts it)."
 
 [[mutant]]
 id = "F5-quota-not-asked"

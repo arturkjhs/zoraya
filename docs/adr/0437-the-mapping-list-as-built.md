@@ -69,10 +69,11 @@ of every record.
 2. **The charge is whole chunks.** Every chunk is made at its full size (1816 bytes with its place in the list, measured: 56
    a record) and kept or given back whole; the space's job is charged one chunk's bytes for each chunk, as kernel memory.
    The most `reserve_for` can add (`max_growth`, one chunk) is charged first and what the list did not grow by is
-   given back, so a refusal allocates nothing; a mapping that fails after its room was made gives the room back
-   (`map_abort`); a removal gives back an emptied chunk. A mapping made and unmapped leaves the charge as it was (a test of
-   `t_thread` needs it). The list of chunks' own slack (its capacity beyond its length, at most 24 bytes for each chunk the
-   list ever had at once, 6 KiB at the worst) is not charged. A job with less than a chunk of headroom is not refused a mapping that adds no chunk (`growth_for`). Measured: a process with one to 32 mappings is charged 1816 bytes
+   given back, so a refusal allocates nothing; a mapping that fails after its room was made gives back a chunk made for the top of the list
+   (`map_abort`, `trim`); a split in the middle (both neighbours full) stays, with its charge, which is exact and within
+   the bound below; a removal gives back an emptied chunk. A mapping made and unmapped leaves the charge as it was (a test of
+   `t_thread` needs it). The list of chunks' own slack (its capacity beyond its length: it doubles, so up to two places of 24 bytes for each chunk
+   the list ever had at once, 12 KiB at the worst, when it reaches 512 places) is not charged. A job with less than a chunk of headroom is not refused a mapping that adds no chunk (`growth_for`). Measured: a process with one to 32 mappings is charged 1816 bytes
    (before: nothing, and a `Vec` of 16 records of 56 bytes, 900 bytes, uncharged); at 4096 mappings 232,448 bytes (56.75 a
    mapping); a fixed array of 4096 records in every process would be 229,376 bytes for all of them.
    **Merging.** A removal merges the chunk with a neighbour when the two together hold less than a chunk (the records move
