@@ -37,6 +37,8 @@ fi
 
 # shellcheck source=tools/plan-lib.sh
 . tools/plan-lib.sh
+# A changed Makefile gives the steps whose recipes or variables changed (ADR-0348).
+[ -n "${TEST_CHANGED_PATHS:-}" ] || mk_base=$(git merge-base "$base" HEAD 2>/dev/null || true)
 plan_changed
 
 echo "make test-changed: since $base"

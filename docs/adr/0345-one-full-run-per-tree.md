@@ -76,6 +76,7 @@ Weak points, stated plainly:
 
 ## Open questions
 
+- Superseded in part by ADR-0348 (2026-11-15, the architect's CI policy): a push to `main` now runs the document checks only, whatever changed, and `main`'s full set runs on a schedule. The plan job no longer calls `tools/ci-tree-proof.rb`, so Consequence 1's merge rule and the `main` rule of INV-0345-1 no longer apply to a push. The tool and its fixtures (`make check-ci-plan`) stay as a way to show that a commit's tree has a green full run; the plan job keeps `actions: read` (INV-0345-2), now for `tools/ci-last-full.rb`. The architect sets this ADR's status.
 - Whether `main`'s run should also upload the proof (run id, tree) as an artifact for the stage tag's record: the log line is enough for now.
 - Whether a candidate's check job names should be compared with a reproducible list from the run's own commit through the API instead of the checkout (equal trees make them the same files; the check is redundant while the rule holds).
 - A reusable `workflow_dispatch` input to run a candidate as "full" without the tag.

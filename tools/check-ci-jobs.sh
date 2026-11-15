@@ -155,6 +155,24 @@ if [ -r "$nightly_list" ]; then
 		echo " $TEST_STEPS " | grep -q " $s " && need "$s not in TEST_STEPS (a nightly-only job is not a step of make test)"
 	done
 fi
+# ADR-0348, the CI policy: the schedule job exists (the nightly and the 4-hourly cron), a
+# push to main plans the document checks only, the concurrency group differs by kind of
+# event (and by cron) and a run of main is never cancelled, and the scheduled run asks the
+# API for the last full run and lists the merges since the last green one.
+grep -q -F "cron: '17 2 * * *'" "$workflow" || need "the nightly schedule (cron '17 2 * * *')"
+grep -q -F "cron: '0 */4 * * *'" "$workflow" || need "the schedule every 4 hours (cron '0 */4 * * *')"
+group=$(sed -n 's/^[[:space:]]*group:[[:space:]]*//p' "$workflow" | head -1)
+case "$group" in
+*github.event_name*github.event.schedule*github.ref*) ;;
+*) need "a concurrency group per kind of event, cron and ref (github.event_name, github.event.schedule, github.ref)" ;;
+esac
+cancel=$(sed -n 's/^[[:space:]]*cancel-in-progress:[[:space:]]*//p' "$workflow" | head -1)
+for w in "github.ref != 'refs/heads/main'" "github.event_name != 'schedule'" "github.event_name != 'workflow_dispatch'"; do
+	case "$cancel" in *"$w"*) ;; *) need "cancel-in-progress that spares main, a schedule and a manual run ($w)" ;; esac
+done
+grep -q 'PUSH_MAIN=1 tools/ci-plan.sh' "$workflow" || need "a push to main planned with PUSH_MAIN=1 (the document checks only)"
+grep -q 'tools/ci-last-full.rb' "$workflow" || need "the scheduled run reading the last full run (tools/ci-last-full.rb)"
+grep -q 'ci-last-full.rb --merges' "$workflow" || need "the scheduled run's summary listing the merges since the last green run"
 # Every test step of TEST_STEPS must be in the full plan and in the plan of a
 # change the map does not know (which runs every step: plan-lib.sh's $all).
 for mode in full unmapped; do

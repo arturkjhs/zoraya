@@ -4,6 +4,9 @@
 # check only. Host tests are not listed: every changed crate's tests run,
 # with the tests of the crates that depend on it.
 #
+# The Makefile line is the fallback: tools/ci-plan.sh and make test-changed give a changed Makefile
+# only the steps whose recipes or variables the diff changes (tools/ci-makefile-steps.rb, ADR-0348),
+# and every step when that cannot be told.
 # The build and the machine's own runners touch every test, so they map to every
 # step explicitly (the same list as `all` in tools/plan-lib.sh, which
 # `make check-test-lanes` compares): the Makefile, tools/run-qemu.sh (the only
@@ -33,6 +36,8 @@ tools/ci-plan.sh              check
 tools/ci-tests.txt            check
 tools/plan-lib.sh             check
 tools/ci-tree-proof.rb        check
+tools/ci-makefile-steps.rb    check
+tools/ci-last-full.rb         check
 tools/check-ci-plan.sh        check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check

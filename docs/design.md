@@ -2680,27 +2680,27 @@ ADR-0221 items 5, 6 and 8).
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there, and
   where `auto` is TCG a run and its `tcg` twin are run once: CI's list holds the `tcg` one (ADR-0350);
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
-  What a run contains is `tools/ci-plan.sh`'s plan: a merge candidate (tag `candidate/NAME`, a pull request) runs the steps its
-  change touches (`tools/test-map.txt`) plus a smoke set; a push to `main` whose changes are all under `docs/` (except the docs a
-  test or build reads, listed in `tools/plan-lib.sh`'s `docs_only`, and the `libc.a` surface lists and blocks) runs only the
-  document checks (`doc_checks`: `adr-check`, `check-host-paths`, `check-untrusted-gate`, `check-quota-tests`,
-  `check-tls-roots`), no build and no machine; every other push to `main`, the nightly run and `candidate-full/` run the full
-  set (`tools/ci-tests.txt`). A push to `main` that is not docs-only also gets the document checks only when the workflow
-  proves (`tools/ci-tree-proof.rb`, ADR-0345, proposed) that the merge commit has the tree of a run of `test.yml` that went
-  green with every job of the full set (the list of `tools/ci-tests.txt`, `build` and the checks, each `success` with its `Run` step, none skipped):
-  the commit is a merge of exactly two parents whose first is the previous head, a run's `head_sha` has the same tree (`git`
-  first, then the API), and the run's jobs are read through the API; any doubt or API error runs the full set. So the merge of a
-  candidate that passed the full set (merge `origin/main` into the branch, run `candidate-full/NAME` or
-  `gh workflow run test.yml --ref BRANCH -f full=true`, then `--no-ff` merge and nothing else) is not tested twice; if main
-  moved in between, the trees differ and the full set runs. A stage tag needs a full green run on the code commit of the tagged commit: the tagged commit itself if its change from
-  its first parent is not docs-only (`docs_only` in `tools/plan-lib.sh` judges the whole change: a posix-surface block or a doc a
-  test reads is code although under `docs/`), else the nearest such commit on its first-parent chain (not "the latest ancestor
-  whose run was the full set": a proven merge, or one whose plan job failed, has no such run); the run is on that commit or on a
-  commit with the same tree; the summary of a
-  proven `main` run names the run. By hand, for a commit: `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name>
-  tools/ci-tree-proof.rb` (it reads `tools/ci-tests.txt` and `test.yml` of that commit with `git show`, not of the checkout; the
-  runs on the commit are found by `head_sha`, others only among the 100 latest successful runs). Each API call and the whole proof
-  have a deadline: a call that does not answer runs the full set. `make check-ci-plan` tests the plan and this rule on fixtures. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
+  What a run contains is the policy of ADR-0348 (the architect, 2026-11-15: CI is the brake on the work). A push to a branch
+  (`work/*`) runs the quick checks only (`make check`'s jobs), no plan, no build, no machine. A merge candidate (tag
+  `candidate/NAME`, a pull request) runs `tools/ci-plan.sh`'s plan: the steps its change touches (`tools/test-map.txt`) plus a
+  smoke set (boot, the shell's files script, one GUI run, the POSIX hello script, the hand-run machines); a change of the
+  `Makefile` gives the steps whose recipes or variables the diff changes (`tools/ci-makefile-steps.rb`: a recipe line belongs to
+  its target, an assignment to its variable, steps are reached through prerequisites, `$(MAKE)` calls and variable references; an
+  unattributable change, such as `.PHONY`, an `include`, an `export` or a conditional, runs the full set); a change under
+  `kernel/`, `crates/zoraya-posix*` (libposix and its ffi), `ports/musl/` or `tools/test-runner/` runs the full set
+  (`tools/ci-tests.txt`). A push to `main` runs only the document checks (`doc_checks`: `adr-check`, `check-host-paths`,
+  `check-untrusted-gate`, `check-quota-tests`, `check-tls-roots`), no build and no machine, whatever changed, and a push never
+  cancels a scheduled or manual run (the concurrency group is per kind of event, cron and ref). `main`'s full set runs on a
+  schedule: every 4 hours (`0 */4 * * *`) if `main` changed since the last scheduled run that ran the build
+  (`tools/ci-last-full.rb`, from the API; an answer it cannot give means run), and nightly (`17 2 * * *`, always, with the
+  nightly's own jobs in `tools/ci-nightly-tests.txt`). A scheduled run's summary lists the merges since the last green full run
+  (`git log --merges --first-parent LAST..HEAD`). A red scheduled run is fixed before the next merge; a stage tag needs a green
+  scheduled or nightly full run whose head is the tagged commit or a descendant of it. A manual run with `full=true` (to chase
+  a flake) and a tag `candidate-full/NAME` still run the full set. ADR-0345's tree proof (`tools/ci-tree-proof.rb`) is no longer
+  called by the plan; by hand, `CI_TREE_PROOF_ANY_COMMIT=1 SHA=<commit> GITHUB_REPOSITORY=<owner/name> tools/ci-tree-proof.rb`
+  shows that a commit's tree has a green full run. `make check-ci-plan` tests the plans, the Makefile mapping, the scheduled
+  lookup and the proof on fixtures. Known limits: a `.PHONY` change always runs the full set; a variable reached only through a
+  `$(...)` the parser does not expand reaches the steps of its other references. The whole-suite TCG steps have `QEMU_SLOW_TIMEOUT` (420 s).
   The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
   that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
   (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".
