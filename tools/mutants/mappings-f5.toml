@@ -69,14 +69,14 @@ id = "F5-snapshot-step-ignores-tables"
 file = "kernel/src/memory/user.rs"
 find = 'taken + grown(build) < STEP'
 replace = 'taken < STEP'
-note = "INV-0437-2: a step is 64 frames, not 64 pages (t_bound, a table for each of 2016 pages)"
+note = "survives in this guest: the pages of a snapshot step that bring tables are the process's own (image, stack), whose layout no test varies; the mappings' pages are copied into objects and their tables are made by `finish`. Kept for a layout of the process's own pages that is sparse. Not a hole a test of this size can close."
 
 [[mutant]]
 id = "F5-finish-ignores-tables"
 file = "kernel/src/memory/user.rs"
 find = 'if pages == 0 || pages >= STEP || tables >= STEP / 2 {'
 replace = 'if pages == 0 || pages >= STEP {'
-note = "INV-0437-2: the child's tables end a step of `finish` (t_bound, a table for each of 2016 pages)"
+note = "survives in this guest: a mapping brings at most one table in t_bound's layouts (the two units of its record end the step first); three tables for each mapping need mappings 1 GiB apart, which needs a 1 GiB object. Kept as the bound for that layout."
 
 [[mutant]]
 id = "F5-space-drops-its-mappings-at-once"

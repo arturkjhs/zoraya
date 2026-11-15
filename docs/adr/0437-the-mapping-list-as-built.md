@@ -52,26 +52,34 @@ unknown key, so room cannot be reserved before pages are mapped.
 
 Constant time and no allocation; 256 KiB in every process, of which the ten that a session holds are most.
 
-### Option E: a sorted list of sorted chunks of at most 64 records
+### Option E: a sorted list of sorted chunks of at most 32 records
 
 A lookup is two binary searches, an insertion or removal moves at most a chunk (about 4 KiB), the list grows by one chunk at a
-time, room is made ahead (`reserve_for`) and the insertion that follows never allocates. The search for a place is the one walk
+time, each at its full size, room is made ahead (`reserve_for`) and the insertion that follows never allocates. The search for a place is the one walk
 of every record.
 
 ## Recommendation
 
 **Option E**, as built, with these rules.
 
-1. **`zoraya-mappings`** (a `no_std` crate, host-tested with a model): the list is `Mappings<T>`, 64 records to a chunk. A
+1. **`zoraya-mappings`** (a `no_std` crate, host-tested with a model): the list is `Mappings<T>`, 32 records to a chunk. A
    full chunk splits at the half, or when the record comes at the top of the last chunk, starts a new one (so a process that
    maps upward, as `find_gap` makes it, has full chunks). A chunk that empties is given back. `find_gap` reports how many
    records it visited.
-2. **The charge is what the heap holds.** `bytes_held` (chunk capacities and the list of chunks) is charged to the space's
-   job as kernel memory: the most `reserve_for` can add (`max_growth`) is charged first and what the list did not grow by is
-   given back, so a refusal allocates nothing; a removal gives back what the list no longer holds. Measured: **see the report**
-   (about 70 bytes a mapping at 4096, and under 1 KiB for a process with a few).
+2. **The charge is whole chunks.** Every chunk is made at its full size (1816 bytes with its place in the list, measured: 56
+   a record) and kept or given back whole; the space's job is charged one chunk's bytes for each chunk, as kernel memory.
+   The most `reserve_for` can add (`max_growth`, one chunk) is charged first and what the list did not grow by is
+   given back, so a refusal allocates nothing; a mapping that fails after its room was made gives the room back
+   (`map_abort`); a removal gives back an emptied chunk. A mapping made and unmapped leaves the charge as it was (a test of
+   `t_thread` needs it). The list of chunks' own slack (its capacity beyond its length, at most 24 bytes for each chunk the
+   list ever had at once, 3 KiB at 4096) is not charged. Measured: a process with one to 32 mappings is charged 1816 bytes
+   (before: nothing, and a `Vec` of 16 records of 56 bytes, 900 bytes, uncharged); at 4096 mappings 232,448 bytes (56.75 a
+   mapping); a fixed array of 4096 records in every process would be 229,376 bytes for all of them.
 3. **Work is counted.** The search for a place counts one unit for every 128 records (32 for 4096); an insertion or removal one;
-   the plan of a snapshot is made in steps of 1024 records, a step point between them; `SnapshotBuild::new` has a step point
+   the plan of a snapshot is made in steps of 1024 records, a step point between them; a snapshot's walk of the page tables
+   reads at most 1024 descriptors a step, empty ones included (`for_each_mapping_bounded`, 8 units): a process that mapped a
+   24 MiB object 40 times and unmapped them left a thousand empty tables, and each snapshot after it held IRQ masked 5.8 ms
+   in one walk (measured by this part's `t_bound` case, before the bound; 127 us after); `SnapshotBuild::new` has a step point
    between objects once a step's pages are made; a space's list, a snapshot's copies and a snapshot's child are dropped one
    record at a time with a step point each step (`steps::before`); a snapshot's step and `finish` count the child's
    page-table frames with its pages (a step is 64 frames, not 64 pages); `memory_unmap` has a step point before it frees the
@@ -89,15 +97,14 @@ of every record.
 - **Positive.** A process holds 4096 mappings at the work of a step per call; a process of ten pays about a kilobyte for its
   list; a `fork` of 4096 mappings is steps of 1024 records and 64 frames; CPython's arenas and a browser's thread stacks fit.
 - **Negative.** Another crate; a program that maps pays 64 KiB for the table (before: 6 KiB for every program); the search
-  for a place is linear in the records below it (32 units at 4096); two places that scale with the walk of the page tables
-  remain (below).
+  for a place is linear in the records below it (32 units at 4096); a process pays 1816 bytes for its first mappings.
 - **Follow-up.** ADR-0415's items 2 and 3 (F6 and E1).
 
 ## Invariants
 
-- **INV-0437-1.** The list of mappings is ordered by address, holds no overlapping ranges, has at most 64 records in a chunk and
-  no empty chunk but the last; what the heap holds for it is exactly what the space's job is charged beyond its page tables, at
-  every size and after every removal; a job that cannot take its growth refuses the mapping with `OverQuota`, nothing changed.
+- **INV-0437-1.** The list of mappings is ordered by address, holds no overlapping ranges, has at most 32 records in a chunk and
+  no empty chunk but the last; what the space's job is charged for it beyond its page tables is one whole chunk's bytes for each
+  chunk, at every size and after every removal, and a mapping made and unmapped leaves it as it was; a job that cannot take its growth refuses the mapping with `OverQuota`, nothing changed.
   *Check:* `cargo test -p zoraya-mappings` (against a model, to 4096, at the limit), and the in-QEMU test
   `a_space_holds_4096_mappings_and_pays_for_the_list` (`make test-qemu-one`).
 - **INV-0437-2.** With the most mappings a process may hold, each call that walks them holds no more than a step of work between
@@ -114,9 +121,8 @@ of every record.
 - **The search for a place is linear** in the records below the place. At 4096 it is 32 units (about 10 us, not measured on
   the machine this part ran on beyond the `t_bound` case). A tree of gaps would make it logarithmic; it is built only if a
   measurement asks for it.
-- **A snapshot's walk of a sparse space** still reads the 512 entries of each page-table it meets, uncounted: with one page in
-  each of 2016 tables a step reads about 32,000 entries (measured in `t_bound`, "a table for each of 2016 pages"; the number is
-  in the report). Counting them needs `zoraya-pagetable`'s walk to report what it read.
+- **A snapshot of a sparse space** takes one step for each 1024 descriptors: a process with a hundred thousand empty
+  tables (a limit of the room's memory) makes a long fork of short steps; it is bounded in each interval, not in the call.
 - **The frame list copy** of `memory_map` and `adopt` (ADR-0436, F8's known limitation) is not changed by this part.
 - Whether the heap's step stays 1 MiB (ADR-0415 item 1: until the engine's measurements say).
 

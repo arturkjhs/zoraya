@@ -1218,14 +1218,14 @@ deterministic random mutations.
   request, held by handles, mappings and pins. The kernel chooses addresses in a window of the user range, with an
   unmapped page between mappings. `memory_unmap` ends one whole mapping: the range must be exactly that mapping's.
   **Mappings per process (F5, ADR-0415 item 1, proposed ADR-0437).** A process holds 4096 mappings (`zoraya_abi::MAPPING_SLOTS`,
-  the kernel's limit and `libposix`'s table). The list is `zoraya-mappings`: sorted chunks of 64 records, room made before
-  a change (`reserve_for`), the heap's bytes for it charged to the space's job as kernel memory (about 70 bytes a mapping at
-  4096; a process with ten pays under 1 KiB). The search for a place visits every record below it (one unit of work for 128);
-  a snapshot's plan is made in steps of 1024 records, the objects of its copy with step points between them, and its steps
-  count the child's page-table frames (a sparse space makes one for each page). A space dropped with mappings drops them in
+  the kernel's limit and `libposix`'s table). The list is `zoraya-mappings`: sorted chunks of 32 records, room made before
+  a change (`reserve_for`), each chunk charged whole to the space's job as kernel memory (1816 bytes a chunk; 56.75 bytes a
+  mapping at 4096). The search for a place visits every record below it (one unit of work for 128);
+  a snapshot's plan is made in steps of 1024 records, the objects of its copy with step points between them, its steps
+  count the child's page-table frames (a sparse space makes one for each page), and its walk of the page tables reads at most
+  1024 descriptors a step, empty tables included. A space dropped with mappings drops them in
   steps. `libposix` closes a private mapping's and a heap step's object handle once it is mapped: a mapping costs one slot of
-  the kernel's and no handle. Known limitations: the search for a place is linear in the records below it; a snapshot's
-  walk reads every entry of each page-table it meets without counting them; `memory_map`'s copy of the frame list
+  the kernel's and no handle. Known limitations: the search for a place is linear in the records below it; `memory_map`'s copy of the frame list
   (ADR-0436) is as before.
 - **Channels (`crates/zoraya-channel`, `kernel/src/channel.rs`, ADR-0050).** Two ends with bounded queues, all or
   nothing on write, a message left in place on any refused read. An end has one handle. Closing runs a work list
