@@ -304,6 +304,9 @@ states, to be taken up later:
     connection for each `fork` and `posix_spawn` (`share`), and a refusal fails the call, so `make &` or `sh script &` with the
     terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
     line can take; refusing it outright waits for a fork that can go on without the terminal.
+  - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
+    for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
+    for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.
   - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): accepted
     by the architect (2026-11-15) with the System+K escape: a chord no client receives shows `kill <program>?` on the
     terminal's status row and Enter kills the line's group. **Part 10f** builds it with the status row and System+G.

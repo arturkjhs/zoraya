@@ -138,6 +138,17 @@ what it found, on this branch, after merging `origin/main` (the invariants Total
   `the_broker_is_told_when_a_line_goes_to_the_back_and_comes_to_the_front`.
 - **The kill offer (the architect, 2026-11-15):** ADR-0387 item 4 accepted with the System+K escape, built in 10f; recorded
   in ADR-0387's open questions and `docs/backlog.md`. **ADR-0383 Option C** (`kbs=^?`) is 10d's; the entry is unchanged here.
+- **`zosh.script` under TCG (candidate `work-10c-c`):** the `sh` section typed Ctrl-C and Ctrl-Z 700 ms after a command;
+  under TCG the fork of the job took longer, so the key reached `sh`'s own group (the chosen one then), which ignores it:
+  the `sleep` ran its 30 s and Ctrl-Z said `did not stop: sh`. Before the fix pass the interrupt went to the whole line
+  and hid this. That is POSIX's rule (a signal character is for the group in front when it is typed), so the script now
+  waits for each job to say it runs (`sh -c 'echo go-a; exec sleep 30'`, printed after the child's `tcsetpgrp`) before
+  the key. `make test-posix POSIX_SCRIPTS=tests/posix/zosh.script POSIX_ACCELS=tcg`: PASS.
+- **`w9-term.script` under TCG (the same candidate):** the guest printed nothing for 10 minutes after the `until` line
+  (no W9 line). Not reproduced: four local runs under TCG pass (`make test-posix POSIX_SCRIPTS=tests/posix/w9-term.script
+  POSIX_ACCELS=tcg`, 195 to 204 s each). QEMU on the efficiency cores (`taskpolicy -b`) makes the step time out, but the
+  whole log (`target/test-logs/`) shows the `until` loop running there, only slowly (traces of `ttyd` and the broker,
+  removed again): slowness, not a hang. `docs/backlog.md` records it; the next full run will tell.
 - **Notes 8, 10, 12, 14:** the kill offer in `docs/architect-queue.md` (ADR-0387's row); the rest in `docs/backlog.md`.
 
 Run in the fix pass: `make check` before each commit; `cargo test -p zoraya-tty -p zoraya-shell -p zoraya-broker -p

@@ -216,17 +216,21 @@ w notstp: ready
 # `sh` typed at the prompt is interactive: it has the terminal on 0 and 2,
 # and job control through /dev/tty and tcsetpgrp (ADR-0331 item 6, ADR-0388):
 # Ctrl-C ends the foreground job and sh goes on; Ctrl-Z stops it and sh says so.
+# A signal character is for the group in front when it is typed: each job
+# first says it runs, which it does after sh's tcsetpgrp gave it the terminal
+# (a key typed before that is sh's, as on Unix; under TCG the fork takes more
+# than the 700 ms a fixed wait gave).
 > sh\r
 < $ 
 > echo in sh\r
 < in sh
 < $ 
-> /bin/sleep 30\r
-~ 700 zzz
+> /bin/sh -c 'echo g""o-a; exec /bin/sleep 30'\r
+< go-a
 > \x03
 < $ 
-> /bin/sleep 31\r
-~ 700 zzz
+> /bin/sh -c 'echo g""o-b; exec /bin/sleep 31'\r
+< go-b
 > \x1a
 < Stopped
 < $ 
@@ -245,8 +249,8 @@ w notstp: ready
 # then a program that reads the terminal still gets it (finding 1).
 > /bin/sleep 60 &\r
 < $ 
-> /bin/sleep 30\r
-~ 700 zzz
+> /bin/sh -c 'echo g""o-c; exec /bin/sleep 30'\r
+< go-c
 > \x03
 < $ 
 > jobs\r
