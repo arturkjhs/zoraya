@@ -14,8 +14,12 @@ the session's reports on 2026-11-14; a number with no source here is in the repo
   steps) and `d0335c8`. `9917bc0` and `05bc71e` were pushed while `make check` failed (`check-test-lanes`: three lines of
   `tools/test-map.txt` did not name the C++ steps); `d0335c8` fixes it. Their runs are superseded. **The run on the head
   of `main` is the first item of the next session**: read `gh run list --branch main`.
-- `main`'s runs cancel each other: a push cancels the run in progress (the concurrency group). Do not push twice in
-  a row while a run you need is going.
+- **CI policy of 2026-11-15 (ADR-0348, supersedes the notes below on `main`'s runs):** a push to `work/*` runs `make check`
+  only; a candidate runs the steps its change needs (the full set only for the kernel, libposix or `tools/test-runner/`); a
+  push to `main` runs the document checks only and cancels nothing; `main`'s full set runs every 4 hours if `main` changed, and
+  nightly. Do not wait for `main`'s run after a merge; a red scheduled run is fixed first, before the next merge; a stage tag
+  needs a green scheduled or nightly run that includes the tagged commit (`CLAUDE.md`, "Work discipline").
+- (Before ADR-0348:) `main`'s runs cancelled each other: a push cancelled the run in progress (the concurrency group).
 - CI is slow: a candidate or main run waits in the queue 10 to 70 minutes before its first job (free-plan
   concurrency, shared with the other machine's candidates). A full run is 66 to 70 jobs and 30 to 67 minutes
   after it starts (the audit's change gave 44 to 31 minutes at its best, see `docs/research/test-audit/report.md`).

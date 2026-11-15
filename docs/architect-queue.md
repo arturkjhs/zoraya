@@ -69,3 +69,13 @@ ADR-0280, 0281, 0285, 0286, 0384, 0385, 0398 accepted; ADR-0383 Option C (`kbs=^
 System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal; a refused
 `tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
 the runner itself in a job of their own; `vttest` pinned and built with 10d.
+
+## For the TASK-34 dispatcher (MacBook Air)
+
+The CI policy of ADR-0348 (the architect, 2026-11-15) applies to this dispatcher as it does to the Mac mini's: a push to
+`work/*` runs `make check` only (no full `workflow_dispatch` runs, except to chase a flake); a candidate runs the steps
+`tools/ci-plan.sh` selects (the full set only for `kernel/`, libposix or `tools/test-runner/`; a `Makefile` change maps to the
+steps whose recipes or variables it changes); do not wait for `main`'s run after a merge, the next part merges as soon as its
+own candidate is green; `main`'s full set runs every 4 hours if `main` changed, and nightly; a red scheduled run
+(`gh run list --workflow 'make test' --event schedule`; a skipping 4-hourly run fails if the last full run was red) is fixed first, before the next merge, and its summary lists the merges
+since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
