@@ -265,6 +265,9 @@ pub struct Launch<'a> {
     pub tty: Option<([bool; 3], Handle)>,
     /// The refused-path channel's write end (ADR-0153 rule 11); moved.
     pub report: Handle,
+    /// The read end of the channel the shell gives the program more files on
+    /// (ADR-0337 item 7); moved.
+    pub grants: Handle,
     /// A connection to `netd` for the program (ADR-0225 item 2), moved in
     /// the second bootstrap message beside `SELF` (`SELF_NET_MESSAGE`);
     /// none for a program the line gave no network.
@@ -317,6 +320,7 @@ pub fn launch(
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
+            let _ = handle_close(l.grants);
             if let Some(n) = l.net {
                 let _ = handle_close(n);
             }
@@ -334,6 +338,7 @@ pub fn launch(
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
+            let _ = handle_close(l.grants);
             if let Some(n) = l.net {
                 let _ = handle_close(n);
             }
@@ -484,6 +489,7 @@ pub fn launch(
         close_entries(&l.entries);
         close_ttys(&moved);
         let _ = handle_close(l.report);
+        let _ = handle_close(l.grants);
         for h in [p.child_job, p.broker_end]
             .into_iter()
             .chain(l.net)
@@ -500,6 +506,7 @@ pub fn launch(
             close_entries(&l.entries);
             close_ttys(&moved);
             let _ = handle_close(l.report);
+            let _ = handle_close(l.grants);
             for h in [p.child_job, p.broker_end]
                 .into_iter()
                 .chain(l.net)
@@ -555,6 +562,7 @@ pub fn launch(
         (slot::BOOTSTRAP.slot(), boot_child, ChannelObject::RIGHTS),
         (slot::BROKER.slot(), p.broker_end, ChannelObject::RIGHTS),
         (slot::REPORT.slot(), l.report, ChannelObject::RIGHTS),
+        (slot::GRANTS.slot(), l.grants, ChannelObject::RIGHTS),
         (slot::PROCESS_JOB.slot(), p.child_job, abi::job_rights::OWN),
     ] {
         e.handle(HandleEntry {
@@ -579,11 +587,18 @@ pub fn launch(
         Err(s) => {
             close_entries(&l.entries);
             close_ttys(&moved);
-            for h in [boot, boot_child, p.broker_end, l.report, p.child_job]
-                .into_iter()
-                .chain(l.net)
-                .chain(l.random)
-                .chain(l.window)
+            for h in [
+                boot,
+                boot_child,
+                p.broker_end,
+                l.report,
+                l.grants,
+                p.child_job,
+            ]
+            .into_iter()
+            .chain(l.net)
+            .chain(l.random)
+            .chain(l.window)
             {
                 let _ = handle_close(h);
             }

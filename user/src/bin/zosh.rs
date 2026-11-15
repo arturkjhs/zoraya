@@ -395,6 +395,9 @@ struct Job {
     job: Handle,
     /// One per element of the pipeline, in order.
     processes: Vec<Handle>,
+    /// One per element, in order: a POSIX program's `GRANTS` channel and what
+    /// its table holds (ADR-0337 item 7); `None` for a native one.
+    granted: Vec<Option<Given>>,
     /// Each element's name, whether it is a question command, and the read
     /// end of its `REPORT` channel (ADR-0153 rule 11).
     elements: Vec<(String, bool, Option<Handle>)>,
@@ -409,10 +412,23 @@ struct Job {
     tmp: Option<String>,
 }
 
+/// What the shell keeps for one POSIX element so that the person can give it
+/// more while it runs (ADR-0337): the write end of its `GRANTS` channel, the
+/// what its table holds (what a grant must not shadow). Nothing
+/// of it outlives the job (INV-0337-4): the end closes with the job, the rest
+/// is dropped with it.
+struct Given {
+    tx: Handle,
+    held: zoraya_shell::delivery::Held,
+}
+
 impl Drop for Job {
     /// A background job's reports are not read (ADR-0158 rule 6 reports its
     /// end only): the channels go with it.
     fn drop(&mut self) {
+        for g in self.granted.drain(..).flatten() {
+            let _ = handle_close(g.tx);
+        }
         for (_, _, report) in &mut self.elements {
             if let Some(r) = report.take() {
                 let _ = handle_close(r);
@@ -455,6 +471,10 @@ enum Ready {
         /// The current directory below that entry.
         cwd: String,
         report: (Handle, Handle),
+        /// The `GRANTS` channel: the shell's write end, the program's read
+        /// end (ADR-0337 item 7), and the plan the table was made of.
+        grants: (Handle, Handle),
+        held: zoraya_shell::delivery::Held,
         /// A connection to `netd` for the program (ADR-0225 item 2), made
         /// with `narrow` from a literal `url` operand.
         net: Option<Handle>,
@@ -479,11 +499,12 @@ impl Ready {
                 image,
                 entries,
                 report,
+                grants,
                 net,
                 window,
                 ..
             } => {
-                for h in [image, report.0, report.1]
+                for h in [image, report.0, report.1, grants.0, grants.1]
                     .into_iter()
                     .chain(net)
                     .chain(window)
@@ -1660,6 +1681,7 @@ impl Z {
                 return Err(e);
             }
         };
+        let held = Self::held_of(&entries, &plan);
         let window = match self.posix_window(exec, path, &plan) {
             Ok(w) => w,
             Err(e) => {
@@ -1685,6 +1707,20 @@ impl Z {
                 return Err(fail(&zoraya_command::status_problem(s)));
             }
         };
+        let grants_channel = match channel_create() {
+            Ok(g) => g,
+            Err(s) => {
+                for h in core::iter::once(image)
+                    .chain(net)
+                    .chain(window)
+                    .chain([report.0, report.1])
+                    .chain(entries.iter().filter_map(|e| e.handle))
+                {
+                    let _ = handle_close(h);
+                }
+                return Err(fail(&zoraya_command::status_problem(s)));
+            }
+        };
         let given = grants::summary(&plan, &self.home());
         Ok((
             Ready::Posix {
@@ -1694,11 +1730,46 @@ impl Z {
                 cwd_entry,
                 cwd,
                 report,
+                grants: grants_channel,
+                held,
                 net,
                 window,
             },
             given,
         ))
+    }
+
+    /// What a POSIX program's table holds, for what is given to it while it
+    /// runs (ADR-0337 item 7): each directory it holds whole with its rights,
+    /// and each name a directory is narrowed to. An entry with no connection
+    /// (the current directory's placeholder) holds nothing.
+    fn held_of(
+        entries: &[posix_child::Entry],
+        plan: &[grants::Planned],
+    ) -> zoraya_shell::delivery::Held {
+        use zoraya_abi::posix::EntryKind as P;
+        let merged = grants::merge(plan);
+        let mut held = zoraya_shell::delivery::Held::default();
+        for e in entries {
+            if e.handle.is_none() {
+                continue;
+            }
+            let found = merged.iter().find(|m| m.path == e.prefix);
+            match (e.kind, found) {
+                (P::Directory, Some(m)) => match &m.name {
+                    Some(name) => held.names.push((m.path.clone(), name.clone(), m.rights)),
+                    None => held.wholes.push((m.path.clone(), m.rights)),
+                },
+                (P::Directory, None) => held
+                    .wholes
+                    .push((e.prefix.clone(), zoraya_shell::delivery::READ)),
+                (P::Tmp, _) => held
+                    .wholes
+                    .push((e.prefix.clone(), zoraya_shell::delivery::TREE)),
+                _ => {}
+            }
+        }
+        held
     }
 
     /// Whether a line for a POSIX program the image describes may run: a
@@ -3471,18 +3542,132 @@ impl Z {
     }
 
     /// Enter on the grant line: what its text parses to, resolved against
-    /// what this shell holds (ADR-0337 item 6); `Ok(words)` once given.
+    /// what this shell holds (ADR-0337 item 6), given to the one element's
+    /// program through its `GRANTS` channel (item 7); `Ok(words)` once sent.
+    /// Nothing is kept past the job (INV-0337-4).
     fn give(&mut self, line: u32, element: usize, text: &str) -> Result<String, String> {
+        use zoraya_shell::delivery::{Spec, Wanted};
         let home = self.home();
         let gives = grantline::parse_give(text, &self.cwd, &home, &Holds(self))?;
-        let _ = (line, element);
-        // The `GRANTS` channel to the running program is not built (the
-        // task report, proposed ADR-0395): nothing is given, and the person
-        // is told so rather than shown a grant that did not happen.
-        Err(format!(
-            "{}: cannot be given to a running program yet; start it with the grant instead",
-            grantline::words(&gives, &home)
-        ))
+        let words = grantline::words(&gives, &home);
+        let mut wanted = Vec::new();
+        for g in &gives {
+            match g {
+                grantline::Give::Net(_) => {
+                    return Err(format!(
+                        "{words}: a host cannot be given to a running program yet"
+                    ));
+                }
+                grantline::Give::Path { path, write } => {
+                    let shown = refusal::hint_path(path, &home);
+                    let dir = match self.open(path, 0).and_then(|f| f.stat()) {
+                        Ok(s) => s.kind == proto_kind::DIRECTORY,
+                        Err(_) => return Err(format!("{shown}: does not exist")),
+                    };
+                    wanted.push(Wanted {
+                        path: path.clone(),
+                        dir,
+                        write: *write,
+                    });
+                }
+            }
+        }
+        let Some(mut trial) = self
+            .jobs
+            .get(line)
+            .and_then(|e| e.payload.granted.get(element))
+            .and_then(|g| g.as_ref().map(|g| g.held.clone()))
+        else {
+            return Err(format!(
+                "{words}: this program takes grants only when it starts"
+            ));
+        };
+        let specs = trial.give(&wanted)?;
+        // The connections: each directory opened from this shell's own root,
+        // whole or narrowed to its names, so that nothing is given that the
+        // shell does not hold.
+        let mut files: Vec<(String, File)> = Vec::new();
+        for spec in &specs {
+            let made = match spec {
+                Spec::Whole { prefix, rights } => self
+                    .open_entry(&grants::Merged {
+                        path: prefix.clone(),
+                        rights: *rights,
+                        name: None,
+                        lines: Vec::new(),
+                    })
+                    .and_then(|o| match o {
+                        Some((f, native::EntryKind::Directory)) => Ok((prefix.clone(), f)),
+                        _ => Err(format!("{prefix}: not a directory")),
+                    }),
+                Spec::Names {
+                    prefix,
+                    names,
+                    rights,
+                } => self
+                    .open(prefix, OPEN_DIRECTORY)
+                    .map_err(|s| format!("{prefix}: {}", problem(s)))
+                    .and_then(|dir| {
+                        let list: Vec<(&str, u32)> =
+                            names.iter().map(|(n, r)| (n.as_str(), *r)).collect();
+                        dir.narrow_names(&list, *rights)
+                            .map_err(|s| format!("{prefix}: {}", problem(s)))
+                    })
+                    .map(|f| (prefix.clone(), f)),
+            };
+            match made {
+                Ok(x) => files.push(x),
+                Err(e) => return Err(e),
+            }
+        }
+        let tx = self
+            .jobs
+            .get(line)
+            .and_then(|e| e.payload.granted.get(element))
+            .and_then(|g| g.as_ref().map(|g| g.tx))
+            .ok_or_else(|| String::from("the program has ended"))?;
+        while !files.is_empty() {
+            let take = files.len().min(zoraya_abi::posix::MAX_GRANTED);
+            let chunk: Vec<(String, File)> = files.drain(..take).collect();
+            let prefixes: Vec<(&str, u8)> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, (p, _))| (p.as_str(), i as u8))
+                .collect();
+            let mut bytes = [0u8; 4096];
+            let Some(n) = posix::Grants::encode(&prefixes, chunk.len(), &mut bytes) else {
+                return Err(format!("{words}: cannot be sent"));
+            };
+            let entries: Vec<ChannelEntry> = chunk
+                .iter()
+                .map(|(_, f)| ChannelEntry {
+                    handle: f.end,
+                    rights: ChannelObject::RIGHTS,
+                    transfer: Transfer::Move,
+                })
+                .collect();
+            if channel_write(tx, &bytes[..n], &entries).is_err() {
+                return Err(format!("{words}: the program does not take it"));
+            }
+            // Moved: these handles are the program's now.
+            core::mem::forget(chunk);
+        }
+        if let Some(g) = self
+            .jobs
+            .get_mut(line)
+            .and_then(|e| e.payload.granted.get_mut(element))
+            .and_then(Option::as_mut)
+        {
+            g.held = trial;
+        }
+        if let Some(e) = self.jobs.get_mut(line) {
+            if !e.given.is_empty() {
+                e.given.push_str(", ");
+            }
+            e.given.push_str(&format!("{words} (given while running)"));
+        }
+        self.refusals.clear();
+        Ok(words)
     }
 
     /// The names of this shell's table that begin with `word`, for the grant
@@ -5372,6 +5557,7 @@ impl Host for Z {
         let streams = self.streams(number, pipe, &mut given);
         let mut processes = Vec::new();
         let mut elements = Vec::new();
+        let mut granted: Vec<Option<Given>> = Vec::new();
         let mut posix = Vec::new();
         let mut native = Vec::new();
         let mut failed = streams.as_ref().err().cloned();
@@ -5402,13 +5588,19 @@ impl Host for Z {
                         cwd_entry,
                         cwd,
                         report,
+                        grants: grants_channel,
+                        held,
                         net,
                         window,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
+                        granted.push(Some(Given {
+                            tx: grants_channel.0,
+                            held,
+                        }));
                         if failed.is_some() {
-                            for h in [image, report.1]
+                            for h in [image, report.1, grants_channel.1]
                                 .into_iter()
                                 .chain(net)
                                 .chain(window)
@@ -5445,6 +5637,7 @@ impl Host for Z {
                             streams: *ends,
                             tty: term_out.map(|out| (*tty, out)),
                             report: report.1,
+                            grants: grants_channel.1,
                             net,
                             // Every program gets its own connection to the
                             // random service, with no word of the line's
@@ -5503,6 +5696,7 @@ impl Host for Z {
                 let report = table.map(|t| t.report);
                 let question = self.description(exec.name).is_some_and(|d| d.question);
                 elements.push((exec.name.to_string(), question, report));
+                granted.push(None);
                 match started {
                     Ok(p) => processes.push(p),
                     Err(s) if failed.is_none() => {
@@ -5539,6 +5733,7 @@ impl Host for Z {
         let record = Job {
             job,
             processes,
+            granted,
             elements,
             captured: Vec::new(),
             posix,

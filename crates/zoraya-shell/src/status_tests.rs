@@ -479,3 +479,135 @@ fn the_grant_line_and_its_parser_are_total_on_any_bytes() {
         }
     }
 }
+
+// ---------------------------------------------------------------- delivery
+
+mod delivery_tests {
+    use crate::delivery::*;
+    use alloc::string::ToString;
+    use alloc::vec;
+
+    fn vi_notes() -> Held {
+        // `vi ~/notes.txt`: the home narrowed to one name, and the system's
+        // directories read whole.
+        Held {
+            wholes: vec![("/etc".into(), READ), ("/usr".into(), READ)],
+            names: vec![("/home/u".into(), "notes.txt".into(), CHANGE)],
+        }
+    }
+
+    fn file(path: &str, write: bool) -> Wanted {
+        Wanted {
+            path: path.into(),
+            dir: false,
+            write,
+        }
+    }
+
+    #[test]
+    fn a_second_file_of_a_directory_is_a_list_of_both() {
+        let mut h = vi_notes();
+        let specs = h.give(&[file("/home/u/other.txt", false)]).unwrap();
+        assert_eq!(
+            specs,
+            vec![Spec::Names {
+                prefix: "/home/u".into(),
+                names: vec![
+                    ("notes.txt".to_string(), CHANGE),
+                    ("other.txt".to_string(), READ)
+                ],
+                rights: CHANGE | READ,
+            }]
+        );
+        // Changing it later adds to that name's rights only.
+        let specs = h.give(&[file("/home/u/other.txt", true)]).unwrap();
+        let Spec::Names { names, .. } = &specs[0] else {
+            panic!()
+        };
+        assert_eq!(names[1], ("other.txt".to_string(), READ | CHANGE));
+        assert_eq!(names[0], ("notes.txt".to_string(), CHANGE));
+        // Nothing to give twice.
+        assert!(h.give(&[file("/home/u/other.txt", true)]).is_err());
+    }
+
+    #[test]
+    fn a_directory_is_whole_and_takes_the_names_given_in_it() {
+        let mut h = vi_notes();
+        let specs = h
+            .give(&[Wanted {
+                path: "/home/u".into(),
+                dir: true,
+                write: false,
+            }])
+            .unwrap();
+        assert_eq!(
+            specs,
+            vec![Spec::Whole {
+                prefix: "/home/u".into(),
+                rights: CHANGE | READ
+            }]
+        );
+        assert!(h.names.is_empty());
+        assert!(h.wholes.contains(&("/home/u".to_string(), CHANGE | READ)));
+    }
+
+    #[test]
+    fn a_grant_never_shadows_or_replaces_what_the_program_holds_whole() {
+        let mut h = vi_notes();
+        let before = h.clone();
+        // Below a directory it holds whole, and a system directory itself.
+        for w in [
+            file("/usr/lib/x", false),
+            file("/etc/passwd", true),
+            Wanted {
+                path: "/usr/lib".into(),
+                dir: true,
+                write: true,
+            },
+            Wanted {
+                path: "/etc".into(),
+                dir: true,
+                write: false,
+            },
+        ] {
+            assert!(h.give(&[w.clone()]).is_err(), "{w:?}");
+            assert_eq!(h, before, "nothing changed");
+        }
+        // All or nothing.
+        assert!(
+            h.give(&[file("/home/u/ok.txt", false), file("/usr/x", false)])
+                .is_err()
+        );
+        assert_eq!(h, before);
+        // Rights of a directory held whole grow only at that directory.
+        let mut g = Held {
+            wholes: vec![("/w".into(), READ)],
+            names: vec![],
+        };
+        let specs = g
+            .give(&[Wanted {
+                path: "/w".into(),
+                dir: true,
+                write: true,
+            }])
+            .unwrap();
+        assert_eq!(
+            specs,
+            vec![Spec::Whole {
+                prefix: "/w".into(),
+                rights: TREE | READ
+            }]
+        );
+    }
+
+    #[test]
+    fn the_list_is_bounded() {
+        let mut h = Held::default();
+        for i in 0..zoraya_proto_file::narrow_names::MAX_NAMES {
+            h.give(&[file(&alloc::format!("/d/f{i}"), false)]).unwrap();
+        }
+        assert!(h.give(&[file("/d/more", false)]).is_err());
+        // Another directory is another list.
+        assert!(h.give(&[file("/e/more", false)]).is_ok());
+    }
+}

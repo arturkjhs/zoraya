@@ -1758,8 +1758,8 @@ fn memory_map_flags_are_zero_to_three() {
 /// INV-0337-4's wire (ADR-0337 item 7, ADR-0395): the `GRANTS` message is
 /// total, and refuses what no grant may be.
 mod grants_message {
-    use std::vec::Vec;
     use crate::posix::*;
+    use std::vec::Vec;
 
     #[test]
     fn a_message_round_trips_and_refuses_what_it_must() {
