@@ -1071,6 +1071,10 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   2026-11-12, ADR-0228) on the source: at least 100 blocks, each a DER certificate, none repeated, none of the test PKI's, the
   header's count, source and date, and `docs/dependencies.md` agreeing; `cargo test -p zoraya-tls --test production_roots` loads every
   one into the verifier;
+- `make check-libposix-widths` (INV-0451-1): every definition libposix exports returns the width its C prototype declares (`syscall()`
+  returned `int` for `long`). `tools/check-libposix-widths.py` reads each Rust definition (and fails on any export form it does not read) against
+  `tools/libposix-widths.txt`; `make test-libposix` also runs it against the sysroot's headers and `libzoraya_posix.a`'s exports
+  (`check-libposix-widths-built`, no fallback), and `tests/posix-core/t_syscall.c` runs the 64-bit cases in the guest;
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - `make check-test-lanes`: every step `make test-changed` can select (`tools/test-map.txt`, `all` in `tools/plan-lib.sh`) and every
   test step of `make test` has a lane in `tools/test-lanes.txt` (the lanes of `tools/test-par.sh`) or a line in its skip list

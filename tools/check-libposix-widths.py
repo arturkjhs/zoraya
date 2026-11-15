@@ -10,9 +10,12 @@ definition against tools/libposix-widths.txt, the table of the prototypes'
 return types (NAME, C return type, width class), offline:
 
   check-libposix-widths.py                 definitions against the table
-  check-libposix-widths.py --headers DIR   also the table against the headers
+  check-libposix-widths.py --headers DIR [--archive A]
+                                           also the table against the headers
                                            in DIR (the sysroot's usr/include),
-                                           parsed by clang's AST dump
+                                           parsed by clang's AST dump, and
+                                           the parsed names against the
+                                           archive's exports (nm); no fallback
   check-libposix-widths.py --regen DIR     rewrite the table from the headers
   check-libposix-widths.py --selftest      show that a narrowed definition fails
 
@@ -89,28 +92,68 @@ def strip_comments(s):
 
 
 def definitions(text):
-    """(name, rust return type) of every exported extern "C" definition."""
+    """(name, rust return type) of every exported extern "C" definition.
+
+    Fails (ValueError) on anything that exports or looks like it exports and
+    that this parser does not consume: another attribute form, a macro that
+    emits definitions, a `not_yet!` of another shape or kind. A definition the
+    parser cannot read must not escape the check silently."""
     text = strip_comments(text)
     out = []
+    # The stubs' macro first: its arms give each kind's type, and its body's
+    # own attribute is a template, not a definition.
+    kinds = {}
+    mac = re.search(r"macro_rules!\s+not_yet\s*\{", text)
+    if mac:
+        body_end = balanced_brace(text, mac.end() - 1)
+        body = text[mac.end():body_end]
+        kinds = dict(re.findall(r"\((\w+)\s+\$\(\$name:ident\)\*\)\s*=>\s*\{\$\(.*?->\s*([^{]+?)\s*\{", body, re.S))
+        text = text[:mac.start()] + text[body_end:]
     # `#[unsafe(no_mangle)]` or `#[unsafe(export_name = "x")]`, then the fn.
     for m in re.finditer(r'#\[unsafe\((no_mangle|export_name\s*=\s*"(\w+)")\)\]', text):
         f = re.compile(r'\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?'
                        r'extern\s+"C(?:-unwind)?"\s+fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(').match(text, m.end())
         if not f:
-            continue
+            raise ValueError("an exported attribute not followed by `extern \"C\" fn NAME(`: " + text[m.start():m.start() + 80])
         end = balanced(text, f.end() - 1)
         r = re.compile(r"\s*(?:->\s*([^{;]+?))?\s*(?:where[^{]*)?\{").match(text, end)
         if not r:
             raise ValueError("cannot read the return type of " + f.group(1))
         out.append((m.group(2) or f.group(1), (r.group(1) or "()").strip()))
-    # not_yet!(int a b c) and not_yet!(ptr x): the stubs' own macro.
-    mac = re.search(r"macro_rules!\s+not_yet\s*\{(.*?)\n\}\n", text, re.S)
-    if mac:
-        ret = dict(re.findall(r"\((int|ptr|long)\s+\$\(\$name:ident\)\*\)\s*=>\s*\{\$\(.*?->\s*([^{]+?)\s*\{", mac.group(1), re.S))
-        for kind, names in re.findall(r"^not_yet!\((int|ptr|long)\s+([^)]*)\);", text, re.M):
-            for n in names.split():
-                out.append((n, ret[kind]))
+    rest = re.sub(r'#\[unsafe\((?:no_mangle|export_name\s*=\s*"\w+")\)\]', "", text)
+    # not_yet!(KIND a b c): the stubs' macro, whose arms give each kind's type.
+    for m in re.finditer(r"\bnot_yet\s*!\s*([(\[{])\s*(\w+)\s+([^)\]}]*)[)\]}]\s*;?", rest):
+        if m.group(2) not in kinds:
+            raise ValueError("not_yet! kind `%s` has no arm in the macro" % m.group(2))
+        for n in m.group(3).split():
+            out.append((n, kinds[m.group(2)]))
+    rest = re.sub(r"\bnot_yet\s*!\s*([(\[{])\s*(\w+)\s+([^)\]}]*)[)\]}]\s*;?", "", rest)
+    # Whatever is left must hold no export attribute, no stub invocation and no
+    # macro that emits `extern "C"` functions.
+    for pat, what in ((r"no_mangle", "no_mangle"), (r"export_name", "export_name"), (r"\bnot_yet\b", "not_yet"),
+                      (r"link_name", "link_name")):
+        m = re.search(pat, rest)
+        if m:
+            raise ValueError("`%s` in a form this checker does not read: %s" % (what, rest[max(0, m.start() - 40):m.start() + 60].strip()))
+    for mm in re.finditer(r"macro_rules!\s+(\w+)\s*\{", rest):
+        e = balanced_brace(rest, mm.end() - 1)
+        if re.search(r'extern\s+"C', rest[mm.end():e]):
+            raise ValueError("macro `%s` emits extern \"C\" items: this checker does not read macros" % mm.group(1))
     return out
+
+
+def balanced_brace(s, i):
+    """Index just past the brace group that opens at s[i]."""
+    depth = 0
+    while i < len(s):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise ValueError("unbalanced brace")
 
 
 def all_definitions(src=SRC):
@@ -119,7 +162,13 @@ def all_definitions(src=SRC):
         for f in sorted(fs):
             if f.endswith(".rs"):
                 with open(os.path.join(dp, f)) as fh:
-                    for name, ty in definitions(fh.read()):
+                    try:
+                        found = definitions(fh.read())
+                    except ValueError as e:
+                        print("check-libposix-widths: FAILED\n  %s: %s" % (os.path.relpath(os.path.join(dp, f), ROOT), e),
+                              file=sys.stderr)
+                        sys.exit(1)
+                    for name, ty in found:
                         defs[name] = (ty, os.path.relpath(os.path.join(dp, f), ROOT))
     return defs
 
@@ -161,6 +210,11 @@ def c_class(qt):
     return "?"
 
 
+# Headers that include a Linux kernel header the sysroot does not carry; they
+# declare no function libposix defines.
+SKIP_HEADERS = {"sys/kd.h", "sys/vt.h", "sys/soundcard.h"}
+
+
 def header_prototypes(inc):
     """name -> (C return type as written, desugared class) for every function
     the headers in INC declare, from clang's AST dump."""
@@ -169,7 +223,7 @@ def header_prototypes(inc):
     for sub in ("", "sys", "arpa", "net", "netinet"):
         d = os.path.join(inc, sub)
         if os.path.isdir(d):
-            heads += [os.path.join(sub, h) for h in sorted(os.listdir(d)) if h.endswith(".h")]
+            heads += [os.path.join(sub, h) for h in sorted(os.listdir(d)) if h.endswith(".h") and os.path.join(sub, h) not in SKIP_HEADERS]
     try:
         with open(tu, "w") as fh:
             fh.write("".join("#include <%s>\n" % h for h in heads))
@@ -181,8 +235,8 @@ def header_prototypes(inc):
     finally:
         if os.path.exists(tu):
             os.unlink(tu)
-    if not res.stdout:
-        raise SystemExit("check-libposix-widths: clang failed: " + res.stderr[:400])
+    if res.returncode != 0 or not res.stdout:
+        raise SystemExit("check-libposix-widths: clang failed (status %d): %s" % (res.returncode, res.stderr[:400]))
     protos = {}
     typedefs = {}
 
@@ -214,6 +268,24 @@ def header_prototypes(inc):
     return dict((n, (w, d if d == "8" else c_class(resolve(d)))) for n, (w, d) in protos.items())
 
 
+def archive_exports(archive):
+    """The global text symbols of the `zoraya_posix` member of libzoraya_posix.a
+    (Rust-mangled names left out): what libc.a gets from this crate."""
+    if not os.path.isfile(archive):
+        raise SystemExit("check-libposix-widths: no archive " + archive)
+    res = subprocess.run(["nm", "-g", "--defined-only", "-A", archive], capture_output=True, text=True)
+    if res.returncode != 0:
+        raise SystemExit("check-libposix-widths: nm failed: " + res.stderr[:300])
+    names = set()
+    for line in res.stdout.splitlines():
+        m = re.match(r"^.*?:(zoraya_posix-[^:]*):\s*[0-9a-f]+ [Tt] (\S+)$", line)
+        if m and not m.group(2).startswith(("_R", "_ZN")):
+            names.add(m.group(2))
+    if not names:
+        raise SystemExit("check-libposix-widths: no zoraya_posix member exports in " + archive)
+    return names
+
+
 def compare(defs, table):
     errors = []
     for name in sorted(defs):
@@ -227,7 +299,10 @@ def compare(defs, table):
                           "(run: tools/check-libposix-widths.py --regen build/sysroot/usr/include)" % (name, where))
             continue
         ctype, cc = table[name]
-        if cc in ("-", "S", "?"):
+        if cc == "?":
+            errors.append("%s: the table row has class ? (a return type the checker could not classify)" % name)
+            continue
+        if cc in ("-", "S"):
             continue
         if rc != cc:
             errors.append("%s (%s): returns `%s` (%s) but the C prototype returns `%s` (%s)"
@@ -252,6 +327,27 @@ def selftest():
            'not_yet!(int tee);\nnot_yet!(ptr __map_file);\nnot_yet!(long syscall);\n'
     assert sorted(definitions(stub)) == [("__map_file", "*mut u8"), ("syscall", "i64"), ("tee", "i32")], definitions(stub)
     assert len(compare(dict((n, (t, "selftest")) for n, t in definitions(stub)), dict(table, __map_file=("void *", "8")))) == 1
+    # What the parser does not read must fail, not pass unseen.
+    macro = 'macro_rules! not_yet {\n    (int $($name:ident)*) => {$(\n        #[unsafe(no_mangle)]\n' \
+            '        extern "C" fn $name() -> i32 { 0 }\n    )*};\n}\n'
+    unread = {
+        "not_yet! kind with no arm": macro + "not_yet!(wide a);\n",
+        "another emitting macro": macro + 'macro_rules! stub {\n    ($n:ident) => { #[unsafe(no_mangle)] extern "C" fn $n() -> i32 { 0 } };\n}\n',
+        "cfg_attr": '#[cfg_attr(all(), unsafe(no_mangle))]\nextern "C" fn a() -> i32 { 0 }\n',
+        "export_name = concat!": '#[unsafe(export_name = concat!("a", "b"))]\nextern "C" fn a() -> i32 { 0 }\n',
+        "attribute without a fn": '#[unsafe(no_mangle)]\npub static X: i32 = 0;\n',
+        "link_name": '#[link_name = "x"]\nextern "C" fn a() -> i32 { 0 }\n',
+    }
+    for what, src in unread.items():
+        try:
+            definitions(src)
+        except ValueError:
+            continue
+        raise AssertionError("the parser read over " + what)
+    # The indented, brace and bracket forms are read, not skipped.
+    assert definitions(macro + "mod m {\n    not_yet!(int a);\n}\n") == [("a", "i32")]
+    assert definitions(macro + "not_yet! { int a b }\n") == [("a", "i32"), ("b", "i32")]
+    assert definitions(macro + "not_yet![int a];\n") == [("a", "i32")]
     print("check-libposix-widths: selftest ok")
 
 
@@ -296,6 +392,13 @@ def main(argv):
             elif cls != "-":
                 errors.append("%s: the table has a prototype, the headers declare none" % name)
         note = ", table checked against the headers"
+        if "--archive" in argv:
+            have = archive_exports(argv[argv.index("--archive") + 1])
+            for n in sorted(have - set(defs)):
+                errors.append("%s: exported by the archive, found by no definition the parser read" % n)
+            for n in sorted(set(defs) - have):
+                errors.append("%s: parsed as a definition, not exported by the archive" % n)
+            note += ", names equal to the archive's exports"
     if errors:
         print("check-libposix-widths: FAILED", file=sys.stderr)
         for e in errors:

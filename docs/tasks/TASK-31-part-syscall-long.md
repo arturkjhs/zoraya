@@ -42,6 +42,19 @@ number gives `-1` and `ENOSYS`. The fixed list of ADR-0451 item 1 (futex, getran
 Shown by hand: with `syscall` made `int` and `zoraya_posix_read` made `i32` again, the checker exits 1 naming both;
 reverted, it passes.
 
+## Review fixes (TASK-31-review-syscall-long.md, findings 1 to 3)
+
+1. `make test-libposix` now runs `make check-libposix-widths-built` after the sysroot is built: `--headers` with no fallback
+   (fails if clang, the headers or the archive are missing), so a wrong hand-written row fails CI.
+2. The parser fails on any `no_mangle` or `export_name` it did not consume (`cfg_attr`, `export_name = concat!`, an attribute
+   without `extern "C" fn NAME(`), on `link_name`, on a `not_yet!` kind with no arm, and on another macro that emits
+   `extern "C"` items; the indented, brace and bracket forms of `not_yet!` are read. `--archive` compares the parsed names with
+   the `zoraya_posix` member's global text symbols (`nm`) in both directions (217 equal). Fixtures for each in `--selftest`.
+   clang's exit status is read, and a `?` row is an error. Three headers that include missing Linux headers
+   (`sys/kd.h`, `sys/vt.h`, `sys/soundcard.h`) are left out of the header scan.
+3. The Status row no longer says `t_syscall` covers `sendmsg` (the checker alone does); ADR-0451's open questions record why
+   (rule 6). `docs/design.md` names the check; findings 4 to 8 are in `docs/backlog.md`.
+
 ## Tests
 
 `tests/posix-core/t_syscall.c` (built by `make test-libposix`, run by `libposix.script`): `syscall` with unanswered

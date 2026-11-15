@@ -1006,6 +1006,7 @@ POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
 	@$(MAKE) -s -f ports/Makefile check-libc
+	@$(MAKE) -s check-libposix-widths-built
 	rm -rf $(POSIX_CORE) && mkdir -p $(POSIX_CORE)/root/bin $(POSIX_CORE)/root/work
 	cp -R rootfs/. $(POSIX_CORE)/root/
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
@@ -1475,7 +1476,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-run-disk check-test-lanes check-python-cache
+.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-libposix-widths-built check-run-disk check-test-lanes check-python-cache
 fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -1595,6 +1596,14 @@ check-libposix-widths:
 	@if [ -d $(BUILD)/sysroot/usr/include ] && command -v clang >/dev/null 2>&1; then \
 	  python3 -I tools/check-libposix-widths.py --headers $(BUILD)/sysroot/usr/include; \
 	else python3 -I tools/check-libposix-widths.py; fi
+
+# The same with no fallback, for a run that has built the sysroot and
+# libzoraya_posix.a (test-libposix): the table against the headers, and the
+# parsed names against the archive's exports, so a wrong hand-written row or a
+# definition the parser missed fails CI.
+LIBPOSIX_A := target/posix/aarch64-unknown-none/release/libzoraya_posix.a
+check-libposix-widths-built:
+	python3 -I tools/check-libposix-widths.py --headers $(BUILD)/sysroot/usr/include --archive $(LIBPOSIX_A)
 
 # INV-0325-1 and INV-0325-2: the page NetSurf shows for a refused host, built
 # with the host's C compiler and run (ports/netsurf/test_refusal.c).

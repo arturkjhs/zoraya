@@ -191,6 +191,11 @@ rust-tool: syscall 279 is not answered (ENOSYS)     # the report's wording is th
 - Whether `getauxval`'s answer for `AT_HWCAP` should describe the CPU (Rust's `std_detect` then uses optional
   instructions) or stay 0; 0 is safe and was measured.
 - Whether `gettid` should equal the broker's pid for the main thread, as Linux's does.
+- INV-0451-1's check (ADR-0001 rule 6) cannot call `sendmsg` yet: `libc.a` hides it as `__zoraya_sendmsg` (outside the tier
+  list), so a C program cannot link it. Until ADR-0412's part exports `sendmsg`, its width is checked by
+  `make check-libposix-widths` only (the definition against the header's prototype, offline and with the built sysroot);
+  the `sendmsg` call of the check, and the `REPORT` line per unanswered `syscall` number of item 1, wait for that part and
+  for `work/rust-std`.
 
 ## Revisit triggers
 

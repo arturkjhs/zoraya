@@ -42,8 +42,8 @@ tools/check-quota-tests.sh    check
 tools/check-net-open.sh       check
 tools/net-open-allowed.txt    check
 tools/check-tls-roots.sh      check
-tools/check-libposix-widths.py check
-tools/libposix-widths.txt     check
+tools/check-libposix-widths.py check test-libposix
+tools/libposix-widths.txt     check test-libposix
 tools/test-run-disk.sh        check
 tools/run-disk.sh             check test-hand-run test-apps test-python test-python-ext test-python-regr
 rootfs/system/tls/        check test-files test-hand-run
