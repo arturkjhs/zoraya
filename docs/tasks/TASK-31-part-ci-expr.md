@@ -18,6 +18,7 @@ quoted arguments of `hashFiles(...)`. The file was still valid YAML.
     for a `hashFiles(...)` written outside `${{ }}` (a `run:` line). Whole-line YAML comments are skipped.
   - Errors are `FILE:LINE: message`. It is a conservative structural check, not GitHub's grammar: it knows no
     function names and no types.
+- The YAML parse calls `Psych.parse_stream(text)` with one argument (the filename argument is positional in psych 3 and a keyword in psych 5; Ruby 3.2 on CI rejected the two-argument call).
 - `--selftest` (in the same file): the historical case `hashFiles('docs/adr/0398-*.md' 'docs/adr/0389-*.md')`, a
   trailing, leading and doubled comma, an unbalanced `${{`, an unbalanced paren, an unterminated string, a missing
   comma in `format(...)`, tabs, duplicate keys (top level and nested), invalid YAML, `hashFiles` in a `run:` line, good

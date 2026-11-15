@@ -170,7 +170,7 @@ def check_workflow(path, text)
 
   # (a) YAML parse; (b) duplicate keys.
   begin
-    stream = Psych.parse_stream(text, path)
+    stream = Psych.parse_stream(text)
     walk = nil
     walk = lambda do |node|
       if node.is_a?(Psych::Nodes::Mapping)
