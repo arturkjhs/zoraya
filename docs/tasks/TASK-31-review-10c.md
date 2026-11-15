@@ -307,3 +307,115 @@ Do not merge as is. Findings 1 and 2 break the part's own deliverable (`sh` with
 ordinary use and were reproduced; both are small changes in `tty_host.rs`/`zosh.rs` and ADR-0388 (proposed). Fix 1,
 2 and 4, add the tests of finding 6 (B16, B17, `tty_flush_conn`), then one check of the changed lines; 3 and 5 can be
 fixed in the same pass or recorded in `docs/backlog.md` with their scenarios before the merge.
+
+## Check of the fix pass
+
+The one check after the review, by the `opus-review` subagent, which wrote none of the code: `git diff 8d64e80
+e82774c` without the merges of `main` (commits `674cf47`, `57eb3a7`, `ec61380`, `e82774c`), and `git diff e82774c
+dd8dfec -- . ':!docs'` (the last merge brings only `CLAUDE.md`). Read against findings 1 to 14 above and the
+architect's decisions of 2026-11-15 (a refused `tcsetpgrp` is `EPERM`; entering a room narrows `room new`).
+
+### What was run
+
+In the worktree of `work/10c` at `dd8dfec` and a scratch copy of it (breaks reverted after each), `CARGO_BUILD_JOBS=3`,
+HVF:
+
+| Command | Result |
+|---|---|
+| `cargo test -p zoraya-tty -p zoraya-shell -p zoraya-broker -p zoraya-posix` | exit 0, 495 passed, 0 failed |
+| `make check` | `make test: all checks passed` |
+| `make test-posix POSIX_SCRIPTS=tests/posix/zosh.script POSIX_ACCELS=auto` | `PASS: 214 steps` |
+
+The console of the last shows the review's probe fixed: after `/bin/sleep 60 &` and a Ctrl-C on `/bin/sleep 30`,
+`jobs` prints `[1] + Running /bin/sleep 60`; after 70 jobs `looped 70`, and `/bin/wc -c` reads `abc` and prints `4`.
+Not run: `make test-files` (`tests/shell/rooms.script`, INV-0172-4's refusal), the GUI steps, TCG, `make mutants-host`.
+
+### Hand breaks (each alone, reverted)
+
+| Break | Result |
+|---|---|
+| H1 the broker takes `Background` from a process too (`caller.is_some() \|\|` dropped, `zoraya-broker` `lib.rs:630`) | caught: `a_client_that_hosts_the_terminal_hears_of_groups_and_tcsetpgrp_of_its_lines` ("a process may not") |
+| H2 `foreground_asked` without the root check (`!l.roots.contains(&root)` dropped, `tty_host.rs:263`) | caught: `tcsetpgrp_is_for_a_group_made_inside_the_front_line` |
+| H3 a group with groups made inside it signalled through its job (`nested` forced false, `zoraya-broker` `lib.rs`, `signal_pids`) | caught: `a_signal_to_a_group_with_groups_made_inside_it_reaches_its_members_only` |
+
+### The review's findings
+
+- **1 (must-fix): fixed.** `ForegroundAsked` carries `root`, which the broker takes from the caller's group record
+  (`root_of`), never from the message; the group named must exist, be outside the session and have the same root
+  (`ask_foreground`, `lib.rs:1426-1430`). A root is a group the client made (`Form::In`), so a process cannot make
+  its own root equal to another line's, and `Join` across roots is refused. `Host::foreground_asked` takes it only
+  when `root` is one of the front line's roots, and refuses 0 for either id. Nothing grows per job, and `GroupMade`
+  no longer decides anything. Pids are never reused (`next_pid` only grows), so a stale or ended group id names
+  nothing else.
+- **2 (must-fix): fixed.** With a chosen group, Ctrl-C and Ctrl-\ are `GroupSignal` for it (`keyed`), sent by `zosh`
+  through `signal_group`. The broker signals a group that has groups made inside it member by member, on each
+  member's own process job. That job holds none of the nested groups: a new group's job is a child of the caller's
+  *group* job, and `setpgid` never moves a process (`lib.rs:1199-1204`). A nested group of a nested group is found
+  the same way (its `parent` is the maker's pgid). The group comes from a notice the broker checked, so the signal
+  stays inside the line. A group id of 0 is refused; ids are `u32`, so a negative one cannot be written; a dead id
+  answers `NO_SUCH_PROCESS`.
+- **3: fixed.** `SIGWINCH` goes to the chosen group or else to each root; native elements have no root
+  (`add_root` drops 0).
+- **4: partly fixed.** The note below says what is left.
+- **5: fixed as proposed** (64 per line, in `add_terminal_in`, which both `Clone` and `Host::connect` use). `Clone`
+  from a background line stays allowed because `fork`/`posix_spawn` of a background job need it. One program can take
+  at most a quarter of the table. A starved window needs four lines that the person started, since a program cannot
+  start a line.
+- **6: the listed survivors have tests** (`leave`, the `retain` of `end_line`, `front`, `has_line`, several 2004
+  parameters, the question's count, the `tty_flush_conn` and readiness ones in `tests/poll.rs`/`tests/tty.rs`).
+  This check did not rerun the mutants.
+- **9: fixed.** CSI and SS3 keys are swallowed whole. Swallowing ends at the end of one read from `term`
+  (`end_of_keys`, `zosh.rs:3110`), so an arrow split across two reads still leaks its tail. Rare; accepted.
+- **13: done as the decision says.** The note below gives its reach.
+
+### The new changes
+
+- **`Background { group, back }` (proto-posix 19) is client-only.** The broker refuses it from any connection that has
+  a pid (`caller.is_some()`, H1) and before `HostTerminal`. A `Peer::Client` connection is made only by `add_client`,
+  which `broker.rs` calls once, in the mode with no first shell, and `zosh` keeps the end (`posix_child::Broker` hands
+  `end` to no child). So a POSIX program cannot put the front line in the background, and cannot take a background
+  line out of `back` to get a notice through. Even if it could, the shell still refuses a root that is not in front.
+- **The broker's `EPERM`** is checked after the line and group checks, so it adds a refusal and widens nothing. A line
+  started with `&` is in `back` before its program runs (the `launch` closure). `stop_front` adds a line's roots and
+  `bring_front` removes them, each before the effects that follow it, through a call that waits for the broker's
+  reply.
+
+### Notes of this check
+
+1. **note (should-fix if cheap; else backlog): output can still turn the question off for a non-canonical reader that
+   never asked for 2004** (`tty_host.rs:499`, `:558`). The bracket is still read from all of a line's output. It is
+   reset only when a group is chosen. *Scenario:* `sh -c 'cat notes.txt; ed-like'`, with no job control and so no
+   `tcsetpgrp`: `cat` prints a file that holds `ESC [ ? 2004 h` while the discipline is canonical. Then a line reader
+   puts the terminal in raw mode and does its own editing without bracketed paste. A paste with a hidden newline
+   reaches it bracketed and unasked, and it runs the second line. The reach is one line. The reader is a raw-mode
+   editor, so the review's `cat`-then-canonical-`sh` case is closed. *Fix:* also reset the line's `Bracket` when a
+   `SetAttr` moves the discipline from canonical to non-canonical. An editor that wants 2004 prints it after it enters
+   raw mode (vim, readline). Add a test of `relay(2004h)`, then raw `SetAttr`, then a paste with a newline that gets the
+   question.
+2. **note: the remaining gap of the `EPERM` rule.** The broker says yes and records `asked`, then `zosh` stops or
+   switches the line before it reads the notice. The caller has been told success, the shell refuses, and
+   `tcgetpgrp` (from `asked`) names a group the discipline did not take. The job reads, gets `NotForeground` and stops
+   on `SIGTTIN`, and `sh`'s next `fg` asks again and succeeds: recoverable, as ADR-0388 now records. In two more ways
+   the rule falls back to the silent yes. First, `zosh` ignores `set_background`'s result (`zosh.rs:2303`, `:5102`).
+   Second, `back` and `asked` are dropped when a root group's last member goes (`lib.rs:1100`), while groups made
+   inside it may live on (sh exited, its `&` job remains). In both cases the shell still refuses, so no group gets the
+   terminal out of turn. A failed `Background { back: 0 }` on `fg` would instead make the front line's `tcsetpgrp`
+   `EPERM`. That can happen only when the broker is gone.
+3. **note: INV-0172-4's refusal is complete for what `room new` can give, and is not a boundary against the shell
+   itself.** `room new` takes only `+r`/`+w` (no `+net`, no other grant kind). `is_grant_path` refuses `.` and `..`.
+   Links are inert objects of the file service (`docs/design.md`). `room_covers` needs `+w` in the room for a `+w`,
+   compares paths at a `/` boundary (`/t/wx` is not under `/t/w`), and lets a `/` grant cover all. Limits (`--mem`,
+   `--procs`, ...) are not narrowed. The decision speaks of what a room holds, so this is outside it, but the architect
+   may want it said. A shell that *entered* a room still holds the volume's root: `room --leave`, or entering another
+   room directly, gives the wider `room new` back. That matches "entering a room narrows `room new`", but the
+   check is a guard on the person's intent and not a confinement. A room's own shell, whose root is the room's table,
+   is confined by the existing `outside what this shell holds` check. `make test-files` was not run here.
+4. **note: a chosen group that ends without the chooser taking the terminal back** gets the signal characters and
+   `SIGWINCH` with nobody to receive them, as on Linux. With no kill offer for such a line (ADR-0387 item 4, accepted
+   with System+K in 10f), until 10f closing the window is the way out. Already in ADR-0387's open question.
+
+### Recommendation
+
+Merge after the candidate run is green. Findings 1 to 3, 5 and 9 are fixed and tested, 13 is done within the
+decision's words, and the new `Background` request cannot be sent by a process. Note 1 is the one change worth making
+in this pass or recording in `docs/backlog.md` with its scenario before the merge. Notes 2 to 4 are records.
