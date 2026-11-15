@@ -149,3 +149,47 @@ Severities: **error** (wrong; fix before merge), **warning** (fix in this part o
 
 Fix first: finding 1 (an error that loses descriptors silently) and finding 2. Findings 3 and 4 need the ADR notes and
 the architect's decision on ADR-0430 item 7 before merge.
+
+## Re-check (fixes at 05184032)
+
+Re-check by the `opus-review` subagent of `git diff e2572b5b..05184032`, 2026-11-15. Run by the reviewer, one at a
+time, `CARGO_BUILD_JOBS=2`, output to files: `cargo test -p zoraya-posix` exit 0 (every suite ok, `tests/unix.rs` 29
+passed); `make check` exit 0 ("all checks passed"); `make test-posix-threads` exit 0, `PASS: 104 steps`, `t_unix:
+block passed`; `make test-python` exit 0, `PASS: 112 steps`, `ok socketpair`. Not run: `make test-python-regr` (the
+changed `unixpair.py` step), `make test-libposix`.
+
+- Finding 1: fixed for both holders. `prepare_one` (`unix_io.rs:309-318`) sends a shared stream socket as its
+  streams alone (`has_anc` false, `shared` true, which the decoder's `has_anc != shared` accepts) and keeps its
+  ancillary channel in `close_after`; `finish_moves` closes it only after a successful send and clears `s.ctl`, so a
+  `dup` of the dead description cannot close it again; on a failed send `drop_prepared` leaves it with the socket. A
+  child's socket has no channel and goes the same way. A throw-away test (removed, not committed) counted the
+  process's handles across the parent case: 15 before the send, 15 after it (one ancillary end closed, one pipe copy
+  queued), 15 after the receive, 12 after closing the two received fds. Nothing leaked or duplicated.
+- Finding 2: fixed. `child_keeps` closes a pipe end and a `Stream` record's read and write handles (the first
+  `has_read + has_write` of its handles, the order `prepare_one` encodes) and leaves channel ends, for `book.pending`
+  and for `held`. With the `after_fork` close disabled, the new test fails.
+- Finding 5: fixed. At the second check `rest` is empty (a non-empty `rest` returns earlier) and `read_off` has not
+  moved (only `consumed` moves it), so putting all `got` bytes back into `rest` keeps them at `read_off` with the tag
+  still due; nothing is consumed or closed. With the check disabled, the new test fails.
+- Findings 3 and 12: the notes on ADR-0225 and ADR-0342 are in their open questions, in the form of the ADR-0156 note
+  (f969cf41); no status and no "Architect's decision" section is touched. The script comment now says what
+  `unixpair.py` runs.
+- Finding 4: the INV-0412-1 row now leads with `not yet applicable (until browser-engine plan part F4 ...)` and names
+  what is checked; that is honest. ADR-0430 item 7 and its open question ask the architect; the merge still waits for
+  that decision.
+
+New notes:
+
+13. **note**: `a_shared_stream_socket_is_sent_as_its_streams_alone` (`tests/unix.rs:871`) takes `before` and never
+    asserts it (`let _ = before;`), while its comment describes a count. The count is right (above), but no test keeps
+    it so. *Fix:* `r.settle(); assert_eq!(r.handles(), before)` after the receive.
+14. **note**: the `held` branch of `unix_after_fork_in_child` (`unix_io.rs:1153-1159`, a packet socket shut both ways
+    with a held message) has no test. *Fix:* one case like the `pending` test, with a held packet message carrying a
+    pipe end.
+15. **note**: ADR-0430 items 3 and 6 do not say that a shared stream socket travels as its streams alone and that the
+    send closes the sender's ancillary channel. After that no holder has the channel, so a peer in a third process
+    that sends `SCM_RIGHTS` gets the closed channel's error instead of having its descriptors closed on arrival, as
+    item 6 says (not measured). *Fix:* record both in item 6.
+
+Verdict: the error and the warnings in the code are fixed; merge once the architect has decided ADR-0430 item 7
+(finding 4). Notes 13 to 15 can go with this part or after it.
