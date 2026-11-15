@@ -348,9 +348,10 @@ struct Connection<E> {
     held: Option<HeldReply<E>>,
     /// The name `read_directory` goes on from, and its cookie.
     position: Option<(u64, String)>,
-    /// A narrowed connection's one name (ADR-0055's note): every request
-    /// that names something must name exactly it.
-    only: Option<String>,
+    /// A narrowed connection's names (ADR-0055's note, ADR-0337 item 8):
+    /// every request that names something must name one of them, and what it
+    /// opens has at most that name's rights.
+    only: Option<Vec<(String, u32)>>,
     /// A FIFO side this connection opened: the object and the side.
     fifo: Option<(u64, u32)>,
     /// A `fifo_open` held until the other side comes (its transaction).
@@ -847,14 +848,20 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         Some(added)
     }
 
-    fn set_only(&mut self, index: usize, only: Option<String>) {
+    fn set_only(&mut self, index: usize, only: Option<Vec<(String, u32)>>) {
         if let Some(c) = self.connections[index].as_mut() {
             c.only = only;
         }
     }
 
-    fn only_of(&self, index: usize) -> Option<String> {
+    fn only_of(&self, index: usize) -> Option<Vec<(String, u32)>> {
         self.connections.get(index)?.as_ref()?.only.clone()
+    }
+
+    /// Whether every `(name, rights)` is within connection `index`'s own.
+    fn names_within(&self, index: usize, list: &[(String, u32)]) -> bool {
+        list.iter()
+            .all(|(n, r)| self.may_name(index, n) && r & !self.rights_on(index, n) == 0)
     }
 
     /// Whether connection `index` may name `name`: always, unless it is
@@ -863,7 +870,26 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.connections
             .get(index)
             .and_then(Option::as_ref)
-            .is_none_or(|c| c.only.as_deref().is_none_or(|only| only == name))
+            .is_none_or(|c| {
+                c.only
+                    .as_deref()
+                    .is_none_or(|l| l.iter().any(|(n, _)| n == name))
+            })
+    }
+
+    /// The rights connection `index` has on `name`: all it has, unless it is
+    /// narrowed, and then the rights of that name's entry (none for another).
+    fn rights_on(&self, index: usize, name: &str) -> u32 {
+        match self.connections.get(index).and_then(Option::as_ref) {
+            None => 0,
+            Some(c) => match c.only.as_deref() {
+                None => c.rights,
+                Some(l) => l
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map_or(0, |(_, r)| r & c.rights),
+            },
+        }
     }
 
     /// Reads with no effect on the record, for tests.
@@ -1334,10 +1360,25 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 let (_, m) = decode::<proto::Narrow<'_>>(bytes, n)?;
                 // `Name` is one component already (zoraya-protocol).
                 let name = m.name.0;
-                if !self.may_name(i, name) {
+                if !self.may_name(i, name) || !self.names_within(i, &[(name.into(), m.rights.0)]) {
                     return self.denied(i, t);
                 }
-                self.clone_connection(i, t, m.rights.0, Some(name.into()), None, handles);
+                let one = alloc::vec![(String::from(name), m.rights.0)];
+                self.clone_connection(i, t, m.rights.0, Some(one), None, handles);
+            }
+            41 => {
+                let (_, m) = decode::<proto::NarrowNames<'_>>(bytes, n)?;
+                let Some(list) = proto::narrow_names::decode(m.names.0) else {
+                    self.done(i, t, status::INVALID_ARGUMENT, 0);
+                    return Ok(());
+                };
+                // Each name must be one this connection may name, with no
+                // more than it has on it, and the connection's rights must
+                // cover them all (rights only narrow).
+                if !self.names_within(i, &list) || list.iter().any(|(_, r)| r & !m.rights.0 != 0) {
+                    return self.denied(i, t);
+                }
+                self.clone_connection(i, t, m.rights.0, Some(list), None, handles);
             }
             40 => {
                 let (_, m) = decode::<proto::CloneAccount>(bytes, n)?;
@@ -1859,6 +1900,13 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         if !self.has(i, needed) {
             return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
         }
+        // A narrowed connection opens a name with that name's rights at most.
+        if flags & f::UNNAMED == 0
+            && self.only_of(i).is_some()
+            && needed & !self.rights_on(i, m.path.0) != 0
+        {
+            return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
+        }
         // A narrowed connection opens its one name and nothing else, nor
         // itself by the empty path; an unnamed file has no name until it is
         // published, which is checked then.
@@ -2009,7 +2057,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         i: usize,
         t: u32,
         rights: u32,
-        narrow: Option<String>,
+        narrow: Option<Vec<(String, u32)>>,
         budget: Option<usize>,
         handles: &mut Vec<T::End>,
     ) {

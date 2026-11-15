@@ -368,6 +368,26 @@ impl File {
         done(&reply[..length]).map(|_| client)
     }
 
+    /// As [`File::narrow`] for several names, each with its rights, and
+    /// `wanted` overall (ADR-0337 item 8).
+    pub fn narrow_names(&self, names: &[(&str, u32)], wanted: u32) -> FsResult<File> {
+        let bytes = proto::narrow_names::encode(names).ok_or(proto::status::INVALID_NAME)?;
+        let (client, server) = channel_create().map_err(|_| GONE)?;
+        let client = File { end: client };
+        let m = proto::NarrowNames {
+            rights: Flags(wanted),
+            names: Data(&bytes),
+        };
+        let mut reply = Vec::new();
+        let (length, _) = call(
+            self.end,
+            &m,
+            &[moved(server, ChannelObject::RIGHTS)],
+            &mut reply,
+        )?;
+        done(&reply[..length]).map(|_| client)
+    }
+
     /// A new file with no name yet in this directory (ADR-0010 rule 7):
     /// written, then given a name by [`File::publish`].
     pub fn create_unnamed(&self) -> FsResult<File> {

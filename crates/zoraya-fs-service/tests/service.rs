@@ -2155,6 +2155,74 @@ fn narrow(r: &mut Rig, dir: End, name: &str, wanted: u32) -> (u32, End) {
     (r.done(dir, &m, vec![end]).0, end)
 }
 
+fn narrow_list(r: &mut Rig, dir: End, list: &[(&str, u32)], wanted: u32) -> (u32, End) {
+    let end = r.net.channel();
+    let bytes = proto::narrow_names::encode(list).expect("a valid list");
+    let m = proto::NarrowNames {
+        rights: Flags(wanted),
+        names: Data(&bytes),
+    };
+    (r.done(dir, &m, vec![end]).0, end)
+}
+
+/// ADR-0337 item 8: a connection narrowed to a list of names, each with its
+/// rights, opens those names with at most their rights and nothing else; it
+/// cannot list, and a narrower list from it stays within it.
+#[test]
+fn a_connection_narrowed_to_a_list_gives_each_name_its_own_rights() {
+    let mut r = rig();
+    let root = r.root;
+    for n in ["notes.txt", "other.txt", "secret.txt"] {
+        let f = r.open(root, n, open_flags::CREATE);
+        r.write_text(f, 0, 0, b"x");
+    }
+    let rw = rights::READ | rights::WRITE | rights::SYNC | rights::CLONE;
+    let ro = rights::READ | rights::CLONE;
+    let (s, n) = narrow_list(&mut r, root, &[("notes.txt", rw), ("other.txt", ro)], rw);
+    assert_eq!(s, status::OK);
+    let denied = status::ACCESS_DENIED;
+    assert_eq!(
+        r.try_open(n, "notes.txt", 0, rights::READ | rights::WRITE)
+            .0,
+        status::OK
+    );
+    assert_eq!(r.try_open(n, "other.txt", 0, rights::READ).0, status::OK);
+    assert_eq!(
+        r.try_open(n, "other.txt", 0, rights::READ | rights::WRITE)
+            .0,
+        denied
+    );
+    assert_eq!(r.try_open(n, "secret.txt", 0, rights::READ).0, denied);
+    assert_eq!(r.try_open(n, "new.txt", open_flags::CREATE, rw).0, denied);
+    let reply = r.call(n, &proto::ReadDirectory { cookie: 0 }, vec![]);
+    assert_eq!(status_of(&reply), denied);
+    // A narrower list from it, but not a wider one or another name.
+    assert_eq!(
+        narrow_list(&mut r, n, &[("other.txt", ro)], ro).0,
+        status::OK
+    );
+    assert_eq!(narrow_list(&mut r, n, &[("other.txt", rw)], rw).0, denied);
+    assert_eq!(narrow_list(&mut r, n, &[("secret.txt", ro)], ro).0, denied);
+    // The connection's own rights must cover the list's.
+    assert_eq!(
+        narrow_list(&mut r, root, &[("notes.txt", rw)], ro).0,
+        denied
+    );
+    // A clone keeps the list.
+    let c = r.net.channel();
+    let m = proto::Clone { rights: Flags(ro) };
+    assert_eq!(r.done(n, &m, vec![c]).0, status::OK);
+    assert_eq!(r.try_open(c, "secret.txt", 0, rights::READ).0, denied);
+    assert_eq!(r.try_open(c, "other.txt", 0, rights::READ).0, status::OK);
+    // A malformed list is refused, not a panic.
+    let end = r.net.channel();
+    let m = proto::NarrowNames {
+        rights: Flags(ro),
+        names: Data(b"\x01\x00\x00\x00\x09ab"),
+    };
+    assert_ne!(r.done(root, &m, vec![end]).0, status::OK);
+}
+
 /// ADR-0055's note (ADR-0153 rule 2): a narrowed connection names its one
 /// name and nothing else, cannot list, cannot widen, and its clones and
 /// shares stay narrowed; "create or replace" works through it.
