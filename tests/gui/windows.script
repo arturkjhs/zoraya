@@ -87,7 +87,8 @@ shot windows-many
 # 2026-11-13). So the click that focuses it comes first: its input follows
 # the release, and its focused title bar, waited for against the bar, is
 # drawn only with the window at its place; then its rows are read.
-drag 560 220 560 30
+shot pre-drag
+drag 560 200 560 30
 click 560 46
 region 600 33 60 4 f7f7f8
 origin 361 64
