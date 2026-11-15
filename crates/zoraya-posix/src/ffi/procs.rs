@@ -1682,6 +1682,15 @@ fn send_record(
         close_made(granted);
         return Err((E2BIG, false));
     }
+    // Made first: a failure after the sockets moved would leave them dead.
+    // TRANSFER to move it; the child receives WAIT alone.
+    let me = match zoraya_rt::handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
+        Ok(me) => me,
+        Err(_) => {
+            close_made(granted);
+            return Err((EAGAIN, false));
+        }
+    };
     // The descriptors a record cannot hold go before `SELF`, all or nothing: a
     // refusal of them (the kernel refuses a moved channel end that holds
     // handles, or a full queue) leaves the connections of `ZPBX` unsent, so
@@ -1694,19 +1703,12 @@ fn send_record(
             .sys
             .channel_send(boot, &third, &passed.handles, &passed.read_only)
         {
+            let _ = zoraya_rt::handle_close(me);
             close_made(granted);
             return Err((if s == Status::BadState { EBUSY } else { EAGAIN }, false));
         }
         passed_sent = true;
     }
-    // TRANSFER to move it; the child receives WAIT alone.
-    let me = match zoraya_rt::handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
-        Ok(me) => me,
-        Err(_) => {
-            close_made(granted);
-            return Err((EAGAIN, passed_sent));
-        }
-    };
     let mut flags = 0u8;
     let mut second: Vec<ChannelEntry> = vec![ChannelEntry {
         handle: me,

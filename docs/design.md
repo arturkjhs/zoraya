@@ -2211,7 +2211,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   stays read-only at the kernel) and its size is fixed; `exec` carries them the same way. `posix_spawnp` searches the caller's `$PATH`;
   the scheduling attributes are `ENOSYS`. Without an attribute a spawn gives what it gave before (INV-0411-4). **Limits** (recorded,
   not hidden): the positive network grant is tested over a fake `netd` and in `zoraya-net`, not in QEMU (no test program holds a
-  network connection); a child with no working directory reads a relative path as one from `/`; a failure of the third message after the
+  network connection); a child with no working directory reads a relative path as one from `/`; a failure of the descriptors message after the
   child exists ends the child (status 127); CPython's `subprocess` uses `posix_spawn` for a program named with a directory
   (`ports/patches/python/0007-subprocess-posix-spawn.patch`; the port's tests were not run by this part). Tests:
   `crates/zoraya-posix/tests/spawn.rs`, `tests/posix-core/t_spawn.c` (`make test-libposix`), `zoraya-net` (`Duplicate`), `zoraya-rng`.

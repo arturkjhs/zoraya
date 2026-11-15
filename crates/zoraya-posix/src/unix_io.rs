@@ -500,7 +500,7 @@ impl<S: Sys> Posix<S> {
         self.memory_sent(&passed.sent_memory);
     }
 
-    /// The child's half, at start-up: the descriptors of the third bootstrap
+    /// The child's half, at start-up: the descriptors of the `ZPBF` bootstrap
     /// message installed at their fds. A fd already taken, or a record that
     /// does not fit its handles, closes what came; the caller has checked
     /// the message with `unix::decode_passed`.

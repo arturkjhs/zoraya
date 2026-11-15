@@ -103,7 +103,10 @@ memory descriptor of the parent to every child that does not set close-on-exec.
    descriptor is), with its size and seals; the size is fixed in both from then (INV-0413-1), and it goes whether listed or only
    inherited (nothing of the parent's is taken). The same description named twice is `EINVAL`; a socket not connected, a TCP
    socket and one holding bytes or a message back are `EBADF` and `EBUSY` as before; a memory descriptor with no object is
-   `EINVAL`. A close-on-exec descriptor stays behind as before. `exec` takes the same path.
+   `EINVAL`. A close-on-exec descriptor stays behind as before. `exec` takes the same path, with no file actions: an image
+   that holds a Unix socket without close-on-exec gets `EBADF` from `execve` (a child given a socket that runs
+   `sh -c 'exec prog'` fails; set close-on-exec or list it). A refusal of `SELF` after `ZPBF` was sent leaves the sockets dead in
+   the parent and the child ending (a limit; the duplicate of the process handle that `SELF` carries is made first).
 7. **`posix_spawnp`** looks for a name without `/` in `$PATH` of the caller's own environment (default
    `/usr/local/bin:/bin:/usr/bin`, as musl's), going on past `ENOENT`, `ENOTDIR` and `EACCES`, and runs a file that is not an
    executable by `/bin/sh`, as `execvp` does. **The scheduling attributes** `posix_spawnattr_setschedparam` and
