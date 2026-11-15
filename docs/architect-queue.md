@@ -17,7 +17,7 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 |---|---|---|---|
 | ADR-0392 | libposix: a signal sent during `execve` follows the new image (`exec_carry`); a handler that ran at a call's entry ends its first wait with `EINTR`; `exec_hold` marks default-terminating signals `Deliver` during the spawn | **Tension with accepted ADR-0106** (INV-0106-2: a take in every handler-less `execve`; item 2's mapping during the spawn). Recommend Option A (library route); the fallback A' is a kernel change. Yours to accept or to choose A' | sigint-exec |
 | ADR-0390, ADR-0391 | 10d: surface for curses, less and vi; the layout, descriptions and refusals of 10d | Option A both. ADR-0391 item 8 (two files of one directory) is now a refusal and an open question: should `narrow` take a list? | 10d |
-| ADR-0395 | 10f: the status row, System+G and System+K, the field's guard, parse and checks as built; **the delivery of a grant (`GRANTS`, `narrow` with a list) is not built**, the wire is written for the next part | Option A. Yours: whether the delivery is its own part before 10g/10j or 10i | 10f |
+| ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 41), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 | ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
 | ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
@@ -57,8 +57,8 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
    and compare with the same recording in a Zoraya terminal (screenshots: `docs/tasks/TASK-31-part-10a-shots/`).
 2. **10a, `vttest`:** needs a pin in `ports/sources.lock` (not pinned, so not recorded).
    `python3 -c 'import sqlite3, ssl, asyncio'` and `ping google.com` in the guest.
-4. **10f's row and kill offer** (the grant line gives nothing yet): the commands are in `docs/tasks/TASK-31-part-10f.md`, "Hand checks".
-5. **Later parts:** 10f's delivery of a grant (first terminal, a room's terminal, a shell that entered a room), 10g's `ssh -l NAME HOST`
+4. **10f's row, grant line and kill offer:** the commands are in `docs/tasks/TASK-31-part-10f.md`, "Hand checks", for a first terminal, a room's own terminal and a shell that entered a room.
+5. **Later parts:** 10g's `ssh -l NAME HOST`
    to a real host, 10h's `git clone` and `git push`: commands will be listed with the part.
 
 ## D. Open questions
@@ -72,7 +72,7 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 
 ADR-0280, 0281, 0285, 0286, 0384, 0385, 0398 accepted; ADR-0383 Option C (`kbs=^?`, built in 10d); the kill offer's escape
-System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal (**not built in 10f**: no report kind for `NotGranted`); a refused
+System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal (built in 10f for POSIX programs: connect and resolve); a refused
 `tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
 the runner itself in a job of their own; `vttest` pinned and built with 10d.
 

@@ -1411,10 +1411,13 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   compositor sends the focused window `Attention` on System+G and System+K (never a key); `term` passes it on, `zosh` puts it
   in the key stream as byte 0xC0 or 0xC1, and `tty_host::Host` opens the field: the grant line (`give vi: ...`, a literal-word
   parse against what the shell holds, a 500 ms guard on Enter, one element of a pipeline) or the kill offer (`kill vi? ...`,
-  Enter ends the line's job). *Known limits:* the grant line **gives nothing yet**: the `GRANTS` channel and `narrow` with a list
-  of names are not built, so a parsed grant is answered with "cannot be given to a running program yet"; the report of a write
-  refused inside a read-only entry, the network refusal report and hint (ADR-0224 item 5), `jobs`' mark for run-time grants and
-  the GUI script for the scenario are not built; native programs still report once per path, not per path and access.
+  Enter ends the line's job). **Delivery:** on Enter the shell opens the entries from its own root and writes them to the `GRANTS` channel
+  (`slot::GRANTS`, `zoraya_abi::posix::Grants`) of the one element named: a file as its directory narrowed to a list of names
+  (`NarrowNames`, each with its rights), a directory whole, never shadowing what the program holds whole (`zoraya_shell::delivery`);
+  `libposix` reads the channel when a path is refused and resolves once more; the write end closes with the job. A refused network
+  request is reported (`NetReport`) and shown too. *Known limits:* a `+net` word and a native program are refused on the row; a write
+  refused inside a read-only entry is reported only on the service's `EACCES`; native programs still report once per path; the planner
+  still refuses two files of a directory at start. Tests: `tests/gui/posix-grant.script` (`make test-tour-terminal`, four sizes).
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).

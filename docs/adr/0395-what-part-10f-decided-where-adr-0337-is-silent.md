@@ -11,9 +11,9 @@
 Part 10f builds ADR-0337 (the status row, the attention keys, the grant line) and the kill offer ADR-0387 item 4 moved to
 System+K. ADR-0337 fixes what the person sees and the trust rules; it is silent on the wire, on how the window makes room
 for a row, on the grant line's editing keys and character set, and on what a key does that no accepted ADR names. It also
-asks for two things that this part did not build: the `GRANTS` channel to the running program (item 7) and `narrow` with
-a list of names (item 8). This ADR records the choices so that none is silent. It changes no accepted decision; the gap in
-item 9 is a gap in the build, not a deviation.
+asks for the `GRANTS` channel to the running program (item 7) and `narrow` with a list of names (item 8); this part built
+both, for POSIX programs. This ADR records the choices so that none is silent. It changes no accepted decision; the gaps in
+item 9 are gaps in the build, not deviations.
 
 ## Decision drivers
 
@@ -27,16 +27,17 @@ item 9 is a gap in the build, not a deviation.
 
 ## Considered options
 
-### Option A: as built, with the delivery missing
+### Option A: as built, the delivery for POSIX programs, a host and a native program not delivered
 
-- **Description:** The pieces of ADR-0337 that need no new transport are built and tested; the grant line parses and
-  checks what is typed against what the shell holds, and then says `PARSED WORDS: cannot be given to a running program
-  yet; start it with the grant instead`. Nothing is given.
-- **Evidence for:** Every trust rule that concerns the row, the key and the parse is real and tested; nothing false is shown;
-  the delivery needs a file-protocol change that two parts share (ADR-0337 item 8, backlog "narrow with a list of names").
-- **Evidence against:** The ADR's "done when" (`:e!` shows the file) is not met; the key is built and has no effect.
-- **Cost:** *(estimate)* what is built; delivery is about 600 lines across `zoraya-abi`, `zoraya-fs-service`,
-  `zoraya-fsclient`, `libposix`, `zoraya-rt` and `zosh`.
+- **Description:** Everything ADR-0337 asks for the row, the keys, the field, the guard, the parse, the delivery of a file or
+  a directory to the one running POSIX program (the `GRANTS` channel and `narrow` with a list), the kill offer and the
+  network refusal report and hint is built and tested, in a window by `tests/gui/posix-grant.script` at four sizes. A
+  `+net` word and a native program get a plain refusal on the row: `cannot be given to a running program yet`.
+- **Evidence for:** Every trust rule is real and tested; nothing false is shown; the part's "done when" (`:e!` shows the file,
+  a second program is refused it) passes in QEMU.
+- **Evidence against:** A running program's network connection and a native program's table do not grow.
+- **Cost:** *(as built)* about 1,500 lines with tests across `zoraya-abi`, `zoraya-proto-file`, `zoraya-fs-service`,
+  `zoraya-fsclient`, `zoraya-posix`, `zoraya-shell`, `zoraya-term`, the compositor and `zosh`.
 - **Precedent:** none; it is a stage of the ADR's own build.
 
 ### Option B: leave System+G unbuilt until the delivery exists
@@ -55,17 +56,18 @@ item 9 is a gap in the build, not a deviation.
 
 ## Recommendation
 
-**Recommendation (not a decision): Option A**, and the delivery as its own part (call it 10f-2) with this wire, which is
-the least that ADR-0337 items 7 and 8 need:
+**Recommendation (not a decision): Option A**, with the delivery as built:
 
-1. A fixed slot `slot::GRANTS` (1006, after `FD0`) in `zoraya_abi::posix::slot`, and a header index in
-   `zoraya_abi::native::Startup`: the read end of a channel the shell made, whose write end it keeps per element.
-2. A message is `ZGR1`, a count, and that many entries as ADR-0107 encodes them (kind, prefix, the index of a connection
-   among the message's handles). An entry for a prefix the table has replaces it: the shell keeps the union per
-   directory (item 8's list of names) and sends the whole entry. The prefix of a program's own directory is refused
-   (ADR-0341 item 3).
-3. The runtime reads the channel only on a miss (`refused`, `NotGranted`), once, then resolves again.
-4. The write end closes with the line's job (INV-0337-4).
+1. A fixed slot `slot::GRANTS` (1006, after `FD0`) in `zoraya_abi::posix::slot`: the read end of a channel the shell made,
+   whose write end it keeps per POSIX element (`Job`'s `granted`). A native `Startup` index is not built.
+2. A message is `ZGR1` (`zoraya_abi::posix::Grants`), a count of at most 4, and that many directory entries (kind, handle
+   index, prefix) with their connections. An entry for a prefix the table has replaces it; the shell keeps the union per
+   directory (`zoraya_shell::delivery::Held`) and sends the whole entry, a file as its directory narrowed to a list of
+   names (`NarrowNames`, file ordinal 41, each name with its rights) and a directory whole. The decoder refuses `/`,
+   `/dev`, `/proc`, `/tmp` and below. A grant never shadows what the program holds whole (item 9 of the decisions below).
+3. `libposix` reads the channel only when a path was refused, either outside the table or by the service (`EACCES`),
+   installs what came (the table is bounded at 64 entries), and resolves the path once more.
+4. The write end closes with the job, and the record with it.
 
 What this part decided where ADR-0337 is silent (all reversible):
 
@@ -89,18 +91,21 @@ What this part decided where ADR-0337 is silent (all reversible):
 6. **Literal words.** A word is refused if it holds a control character or any of `` $ ` ( ) { } [ ] * ? ; | & < > ' " \ ! # % ``;
    `~` and `~/` at the start of a path are the home directory, `~name` is refused, a relative path is joined to the current
    directory, a word that begins `+` is not a path. One refused word gives none of the line.
-7. **The result.** Enter, after 500 ms, parses the text and answers to the field: success says `given until PROGRAM ends:
-   WORDS`; failure closes the field and says why in one line. The field is not kept open after a failure (nothing typed is
-   kept either).
+7. **The result.** Enter, after 500 ms, parses the text, checks it against what the shell holds, delivers it and answers to
+   the field: success says `given until PROGRAM ends: WORDS`; failure closes the field and says why in one line, once (the
+   row then goes back to what was pending). The field is not kept open after a failure (nothing typed is kept either).
 8. **The kill offer.** System+K shows `kill PROGRAM? Enter kills, Escape keeps`; Enter after the same 500 ms guard ends the
    line's job; Escape or the key again keeps it. It is offered in an untrusted room's terminal too (it grants nothing);
    on the serial console neither key does anything.
-9. **What is not built, and says so.** The delivery above (the `GRANTS` channel and `narrow` with a list). Also not built:
-   the report of a write refused inside a read-only entry (`EACCES`), the limit of 16 restarting after a grant (there is
-   no grant to restart it), `jobs` marking a run-time grant, the network refusal report and hint of ADR-0224 item 5
-   (`NotGranted` has no report kind yet; stage 8's owners did not build it either), a GUI script for the scenario of
-   "What the person sees", and the native programs' runtime (`user/src/namespace.rs` still reports once per path, not per
-   path and access).
+9. **What is delivered, and what is not.** A file or a directory the shell holds goes to the one element named, as item 2 of
+   the recommendation says. A grant below a directory the program holds whole, or at a system directory it holds, is refused
+   (`the program holds PATH already; start it again with the grant`): the new entry would shadow, or replace, a wider one,
+   and widening it would give more than the person typed. A path that does not exist is refused (`does not exist`, only after
+   the shell found it inside its own reach). **Not built:** a `+net` word and a native program (no `Startup` index) are
+   refused on the row; a write refused inside a read-only entry is reported only when the service answers `EACCES`;
+   `user/src/namespace.rs` still reports once per path, not per path and access; the report limit of 16 restarts after a
+   grant only in `libposix`; datagram and listen refusals are not reported; the planner (`grants.rs`) still refuses two files
+   of one directory at start (ADR-0391 item 8), and the run-time list is the only place `narrow`'s list is used.
 10. **A refusal is counted per path, access and element**; `libposix` reports a read and a write of the same path as two
     reports. The hint after a job and the row use the same filter; a path that does not pass is `a path that cannot be
     shown` in both.
@@ -110,13 +115,14 @@ What this part decided where ADR-0337 is silent (all reversible):
 - **Positive.** A refusal appears on the window's row as it happens, worded by the shell's own lookup, and a hostile report
   cannot put anything on it; the hint after a job no longer prints a path as it came; the kill offer exists in a terminal
   whose program has the keys; the grant line's input, guard, parse and checks are reviewed before the delivery is built.
-- **Negative.** The grant line gives nothing yet; a person who presses the key and types a grant is told to start the
-  program again with it. The window is one row taller. `Status` and `Attention` are new ordinals. The row's text is the
+- **Negative.** A host and a native program cannot be given anything while they run. The window is one row taller (and where
+  the compositor fits it above the dock the grid has one row fewer than `grid_for` says). `Status` and `Attention` are new ordinals. The row's text is the
   shell's only, so a program cannot show a message there even in the way a title could be misused.
 - **Invariants of ADR-0337.** INV-0337-1 to -3 and -5 to -7 are checked as their Status column says (partly); INV-0337-4
   waits for the delivery (ADR-0337's open-question note).
-- **Follow-up.** The delivery (recommendation, items 1 to 4); `narrow` with a list (also ADR-0391 item 8's second-file case);
-  the GUI script; the net report; `jobs`' marking; a fuzz target for `term`'s input with the row compared before and after.
+- **Follow-up.** A native `Startup` index and `+net` delivery; the planner's use of the list at start (ADR-0391 item 8); the
+  `/data` rule in `Grants`' prefix check when ADR-0393 lands (a program's own directory is never replaced, ADR-0341 item 3); a
+  fuzz target for `term`'s input with the row compared before and after.
 
 ## Invariants
 
@@ -127,6 +133,12 @@ What this part decided where ADR-0337 is silent (all reversible):
   `cargo test -p zoraya-shell paste` and `cargo test -p zoraya-compositor` (the attention chords).
 - **INV-0395-3.** A path refused to a POSIX program is reported once per path and access. *Check:*
   `cargo test -p zoraya-posix --test files` (`a_path_is_reported_once_per_access`).
+- **INV-0395-4.** A grant given while a program runs never shadows or replaces an entry the program holds whole, and a
+  refused grant changes nothing. *Check:* `cargo test -p zoraya-shell delivery`.
+- **INV-0395-5.** A `GRANTS` message decodes totally, adds only directory entries, and never `/`, `/dev`, `/proc`, `/tmp` or
+  a name below them. *Check:* `cargo test -p zoraya-abi grants_message`.
+- **INV-0395-6.** A connection narrowed to a list of names opens each with at most its own rights, nothing else, and cannot
+  list or widen. *Check:* `cargo test -p zoraya-fs-service a_connection_narrowed_to_a_list`.
 
 
 ## Open questions
@@ -138,7 +150,6 @@ What this part decided where ADR-0337 is silent (all reversible):
 ## Revisit triggers
 
 - A program is found that writes to the row or opens the field.
-- A person presses System+G and the field gives nothing for more than one part after this one.
 - A GUI test that reads the grid is broken by the taller window.
 
 ## Architect's decision
