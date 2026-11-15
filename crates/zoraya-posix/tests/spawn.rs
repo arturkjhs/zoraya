@@ -1156,3 +1156,79 @@ fn move_net_and_grant_window_move_the_parents_handle_and_it_is_gone_after() {
     r.p.spawned(&Inherit::empty(), &g);
     assert_eq!(r.p.net, Some(net));
 }
+
+/// Past 64 handles in the third message the spawn is `E2BIG`, and what the
+/// refused attempt had noted for the parent (a moved packet socket, a shared
+/// stream, a memory size) is not applied (mutants of `pass_to_child`'s bound).
+#[test]
+fn too_many_descriptors_for_one_message_is_e2big_and_leaves_the_parent_whole() {
+    let mut r = rig();
+    let held = count(&mut r);
+    // 22 stream sockets bring 3 handles each: 66.
+    let mut ends = Vec::new();
+    for _ in 0..22 {
+        let (a, b) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
+        r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+        ends.push(b);
+    }
+    let before = count(&mut r);
+    assert_eq!(r.p.inherit(&[], 0).err(), Some(E2BIG));
+    let one = count(&mut r);
+    assert_eq!(r.p.inherit(&[], 0).err(), Some(E2BIG));
+    assert_eq!((one - before, count(&mut r) - one), (0, 0));
+    // Nothing was told to the parent: every socket still has its channel.
+    for &b in &ends {
+        let Some(Desc::Socket(s)) = r.p.fds.get(b) else {
+            panic!()
+        };
+        assert!(s.ctl.is_some() && !s.unix.as_ref().unwrap().shared);
+    }
+    // 21 are 63 handles, and go.
+    r.p.fcntl(ends[0], F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    let out = r.p.inherit(&[], 0).unwrap();
+    assert_eq!(out.passed.handles.len(), 63);
+    r.p.spawn_refused(&out);
+    drop_made(&mut r, &out);
+    close_all(&mut r);
+    assert_eq!(count(&mut r), held);
+}
+
+/// A stream socket that is shared already goes as shared, with no channel; and
+/// a refusal closes the files `addopen` opened.
+#[test]
+fn a_shared_stream_goes_without_a_channel_and_a_refusal_closes_the_addopen_files() {
+    let mut r = rig();
+    let (a, b) = r.p.socketpair(AF_UNIX, SOCK_STREAM, 0).unwrap();
+    r.p.fcntl(a, F_SETFD, i64::from(FD_CLOEXEC)).unwrap();
+    let out = r.p.inherit(&[], 0).unwrap();
+    assert!(out.passed.records[0].has_anc && !out.passed.records[0].shared);
+    r.p.spawned(&out, &Granted::none());
+    // A second spawn of the same, now shared, socket: no channel to give.
+    let out = r.p.inherit(&[], 0).unwrap();
+    let rec = out.passed.records[0];
+    assert!(rec.shared && !rec.has_anc);
+    assert_eq!(out.passed.handles.len(), 2);
+    assert!(out.passed.handles.iter().all(|h| h.1));
+    assert!(r.p.fds.get(b).is_some());
+    // `addopen` files are closed by a refusal.
+    let f = create(&mut r, b"/f", b"x");
+    r.p.close(f).unwrap();
+    let out =
+        r.p.inherit_shaped(
+            &[FileAction::Open(9, b"/f".to_vec(), o::RDONLY, 0)],
+            0,
+            &chosen(vec![]),
+        )
+        .unwrap();
+    let temp = out.temps[0];
+    r.p.spawn_refused(&out);
+    assert!(r.p.fds.get(temp).is_none());
+    drop_made(&mut r, &out);
+}
+
+#[test]
+fn an_entry_path_may_be_as_long_as_a_path_goes_and_no_longer() {
+    let at = |n: usize| format!("/{}", "a".repeat(n - 1));
+    assert!(parse_spec(at(4096).as_bytes()).is_ok());
+    assert_eq!(parse_spec(at(4097).as_bytes()), Err(EINVAL));
+}
