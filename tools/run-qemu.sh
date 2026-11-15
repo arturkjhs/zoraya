@@ -40,8 +40,9 @@
 #                         10.0.2.2 is 127.0.0.1; `restrict=on` blocks UDP to it).
 #                         The Internet must stay out of reach (INV-0230-1), so
 #                         the run refuses unless it is inside
-#                         tools/confine-loopback.sh (ZORAYA_LOOPBACK_ONLY=1: the
-#                         process may open connections to the loopback only).
+#                         tools/confine-loopback.sh, which it verifies (a datagram
+#                         to 198.51.100.7 must fail: connections to the loopback
+#                         only). IPv6 is off in every test network.
 #                         A test that needs only TCP to the runner's servers
 #                         does not use it: it stays `restrict=on` and gets
 #                         --net-guestfwd rules to the servers.
@@ -264,8 +265,10 @@ fi
 if { [ "$net_open" = 1 ] || [ "$net_internet" = 1 ]; } && [ "$net" != 1 ]; then
     die "--net-open and --net-internet need --net"
 fi
-if [ "$net_open" = 1 ] && [ "${ZORAYA_LOOPBACK_ONLY:-}" != 1 ]; then
-    die "--net-open runs only inside tools/confine-loopback.sh (INV-0230-1): the guest could reach the Internet"
+# Not the environment variable the wrapper sets: this process itself must fail to send one
+# datagram to a documentation address (tools/confine-loopback.sh --verify).
+if [ "$net_open" = 1 ] && ! "$(dirname "$0")/confine-loopback.sh" --verify; then
+    die "--net-open runs only inside tools/confine-loopback.sh, and this process is not confined (INV-0230-1): the guest could reach the Internet"
 fi
 if [ "$net_internet" = 1 ] && { [ -n "${CI:-}" ] || [ "$net_open" = 1 ]; }; then
     die "--net-internet is for a person's hand run: not on CI, not with --net-open (INV-0230-1)"
@@ -331,7 +334,10 @@ fi
 # with restrict=on; a person at `make run-net` gets the Internet through SLIRP.
 if [ "$net" = 1 ]; then
     restrict=
-    [ "$mode" = test ] && [ "$net_open" != 1 ] && [ "$net_internet" != 1 ] && restrict=,restrict=on
+    if [ "$mode" = test ] && [ "$net_internet" != 1 ]; then
+        restrict=,ipv6=off
+        [ "$net_open" != 1 ] && restrict=,restrict=on,ipv6=off
+    fi
     forward=
     [ -z "$net_forward" ] || forward=",hostfwd=tcp:127.0.0.1:$net_forward-10.0.2.15:$net_forward"
     subnet=

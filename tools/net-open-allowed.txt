@@ -9,9 +9,12 @@
 #    CONFINED. The check proves the wrapper blocks every address but the loopback.
 #  - `--net-internet`: a hand run that reaches the Internet; name must start with
 #    `hand-`; run-qemu.sh refuses it on CI.
-#  - person mode (`--net`, no `--test`): a person's `make run-net`.
+#  - person mode (`--net`, no `--test`): a person's `make run-net`; a step that uses it
+#    (test-hand-run's network leg) is `-run` and started only through CONFINED.
 # A new unrestricted line needs a line here, with its reason.
 test-net-dns-run         --net-open: the names asked of tools/test-dns (UDP), inside tools/confine-loopback.sh
 test-net-lookup-run      --net-open: the lookup test against the test DNS server (UDP) with a pcap, inside tools/confine-loopback.sh
+test-hand-run-net-run    person mode, as a person runs it (a router and DNS in the lease): test-hand-run's network leg, inside tools/confine-loopback.sh
 hand-netsurf-wikipedia   --net-internet: a hand run that reaches the real Wikipedia; not a step of make test
-RUN_NET_CMD              person mode with --net and no --test (no restrict=on, no --net-open): test-hand-run runs it, and make run-net
+run-net                  person mode: a person's `make run-net`, by hand, never a step
+RUN_NET_CMD              the definition of person mode's command line (callers are listed above)

@@ -554,6 +554,10 @@ fn start_tls(dir: &str, backend: u16, deadline: Instant) -> Result<[u16; 3], Str
 fn relay(to: &str) -> i32 {
     use std::io::{Read, Write, copy, stdin, stdout};
     use std::net::Shutdown;
+    // INV-0230-1: a relay reaches this machine's loopback and nothing else.
+    if !to.starts_with("127.0.0.1:") {
+        return 1;
+    }
     let Ok(server) = TcpStream::connect(to) else {
         return 1;
     };

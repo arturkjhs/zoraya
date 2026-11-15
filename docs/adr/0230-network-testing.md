@@ -171,7 +171,7 @@ GUI test can fetch through a desktop program the same way. Threads: none.
   A script in them could reach outside `127.0.0.1`. What `--net-open` may reach (or moving these runs to `restrict=on`
   with `guestfwd`, item 2) is the architect's decision. `make check-net-open` is a partial guard (each open run is
   listed in `tools/net-open-allowed.txt`; the servers bind `127.0.0.1`).
-- Done, 2026-11-15 (work/test-fixes-3): the TCP steps run `restrict=on` with `guestfwd` relays, the two UDP steps run inside `tools/confine-loopback.sh`, and INV-0230-1 is `checked: make check-net-open`.
+- Done, 2026-11-15 (work/test-fixes-3): the TCP steps run `restrict=on` with `guestfwd` relays, the two UDP steps run inside `tools/confine-loopback.sh`, and INV-0230-1 is `checked: make check-net-open` (test-hand-run's person-mode leg runs inside the wrapper too; the review of 2026-11-15 tightened the check).
 - Decided by the architect, 2026-11-15: the network test steps may reach only the runner's own test servers (and the QEMU host address they use), never the Internet. `--net-open` is to be restricted accordingly and INV-0230-1 made `checked` again (docs/backlog.md).
 
 ## Revisit triggers

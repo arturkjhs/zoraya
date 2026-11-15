@@ -64,3 +64,32 @@ Branch `work/test-fixes-3`, from `origin/main` f969cf4. Machine: Mac mini, `CARG
   7200 s and 150 minutes are enough for `test-cxx-libcxx-slow` under CI's TCG (the Mac's TCG run is the only measurement).
 - The macOS sandbox does not stop `getaddrinfo` through the system's resolver daemon; QEMU's SLIRP does not use it for a guest's
   traffic (its forwarder sends UDP itself, which the sandbox denies).
+
+## Review fixes (TASK-31-review-test-fixes-3, findings 1 to 8)
+
+- **1:** `test-hand-run`'s network leg is its own target, `test-hand-run-net-run`, started only through `CONFINED` (inside the
+  wrapper, with its server); it stays person mode. `tools/net-open-allowed.txt` lists it, `run-net` and `RUN_NET_CMD`.
+- **2:** `tools/check-net-open.sh` now checks the command lines `run-qemu.sh` really prints for every network option the
+  Makefile uses (never empty, `restrict=on` and `ipv6=off`), `CONFINED`'s definition, that nothing sets
+  `ZORAYA_LOOPBACK_ONLY`, that `NET_RELAY` and `NS_RELAY` are exact and every `--net-guestfwd` is one of them, that every caller
+  of `RUN_NET_CMD` and every `--net` line without `--test` but `run-net` is a `-run` target reached only through `CONFINED`,
+  and that `zoraya-test-httpd --relay` refuses a target other than `127.0.0.1`. Shown failing, each in a scratch copy of the
+  tree: B1 (`CONFINED` = the marker only), B2 (a guestfwd to another command), B3 (`restrict=on` dropped when a guestfwd is
+  given), B4 (a step calling `RUN_NET_CMD`), the marker trusted in `run-qemu.sh`, `ipv6=off` dropped, and `test-hand-run`'s leg
+  unconfined.
+- **4:** `run-qemu.sh --net-open` no longer trusts the variable: it runs `tools/confine-loopback.sh --verify`, one datagram to
+  198.51.100.7 (TEST-NET-2, never routed) that must fail with EPERM (macOS) or with ENETUNREACH in a namespace with only `lo`
+  (Linux); unconfined it exits 1 (shown: outside the wrapper 1, inside 0, with the variable alone 1).
+- **5:** `test-net-dns` fails unless `tools/test-dns`'s log has `query localhost` and `query nothing.invalid`. `netd`'s `(dhcp)`
+  in `netd: ADDRESS gateway G, N dns server(s) (dhcp)` is the address source (`net.address`), not the DNS server's: no bug.
+- **6:** the dead `env -u CI cmd` is `(unset CI; cmd ...)`; every case check requires a non-empty `-netdev`.
+- **7:** `ipv6=off` in every test network, asserted. The macOS loopback breadth is recorded in `docs/design.md` as a known limit.
+- **3, CI (option A):** the `tests` job's container gets `options: --cap-add=SYS_ADMIN --cap-add=NET_ADMIN` only for commands
+  containing `test-net` or `test-hand-run` (the `format(...)` of `container:` gained a fourth argument; no `hashFiles` list was
+  touched; the job list of the branch run is checked below). The wrapper uses `unshare -n` as root, `unshare -rn` otherwise, and
+  brings `lo` up with `ip` or, without it, an ioctl from `python3`. Exit 75 now fails on CI and prints `SKIPPED:` locally.
+  CI's `checks` jobs have no capability, so `check-net-open` only reports there that it cannot confine. **Not verified on
+  Linux or in GitHub's container runtime** (no Docker daemon here); if Docker's default seccomp or AppArmor refuses
+  `unshare(CLONE_NEWNET)` even with the capability, the two UDP steps and the hand-run leg fail visibly on the first CI run of
+  those jobs, and the fallback is C (record the gap; the failure there is the signal).
+- Run: `make check`; `make test-net-dns`, `test-net-lookup`, `test-net-fetch` (with `ipv6=off`), `test-hand-run`: PASS.

@@ -446,8 +446,13 @@ test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 # so this step and test-net-lookup run unrestricted but inside
 # tools/confine-loopback.sh, which lets the whole step open connections to the
 # loopback only (exit 75: this host cannot confine, the step is skipped).
+# Exit 75 is the wrapper's "cannot confine" and only it: the command is always $(MAKE), which
+# exits 0, 1 or 2, so a recipe's own status cannot be taken for it. On CI that is a failure (as
+# NET_OR_SKIP's is), never a silent skip; locally it prints `SKIPPED:`.
 CONFINED = tools/confine-loopback.sh $(MAKE) --no-print-directory $(2); rc=$$?; \
-	if [ $$rc = 75 ]; then echo "[$(1)] SKIP: this host cannot confine a step to the loopback (tools/confine-loopback.sh; docs/backlog.md)"; exit 0; fi; \
+	if [ $$rc = 75 ]; then \
+		if [ -n "$$CI" ]; then echo "[$(1)] FAIL: this CI runner cannot confine a step to the loopback (tools/confine-loopback.sh)"; exit 1; fi; \
+		echo "SKIPPED: $(1): this host cannot confine a step to the loopback (tools/confine-loopback.sh)"; exit 0; fi; \
 	exit $$rc
 NET_DNS_ROOT := $(BUILD)/net-dns-root
 NET_DNS_DISK := $(BUILD)/net-dns-disk.img
@@ -467,6 +472,7 @@ test-net-dns-run:
 	target/debug/zoraya-mkfs --size 16M --from $(NET_DNS_ROOT) $(NET_DNS_DISK); rc=$$?; \
 	if [ $$rc = 0 ]; then $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_DNS_DISK) --accel auto $(NET_TEST_KERNEL); rc=$$?; fi; \
 	kill $$dns 2>/dev/null; wait $$dns 2>/dev/null; \
+	if [ $$rc = 0 ]; then for n in localhost nothing.invalid; do grep -q ": query $$n id" $(NET_DNS_LOG) || { echo "[net-dns] FAIL: tools/test-dns never saw a query for $$n: the answers did not come from it"; rc=1; }; done; fi; \
 	if [ $$rc != 0 ]; then echo "[net-dns] FAIL (the DNS server's log: $(NET_DNS_LOG))"; tail -20 $(NET_DNS_LOG); fi; \
 	exit $$rc
 
@@ -930,8 +936,20 @@ test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	if [ ! -f $(HAND_DISK).old.1 ] || ! cmp -s $(HAND_DISK).old $(BUILD)/hand-run-disk.copy; then \
 		echo "[hand-run] FAIL: tools/run-disk.sh overwrote an earlier .old disk"; cat $(BUILD)/hand-run-disk.log; exit 1; fi; \
 	echo "[hand-run] ok: a stale disk is replaced and never overwrites an earlier .old, a current one kept"
-	@$(call NET_OR_SKIP,hand-run,skipped run-net) \
-	mkdir -p target/test-logs && : > $(HAND_HTTP_READY) && : > $(HAND_TLS_READY) && \
+	@$(call NET_OR_SKIP,hand-run,skipped run-net) $(call CONFINED,hand-run-net,test-hand-run-net-run)
+	@tools/run-disk.sh $(HAND_DISK)
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(HAND_SCRIPT) --label hand-run -- $(call RUN_CMD,$(HAND_DISK))
+	target/debug/zoraya-fsck $(HAND_DISK)
+	@tools/run-disk.sh $(HAND_DISK)
+	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --gui-script $(HAND_GUI_SCRIPT) --qmp $(BUILD)/hand-run-gui.qmp --label hand-run-gui -- \
+		$(call RUN_GUI_CMD,$(HAND_DISK),--display-opts none --qmp $(BUILD)/hand-run-gui.qmp)
+	target/debug/zoraya-fsck $(HAND_DISK)
+
+# The network leg of test-hand-run: person mode (`--net`, no `--test`: no restrict=on, the
+# lease with a router and a DNS server, which is what it tests), so it runs inside
+# tools/confine-loopback.sh with its server (INV-0230-1), started only through CONFINED.
+test-hand-run-net-run:
+	@mkdir -p target/test-logs && : > $(HAND_HTTP_READY) && : > $(HAND_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(HAND_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(HAND_TLS_READY) > target/test-logs/test-httpd-hand-run.log 2>&1 & echo $$! > $(BUILD)/hand-run-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/hand-run-httpd.pid); \
 	for i in $$(seq 1 20); do [ -s $(HAND_HTTP_READY) ] && [ -s $(HAND_TLS_READY) ] && break; sleep 0.25; done; \
@@ -943,13 +961,6 @@ test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(HAND_DISK); rc=$$?; fi; \
 	exit $$rc
-	@tools/run-disk.sh $(HAND_DISK)
-	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(HAND_SCRIPT) --label hand-run -- $(call RUN_CMD,$(HAND_DISK))
-	target/debug/zoraya-fsck $(HAND_DISK)
-	@tools/run-disk.sh $(HAND_DISK)
-	$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --gui-script $(HAND_GUI_SCRIPT) --qmp $(BUILD)/hand-run-gui.qmp --label hand-run-gui -- \
-		$(call RUN_GUI_CMD,$(HAND_DISK),--display-opts none --qmp $(BUILD)/hand-run-gui.qmp)
-	target/debug/zoraya-fsck $(HAND_DISK)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell
