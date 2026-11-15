@@ -387,7 +387,7 @@ fn random_use_keeps_the_prediction_and_the_bounds() {
             model.0.insert(at, (va, length));
         } else if !model.0.is_empty() {
             // Bursts: now and then a run of neighbours leaves together.
-            let n = if r % 31 == 0 { 40 } else { 1 };
+            let n = if r.is_multiple_of(31) { 40 } else { 1 };
             for _ in 0..n.min(model.0.len()) {
                 let i = (r >> 8) as usize % model.0.len();
                 let (va, length) = model.0.remove(i);
@@ -396,7 +396,7 @@ fn random_use_keeps_the_prediction_and_the_bounds() {
         }
         assert_eq!(list.len(), model.0.len());
         assert!(list.chunk_count() <= 2 * list.len() / CHUNK + 2);
-        if round % 211 == 0 {
+        if round.is_multiple_of(211) {
             same(&list, &model);
         }
     }
