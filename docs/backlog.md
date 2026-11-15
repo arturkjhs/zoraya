@@ -535,3 +535,9 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
 `crates/zoraya-events/tests/no_allocation.rs` counted allocations in one process-wide counter, so allocations by the
 harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, a part that does not touch the crate) saw
 226 against 222, and its re-run passed. The counter is now per thread (`work/alloc-flake`).
+
+## Sockets that survive `exec` (the architect, 2026-11-15)
+
+`execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets
+across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its streams and ancillary channel) crosses
+`exec`, and lift the limit.

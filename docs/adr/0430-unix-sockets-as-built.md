@@ -1,6 +1,6 @@
 # ADR-0430: `AF_UNIX` sockets as built (plan part F2): the wire form, the limits where ADR-0412 leaves a number open, what `fork` and `spawn` do, and the seven names
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0050, ADR-0101, ADR-0102, ADR-0103, ADR-0287, ADR-0315, ADR-0342, ADR-0398, ADR-0412, ADR-0414
 - **Evidence:** CP-02, DM-022, GR-008, browser-engine/survey.md#the-posix-library
@@ -159,4 +159,7 @@ This part adds no authority: a program can pass only what it holds, and a refuse
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-15. Decided by the architect; recorded by an agent at the architect's request.
+
+Item 7 is accepted: a Unix socket crosses `spawn` as built (ADR-0433, plan part F4). `execve` with a Unix socket open
+returns `EBADF` as an interim limit; sockets surviving `exec` are in the backlog.
