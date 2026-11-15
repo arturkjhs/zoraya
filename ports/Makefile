@@ -636,7 +636,7 @@ $(DEPS)/lib/libzshim.a: ports/apps/zshim.c $(SYSROOT_STAMP)
 	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/zshim.o
 
 # The names OpenSSH's client and ssh-keygen reference that libc.a does not
-# export (ports/apps/sshshim.c, proposed ADR-0390), linked from here.
+# export (ports/apps/sshshim.c, proposed ADR-0393), linked from here.
 $(DEPS)/lib/libsshshim.a: ports/apps/sshshim.c $(SYSROOT_STAMP)
 	@mkdir -p $(DEPS)/lib $(OBJ)/apps
 	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/sshshim.o ports/apps/sshshim.c

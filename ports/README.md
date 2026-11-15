@@ -53,7 +53,7 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 
 `make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
 `build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and
-`run-gui`. `ports/apps/zshim.c` is the small archive of names those two programs need and `libc.a` does not export. 10g (TASK-31, ADR-0340) adds OpenSSH's `ssh` and `ssh-keygen` to the same directory, with `ports/apps/sshshim.c` for the nineteen names they need (proposed ADR-0390).
+`run-gui`. `ports/apps/zshim.c` is the small archive of names those two programs need and `libc.a` does not export. 10g (TASK-31, ADR-0340) adds OpenSSH's `ssh` and `ssh-keygen` to the same directory, with `ports/apps/sshshim.c` for the nineteen names they need (proposed ADR-0393).
 
 `make netsurf` (TASK-27 9d, ADR-0318) builds libpng, libjpeg, libcurl's install and NetSurf 3.11's libraries
 (`libnsfb` and the others, no libsvgtiny, no JavaScript) into `build/ports/deps`, then `netsurf` (framebuffer front

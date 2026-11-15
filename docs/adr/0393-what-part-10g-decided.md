@@ -1,4 +1,4 @@
-# ADR-0390: What part 10g decided where ADR-0340 and ADR-0341 are silent
+# ADR-0393: What part 10g decided where ADR-0340 and ADR-0341 are silent
 
 - **Status:** proposed
 - **Date:** 2026-11-15
@@ -80,8 +80,8 @@ simplest, safest and most reversible choice, so that the architect can accept or
 
 ## Invariants
 
-- **INV-0390-1.** `EntryKind::Own` is a directory entry and a child's connection to it carries no write right. *Check:* `cargo test -p zoraya-abi` and `cargo test -p zoraya-posix --test files`.
-- **INV-0390-2.** Every name `ssh` and `ssh-keygen` import that `libc.a` lacks is in `sshshim.c`. *Check:* `make -f ports/Makefile openssh` links.
+- **INV-0393-1.** `EntryKind::Own` is a directory entry and a child's connection to it carries no write right. *Check:* `cargo test -p zoraya-abi` and `cargo test -p zoraya-posix --test files`.
+- **INV-0393-2.** Every name `ssh` and `ssh-keygen` import that `libc.a` lacks is in `sshshim.c`. *Check:* `make -f ports/Makefile openssh` links.
 
 ## Open questions
 

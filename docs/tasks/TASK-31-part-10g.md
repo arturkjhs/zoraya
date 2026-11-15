@@ -23,7 +23,7 @@ Branch `work/10g`, from `main` at `47f59d26`. Written by an agent (Sonnet). ADR 
    comes with them.
 6. **Tests**: `tools/test-sshd.sh` (the host's sshd, two servers, throwaway keys), `tools/test-apps-ssh.sh`,
    `tests/shell/apps-ssh.script`, run by `make test-apps`. CI image and fallback step install `openssh-server`.
-7. **Docs**: ADR-0390 (proposed), invariants rows and statuses (Total 816), ports README, dependencies.
+7. **Docs**: ADR-0393 (proposed), invariants rows and statuses (Total 816), ports README, dependencies.
 
 ## What was run
 
@@ -44,7 +44,7 @@ Branch `work/10g`, from `main` at `47f59d26`. Written by an agent (Sonnet). ADR 
 ## Gaps and known limits
 
 - The storage limit on `/data/ROOM` (ADR-0341 item 6) is **not built**: the creating shell holds no connection to
-  `/data`. Needs the keeper or a `/data` hold (ADR-0390 item 10).
+  `/data`. Needs the keeper or a `/data` hold (ADR-0393 item 10).
 - `scp` and `sftp` (the follow-up) are not built.
 - The INV-0340-1 test with a configuration file in `~/.ssh` and `/etc/ssh` is not run in QEMU; the patch removes the
   reader. INV-0341-5 is not run with another `shell.home`. INV-0341-6's git-hook script waits for 10h.
@@ -79,4 +79,4 @@ host. In a room (`room new r +net build.example.org:22`): the same line, an empt
 
 ## Proposed ADRs
 
-- ADR-0390 (what 10g decided): recommends Option A (as built).
+- ADR-0393 (what 10g decided): recommends Option A (as built).

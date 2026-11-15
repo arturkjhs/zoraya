@@ -1,5 +1,5 @@
 /* Names that OpenSSH's client and ssh-keygen reference and Zoraya's libc.a does
- * not export (TASK-31 10g, proposed ADR-0390). They are linked into those two
+ * not export (TASK-31 10g, proposed ADR-0393). They are linked into those two
  * programs from libsshshim.a, as libzshim.a is into curl and wget, not into
  * libc.a: the surface of libc.a changes only by ADR (INV-0005-1), and a program
  * that does not call these names never links them. The link probe of the port
