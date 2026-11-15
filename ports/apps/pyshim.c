@@ -72,8 +72,8 @@ int dirfd(DIR *d)
 /* ---- names of the database and terminal modules
 
  * _socket.c names the classic resolver and the protocol and service
- * databases; termios.c the speed and flow calls; sendmsg
- * and recvmsg carry ancillary data, which Zoraya's sockets do not.
+ * databases; termios.c the speed and flow calls. (sendmsg and recvmsg
+ * were stubs here until plan part F2 built them in libposix.)
  * gethostbyname is getaddrinfo (libposix answers IPv4 only); the databases
  * are the few entries a program asks for by name (there is no /etc/services
  * on the volume); the terminal calls fail the way libposix's tcsetattr does
@@ -211,16 +211,3 @@ int tcflow(int fd, int action) { (void)fd; (void)action; errno = ENOTTY; return 
 int tcflush(int fd, int queue) { (void)fd; (void)queue; errno = ENOTTY; return -1; }
 int tcsendbreak(int fd, int duration) { (void)fd; (void)duration; errno = ENOTTY; return -1; }
 
-ssize_t sendmsg(int fd, const struct msghdr *m, int flags)
-{
-	(void)fd; (void)m; (void)flags;
-	errno = ENOSYS;
-	return -1;
-}
-
-ssize_t recvmsg(int fd, struct msghdr *m, int flags)
-{
-	(void)fd; (void)m; (void)flags;
-	errno = ENOSYS;
-	return -1;
-}

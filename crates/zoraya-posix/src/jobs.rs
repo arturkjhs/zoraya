@@ -901,9 +901,16 @@ impl<S: Sys> Posix<S> {
                     };
                     conns.push((c, wanted));
                 }
-                // A socket's three handles do not cross `fork` yet
-                // (ADR-0225 item 9; ADR-0287 lists it as not built): refused
-                // rather than copied as a description with no handles.
+                // A Unix stream socket's byte streams are duplicated by the
+                // snapshot and its ancillary channel stays with the parent
+                // (ADR-0412 item 6); a packet socket is one channel, which
+                // cannot be duplicated. A TCP socket's three handles do not
+                // cross `fork` yet (ADR-0225 item 9; ADR-0287 lists it as not
+                // built): refused rather than copied as a description with no
+                // handles.
+                Desc::Socket(ref s)
+                    if s.unix.is_some()
+                        && (s.kind == crate::unix::SOCK_STREAM || s.ctl.is_none()) => {}
                 Desc::Socket(_) => return Err(crate::errno::ENOTSUP),
                 _ => {}
             }
@@ -976,6 +983,7 @@ impl<S: Sys> Posix<S> {
         // A window channel is the same: one end, the parent's.
         self.window = None;
         self.addrs = crate::socket::AddrCache::default();
+        self.unix_after_fork_in_child();
         for d in self.fds.descriptions_mut() {
             if let Desc::Object { attached, .. } = d {
                 *attached = false;

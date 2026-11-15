@@ -40,6 +40,24 @@ async def main():
 assert asyncio.run(main()) == [1, 4, 9, 16]
 print("ok asyncio")
 
+# The loop's self-pipe is a socketpair (plan part F2, ADR-0412): a Unix pair
+# carries bytes both ways, and a descriptor with SCM_RIGHTS arrives as the same
+# file (ADR-0412 item 3).
+import socket
+a, b = socket.socketpair()
+a.sendall(b"ping")
+assert b.recv(10) == b"ping" and a.family == socket.AF_UNIX
+r, w = os.pipe()
+socket.send_fds(a, [b"fd"], [w])
+msg, fds, flags, addr = socket.recv_fds(b, 10, 2)
+assert msg == b"fd" and len(fds) == 1, (msg, fds)
+os.write(fds[0], b"x")
+assert os.read(r, 1) == b"x"
+for fd in (r, w, fds[0]):
+    os.close(fd)
+a.close(); b.close()
+print("ok socketpair")
+
 # A child by fork (no exec: a program started by another has no connection to
 # the random service, so a second python3 cannot start from here; ADR-0310).
 pid = os.fork()

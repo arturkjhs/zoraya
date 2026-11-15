@@ -746,7 +746,7 @@ PY_HTTPD_LOG = target/test-logs/test-httpd-$@.log
 PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
 PYTHON_HOSTPY := $(BUILD)/ports/hostpython/bin/python3.15
 PYTHON_TESTLIB := $(BUILD)/python-testlib
-PYTHON_REGR_FILES := tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt
+PYTHON_REGR_FILES := tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-unix.txt tests/python/regr-ignore.txt
 # Made once, by ci-build, so that the test jobs need neither the source tree nor
 # the host python (neither is in the build artifact).
 $(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
@@ -754,7 +754,7 @@ $(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
 	rm -rf $(PYTHON_TESTLIB).tmp && mkdir -p $(PYTHON_TESTLIB).tmp
 	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
 		case $$n in test_*) ;; *) cp -R $$f $(PYTHON_TESTLIB).tmp/ ;; esac; done
-	for m in $$(cat tests/python/regr-modules.txt tests/python/regr-long.txt | sed 's/\..*//' | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
+	for m in $$(cat tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-unix.txt | sed 's/\..*//' | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
 	@# deliberately bad test files do not compile, so the exit status is not read
 	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $(PYTHON_TESTLIB).tmp >/dev/null 2>&1; true
 	rm -rf $(PYTHON_TESTLIB) && mv $(PYTHON_TESTLIB).tmp $(PYTHON_TESTLIB)
@@ -1068,11 +1068,13 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	cp -R rootfs/. $(POSIX_CORE)/root/
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_poll tests/posix-core/t_poll.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_unix tests/posix-core/t_unix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_syscall tests/posix-core/t_syscall.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_syscall
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_poll
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_unix
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
@@ -1090,9 +1092,11 @@ test-posix-threads: $(KERNEL) $(RUNNER) tools-storage
 	cp -R rootfs/. $(POSIX_THREADS)/root/
 	tools/zcc -O2 -o $(POSIX_THREADS)/root/bin/t_threads tests/posix-core/t_threads.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_THREADS)/root/bin/t_poll tests/posix-core/t_poll.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_THREADS)/root/bin/t_unix tests/posix-core/t_unix.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_threads
 	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_poll
+	target/debug/zoraya-elf-check $(POSIX_THREADS)/root/bin/t_unix
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_THREADS)/root $(POSIX_THREADS)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_THREADS_SCRIPT) --label posix-threads-$$accel -- \

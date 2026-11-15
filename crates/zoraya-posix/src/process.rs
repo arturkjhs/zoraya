@@ -1086,7 +1086,7 @@ impl<S: Sys> Posix<S> {
 
     /// Ends a description entry's handles; for a file written through, asks
     /// the service's `status` first (ADR-0103 item 6, ADR-0010).
-    fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
+    pub(crate) fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {
         match desc {
             Desc::Object { conn, written, .. } => {
                 self.locks.release_description(conn);
@@ -1116,9 +1116,19 @@ impl<S: Sys> Posix<S> {
                 Ok(())
             }
             Desc::Null { .. } => Ok(()),
-            Desc::Socket(s) => {
+            Desc::Socket(mut s) => {
                 for h in [s.read, s.write, s.ctl].into_iter().flatten() {
                     self.sys.close(h);
+                }
+                // What a Unix socket held in the library (ADR-0412).
+                if let Some(u) = s.unix.as_mut() {
+                    let mut more = u.book.drain();
+                    if let Some(h) = u.held.take() {
+                        more.extend(h.handles);
+                    }
+                    for h in more {
+                        self.sys.close(h);
+                    }
                 }
                 Ok(())
             }
@@ -1219,6 +1229,107 @@ impl<S: Sys> Posix<S> {
                     Ok((_, r)) => Err(errno::from_file(r.status.0)),
                     Err(_) => Err(errno::from_file(self.status_of(size))),
                 }
+            }
+        }
+    }
+
+    /// `pread`: a read of a file at `offset`, which leaves the position where
+    /// it was. A stream or socket has no offset (`ESPIPE`).
+    pub fn pread(&mut self, fd: i32, into: User, offset: i64) -> Result<usize, i32> {
+        let start = u64::try_from(offset).map_err(|_| EINVAL)?;
+        match self.fds.get(fd) {
+            None => Err(EBADF),
+            Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
+            Some(Desc::Null { access }) => {
+                if *access == o::WRONLY {
+                    Err(EBADF)
+                } else {
+                    Ok(0)
+                }
+            }
+            Some(&Desc::Object { conn, access, .. }) => {
+                if access == o::WRONLY {
+                    return Err(EBADF);
+                }
+                let mut done = 0;
+                while done < into.length {
+                    let n = (into.length - done).min(MAX_INLINE);
+                    let at = start.checked_add(done as u64).ok_or(EINVAL)?;
+                    let m = proto::Read {
+                        offset: at,
+                        length: n as u32,
+                    };
+                    let size = self.call(conn, &m, &[])?;
+                    match decode::<proto::ReadReply<'_>>(&self.input[..size], 0) {
+                        Ok((_, r)) if r.status.0 == status::OK => {
+                            let got = r.data.0.len().min(n);
+                            self.sys.copy_out(into.part(done, got), &r.data.0[..got]);
+                            done += got;
+                            if got < n {
+                                break;
+                            }
+                        }
+                        Ok((_, r)) if done == 0 => return Err(errno::from_file(r.status.0)),
+                        Err(_) if done == 0 => {
+                            return Err(errno::from_file(self.status_of(size)));
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(done)
+            }
+        }
+    }
+
+    /// `pwrite`: a write of a file at `offset`, which leaves the position
+    /// where it was. (A description opened `O_APPEND` appends all the same on
+    /// Linux; here it writes at `offset`.)
+    pub fn pwrite(&mut self, fd: i32, from: User, offset: i64) -> Result<usize, i32> {
+        let start = u64::try_from(offset).map_err(|_| EINVAL)?;
+        match self.fds.get(fd) {
+            None => Err(EBADF),
+            Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
+            Some(Desc::Null { access }) => {
+                if *access == o::RDONLY {
+                    Err(EBADF)
+                } else {
+                    Ok(from.length)
+                }
+            }
+            Some(&Desc::Object {
+                conn, access, sync, ..
+            }) => {
+                if access == o::RDONLY {
+                    return Err(EBADF);
+                }
+                if from.length > isize::MAX as usize {
+                    return Err(EINVAL);
+                }
+                if let Some(Desc::Object { written, .. }) = self.fds.get_mut(fd) {
+                    *written = true;
+                }
+                let flags = if sync { write_flags::DURABLE } else { 0 };
+                let mut done = 0;
+                while done < from.length {
+                    let n = (from.length - done).min(MAX_INLINE);
+                    let at = start.checked_add(done as u64).ok_or(EINVAL)?;
+                    let mut data = core::mem::take(&mut self.data);
+                    self.sys.copy_in(from.part(done, n), &mut data[..n]);
+                    let m = proto::Write {
+                        offset: at,
+                        flags: Flags(flags),
+                        data: Data(&data[..n]),
+                    };
+                    let r = self.done(conn, &m, &[]);
+                    self.data = data;
+                    match r {
+                        Ok(0) => break,
+                        Ok(k) => done += k as usize,
+                        Err(e) if done == 0 => return Err(e),
+                        Err(_) => break,
+                    }
+                }
+                Ok(done)
             }
         }
     }
