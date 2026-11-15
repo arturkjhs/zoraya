@@ -1015,7 +1015,8 @@ fn a_memory_descriptor_does_not_cross_a_spawn_yet() {
     let before = r.handles();
     assert_eq!(r.p.inherit(&[], 0).err(), Some(EBADF));
     assert_eq!(r.handles(), before);
-    // The same descriptor given to the child as another fd by a file action.
+    // Close-on-exec after the fact: the same descriptor is then left behind (a
+    // `dup2` file action of it onto a kept fd is not tested here).
     r.p.fcntl(fd, zoraya_posix::process::F_SETFD, i64::from(FD_CLOEXEC))
         .unwrap();
     assert!(r.p.inherit(&[], 0).is_ok());
@@ -1098,7 +1099,7 @@ fn apply(r: &mut Rig, fd: i32, a: i32, step: Step, maps: &mut Vec<u64>) -> bool 
     }
 }
 
-/// INV-0413-1: every order of up to five of the steps. Once the descriptor
+/// INV-0413-1: every order of four of nine steps (6,561 orders). Once the descriptor
 /// was mapped shared, sent or forked, its object is the same one, of the same
 /// size, to the end.
 #[test]

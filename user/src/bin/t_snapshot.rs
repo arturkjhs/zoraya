@@ -207,8 +207,9 @@ fn both_halves_run_with_their_own_memory() {
 }
 
 /// ADR-0431 and INV-0413-2: a mapping made `SHARED` stays shared with the
-/// child (each half sees the other's writes, the child's mapping of a
-/// read-only handle is read-only), a mapping that is not shared is copied,
+/// child (each half sees the other's writes; a mapping through a read-only
+/// handle is made and read in the child, its refusal to write is `t_memfd
+/// seal`'s), a mapping that is not shared is copied,
 /// and sharing takes no frame for the object's pages.
 fn a_shared_mapping_stays_shared() {
     const PAGES: u64 = 8;
@@ -228,7 +229,10 @@ fn a_shared_mapping_stays_shared() {
     // A shared mapping needs DUPLICATE too: a fork child could not be given
     // the handle (ADR-0431 item 4); a private one does not.
     let no_dup = handle_duplicate(object, Rights::READ.union(Rights::WRITE)).expect("dup");
-    assert_err!(memory_map(no_dup, 0, size, MapFlags::SHARED), Status::AccessDenied);
+    assert_err!(
+        memory_map(no_dup, 0, size, MapFlags::SHARED),
+        Status::AccessDenied
+    );
     let private_view = memory_map(no_dup, 0, size, MapFlags::READ).expect("not shared");
     memory_unmap(private_view, size).expect("unmap");
     handle_close(no_dup).expect("close");

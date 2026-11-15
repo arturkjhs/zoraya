@@ -998,8 +998,16 @@ fn outer() -> i32 {
 fn inner() -> i32 {
     calibrate();
     memory_sites();
-    check("snapshot_process", snapshot_of(STEP, false), snapshot_of(BIG, false));
-    check("snapshot_process, shared", snapshot_of(STEP, true), snapshot_of(BIG, true));
+    check(
+        "snapshot_process",
+        snapshot_of(STEP, false),
+        snapshot_of(BIG, false),
+    );
+    check(
+        "snapshot_process, shared",
+        snapshot_of(STEP, true),
+        snapshot_of(BIG, true),
+    );
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();

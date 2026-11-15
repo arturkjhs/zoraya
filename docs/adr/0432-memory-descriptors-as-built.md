@@ -130,6 +130,12 @@ giving less. A receiver can never write what it was handed read-only, and a writ
 
 ## Open questions
 
+- **Known limitations of the review (F3 notes 5 and 6).** A `fork` child keeps a handle to each of its parent's `MAP_PRIVATE` copy
+  objects (the snapshot duplicates it) and does not use it; the parent's copy, charged to the parent's job, lives until the child
+  unmaps it or exits, also after the parent unmapped it (the anonymous `mmap` table has the same pattern from before F3). In
+  `memory_mmap` the `EACCES` for a writable shared mapping of a handle that is not writable (`!m.writable`) is unreachable: a
+  handle loses `WRITE` only by a seal (`EPERM` first) or arrives read-only (`access` `EACCES` first); the kernel's refusal of a
+  record that lies is the check that holds. A mutant of that branch is equivalent.
 - Seals are not shared between holders (item 1). WebKit's `createHandle(ReadOnly)`, read in its 2.54 source by the first engine
   part, decides whether a second descriptor made by `fcntl`-less duplication with fewer rights is also wanted.
 - Whether a memory descriptor sent to a spawned child should carry the size and seals in the bootstrap record (F4) as the wire
