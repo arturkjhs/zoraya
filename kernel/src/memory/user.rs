@@ -563,7 +563,13 @@ impl AddressSpace {
                     let target = match self.mappings.get(i) {
                         // A shared mapping is not copied: the child maps the
                         // same frames when the snapshot finishes (ADR-0431).
-                        Some(m) if m.va <= va && build.plan[i].share.is_some() => continue,
+                        Some(m) if m.va <= va && build.plan[i].share.is_some() => {
+                            // Not copied, but a unit of the step all the
+                            // same: a step stays bounded however many
+                            // shared pages the walk meets (INV-0270-1).
+                            taken += 1;
+                            continue;
+                        }
                         Some(m) if m.va <= va => build.objects[i].page(va - m.va),
                         _ => match build.child.copy_page(va, leaf.attributes) {
                             Ok(pa) => pa,

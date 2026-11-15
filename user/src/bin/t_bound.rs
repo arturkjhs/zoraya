@@ -267,9 +267,16 @@ fn contiguous_sites() {
     assert_eq!(free_frames(), free, "a refusal keeps nothing");
 }
 
-fn snapshot_of(size: u64) -> u64 {
+/// `shared`: the object is mapped `SHARED` (ADR-0431), whose pages a
+/// snapshot walks and does not copy (INV-0270-1 still holds).
+fn snapshot_of(size: u64, shared: bool) -> u64 {
     let object = memory_create(size, MemoryFlags::NONE).expect("create");
-    let at = memory_map(object, 0, size, MapFlags::WRITE).expect("map");
+    let flags = if shared {
+        MapFlags::WRITE.union(MapFlags::SHARED)
+    } else {
+        MapFlags::WRITE
+    };
+    let at = memory_map(object, 0, size, flags).expect("map");
     let job = job_create(JOB, JobFlags::POSIX).expect("job");
     let mut buffer = alloc::vec![0u8; 512];
     let mut e = SnapshotEncoder::new(&mut buffer, job);
@@ -991,7 +998,8 @@ fn outer() -> i32 {
 fn inner() -> i32 {
     calibrate();
     memory_sites();
-    check("snapshot_process", snapshot_of(STEP), snapshot_of(BIG));
+    check("snapshot_process", snapshot_of(STEP, false), snapshot_of(BIG, false));
+    check("snapshot_process, shared", snapshot_of(STEP, true), snapshot_of(BIG, true));
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();
