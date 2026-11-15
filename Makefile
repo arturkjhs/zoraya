@@ -698,7 +698,7 @@ PY_HTTPD_LOG = target/test-logs/test-httpd-$@.log
 PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
 PYTHON_HOSTPY := $(BUILD)/ports/hostpython/bin/python3.15
 PYTHON_TESTLIB := $(BUILD)/python-testlib
-PYTHON_REGR_FILES := tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-ignore.txt
+PYTHON_REGR_FILES := tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-unix.txt tests/python/regr-ignore.txt
 # Made once, by ci-build, so that the test jobs need neither the source tree nor
 # the host python (neither is in the build artifact).
 $(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
@@ -706,7 +706,7 @@ $(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
 	rm -rf $(PYTHON_TESTLIB).tmp && mkdir -p $(PYTHON_TESTLIB).tmp
 	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
 		case $$n in test_*) ;; *) cp -R $$f $(PYTHON_TESTLIB).tmp/ ;; esac; done
-	for m in $$(cat tests/python/regr-modules.txt tests/python/regr-long.txt | sed 's/\..*//' | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
+	for m in $$(cat tests/python/regr-modules.txt tests/python/regr-long.txt tests/python/regr-unix.txt | sed 's/\..*//' | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $(PYTHON_TESTLIB).tmp/; done
 	@# deliberately bad test files do not compile, so the exit status is not read
 	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $(PYTHON_TESTLIB).tmp >/dev/null 2>&1; true
 	rm -rf $(PYTHON_TESTLIB) && mv $(PYTHON_TESTLIB).tmp $(PYTHON_TESTLIB)

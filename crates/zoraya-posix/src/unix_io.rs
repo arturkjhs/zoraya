@@ -480,7 +480,7 @@ impl<S: Sys> Posix<S> {
             return Err(EPIPE);
         };
         if rights.is_empty() {
-            return self.write_pieces(fd, write, iov, nonblock);
+            return self.write_pieces(fd, write, iov, nonblock, false);
         }
         if shared {
             return Err(EOPNOTSUPP);
@@ -507,23 +507,36 @@ impl<S: Sys> Posix<S> {
         let moved = prepared.moved;
         self.finish_moves(&moved);
         // The descriptors are queued; their byte follows at once.
-        self.write_pieces(fd, write, iov, nonblock)
+        self.write_pieces(fd, write, iov, nonblock, true)
     }
 
     /// Writes `iov` to a stream socket's write end: the pieces in order, as
-    /// many as go; counts the offset.
+    /// many as go; counts the offset. `committed`: the descriptors that go with
+    /// the first byte are already queued, so this call must not be run again
+    /// (a deferred wait would send them twice): it waits where it stands.
     fn write_pieces(
         &mut self,
         fd: i32,
         end: S::H,
         iov: &[User],
         nonblock: bool,
+        committed: bool,
     ) -> Result<usize, i32> {
         let mut done = 0;
         for u in iov.iter().filter(|u| u.length > 0) {
             // Only the first piece may wait: the rest must not hold a caller
             // that already has bytes sent.
-            match self.write_stream(end, *u, nonblock || done > 0) {
+            let step = loop {
+                let r = self.write_stream(end, *u, nonblock || done > 0 || committed);
+                if committed && !nonblock && done == 0 && r == Err(EAGAIN) {
+                    match self.sys.wait(end, signals::WRITABLE | signals::PEER_CLOSED) {
+                        Ok(_) => continue,
+                        Err(_) => break Err(EPIPE),
+                    }
+                }
+                break r;
+            };
+            match step {
                 Ok(n) => {
                     done += n;
                     if n < u.length {

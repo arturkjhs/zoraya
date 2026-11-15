@@ -55,7 +55,7 @@ change; the existing all-or-nothing write (INV-0050-1) is enough once the librar
 2. **What the limit of 64 counts.** Handles, not descriptors: a file, directory, pipe end or packet socket is one, a stream
    socket up to three (read, write, ancillary). `ETOOMANYREFS` above 64 handles.
 3. **What each kind becomes.** A file or directory: a new connection by `share` with the descriptor's rights
-   (read-only stays read-only). A pipe end: a copy of the stream handle, the sender keeps its own (FIFOs travel as pipe
+   (read-only stays read-only; a directory that arrives answers `fstat` and listing but not `openat`, which needs the sender's place in its namespace table: as a directory a spawned child inherits). A pipe end: a copy of the stream handle, the sender keeps its own (FIFOs travel as pipe
    ends; the service connection stays with the sender). A Unix socket: **moved**: the sender's description is left dead
    (a `dup`ed fd of it reads end of file and writes `EPIPE`) and the fd sent is closed by the send. A stream socket with
    descriptors or bytes held in the library, or a packet socket with a message held, is `EBUSY`. A terminal, `/dev/null`,
