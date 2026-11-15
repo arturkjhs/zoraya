@@ -1,6 +1,6 @@
 # Plan part F5 (ADR-0415 item 1, INV-0415-1): 4096 mappings per process, from C
 # through libposix, in a 2 GiB guest (make test-libposix boots this script with
-# --mem 2G). The CPython command of the plan's "done when" is the python step's.
+# --mem 2G). The plan's CPython command is run by `make test-python-mem` (tests/python/mappings.py).
 ! panicked
 ! ZORAYA-PANIC
 ! t_maps: line

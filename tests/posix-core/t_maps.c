@@ -20,7 +20,7 @@
  *   t_maps all     every case, in one process (the heap keeps what `limit`
  *                  grew it by, so the script runs them one at a time)
  *
- * The CPython command itself is the python step's (tests/python/).
+ * The CPython command itself is run by `make test-python-mem` (tests/python/mappings.py).
  */
 #define _GNU_SOURCE
 #include <errno.h>

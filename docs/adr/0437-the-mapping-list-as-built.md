@@ -133,6 +133,12 @@ of every record.
 - **The frame list copy** of `memory_map` and `adopt` (ADR-0436, F8's known limitation) is not changed by this part.
 - Whether the heap's step stays 1 MiB (ADR-0415 item 1: until the engine's measurements say).
 
+- **Measured (F5, `make test-python-mem`, a 2 GiB guest under HVF):** ADR-0320's measurement repeated with CPython 3.15.2:
+  free one-page private mappings 4086 at the start and 4086 after 4000 threads (2000 joined, 2000 detached) and 30
+  `fork` + `waitpid` (ADR-0320: 248 and 247 of 256); a recursion of 200,000 frames, which ended in `MemoryError` at about
+  33,000 with 256 slots; and the plan's `python3 -c "x=[bytearray(100) for _ in range(5_000_000)]"` to its end (5,000,000
+  objects). The step passed (24 steps of the runner) in under a minute.
+
 ## Revisit triggers
 
 - A measured interval over 2 ms in `t_bound`'s 4032-mapping cases under HVF.
