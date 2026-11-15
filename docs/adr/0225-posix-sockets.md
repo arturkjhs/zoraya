@@ -201,6 +201,7 @@ Target 3: desktop programs are native and use ADR-0222's crate. Threads: the fd 
 - The service-name table and whether `/etc/services` should be a setting instead.
 - How many addresses to try on `connect(Name)` and in which order (Happy Eyeballs is DM-074's example of what an
   application should not have to do).
+- Amended by ADR-0412 (accepted 2026-11-14), recorded by plan part F2 (as built: ADR-0430): item 1 no longer refuses `AF_UNIX` for `socketpair` and `socket(AF_UNIX)` (`SOCK_STREAM`, `SOCK_SEQPACKET`, `SOCK_DGRAM`); a path is still refused (`bind` outside a program's own places stays plan part F7's). Item 10: a stream pair keeps its two crossed byte streams and gains an ancillary channel that carries `SCM_RIGHTS` descriptors; sequenced-packet and datagram pairs are one channel. The rest of this ADR stands.
 
 ## Revisit triggers
 - A program in scope using `getnameinfo`, raw sockets, filesystem `AF_UNIX` sockets or `MSG_PEEK`.

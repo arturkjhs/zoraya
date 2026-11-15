@@ -235,6 +235,7 @@ the calling thread (ADR-0304).
 - Whether any port needs `alarm` or `setitimer` after its switches are used; the probes answer it.
 - Whether `nftw`, `glob` extensions or `wordexp` are needed by git's or OpenSSH's builds; the probes answer it.
 - Whether T10 should also exist as one generated file for readers, built from the blocks.
+- Amended by ADR-0412 (accepted 2026-11-14), recorded by plan part F2 (as built: ADR-0430): item 11's `sendmsg` and `recvmsg` "without ancillary data" now carry `SCM_RIGHTS` on `AF_UNIX` sockets (handle transfer, at most 64 handles a message); other ancillary data stays refused (`EINVAL`). The rest of this ADR stands.
 
 ## Revisit triggers
 
