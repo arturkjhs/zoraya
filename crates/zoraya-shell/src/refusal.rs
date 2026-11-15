@@ -52,6 +52,24 @@ fn normalised(path: &str) -> Option<String> {
     Some(out)
 }
 
+/// A host and port as shown (ADR-0224 item 5): the name or dotted address as
+/// the program gave it, if it is made of ASCII letters, digits, `.`, `-` and
+/// `_` and fits the row, and `:PORT` unless the port is 0. `None` otherwise.
+pub fn shown_target(target: &str, port: u16) -> Option<String> {
+    let host_ok = !target.is_empty()
+        && target.len() <= MAX_SHOWN - 6
+        && target
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+    host_ok.then(|| {
+        if port == 0 {
+            String::from(target)
+        } else {
+            format!("{target}:{port}")
+        }
+    })
+}
+
 /// The path to show, or `None` when it may not be shown (ADR-0337 item 2).
 /// Total: any text gives a path or `None`.
 pub fn shown_path(path: &str) -> Option<String> {
@@ -128,6 +146,9 @@ pub struct Refusal {
     pub path: Option<String>,
     pub write: bool,
     pub element: usize,
+    /// A refused network request: the host and port as shown (`Some(None)`:
+    /// they may not be shown). `path` is `None` then.
+    pub net: Option<Option<String>>,
     /// The reported text itself, kept only to tell refusals apart.
     key: String,
 }
@@ -165,7 +186,34 @@ impl Pending {
             path: shown_path(path),
             write,
             element,
+            net: None,
             key: String::from(path),
+        });
+        self.latest = Some(self.seen.len() - 1);
+        true
+    }
+
+    /// A report of a refused network request (ADR-0224 item 5): `target` as
+    /// the program wrote it, `port` 0 for a lookup.
+    pub fn note_net(&mut self, target: &str, port: u16, element: usize) -> bool {
+        let key = format!("net:{target}:{port}");
+        if self
+            .seen
+            .iter()
+            .any(|r| r.key == key && r.element == element)
+        {
+            return false;
+        }
+        if self.seen.len() >= MAX_PENDING {
+            self.overflow = self.overflow.saturating_add(1);
+            return false;
+        }
+        self.seen.push(Refusal {
+            path: None,
+            write: false,
+            element,
+            net: Some(shown_target(target, port)),
+            key,
         });
         self.latest = Some(self.seen.len() - 1);
         true
@@ -204,6 +252,10 @@ impl Pending {
 pub fn notice(program: &str, r: &Refusal, case: Case, home: &str, more: usize) -> String {
     let name = program_name(program);
     let mut text = match &r.path {
+        None if r.net.is_some() => match &r.net {
+            Some(Some(t)) => format!("{name} was not given {t} (to reach)"),
+            _ => format!("{name} was refused a host that cannot be shown"),
+        },
         None => format!("{name} was refused {CANNOT_SHOW}"),
         Some(p) => {
             let p = shown(p, home);

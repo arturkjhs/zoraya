@@ -611,3 +611,44 @@ mod delivery_tests {
         assert!(h.give(&[file("/e/more", false)]).is_ok());
     }
 }
+
+#[test]
+fn a_refused_network_request_is_worded_and_counted_like_a_path() {
+    // ADR-0224 item 5, ADR-0337 items 1 and 3.
+    use crate::refusal::shown_target;
+    assert_eq!(
+        shown_target("example.org", 443).as_deref(),
+        Some("example.org:443")
+    );
+    assert_eq!(shown_target("10.0.2.2", 0).as_deref(), Some("10.0.2.2"));
+    for bad in [
+        "",
+        "a b",
+        "a/b",
+        "\u{202e}x",
+        "ex\u{e4}.org",
+        "a;b",
+        &"a".repeat(80),
+    ] {
+        assert_eq!(shown_target(bad, 80), None, "{bad:?}");
+    }
+    let mut p = Pending::new();
+    assert!(p.note_net("example.org", 443, 0));
+    assert!(!p.note_net("example.org", 443, 0));
+    assert!(
+        p.note_net("example.org", 80, 0),
+        "another port is another request"
+    );
+    let r = p.latest().unwrap().clone();
+    assert_eq!(
+        notice("curl", &r, Case::NotGiven, HOME, p.more()),
+        "curl was not given example.org:80 (to reach)  [1 more]"
+    );
+    let mut q = Pending::new();
+    q.note_net("a b", 1, 0);
+    let r = q.latest().unwrap().clone();
+    assert_eq!(
+        notice("curl", &r, Case::NotGiven, HOME, 0),
+        "curl was refused a host that cannot be shown"
+    );
+}

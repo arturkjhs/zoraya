@@ -1445,10 +1445,16 @@ impl Z {
             for h in &handles[..sizes.handles as usize] {
                 let _ = handle_close(*h);
             }
-            if let Some(r) = posix::Report::decode(&bytes[..sizes.bytes as usize]) {
+            let message = &bytes[..sizes.bytes as usize];
+            if let Some(r) = posix::Report::decode(message) {
                 let write = r.access == posix::Access::Write;
                 if !seen.iter().any(|(p, _)| p == r.path) {
                     seen.push((r.path.into(), write));
+                }
+            } else if let Some(r) = posix::NetReport::decode(message) {
+                let key = format!("net:{}:{}", r.target, r.port);
+                if !seen.iter().any(|(p, _)| *p == key) {
+                    seen.push((key, false));
                 }
             }
         }
@@ -1462,6 +1468,26 @@ impl Z {
         // words only characters a word needs no quoting for (INV-0337-5).
         let name = refusal::program_name(name);
         for (path, write) in &seen {
+            // A refused network request (ADR-0224 item 5): `net:HOST:PORT`.
+            if let Some(rest) = path.strip_prefix("net:") {
+                let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "0"));
+                let port: u16 = port.parse().unwrap_or(0);
+                match refusal::shown_target(host, port) {
+                    Some(t) => {
+                        let allow = match line {
+                            Some(line) => format!("+net {t} {line}"),
+                            None => format!("put +net {t} before {name} in the line"),
+                        };
+                        text.push_str(&format!(
+                            "  hint: {name} tried to reach {t}, which it was not given\n  to allow it: {allow}\n"
+                        ));
+                    }
+                    None => text.push_str(&format!(
+                        "  hint: {name} was refused a host that cannot be shown\n"
+                    )),
+                }
+                continue;
+            }
             let Some(path) = refusal::shown_path(path) else {
                 if !hidden {
                     hidden = true;
@@ -3442,7 +3468,8 @@ impl Z {
                         for h in &handles[..sizes.handles as usize] {
                             let _ = handle_close(*h);
                         }
-                        if let Some(r) = posix::Report::decode(&bytes[..sizes.bytes as usize]) {
+                        let message = &bytes[..sizes.bytes as usize];
+                        if let Some(r) = posix::Report::decode(message) {
                             let path: String = r.path.into();
                             self.note_refusal(
                                 number,
@@ -3450,6 +3477,9 @@ impl Z {
                                 &path,
                                 r.access == posix::Access::Write,
                             );
+                        } else if let Some(r) = posix::NetReport::decode(message) {
+                            let target: String = r.target.into();
+                            self.note_net_refusal(number, element, &target, r.port);
                         }
                     }
                     Err((Status::WouldBlock, _)) => break,
@@ -3481,6 +3511,24 @@ impl Z {
         if self.tty.front() != Some(number) || !self.refusals.note(path, write, element) {
             return;
         }
+        self.show_latest(number);
+    }
+
+    /// A refused network request of element `element` (ADR-0224 item 5).
+    fn note_net_refusal(&mut self, number: u32, element: usize, target: &str, port: u16) {
+        let key = format!("net:{target}:{port}");
+        let seen = self.live.entry(number).or_default();
+        if seen.len() < 256 && !seen.iter().any(|(e, p, _)| *e == element && *p == key) {
+            seen.push((element, key, false));
+        }
+        if self.tty.front() != Some(number) || !self.refusals.note_net(target, port, element) {
+            return;
+        }
+        self.show_latest(number);
+    }
+
+    /// The latest refusal of the line in front, worded and shown on the row.
+    fn show_latest(&mut self, number: u32) {
         let Some(r) = self.refusals.latest().cloned() else {
             return;
         };
@@ -3548,6 +3596,15 @@ impl Z {
     fn give(&mut self, line: u32, element: usize, text: &str) -> Result<String, String> {
         use zoraya_shell::delivery::{Spec, Wanted};
         let home = self.home();
+        // A host is given on the grant line like a file (ADR-0337 item 6),
+        // but the delivery of a network connection is not built (proposed
+        // ADR-0395): said before anything is checked, so that nothing is
+        // claimed.
+        if text.split_ascii_whitespace().any(|w| w == "+net") {
+            return Err(String::from(
+                "+net cannot be given to a running program yet; start it with the grant instead",
+            ));
+        }
         let gives = grantline::parse_give(text, &self.cwd, &home, &Holds(self))?;
         let words = grantline::words(&gives, &home);
         let mut wanted = Vec::new();

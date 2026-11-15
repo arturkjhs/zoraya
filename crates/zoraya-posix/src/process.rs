@@ -281,6 +281,8 @@ pub struct Posix<S: Sys> {
     grants: Option<S::H>,
     /// A path was refused in the call being made: a grant may have arrived.
     refused_in_call: bool,
+    /// Network refusals already reported: target, port, access.
+    reported_net: Vec<(String, u16, u32)>,
     /// The process itself, with `WAIT`, from the bootstrap channel's second
     /// message (ADR-0107 item 5), for 6d's `REQUEST_PENDING` waits.
     pub self_handle: Option<S::H>,
@@ -389,6 +391,7 @@ impl<S: Sys> Posix<S> {
             report: None,
             grants: None,
             refused_in_call: false,
+            reported_net: Vec::new(),
             self_handle: None,
             reported: Vec::new(),
             report_dropped: 0,
@@ -719,6 +722,42 @@ impl<S: Sys> Posix<S> {
             None => self.report_dropped = self.report_dropped.saturating_add(1),
         }
         self.remember(path, access);
+    }
+
+    /// Reports a network request `netd` refused with `NotGranted` (ADR-0224
+    /// item 5), once per target, port and access, within the same 16 as the
+    /// paths. `target` is the name the program gave or a dotted address.
+    pub(crate) fn report_net(&mut self, target: &str, port: u16, access: abi::NetAccess) {
+        if self
+            .reported_net
+            .iter()
+            .any(|(t, p, a)| t == target && *p == port && *a == access as u32)
+        {
+            return;
+        }
+        if self.reported_net.len() < REMEMBERED {
+            self.reported_net
+                .push((target.to_string(), port, access as u32));
+        }
+        let Some(end) = self.report else {
+            return;
+        };
+        if self.reports_sent >= MAX_REPORTS {
+            self.report_dropped = self.report_dropped.saturating_add(1);
+            return;
+        }
+        let r = abi::NetReport {
+            access,
+            port,
+            target,
+        };
+        let mut bytes = [0u8; abi::NetReport::HEADER_SIZE + 253];
+        if let Some(size) = r.encode(&mut bytes)
+            && self.sys.channel_write(end, &bytes[..size], &[]).is_ok()
+        {
+            self.reports_sent += 1;
+            self.stats.reports += 1;
+        }
     }
 
     /// A service refused an open of what `r` names (`EACCES`: a name its

@@ -723,6 +723,78 @@ impl<'a> Grants<'a> {
     }
 }
 
+const NET_REPORT_MAGIC: &[u8; 4] = b"ZPN1";
+
+/// What a refused network call asked for (ADR-0224 item 5).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetAccess {
+    Reach = 0,
+    Listen = 1,
+}
+
+/// One message on the `REPORT` channel for a network request `netd` answered
+/// `NotGranted` (ADR-0224 item 5): the host or address the program named, the
+/// port (0 for a lookup), and what it wanted. Like a path report it is the
+/// program's own text and is hostile data: the decoder accepts only a host
+/// name or dotted address (ASCII letters, digits, `.`, `-`, `_`, at most 253),
+/// and the shell filters it again before it shows it.
+///
+/// ```text
+/// magic "ZPN1", access u32, port u32, the target's bytes to the end
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetReport<'a> {
+    pub access: NetAccess,
+    pub port: u16,
+    pub target: &'a str,
+}
+
+/// Whether `text` is a host name or a dotted address: 1 to 253 of ASCII
+/// letters, digits, `.`, `-` and `_`.
+pub fn is_host_text(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 253
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+impl<'a> NetReport<'a> {
+    pub const HEADER_SIZE: usize = 12;
+
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        if !is_host_text(self.target) {
+            return None;
+        }
+        let size = NetReport::HEADER_SIZE.checked_add(self.target.len())?;
+        let out = out.get_mut(..size)?;
+        out[..4].copy_from_slice(NET_REPORT_MAGIC);
+        out[4..8].copy_from_slice(&(self.access as u32).to_le_bytes());
+        out[8..12].copy_from_slice(&u32::from(self.port).to_le_bytes());
+        out[12..].copy_from_slice(self.target.as_bytes());
+        Some(size)
+    }
+
+    pub fn decode(bytes: &'a [u8]) -> Option<NetReport<'a>> {
+        if bytes.get(..4)? != NET_REPORT_MAGIC {
+            return None;
+        }
+        let access = match u32_at(bytes, 4)? {
+            0 => NetAccess::Reach,
+            1 => NetAccess::Listen,
+            _ => return None,
+        };
+        let port = u16::try_from(u32_at(bytes, 8)?).ok()?;
+        let target = core::str::from_utf8(bytes.get(NetReport::HEADER_SIZE..)?).ok()?;
+        is_host_text(target).then_some(NetReport {
+            access,
+            port,
+            target,
+        })
+    }
+}
+
 /// The access a refused path was named for (ADR-0153 rule 11).
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1833,3 +1833,50 @@ mod grants_message {
         assert!(accepted > 0);
     }
 }
+
+mod net_report {
+    use crate::posix::*;
+
+    #[test]
+    fn a_net_report_round_trips_and_decodes_totally() {
+        let mut out = [0u8; 300];
+        let r = NetReport {
+            access: NetAccess::Reach,
+            port: 443,
+            target: "example.org",
+        };
+        let n = r.encode(&mut out).unwrap();
+        assert_eq!(NetReport::decode(&out[..n]), Some(r));
+        // A path report is not one, and what is no host text is refused.
+        assert!(Report::decode(&out[..n]).is_none());
+        for bad in [
+            "",
+            "a b",
+            "a/b",
+            "ex\u{e4}mple.org",
+            "a\nb",
+            &"a".repeat(254),
+        ] {
+            let r = NetReport {
+                access: NetAccess::Listen,
+                port: 1,
+                target: bad,
+            };
+            assert!(r.encode(&mut out).is_none(), "{bad:?}");
+        }
+        for cut in 0..n {
+            assert!(NetReport::decode(&out[..cut]).is_none() || cut > NetReport::HEADER_SIZE);
+        }
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..100_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let mut m = out;
+            m[(x as usize) % n] = (x >> 20) as u8;
+            if let Some(r) = NetReport::decode(&m[..n]) {
+                assert!(is_host_text(r.target));
+            }
+        }
+    }
+}
