@@ -2185,12 +2185,16 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
             actions: &[],
         };
         // The job handle moves to the new image: this one is ending.
+        // A signal that comes while the kernel makes the new image waits for
+        // the carry below instead of ending this image (`Posix::exec_hold`).
+        let held = p.exec_hold(facts.ignored);
         let r = spawn_into(
             p, job, client, &facts, image, &argv, envp, &exe, &start, false,
         );
         let process = match r {
             Ok(h) => h,
             Err(e) => {
+                p.exec_release(held);
                 let _ = zoraya_rt::handle_close(image);
                 let _ = zoraya_rt::handle_close(server);
                 let _ = zoraya_rt::handle_close(client);
@@ -2200,7 +2204,7 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
         // What this image took in and has not acted on goes on to the new
         // one, first thing: from the spawn on, a request reaches the new
         // image itself, as it is in the job (`Posix::exec_carry`).
-        let carried = p.exec_carry(facts.ignored);
+        let carried = p.exec_carry(facts.ignored, held);
         for n in 1..=zoraya_abi::posix::signal::MAX {
             if carried & bit(n) != 0
                 && let Some(kind) = zoraya_abi::posix::signal::kind(n)

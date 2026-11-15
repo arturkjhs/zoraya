@@ -1,0 +1,35 @@
+# work/sigint-exec (proposed ADR-0392): the review's hand mutations of the
+# C boundary, which no host test sees (finding 4). Each is killed by
+# invariants.script's `t_posix entryintr` (INV-0392-2) or zosh.script's
+# Ctrl-C steps (INV-0392-1). Minutes per mutant: the ports relink and two
+# QEMU runs.
+tests = ["make -s test-posix POSIX_SCRIPTS='tests/posix/invariants.script tests/posix/zosh.script' POSIX_ACCELS=auto"]
+timeout = 2400
+
+[[mutant]]
+id = "S-exec-carries-nothing"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'let carried = p.exec_carry(facts.ignored, held);'
+replace = 'let carried = 0u64;'
+note = "INV-0392-1: zosh.script's go-a and go-c print their ended- line after the sleep"
+
+[[mutant]]
+id = "S-exec-holds-nothing"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'let held = p.exec_hold(facts.ignored);'
+replace = 'let held = 0u64;'
+note = "INV-0392-1, the hold: not killed by a test today (a program without a SIGINT handler that execs during a Ctrl-C); a known survivor until one exists"
+
+[[mutant]]
+id = "S-waiting-never-interrupts"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'if !d.ran || d.restart {'
+replace = 'if true || !d.ran || d.restart {'
+note = "INV-0392-2: t_posix entryintr's first read returns the child's byte instead of EINTR"
+
+[[mutant]]
+id = "S-nanosleep-not-interrupted"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = 'let early = poll().ran;'
+replace = 'let early = { let _ = poll(); false };'
+note = "INV-0392-2: t_posix entryintr's nanosleep sleeps its 2 s and returns 0"

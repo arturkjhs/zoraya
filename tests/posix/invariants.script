@@ -52,6 +52,10 @@
 > t_posix eintr\r
 < t_posix: eintr passed
 < PSURF>
+# INV-0392-2: a handler run at a call's entry interrupts the call's wait.
+> t_posix entryintr\r
+< t_posix: entryintr passed
+< PSURF>
 # INV-0104-5 and INV-0106-2: no broker message and no request taken on the
 # file paths of a process with no handler.
 > ZORAYA_POSIX_STATS=1 t_posix files\r

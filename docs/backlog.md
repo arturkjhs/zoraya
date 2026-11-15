@@ -171,7 +171,7 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 - The wheel in the native applications beyond the terminal (9e, proposed ADR-0322): `zoraya-app` drops `Wheel` (ordinal 46), so the file manager's list, the editor and the settings window do not scroll with it; `zoraya-ui`'s `ScrollView` and the list need a wheel event of their own. NetSurf takes no horizontal turn (libnsfb has no button for it).
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs. **Cause found (TASK-29, F5, `docs/research/test-audit/report.md` section 3): not slow echo but the script's order.** The shell reports the count at its next prompt; the step passed only when the burst reached the shell before it had read `spin`, and timed out when the job was already in front. `tests/shell/console.script` now starts the job first and expects the count after it ends (branch `work/test-audit`).
 - `tools/test-runner/tests/flood.rs`: two of its four tests missed their 60 s bound (69.7 s) when `cargo test -p zoraya-test-runner` ran beside other work on an M1 (TASK-29's review, R13); all four pass alone. A wall-clock bound on the host; make it scale or drop it if it recurs.
-- **Ctrl-C does not end a continued POSIX job once it runs a later child (found by TASK-29, candidate run 43575482537, job `posix-scenarios-tcg`).** In the POSIX session: `sh -c 'printf "in\146g\n"; sleep 5; echo first; sleep 1; echo second; sleep 30'`, Ctrl-Z at `infg`, `fg`, wait for the job's own `first` and `second`, then Ctrl-C. Seen: `^C` is echoed, the job runs on for the 30 s of `sleep 30` and `echo after=$?` prints `after=0`. Expected: the job ends at once with 130, as it does when Ctrl-C comes half a second after `fg` (during the continued `sleep 5`), which is what `tests/posix/scenarios.script` checks and has always checked: its `< first` and `< second` matched the line `fg` echoes. One run, under TCG; not looked into (ttyd's foreground handle, the broker's group and the job signal after `job_resume` are where to look). No test covers it: the corrected step was put back to the early Ctrl-C so that CI stays green, and says so.
+- **Ctrl-C does not end a continued POSIX job once it runs a later child (found by TASK-29, candidate run 43575482537, job `posix-scenarios-tcg`).** In the POSIX session: `sh -c 'printf "in\146g\n"; sleep 5; echo first; sleep 1; echo second; sleep 30'`, Ctrl-Z at `infg`, `fg`, wait for the job's own `first` and `second`, then Ctrl-C. Seen: `^C` is echoed, the job runs on for the 30 s of `sleep 30` and `echo after=$?` prints `after=0`. Expected: the job ends at once with 130, as it does when Ctrl-C comes half a second after `fg` (during the continued `sleep 5`), which is what `tests/posix/scenarios.script` checks and has always checked: its `< first` and `< second` matched the line `fg` echoes. One run, under TCG; not looked into (ttyd's foreground handle, the broker's group and the job signal after `job_resume` are where to look). No test covers it: the corrected step was put back to the early Ctrl-C so that CI stays green, and says so. Probably the `exec` window that `work/sigint-exec` fixed (ADR-0392): dash execs the last command `sleep 30` right after `second`; see the entry of part 10c's leftovers below. Not rerun with the late Ctrl-C.
 
 
 ## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`) - done (9f-ci, 2026-11-14)
@@ -305,17 +305,19 @@ states, to be taken up later:
     terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
     line can take; refusing it outright waits for a fork that can go on without the terminal.
   - **A Ctrl-C typed just after a job's first output is not acted on** (`work/tcg-slow`, found from the `ports-early`
-    candidate's TCG `zosh.script` failure, run 43701741943). In `sh` in `zosh`, `/bin/sh -c 'echo go; exec /bin/sleep 20'`
-    and Ctrl-C at once after `go`: `zosh` has taken the job's `tcsetpgrp` (its notice came before the output), sends
-    `kill(-group, SIGINT)` to the job's group through the broker, and the broker's `job_signal(Interrupt)` on the group's
-    job returns `Ok` (traced), yet the job runs on: the sleep its full 20 s (HVF too, when the key lands during the job's
-    `exec` or its spawn of the sleep); under TCG, `sh -c 'echo go; read x'` is never ended. The same Ctrl-C 4 s later
-    ends the job at once, and `kill -INT %1` from `sh` on a running job works. So the request reaches the job's tree
-    and is lost by the process during or just after `exec`/`fork` (its disposition then, or `libposix` taking the request
-    and not acting on it at its wait). Not fixed: it is in `libposix`'s signal entry around `exec` and `fork` (ADR-0106,
-    ADR-0315), not in the routing of 10c. `zosh.script`'s Ctrl-C steps pass anyway, because they wait for the prompt
-    the job's end gives (30 s each under TCG, which with a slow loop overran the run's 180 s). A check: a `%` mark
-    around the Ctrl-C of `zosh.script` and a limit of a few seconds, once the cause is fixed.
+    candidate's TCG `zosh.script` failure, run 43701741943) - fixed by `work/sigint-exec` (`eddfd477` and the fix pass
+    of its review, `docs/tasks/TASK-31-review-sigint-exec.md`; proposed ADR-0392). In `sh` in `zosh`,
+    `/bin/sh -c 'echo go; exec /bin/sleep 20'` with Ctrl-C at once after `go` ran its 20 s, and under TCG
+    `sh -c 'echo go; read x'` never ended. Two causes in `libposix`: `sh -c` catches `SIGINT`, so a job signal during
+    the job's `exec` was queued on the old image, which ended without looking (now carried to the new image, and held
+    during the spawn for a program without a handler); and a request taken by the poll at `read`'s entry ran dash's
+    handler, which only notes it under `INTOFF`, and the read then waited (now the call's wait is `EINTR`).
+    `zosh.script`'s Ctrl-C steps are now the check this entry asked for: `x ended-a`, `x ended-r`, `x ended-c` fail when
+    the job runs on (a 10 s sleep, and the run's limit for the read); `t_posix entryintr` forces the entry case. Left
+    open: a `fork` child made during a job signal's walk misses it (ADR-0004 rule 3; a kernel question, ADR-0392's
+    follow-up; `zosh.script` has no forked step for it), and no test forces the handler-less `exec` window. TASK-29's
+    step V6 above (a Ctrl-C after `second`, while dash execs the last command `sleep 30`) is probably the same `exec`
+    window; its late Ctrl-C was not put back into `scenarios.script` here.
   - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
     for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
     for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.

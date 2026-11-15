@@ -25,6 +25,11 @@
  *                      nanosleep give EINTR only after a handler; an
  *                      ignored or blocked signal does not wake pselect; a
  *                      read with SA_RESTART resumes
+ *   t_posix entryintr  INV-0392-2: a signal that comes while the program
+ *                      makes no library call runs its handler at the next
+ *                      call's entry; a read that would wait is then EINTR
+ *                      without SA_RESTART and completes with it; nanosleep
+ *                      is EINTR with its time left either way
  *   t_posix files      a file workload (INV-0104-5, INV-0106-2 with
  *                      ZORAYA_POSIX_STATS: broker=0 takes=0)
  *   t_posix time       INV-0191-1: a file in /tmp after one on the root volume is
@@ -586,6 +591,81 @@ static pid_t later(pid_t to, int sig, long ms, int fd)
 		_exit(0);
 	}
 	return pid;
+}
+
+/* No _GNU_SOURCE here: memfd_create is declared by hand (musl's). */
+int memfd_create(const char *name, unsigned int flags);
+
+/*
+ * INV-0392-2. A child signals the parent while the parent spins on a flag in
+ * a shared page with no library call, so the request is in its kernel queue,
+ * not yet taken, when it calls the next function. The parent raises the flag
+ * to 1 once its fork has returned (fork's own calls would take the request);
+ * the child sends the signal and raises it to 2. The child writes a byte `ms`
+ * later: a read that waited for it is the defect.
+ */
+static pid_t signal_then_flag(pid_t to, volatile int *flag, int fd, long ms)
+{
+	*flag = 0;
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		while (*flag != 1)
+			;
+		kill(to, SIGUSR1);
+		*flag = 2;
+		if (fd >= 0) {
+			pause_ms(ms);
+			if (write(fd, "w", 1) != 1)
+				_exit(2);
+		}
+		_exit(0);
+	}
+	*flag = 1;
+	while (*flag != 2)
+		;
+	return pid;
+}
+
+static void entryintr(void)
+{
+	pid_t me = getpid();
+	int mfd = memfd_create("entryintr", 1 /* MFD_CLOEXEC */);
+	CHECK(mfd >= 0 && ftruncate(mfd, 4096) == 0);
+	volatile int *flag = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+	CHECK(flag != MAP_FAILED);
+	int p[2];
+	CHECK(pipe(p) == 0);
+	char b;
+	/* Without SA_RESTART: the read does not wait. */
+	counted = 0;
+	handle(SIGUSR1, count, 0);
+	pid_t pid = signal_then_flag(me, flag, p[1], 1000);
+	errno = 0;
+	CHECK(read(p[0], &b, 1) == -1 && errno == EINTR);
+	CHECK(counted == 1);
+	CHECK(read(p[0], &b, 1) == 1 && b == 'w');
+	reap(pid);
+	/* With SA_RESTART: the read goes on and takes the byte. */
+	counted = 0;
+	handle(SIGUSR1, count, SA_RESTART);
+	pid = signal_then_flag(me, flag, p[1], 300);
+	CHECK(read(p[0], &b, 1) == 1 && b == 'w');
+	CHECK(counted == 1);
+	reap(pid);
+	/* nanosleep, with SA_RESTART too: EINTR, about all of its time left. */
+	counted = 0;
+	pid = signal_then_flag(me, flag, -1, 0);
+	struct timespec t = { 2, 0 };
+	CHECK(nanosleep(&t, &t) == -1 && errno == EINTR);
+	CHECK(counted == 1 && t.tv_sec >= 1);
+	reap(pid);
+	handle(SIGUSR1, SIG_DFL, 0);
+	close(p[0]);
+	close(p[1]);
+	CHECK(munmap((void *)flag, 4096) == 0);
+	close(mfd);
+	passed();
 }
 
 static void eintr(void)
@@ -1926,6 +2006,8 @@ int main(int argc, char **argv)
 		raise_self();
 	else if (!strcmp(argv[1], "eintr"))
 		eintr();
+	else if (!strcmp(argv[1], "entryintr"))
+		entryintr();
 	else if (!strcmp(argv[1], "files"))
 		files();
 	else if (!strcmp(argv[1], "time"))

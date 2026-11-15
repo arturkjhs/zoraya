@@ -503,6 +503,8 @@ pub struct Fake {
     pub interrupts: Vec<(H, Option<H>)>,
     /// The process's request queue (`process_take_request`).
     pub requests: VecDeque<(zoraya_abi::RequestKind, u32)>,
+    /// Every `process_set_disposition`, in order.
+    pub dispositions: Vec<(zoraya_abi::RequestKind, zoraya_abi::Disposition)>,
 }
 
 impl Fake {
@@ -519,6 +521,7 @@ impl Fake {
             signal_after_waits: None,
             interrupts: Vec::new(),
             requests: VecDeque::new(),
+            dispositions: Vec::new(),
         }
     }
 }
@@ -606,6 +609,15 @@ impl Sys for Fake {
 
     fn take_request(&mut self) -> Option<(zoraya_abi::RequestKind, u32)> {
         self.requests.pop_front()
+    }
+
+    fn set_disposition(
+        &mut self,
+        kind: zoraya_abi::RequestKind,
+        d: zoraya_abi::Disposition,
+    ) -> Result<(), Status> {
+        self.dispositions.push((kind, d));
+        Ok(())
     }
 
     fn close(&mut self, h: H) {

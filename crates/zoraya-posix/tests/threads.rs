@@ -436,12 +436,68 @@ fn an_exec_hands_on_the_signals_this_image_took_in_and_did_not_act_on() {
     // Blocked when they came: this thread's and the process's sets.
     r.p.signals.pending |= bit(TERM);
     r.p.signals.shared |= bit(USR1);
-    let carried = r.p.exec_carry(1 << HUP);
+    let takes = r.p.stats.takes;
+    let carried = r.p.exec_carry(1 << HUP, 0);
     assert!(r.p.sys.requests.is_empty(), "the whole queue is taken");
+    assert_eq!(r.p.stats.takes - takes, 4, "each take is counted");
     assert_eq!(carried, bit(INT) | bit(TERM) | bit(USR1));
     // Nothing taken, nothing pending: nothing to hand on.
     let mut r = three();
-    assert_eq!(r.p.exec_carry(0), 0);
+    assert_eq!(r.p.exec_carry(0, 0), 0);
+}
+
+#[test]
+fn an_exec_without_handler_or_hold_takes_nothing() {
+    // INV-0106-2: a handler-less process makes no `process_take_request`;
+    // its queue is empty anyway (no disposition is `Deliver`).
+    use zoraya_abi::RequestKind;
+    let mut r = rig();
+    r.p.signals.pending |= bit(TERM);
+    r.p.sys.requests.push_back((RequestKind::Interrupt, 0));
+    assert_eq!(
+        r.p.exec_carry(0, 0),
+        bit(TERM),
+        "the pending set still goes"
+    );
+    assert_eq!(r.p.stats.takes, 0);
+    assert_eq!(r.p.sys.requests.len(), 1, "the queue was not looked at");
+    // After a hold it is: the held requests wait there.
+    assert_eq!(r.p.exec_carry(0, bit(2)), bit(TERM) | bit(2));
+    assert!(r.p.sys.requests.is_empty());
+}
+
+#[test]
+fn an_exec_holds_what_would_end_the_old_image_while_the_new_one_is_made() {
+    // A program without a handler for SIGINT execs; a Ctrl-C during the spawn
+    // must not end the old image before the new one, made after the job
+    // signal's walk, has it: it is held as `Deliver`, then carried.
+    use zoraya_abi::{Disposition, RequestKind};
+    const HUP: u32 = 1;
+    const INT: u32 = 2;
+    const CHLD: u32 = 17;
+    let mut r = rig();
+    r.p.signals.set(USR1, Some(HANDLER)).unwrap();
+    let held = r.p.exec_hold(1 << HUP);
+    // Every default-terminating signal not ignored and not already `Deliver`.
+    assert_ne!(held & bit(INT), 0);
+    assert_ne!(held & bit(TERM), 0);
+    assert_eq!(held & bit(HUP), 0, "ignored in the new image");
+    assert_eq!(held & bit(USR1), 0, "already Deliver: a handler");
+    assert_eq!(held & bit(CHLD), 0, "its default ignores");
+    assert_eq!(held & bit(9), 0, "SIGKILL is not a request");
+    let set: Vec<_> = r.p.sys.dispositions.clone();
+    assert!(set.contains(&(RequestKind::Interrupt, Disposition::Deliver)));
+    assert!(set.iter().all(|&(_, d)| d == Disposition::Deliver));
+    assert_eq!(set.len() as u32, held.count_ones());
+    // A failed spawn puts each one back.
+    r.p.sys.dispositions.clear();
+    r.p.exec_release(held);
+    assert!(
+        r.p.sys
+            .dispositions
+            .contains(&(RequestKind::Interrupt, Disposition::Terminate))
+    );
+    assert_eq!(r.p.sys.dispositions.len() as u32, held.count_ones());
 }
 
 #[test]
