@@ -178,6 +178,10 @@ A program that tries `bind("/home/me/sock")` gets `EACCES` and the shell shows
 - Whether WebKit ever sends more than 64 descriptors in one message (its limit is 254); the first engine part counts
   them in a debug build.
 - Whether a moved socket end breaks a pattern in GLib or CPython (sending a socket and keeping it); found by their tests.
+- **Rule 6 note (plan part F2, 2026-11-15).** INV-0412-1's in-QEMU half "between two processes" is not built: a spawned child cannot
+  be given a Unix socket until plan part F4 changes the bootstrap record (one fd with two or three handles), so the check runs in
+  one process on the real kernel (`make test-libposix`, `t_unix rights`) and over two processes on a fake kernel
+  (`cargo test -p zoraya-posix --test unix`). What F2 decided where this ADR is silent is in ADR-0430 (proposed).
 
 ## Revisit triggers
 
