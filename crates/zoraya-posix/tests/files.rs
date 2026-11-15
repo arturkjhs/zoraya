@@ -1977,20 +1977,21 @@ fn a_child_gets_the_own_directory_to_read_and_never_to_write() {
     let mut r = rig();
     r.p.mkdir_at(AT_FDCWD, b"own", 0o755).unwrap();
     let full = narrowed(&mut r, ALL);
-    let own = r.p.add_entry("/own", EntryKind::Own, Some(full));
+    r.p.add_entry("/own", EntryKind::Own, Some(full));
     // The program itself writes its directory.
     let fd = open(&mut r, "/own/config", RW_CREATE, 0o600).unwrap();
     assert_eq!(r.write(fd, b"keep"), Ok(4));
     r.p.close(fd).unwrap();
     let got = r.p.inherit(&[], 1).unwrap();
-    let (index, kind, at) = *got
+    let (prefix, kind, at) = got
         .entries
         .iter()
         .find(|e| e.1 == EntryKind::Own)
+        .cloned()
         .expect("the own entry is inherited");
     assert_ne!(at, zoraya_abi::posix::NO_HANDLE);
     assert_eq!(kind, EntryKind::Own, "and stays marked for the grandchild");
-    assert_eq!(index, own);
+    assert_eq!(prefix, "/own");
     let theirs = got.message[at as usize];
     assert_ne!(theirs, full, "a second connection, not the parent's");
     // The child's table: the same directory through the handle it was given.
@@ -2007,9 +2008,14 @@ fn a_child_gets_the_own_directory_to_read_and_never_to_write() {
     assert!(open(&mut r, "/own/config", o::WRONLY, 0).is_ok());
     // A child of an ordinary directory entry keeps what it had.
     let plain = narrowed(&mut r, ALL);
-    let plain_entry = r.p.add_entry("/plain", EntryKind::Directory, Some(plain));
+    r.p.add_entry("/plain", EntryKind::Directory, Some(plain));
     let got = r.p.inherit(&[], 1).unwrap();
-    let (_, _, at) = *got.entries.iter().find(|e| e.0 == plain_entry).unwrap();
+    let (_, _, at) = got
+        .entries
+        .iter()
+        .find(|e| e.0 == "/plain")
+        .cloned()
+        .unwrap();
     r.p.add_entry("/c2", EntryKind::Directory, Some(got.message[at as usize]));
     assert!(open(&mut r, "/c2/x", RW_CREATE, 0o600).is_ok());
 }
