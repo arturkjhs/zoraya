@@ -19,7 +19,8 @@ use crate::errno::{
     Call, EAFNOSUPPORT, EAGAIN, EBADF, EBUSY, EDESTADDRREQ, EINVAL, EMFILE, EMSGSIZE, ENOMEM,
     ENOTCONN, ENOTSOCK, EOPNOTSUPP, EPIPE, EPROTONOSUPPORT,
 };
-use crate::process::{Desc, Listing, Posix, native};
+use crate::memfd::{Memory, seal};
+use crate::process::{Desc, Listing, Posix, native, o};
 use crate::socket::{Held, Socket, State};
 use crate::stat::Kind as FileKind;
 use crate::sys::{Sys, User, signals};
@@ -53,6 +54,11 @@ struct Prepared<H> {
     /// are closed then: the ancillary channel of a socket sent from a `fork`
     /// parent (the receiver holds streams alone, `shared`).
     close_after: Vec<H>,
+    /// The fds of memory descriptors that go: their size is fixed once the
+    /// send happens (INV-0413-1).
+    sent_memory: Vec<i32>,
+    /// The memory handles of `handles` that have no `WRITE`.
+    read_only: Vec<H>,
 }
 
 fn total(iov: &[User]) -> usize {
@@ -190,6 +196,8 @@ impl<S: Sys> Posix<S> {
             created: Vec::new(),
             moved: Vec::new(),
             close_after: Vec::new(),
+            sent_memory: Vec::new(),
+            read_only: Vec::new(),
         };
         if fds.len() > MAX_HANDLES {
             return Err(ETOOMANYREFS);
@@ -216,6 +224,7 @@ impl<S: Sys> Posix<S> {
             File(H, bool, u32, bool),
             Pipe(H, bool, bool),
             Socket,
+            Memory(H, (u8, u64, u64)),
         }
         let plan = match self.fds.get(fd) {
             None => return Err(EBADF),
@@ -240,6 +249,11 @@ impl<S: Sys> Posix<S> {
             Some(Desc::Null { .. }) => return Err(EINVAL),
             Some(Desc::Socket(s)) if s.unix.is_none() => return Err(EINVAL),
             Some(Desc::Socket(_)) => Plan::Socket,
+            // A descriptor with no object yet (size 0) has nothing to send.
+            Some(Desc::Memory(m)) => match m.object() {
+                Some(h) => Plan::Memory(h, m.wire()),
+                None => return Err(EINVAL),
+            },
         };
         match plan {
             Plan::File(conn, dir, access, nonblock) => {
@@ -272,6 +286,19 @@ impl<S: Sys> Posix<S> {
                     0,
                     nonblock,
                 ));
+            }
+            Plan::Memory(h, (access, size, flags)) => {
+                // A copy of the handle, with the rights the descriptor has:
+                // after a seal, none to write (INV-0413-2).
+                p.handles.push((h, true));
+                if access == 0 {
+                    p.read_only.push(h);
+                }
+                let mut r = Record::one(Kind::Memory, access, false);
+                r.read_off = size;
+                r.write_off = flags;
+                p.records.push(r);
+                p.sent_memory.push(fd);
             }
             Plan::Socket => {
                 // A description moves once, whatever fds name it.
@@ -413,10 +440,11 @@ impl<S: Sys> Posix<S> {
         end: S::H,
         bytes: &[u8],
         handles: &[(S::H, bool)],
+        read_only: &[S::H],
         nonblock: bool,
     ) -> Result<(), i32> {
         loop {
-            match self.sys.channel_send(end, bytes, handles) {
+            match self.sys.channel_send(end, bytes, handles, read_only) {
                 Ok(()) => return Ok(()),
                 Err(Status::WouldBlock) => {
                     if nonblock {
@@ -517,11 +545,18 @@ impl<S: Sys> Posix<S> {
             .as_ref()
             .map_or(0, |u| u.book.write_off);
         let message = unix::encode_anc(offset, &prepared.records);
-        if let Err(e) = self.send_on_channel(anc, &message, &prepared.handles, nonblock) {
+        if let Err(e) = self.send_on_channel(
+            anc,
+            &message,
+            &prepared.handles,
+            &prepared.read_only,
+            nonblock,
+        ) {
             self.drop_prepared(prepared);
             return Err(e);
         }
         let (moved, after) = (prepared.moved, prepared.close_after);
+        self.memory_sent(&prepared.sent_memory);
         self.finish_moves(&moved, after);
         // The descriptors are queued; their byte follows at once.
         self.write_pieces(fd, write, iov, nonblock, true)
@@ -625,17 +660,26 @@ impl<S: Sys> Posix<S> {
                 created: Vec::new(),
                 moved: Vec::new(),
                 close_after: Vec::new(),
+                sent_memory: Vec::new(),
+                read_only: Vec::new(),
             }
         } else {
             self.prepare_rights(fd, rights)?
         };
         let payload = self.gather(iov);
         let message = unix::encode_packet(&prepared.records, &payload);
-        if let Err(e) = self.send_on_channel(ctl, &message, &prepared.handles, nonblock) {
+        if let Err(e) = self.send_on_channel(
+            ctl,
+            &message,
+            &prepared.handles,
+            &prepared.read_only,
+            nonblock,
+        ) {
             self.drop_prepared(prepared);
             return Err(e);
         }
         let (moved, after) = (prepared.moved, prepared.close_after);
+        self.memory_sent(&prepared.sent_memory);
         self.finish_moves(&moved, after);
         Ok(size)
     }
@@ -823,6 +867,25 @@ impl<S: Sys> Posix<S> {
                     u.book.write_off = r.write_off;
                 }
                 Desc::Socket(Box::new(s))
+            }
+            Kind::Memory => {
+                let access = if r.access == 2 { o::RDWR } else { o::RDONLY };
+                // What the receiver can check: the object's size never
+                // changes (`SHRINK`, `GROW`) and a seal against sealing only
+                // takes from the receiver. `F_SEAL_WRITE` is the peer's word
+                // that nobody writes, which the receiver cannot check: never
+                // reported. `F_SEAL_FUTURE_WRITE` only if this handle is
+                // read-only, which the kernel enforces.
+                let mut seals = (r.write_off & unix::MEMORY_SEALS) as u32
+                    & (seal::SEAL | seal::SHRINK | seal::GROW);
+                if access == o::RDONLY {
+                    seals |= seal::FUTURE_WRITE;
+                }
+                let sealable = r.write_off & unix::MEMORY_SEALABLE != 0;
+                let id = self.memory_id();
+                Desc::Memory(Box::new(Memory::received(
+                    id, first, access, r.read_off, seals, sealable,
+                )))
             }
             Kind::Packet => {
                 let mut s = Socket::fresh_unix(i32::from(r.sock_type), r.nonblock);
@@ -1126,6 +1189,7 @@ impl<S: Sys> Posix<S> {
     /// held by two processes now, so `SCM_RIGHTS` on it is `EOPNOTSUPP` here
     /// too (ADR-0412 items 2 and 6).
     pub fn after_fork_in_parent(&mut self) {
+        self.memory_after_fork();
         for d in self.fds.descriptions_mut() {
             if let Desc::Socket(s) = d
                 && let Some(u) = s.unix.as_mut()
@@ -1139,6 +1203,7 @@ impl<S: Sys> Posix<S> {
     /// held for it are the parent's (a channel end cannot be duplicated,
     /// ADR-0102 item 3); the byte streams are the child's own handles.
     pub(crate) fn unix_after_fork_in_child(&mut self) {
+        self.memory_after_fork();
         let mut closing: Vec<S::H> = Vec::new();
         for d in self.fds.descriptions_mut() {
             if let Desc::Socket(s) = d

@@ -6,7 +6,7 @@
 #![allow(dead_code)] // Reason: each test binary uses part of the rig.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
 use zoraya_abi::Status;
@@ -62,6 +62,13 @@ pub struct Net {
     services: u32,
     pub reports: Vec<u32>,
     pub now: u64,
+    /// Handles to a memory object that have no `WRITE`.
+    read_only: BTreeSet<H>,
+    /// The live mappings made by `memory_map_at`: address, length, writable,
+    /// shared.
+    mapped: Vec<(u64, u64, bool, bool)>,
+    /// Numbers the mappings (bits 24 to 31 of an address).
+    map_serial: u64,
 }
 
 impl Net {
@@ -80,6 +87,45 @@ impl Net {
 
     fn object(&self, h: H) -> Option<u32> {
         self.handles.get(&h).copied()
+    }
+
+    /// The memory object `h` names, as bytes.
+    pub fn memory_bytes(&self, h: H) -> Option<&[u8]> {
+        match self.objects.get(&self.object(h)?) {
+            Some(Obj::Memory(bytes)) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// The object `h` names, by number.
+    pub fn object_id(&self, h: H) -> Option<u32> {
+        self.object(h)
+    }
+
+    /// Whether the two handles name one object.
+    pub fn same_object(&self, a: H, b: H) -> bool {
+        self.object(a).is_some() && self.object(a) == self.object(b)
+    }
+
+    /// Whether `h` is a handle to a memory object without `WRITE`.
+    pub fn is_read_only(&self, h: H) -> bool {
+        self.read_only.contains(&h)
+    }
+
+    /// The live mappings `memory_map_at` made: address, length, writable,
+    /// shared.
+    pub fn mappings(&self) -> &[(u64, u64, bool, bool)] {
+        &self.mapped
+    }
+
+    /// A new handle to the object of `h`, read-only if `h` is.
+    fn copy_handle(&mut self, h: H) -> Option<H> {
+        let object = self.object(h)?;
+        let new = self.new_handle(object);
+        if self.read_only.contains(&h) {
+            self.read_only.insert(new);
+        }
+        Some(new)
     }
 
     /// Takes up to `n` bytes out of the stream whose read end is `h`, as a
@@ -160,6 +206,7 @@ impl Net {
         let Some(object) = self.handles.remove(&h) else {
             return;
         };
+        self.read_only.remove(&h);
         let held = self.holders.get_mut(&object).unwrap();
         *held -= 1;
         if *held > 0 {
@@ -246,9 +293,9 @@ impl Net {
     }
 
     /// Bytes at `address`: the high half names the memory object.
-    fn memory(&mut self, address: u64, length: usize) -> &mut [u8] {
+    pub fn memory(&mut self, address: u64, length: usize) -> &mut [u8] {
         let object = (address >> 32) as u32;
-        let at = (address & 0xffff_ffff) as usize;
+        let at = (address & 0x00ff_ffff) as usize;
         match self.objects.get_mut(&object) {
             Some(Obj::Memory(bytes)) => &mut bytes[at..at + length],
             _ => panic!("no memory at {address:#x}"),
@@ -328,9 +375,7 @@ impl Transport for Wire {
     }
 
     fn duplicate(&mut self, end: H) -> Option<H> {
-        let mut n = self.0.borrow_mut();
-        let object = n.object(end)?;
-        Some(n.new_handle(object))
+        self.0.borrow_mut().copy_handle(end)
     }
 
     fn new_token(&mut self) -> Option<H> {
@@ -568,9 +613,10 @@ impl Sys for Fake {
     }
 
     fn duplicate(&mut self, h: H) -> Result<H, Status> {
-        let mut n = self.net.borrow_mut();
-        let object = n.object(h).ok_or(Status::BadHandle)?;
-        Ok(n.new_handle(object))
+        self.net
+            .borrow_mut()
+            .copy_handle(h)
+            .ok_or(Status::BadHandle)
     }
 
     fn channel_create(&mut self) -> Result<(H, H), Status> {
@@ -605,7 +651,26 @@ impl Sys for Fake {
     /// The kernel's all-or-nothing write (INV-0050-1): a refused one changes
     /// nothing, a moved channel end may not hold queued handles or be one of
     /// the channel the message travels on (ADR-0050).
-    fn channel_send(&mut self, end: H, bytes: &[u8], handles: &[(H, bool)]) -> Result<(), Status> {
+    fn channel_send(
+        &mut self,
+        end: H,
+        bytes: &[u8],
+        handles: &[(H, bool)],
+        read_only: &[H],
+    ) -> Result<(), Status> {
+        // As the kernel: an entry names no more rights than its handle has,
+        // so a handle that is read-only is listed, and a listed one is.
+        {
+            let n = self.net.borrow();
+            for &h in read_only {
+                assert!(n.is_read_only(h), "{h} is listed read-only but is not");
+            }
+            for &(h, _) in handles {
+                if n.is_read_only(h) {
+                    assert!(read_only.contains(&h), "{h} is read-only and not listed");
+                }
+            }
+        }
         let mut n = self.net.borrow_mut();
         let object = n.object(end).ok_or(Status::BadHandle)?;
         let peer = match n.objects.get(&object) {
@@ -633,7 +698,7 @@ impl Sys for Fake {
         let list: Vec<H> = handles
             .iter()
             .zip(objects)
-            .map(|(&(h, copy), o)| if copy { n.new_handle(o) } else { h })
+            .map(|(&(h, copy), _)| if copy { n.copy_handle(h).unwrap() } else { h })
             .collect();
         if let Some(Obj::End { queue, .. }) = n.objects.get_mut(&peer) {
             queue.push_back((bytes.to_vec(), list));
@@ -801,8 +866,50 @@ impl Sys for Fake {
             .ok_or(Status::InvalidArgument)
     }
 
-    fn memory_unmap(&mut self, _address: u64, _length: u64) -> Result<(), Status> {
+    fn memory_unmap(&mut self, address: u64, length: u64) -> Result<(), Status> {
+        let mut n = self.net.borrow_mut();
+        if let Some(at) = n
+            .mapped
+            .iter()
+            .position(|m| m.0 == address && m.1 == length)
+        {
+            n.mapped.remove(at);
+        }
         Ok(())
+    }
+
+    fn memory_map_at(
+        &mut self,
+        object: H,
+        offset: u64,
+        length: u64,
+        write: bool,
+        shared: bool,
+    ) -> Result<u64, Status> {
+        let mut n = self.net.borrow_mut();
+        let id = n.object(object).ok_or(Status::BadHandle)?;
+        let size = match n.objects.get(&id) {
+            Some(Obj::Memory(bytes)) => bytes.len() as u64,
+            _ => return Err(Status::BadHandle),
+        };
+        if write && n.read_only.contains(&object) {
+            return Err(Status::AccessDenied);
+        }
+        let whole = |v: u64| v.is_multiple_of(4096);
+        if length == 0 || !whole(offset) || !whole(length) || offset + length > size {
+            return Err(Status::InvalidArgument);
+        }
+        n.map_serial = n.map_serial % 255 + 1;
+        let address = u64::from(id) << 32 | n.map_serial << 24 | offset;
+        n.mapped.push((address, length, write, shared));
+        Ok(address)
+    }
+
+    fn duplicate_read_only(&mut self, h: H) -> Result<H, Status> {
+        let mut n = self.net.borrow_mut();
+        let new = n.copy_handle(h).ok_or(Status::BadHandle)?;
+        n.read_only.insert(new);
+        Ok(new)
     }
 
     fn now(&mut self) -> u64 {

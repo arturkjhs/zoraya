@@ -68,13 +68,17 @@ pub trait Sys {
     /// still the caller's, unlike [`Sys::channel_write`], which takes what it
     /// is given whatever happens. `BadState` is a channel end that holds
     /// handles queued, or the end the message travels on (ADR-0050).
+    /// `read_only` names the handles among `handles` that are memory handles
+    /// without `WRITE`, which the library knows and the kernel cannot be
+    /// asked: an entry may name no more rights than its handle has.
     fn channel_send(
         &mut self,
         end: Self::H,
         bytes: &[u8],
         handles: &[(Self::H, bool)],
+        read_only: &[Self::H],
     ) -> Result<(), Status> {
-        let _ = (end, bytes, handles);
+        let _ = (end, bytes, handles, read_only);
         Err(Status::BadSyscall)
     }
     /// Takes the next message into `bytes`, its handles onto `handles`, and
@@ -103,6 +107,20 @@ pub trait Sys {
     /// Maps the whole object writable, and gives its address.
     fn memory_map(&mut self, object: Self::H, length: u64) -> Result<u64, Status>;
     fn memory_unmap(&mut self, address: u64, length: u64) -> Result<(), Status>;
+    /// Maps `length` bytes of `object` from `offset` (both page multiples),
+    /// writable if `write`, and gives the address. `shared` keeps the mapping
+    /// shared with the object across `fork` (`MapFlags::SHARED`, ADR-0431).
+    /// Never executable (INV-0051-2).
+    fn memory_map_at(
+        &mut self,
+        object: Self::H,
+        offset: u64,
+        length: u64,
+        write: bool,
+        shared: bool,
+    ) -> Result<u64, Status>;
+    /// A handle to the same memory object without `WRITE`.
+    fn duplicate_read_only(&mut self, h: Self::H) -> Result<Self::H, Status>;
 
     /// Nanoseconds on the monotonic clock.
     fn now(&mut self) -> u64;

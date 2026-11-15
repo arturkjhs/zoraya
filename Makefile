@@ -1291,9 +1291,11 @@ posix-image: $(KERNEL) tools-storage
 	cp -R tests/posix/rootfs/. $(POSIX_ROOT)/
 	tools/zcc -O2 -o $(POSIX_ROOT)/bin/t_posix tests/posix/t_posix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_tty tests/posix/t_tty.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_ROOT)/bin/t_memfd tests/posix/t_memfd.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_posix
 	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_tty
+	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_memfd
 	mkdir -p $(POSIX_ROOT)/src/w10 $(POSIX_ROOT)/src/w3
 	cp -R $(BUILD)/ports/workloads/tcc $(BUILD)/ports/workloads/lua $(BUILD)/ports/workloads/sqlite \
 	  $(BUILD)/ports/workloads/hello $(POSIX_ROOT)/src/

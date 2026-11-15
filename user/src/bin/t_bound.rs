@@ -267,9 +267,25 @@ fn contiguous_sites() {
     assert_eq!(free_frames(), free, "a refusal keeps nothing");
 }
 
-fn snapshot_of(size: u64) -> u64 {
+/// `shared`: the object is mapped `SHARED` (ADR-0431), whose pages a
+/// snapshot walks and does not copy (INV-0270-1 still holds).
+fn snapshot_of(size: u64, shared: bool) -> u64 {
     let object = memory_create(size, MemoryFlags::NONE).expect("create");
-    let at = memory_map(object, 0, size, MapFlags::WRITE).expect("map");
+    let flags = if shared {
+        MapFlags::WRITE.union(MapFlags::SHARED)
+    } else {
+        MapFlags::WRITE
+    };
+    let at = memory_map(object, 0, size, flags).expect("map");
+    // A shared object mapped many times: the walk meets all those pages and
+    // copies none, and one step must still be bounded (INV-0270-1).
+    let more: alloc::vec::Vec<u64> = if shared {
+        (0..SHARED_COPIES)
+            .map(|_| memory_map(object, 0, size, flags).expect("map again"))
+            .collect()
+    } else {
+        alloc::vec::Vec::new()
+    };
     let job = job_create(JOB, JobFlags::POSIX).expect("job");
     let mut buffer = alloc::vec![0u8; 512];
     let mut e = SnapshotEncoder::new(&mut buffer, job);
@@ -283,10 +299,17 @@ fn snapshot_of(size: u64) -> u64 {
     wait_exit(child);
     handle_close(child).expect("close");
     handle_close(job).expect("job");
+    for m in more {
+        memory_unmap(m, size).expect("unmap");
+    }
     memory_unmap(at, size).expect("unmap");
     handle_close(object).expect("close");
     ns
 }
+
+/// More mappings of one shared object than a limited job's tables would
+/// allow it to copy.
+const SHARED_COPIES: usize = 40;
 
 fn chain_close() -> (u64, u64) {
     // INV-0050-6's chain: each new pair's end travels in the message queued
@@ -991,7 +1014,21 @@ fn outer() -> i32 {
 fn inner() -> i32 {
     calibrate();
     memory_sites();
-    check("snapshot_process", snapshot_of(STEP), snapshot_of(BIG));
+    check(
+        "snapshot_process",
+        snapshot_of(STEP, false),
+        snapshot_of(BIG, false),
+    );
+    let (small, large) = (snapshot_of(STEP, true), snapshot_of(BIG, true));
+    check("snapshot_process, shared", small, large);
+    // Where the time limit is loose (a slow host), the walk of the shared
+    // pages must still not grow with their number: a skipped page is a unit
+    // of the step (INV-0270-1), so a big mapping is as quick as a small one.
+    let floor = 1_000_000 * FACTOR.load(Ordering::Relaxed);
+    assert!(
+        large <= 10 * small.max(floor),
+        "shared snapshot grows with the pages: {small} ns, {large} ns"
+    );
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();

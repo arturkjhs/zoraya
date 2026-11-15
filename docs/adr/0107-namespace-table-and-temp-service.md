@@ -300,6 +300,9 @@ several entries on one prefix; a batch `clone` for spawn.
 - Whether `clone` of several directory connections per `spawn` shows in W4's 3,002 `execve`s: ADR-0110.
 - A FIFO reopened after its writers closed (item 15's deviation): only if a program in scope does it.
 
+- Amended by ADR-0413 (accepted 2026-11-14), recorded by plan part F3 (as built: ADR-0432): item 17's `memfd_create` is a memory
+  descriptor, not an unnamed file on the `Tmp` entry; `tmpfile` keeps the unnamed file.
+
 ## Revisit triggers
 
 - A measured need to narrow below `/` for the toolchain (target 2): the table already allows it; the launcher's

@@ -1243,7 +1243,8 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   memory object for every mapped one, data cache cleaned to the point of unification for executable pages and the
   instruction cache invalidated once. A device mapping or a pin refuses it. The child's thread starts from a copy of
   the caller's exception frame with x0 `Ok` and x1 0, and its `TPIDR_EL0`; dispositions are copied, the request queue
-  is empty. Only after the child exists do the moved handles leave the caller.
+  is empty. Only after the child exists do the moved handles leave the caller. A mapping made `SHARED` (ADR-0431) is not copied:
+  the child maps the same frames with the same attributes.
 - **`image_create` (ADR-0108).** `zoraya-elf` parses an ELF in a memory object in two steps (header, then table)
   with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table and the object.
   `spawn` copies each segment's bytes from the object then. Rewriting the object after the call harms only the
@@ -2153,6 +2154,28 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
   part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
   splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
+- **Memory descriptors** (plan part F3, ADR-0413; ADR-0431 and ADR-0432, proposed, record what the code decided):
+  `memfd_create` and `shm_open(SHM_ANON)` make a descriptor of size 0 (`crates/zoraya-posix/src/memfd.rs`, the state in the
+  description entry); its first `ftruncate` makes the memory object, committed at once and paid by the creator's job for its life.
+  `mmap(MAP_SHARED)` maps the object (`Sys::memory_map_at`; the kernel's `memory_map` takes a new `SHARED` flag, ADR-0431, so
+  that `snapshot_process` maps a shared mapping's pages into the child as they are and copies nothing for them: `fork` after
+  `mmap(MAP_SHARED)` has POSIX's meaning); `MAP_PRIVATE` is a copy; `PROT_EXEC` on any `mmap` is `EACCES`, and `mprotect` with it too
+  (INV-0413-5). Seals are rights: `F_SEAL_FUTURE_WRITE` and `F_SEAL_WRITE` replace the library's handle by one without `WRITE` (the
+  old one is closed), so every later mapping, copy sent and fork child is read-only in the kernel (a sealed descriptor's `write`
+  and writable `mmap` are `EPERM`); `F_SEAL_WRITE` is `EBUSY` once a writable handle has left (a send, a `fork`, an arrival) or the
+  descriptor has a writable mapping. The size is fixed from the first shared `mmap`, send, `fork` or arrival (`EBUSY` for another
+  size, `EFBIG` for a write past the end); before that an `ftruncate` or a `write` past the end replaces the object, in doubling
+  steps. A descriptor travels in `SCM_RIGHTS` as a copy of the object handle with its size and seals (a record of kind 7). `shm_open`
+  of any name is `EACCES`, `shm_unlink` `ENOENT`; `SHM_ANON` is `((char *)1)` in `<zoraya/shm.h>`, which musl's `<sys/mman.h>`
+  includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): a memory descriptor does not cross `spawn`
+  or `exec` (`EBADF` without `O_CLOEXEC`) until plan part F4 changes the bootstrap record, so the plan's "a child reads what the
+  parent wrote" is checked with a `fork` child and in one process over a socketpair, and the two-process half over a fake kernel;
+  seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
+  `mlock`; `MAP_SHARED` of a regular file and `MAP_SHARED|MAP_ANONYMOUS` stay `ENODEV`; `memfd_create` no longer survives `exec` or
+  backs a tmpd file. CPython's `_posixshmem` stays unbuilt (`ports/Makefile`'s `PYTHON_ABSENT`). Tests:
+  `crates/zoraya-posix/tests/memfd.rs` (INV-0413-1 over every order of four of nine steps, -2, -3, -5), `tests/posix/t_memfd.c`
+  (`make test-posix`: the 4 MiB memfd and the fork child, the seal and the read-only child's `SIGSEGV`), `tests/posix-core/t_unix.c`
+  (`memfd`, `make test-libposix`), `t_snapshot` and `t_quota` (`make test-qemu`: INV-0431-1 to -3 and INV-0413-4).
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 
