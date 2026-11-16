@@ -12,6 +12,10 @@
 #   --mem SIZE            RAM, QEMU syntax (default 128M)
 #   --machine-opt OPT     appended to -machine virt,...; repeatable
 #                         (e.g. gic-version=3, virtualization=on)
+#   --shard N/M           with --test and the test kernel: run only shard N of M
+#                         of its tests (the kernel reads `zoraya.shard=N/M` from
+#                         the device tree's /chosen/bootargs; kernel/src/testing.rs,
+#                         tools/check-test-shards.sh)
 #   --test                non-interactive: serial on stdout, no monitor,
 #                         stdin not read
 #   --keys                with --test: stdin goes to the serial line, for the
@@ -127,6 +131,7 @@ net_guestfwd=
 qmp=
 display_opts=
 kernel=
+shard=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
 
@@ -136,6 +141,7 @@ while [ $# -gt 0 ]; do
         --smp) [ $# -ge 2 ] || die "--smp needs a value"; smp=$2; shift 2 ;;
         --mem) [ $# -ge 2 ] || die "--mem needs a value"; mem=$2; shift 2 ;;
         --machine-opt) [ $# -ge 2 ] || die "--machine-opt needs a value"; machine="$machine,$2"; shift 2 ;;
+        --shard) [ $# -ge 2 ] || die "--shard needs N/M"; shard=$2; shift 2 ;;
         --test) mode=test; shift ;;
         --keys) keys=1; shift ;;
         --test-disk) test_disk=1; shift ;;
@@ -236,6 +242,7 @@ set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
     -smp "$smp" -m "$mem" -nodefaults
 [ -n "$reboot" ] || set -- "$@" -no-reboot
 [ -n "$kernel" ] && [ -z "$dumpdtb" ] && set -- "$@" -kernel "$kernel"
+[ -z "$shard" ] || set -- "$@" -append "zoraya.shard=$shard"
 
 # Interactive with --gui: QEMU's display opens a window. On macOS the
 # cocoa display keeps the Command keys for the host unless told otherwise;

@@ -11,9 +11,12 @@
 make test-unit
 make test-qemu-auto-smp4-2g
 make test-qemu-tcg-default
-make test-qemu-tcg-smp4-gicv2
-make test-qemu-tcg-el2
-make test-qemu-tcg-smp4-gicv3
+make test-qemu-tcg-smp4-gicv2-a
+make test-qemu-tcg-smp4-gicv2-b
+make test-qemu-tcg-el2-a
+make test-qemu-tcg-el2-b
+make test-qemu-tcg-smp4-gicv3-a
+make test-qemu-tcg-smp4-gicv3-b
 make test-boot
 make test-files
 make test-libposix

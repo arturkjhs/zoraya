@@ -1131,13 +1131,21 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 | auto-smp4-2g | HVF on a Mac, else TCG | 4 CPUs, 2 GiB | `cpus: 4`, 2048 MiB region |
 | auto-el2 | HVF on a Mac, else TCG | `virtualization=on` | entry at EL2; skipped where HVF has no EL2 (Known limitations) |
 | tcg-default | TCG | default | GICv2 |
-| tcg-smp4-gicv2 | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
-| tcg-el2 | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
-| tcg-smp4-gicv3 | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
+| tcg-smp4-gicv2-a, -b | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
+| tcg-el2-a, -b | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
+| tcg-smp4-gicv3-a, -b | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
 
 On a Mac the three `auto` lines run under HVF, so they cover GICv3 only. GICv2 under HVF is not run, because QEMU
 cannot start it. Where `auto` is TCG (CI's runners), `auto-default` and `auto-el2` are the machines of `tcg-default`
-and `tcg-el2`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
+and `tcg-el2-a`/`-b`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
+
+The three TCG suites that are not `tcg-default` run in two shards (`-a`, `-b`), each a job with its own 420 s limit
+(architect, 2026-11-16: one boot of the list took about 300 s on a fast runner and passed 420 s on a slow one). The test
+kernel reads `zoraya.shard=N/2` from `/chosen/bootargs` (`tools/run-qemu.sh --shard N/2`); shard 1 is the registered
+tests before `SHARD_2_FIRST` (`kernel/src/testing.rs`), shard 2 the rest, in the registered order, so each test runs
+in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that ran after earlier ones
+and needs what they left (`memory_objects_from_a_process` needs the heap grown by the earlier tests) must stay after them:
+the cut is not moved before it. The `auto-*` suites stay whole (HVF runs one in under two minutes).
 
 How the in-QEMU tests run and report:
 - The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A

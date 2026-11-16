@@ -649,12 +649,59 @@ fn bump(counter: &AtomicUsize) {
     counter.store(counter.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
 }
 
-/// Runs the tests from index `start` on, then powers off.
+/// The first test of shard 2 of 2 (`--shard 2/2` of tools/run-qemu.sh). Shard
+/// 1 runs the tests before it, shard 2 this one and those after it, in the
+/// registered order, so each test runs in exactly one shard
+/// (`tools/check-test-shards.sh`). Everything the runner expects of a
+/// deliberate failure (`EXPECT` in the Makefile) comes before it, so shard 1
+/// holds the fault tests and `harness_resumes_after_panic`.
+const SHARD_2_FIRST: &str = "job_suspend_from_a_process";
+
+/// One past the last test of this run (`TESTS.len()` unless sharded).
+static END: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// The `zoraya.shard=N/M` word of `/chosen/bootargs`, if any.
+fn shard_argument() -> Option<(usize, usize)> {
+    let (fdt, _) = platform();
+    let args = fdt.find_node("/chosen")?.property("bootargs")?.as_str()?;
+    let spec = args
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("zoraya.shard="))?;
+    let (n, m) = spec.split_once('/')?;
+    Some((n.parse().ok()?, m.parse().ok()?))
+}
+
+/// The tests this run covers, `lo..hi` (the whole list without a shard).
+fn shard_range() -> (usize, usize) {
+    let Some((n, m)) = shard_argument() else {
+        return (0, TESTS.len());
+    };
+    assert!(m == 2 && (n == 1 || n == 2), "bad shard {n}/{m}");
+    let split = TESTS
+        .iter()
+        .position(|t| t.name == SHARD_2_FIRST)
+        .expect("SHARD_2_FIRST is a registered test");
+    let (lo, hi) = if n == 1 {
+        (0, split)
+    } else {
+        (split, TESTS.len())
+    };
+    println!("shard: {n}/{m} runs tests {lo}..{hi} of {}", TESTS.len());
+    (lo, hi)
+}
+
+/// Runs the tests from index `start` on, then powers off. The first call
+/// (`start` 0) picks the shard's range.
 pub fn run(start: usize) -> ! {
+    let mut start = start;
     if start == 0 {
-        println!("ZORAYA-TEST begin {}", TESTS.len());
+        let (lo, hi) = shard_range();
+        END.store(hi, Ordering::Relaxed);
+        start = lo;
+        println!("ZORAYA-TEST begin {}", hi - lo);
     }
-    for (i, t) in TESTS.iter().enumerate().skip(start) {
+    let end = END.load(Ordering::Relaxed);
+    for (i, t) in TESTS.iter().enumerate().take(end).skip(start) {
         println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
         LIVE_BEFORE.store(live_processes(), Ordering::Relaxed);
