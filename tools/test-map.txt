@@ -39,6 +39,7 @@ tools/ci-tree-proof.rb        check
 tools/ci-makefile-steps.rb    check
 tools/ci-last-full.rb         check
 tools/check-ci-plan.sh        check
+tools/check-test-shards.sh    check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
 tools/check-workflow-syntax.rb check
