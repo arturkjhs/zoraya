@@ -139,3 +139,116 @@ units (finding 1), so that off HVF the units carry the claim, as ADR-0270's Q6 n
   the units, even with the bound at 1 s.
 - **Docs.** The INV-0270-1 row is unchanged, `make adr-check` passes; the backlog entry matches the commit except
   findings 3 and 4.
+
+## Check of the changed lines
+
+A check by the `opus-review` subagent of the fix pass, `git diff 24583771..origin/work/kwb-time -- kernel user crates
+tools Makefile` at `29ee64ec` (commits `c28b094e`, `56f9ad2d`, `29ee64ec`; the rest of that range is the merge of
+F6 from `main`, not reviewed here). Read only: nothing was built or run but `make check`, so the commit's numbers
+("111 units against 80", "factor 2, bound 2 ms") are not re-measured here.
+
+### C1. must-fix: the undo of a cancelled or failed `memory_map` is one interval of up to the whole mapping
+
+*Where:* `kernel/src/syscall.rs:832-835` (`unmap_range(va, 0, done)` after a failed step), `:841-848` (after
+`steps::between()` returns `Cancelled`), `:855-860` (`unmap_range(va, 0, length)` after `map_commit` fails).
+
+*What:* each clears every entry mapped so far under one lock, with no step point. Now that entries are units
+(`user.rs:233-237`), the test kernel would count it; the release kernel just runs it. The backlog's new note records
+it as "not reached by a test", but it is a breach of INV-0270-1 reachable by any limited job, and neither the
+ADR-0270 note nor the row's list of known breaches ((a), (b)) names it.
+
+*Scenario:* a process maps an object of its room's whole limit (2 GiB in the 2 GiB guest: 524 288 entries); its
+parent (or `job_kill` of its own job from another thread) asks it to end in the middle. `between()` returns
+`Cancelled` at about 2 GiB - 256 KiB done, and `unmap_range` clears about 8190 steps' entries in one interval. At
+R1's 13.7 us per 64 entries under HVF, about 110 ms masked against 2 ms. `a_kill_between_steps_leaves_nothing` kills
+`create-loop`, `snapshot-loop` and `contiguous-loop`, not a `memory_map`, so nothing sees it.
+
+*Fix:* undo in steps: drop the space lock, then `unmap_range` a step at a time with `steps::pause()` between (the
+mapping lock `_map` is held across the steps already, as `unmap_exact` does), then `map_abort`. Add a `map-loop`
+role to `a_kill_between_steps_leaves_nothing` (24 MiB, so the units of the undo would read 96 + tables). Until then,
+record it as item (c) in the ADR-0270 note and in the row.
+
+### C2. should-fix: the INV-0270-1 row's Status is no longer true
+
+*Where:* `docs/adr/invariants.md:509`.
+
+*What:* it says "the masked time, 2 ms when the calibration says HVF and off HVF only a sanity limit of 1 s". Now the
+bound follows `MIDR_EL1` (any CPU but a Cortex-A72 gets 2 ms), a run over 1 s under TCG is repeated up to three
+times, and page-table entries are units (1 per 64). The far-pages case's 512 empty tables and C1's breach are not
+mentioned either. CLAUDE.md: keep the Status column true. *Fix:* rewrite those clauses; `make adr-check` does not
+compare the prose.
+
+### C3. should-fix: under HVF a single host stall over 2 ms now fails the run, with no repeat
+
+*Where:* `user/src/bin/t_bound.rs:132-141` (`time_ok`: `assert!(on_tcg(), ...)`).
+
+*What:* before, a slow HVF run moved the bound to 1 s (finding 2, wrong in the other direction). Now HVF is 2 ms
+always, and only TCG repeats. A vCPU thread of HVF is descheduled by the host as TCG's is; `make test-changed` runs
+up to 3 guests in parallel lanes. One preemption of the vCPU inside a masked interval fails `kernel_work_is_bounded`
+with nothing to show it was the host. *Fix:* apply the same repeat under HVF (three runs over 2 ms in a row fail; a
+kernel loop repeats, a stall does not), and keep the line that prints each over-limit site so a flake is visible.
+
+### C4. note: the weight of 64 entries per unit catches the loss of every step point, not a larger step
+
+*Where:* `kernel/src/memory/user.rs:233`; `MAX_UNITS = 64 + 16` (`t_bound.rs:45`).
+
+*What:* a legitimate step of `map_range` / `unmap_range` is 64 entries = 1 unit plus its few table frames, so an
+interval may hold up to about 80 * 64 = 5120 entries before the units check fails (20 MiB of 4 KiB pages). That is
+consistent with the 2 ms bound on the reference host (R1: about 13.7 us per 64 entries, 80 units = about 1.1 ms),
+and every real caller is stepped: `memory_map` and `unmap_exact` call these with `n <= STEP` pages
+(`syscall.rs:817-820`, `:376-379`), 1 unit each, so a 24 MiB map is 96 intervals of 1 unit plus tables, and an
+unstepped one is 96 + tables > 80. But a regression that raises the step to 4096 pages (16 MiB, 64 units) passes
+the units on every host and, at about 0.9 ms, the time under HVF too. Weighting closer to the time (1 unit per 4
+entries makes a legitimate step 16 units) would catch a step four times too large. Also `count_entries` is not
+`#[track_caller]`, so `diagnose_units` attributes every entry unit to `user.rs:237` and not to `memory_map` or the
+undo.
+
+In the release kernel the count costs nothing: `steps::count` is `#[inline(always)]` and only `let _ = units` without
+`qemu-test` (`kernel/src/steps.rs:58-63`), so the division is dead code and is removed. Nothing in the release build
+reads the count; step points (`between`, `pause`, `before`'s `PENDING`) do not depend on it, so ordinary builds
+behave as before.
+
+### C5. note: the re-run under TCG lets an intermittent time-only regression through
+
+*Where:* `t_bound.rs:1325-1340` (`outer`).
+
+*What:* a kernel loop that appears in one run of three (a kill landing in a window) passes unless it hits all three:
+with p = 1/3 the run fails 1 time in 27. This only concerns work the units do not count (the units are asserted in
+every run, before or regardless of the time, and an assertion exits 101, which `outer` does not repeat), and it is
+what a 1 s limit could catch at all under TCG; HVF (2 ms, no repeat) still sees it. Acceptable; record it in the row.
+Each repeat adds a whole `inner` (14 s idle, about 100 s under 10 hogs) to a step whose deadline is
+`QEMU_SLOW_TIMEOUT` = 420 s, with 267 s seen in CI: two repeats on a slow runner can time the step out, which reads as
+a hang and not as "over the time limit".
+
+### C6. note: a long teardown child that fails before `built()` costs 25 s and a misleading message
+
+*Where:* `t_bound.rs:788-797`, `:638-642`.
+
+*What:* the loop waits for `READABLE` only. If the child panics before `built()`, its end of the channel closes
+(`PEER_CLOSED`), and the parent naps until 25 s, then says "did not finish its build in 25 s". *Fix:* stop on
+`PEER_CLOSED` too and report the child's exit record. The rest is sound: the child naps only after `built()`, so its
+own 30 s end always comes after the parent sees the message; the kill now lands on a process that holds all it built
+(the row's case). `crowd-mapped` closes its last small object first, so the message is not refused for room.
+
+### Checked and sound
+
+- **MIDR** (`kernel/src/syscall.rs:1736-1743`): inside `test_call`, which is `#[cfg(feature = "qemu-test")]`; a read
+  of an ID register, `nomem`, the SAFETY comment holds. `tools/run-qemu.sh:190-194` is the only place a `-cpu` is
+  chosen: `hvf` gives `host`, `tcg` gives `cortex-a72`, for every Makefile target (`--accel auto|tcg|hvf`, `--smp 4`,
+  `--machine-opt gic-version=...`, `virtualization=on`, `--debug`); no `-cpu max` anywhere. The decode in
+  `t_bound.rs:67-76` (implementer `0x41`, part `0xd08`) is A72's. An M-series host under HVF reports Apple's
+  implementer `0x61`, so it is held to 2 ms; an unknown CPU gets the strict bound, which fails loudly and is the
+  right direction. A change of TCG's CPU in `run-qemu.sh` would fail every TCG run at 2 ms, loudly; a comment there
+  naming `t_bound` would save the search.
+- **SET_MAP_FLOOR** (`syscall.rs:1724-1735`): 0, or page-aligned in `[MAP_LOW, MAP_HIGH)`; otherwise `InvalidArgument`
+  before the space is touched. Note 5 is done.
+- **Far pages** (`t_bound.rs:504-520`): a page mapped and unmapped in each 2 MiB of a gigabyte leaves 512 empty L3
+  tables under 512 valid table descriptors of one L2 (tables left empty stay, `zoraya-pagetable`). The snapshot walks
+  the page table, not the list (`user.rs:746`, `for_each_mapping_bounded`), so it reads those 262 144 invalid
+  descriptors, about 256 walk budgets of `WALK_READS`, and counts them (`user.rs:804`, 1 unit per 128 reads): a walk
+  that lost its budget would show about 2048 units in one interval on every host. Finding 4 is answered, at a 22nd of
+  the old size, and the backlog now says so.
+- **Units on every run:** `measure` asserts units in every run, `time_ok` returns without panicking under TCG, the
+  children that time (`far-pages`, `wide-source`) return `time_verdict()` and their parents fold exit 3 in with
+  `child_ended`.
+- `make check` on this branch: exit 0.
