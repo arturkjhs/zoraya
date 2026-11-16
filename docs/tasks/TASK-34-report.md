@@ -4,8 +4,8 @@
 
 Updated 2026-11-16.
 
-- Merged: F2 (merge b2fb7c55, tagged `stage-f2`), F3 (db938461) and F4 (2955dcea). **`stage-f3` and `stage-f4` are not tagged**: CLAUDE.md needs a green scheduled full run of `main` that includes the commit (`tools/ci-last-full.rb --green-for SHA`); the `w9-term` red scheduled runs are TASK-31's to fix and the stage tags wait for them (architect, 2026-11-15). `stage-f2` was tagged before that rule. F1 (`poll`) was merged before this task.
-- In progress: F8 (the 2 GiB guest), then F5, F6, F7.
+- Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`) and F4 (`stage-f4`), the tags placed on the green scheduled full run 43749759496 that includes all three (`tools/ci-last-full.rb --green-for`). Merged, not yet tagged (no green scheduled full run includes them yet): F8 (aabe2b6f) and F5 (c1061eca); I tag `stage-f8` and `stage-f5` when the script names one. F1 (`poll`) was merged before this task.
+- In progress: F6 (read-only code shared between a program and its copies), then F7 (socket files and TCP listen).
 - ADRs: ADR-0430 (item 7), ADR-0433 and ADR-0435 were accepted by the architect on 2026-11-15 and recorded; sockets surviving `exec` (`execve` with a Unix socket open is `EBADF`) are in the backlog. ADR-0431 (a `SHARED` bit in `memory_map`, kernel ABI), ADR-0432 (memory descriptors as built) and ADR-0434 (netd `Duplicate` makes a connection of the caller's own rights, bounded to 8 live per family) are **proposed**, each recommended as written; ADR-0431 first, as a kernel ABI change. Numbers 0436 to 0449 are free.
 - Machine: MacBook Air M1, 8 GB, so `CARGO_BUILD_JOBS=2`, one part with builds and one QEMU guest at a time.
 
@@ -16,9 +16,9 @@ Updated 2026-11-16.
 | F2 | merged | stage-f2 | about 3 sessions | Sonnet implementation; Opus review (1 error, 2 warnings, all fixed) and re-check; candidate run 43681721034 green (75 jobs) |
 | F3 | merged | stage-f3 pending a green full run | about 3 sessions | Sonnet implementation; Opus review (1 error, 3 warnings, all fixed) and re-check; candidate run 43700119735 green after one rerun of the `w9-term` TCG job |
 | F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
-| F8 | in progress on `work/f8`, not merged | | one session | Sonnet; review not yet done |
-| F5 | not started | | | |
-| F6 | not started | | | |
+| F8 | merged | stage-f8 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error, 5 warnings) and re-check; candidate run 43751085581 green after one fix (the keeper script pinned a session size that varies with boot) and one rerun of the `test-tour-terminal` TCG job |
+| F5 | merged | stage-f5 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error: the plan's CPython command was never run; 5 warnings), re-check (1 warning) and a test-only follow-up; candidate run 43770158088 green, 79 of 79 jobs, including the new `test-python-mem` (python at 2 GiB, 5,000,000 `bytearray(100)`, 2 m 51 s under TCG) |
+| F6 | in progress on `work/f6` | | | Sonnet |
 | F7 | not started | | | |
 
 ## F2 notes
@@ -63,3 +63,22 @@ Updated 2026-11-16.
 - Run: `cargo test -p zoraya-pmm` (17 + 5 passed); `make test-qemu-one` and `make test-qemu-auto-smp4-2g` (120 passed, 9 expected failures each); `make test-qemu-tcg-smp4-gicv3` (same, before the per-word limit replaced a fixed one; not rerun); `make test-keeper` (HVF, passed, 29 steps); `make check` (passed). Not run: the TCG keeper run (full set only), `make test-changed`.
 - Mutation: host `--in-diff` on `zoraya-pmm` 15 mutants: 10 caught, 3 unviable, 1 timeout, 1 missed (the wrap-around's end bound, equivalent while a frame is free); kernel list `tools/mutants/frames-f8.toml` 2 of 2 caught.
 - Limitations: a guest above 4 GiB needs a second level of the frame map (the test says so); the 1 us a word limit is generous under TCG (150 ns a word).
+
+## F8 notes
+
+- Review: `docs/tasks/TASK-34-review-f8.md`. Error: the first in-guest limit (1 us per word plus 200 us) allowed 8.4 ms at 2 GiB against the accepted 2 ms of INV-0270-1; now the words read are checked against `alloc_scan_bound` on every host and 2 ms only at HVF speed (1 s otherwise, ADR-0270 Q6).
+- Measured (M1 Air, debug test kernel): worst single allocation 8192 words at 2 GiB, 94 to 104 us under HVF and 1.33 ms under TCG; boot 0.26 s (HVF) and 0.73 to 0.80 s (TCG) at 128 MiB and at 2 GiB; frame map 128 KiB at 2 GiB against 8 KiB at 128 MiB.
+- **For the architect (ADR-0436, proposed):** `top --session` is not built (ADR-0267 gives `top` services' accounts); the plan's "done when" was read as `top`'s session row plus the keeper's session-ceiling refusal. Accept that, or build `top --session` now. ADR-0436 also records that ADR-0415 says there is no `make run-browser` default of 2 GiB while `BROWSER_MEM ?= 2G`.
+- Known limitations: a guest above 4 GiB needs a second level of the frame map; the `memory_map`/`adopt` frame-list copy and the heap's growth (up to 256 allocations per interval) stay unbounded; the HVF time check is a single measurement (a vCPU stall can fail it); `make run-browser` is only the machine (no browser exists before plan E2).
+
+## F5 notes
+
+- Built: `zoraya-mappings`, a chunked sorted list (32 records per chunk, at most 2*len/32+2 chunks, merge and spill on removal), 4096 slots (`MAPPING_SLOTS`), charged to the job by whole chunks (worst case 468,528 bytes per process against 232,448 for a list filled upward); every walk over the list counted or taken in steps (INV-0270-1); `libposix` keeps no handle for a private mapping and `Objects::grow` no longer leaks a handle per MiB.
+- Review: `docs/tasks/TASK-34-review-f5.md`. The error was the plan's own acceptance (`python3 -c "x=[bytearray(100) for _ in range(5_000_000)]"` at 2 GiB) not being run anywhere; `make test-python-mem` now runs it, and repeats ADR-0320's mapping measurement (free one-page mappings 4086 before and after 4000 threads and 30 forks, against 248 and 247 of 256; a recursion of 200,000 frames ran, it ended near 33,000 before).
+- Also found and fixed: after unmapping 40 mappings of 24 MiB a process left about 1000 empty page tables and the next snapshot read them all in one 5.8 ms masked interval (now 127 us).
+- Measured (HVF): at 4032 mappings the longest masked interval is 133 us for `memory_map`, 169 us for `snapshot_process` and 322 us for the exit of a process with 4000 mappings.
+- Known limitations: `F5-snapshot-step-ignores-tables` is unkillable at this test size (a sparse image layout is unverified); the three equivalent survivors (reaper refunds the charge anyway; growth estimate exact; the unmap step point); fork at 4096 mappings is covered by `t_bound` and not by a C `fork` test; `find_gap` is linear in the records below the place.
+
+## Curses tour flake count
+
+`test-tour-terminal` (TCG, `posix-curses.script`, step 55) hung once in the F4 candidate run and once in the first F8 candidate run (both passed on rerun, and it passed in the F5 run). Follow-up for stage 10: wait for `vi`'s screen with a `screen` step instead of fixed pauses.
