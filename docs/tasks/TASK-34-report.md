@@ -18,7 +18,7 @@ Updated 2026-11-16.
 | F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
 | F8 | merged | stage-f8 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error, 5 warnings) and re-check; candidate run 43751085581 green after one fix (the keeper script pinned a session size that varies with boot) and one rerun of the `test-tour-terminal` TCG job |
 | F5 | merged | stage-f5 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error: the plan's CPython command was never run; 5 warnings), re-check (1 warning) and a test-only follow-up; candidate run 43770158088 green, 79 of 79 jobs, including the new `test-python-mem` (python at 2 GiB, 5,000,000 `bytearray(100)`, 2 m 51 s under TCG) |
-| F6 | in progress on `work/f6` | | | Sonnet |
+| F6 | built on `work/f6`, not merged; review not yet done | | one session | Sonnet |
 | F7 | not started | | | |
 
 ## F2 notes
@@ -82,3 +82,14 @@ Updated 2026-11-16.
 ## Curses tour flake count
 
 `test-tour-terminal` (TCG, `posix-curses.script`, step 55) hung once in the F4 candidate run and once in the first F8 candidate run (both passed on rerun, and it passed in the F5 run). Follow-up for stage 10: wait for `vi`'s screen with a `screen` step instead of fixed pauses.
+
+## F6 notes
+
+- Built: `image_create` copies the program's pages once into an object of the creator's job (`Program::kept`, `zoraya-elf`); `spawn` maps each read-only segment as a `SHARED` record over those frames and copies the writable ones; `posix_spawn` and `execve` of `/proc/self/exe` use the bootstrap's `Image` handle; `zoraya_child_memory`; `t_shared` and `top.script` (a room, `top`, `tools/check-top-image.py`) in `make test-libposix`. ADR-0438 (proposed; the architect's answers are relayed in it, not recorded). INV-0415-2 and INV-0438-1 to -4 checked (Total 854).
+- `top` in a room, twice around `t_shared keep` (`tests/posix-core/top.script`): `tab 4259K` (launcher alone), `9302K` (+ three children of its own image, 1681K each, no image), `11946K` (+ one child of the file: +2644K, 956K more than a child of the image, the image's pages), `1K` at the end (the empty room's reading); the second run reads the same. **`top` cannot show the program's own image:** the shell makes it, in no room (job-level proxy, accepted by the architect per the dispatcher; a per-image line is in `docs/backlog.md`).
+- `t_shared` (HVF): image keeps 978944 bytes (from the program headers); L's job 2776256, +1125504 for a spawn of the file, +139264 +139264 for two of its image; children's own jobs 1582144 each.
+- Found by tests: `Mappings::find_gap` let a record below the mmap window pull the search below it (every C program aborted at start); the 2048-page text case found 128 units in one interval (a step point before the first piece), and the text-then-data case another (a step point after the clean loop).
+- Review (`docs/tasks/TASK-34-review-f6.md`): findings 1 to 7 and R1, R2, R4 to R6 fixed. Finding 8: the ADR-0108 note removed. R3 and the room-limit charge: **not built**; `image_create` naming the room's job is in `docs/architect-queue.md` as a condition of the untrusted-room gate, with the estimate.
+- Run: `cargo test -p zoraya-elf -p zoraya-mappings -p zoraya-posix`, `make test-qemu-one` (128 passed), `make test-libposix` (164, 17 and 66 steps), `make test-posix-threads` (104) earlier on this branch.
+- Mutation: host `--in-diff` zoraya-elf 32 of 34 caught (2 unviable), zoraya-mappings 10 of 10; kernel `tools/mutants/images-f6.toml` 10 of 10 non-equivalent caught (the copy, the charge, the piece, three step points in `keep_program` and one in the spawn, a writable record; the equivalent one is marked, not run); `images-f6-libposix.toml` 2 of 2 caught (no image charge: `t_shared` fails; image never freed: `check-top-image` fails, 961K then 1921K at the end).
+- Limitations: `image_create` holds the file's object and the copy at once; two images of one file share nothing; programs started from the ramdisk still copy; instruction-cache maintenance across step points is correct on one CPU only (ADR-0438); no TCG run.

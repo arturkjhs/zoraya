@@ -324,7 +324,9 @@ impl<T> Mappings<T> {
                 Some(end) if end < e.va => return (Some(at), visited),
                 Some(_) => {}
             }
-            at = e.va + e.length + guard;
+            // A record below `low` (a program's own segments, ADR-0438) must
+            // not pull the search below it.
+            at = at.max(e.va + e.length + guard);
         }
         let fits = at.checked_add(length).is_some_and(|end| end <= high);
         (fits.then_some(at), visited)

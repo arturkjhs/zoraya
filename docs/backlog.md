@@ -574,3 +574,10 @@ harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, 
 `execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets
 across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its streams and ancillary channel) crosses
 `exec`, and lift the limit.
+
+## A line per image in `top` (F6, ADR-0438; relayed from the architect, 2026-11-16)
+
+`top` lists rooms. The image of a program is charged to the job that made it (ADR-0438), which for a program the shell starts is the
+shell's, in no room, so `top` shows it nowhere. The job-level proxy (`tools/check-top-image.py`) is accepted as F6's "done when"; a line
+per image (the image's pages once, however many processes run from it, as ADR-0415 item 6's example shows) is asked for here.
+

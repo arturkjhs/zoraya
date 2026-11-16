@@ -18,7 +18,6 @@ use zoraya_abi::{
     StreamReadObject, StreamWriteObject, UsageFlags, Word32, request_value,
 };
 use zoraya_console::INPUT_SIZE;
-use zoraya_elf::{EHDR_SIZE, Header, Program};
 use zoraya_pagetable::{Attributes, MemoryType as PageMemory};
 use zoraya_pmm::FRAME_SIZE;
 use zoraya_ramdisk::NAME_SIZE;
@@ -34,9 +33,9 @@ use crate::memory::object::MemoryObject;
 use crate::memory::user::{
     AddressSpace, Copied, Holder, MappingError, PlanItem, SnapshotBuild, USER_HIGH,
 };
-use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
+use crate::object::{self, Event, HandleTable, Image, Object};
 use crate::port::Port;
-use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
+use crate::process::{self, Loadable, Process, Snapshot, Start};
 use crate::stream::Stream;
 use crate::thread::{self, MapGuard};
 use crate::{console, port, print, ramdisk, sched, steps, timer};
@@ -1437,46 +1436,23 @@ impl Handlers for Calls<'_> {
         let Object::Memory(memory) = self.object(memory, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
-        let length = length.0;
-        if length > memory.size() {
-            return Err(Status::InvalidArgument);
-        }
-        let mut ehdr = [0; EHDR_SIZE];
-        let head = &mut ehdr[..(length as usize).min(EHDR_SIZE)];
-        // In range: `head` is at most `length`, which is at most the size.
-        let read = memory.read(0, head);
-        debug_assert!(read);
-        let header = Header::parse(head).map_err(|_| Status::InvalidArgument)?;
-        let end = header.table_offset as u64 + header.table_length as u64;
-        if end > length {
-            return Err(Status::InvalidArgument);
-        }
-        let mut table = Vec::new();
-        table
-            .try_reserve_exact(header.table_length)
-            .map_err(|_| Status::NoMemory)?;
-        table.resize(header.table_length, 0);
-        // In range: `end <= length <= size`, checked above.
-        let read = memory.read(header.table_offset as u64, &mut table);
-        debug_assert!(read);
-        // The same parser and range as the ramdisk's (INV-0108-1).
-        let program = Program::from_table(&header, &table, length, PROGRAM_LOW, PROGRAM_HIGH)
-            .map_err(|_| Status::InvalidArgument)?;
-        let mut handles = self.process.handles.lock();
-        handles.reserve()?;
-        let image = charge::arc(
-            Paid::new(Some(self.process.job())),
-            charge::vec_cost::<u8>(table.capacity()),
-            |paid| MemoryImage {
-                memory,
-                program,
-                table,
-                _paid: paid,
-            },
-        )?;
+        // The room for the handle is kept from here: a full table refuses
+        // before the pages are made, and a sibling thread cannot fill it
+        // while the copy pauses (INV-0040-3).
+        self.process.handles.lock().keep_room()?;
+        let image = match process::image_from(&memory, length.0, self.process.job()) {
+            Ok(image) => image,
+            Err(status) => {
+                self.process.handles.lock().drop_kept();
+                return Err(status);
+            }
+        };
         let image = Object::Image(Image::Memory(image));
-        Ok(handles
-            .insert(image, ImageObject::RIGHTS, object::next_id())?
+        Ok(self
+            .process
+            .handles
+            .lock()
+            .insert_kept(image, ImageObject::RIGHTS, object::next_id())?
             .raw())
     }
 

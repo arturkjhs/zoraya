@@ -19,6 +19,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::hint::black_box;
@@ -556,6 +557,34 @@ static TESTS: &[Test] = &[
     Test {
         name: "images_from_a_process",
         run: images_from_a_process,
+    },
+    Test {
+        name: "images_share_their_read_only_pages",
+        run: images_share_their_read_only_pages,
+    },
+    Test {
+        name: "an_images_pages_outlive_its_handle_and_go_with_its_last_process",
+        run: an_images_pages_outlive_its_handle_and_go_with_its_last_process,
+    },
+    Test {
+        name: "an_images_pages_are_paid_by_its_creator_alone",
+        run: an_images_pages_are_paid_by_its_creator_alone,
+    },
+    Test {
+        name: "a_fork_child_of_an_image_process_maps_the_images_frames",
+        run: a_fork_child_of_an_image_process_maps_the_images_frames,
+    },
+    Test {
+        name: "a_fork_child_of_an_image_process_ending_first_frees_with_the_last",
+        run: a_fork_child_of_an_image_process_ending_first_frees_with_the_last,
+    },
+    Test {
+        name: "an_images_pages_hold_the_files_bytes_piece_by_piece",
+        run: an_images_pages_hold_the_files_bytes_piece_by_piece,
+    },
+    Test {
+        name: "an_image_of_a_large_program_is_bounded",
+        run: an_image_of_a_large_program_is_bounded,
     },
     Test {
         name: "job_suspend_from_a_process",
@@ -1432,6 +1461,570 @@ fn images_from_a_process() {
             .expect("program in the ramdisk")
             .wait()
     });
+}
+
+/// An object holding `file`, for `process::image_from`.
+fn file_object(file: &[u8]) -> Arc<memory::object::MemoryObject> {
+    let size = (file.len() as u64).next_multiple_of(PAGE_SIZE);
+    let object = memory::object::MemoryObject::new(size, false, None).expect("memory");
+    assert!(object.write(0, file));
+    object
+}
+
+/// A process of `image`, suspended, in a job of its own made by `job`.
+fn from_image(
+    image: &Arc<object::MemoryImage>,
+    job: Arc<Job>,
+) -> Result<Arc<process::Process>, SpawnError> {
+    process::create(process::Start {
+        name: "hello",
+        image: process::Loadable::from_image(image),
+        job,
+        handles: HandleTable::new(),
+        argv: Strings::empty(),
+        envp: Strings::empty(),
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended: true,
+    })
+}
+
+/// Every page a process maps: address to frame and attributes.
+fn pages_of(process: &process::Process) -> BTreeMap<u64, (u64, zoraya_pagetable::Attributes)> {
+    let mut pages = BTreeMap::new();
+    process.for_each_mapping(&mut |m| {
+        for offset in (0..m.size).step_by(PAGE_SIZE as usize) {
+            pages.insert(m.va + offset, (m.pa + offset, m.attributes));
+        }
+    });
+    pages
+}
+
+/// Ends a process that never ran.
+fn end_suspended(process: &Arc<process::Process>) {
+    let _ = process.signal(RequestKind::Terminate, 0);
+    let _ = process.resume();
+    process.wait();
+}
+
+/// Lets a suspended process run to its end and gives its record.
+fn run_to_the_end(process: &Arc<process::Process>) -> ExitRecord {
+    process.resume().expect("resume");
+    process.wait()
+}
+
+/// INV-0415-2 (ADR-0415 item 2, proposed ADR-0438): two processes of one
+/// image map the same frames for the segments that are not writable, never
+/// writable, and each has frames of its own for the rest; the creator's job
+/// pays for the shared frames once and the two children's jobs for their own
+/// pages alone; both run what the image holds.
+fn images_share_their_read_only_pages() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let image = process::image_from(&file_object(file), file.len() as u64, &creator)
+        .expect("an image of hello");
+    let kept = image.program.kept();
+    let shared: u64 = image
+        .program
+        .segments()
+        .iter()
+        .filter(|s| s.is_shared())
+        .map(|s| (s.pages().1 - s.pages().0) / PAGE_SIZE)
+        .sum();
+    let writable: u64 = image
+        .program
+        .segments()
+        .iter()
+        .filter(|s| !s.is_shared())
+        .map(|s| s.kept_pages())
+        .sum();
+    assert!(shared > 0, "hello has a text");
+    assert_eq!(
+        shared + writable,
+        kept.pages(),
+        "every kept page is one or the other"
+    );
+    let paid = creator.usage(false);
+    assert_eq!(paid.user, kept.bytes(), "the creator pays for the pages");
+
+    let (job1, job2, job0) = (
+        Job::create(&root(), false).expect("job"),
+        Job::create(&root(), false).expect("job"),
+        Job::create(&root(), false).expect("job"),
+    );
+    let p1 = from_image(&image, job1.clone()).expect("first");
+    let p2 = from_image(&image, job2.clone()).expect("second");
+    // The same program from the ramdisk copies every page: the control.
+    let p0 = start("hello", job0.clone(), true);
+    let (m1, m2, m0) = (pages_of(&p1), pages_of(&p2), pages_of(&p0));
+    assert_eq!(m1.len(), m0.len(), "the same pages");
+    for (index, s) in image.program.segments().iter().enumerate() {
+        let (start, end) = s.pages();
+        let first = kept.first_page(index) * PAGE_SIZE;
+        for va in (start..end).step_by(PAGE_SIZE as usize) {
+            let (pa1, a1) = m1[&va];
+            let (pa2, a2) = m2[&va];
+            let (pa0, _) = m0[&va];
+            assert!(a1.user && a2.user);
+            assert!(!(a1.write && a1.execute), "W+X at {va:#x}");
+            assert_eq!((a1.write, a1.execute), (s.write, s.execute));
+            assert_eq!((a2.write, a2.execute), (s.write, s.execute));
+            if s.is_shared() {
+                // The frames of the image's object, in both, writable in
+                // neither.
+                assert!(!a1.write && !a2.write, "a shared page writable at {va:#x}");
+                assert_eq!(pa1, image.kept.page(first + (va - start)));
+                assert_eq!(pa1, pa2, "one frame for {va:#x}");
+                assert_ne!(pa1, pa0, "the control has a copy of its own");
+            } else {
+                assert_ne!(pa1, pa2, "two frames for the writable {va:#x}");
+                let n = (va - start) / PAGE_SIZE;
+                if n < s.kept_pages() {
+                    assert_ne!(pa1, image.kept.page(first + n * PAGE_SIZE));
+                }
+            }
+        }
+    }
+    // The text is what the file says, through both processes' pages.
+    let text = image
+        .program
+        .segments()
+        .iter()
+        .find(|s| s.execute)
+        .expect("a text");
+    let at = text.vaddr.next_multiple_of(8);
+    let from = (text.offset + (at - text.vaddr)) as usize;
+    let word = u64::from_le_bytes(file[from..from + 8].try_into().expect("8"));
+    assert_eq!(p1.peek(at), Some(word));
+    assert_eq!(p2.peek(at), Some(word));
+    // Who pays: the creator's job is as it was and each child's holds its
+    // own pages only: the control's user bytes are the child's plus the
+    // shared pages.
+    assert_eq!(creator.usage(false), paid, "spawning charged the creator");
+    let (u1, u2, u0) = (job1.usage(false), job2.usage(false), job0.usage(false));
+    assert_eq!(u1.user, u2.user, "two children, one cost");
+    assert_eq!(
+        u1.user + shared * PAGE_SIZE,
+        u0.user,
+        "the copy pays for the pages the shared child does not"
+    );
+    // Both run the image, and the control as before.
+    assert_eq!(run_to_the_end(&p1), exited(7));
+    assert_eq!(run_to_the_end(&p2), exited(7));
+    assert_eq!(run_to_the_end(&p0), exited(7));
+    drop((p0, p1, p2));
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before, "every frame went back");
+    assert_eq!(creator.usage(false).user, 0, "and the creator's charge");
+}
+
+/// INV-0415-2: the pages live while any holder does. The image's handle may
+/// go while a process of it runs, and the process's pages stay valid; the
+/// frames go with the last of them, no sooner and no later.
+fn an_images_pages_outlive_its_handle_and_go_with_its_last_process() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let image = process::image_from(&file_object(file), file.len() as u64, &creator)
+        .expect("an image of hello");
+    let kept = image.program.kept().bytes();
+    let alive = frames_accounted();
+    assert!(
+        alive + kept / PAGE_SIZE <= before + 8,
+        "the pages are taken"
+    );
+    let p1 = from_image(&image, Job::create(&root(), false).expect("job")).expect("first");
+    let p2 = from_image(&image, Job::create(&root(), false).expect("job")).expect("second");
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, kept, "held by the processes");
+    // The first ends: the second's text is still there and runs.
+    assert_eq!(run_to_the_end(&p1), exited(7));
+    drop(p1);
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, kept, "one process is left");
+    assert_eq!(run_to_the_end(&p2), exited(7), "and its text is intact");
+    drop(p2);
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, 0, "the last holder frees them");
+    assert_eq!(frames_accounted(), before);
+}
+
+/// ADR-0438 item 2 and driver 3: a `fork` child (a snapshot of the space) of a
+/// process of an image maps the image's frames read-only for its read-only
+/// segments, takes no frame and no charge for them, and the creator's use does
+/// not move; the frames go with the last holder, whichever ends first.
+fn a_fork_child_of_an_image_process_maps_the_images_frames() {
+    a_fork_child_of_an_image_process(false);
+}
+
+/// The same, with the child ending first.
+fn a_fork_child_of_an_image_process_ending_first_frees_with_the_last() {
+    a_fork_child_of_an_image_process(true);
+}
+
+fn a_fork_child_of_an_image_process(child_first: bool) {
+    use crate::memory::user::{Copied, PlanItem, SnapshotBuild};
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let image = process::image_from(&file_object(file), file.len() as u64, &creator)
+        .expect("an image of hello");
+    let kept = image.program.kept();
+    let paid = creator.usage(false);
+    let (job1, job2) = (
+        Job::create(&root(), false).expect("job"),
+        Job::create(&root(), false).expect("job"),
+    );
+    let parent = from_image(&image, job1.clone()).expect("parent");
+    // The steps of `snapshot_process`, on the parent's space, into job 2.
+    let child = {
+        let guard = parent.space.lock();
+        let space = guard.as_ref().expect("a space");
+        let mut plan: Vec<PlanItem> = Vec::new();
+        plan.try_reserve_exact(space.mapping_count()).expect("room");
+        assert_eq!(space.snapshot_plan_step(&mut plan, 0), Ok(None));
+        let mut build = SnapshotBuild::new(plan, Some(&job2)).expect("a build");
+        let mut copied = Copied::default();
+        loop {
+            build.prepare_step();
+            if space
+                .snapshot_step(&mut build, &mut copied)
+                .expect("a step")
+            {
+                break;
+            }
+        }
+        build.finish().expect("a child")
+    };
+    let mut child_pages = BTreeMap::new();
+    child.for_each_mapping(&mut |m| {
+        for offset in (0..m.size).step_by(PAGE_SIZE as usize) {
+            child_pages.insert(m.va + offset, (m.pa + offset, m.attributes));
+        }
+    });
+    let parent_pages = pages_of(&parent);
+    assert_eq!(child_pages.len(), parent_pages.len(), "the same pages");
+    let mut shared = 0;
+    for (index, s) in image.program.segments().iter().enumerate() {
+        let (start, end) = s.pages();
+        let first = kept.first_page(index) * PAGE_SIZE;
+        for va in (start..end).step_by(PAGE_SIZE as usize) {
+            let (pa, a) = child_pages[&va];
+            assert_eq!((a.write, a.execute), (s.write, s.execute), "{va:#x}");
+            if s.is_shared() {
+                shared += 1;
+                assert!(!a.write, "a shared page writable in a fork child");
+                assert_eq!(pa, image.kept.page(first + (va - start)));
+                assert_eq!(pa, parent_pages[&va].0, "the parent's frame");
+            } else {
+                assert_ne!(pa, parent_pages[&va].0, "a writable page is copied");
+            }
+        }
+    }
+    assert!(shared > 0);
+    // The child pays for every page the parent does but the shared ones, which
+    // nobody but the creator pays; the creator's use is as it was.
+    assert_eq!(job2.usage(false).user, job1.usage(false).user);
+    assert_eq!(creator.usage(false), paid, "a fork charged the creator");
+    let held = kept.bytes();
+    if child_first {
+        // The child first: the image and the parent still hold the pages.
+        drop(child);
+        crate::reaper::drain();
+        assert_eq!(
+            creator.usage(false).user,
+            held,
+            "the parent holds the pages"
+        );
+        end_suspended(&parent);
+        drop(parent);
+        crate::reaper::drain();
+        assert_eq!(creator.usage(false).user, held, "the image holds the pages");
+        assert!(frames_accounted() < before);
+        drop(image);
+    } else {
+        // The creator's side first: the image, the parent, then the child last.
+        drop(image);
+        end_suspended(&parent);
+        drop(parent);
+        crate::reaper::drain();
+        assert_eq!(creator.usage(false).user, held, "the child holds the pages");
+        assert!(
+            frames_accounted() < before,
+            "and the frames are still there"
+        );
+        drop(child);
+    }
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, 0);
+    assert_eq!(frames_accounted(), before);
+}
+
+/// ADR-0261 point 8 and INV-0415-2: a creator that cannot pay for an image
+/// gets `OverQuota` and holds nothing; one that can pays once, and no number
+/// of processes in other jobs changes what it owes; a job that can pay for
+/// its own pages spawns the image whatever the creator's limit.
+fn an_images_pages_are_paid_by_its_creator_alone() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let limits = |memory| zoraya_abi::quota::JobLimits {
+        memory: Some(memory),
+        processes: None,
+        cpu: None,
+        threads: None,
+    };
+    let make = |job: &Arc<Job>| process::image_from(&file_object(file), file.len() as u64, job);
+    // A job with no limit makes the image and shows what the pages cost.
+    let probe = Job::create(&root(), false).expect("job");
+    let image = make(&probe).expect("image");
+    let (kept, cost) = (image.program.kept().bytes(), probe.usage(false).memory.used);
+    assert!(cost >= kept);
+    drop(image);
+    crate::reaper::drain();
+    // One byte short: refused, and nothing is held.
+    let poor = Job::create(&root(), false).expect("job");
+    // A job's own record is charged to it.
+    let record = poor.usage(false).memory.used;
+    poor.set_limits(limits(cost - 1)).expect("limits");
+    assert!(matches!(make(&poor), Err(zoraya_abi::Status::OverQuota)));
+    let seen = poor.usage(false);
+    assert_eq!(
+        (seen.memory.used, seen.user),
+        (record, 0),
+        "a refusal holds nothing"
+    );
+    assert_eq!(seen.memory.refused, 1);
+    assert_eq!(frames_accounted(), before, "no frame was kept");
+    // Exactly enough: made; the pages are the creator's.
+    let exact = Job::create(&root(), false).expect("job");
+    exact.set_limits(limits(cost)).expect("limits");
+    let image = make(&exact).expect("image");
+    assert_eq!(exact.usage(false).memory.used, cost);
+    // A child job sized to its own pages: the probe's first spawn shows them.
+    let first = Job::create(&root(), false).expect("job");
+    let p = from_image(&image, first.clone()).expect("spawn");
+    let own = first.usage(false).memory.peak;
+    end_suspended(&p);
+    drop(p);
+    crate::reaper::drain();
+    let tight = Job::create(&root(), false).expect("job");
+    tight.set_limits(limits(own - 1)).expect("limits");
+    assert!(matches!(
+        from_image(&image, tight.clone()),
+        Err(SpawnError::OverQuota)
+    ));
+    assert_eq!(
+        tight.usage(false).memory.used,
+        record,
+        "a refused spawn holds nothing"
+    );
+    let snug = Job::create(&root(), false).expect("job");
+    snug.set_limits(limits(own)).expect("limits");
+    // The creator is at its limit: the children do not need its room.
+    let kids: Vec<_> = (0..4).map(|_| from_image(&image, snug.clone())).collect();
+    // Four in one job of `own`: the first fits and each later one is refused
+    // for the job's own room, none of them charged to the creator.
+    assert!(kids[0].is_ok());
+    for kid in &kids[1..] {
+        assert!(
+            matches!(kid, Err(SpawnError::OverQuota)),
+            "a second process in a job with room for one"
+        );
+    }
+    assert_eq!(
+        exact.usage(false).memory.used,
+        cost,
+        "the creator owes the same"
+    );
+    for kid in kids.iter().flatten() {
+        end_suspended(kid);
+    }
+    drop(kids);
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(exact.usage(false).memory.used, record);
+    assert_eq!(frames_accounted(), before);
+}
+
+/// `file` with its last writable segment made read-only and `extra` bytes of
+/// zeroed memory after it: a large segment that is shared, to measure the
+/// image's call and the spawn with.
+fn with_shared_bss(file: &[u8], extra: u64) -> Vec<u8> {
+    let mut bytes = with_bss(file, extra);
+    let word = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().expect("8"));
+    let phoff = word(&bytes, 32) as usize;
+    let phnum = u16::from_le_bytes(bytes[56..58].try_into().expect("2")) as usize;
+    for i in 0..phnum {
+        let ph = phoff + i * 56;
+        let flags = u32::from_le_bytes(bytes[ph + 4..ph + 8].try_into().expect("4"));
+        if flags & 2 != 0 {
+            bytes[ph + 4..ph + 8].copy_from_slice(&(flags & !2).to_le_bytes());
+        }
+    }
+    bytes
+}
+
+/// An ELF with one text segment of `pages` pages of a known pattern, for
+/// `image_from` (the pattern byte of offset `i` is `i % 251`).
+fn patterned_elf(pages: u64) -> Vec<u8> {
+    let size = (pages + 1) * PAGE_SIZE;
+    let mut f = vec![0u8; size as usize];
+    f[..4].copy_from_slice(b"\x7fELF");
+    f[4] = 2;
+    f[5] = 1;
+    f[6] = 1;
+    f[16..18].copy_from_slice(&2u16.to_le_bytes());
+    f[18..20].copy_from_slice(&183u16.to_le_bytes());
+    f[24..32].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    f[32..40].copy_from_slice(&64u64.to_le_bytes());
+    f[54..56].copy_from_slice(&56u16.to_le_bytes());
+    f[56..58].copy_from_slice(&1u16.to_le_bytes());
+    let ph = 64;
+    f[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+    f[ph + 4..ph + 8].copy_from_slice(&5u32.to_le_bytes()); // R X
+    f[ph + 8..ph + 16].copy_from_slice(&PAGE_SIZE.to_le_bytes());
+    f[ph + 16..ph + 24].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    f[ph + 32..ph + 40].copy_from_slice(&(pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 40..ph + 48].copy_from_slice(&(pages * PAGE_SIZE).to_le_bytes());
+    for (i, b) in f[PAGE_SIZE as usize..].iter_mut().enumerate() {
+        *b = (i % 251) as u8;
+    }
+    f
+}
+
+/// As [`patterned_elf`], with an RW segment of `data_pages` pages of file bytes
+/// after the text, as a real program is laid out.
+fn patterned_elf_with_data(text_pages: u64, data_pages: u64) -> Vec<u8> {
+    let mut f = patterned_elf(text_pages + data_pages);
+    f[56..58].copy_from_slice(&2u16.to_le_bytes());
+    // The text: the first `text_pages`.
+    f[64 + 32..64 + 40].copy_from_slice(&(text_pages * PAGE_SIZE).to_le_bytes());
+    f[64 + 40..64 + 48].copy_from_slice(&(text_pages * PAGE_SIZE).to_le_bytes());
+    let ph = 64 + 56;
+    f[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+    f[ph + 4..ph + 8].copy_from_slice(&6u32.to_le_bytes()); // R W
+    f[ph + 8..ph + 16].copy_from_slice(&((1 + text_pages) * PAGE_SIZE).to_le_bytes());
+    f[ph + 16..ph + 24].copy_from_slice(&(0x40_0000 + text_pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 32..ph + 40].copy_from_slice(&(data_pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 40..ph + 48].copy_from_slice(&(data_pages * PAGE_SIZE).to_le_bytes());
+    f
+}
+
+/// INV-0438-1: a segment of many steps (200 pages, four pieces) is in the
+/// image byte for byte, where the file had it, and nothing else is.
+fn an_images_pages_hold_the_files_bytes_piece_by_piece() {
+    let file = patterned_elf(200);
+    let job = Job::create(&root(), false).expect("job");
+    let before = frames_accounted();
+    let image = process::image_from(&file_object(&file), file.len() as u64, &job).expect("image");
+    assert_eq!(image.program.kept().pages(), 200);
+    let mut seen = vec![0u8; 200 * PAGE_SIZE as usize];
+    assert!(image.kept.read(0, &mut seen));
+    assert!(
+        seen.iter().enumerate().all(|(i, b)| *b == (i % 251) as u8),
+        "the kept pages differ from the file"
+    );
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: `image_create` of a program whose read-only segments are
+/// large, and a spawn from it, hold no more than a step of work in an
+/// interval; a spawn of the same image maps what it shares in steps too.
+fn an_image_of_a_large_program_is_bounded() {
+    const PAGES: u64 = 2048;
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let big = with_shared_bss(file, PAGES * PAGE_SIZE);
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let object = file_object(&big);
+    let measured = |work: &mut dyn FnMut()| {
+        crate::steps::set_kernel_steps(true);
+        let daif = arch::save_and_mask_interrupts();
+        let _ = test_step_point();
+        crate::steps::masked_max_units(true);
+        work();
+        let _ = test_step_point();
+        arch::restore_interrupts(daif);
+        crate::steps::set_kernel_steps(false);
+        let units = crate::steps::masked_max_units(true);
+        if units > crate::steps::STEP as u64 + 16 {
+            crate::steps::diagnose_units();
+        }
+        units
+    };
+    // The copy and the instruction-cache loops of `image_create` (INV-0438-4): a
+    // text of 2048 pages of file bytes, executable, so that both run over it.
+    let text = patterned_elf(PAGES);
+    let text_object = file_object(&text);
+    let mut made_text = None;
+    let units = measured(&mut || {
+        made_text = Some(process::image_from(
+            &text_object,
+            text.len() as u64,
+            &creator,
+        ));
+    });
+    let text_image = made_text.expect("ran").expect("an image of 8 MiB of text");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create of {PAGES} pages of text (INV-0270-1)"
+    );
+    drop((text_image, text_object));
+    crate::reaper::drain();
+    // A real program is laid out text then data: the last cleans of the text
+    // and the first piece of the data copy must not share an interval.
+    let both = patterned_elf_with_data(PAGES, 128);
+    let both_object = file_object(&both);
+    let mut made_both = None;
+    let units = measured(&mut || {
+        made_both = Some(process::image_from(
+            &both_object,
+            both.len() as u64,
+            &creator,
+        ));
+    });
+    let both_image = made_both.expect("ran").expect("an image of text and data");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create of text then data (INV-0270-1)"
+    );
+    assert_eq!(both_image.program.segments().len(), 2);
+    drop((both_image, both_object));
+    crate::reaper::drain();
+    let mut made = None;
+    let units = measured(&mut || {
+        made = Some(process::image_from(&object, big.len() as u64, &creator));
+    });
+    let image = made
+        .expect("ran")
+        .expect("an image of 8 MiB of shared pages");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create (INV-0270-1)"
+    );
+    assert!(image.program.kept().pages() >= PAGES);
+    let mut spawned = None;
+    let units = measured(&mut || {
+        spawned = Some(from_image(
+            &image,
+            Job::create(&root(), false).expect("job"),
+        ));
+    });
+    let process = spawned.expect("ran").expect("a spawn of the large image");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of a spawn of shared pages (INV-0270-1)"
+    );
+    let _ = process.signal(RequestKind::Terminate, 0);
+    let _ = process.resume();
+    process.wait();
+    drop((process, image, object));
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
 }
 
 /// ADR-0105 item 8 (INV-0105-5) and the latency of suspending 16 processes.

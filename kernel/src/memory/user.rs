@@ -336,6 +336,70 @@ impl AddressSpace {
         Ok(phys_to_virt(frame.addr()) as *mut u8)
     }
 
+    /// Records, at the fixed address `va`, a mapping of `length` bytes of an
+    /// image's kept pages, which start at byte `offset` of `object`
+    /// (ADR-0415 item 2, proposed ADR-0438). It holds the object and counts as
+    /// a `SHARED` mapping, so a snapshot maps the same frames into its child
+    /// instead of copying them. The space's job pays for the record, not for
+    /// the frames, which the image's creator pays. The pages follow, one by
+    /// one, through [`AddressSpace::map_kept_page`]; if one fails the space is
+    /// dropped, which unmaps them all and lets the object go.
+    pub fn map_kept(
+        &mut self,
+        va: u64,
+        length: u64,
+        attributes: Attributes,
+        object: &Arc<MemoryObject>,
+        offset: u64,
+    ) -> Result<(), MappingError> {
+        // Never read-write: no frame of an image's kept pages is writable
+        // (INV-0415-2).
+        debug_assert!(!attributes.write);
+        if attributes.write {
+            return Err(MappingError::Memory);
+        }
+        if self.mappings.len() >= MAX_MAPPINGS {
+            return Err(MappingError::Limit);
+        }
+        self.reserve_record(va)?;
+        let record = Record {
+            attributes,
+            holder: Holder::Memory(object.clone()),
+            share: Some(offset),
+        };
+        self.record(va, length, record).map_err(|record| {
+            // The object is held elsewhere (the image): nothing frees here.
+            drop(record);
+            self.map_abort();
+            MappingError::Memory
+        })
+    }
+
+    /// Maps one page of a frame that another holder owns (an image's kept
+    /// pages) at `va`. The space's job pays for the tables it needs, not for
+    /// the frame. `pa` must be a page of the object `map_kept` recorded.
+    pub fn map_kept_page(
+        &mut self,
+        va: u64,
+        pa: u64,
+        attributes: Attributes,
+    ) -> Result<(), MapFailed> {
+        if attributes.write {
+            return Err(MapFailed::Memory);
+        }
+        // A page is a unit of the step, as a new frame is (INV-0270-1).
+        steps::count(1);
+        self.table
+            .map_pages(&mut self.memory, va, pa, FRAME_SIZE, attributes)
+            .map_err(|e| {
+                if core::mem::take(&mut self.memory.refused) {
+                    MapFailed::Quota
+                } else {
+                    MapFailed::Table(e)
+                }
+            })
+    }
+
     /// The lowest place for `length` bytes, with an unmapped page after what
     /// comes before it, so that running off a mapping faults. The search
     /// visits every mapping that lies below the place: counted as work.
