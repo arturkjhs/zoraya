@@ -5,7 +5,7 @@
 Updated 2026-11-16.
 
 - Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`) and F4 (`stage-f4`), the tags placed on the green scheduled full run 43749759496 that includes all three (`tools/ci-last-full.rb --green-for`). Merged, not yet tagged (no green scheduled full run includes them yet): F8 (aabe2b6f) and F5 (c1061eca); I tag `stage-f8` and `stage-f5` when the script names one. F1 (`poll`) was merged before this task.
-- In progress: F6 (read-only code shared between a program and its copies), then F7 (socket files and TCP listen).
+- F6 merged; F7 built on `work/f7` (Unix socket files in `/tmp`; TCP listen is a design only, ADR-0440), reviewed twice, not merged.
 - ADRs: ADR-0430 (item 7), ADR-0433 and ADR-0435 were accepted by the architect on 2026-11-15 and recorded; sockets surviving `exec` (`execve` with a Unix socket open is `EBADF`) are in the backlog. ADR-0431 (a `SHARED` bit in `memory_map`, kernel ABI), ADR-0432 (memory descriptors as built) and ADR-0434 (netd `Duplicate` makes a connection of the caller's own rights, bounded to 8 live per family) are **proposed**, each recommended as written; ADR-0431 first, as a kernel ABI change. Numbers 0436 to 0449 are free.
 - Machine: MacBook Air M1, 8 GB, so `CARGO_BUILD_JOBS=2`, one part with builds and one QEMU guest at a time.
 
@@ -25,7 +25,7 @@ Updated 2026-11-16.
 
 - Review: `docs/tasks/TASK-34-review-f2.md`. The error (a shared stream socket sent from a fork parent was lost) and the fork-child handle leak are fixed with host tests.
 - CI found one more effect: `usleep` in libposix made wget's configure use `sleep`, which libc lacks. wget is configured with `ac_cv_func_usleep=no` and curl with `--disable-socketpair`, in `ports/Makefile`.
-- Known limitations are in ADR-0430: no `bind`/`listen`/`accept` (F7); a packet socket cannot be half-closed; the send-then-peer-closes window can lose a moved socket. Guest console output stalled with `-v` or `-W` in regrtest; not diagnosed.
+- Known limitations are in ADR-0430: `bind`/`listen`/`accept` came with F7 (Unix socket files only); a packet socket cannot be half-closed; the send-then-peer-closes window can lose a moved socket. Guest console output stalled with `-v` or `-W` in regrtest; not diagnosed.
 - I tagged `candidate/work-f2-b` on the same commit as the green run; its duplicate run is not needed.
 - Files outside the task's scope: `ports/` (wget, curl, the CPython port), `tools/libposix-widths.txt`, ADR-0225 and ADR-0342 notes.
 
@@ -116,7 +116,7 @@ Updated 2026-11-16.
   makes its sockets close-on-exec, as a program that spawns a second one does. Found by thinking about the kernel's rule for moved handles:
   the service forwards a far end with the type's full rights, and the kernel refuses a handle that has fewer; the first version read that
   refusal as a dead listener, so any connector could have ended a listener. `Outgoing::Refused` separates them (test and mutant).
-- Mutation: `tools/mutants/sockets-f7.toml`, 26 hand mutants of the service and the library, all caught after survivors got tests; `make mutants-host --in-diff`: zoraya-posix cut at 20 minutes (114 of 147 run caught, 12 missed: equivalent disjoint-bit `|`/`^`, defence-in-depth checks, and the fork guard, since tested in `t_unix file`), zoraya-fs-service 52 of 60 caught (misses closed with tests).
+- Mutation: `tools/mutants/sockets-f7.toml`, 28 hand mutants of the service and the library, all caught after survivors got tests; `make mutants-host --in-diff`: zoraya-posix cut at 20 minutes (114 of 147 run caught, 12 missed: equivalent disjoint-bit `|`/`^`, defence-in-depth checks, and the fork guard, since tested in `t_unix file`), zoraya-fs-service 52 of 60 caught (misses closed with tests).
 - Review: `docs/tasks/TASK-34-review-f7.md` (no errors, five warnings): fixed the listener takeover (only the binder listens), a quota refusal killing a live listener (`OverQuota` is not `Closed`), and the wrong `spawn` errno in ADR-0439; the rest in the ADR and backlog.
 - Limits (ADR-0439): the 256 nodes of the service are shared by the line; a node stays after its listener goes until `unlink`; the queue is the channel's 64
   messages and a blocking `connect` into a full queue is `EAGAIN`; `readdir` shows a socket file as a plain name; CPython's `test_socket`

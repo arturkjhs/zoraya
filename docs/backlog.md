@@ -597,3 +597,7 @@ per image (the image's pages once, however many processes run from it, as ADR-04
   its own limit, ADR-0265). A per-connection count is the next step if a port needs it.
 - CPython's `test_socket` server classes (`AF_UNIX` servers now bind) are not in `tests/python/regr-modules.txt` beyond
   `BasicSocketPairTest`; `regr-ignore.txt` names the asyncio cases that said "bind (plan part F7)": review them once TCP listens.
+- F7 errno differences from Linux (review of plan part F7): `listen` after the name was unlinked is `EPROTOTYPE`; `listen` of an unbound
+  `SOCK_DGRAM` socket is `EINVAL` (Linux `EOPNOTSUPP`); a far end the kernel refuses is `EPROTOTYPE` to the connector.
+- The service's 64 listeners, 256 nodes and queued connections (paid by `tmp_job`, no limit of its own) are the line's: a per-account bound
+  would stop one program from filling them (ADR-0439 effect of the vision).

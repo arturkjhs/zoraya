@@ -115,6 +115,22 @@ pub enum Outgoing {
     Refused,
 }
 
+/// What a failed `channel_write` of the service is, as the loop sees it
+/// (`user/src/bin/fsd.rs` maps its kernel call's error with this). Only a
+/// closed peer is `Closed`: a full queue is `Full`; the service's own job
+/// being over its limit (`NoMemory`, `OverQuota`) is not the listener's
+/// fault; a handle the kernel will not move (rights it lacks, a channel with
+/// handles queued, a bad handle) is the sender's, and the peer is there.
+pub fn outgoing_for(error: zoraya_abi::Status) -> Outgoing {
+    use zoraya_abi::Status;
+    match error {
+        Status::WouldBlock => Outgoing::Full,
+        Status::NoMemory | Status::OverQuota => Outgoing::NoMemory,
+        Status::AccessDenied | Status::BadState | Status::BadHandle => Outgoing::Refused,
+        _ => Outgoing::Closed,
+    }
+}
+
 /// What a handle is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleKind {
@@ -1715,6 +1731,19 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         if self.transport.kind(end) != HandleKind::Channel {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         }
+        let owner = self
+            .sockets
+            .as_ref()
+            .and_then(|m| m.get(&id))
+            .map(|n| n.owner);
+        if owner != Some(Some(i)) {
+            let s = if owner.is_none() {
+                status::INVALID_ARGUMENT
+            } else {
+                status::ACCESS_DENIED
+            };
+            return self.done(i, t, s, 0);
+        }
         let listening = self
             .sockets
             .as_ref()
@@ -1728,9 +1757,6 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(node) = self.sockets.as_mut().and_then(|m| m.get_mut(&id)) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
-        if node.owner != Some(i) {
-            return self.done(i, t, status::ACCESS_DENIED, 0);
-        }
         if node.listener.is_some() {
             return self.done(i, t, status::EXISTS, 0);
         }
@@ -2234,6 +2260,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             self.fifo_nodes.insert(a.id);
         }
         if self.socket_create
+            && added.is_some()
             && let Some(a) = attr.filter(|a| a.id >= first_new)
             && let Some(nodes) = self.sockets.as_mut()
         {

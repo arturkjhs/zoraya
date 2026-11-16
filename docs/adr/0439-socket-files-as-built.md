@@ -91,7 +91,7 @@ A socket file anywhere a program may write, persisting until unlinked, any numbe
 6. **Names.** `getsockname` of a bound or accepted socket is the path as the program gave it (`struct sockaddr_un` with a NUL);
    `getpeername` of a connected socket is the path it connected to, and empty for an accepted one; `SO_ACCEPTCONN` is 1 on a
    listener. Poll: a listener is readable when a connection waits and never writable.
-7. **What is not carried.** A listening socket is not sent with `SCM_RIGHTS` (`EINVAL`), not inherited by `spawn` or `execve` (`EBADF`, ADR-0433 item 6), and `fork` with one is `ENOTSUP`: its listener is tied to the connection the library
+7. **What is not carried.** A listening socket is not sent with `SCM_RIGHTS` (`EINVAL`), not inherited by `spawn` or `execve` (`EBADF`: a Unix socket the file actions do not list fails the spawn, as ADR-0433 item 6 says, and a listed listening socket is `EINVAL`), and `fork` with one is `ENOTSUP`: its listener is tied to the connection the library
    holds. A bound socket that does not listen is the same.
 8. **TCP.** `bind`, `listen` and `accept` on an `AF_INET` socket are `EOPNOTSUPP` (the symbols exist so that programs link and say so
    at run time); ADR-0440 records what listening over `netd` needs.
@@ -108,7 +108,11 @@ accept4 t_unix
 
 For target 2 a socket file is a capability inside one line's `/tmp`: a program with no `/tmp` entry, or with `/tmp` read-only, cannot
 connect; the listener checks what arrives and the service reads nothing, so a program with `WRITE` on the file can fill the
-64-message queue (it is `EAGAIN` for the next, and costs the writer the pair it made) and nothing else. Another line's `/tmp` is
+64-message queue (`EAGAIN` for the next); and, because the service's tables are the line's, take all 64 listener slots (`ENFILE` for
+every other program), fill the 256 nodes (`ENOMEM` until something is unlinked) and make the service's job (`tmp_job`, which has no
+limit of its own) pay for up to 64 x 64 queued connections, where the connector pays only for its pair. A socket name authenticates
+nothing: any program of the line that can write `/tmp` can `unlink` or `rename` a live server's name and `bind` its own (a
+listener whose name was unlinked between `bind` and `listen` gets `EPROTOTYPE`, where Linux succeeds). Another line's `/tmp` is
 another service.
 
 ## Consequences
@@ -131,8 +135,8 @@ another service.
   `cargo test -p zoraya-fs-service --test socket` (the bounds, `unlink` and `rename` over a node, the handle count after closing).
 - **INV-0439-3.** A listener takes from its channel only a record of its own socket type, a fresh pair's, with the handle count it
   says; any other message is dropped and its handles closed, and no byte of it is trusted. *Check:* `cargo test -p zoraya-posix`
-  (`unix::tests`, `a_connection_record_decodes_only_in_the_form_its_listener_takes`, and the property over every length and byte
-  pattern in `tests/socketfile.rs`).
+  (`unix::tests`, `a_connection_record_decodes_only_in_the_form_its_listener_takes`, and a totality sweep over lengths and byte
+  patterns in `tests/socketfile.rs`: no panic, and whatever decodes has the handle count it says).
 
 ## Open questions
 

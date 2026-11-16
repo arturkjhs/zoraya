@@ -121,3 +121,7 @@ program's own directory needs a kind for "own directory" in the bootstrap record
 before tmux (ADR-0439 item 1, open question). (2) TCP `bind`/`listen`/`accept` is not built, so `python3 -m http.server` does not serve to `curl`: decide
 whether it becomes its own plan part with a network step (ADR-0440: the listen rule the scope already has, a `listen` request, a loopback
 interface in `netd` after a smoltcp spike), and the word a person types for a listen rule (ADR-0225 item 5).
+
+**2026-11-16, F7 review:** a socket name authenticates nothing: any program of the line that can write `/tmp` can unlink or rename a live
+server's name and bind its own. Should `unlink` and `rename` of a node with a listener be restricted to the connection that made it
+(ADR-0439)?

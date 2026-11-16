@@ -11,7 +11,9 @@ use std::rc::Rc;
 
 use zoraya_fs::{MkfsOptions, MountOptions, Timestamp, Volume, mkfs};
 use zoraya_fs_service::memory::MemoryDevice;
-use zoraya_fs_service::{HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake};
+use zoraya_fs_service::{
+    HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake, outgoing_for,
+};
 use zoraya_fs_testkit::clock::TestClock;
 use zoraya_proto_file::{self as proto, S_IFSOCK, open_flags, rights, status};
 use zoraya_protocol::{
@@ -755,6 +757,38 @@ fn the_table_of_nodes_and_of_listeners_is_bounded() {
     let (s, end) = r.listen(extra, 1);
     assert_eq!(s, status::TOO_MANY_OPEN);
     assert!(r.is_closed(end));
+    // Past the bound a program that is not the binder is refused for that, and
+    // counts nothing against anyone.
+    let thief = r.connection("s100", rights::READ | rights::WRITE).unwrap();
+    let (s, _) = r.listen(thief, 1);
+    assert_eq!(s, status::ACCESS_DENIED);
+}
+
+/// What `fsd` makes of a kernel error on a write (`fsd.rs` calls this): only a closed peer kills a listener.
+#[test]
+fn only_a_closed_peer_is_a_closed_write() {
+    use zoraya_abi::Status;
+    assert_eq!(outgoing_for(Status::WouldBlock), Outgoing::Full);
+    assert_eq!(outgoing_for(Status::NoMemory), Outgoing::NoMemory);
+    assert_eq!(outgoing_for(Status::OverQuota), Outgoing::NoMemory);
+    for s in [Status::AccessDenied, Status::BadState, Status::BadHandle] {
+        assert_eq!(outgoing_for(s), Outgoing::Refused, "{s:?}");
+    }
+    assert_eq!(outgoing_for(Status::PeerClosed), Outgoing::Closed);
+    // Every other status leaves the peer's state alone only if it says so: they are all `Closed`.
+    for s in Status::ALL {
+        let o = outgoing_for(*s);
+        let known = matches!(
+            s,
+            Status::WouldBlock
+                | Status::NoMemory
+                | Status::OverQuota
+                | Status::AccessDenied
+                | Status::BadState
+                | Status::BadHandle
+        );
+        assert_eq!(o == Outgoing::Closed, !known, "{s:?}");
+    }
 }
 
 /// Only the connection that made a node makes it listen: another program with `WRITE` on the file cannot

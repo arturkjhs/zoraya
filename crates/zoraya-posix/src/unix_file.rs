@@ -321,7 +321,18 @@ impl<S: Sys> Posix<S> {
                 }
                 // The service dropped the listener (its name was unlinked
                 // and the listener's connection closed from its side).
-                Err(Status::PeerClosed) => return Err(ECONNABORTED),
+                // The error comes once: the socket is no longer listening
+                // (a server that retries gets `EINVAL`, and may `listen` again).
+                Err(Status::PeerClosed) => {
+                    if let Ok(sock) = self.unix_file_mut(fd) {
+                        sock.ctl = None;
+                        if let Some(u) = sock.unix.as_mut() {
+                            u.listening = false;
+                        }
+                    }
+                    self.sys.close(ctl);
+                    return Err(ECONNABORTED);
+                }
                 Err(s) => return Err(native(s, Call::Other)),
             }
         }

@@ -598,3 +598,38 @@ fn a_tmp_service_without_socket_nodes_refuses_bind_and_leaves_nothing() {
     // The socket is still unbound, and can bind where the service allows it.
     assert_eq!(r.p.listen(s, 1), Err(EINVAL));
 }
+
+/// Connecting is a write on the file: a process whose `/tmp` is a read-only connection to the same service cannot.
+#[test]
+fn a_read_only_tmp_cannot_connect() {
+    let (mut a, svc) = tmp_rig();
+    let _s = server(&mut a, SOCK_STREAM, "/tmp/ro");
+    let mut b = peer(&a, &svc, false);
+    // A narrower connection: the root's `clone` with READ alone.
+    let root = another_root(&b.net, &svc);
+    let (mine, theirs) = b.p.sys.channel_create().unwrap();
+    use zoraya_protocol::{Flags, decode, encode};
+    let mut out = vec![0u8; 256];
+    let n = encode(
+        &zoraya_proto_file::Clone {
+            rights: Flags(zoraya_proto_file::rights::READ),
+        },
+        1,
+        &mut out,
+    )
+    .unwrap();
+    b.p.sys.channel_write(root, &out[..n], &[theirs]).unwrap();
+    b.settle();
+    let mut buf = vec![0u8; 256];
+    let mut hs = vec![];
+    let got = b.p.sys.channel_read(root, &mut buf, &mut hs).unwrap();
+    let (_, done) = decode::<zoraya_proto_file::Done>(&buf[..got], 0).unwrap();
+    assert_eq!(done.status.0, zoraya_proto_file::status::OK);
+    let _ = mine;
+    let e = b.p.add_entry("/tmp", EntryKind::Tmp, Some(mine));
+    b.p.set_cwd(e, "", zoraya_posix::path::Form::EntryRelative);
+    let c = sock(&mut b, SOCK_STREAM);
+    assert_eq!(b.p.connect(c, &un("/tmp/ro")), Err(EACCES));
+    let n = sock(&mut b, SOCK_STREAM);
+    assert_eq!(b.p.bind(n, &un("/tmp/new")), Err(EACCES));
+}

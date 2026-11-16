@@ -245,3 +245,17 @@ replace = '''        if false {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }'''
 note = "INV-0439-1: only the connection that made the node listens on it"
+
+[[mutant]]
+id = "F7-overquota-kills-listener"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        Status::NoMemory | Status::OverQuota => Outgoing::NoMemory,'''
+replace = '''        Status::NoMemory => Outgoing::NoMemory,'''
+note = "fsd's kernel error mapping: the service's own job over its limit is not the listener's death"
+
+[[mutant]]
+id = "F7-refused-is-closed"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        Status::AccessDenied | Status::BadState | Status::BadHandle => Outgoing::Refused,'''
+replace = '''        Status::AccessDenied | Status::BadState => Outgoing::Refused,'''
+note = "fsd's kernel error mapping: a handle the kernel will not move is the connector's fault"
