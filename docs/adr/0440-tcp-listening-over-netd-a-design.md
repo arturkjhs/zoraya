@@ -1,6 +1,6 @@
 # ADR-0440: TCP `bind`, `listen` and `accept` over `netd`: what listening needs, and why plan part F7 stops short of it
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0220, ADR-0221, ADR-0222, ADR-0225, ADR-0262, ADR-0287, ADR-0434, ADR-0439
 - **Evidence:** CP-01, GR-008
@@ -120,3 +120,7 @@ untrusted line has no listen rule unless a person wrote one.
 - A program that needs UDP listening (`datagram`).
 
 ## Architect's decision
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

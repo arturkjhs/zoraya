@@ -663,3 +663,17 @@ per image (the image's pages once, however many processes run from it, as ADR-04
 `socketserver` reads `getsockname()` straight after `bind` (`server_port` is 0, `wsgiref` gives `SERVER_PORT=0`; `http.server` prints
 the right port only because it reads again after `listen`), and `find_unused_port` and xmlrpc read it before too. Needs a port reserved with `netd`
 at `bind` (a request, a bound on reservations) or a library-side pick that `listen` asks for exactly.
+
+## Listeners reachable from the NIC; the rooms' `+listen` words and pills (the architect, 2026-11-16: next stage)
+
+ADR-0441 listens through a loopback of stream pairs, so a listener is not reachable from the NIC or the QEMU host. A second smoltcp
+interface (ADR-0440 Option B, after a real spike, not a reading of `socket_egress`) would let a program listen for outside connections. The
+rooms' `+listen` words and the panel's pills for a listen rule are not built (only the shell's `+listen PORT` is).
+
+## The contiguous create refused while the reaper holds the frames (ADR-0270; HIGH PRIORITY; the architect, 2026-11-16)
+
+`alloc_contig_in_steps` helps the reaper at most `CONTIG_HELP_ROUNDS = 17` times of 64 scattered frames, so `memory_create(CONTIGUOUS)` can return
+`NoMemory` while about 15,000 frames sit in the reaper's queue (`t_bound` `contiguous create: NoMemory`, the source of its flake; found in F7b's
+merge test, `TASK-34-report.md`). Keep helping while the reaper holds frames, with a step point between rounds, or free the queue in whole objects:
+a proposed ADR under ADR-0270 and INV-0270-1.
+

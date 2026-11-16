@@ -1,6 +1,6 @@
 # ADR-0431: A `SHARED` mapping of a memory object stays shared across `snapshot_process` (plan part F3)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0051, ADR-0102, ADR-0261, ADR-0270, ADR-0413
 - **Evidence:** CP-14, GR-005, X-6
@@ -123,4 +123,6 @@ and the mappings they made, with no more rights; sharing is the parent's mapping
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

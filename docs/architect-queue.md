@@ -83,26 +83,18 @@ System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint i
 `tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
 the runner itself in a job of their own; `vttest` pinned and built with 10d.
 
-## Condition of the untrusted-room gate (ADR-0268), from F6 (ADR-0438, 2026-11-16)
+## Decided 2026-11-16 (TASK-34, plan parts F2 to F8; removed from the lists above)
 
-**An image must be charged to the room it is started in.** Since F6 `image_create` copies a program's pages into an object charged to the
-job that calls it. The shell (`user/src/posix_child.rs` `load`, called from `user/src/bin/zosh.rs` `ready_from_volume`) and the broker
-make the image for a program they start, so a room's memory limit no longer covers the text of the programs run in it (before F6 a spawn
-copied the pages into the child's job). A room with `--mem 64M` can run a program of any size and pays nothing for its text; the shell's
-job pays, one image per start, while any process of the room runs from it. ADR-0262's rule (what is made for a client is paid by the
-client) says the room pays.
-
-*What F6 found (estimate; not built).* The fix is `image_create(memory, length, job)`: the kernel charges `job` (`process::image_from`
-already takes the payer) after checking `CREATE_PROCESS` on it, the right it already needs to put a process there, so no program can charge
-a job it could not spawn into and no new right is needed. The shell passes `self.room_job.unwrap_or(JOB)`; the broker the job of the
-child it loads for; `posixrun` and `libposix`'s `load_fd` their own job (slot 2 / `PROCESS_JOB`, which has `CREATE_PROCESS`). Touches: the
-syscall table and signature test in `zoraya-abi` (`lib.rs` line 1238, `tests.rs` lines 37-44 and 431), `zoraya-rt`, `zoraya-user`, the
-kernel handler, `posix_child.rs`, `zosh.rs` (two calls), `broker.rs`, `posixrun.rs`, `crates/zoraya-posix/src/ffi/procs.rs`, and the 14
-calls of `t_image`. Judged not small: a kernel ABI change with six callers in the shell, the broker and the library, and the steps that load
-programs through the shell (`test-posix`, `test-apps`, the Python lanes) are more than a part session runs. *Tests the gate needs:* a room at
-its memory limit cannot start a program through the shell (a script step: `room new r --mem 2M`, then a program whose image is larger is refused
-with the room's `OverQuota`, the room's `top` row unchanged), and a kernel test that `image_create` with a job the caller cannot spawn into
-is `AccessDenied`.
+- ADR-0431, 0432, 0434, 0436, 0437, 0439 and 0440 accepted as built. F8: `top`'s session row plus the keeper's ceiling refusal are the plan's `top --session`.
+- ADR-0441 accepted with a change: each room has its own loopback (a connect to `127.0.0.1:PORT` reaches only listeners of the connecting program's
+  room; reaching another room is a later, explicit grant). Built as **part F9**, with a test that a program in room B cannot reach a listener in room A
+  with `+net 127.0.0.1:PORT`. A gate condition (ADR-0268).
+- F6: the room charging of a program image is built now as **part F10** (`image_create` takes the job to charge; the shell passes the room's job; a test
+  that a room at its memory limit cannot start a new program through the shell). A gate condition too (ADR-0262: what is made for a client is paid by the client).
+- Backlog (next stage): listeners reachable from the NIC (ADR-0440 Option B, a second smoltcp interface) and the rooms' `+listen` words and pills.
+- The TCG kernel suites near 420 s: split into two jobs; the limit is not raised.
+- The contiguous-create race with the reaper (ADR-0270; `t_bound`'s flake source): backlog, high priority.
+- Still open: sockets in a program's own directory before tmux (ADR-0439 item 1), and restricting `unlink` and `rename` of a node with a listener to the connection that made it (ADR-0439).
 
 ## For the TASK-34 dispatcher (MacBook Air)
 
@@ -145,20 +137,3 @@ scheduled run 43819664106 (head `4e86f859`) is green: F5, F8, F6 and F7a (and `s
 wall-clock tests, from the TCG libc++ run (`tests/cxx/libcxx-tcg-excluded.txt`, HVF only, as for LWG3343), or keep them and
 re-run a failed job once; the new `RUNNER-STEP` lines in the serial runner will show per-step times in the next full run.
 
-**2026-11-16, from plan part F7b (TCP listening, proposed ADR-0441):** `python3 -m http.server` serves a file to `curl`
-(`make test-python-serve`, PASS 26 steps; `tcptest` in `make test-net-posix`). Decisions for the architect: (1) the
-loopback is `netd` handing the client's two stream ends to the listener, not a second smoltcp interface (ADR-0440 item 5; the
-spike was a reading of smoltcp's `socket_egress`, not an experiment): a listener is therefore not reachable from the NIC. Keep, or
-have a later part build the second interface? (2) The loopback is the machine's: a reach rule for 127.0.0.1 and a listen rule are
-two grants, and `netd` cannot tell rooms (the shell carves one account per POSIX program, so an account-scoped loopback would
-not serve `python3` and `curl` of one line). Should rooms get a loopback of their own once `netd` knows them? (3) The listeners
-row of ADR-0262's table in code changed from 4, 0, 0 to 8, 1 (only for a carve whose rights have `listen`), 4. (4) `+listen` is
-built in the shell (ADR-0224's word), not the rooms' words or the pills. (5) `tests/python/regr-ignore.txt` was not re-evaluated
-(no regrtest run here): `test-python-regr` will show which asyncio and `test_socket` server cases now pass or hang.
-
-**2026-11-16, F7b review (TASK-34-review-f7c), decision needed BEFORE accepting ADR-0441, and a condition of the untrusted-room gate
-(ADR-0268):** the loopback belongs to the whole machine. A program with a reach rule naming 127.0.0.1 can connect to any
-account's listener (another room's server too), learn which ports are listened on, and fill a listener's 64-slot queue. Options:
-(a) a per-room loopback once `netd` knows rooms; (b) an ACL on a listener by account. Until one exists an untrusted room must
-not be given a loopback reach rule from any source: a `+net 127.0.0.1` word, `any`, a 127/8 prefix, or ADR-0328's URL-operand
-grant (a literal `curl http://127.0.0.1:PORT/` gets the rule automatically). ADR-0441 says so in its "Decisions for the architect".

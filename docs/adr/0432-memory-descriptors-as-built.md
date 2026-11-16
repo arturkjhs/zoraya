@@ -1,6 +1,6 @@
 # ADR-0432: Memory descriptors as built (plan part F3): the wire form, seals as handle rights, `fork`, `spawn`, the mapping rules and the names
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0051, ADR-0100, ADR-0102, ADR-0103, ADR-0107, ADR-0261, ADR-0342, ADR-0412, ADR-0413, ADR-0430, ADR-0431
 - **Evidence:** CP-01, CP-14, CP-16, DM-031, DM-032
@@ -156,4 +156,6 @@ giving less. A receiver can never write what it was handed read-only, and a writ
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

@@ -1,6 +1,6 @@
 # ADR-0441: TCP `bind`, `listen` and `accept` as built (plan part F7b): the loopback is `netd` handing a client's stream ends to a listener, not a second smoltcp interface
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0220, ADR-0221, ADR-0222, ADR-0223, ADR-0224, ADR-0225, ADR-0262, ADR-0287, ADR-0434, ADR-0439, ADR-0440
 - **Evidence:** CP-01, GR-008
@@ -72,6 +72,10 @@ Against drivers 1 and 2 (CP-01): authority from nowhere.
 What F7a built (ADR-0439): `http.server` cannot run, and neither can any program that serves a browser or another program.
 
 ## Recommendation
+
+### Decision
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request. Accepted with a change: each room has its own loopback (a connect to 127.0.0.1:PORT reaches only listeners of the connecting program's room; reaching another room is a later, explicit grant). Where the text below says the loopback belongs to the whole machine, this decision replaces it; built as part F9.
 
 **Recommendation (not a decision): Option A, as built, with Option B recorded as the way to listen on the NIC if a part ever needs
 it.**
@@ -181,3 +185,7 @@ its own: a listener cannot do more to the client than the client's ends allow, a
 - `netd` learns what a room is.
 
 ## Architect's decision
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted with a change. Each room has its own loopback: a connect to 127.0.0.1:PORT reaches only listeners of the connecting program's room; reaching another room is a later, explicit grant. This replaces the machine-wide loopback this ADR recommends; it is built as part F9 and is a condition of the untrusted-room gate (ADR-0268). The listeners reachable from the NIC (Option B) and the rooms' `+listen` words and pills go to the backlog, for the next stage.
