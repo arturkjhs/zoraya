@@ -14,7 +14,7 @@
 use alloc::vec::Vec;
 
 use zoraya_abi::Status;
-use zoraya_abi::posix::Access;
+use zoraya_abi::posix::{Access, EntryKind};
 use zoraya_proto_file::{self as proto, open_flags, rights, status};
 use zoraya_protocol::{Below, Data, ERROR_ORDINAL, decode};
 
@@ -109,12 +109,16 @@ impl<S: Sys> Posix<S> {
             None => return Err(EACCES),
         }
         let mode = stat::S_IFSOCK | (0o777 & !self.facts.umask);
-        let wire = open_flags::CREATE | open_flags::EXCLUSIVE;
+        // As `O_CREAT | O_EXCL`: a name that exists is taken, even a link,
+        // which is never followed (a link out of `/tmp` could otherwise make
+        // the node in another service).
+        let wire = open_flags::CREATE | open_flags::EXCLUSIVE | open_flags::NO_FOLLOW;
         let wanted = rights::READ | rights::WRITE;
-        let (_, opened) = self
+        let (made, opened) = self
             .open_resolved(r, wire, wanted, 0, mode, Access::Write)
             .map_err(|e| if e == EEXIST { EADDRINUSE } else { e })?;
-        if opened.meta().mode & stat::S_IFMT != stat::S_IFSOCK {
+        let in_tmp = self.entries.get(made.place.entry).map(|e| e.kind) == Some(EntryKind::Tmp);
+        if !in_tmp || opened.meta().mode & stat::S_IFMT != stat::S_IFSOCK {
             // A service that keeps no socket nodes made a plain file.
             self.sys.close(opened.conn);
             let _ = self.unlink_at(AT_FDCWD, &path, 0);

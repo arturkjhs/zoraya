@@ -149,6 +149,9 @@ impl Transport for Kernel {
             Ok(()) => Outgoing::Sent,
             Err(Status::WouldBlock) => Outgoing::Full,
             Err(Status::NoMemory) => Outgoing::NoMemory,
+            // A handle that lacks the rights the entry names or cannot travel:
+            // the peer is there (`socket_connect` keeps its listener).
+            Err(Status::AccessDenied | Status::BadState | Status::BadHandle) => Outgoing::Refused,
             Err(_) => Outgoing::Closed,
         }
     }

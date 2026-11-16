@@ -2198,9 +2198,26 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   all-or-nothing write). A full fd table leaves the message queued (`EMFILE`). After `fork` a stream socket's byte streams are in two
   processes and `SCM_RIGHTS` on it is `EOPNOTSUPP` in both; a packet socket does not fork (`ENOTSUP`). **Limits** (recorded, not
   hidden): (a Unix socket did not cross `spawn` or `exec` until plan part F4, the next bullets: now it does, a TCP socket still does not, `EBADF`); no `bind`, `listen`, `accept` or
-  socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
+  socket file until plan part F7 (the next but one bullet: now `bind`, `listen`, `accept` and a path for `connect` work in the line's `/tmp`); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
   part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
   splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
+- **Socket files** (plan part F7, ADR-0412 item 5, INV-0412-3; ADR-0439, proposed, records what the code decided):
+  `bind`, `listen`, `accept`, `accept4` and `connect` of a path for `SOCK_STREAM` and `SOCK_SEQPACKET` Unix sockets, in
+  `crates/zoraya-posix/src/unix_file.rs` and, in the temporary directory service (`fsd --memory`, `crates/zoraya-fs-service`), a table of
+  socket nodes with `socket_listen` (message 41) and `socket_connect` (42 for a packet socket's one channel end, 43 for a stream
+  socket's three handles) in `zoraya-proto-file`. `bind` is an exclusive create with `S_IFSOCK` and works only in the table entry of
+  kind `Tmp` (the line's `/tmp`; `EACCES` in any other entry, so INV-0412-3 holds with the narrower place: a program's own directory
+  is not built, ADR-0439 item 1); `listen` sends the service one end of a channel, held for the connection `bind` made, so closing
+  the socket ends the listener; `connect` resolves the path in the connecting program's own table (a program with no `/tmp` entry, or
+  with it read-only, cannot connect), opens the node with `WRITE` and sends the far end of a new pair with a 24-byte record, which the
+  service writes, unread, to the listener's channel and the listener checks (`unix::decode_connect`). 256 nodes and 64 listeners in
+  a service; the accept queue is the channel's 64 messages (`backlog` is a hint; a full queue is `EAGAIN`). A node stays, inert, after
+  its listener goes, until `unlink` (as on Linux); `stat` says socket, `open` is `ENXIO`. A listening socket is not sent, spawned
+  (`EINVAL`), exec'd (`EBADF`) or forked (`ENOTSUP`). **Limits:** TCP `bind`, `listen` and `accept` are `EOPNOTSUPP` (ADR-0440,
+  proposed, records what listening over `netd` needs: the listen rule the scope already has, a `listen` request, a loopback interface;
+  not built, so `python3 -m http.server` does not serve yet); no datagram `bind`; `readdir` shows a socket file as a plain name.
+  Tests: `crates/zoraya-fs-service/tests/socket.rs`, `crates/zoraya-posix/tests/socketfile.rs`, `tests/posix-core/t_unix.c` (`file`, run
+  by zosh in `make test-libposix`).
 - **Memory descriptors** (plan part F3, ADR-0413; ADR-0431 and ADR-0432, proposed, record what the code decided):
   `memfd_create` and `shm_open(SHM_ANON)` make a descriptor of size 0 (`crates/zoraya-posix/src/memfd.rs`, the state in the
   description entry); its first `ftruncate` makes the memory object, committed at once and paid by the creator's job for its life.

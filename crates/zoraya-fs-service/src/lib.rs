@@ -109,6 +109,10 @@ pub enum Outgoing {
     Full,
     NoMemory,
     Closed,
+    /// Refused for a reason other than the peer going: a handle with fewer
+    /// rights than the entry names, one that cannot travel. The peer is
+    /// there; a reply that gets this is lost as `Closed` loses it.
+    Refused,
 }
 
 /// What a handle is.
@@ -1195,7 +1199,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.transport.interest(end, index as u64, Interest::Closed);
                 self.retry_at = Some(self.transport.now() + RETRY_NS);
             }
-            Outgoing::Closed => self.close_connection(index),
+            Outgoing::Closed | Outgoing::Refused => self.close_connection(index),
         }
     }
 
@@ -1211,7 +1215,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.release(account, handles.len());
                 return;
             }
-            Outgoing::Closed => {
+            Outgoing::Closed | Outgoing::Refused => {
                 self.drop_handles(account, handles);
                 self.close_connection(index);
                 return;
@@ -1771,6 +1775,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.done(i, t, status::OK, 0);
             }
             Outgoing::Full | Outgoing::NoMemory => self.done(i, t, status::LIMIT_REACHED, 0),
+            // A far end the kernel would not move (rights the connector's
+            // handles lack, a channel with handles queued in it): the
+            // connector's fault, and the listener is alive.
+            Outgoing::Refused => self.done(i, t, status::INVALID_ARGUMENT, 0),
             Outgoing::Closed => {
                 // The listening program is gone without its connection
                 // saying so: the listener is dead.

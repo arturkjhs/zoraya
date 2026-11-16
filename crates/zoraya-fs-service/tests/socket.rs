@@ -43,6 +43,9 @@ struct Net {
     no_streams: bool,
     /// Ends whose queue is full: a write answers `Full`.
     full: BTreeSet<End>,
+    /// Ends that refuse what they are sent (the kernel would not move a
+    /// handle): a write answers `Refused`.
+    refuse: BTreeSet<End>,
     /// A token's copies: copy to original.
     tokens: BTreeMap<End, End>,
 }
@@ -96,6 +99,9 @@ impl Transport for Fake {
         }
         if n.full.contains(&end) {
             return Outgoing::Full;
+        }
+        if n.refuse.contains(&end) {
+            return Outgoing::Refused;
         }
         n.replies
             .entry(end)
@@ -559,6 +565,25 @@ fn a_full_queue_refuses_the_connect_and_keeps_nothing() {
     r.net.0.borrow_mut().full.clear();
     let (s, _) = r.connect(c, 1, &[0; 24]);
     assert_eq!(s, status::OK);
+}
+
+/// A connector whose handles the kernel will not move (rights narrower than
+/// the entry names) must not be able to end the listener by it.
+#[test]
+fn a_far_end_the_kernel_refuses_is_the_connectors_fault_and_not_the_listeners_death() {
+    let mut r = rig();
+    let conn = r.bind("sock").unwrap();
+    let (_, listener) = r.listen(conn, 1);
+    r.net.0.borrow_mut().refuse.insert(listener);
+    let c = r.connection("sock", rights::WRITE).unwrap();
+    let (s, far) = r.connect(c, 1, &[0; 24]);
+    assert_eq!(s, status::INVALID_ARGUMENT);
+    assert!(r.is_closed(far));
+    assert_eq!(r.service.socket_nodes(), (1, 1), "the listener lives");
+    assert!(!r.is_closed(listener));
+    r.net.0.borrow_mut().refuse.clear();
+    let (s, _) = r.connect(c, 1, &[0; 24]);
+    assert_eq!(s, status::OK, "the next connector is served");
 }
 
 #[test]

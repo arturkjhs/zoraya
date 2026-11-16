@@ -272,6 +272,11 @@ fn a_name_is_taken_once_and_a_socket_binds_once() {
             .unwrap();
     r.p.close(fd).unwrap();
     assert_eq!(r.p.bind(b, &un("/tmp/plain")), Err(EADDRINUSE));
+    // A link is a name too, and is not followed: nothing is made where it points.
+    r.p.symlink_at(b"/work/elsewhere", AT_FDCWD, b"/tmp/link")
+        .unwrap();
+    assert_eq!(r.p.bind(b, &un("/tmp/link")), Err(EADDRINUSE));
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"/work/elsewhere", 0), Err(ENOENT));
     // Only the unlink frees the name, even after the socket is closed.
     r.p.close(a).unwrap();
     assert_eq!(r.p.bind(b, &un("/tmp/one")), Err(EADDRINUSE));
@@ -527,5 +532,37 @@ fn a_hostile_connection_message_is_dropped_by_the_listener() {
                 }
             }
         }
+    }
+}
+
+/// A descriptor crosses a connection made through a socket file, both ways, for both types: the pair
+/// is a fresh one with its ancillary channel (INV-0412-1 over a rendezvous).
+#[test]
+fn descriptors_cross_a_connection_made_through_a_socket_file() {
+    for ty in [SOCK_STREAM, SOCK_SEQPACKET] {
+        let (mut a, svc) = tmp_rig();
+        let mut b = peer(&a, &svc, true);
+        let s = server(&mut a, ty, "/tmp/rights");
+        let c = sock(&mut b, ty);
+        b.p.connect(c, &un("/tmp/rights")).unwrap();
+        let d = a.p.accept(s, false, false).unwrap();
+        // The connector sends a pipe's read end; the listener reads through it.
+        let (pr, pw) = b.p.pipe(0).unwrap();
+        b.write(pw, b"through the pipe").unwrap();
+        let u = b.poke(0, b"!");
+        assert_eq!(b.p.sendmsg(c, &[u], &[pr], 0), Ok(1), "type {ty}");
+        let u = a.arena.user(ARENA / 2, 16);
+        let got = a.p.recvmsg(d, &[u], 1, 0).unwrap();
+        assert_eq!((got.bytes, got.fds.len()), (1, 1), "type {ty}");
+        assert_eq!(a.read(got.fds[0], 100).unwrap(), b"through the pipe");
+        // And back: the listener sends the other end of a socketpair.
+        let (x, y) = a.p.socketpair(AF_UNIX, SOCK_SEQPACKET, 0).unwrap();
+        let u = a.poke(0, b"?");
+        assert_eq!(a.p.sendmsg(d, &[u], &[x], 0), Ok(1), "type {ty}");
+        let u = b.arena.user(ARENA / 2, 16);
+        let got = b.p.recvmsg(c, &[u], 1, 0).unwrap();
+        assert_eq!(got.fds.len(), 1, "type {ty}");
+        a.write(y, b"hello over a moved end").unwrap();
+        assert_eq!(b.read(got.fds[0], 100).unwrap(), b"hello over a moved end");
     }
 }

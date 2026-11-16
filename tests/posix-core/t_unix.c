@@ -44,6 +44,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <spawn.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -615,7 +616,7 @@ static void file_case(void)
 	unlink(SOCK_PATH "2");
 
 	/* A stream socket bound in /tmp: a socket file, with its name. */
-	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	CHECK(s >= 0);
 	OK(un_bind(s, SOCK_PATH));
 	struct stat st;
@@ -627,7 +628,7 @@ static void file_case(void)
 	CHECK(len == offsetof(struct sockaddr_un, sun_path) + strlen(SOCK_PATH) + 1);
 
 	/* What bind refuses (INV-0412-3), and a name taken once. */
-	int t = socket(AF_UNIX, SOCK_STREAM, 0);
+	int t = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	FAILS(un_bind(t, SOCK_PATH), EADDRINUSE);
 	FAILS(un_bind(s, SOCK_PATH "2"), EINVAL);
 	FAILS(un_bind(t, "/bin/t_unix_sock"), EACCES);
@@ -641,14 +642,14 @@ static void file_case(void)
 	ab.sun_family = AF_UNIX;
 	memcpy(ab.sun_path + 1, "abc", 3);
 	FAILS(bind(t, (struct sockaddr *)&ab, offsetof(struct sockaddr_un, sun_path) + 4), EAFNOSUPPORT);
-	int d = socket(AF_UNIX, SOCK_DGRAM, 0);
+	int d = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	FAILS(un_bind(d, SOCK_PATH "d"), EOPNOTSUPP);
 	close(d);
 	/* A socket file is connected to, not opened. */
 	FAILS(open(SOCK_PATH, O_RDWR), ENXIO);
 
 	/* Bound, not listening: refused; no listener to accept on. */
-	int c = socket(AF_UNIX, SOCK_STREAM, 0);
+	int c = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	FAILS(un_connect(c, SOCK_PATH), ECONNREFUSED);
 	FAILS(accept(s, NULL, NULL), EINVAL);
 	FAILS(listen(t, 5), EINVAL);
@@ -682,8 +683,12 @@ static void file_case(void)
 	OK(pipe(pp));
 	CHECK(write(pp[1], "via pipe", 8) == 8);
 	CHECK(send_fds(c, "!", 1, &pp[0], 1, 0) == 1);
-	int got[1], ng = 0;
-	CHECK(recv_fds(acc, b, sizeof b, got, 1, &ng, NULL, 0) == 1 && ng == 1);
+	int got[1], ng = 0, mf = 0;
+	errno = 0;
+	ssize_t rr = recv_fds(acc, b, sizeof b, got, 1, &ng, &mf, 0);
+	if (rr != 1 || ng != 1 || mf != 0)
+		printf("t_unix: recv_fds gave %zd, %d descriptors, flags %d, errno %d\n", rr, ng, mf, errno);
+	CHECK(rr == 1 && ng == 1 && mf == 0);
 	CHECK(read(got[0], b, sizeof b) == 8 && memcmp(b, "via pipe", 8) == 0);
 	close(got[0]);
 	close(pp[0]);
@@ -698,14 +703,15 @@ static void file_case(void)
 	close(acc);
 
 	/* A packet listener, and a stream connect to it is the wrong type. */
-	int ps = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	int ps = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
 	OK(un_bind(ps, SOCK_PATH "2"));
 	OK(listen(ps, 5));
-	int wrong = socket(AF_UNIX, SOCK_STREAM, 0);
+	int wrong = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	FAILS(un_connect(wrong, SOCK_PATH "2"), EPROTOTYPE);
 	close(wrong);
 
-	/* A second program, in the same directory, through its own table. */
+	/* A second program, in the same directory, through its own table. Every
+	 * socket here is close-on-exec: an inherited Unix socket would fail the spawn. */
 	pid_t pid;
 	char *argv[] = {"/bin/t_unix", "filechild", SOCK_PATH, SOCK_PATH "2", NULL};
 	CHECK(posix_spawn(&pid, "/bin/t_unix", NULL, NULL, argv, environ) == 0);
@@ -725,7 +731,7 @@ static void file_case(void)
 
 	/* Closing the listener leaves an inert file; unlink removes it. */
 	close(s);
-	int c2 = socket(AF_UNIX, SOCK_STREAM, 0);
+	int c2 = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	FAILS(un_connect(c2, SOCK_PATH), ECONNREFUSED);
 	OK(unlink(SOCK_PATH));
 	FAILS(un_connect(c2, SOCK_PATH), ENOENT);
