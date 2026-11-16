@@ -257,7 +257,28 @@ fn an_image_is_charged_to_the_job_it_names(hello: &[u8]) {
     let own_delta = used(JOB) - own_before;
     assert!(own_delta >= cost, "the parent holds what its child holds");
     assert!(own_delta < cost + cost / 2, "and not a second time");
-    // A running process of the image does not change who paid for it.
+    // A live process of the image, in a job of its own, does not change who
+    // paid for the image: it is read while the child still exists.
+    let kid = job_with(None);
+    let kid_before = used(kid);
+    let mut buffer = [0; 8192];
+    let mut e = Encoder::new(&mut buffer, kid, image);
+    e.suspended().handle(console_entry());
+    let request = e.finish().expect("room");
+    let child = spawn(&buffer[..request]).expect("spawn");
+    assert!(
+        used(kid) > kid_before,
+        "the child's own pages are its job's"
+    );
+    assert_eq!(
+        used(named) - named_before,
+        cost,
+        "and the image stays the named job's"
+    );
+    job_kill(kid).expect("kill");
+    let _ = wait_exit(child);
+    handle_close(child).expect("close");
+    handle_close(kid).expect("close");
     assert_eq!(run(image, &[]).code, 7);
     assert_eq!(used(named) - named_before, cost);
     handle_close(image).expect("close");
@@ -318,6 +339,10 @@ fn an_image_is_charged_to_the_job_it_names(hello: &[u8]) {
     let doomed_before = used(doomed);
     let image = image_create(object, length, doomed).expect("image");
     job_kill(doomed).expect("kill");
+    // A job that ended takes no new charge, as `spawn` refuses it.
+    let frames_dead = free_frames();
+    assert_err!(image_create(object, length, doomed), Status::BadState);
+    assert_eq!(free_frames(), frames_dead, "nothing kept");
     assert_eq!(used(doomed) - doomed_before, cost, "still charged");
     assert_eq!(
         run(image, &[]).code,

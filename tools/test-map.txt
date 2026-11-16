@@ -225,6 +225,7 @@ docs/adr/0392-signals-across-exec-and-at-the-entry-of-a-wait.md check test-libpo
 tests/posix/                  test-posix test-posix-gui test-tour-gui test-tour-terminal
 tools/check-top-image.py       test-libposix
 tools/check-room-image.py      test-libposix
+tools/room-mid-limit.py        test-libposix
 tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 tests/libc-test/             test-posix-suites test-posix-threadtest3
 

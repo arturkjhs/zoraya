@@ -1458,6 +1458,9 @@ impl Handlers for Calls<'_> {
         // is the one a process needs to be started there, so no program pays
         // into a job it could not spawn into. Checked before anything is made.
         let payer = self.job(job, Rights::CREATE_PROCESS)?;
+        if payer.is_closed() {
+            return Err(Status::BadState);
+        }
         // The room for the handle is kept from here: a full table refuses
         // before the pages are made, and a sibling thread cannot fill it
         // while the copy pauses (INV-0040-3).

@@ -15,3 +15,13 @@ replace = '''        JOB
 
     /// A program of the volume'''
 note = "INV-0443-5: the shell charges the room's programs to itself: no refusal in a room at its limit"
+
+[[mutant]]
+id = "F10-libposix-names-slot-2"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = '''        let job = p.process_job.unwrap_or(zoraya_abi::JOB);'''
+replace = '''        let job = zoraya_abi::JOB;'''
+note = "INV-0443-2: a POSIX process holds its job at PROCESS_JOB and nothing at slot 2: every program a libposix process loads fails (ENOEXEC)"
+
+# Not listed, because no test can see it: the broker's `first.job` replaced by `JOB`. The
+# broker's own job and the first child's lie in one session job with no limit between them.

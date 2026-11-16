@@ -30,7 +30,8 @@ gate needs it: a room's limit must bound what the room can make the machine hold
 
 `image_create(memory, length, job)`. The kernel checks `CREATE_PROCESS` on `job` (the right a spawner holds on the job it
 starts a process in), then makes the image with that job as the payer (`process::image_from` already took the payer). A caller that
-means its own job names `JOB` (slot 2), which every spawner holds.
+means its own job names the handle it spawns into: `JOB` (slot 2) for a native program, `PROCESS_JOB` (slot 1002) for a
+POSIX process, which holds nothing at slot 2.
 - **Evidence for:** drivers 1 to 4. The check is the one `spawn` and `job_create` make, so the set of jobs a program can charge is the
   set it can spawn into.
 - **Evidence against:** every caller changes (14 in `t_image`, the shell, the broker, `posixrun`, `libposix`).
@@ -56,7 +57,7 @@ A call that moves a charge between jobs: a new call with the transfer's own fail
 **Recommendation (not a decision): Option A, as built.**
 
 1. **The call.** `image_create(memory, length, job: Handle)`. After the memory handle's check (`READ`), the kernel looks up `job` with
-   `CREATE_PROCESS` (a handle without `CREATE_PROCESS`, whatever its kind, is `AccessDenied`; `BadHandle` only for a non-job handle that carries the right), before the table room is kept and before
+   `CREATE_PROCESS` (a handle without `CREATE_PROCESS`, whatever its kind, is `AccessDenied`; only a job carries that right, and a handle cannot gain a right, so the `BadHandle` arm for a non-job handle is defensive and not reachable), and refuses a job that was killed with `BadState`, as `spawn` and `job_create` do, all, before the table room is kept and before
    anything is made. The image's kept pages and record are charged to `job` (the payer of ADR-0438 item 2 is now `job`, not the
    caller's own job); a job at its memory limit refuses `OverQuota` and the call holds nothing.
 2. **The lifetime.** As ADR-0438: `Paid` keeps the payer job alive for as long as the image or any process of it lives. A job that
@@ -64,8 +65,7 @@ A call that moves a charge between jobs: a new call with the transfer's own fail
    last holder goes, and then the pages and the charge go back. The creator ending first changes nothing: the image is not the
    creator's.
 3. **Callers.** The shell names the room's launch job when it holds one (`room_job`), else its own job (a trusted room without limits has no launch job), so a program started outside
-   a room is charged as before. The broker names the job of the child it loads for. `posixrun` and `libposix`'s program loader name
-   their own job (`JOB`, `PROCESS_JOB`): a job that charges itself keeps its behaviour. Every other caller names `JOB`.
+   a room is charged as before. The broker names the job of the child it loads for. `posixrun` names its own job (`JOB`) and `libposix`'s program loader the process's own (`PROCESS_JOB`): a job that charges itself keeps its behaviour. Every other caller names `JOB`.
 4. **Not built.** The staging memory object the shell fills before the image exists (`memory_create`, the program's bytes, closed
    after `image_create`) is the shell's own and is charged to the shell's job while it lives; the room's row shows the image only.
 
@@ -86,25 +86,43 @@ charge a job it could not spawn into, so the call adds no way to spend another r
 ## Invariants
 
 - **INV-0443-1.** The pages and the record of an image are charged to the job `image_create` names, once, and to no other job
-  that is not its ancestor: a sibling's use and the number of processes started from the image change nothing. *Check:* `t_image`'s
+  that is not its ancestor: a sibling's use and a live process of the image, started in a job of its own, change nothing. *Check:* `t_image`'s
   `an_image_is_charged_to_the_job_it_names` (`make test-qemu-one`) and `cargo test -p zoraya-abi` (the signature).
-- **INV-0443-2.** `image_create` of a job handle without `CREATE_PROCESS`, or of a handle that is not a job, is refused
-  (`AccessDenied`, `BadHandle`) and leaves no charge, no frame and no heap. *Check:* `t_image`'s
+- **INV-0443-2.** `image_create` of a handle without `CREATE_PROCESS` (a weakened job handle, or any other kind of handle: only a job
+  carries the right) is refused `AccessDenied`, of a job that was killed `BadState`, and each leaves no charge, no frame and no heap. *Check:* `t_image`'s
   `an_image_is_charged_to_the_job_it_names` (`make test-qemu-one`).
 - **INV-0443-3.** A job at its memory limit refuses `image_create` with `OverQuota`, holds nothing, and a job with room takes the same
   file. *Check:* `t_image`'s `an_image_is_charged_to_the_job_it_names` (`make test-qemu-one`).
 - **INV-0443-4.** An image outlives the end of the job that pays for it and the closing of that job's handle, and its last holder
   gives back the pages and the charge. *Check:* `t_image`'s `an_image_is_charged_to_the_job_it_names` (`make test-qemu-one`).
-- **INV-0443-5.** The image of a program the shell starts in a room is charged to the room's job, and a room at its memory limit
-  cannot start a program whose image does not fit: the shell says `over quota` and the room's row is unchanged, while the same
-  program starts in a room with room. *Check:* `make test-libposix` (`tests/posix-core/room-image.script`, read by
-  `tools/check-room-image.py`).
+- **INV-0443-5.** The image of a program the shell starts in a room with a launch job is charged to that room's job: a room whose
+  limit holds the program's start but not the start and its image refuses it (the shell says `over quota` and the room's row
+  counts the refusal and does not change), while the same program starts in a room with room; and a room sized between the program's
+  start and its start plus its image (from `top.script`'s own reading) does not run it, which a shell that charged its own job would. *Check:*
+  `make test-libposix` (`tests/posix-core/room-image.script` read by `tools/check-room-image.py`, and `tests/posix-core/room-mid.script`
+  with the limit from `tools/room-mid-limit.py`).
 
 ## Open questions
 
+### Known limitations: what the gate still lacks (the honest remainder)
+
+Programs started in a room whose image is **not** charged to the room:
+
+- The shell in a trusted room without limits has no launch job (`room_job` is `None`), so `image_job` is the shell's own job; there is
+  no limit to bound. An untrusted room is refused without the keeper.
+- The shell's staging object (the program's bytes before the image exists) and the `grants` probe's image (made and closed in one
+  expression) are short-lived and charged to the shell's own job; only the shell's user starts either.
+- Ramdisk programs (`directory_lookup`; the panel's launches) have no image charge: the child's job pays for the copied pages.
+- The broker's first child and `posixrun` name their own jobs, outside rooms.
+- The untrusted-room launcher of ADR-0269 is not built; it must name the room's job and hold no job above it.
+
+A refusal in the test of INV-0443-5 comes at the child's launch as well as at the image: the shell prints `over quota` for both, so the
+script alone cannot tell them apart; the room sized by `tools/room-mid-limit.py` is what shows the image is the room's.
+
+### Questions
+
 - Whether the staging object of the shell's loader (item 4) should be charged to the room too: it is transient and bounded by the
   program's size, and it is the shell's own memory.
-- A job that was killed: the call still charges it (`held`, ADR-0261 point 9) while `spawn` refuses it; whether `image_create` should refuse a closed job with `BadState`.
 
 ## Revisit triggers
 

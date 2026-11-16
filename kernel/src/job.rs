@@ -322,6 +322,12 @@ impl Job {
         }
     }
 
+    /// Whether the job was killed: it takes no new member, child job or
+    /// charge (proposed ADR-0443 item 1).
+    pub fn is_closed(&self) -> bool {
+        self.state.lock().closed
+    }
+
     /// Makes `process` a member. `BadState` once the job was killed.
     pub fn admit(&self, process: &Arc<Process>) -> Result<(), Status> {
         let _tree = TREE.lock();

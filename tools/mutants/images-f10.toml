@@ -35,3 +35,12 @@ replace = '''            Err(status) => {
         let image = Object::Image(Image::Memory(image));'''
 note = "INV-0443-3 (and INV-0040-3): a refusal at the named job's limit leaves the caller's table room kept, so a later call finds the table full"
 
+
+[[mutant]]
+id = "F10-charge-a-killed-job"
+file = "kernel/src/syscall.rs"
+find = '''        if payer.is_closed() {
+            return Err(Status::BadState);
+        }'''
+replace = ''''''
+note = "INV-0443-2: a killed job is charged by a new image (spawn and job_create refuse it)"
