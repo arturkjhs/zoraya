@@ -24,7 +24,7 @@ split=$(echo "$names" | grep -n -x -F "$first" | cut -d: -f1)
 split=$((split - 1))
 
 bad=0
-panics=$(sed -n -E 's/^[[:space:]]*(EXPECT :=)?[[:space:]]*--expect-panic ([A-Za-z0-9_]+).*/\2/p' "$makefile")
+panics=$(sed -n -E 's/^[[:space:]]*(EXPECT_FAULTS :=)?[[:space:]]*--expect-panic ([A-Za-z0-9_]+).*/\2/p' "$makefile")
 for p in $panics harness_resumes_after_panic; do
 	idx=$(echo "$names" | grep -n -x -F "$p" | cut -d: -f1 || true)
 	if [ -z "$idx" ]; then

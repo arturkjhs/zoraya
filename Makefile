@@ -216,7 +216,7 @@ test-unit:
 # One runner invocation per machine configuration. "auto" is HVF on an
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
 # a Mac both accelerators are exercised.
-EXPECT := --expect-panic harness_reports_panic_as_failure \
+EXPECT_FAULTS := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic harness_fails_with_a_process_left \
 	--expect-panic harness_reports_exception_as_failure \
 	--expect-panic fault_report_for_brk \
@@ -236,11 +236,14 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1" \
 	--expect-line "ZORAYA-FAULT interrupt 40 has no handler" \
 	--expect-line "ZORAYA-FAULT synchronous from EL0 (AArch64)" \
-	--expect-line "hello from EL0" --expect-line "process f_kread: fault, EC 0x24" \
+	--expect-line "process f_kread: fault, EC 0x24"
+# What every boot prints, whichever shard it runs: the banner and `hello`.
+EXPECT_BOOT := --expect-line "hello from EL0" \
 	--expect-line "timer: virtual" --expect-line ", interrupt 27" \
 	--expect-line "uart interrupt 33" \
 	--expect-line "first process: hello" \
 	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
+EXPECT := $(EXPECT_FAULTS) $(EXPECT_BOOT)
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 RUN_TEST_SLOW = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) $(EXPECT)
 
@@ -304,9 +307,7 @@ test-qemu-tcg-default: test-qemu-disk
 # Shard 2 has none of the faults of EXPECT: it expects the lines of the
 # banner and of `hello`, and the shard line each prints. The `auto` suites
 # stay whole (HVF runs them in seconds).
-EXPECT_B := --expect-line "timer: virtual" --expect-line ", interrupt 27" \
-	--expect-line "first process: hello" \
-	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
+EXPECT_B := $(EXPECT_BOOT)
 RUN_TEST_SLOW_B = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) $(EXPECT_B)
 SHARD_A_EXPECT := --expect-line "shard: 1/2 runs tests 0.."
 SHARD_B_EXPECT := --expect-line "shard: 2/2 runs tests "
