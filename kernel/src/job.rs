@@ -552,6 +552,9 @@ impl Drop for Job {
         if record != 0 {
             charge::refund_memory(self, record, Kind::Kernel);
         }
+        // A room that ends for good keeps no debt; what it still owes goes
+        // to the nearest ancestor with a ceiling (ADR-0460).
+        crate::cpu::pass_debt(self);
         if let Some(parent) = &self.parent {
             // `swap_remove`, as for processes: a walk counts down from the
             // end of the list and copes with it (`walk`). Dead slots are not

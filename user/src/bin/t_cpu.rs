@@ -558,7 +558,9 @@ fn a_mass_exit_is_bounded() {
 }
 
 /// Review W6, ADR-0285 point 7: `job_kill` of a room whose threads are parked:
-/// the room is gone within about one period, and its use goes to zero.
+/// the room is gone within about one period, and its use goes to zero. Its
+/// dying threads are not parked again (ADR-0460); before that, a teardown
+/// longer than the room's budget took a period for each budget's worth.
 fn a_killed_room_with_parked_threads_dies() {
     const PERIOD: u64 = 100 * MS;
     set_period(PERIOD);
