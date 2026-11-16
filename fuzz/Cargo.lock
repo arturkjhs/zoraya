@@ -316,6 +316,7 @@ dependencies = [
 name = "zoraya-fs-service"
 version = "0.1.0"
 dependencies = [
+ "zoraya-abi",
  "zoraya-fs",
  "zoraya-proto-block",
  "zoraya-proto-file",
