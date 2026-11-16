@@ -1,7 +1,9 @@
 name     tcptest
 summary  test TCP listen, accept and connect on the loopback (a POSIX test program)
-usage    tcptest
+usage    tcptest [--no-listen | --no-reach]
 program  /bin/tcptest
+option   -L --no-listen  check that listen is refused (a line with no +listen word)
+option   -R --no-reach  check that a connect to 127.0.0.1 is refused (a line with no +net word)
 exit     0  every check passed
 exit     1  a check failed; the output says which line
 ---

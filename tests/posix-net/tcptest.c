@@ -167,7 +167,7 @@ static void test_refusals(void)
 	CHECK(l >= 0);
 	{
 		int l2 = listener(LOW + 1, &err);
-		CHECK(l2 < 0 && (err == EADDRINUSE || err == ENOBUFS));
+		CHECK(l2 < 0 && err == EADDRINUSE);
 	}
 	{
 		int l3 = listener(LOW + 2, &err);
@@ -339,8 +339,39 @@ static void test_backlog_bound(void)
 	printf("tcptest: backlog bound and a closed listener with pending connections ok\n");
 }
 
-int main(void)
+/* The refusal itself, for the lines that give the program less: with no
+ * listen rule `listen` must be EACCES (INV-0440-1); with no reach rule for
+ * 127.0.0.1 a connect must be EACCES even though the listener works
+ * (INV-0440-2). Each prints its own ok line, which the script waits for. */
+static void test_expect_no_listen(void)
 {
+	int err = 0;
+	CHECK(listener(LOW, &err) < 0 && err == EACCES);
+	printf("tcptest: no listen grant ok\n");
+}
+
+static void test_expect_no_reach(void)
+{
+	int err = 0, l = listener(LOW, &err);
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in a = addr("127.0.0.1", LOW);
+	CHECK(l >= 0);
+	CHECK(connect(fd, (struct sockaddr *)&a, sizeof a) < 0 && errno == EACCES);
+	close(fd);
+	close(l);
+	printf("tcptest: no reach grant ok\n");
+}
+
+int main(int argc, char **argv)
+{
+	if (argc > 1 && strcmp(argv[1], "--no-listen") == 0) {
+		test_expect_no_listen();
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && strcmp(argv[1], "--no-reach") == 0) {
+		test_expect_no_reach();
+		return failures ? 1 : 0;
+	}
 	test_basics();
 	test_refusals();
 	test_port_zero();

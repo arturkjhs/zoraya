@@ -5,6 +5,7 @@
 # and port of the URL on its line (ADR-0224 item 2) at the NET slot.
 ! panicked
 ! first process ended
+! tcptest: FAIL
 < Type help to begin, or help tour.
 < \r\n~>
 # The lease takes a few hundred milliseconds under TCG.
@@ -78,12 +79,12 @@
 < \r\n~>
 # Without a listen word the program has no listener (INV-0440-1), and without a
 # reach word for 127.0.0.1 it cannot connect to the loopback (INV-0440-2): each
-# line fails at its first check and says so.
-> +net 127.0.0.1 tcptest\r
-< tcptest: FAIL line
+# mode checks the refusal itself (EACCES) and prints its own ok line.
+> +net 127.0.0.1 tcptest --no-listen\r
+< tcptest: no listen grant ok
 < \r\n~>
-> +listen 9000-9009 tcptest\r
-< tcptest: FAIL line
+> +listen 9000-9009 tcptest --no-reach\r
+< tcptest: no reach grant ok
 < \r\n~>
 x power off
 > poweroff\r
