@@ -2149,9 +2149,20 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
         parent_charged >= charged,
         "the parent was charged {parent_charged} ns, the room {charged} ns"
     );
+    // INV-0460-1 holds while the ways out fit in one period. The wall time
+    // the room's ending threads ran is what the test can read (`ran`): the
+    // 16 ways out took some 25 ms where this was written and 102 ms on CI's
+    // TCG (scheduled run 43843667050), more than the period. What never
+    // depends on the speed is that no ending thread is parked again, and
+    // that the room goes in the period after the kill's plus one for each
+    // whole period the ways out ran.
     assert!(
-        died <= killed + 1,
-        "the killed room ended {} periods after the kill's period, {parks} parks after the kill",
+        parks == 0,
+        "{parks} parks after the kill: an ending thread was parked again"
+    );
+    assert!(
+        died <= killed + 1 + ran / PERIOD,
+        "the killed room ended {} periods after the kill's period, {parks} parks after the kill, its ending threads ran {ran} ns",
         died - killed
     );
 }
