@@ -387,6 +387,8 @@ impl AddressSpace {
         if attributes.write {
             return Err(MapFailed::Memory);
         }
+        // A page is a unit of the step, as a new frame is (INV-0270-1).
+        steps::count(1);
         self.table
             .map_pages(&mut self.memory, va, pa, FRAME_SIZE, attributes)
             .map_err(|e| {

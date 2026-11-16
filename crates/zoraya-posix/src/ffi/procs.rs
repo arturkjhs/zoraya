@@ -1161,6 +1161,39 @@ extern "C" fn zoraya_fork_group(pgid: i32) -> i32 {
     0
 }
 
+/// The memory charged to the job of the live child `pid`, in bytes, which the
+/// parent's handle to it can read (`WAIT`, ADR-0261): what a test or a tool
+/// of the parent compares across spawns (proposed ADR-0438). 0, or -1 with
+/// `ECHILD`.
+///
+/// # Safety
+///
+/// `used` is NULL or points to a `unsigned long long`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn zoraya_child_memory(pid: i32, used: *mut u64) -> i32 {
+    if used.is_null() {
+        return int(Err(EFAULT));
+    }
+    let job = with(|p| {
+        p.children
+            .iter()
+            .find(|c| c.pid as i32 == pid)
+            .map(|c| c.job)
+    })
+    .flatten();
+    let Some(job) = job else {
+        return int(Err(ECHILD));
+    };
+    match zoraya_rt::job_get_usage(job, false) {
+        Ok(usage) => {
+            // SAFETY: C's contract: `used` is a `unsigned long long`.
+            unsafe { used.write_unaligned(usage.memory.used) };
+            0
+        }
+        Err(_) => int(Err(ECHILD)),
+    }
+}
+
 // ------------------------------------------------------------ the terminal
 
 #[unsafe(no_mangle)]
@@ -1528,6 +1561,14 @@ fn load_fd(p: &mut Posix<RtSys>, fd: i32) -> Result<Program, i32> {
 type Resolved = (Handle, Vec<Vec<u8>>, Vec<u8>);
 
 fn resolve_program(p: &mut Posix<RtSys>, path: &[u8], argv: &[Vec<u8>]) -> Result<Resolved, i32> {
+    // The program's own image (`/proc/self/exe`): the handle it was started
+    // from, duplicated, and no `image_create` (ADR-0415 item 2 (a), INV-0415-2).
+    // A handle that cannot be duplicated falls through to the file.
+    if let Some(own) = p.own_image(path)
+        && let Ok(image) = zoraya_rt::handle_duplicate(own, rights_of(own))
+    {
+        return Ok((image, argv.to_vec(), p.exe.clone().into_bytes()));
+    }
     match load(p, path)? {
         Program::Elf(image) => Ok((image, argv.to_vec(), path.to_vec())),
         Program::Script(interpreter, arg) => match load(p, &interpreter)? {

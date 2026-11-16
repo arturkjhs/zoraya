@@ -489,6 +489,50 @@ fn a_special_entry_is_listed_by_its_own_name() {
     );
 }
 
+/// INV-0415-2 (ADR-0415 item 2 (a), proposed ADR-0438): a spawn or an `exec`
+/// of `/proc/self/exe` is a spawn of the image the process was started from,
+/// from the bootstrap's `Image` entry, and no other path is: the library
+/// makes no `image_create` for the first (the decision is this one function,
+/// which `resolve_program` calls first) and reads a file for the others.
+#[test]
+fn a_spawn_of_the_own_executable_uses_the_bootstrap_image() {
+    let mut r = rig();
+    const IMAGE: u32 = 4242;
+    r.p.add_entry("/proc/self/exe", EntryKind::Image, Some(IMAGE));
+    r.p.add_entry("/dev/null", EntryKind::Null, None);
+    let same = |p: &mut Posix<Fake>, path: &[u8]| p.own_image(path);
+    assert_eq!(same(&mut r.p, b"/proc/self/exe"), Some(IMAGE));
+    // The same entry named around: the resolver's rules, not a string match.
+    assert_eq!(same(&mut r.p, b"/proc//self/./exe"), Some(IMAGE));
+    assert_eq!(same(&mut r.p, b"/proc/self/../self/exe"), Some(IMAGE));
+    // Other names are files, however alike: they are loaded as before.
+    for path in [
+        &b"/proc/self/exe/x"[..],
+        b"/proc/self",
+        b"/bin/self",
+        b"/dev/null",
+        b"exe",
+        b"",
+        b"/proc/self/exe\0",
+    ] {
+        assert_eq!(
+            same(&mut r.p, path),
+            None,
+            "{:?}",
+            String::from_utf8_lossy(path)
+        );
+    }
+    // The executable's own path as a file name is a file: it may have
+    // changed since the process started.
+    r.p.exe = "/bin/prog".to_string();
+    assert_eq!(same(&mut r.p, b"/bin/prog"), None);
+    // An image entry listed with no handle (a table that names it only)
+    // gives nothing to reuse.
+    let mut bare = rig();
+    bare.p.add_entry("/proc/self/exe", EntryKind::Image, None);
+    assert_eq!(bare.p.own_image(b"/proc/self/exe"), None);
+}
+
 #[test]
 fn an_empty_table_has_no_entry_no_cwd_and_the_actions_fds() {
     let mut r = rig();

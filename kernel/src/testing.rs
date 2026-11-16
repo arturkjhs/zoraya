@@ -19,6 +19,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::hint::black_box;
@@ -568,6 +569,10 @@ static TESTS: &[Test] = &[
     Test {
         name: "an_images_pages_are_paid_by_its_creator_alone",
         run: an_images_pages_are_paid_by_its_creator_alone,
+    },
+    Test {
+        name: "an_images_pages_hold_the_files_bytes_piece_by_piece",
+        run: an_images_pages_hold_the_files_bytes_piece_by_piece,
     },
     Test {
         name: "an_image_of_a_large_program_is_bounded",
@@ -1722,6 +1727,53 @@ fn with_shared_bss(file: &[u8], extra: u64) -> Vec<u8> {
         }
     }
     bytes
+}
+
+/// An ELF with one text segment of `pages` pages of a known pattern, for
+/// `image_from` (the pattern byte of offset `i` is `i % 251`).
+fn patterned_elf(pages: u64) -> Vec<u8> {
+    let size = (pages + 1) * PAGE_SIZE;
+    let mut f = vec![0u8; size as usize];
+    f[..4].copy_from_slice(b"\x7fELF");
+    f[4] = 2;
+    f[5] = 1;
+    f[6] = 1;
+    f[16..18].copy_from_slice(&2u16.to_le_bytes());
+    f[18..20].copy_from_slice(&183u16.to_le_bytes());
+    f[24..32].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    f[32..40].copy_from_slice(&64u64.to_le_bytes());
+    f[54..56].copy_from_slice(&56u16.to_le_bytes());
+    f[56..58].copy_from_slice(&1u16.to_le_bytes());
+    let ph = 64;
+    f[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+    f[ph + 4..ph + 8].copy_from_slice(&5u32.to_le_bytes()); // R X
+    f[ph + 8..ph + 16].copy_from_slice(&PAGE_SIZE.to_le_bytes());
+    f[ph + 16..ph + 24].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    f[ph + 32..ph + 40].copy_from_slice(&(pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 40..ph + 48].copy_from_slice(&(pages * PAGE_SIZE).to_le_bytes());
+    for (i, b) in f[PAGE_SIZE as usize..].iter_mut().enumerate() {
+        *b = (i % 251) as u8;
+    }
+    f
+}
+
+/// INV-0438-1: a segment of many steps (200 pages, four pieces) is in the
+/// image byte for byte, where the file had it, and nothing else is.
+fn an_images_pages_hold_the_files_bytes_piece_by_piece() {
+    let file = patterned_elf(200);
+    let job = Job::create(&root(), false).expect("job");
+    let before = frames_accounted();
+    let image = process::image_from(&file_object(&file), file.len() as u64, &job).expect("image");
+    assert_eq!(image.program.kept().pages(), 200);
+    let mut seen = vec![0u8; 200 * PAGE_SIZE as usize];
+    assert!(image.kept.read(0, &mut seen));
+    assert!(
+        seen.iter().enumerate().all(|(i, b)| *b == (i % 251) as u8),
+        "the kept pages differ from the file"
+    );
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
 }
 
 /// INV-0270-1: `image_create` of a program whose read-only segments are

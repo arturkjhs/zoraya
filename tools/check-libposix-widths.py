@@ -55,6 +55,7 @@ INTERNAL = {
     "__mprotect": ("int", "4"), "__munmap": ("int", "4"), "__libc_calloc": ("void *", "8"),
     "__libc_free": ("void", "v"), "__libc_malloc": ("void *", "8"), "__map_file": ("const unsigned char *", "8"),
     "__unmapself": ("void", "v"), "zoraya_fork_group": ("int", "4"),
+    "zoraya_child_memory": ("int", "4"),
     "zoraya_posix_main_stack": ("void", "v"), "zoraya_posix_start": ("void", "v"),
     "zoraya_posix_exit_group": ("void", "v"), "zoraya_posix_thread_exit": ("void", "v"),
 }

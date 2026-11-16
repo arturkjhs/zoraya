@@ -21,7 +21,7 @@ impl Model {
             if at.checked_add(length)? < va {
                 return Some(at);
             }
-            at = va + len + PAGE;
+            at = at.max(va + len + PAGE);
         }
         (at.checked_add(length)? <= HIGH).then_some(at)
     }
@@ -512,3 +512,27 @@ fn a_record_is_dropped_with_the_list() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// ADR-0438: a program's own segments are records far below the window
+/// mappings go in. They must not pull the search for a place below it
+/// (found by `make test-libposix`: every C program aborted at its start).
+#[test]
+fn records_below_the_window_do_not_move_the_search() {
+    let mut list = Mappings::new();
+    for (va, length) in [
+        (0x40_0000u64, 0x25000u64),
+        (0x43_4000, 0xc9000),
+        (0x50_c000, 0x102000),
+    ] {
+        list.reserve_for(va).expect("room");
+        list.insert(va, length, 0u32).expect("insert");
+    }
+    assert_eq!(list.find_gap(PAGE, LOW, HIGH, PAGE).0, Some(LOW));
+    // And with a record inside the window too: after it, as before.
+    list.reserve_for(LOW).expect("room");
+    list.insert(LOW, PAGE, 1).expect("insert");
+    assert_eq!(list.find_gap(PAGE, LOW, HIGH, PAGE).0, Some(LOW + 2 * PAGE));
+    // A record above the window's end leaves no room past `high`.
+    assert_eq!(list.find_gap(HIGH, LOW, HIGH, PAGE).0, None);
+    list.check();
+}

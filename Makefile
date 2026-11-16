@@ -1099,6 +1099,7 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_spawn tests/posix-core/t_spawn.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_syscall tests/posix-core/t_syscall.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_maps tests/posix-core/t_maps.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_shared tests/posix-core/t_shared.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_syscall
@@ -1106,6 +1107,7 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_unix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_spawn
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_maps
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_shared
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
