@@ -1315,6 +1315,15 @@ fn listen_needs_the_right_and_a_listen_rule_that_covers_the_port() {
         listen_on(&mut service, &mut net, no_right, 0),
         Err(status::NOT_GRANTED)
     );
+    // Port 0 needs the right as well, with a rule that covers the ephemeral ports.
+    let wide = loop_scope(None, &[Ports::ranges(&[(49152, 65535)]).unwrap()]);
+    let wide_no_right = service
+        .add(Connection::new(rights::REACH, &wide).unwrap())
+        .unwrap();
+    assert_eq!(
+        listen_on(&mut service, &mut net, wide_no_right, 0),
+        Err(status::NOT_GRANTED)
+    );
     assert_eq!(service.listeners(), 0, "a refusal holds nothing");
     assert_eq!(service.accounts().used(0, Kind::Listeners), 0);
     // Inside: the ports of the rule, both ends of it.
@@ -1417,6 +1426,28 @@ fn listeners_are_bounded_per_account_at_exactly_the_bound() {
         decode::<Narrowed>(&reply, 0).unwrap().1.status.0,
         status::OK
     );
+    let account = service.connection(program).unwrap().account();
+    assert_eq!(service.accounts().limit(account, Kind::Listeners), 1);
+    // A carve without the right takes no listener (ADR-0262: 0 unless listen).
+    let plain = match service.handle(
+        root,
+        &bytes(
+            &zoraya_proto_net::NarrowAccount {
+                rights: rights::REACH,
+                budget: Below(1),
+                scope: Data(&loop_scope(Some(Ports::ANY), &[])),
+            },
+            7,
+        ),
+        1,
+        &mut net.client,
+        0,
+    ) {
+        Action::Narrowed { id, .. } => id,
+        other => panic!("{other:?}"),
+    };
+    let plain_account = service.connection(plain).unwrap().account();
+    assert_eq!(service.accounts().limit(plain_account, Kind::Listeners), 0);
     let (first, _) = listen_on(&mut service, &mut net, program, 8000).unwrap();
     assert_eq!(
         listen_on(&mut service, &mut net, program, 8001),

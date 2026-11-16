@@ -4,7 +4,10 @@
 # shell's word (`crates/zoraya-shell` netgrant tests). Host tests only; the QEMU half is `make test-net-posix`.
 # `make mutants` runs each against the committed tree.
 #
-# Not listed, equivalent: the ephemeral search's start (`next_port`: a rotating start, any covered free port is
+# Not listed, equivalent (each tried and survived): the loopback's `a[0] != 127` bypass of the local-address check
+# (`decide` already refuses 127.x unless a rule covers it, and `web` never does: defence in depth); `a[0] == 127` in
+# `next_candidate` (the stack has no route to 127.x and `tcp_open` refuses it: defence in depth); `handles.len() == 2`
+# in `accept` (`decode` is given the handle count and refuses any but 2); the ephemeral search's start (`next_port`: a rotating start, any covered free port is
 # right); `self.next_peer`'s modulus (the made-up port only has to differ between nearby connections).
 tests = ["cargo test -q -p zoraya-net", "cargo test -q -p zoraya-posix --test tcplisten --lib", "cargo test -q -p zoraya-shell netgrant"]
 timeout = 900
@@ -71,16 +74,6 @@ replace = '''        if let Some(slot) = self.listeners.get_mut(id)
 note = "INV-0441-2: closing frees the port"
 
 [[mutant]]
-id = "F7b-loopback-without-naming-rule"
-file = "crates/zoraya-net/src/service.rs"
-find = '''                if let (Verdict::Allowed, ConnectTarget::Address(a)) = (verdict, target.0)
-                    && is_local(stack, a, now_us)'''
-replace = '''                if let (Verdict::Allowed, ConnectTarget::Address(a)) = (verdict, target.0)
-                    && a[0] != 127
-                    && is_local(stack, a, now_us)'''
-note = "INV-0440-2: a rule that does not name 127.x (web) does not reach it"
-
-[[mutant]]
 id = "F7b-loopback-charged"
 file = "crates/zoraya-net/src/service.rs"
 find = '''                        self.next_peer = (self.next_peer + 1) % EPHEMERAL_SPAN;'''
@@ -98,25 +91,11 @@ replace = '''            listener: self.listener_on(port).or(self.listeners.iter
 note = "INV-0441-1: the listener is the one on the port"
 
 [[mutant]]
-id = "F7b-name-to-loopback-opens-socket"
-file = "crates/zoraya-net/src/conn.rs"
-find = '''            if Some(a) == stack.address() || a[0] == 127 {'''
-replace = '''            if Some(a) == stack.address() {'''
-note = "INV-0441-3: a name that resolves to 127.x leaves by the NIC"
-
-[[mutant]]
 id = "F7b-carve-always-listens"
 file = "crates/zoraya-net/src/service.rs"
 find = '''let listeners = u32::from(m.rights & zoraya_abi::net::rights::LISTEN != 0);'''
 replace = '''let listeners = 1;'''
 note = "ADR-0262: 0 listeners unless listen"
-
-[[mutant]]
-id = "F7b-accept-any-message"
-file = "crates/zoraya-posix/src/net.rs"
-find = '''                        Ok((_, a)) if handles.len() == 2 => {'''
-replace = '''                        Ok((_, a)) if handles.len() >= 1 => {'''
-note = "INV-0441-4: exactly two handles"
 
 [[mutant]]
 id = "F7b-accept-swaps-ends"
