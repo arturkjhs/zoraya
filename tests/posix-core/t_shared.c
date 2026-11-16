@@ -279,8 +279,8 @@ static void phase(pid_t l, const char *what, unsigned long long kept)
 	struct stat sb;
 	/* L's job settled first: a file's object that L closed is still charged
 	 * while the reaper holds it, and the script reads `top` right after. */
-	(void)memory_of(l);
-	printf("t_shared: keep: %s (an image keeps exactly %llu bytes)\n", what, kept);
+	unsigned long long l_job = memory_of(l);
+	printf("t_shared: keep: %s (an image keeps exactly %llu bytes; L's job holds %llu bytes)\n", what, kept, l_job);
 	fflush(stdout);
 	while (stat("/work/t_shared.go", &sb))
 		usleep(100000);

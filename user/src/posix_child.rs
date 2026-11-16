@@ -688,7 +688,9 @@ pub fn launch(
 /// mapped read-only for the purpose. (It was a `Vec` of the whole file read
 /// 4 KiB a request: a 6.7 MiB `curl` cost a thousand requests and two copies
 /// in the shell's heap, and a machine of 128 MiB gave out after five runs.)
-pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
+/// The image is charged to `job` (proposed ADR-0443): the room's, for a program
+/// the shell starts in a room.
+pub fn load(file: &crate::files::File, job: Handle) -> Result<(Handle, bool), Status> {
     let gone = |_| Status::BadState;
     let length = file.stat().map_err(gone)?.size;
     if length == 0 || length > LOAD_LIMIT {
@@ -727,7 +729,7 @@ pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
         let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, length as usize) };
         native = zoraya_elf::is_native(bytes);
         let _ = zoraya_rt::memory_unmap(base, size);
-        crate::image_create(object, length)
+        crate::image_create(object, length, job)
     });
     let _ = handle_close(object);
     Ok((image?, native))

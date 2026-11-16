@@ -162,7 +162,7 @@ fn clone_tty(terminal: Handle, group: u32) -> Option<Handle> {
 }
 
 /// The program's image, `/bin/sh` through its link (ADR-0108).
-fn load_image(root: &File, path: &str) -> Option<Handle> {
+fn load_image(root: &File, path: &str, job: Handle) -> Option<Handle> {
     let file = root
         .open_followed(
             path,
@@ -191,7 +191,7 @@ fn load_image(root: &File, path: &str) -> Option<Handle> {
     }
     let _ = memory_unmap(address, size);
     let image = if ok {
-        image_create(object, length).ok()
+        image_create(object, length, job).ok()
     } else {
         None
     };
@@ -648,13 +648,16 @@ fn main() -> i32 {
             }
         };
         let program = session::program(&s);
-        let Some(image) = load_image(&root, &program) else {
-            println!("broker: {program}: cannot be loaded");
-            return 1;
-        };
         let (first, actions) = match core.first() {
             Ok(x) => x,
             Err(_) => return 1,
+        };
+        // Charged to the job of the child it is loaded for (proposed
+        // ADR-0443, ADR-0262), not to the broker's own.
+        let Some(image) = load_image(&root, &program, first.job) else {
+            println!("broker: {program}: cannot be loaded");
+            core.abort_first();
+            return 1;
         };
         server.act(&mut core, actions);
         // The session job, for hangup (ADR-0105 item 3).

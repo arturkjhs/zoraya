@@ -1505,6 +1505,13 @@ impl Z {
         }
     }
 
+    /// The job an image of a program started here is charged to: the room's
+    /// launch job when the shell holds one, else the shell's own (proposed
+    /// ADR-0443, ADR-0262: what is made for a client is paid by the client).
+    fn image_job(&self) -> Handle {
+        self.room_job.unwrap_or(JOB)
+    }
+
     /// A program of the volume: native when it carries the mark (rule 9),
     /// with the current directory only, since no description of the
     /// image's names it; else a POSIX program through the broker.
@@ -1525,8 +1532,8 @@ impl Z {
                 file_rights::READ | file_rights::CLONE,
             )
             .map_err(|s| fail(&problem(s)))?;
-        let (image, native) =
-            posix_child::load(&file).map_err(|s| fail(&zoraya_command::status_problem(s)))?;
+        let (image, native) = posix_child::load(&file, self.image_job())
+            .map_err(|s| fail(&zoraya_command::status_problem(s)))?;
         drop(file);
         let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes()).map_err(|_| fail("?"))?;
         if native {
@@ -4448,10 +4455,14 @@ impl Z {
         if self.lookup(name) == Found::Program
             && let Some(path) = self.on_volume.get(name).cloned()
         {
+            // The probe makes a whole image to read its mark and drops it: the
+            // shell's own job, so that `grants` in a room at its limit neither
+            // fails nor counts a refusal for a command that runs nothing.
+            let job = JOB;
             let native = self.root.as_ref().is_some_and(|r| {
                 r.open_followed(path.trim_start_matches('/'), 0, file_rights::READ)
                     .ok()
-                    .and_then(|f| posix_child::load(&f).ok())
+                    .and_then(|f| posix_child::load(&f, job).ok())
                     .is_some_and(|(image, native)| {
                         let _ = handle_close(image);
                         native

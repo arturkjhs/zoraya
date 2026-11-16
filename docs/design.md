@@ -1268,17 +1268,19 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   the child maps the same frames with the same attributes.
 - **`image_create` (ADR-0108, ADR-0415 item 2, F6, proposed ADR-0438).** `zoraya-elf` parses an ELF in a memory object in two
   steps (header, then table) with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table
-  and **its own copy of the program's pages** (`Program::kept`: one object of the creator's job, no handle names it; every page
+  and **its own copy of the program's pages** (`Program::kept`: one object of the job the creator names, no handle names it; every page
   of a segment that is not writable, its zero tail included, and the pages with file bytes of a writable one), made in steps of
   64 pages. `spawn` maps the frames of each read-only segment as one `SHARED` mapping record (never writable, executable for
   text; a `fork` child maps the same frames) and copies the pages of the writable ones, so the processes of one image hold its
-  text once. The creator's job pays the kept object while the image or any process of it lives; each child's job its own pages
-  and tables. Rewriting the object or the file after the call changes nothing. `libposix`'s `posix_spawn` and `execve` of
+  text once. Since F10 (proposed ADR-0443) `image_create(memory, length, job)` names the job that pays, after the kernel checks
+  `CREATE_PROCESS` on it: the shell names the room's launch job (its own job outside a room), the broker the job of the child it loads for,
+  `posixrun` and `libposix` their own. That job pays the kept object while the image or any process of it lives; each child's job its own pages
+  and tables. A room at its memory limit cannot start a program whose image does not fit (`tests/posix-core/room-image.script`, `tools/check-room-image.py`). Rewriting the object or the file after the call changes nothing. `libposix`'s `posix_spawn` and `execve` of
   `/proc/self/exe` use a duplicate of the bootstrap's `Image` handle (`Posix::own_image`); any other path reads its file and
   makes an image of its own. `zoraya_child_memory(pid, &used)` reads a child's job's memory through the parent's handle
   (`t_shared`; `top.script` and `tools/check-top-image.py` read `top` in a room around it). Known limitations: `image_create` holds the file's object and the copy at once; two images of one file share
   nothing (the key is the image); programs started from the ramdisk (the first processes) still copy every page; `top` has no
-  line per image and shows an image only in the room whose job made it (the shell's own is in no room).
+  line per image; the shell's staging object (the program's bytes before the image exists) is charged to the shell's own job.
 - **Startup block (ADR-0109 item 5).** `argc`, `envc`, a header size of 16 and the number of program headers, the
   strings, zeros to a multiple of 8, then the ELF's whole program header table, for `AT_PHDR`.
 - **`job_suspend`, `job_resume`.** Need `KILL`. A flag on every job of the tree and `SUSPENDED` on each; every
