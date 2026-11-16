@@ -24,10 +24,10 @@ use crate::signals::{
 // ------------------------------------------------------------ delivery
 
 /// What a round of delivery did.
-struct Delivered {
-    ran: bool,
+pub(super) struct Delivered {
+    pub(super) ran: bool,
     /// Every handler that ran had `SA_RESTART`.
-    restart: bool,
+    pub(super) restart: bool,
 }
 
 /// `si_code` values.
@@ -94,14 +94,46 @@ fn stop_self(n: u32) {
 }
 
 /// The poll at a library entry (ADR-0106 item 5): only with a handler
-/// installed (INV-0106-2), or with a pending one now unblocked.
-pub(super) fn poll() {
+/// installed (INV-0106-2), or with a pending one now unblocked. Says what
+/// ran, for a call that may wait ([`waiting`], [`nanosleep_until`]).
+pub(super) fn poll() -> Delivered {
     let wanted =
         with(|p| p.signals.handlers_installed() || p.signals.pending & !p.signals.blocked != 0)
             .unwrap_or(false);
     if wanted {
-        deliver();
+        deliver()
+    } else {
+        Delivered {
+            ran: false,
+            restart: true,
+        }
     }
+}
+
+/// A call that may wait, from its entry: the poll, then [`restartable`].
+/// A signal the poll finds came before the call's wait. On Unix it would
+/// have ended that wait, or, sent a moment earlier, run its handler where
+/// the program was; here it waited for the call. So a handler without
+/// `SA_RESTART` that the poll ran makes the call's wait point `EINTR`
+/// (ADR-0106 item 6) instead of a wait that nothing ends: dash runs its
+/// `read` under `INTOFF` and acts on a `SIGINT` its handler noted only when
+/// the read returns.
+pub(super) fn waiting<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
+    let d = poll();
+    if !d.ran || d.restart {
+        return restartable(f);
+    }
+    let r = state(|p| {
+        p.interrupt_wait = true;
+        let r = f(p);
+        p.interrupt_wait = false;
+        r
+    });
+    if matches!(r, Err(EINTR)) {
+        // What else came meanwhile runs too; the call stays interrupted.
+        let _ = deliver();
+    }
+    r
 }
 
 /// Runs `f` on the state, delivering what interrupts it: again when every
@@ -178,14 +210,12 @@ pub(super) fn after_write(r: Result<usize, i32>) -> Result<usize, i32> {
 
 pub(super) fn read_fd(fd: i32, u: User) -> Result<usize, i32> {
     testcancel();
-    poll();
-    restartable(|p| p.read(fd, u))
+    waiting(|p| p.read(fd, u))
 }
 
 pub(super) fn write_fd(fd: i32, u: User) -> Result<usize, i32> {
     testcancel();
-    poll();
-    after_write(restartable(|p| p.write(fd, u)))
+    after_write(waiting(|p| p.write(fd, u)))
 }
 
 // ------------------------------------------------------------ sigaction
@@ -643,8 +673,13 @@ fn sleep_until(deadline: u64) -> Result<(), u64> {
 
 pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
     testcancel();
-    poll();
-    match sleep_until(deadline) {
+    // A handler that ran on the way in interrupted the sleep (`waiting`).
+    let early = poll().ran;
+    match if early {
+        Err(deadline.saturating_sub(zoraya_rt::clock_monotonic()))
+    } else {
+        sleep_until(deadline)
+    } {
         Ok(()) => 0,
         Err(left) => {
             if !rem.is_null() {
@@ -661,8 +696,7 @@ pub(super) fn nanosleep_until(deadline: u64, rem: *mut [i64; 2]) -> i32 {
 /// `waitpid` and its kin (ADR-0104 item 11).
 fn wait_child(pid: i32, status: *mut i32, options: i32) -> i32 {
     testcancel();
-    poll();
-    match restartable(|p| p.waitpid(pid, options)) {
+    match waiting(|p| p.waitpid(pid, options)) {
         Ok(Some((child, s))) => {
             if !status.is_null() {
                 // SAFETY: C's contract: `status` is NULL or an int.
@@ -694,9 +728,8 @@ extern "C" fn zoraya_posix_wait4(pid: i64, status: i64, options: i64, usage: i64
         // SAFETY: C's contract: `usage` is NULL or a `struct rusage`.
         unsafe { ptr::write_bytes(usage as *mut u8, 0, 144) };
     }
-    poll();
     let status = status as *mut i32;
-    match restartable(|p| p.waitpid(pid as i32, options as i32)) {
+    match waiting(|p| p.waitpid(pid as i32, options as i32)) {
         Ok(Some((child, s))) => {
             if !status.is_null() {
                 // SAFETY: C's contract: `status` is NULL or an int.
@@ -1128,6 +1161,39 @@ extern "C" fn zoraya_fork_group(pgid: i32) -> i32 {
     0
 }
 
+/// The memory charged to the job of the live child `pid`, in bytes, which the
+/// parent's handle to it can read (`WAIT`, ADR-0261): what a test or a tool
+/// of the parent compares across spawns (proposed ADR-0438). 0, or -1 with
+/// `ECHILD`.
+///
+/// # Safety
+///
+/// `used` is NULL or points to a `unsigned long long`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn zoraya_child_memory(pid: i32, used: *mut u64) -> i32 {
+    if used.is_null() {
+        return int(Err(EFAULT));
+    }
+    let job = with(|p| {
+        p.children
+            .iter()
+            .find(|c| c.pid as i32 == pid)
+            .map(|c| c.job)
+    })
+    .flatten();
+    let Some(job) = job else {
+        return int(Err(ECHILD));
+    };
+    match zoraya_rt::job_get_usage(job, false) {
+        Ok(usage) => {
+            // SAFETY: C's contract: `used` is a `unsigned long long`.
+            unsafe { used.write_unaligned(usage.memory.used) };
+            0
+        }
+        Err(_) => int(Err(ECHILD)),
+    }
+}
+
 // ------------------------------------------------------------ the terminal
 
 #[unsafe(no_mangle)]
@@ -1495,6 +1561,14 @@ fn load_fd(p: &mut Posix<RtSys>, fd: i32) -> Result<Program, i32> {
 type Resolved = (Handle, Vec<Vec<u8>>, Vec<u8>);
 
 fn resolve_program(p: &mut Posix<RtSys>, path: &[u8], argv: &[Vec<u8>]) -> Result<Resolved, i32> {
+    // The program's own image (`/proc/self/exe`): the handle it was started
+    // from, duplicated, and no `image_create` (ADR-0415 item 2 (a), INV-0415-2).
+    // A handle that cannot be duplicated falls through to the file.
+    if let Some(own) = p.own_image(path)
+        && let Ok(image) = zoraya_rt::handle_duplicate(own, rights_of(own))
+    {
+        return Ok((image, argv.to_vec(), p.exe.clone().into_bytes()));
+    }
     match load(p, path)? {
         Program::Elf(image) => Ok((image, argv.to_vec(), path.to_vec())),
         Program::Script(interpreter, arg) => match load(p, &interpreter)? {
@@ -2535,18 +2609,34 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
             shape: &crate::spawn::Shape::default(),
         };
         // The job handle moves to the new image: this one is ending.
+        // A signal that comes while the kernel makes the new image waits for
+        // the carry below instead of ending this image (`Posix::exec_hold`).
+        let held = p.exec_hold(facts.ignored);
         let r = spawn_into(
             p, job, client, &facts, image, &argv, envp, &exe, &start, false,
         );
-        let _ = zoraya_rt::handle_close(image);
         let process = match r {
             Ok(h) => h,
             Err(e) => {
+                p.exec_release(held);
+                let _ = zoraya_rt::handle_close(image);
                 let _ = zoraya_rt::handle_close(server);
                 let _ = zoraya_rt::handle_close(client);
                 return Err(e);
             }
         };
+        // What this image took in and has not acted on goes on to the new
+        // one, first thing: from the spawn on, a request reaches the new
+        // image itself, as it is in the job (`Posix::exec_carry`).
+        let carried = p.exec_carry(facts.ignored, held);
+        for n in 1..=zoraya_abi::posix::signal::MAX {
+            if carried & bit(n) != 0
+                && let Some(kind) = zoraya_abi::posix::signal::kind(n)
+            {
+                let _ = zoraya_rt::process_signal(process, kind, n);
+            }
+        }
+        let _ = zoraya_rt::handle_close(image);
         // The new image runs in this pid's job: from here this image ends
         // whatever happens (review R5); a failed commit leaves the broker's
         // record on the old image, which then reads as its exit.

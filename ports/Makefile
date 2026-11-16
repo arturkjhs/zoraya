@@ -49,7 +49,8 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0398-poll-and-ppoll-as-built.md docs/adr/0430-unix-sockets-as-built.md docs/adr/0389-the-terminal-calls-of-libposix-where-adr-0331-and-adr-0342-are-silent.md \
 	docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md docs/adr/0347-surface-for-git.md \
 	docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md \
-	docs/adr/0432-memory-descriptors-as-built.md docs/adr/0433-posix-spawn-as-built.md
+	docs/adr/0432-memory-descriptors-as-built.md docs/adr/0433-posix-spawn-as-built.md docs/adr/0438-shared-read-only-segments-as-built.md \
+	docs/adr/0439-socket-files-as-built.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))

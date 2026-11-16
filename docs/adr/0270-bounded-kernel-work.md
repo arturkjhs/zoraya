@@ -269,6 +269,20 @@ and exits.
   step boundary; and the kernel's page-table frames come from the boot pool (64 tables) until it is empty, so the
   count of them in `backing` shows only past 128 MiB of window; (d) `reaper::free_some` still frees up
   to a step under the queue's lock, as before.
+- *TASK-31 note (agent, ADR-0001 rule 6), `memory_map`'s undo and what `t_bound` checks (`work/kwb-time`, reviews in
+  `docs/tasks/TASK-31-review-kwb-time.md`):* (1) a `memory_map` cancelled between steps, or whose step or
+  `map_commit` failed, cleared all it had mapped in one interval (a room's 2 GiB: about 110 ms masked under HVF), a
+  breach reachable by any limited job; it is now undone in steps of `STEP` pages with `steps::pause` between, which
+  never fails, so the undo runs to its end even if the process is killed meanwhile, under the mapping lock and before
+  any mapping record exists (`Calls::undo_map`). `t_bound`'s `map-loop` kills a process in the middle of a 24 MiB
+  `memory_map`; with the one-interval undo it read 87 units against 80. (2) The page-table entries `memory_map` and
+  `memory_unmap` write are units now, one per 64 (`count_entries`): a `memory_map` that lost its step points read 111
+  units; a step four times too large (4096 entries, 64 units) would still pass. (3) The 2 ms bound applies unless
+  the CPU is TCG's Cortex-A72 (`MIDR_EL1`; `tools/run-qemu.sh` chooses it), not by the fill's calibration, which a busy
+  HVF host had pushed to factor 2 and so to 1 s. (4) A run whose masked time is over the bound (2 ms, or 1 s under
+  TCG) is repeated, up to three runs, under both accelerators, since a stall of the vCPU thread shows as masked time
+  with the units in bound; a time-only loop that shows in one run of three passes about 26 times in 27, so the units,
+  checked in every run and failing at once, carry the claim for work that is counted.
 - *Q7 review note (agent, ADR-0001 rule 6), the job tree walks are sites:* the review of the system calls
   (`docs/tasks/TASK-26-syscall-review.md`, error 1) found `job_signal`, `job_suspend`, `job_resume` and `job_kill` walking a
   whole subtree with IRQ masked and `TREE` held; a limited room can keep tens of thousands of jobs. They are sites of
@@ -314,6 +328,11 @@ and exits.
   of up to 1024 `Paid` are not counted in units, only timed (`t_bound`).
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
+- *F8 note (agent, ADR-0001 rule 6, 2026-11-16):* `steps::masked::*` (`SINCE`, `MAX_TICKS`) is one counter for all CPUs, while
+  `mask_began` and `mask_ended` run on every exception of every CPU: an exception returned on another CPU ends the interval
+  that this CPU began and records only its first part, or records another CPU's interval, so `masked_max_ns` can under-report on
+  SMP (the 2 GiB steps run 4 CPUs). F8's test of the frame scan reads its own CPU's `cntvct` around the call instead
+  (ADR-0436). The counter is not made per CPU yet.
 
 ## Revisit triggers
 - SMP (interrupts masked on one CPU stop less, but locks across steps matter more).

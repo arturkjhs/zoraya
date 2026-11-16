@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 \
+.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -178,7 +178,8 @@ RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
 # test on 256 MiB refused a menu). No smaller size has been measured (docs/backlog.md,
 # "Memory of the run machines").
 RUN_NET_CMD = $(RUN_QEMU) --net --mem 512M --disk $(1) $(KERNEL)
-RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem 512M --disk $(1) $(2) $(KERNEL)
+# $(3) is the memory, 512M by default.
+RUN_GUI_CMD = $(RUN_QEMU) --gui $(if $(filter 0,$(NET)),,--net) --gui-scale $(GUI_SCALE) --mem $(or $(3),512M) --disk $(1) $(2) $(KERNEL)
 
 run: $(KERNEL) $(DISK)
 	$(call RUN_CMD,$(DISK))
@@ -190,6 +191,16 @@ run: $(KERNEL) $(DISK)
 GUI_SCALE ?= $(if $(filter Darwin,$(shell uname -s)),2,1)
 run-gui: $(KERNEL) $(DISK)
 	$(call RUN_GUI_CMD,$(DISK),)
+
+# The guest of the browser's steps (ADR-0415 item 5): 2 GiB, with the desktop,
+# the network and the disk of run-gui, so that `top` in a terminal shows the
+# room keeper's session of that size. `make run` and `make run-gui` stay at
+# their own sizes (ADR-0415; ADR-0436 asks the architect about its sentence on a
+# 2 GiB default); no step boots this line, and there is no browser to start yet
+# (plan part E2).
+BROWSER_MEM ?= 2G
+run-browser: $(KERNEL) $(DISK)
+	$(call RUN_GUI_CMD,$(DISK),,$(BROWSER_MEM))
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
@@ -206,6 +217,7 @@ test-unit:
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
 # a Mac both accelerators are exercised.
 EXPECT := --expect-panic harness_reports_panic_as_failure \
+	--expect-panic harness_fails_with_a_process_left \
 	--expect-panic harness_reports_exception_as_failure \
 	--expect-panic fault_report_for_brk \
 	--expect-panic fault_report_for_unmapped_access \
@@ -763,6 +775,20 @@ $(PYTHON_TESTLIB): $(PYTHON_ROOT)/.stamp $(PYTHON_REGR_FILES)
 	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $(PYTHON_TESTLIB).tmp >/dev/null 2>&1; true
 	rm -rf $(PYTHON_TESTLIB) && mv $(PYTHON_TESTLIB).tmp $(PYTHON_TESTLIB)
 python-testlib: $(PYTHON_TESTLIB)
+# Plan part F5 (ADR-0415 item 1, ADR-0437): CPython in a 2 GiB guest, its own step
+# with its own memory: the plan's five million bytearrays (it ended at 256
+# mappings before) and ADR-0320's measurement of the mappings repeated
+# (tests/python/mappings.py). No network.
+PYTHON_MEM_QEMU ?= --mem 2G
+PYTHON_MEM_TIMEOUT ?= 900
+test-python-mem: $(KERNEL) $(RUNNER) tools-storage python
+	rm -rf $(BUILD)/$@-root && mkdir -p $(BUILD)/$@-root && cp -R rootfs/. $(BUILD)/$@-root/ && \
+	cp -R $(PYTHON_ROOT)/. $(BUILD)/$@-root/ && mkdir -p $(BUILD)/$@-root/home && cp tests/python/mappings.py $(BUILD)/$@-root/home/ && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(BUILD)/$@-root/bin && \
+	target/debug/zoraya-mkfs --size 256M --from $(BUILD)/$@-root $(BUILD)/$@-disk.img && \
+	$(RUNNER) --timeout $(PYTHON_MEM_TIMEOUT) --script tests/shell/python-mem.script --label python-mem-$(PYTHON_ACCEL) --expect-line "2048 MiB  RAM" -- \
+		$(RUN_QEMU) --test --keys --disk $(BUILD)/$@-disk.img $(PYTHON_MEM_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL) && \
+	target/debug/zoraya-fsck $(BUILD)/$@-disk.img
 # The TLS check (INV-0320-3) reads the server's log of test-python only: the
 # regrtest scripts make no connection to it.
 test-python test-python-regr test-python-long: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python $(PYTHON_TESTLIB)
@@ -1064,6 +1090,8 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 # the fetch is outside make test, as the Rust toolchain's install is).
 POSIX_CORE := $(BUILD)/posix-core
 POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
+POSIX_CORE_MAPS_SCRIPT := tests/posix-core/maps.script
+POSIX_CORE_TOP_SCRIPT := tests/posix-core/top.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
 	@$(MAKE) -s -f ports/Makefile check-libc
@@ -1075,16 +1103,35 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_unix tests/posix-core/t_unix.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_spawn tests/posix-core/t_spawn.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_syscall tests/posix-core/t_syscall.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_maps tests/posix-core/t_maps.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_shared tests/posix-core/t_shared.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_syscall
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_poll
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_unix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_spawn
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_maps
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_shared
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+# F5 (ADR-0415 item 1): 4096 mappings per process and 5,000,000 small allocations
+# in the 2 GiB guest, one boot per accelerator (TCG is slow: the long timeout).
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_CORE_MAPS_SCRIPT) --label libposix-maps-$$accel -- \
+	    $(RUN_QEMU) --test --keys --mem 2G --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+# F6 (ADR-0415 item 2, INV-0415-2): `top` in a room around a program that spawns its
+# own image three times, and the checker that compares what it shows.
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_TOP_SCRIPT) --label libposix-top-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  python3 tools/check-top-image.py target/test-logs/libposix-top-$$accel.log && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
 # Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,
@@ -1539,6 +1586,7 @@ test-fuzz-net:
 # proposed ADR-0298) ends the keeper under a running room; init restarts it,
 # the shell reconnects and rebinds.
 KEEPER_SCRIPT := tests/shell/keeper.script
+BROWSER_SCRIPT := tests/shell/browser-guest.script
 test-keeper: $(NET_TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if [ ! -f $(USER_DIR)/$$f ]; then echo "[keeper] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
@@ -1547,6 +1595,13 @@ test-keeper: $(NET_TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(NET_TEST_KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# The 2 GiB guest (F8, ADR-0415 item 5): the keeper sizes the session from RAM.
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(BROWSER_SCRIPT) --label browser-guest --expect-line "2048 MiB  RAM" -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --mem 2G --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+	$(FULL_ONLY) target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE) && \
+		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(BROWSER_SCRIPT) --label browser-guest-tcg --expect-line "2048 MiB  RAM" -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --mem 2G --accel tcg $(KERNEL) && \
+		target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(FULL_ONLY) target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE) && \
 		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper-tcg -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel tcg $(NET_TEST_KERNEL) && \
 		target/debug/zoraya-fsck $(CRASH_IMAGE)
@@ -1786,7 +1841,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-tour-terminal test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and

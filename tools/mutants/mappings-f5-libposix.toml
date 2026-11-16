@@ -1,0 +1,44 @@
+# Plan part F5 (ADR-0415 item 1, INV-0415-1, INV-0437-3): libposix keeps no handle
+# for a private mapping and has the kernel's number of slots. The test is
+# `t_maps` in the 2 GiB guest of `make test-libposix`; `maptab`'s logic is
+# `make mutants-host CRATE=zoraya-posix`.
+tests = ["make -s test-libposix"]
+timeout = 2400
+
+[[mutant]]
+id = "F5-heap-step-keeps-its-handle"
+file = "crates/zoraya-posix/src/ffi.rs"
+find = '''        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        let _ = zoraya_rt::handle_close(object);
+        mapped.ok().map(|address| address as usize)'''
+replace = '''        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        mapped.ok().map(|address| address as usize)'''
+note = "INV-0437-3: 1.2 GiB of heap is 1200 handles, more than the table (t_maps heap)"
+
+[[mutant]]
+id = "F5-mmap-keeps-its-handle"
+file = "crates/zoraya-posix/src/ffi.rs"
+find = '''        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        let _ = zoraya_rt::handle_close(object);
+        match mapped {'''
+replace = '''        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        match mapped {'''
+note = "INV-0437-3: 3000 one-page mmaps are not 3000 handles"
+
+[[mutant]]
+id = "F5-table-has-256-slots"
+file = "crates/zoraya-posix/src/ffi.rs"
+find = 'const MAPPING_SLOTS: usize = zoraya_abi::MAPPING_SLOTS;'
+replace = 'const MAPPING_SLOTS: usize = 256;'
+note = "INV-0415-1: the table has the kernel's number of slots"
+
+[[mutant]]
+id = "F5-munmap-of-the-heap-allowed"
+file = "crates/zoraya-posix/src/ffi.rs"
+find = '''        if !table.contains(address, size) {
+            return Err(EINVAL);
+        }'''
+replace = '''        if size == 0 {
+            return Err(EINVAL);
+        }'''
+note = "survives: the kernel ends whole mappings only, so the heap's block and half a mapping are EINVAL there too; a C program cannot name a heap step's exact range (only the table's check keeps the one it could guess from ending a heap step)"

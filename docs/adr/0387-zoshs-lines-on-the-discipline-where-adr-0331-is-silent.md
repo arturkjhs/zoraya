@@ -1,6 +1,6 @@
 # ADR-0387: `zosh`'s lines on the discipline where ADR-0331 is silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0105, ADR-0152, ADR-0158, ADR-0200, ADR-0331, ADR-0386
 - **Evidence:** CP-25, DM-072, stage-10/survey.md#the-terminal-as-built
@@ -128,4 +128,7 @@ not outlive its line. Target 3: nothing here is per-machine.
 - A person cannot leave a program because it ignores Ctrl-C.
 
 ## Architect's decision
-(Left empty for the architect.)
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A. Item 4 (no kill offer for a line with the terminal) was decided on 2026-11-15 (accepted with the System+K escape, built in part 10f); the open question about that escape is covered by that decision. The other open questions stay open.

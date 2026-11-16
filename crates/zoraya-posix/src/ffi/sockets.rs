@@ -1,11 +1,11 @@
 //! Sockets at the C boundary (ADR-0225; N4): the stream client's calls,
 //! `getaddrinfo`, and the address helpers musl's `src/network` would have
 //! given. Every call is a thin wrapper over `net.rs`, which is host tested;
-//! what is here is pointers, lengths and `struct` layouts. Not offered:
-//! `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `poll`,
-//! `sendmsg`/`recvmsg`, `getnameinfo`, `gethostbyname` (ADR-0287 lists them).
+//! what is here is pointers, lengths and `struct` layouts. `bind`, `listen`
+//! and `accept` are socket files for Unix sockets (plan part F7, proposed
+//! ADR-0439) and `EOPNOTSUPP` for TCP; not offered: datagram sockets.
 
-use super::procs::{after_write, poll, restartable};
+use super::procs::{after_write, poll, restartable, waiting};
 use super::*;
 
 use crate::socket::{self as sock, Hints};
@@ -97,22 +97,75 @@ extern "C" fn connect(fd: i32, addr: *const u8, len: u32) -> i32 {
     unit(r)
 }
 
+/// `bind` (ADR-0412 item 5, proposed ADR-0439): a socket file in the line's
+/// `/tmp` for a Unix socket; a TCP listener is not built.
+#[unsafe(no_mangle)]
+extern "C" fn bind(fd: i32, addr: *const u8, len: u32) -> i32 {
+    // SAFETY: C's contract: `addr` is a `struct sockaddr` of `len` bytes.
+    let r = unsafe { copy_bytes(addr, len as usize) }.and_then(|a| {
+        if a.is_empty() {
+            return Err(EINVAL);
+        }
+        state(|p| p.bind(fd, &a))
+    });
+    unit(r)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn listen(fd: i32, backlog: i32) -> i32 {
+    unit(state(|p| p.listen(fd, backlog)))
+}
+
+/// `accept4`: the flags are `SOCK_NONBLOCK` and `SOCK_CLOEXEC`; the peer of
+/// an accepted Unix socket has no name.
+fn accept_with(fd: i32, addr: *mut u8, len: *mut u32, flags: i32) -> i32 {
+    testcancel();
+    if flags & !(sock::SOCK_NONBLOCK | sock::SOCK_CLOEXEC) != 0 {
+        return int(Err(EINVAL));
+    }
+    if addr.is_null() != len.is_null() {
+        return int(Err(EFAULT));
+    }
+    let nonblock = flags & sock::SOCK_NONBLOCK != 0;
+    let cloexec = flags & sock::SOCK_CLOEXEC != 0;
+    match waiting(|p| p.accept(fd, nonblock, cloexec)) {
+        Ok(new) => {
+            let family = (crate::unix::AF_UNIX as u16).to_ne_bytes();
+            // SAFETY: C's contract for `addr` and `len`.
+            if let Err(e) = unsafe { put_unix_addr(addr, len, &family) } {
+                let _ = state(|p| p.close(new));
+                return int(Err(e));
+            }
+            new
+        }
+        Err(e) => int(Err(e)),
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn accept(fd: i32, addr: *mut u8, len: *mut u32) -> i32 {
+    accept_with(fd, addr, len, 0)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn accept4(fd: i32, addr: *mut u8, len: *mut u32, flags: i32) -> i32 {
+    accept_with(fd, addr, len, flags)
+}
+
 fn recv_flags(fd: i32, buf: *mut u8, n: usize, flags: i32) -> Result<usize, i32> {
     crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
     let u = user(buf, n)?;
     testcancel();
-    poll();
     let dontwait = flags & sock::MSG_DONTWAIT != 0;
-    restartable(|p| p.sock_read(fd, u, dontwait))
+    waiting(|p| p.sock_read(fd, u, dontwait))
 }
 
 fn send_flags(fd: i32, buf: *const u8, n: usize, flags: i32) -> Result<usize, i32> {
     crate::process::Posix::<RtSys>::check_msg_flags(flags)?;
     let u = user(buf, n)?;
     testcancel();
-    poll();
     let dontwait = flags & sock::MSG_DONTWAIT != 0;
-    let r = restartable(|p| p.sock_write(fd, u, dontwait));
+    let r = waiting(|p| p.sock_write(fd, u, dontwait));
     if flags & sock::MSG_NOSIGNAL != 0 {
         r
     } else {
@@ -209,13 +262,14 @@ extern "C" fn getsockopt(fd: i32, level: i32, name: i32, value: *mut u8, len: *m
     unit(r)
 }
 
-/// Writes an unnamed `struct sockaddr_un` (its family alone: two bytes) to a
-/// program's `addr` / `addrlen` pair, with `getsockname`'s truncation rule.
+/// Writes a `struct sockaddr_un` (`bytes`: its family and a path, or the
+/// family alone for an unnamed socket) to a program's `addr` / `addrlen`
+/// pair, with `getsockname`'s truncation rule.
 ///
 /// # Safety
 ///
 /// As [`put_sockaddr`].
-unsafe fn put_unix_addr(addr: *mut u8, addrlen: *mut u32) -> Result<(), i32> {
+unsafe fn put_unix_addr(addr: *mut u8, addrlen: *mut u32, bytes: &[u8]) -> Result<(), i32> {
     if addr.is_null() || addrlen.is_null() {
         return if addr.is_null() && addrlen.is_null() {
             Ok(())
@@ -223,7 +277,6 @@ unsafe fn put_unix_addr(addr: *mut u8, addrlen: *mut u32) -> Result<(), i32> {
             Err(EFAULT)
         };
     }
-    let bytes = (crate::unix::AF_UNIX as u16).to_ne_bytes();
     // SAFETY: the caller's contract.
     unsafe {
         let room = addrlen.read_unaligned() as usize;
@@ -238,7 +291,8 @@ extern "C" fn getpeername(fd: i32, addr: *mut u8, len: *mut u32) -> i32 {
     if with(|p| p.is_unix(fd)).unwrap_or(false) {
         // SAFETY: C's contract for `addr` and `len`.
         return unit(
-            state(|p| p.unix_name(fd, true)).and_then(|()| unsafe { put_unix_addr(addr, len) }),
+            state(|p| p.unix_sockaddr(fd, true))
+                .and_then(|b| unsafe { put_unix_addr(addr, len, &b) }),
         );
     }
     // SAFETY: C's contract for `addr` and `len`.
@@ -252,7 +306,8 @@ extern "C" fn getsockname(fd: i32, addr: *mut u8, len: *mut u32) -> i32 {
     if with(|p| p.is_unix(fd)).unwrap_or(false) {
         // SAFETY: C's contract for `addr` and `len`.
         return unit(
-            state(|p| p.unix_name(fd, false)).and_then(|()| unsafe { put_unix_addr(addr, len) }),
+            state(|p| p.unix_sockaddr(fd, false))
+                .and_then(|b| unsafe { put_unix_addr(addr, len, &b) }),
         );
     }
     // SAFETY: C's contract for `addr` and `len`.
@@ -650,8 +705,7 @@ extern "C" fn sendmsg(fd: i32, msg: *const u8, flags: i32) -> isize {
             )
         };
         testcancel();
-        poll();
-        restartable(|p| p.sendmsg(fd, &iov, &rights, flags))
+        waiting(|p| p.sendmsg(fd, &iov, &rights, flags))
     })();
     if flags & sock::MSG_NOSIGNAL != 0 {
         size(r)
@@ -686,8 +740,7 @@ extern "C" fn recvmsg(fd: i32, msg: *mut u8, flags: i32) -> isize {
         // As many descriptors as the control buffer holds beside its header.
         let max_fds = controllen.saturating_sub(CMSG_HEADER) / 4;
         testcancel();
-        poll();
-        let got = restartable(|p| p.recvmsg(fd, &iov, max_fds, flags))?;
+        let got = waiting(|p| p.recvmsg(fd, &iov, max_fds, flags))?;
         let mut used = 0;
         if !got.fds.is_empty() {
             let clen = CMSG_HEADER + 4 * got.fds.len();

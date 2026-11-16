@@ -161,6 +161,20 @@ x missing.h
 > /bin/t_spawn spawnp\r
 < t_spawn: spawnp passed
 < \r\n~> 
+# Socket files (plan part F7, ADR-0412 item 5, proposed ADR-0439, INV-0412-3), run by zosh: bind in /tmp and refused
+# in /bin and outside the table, listen, connect and accept of a stream and a packet socket, a second program (the
+# same binary, spawned) connecting through its own table, unlink, and the fds back where they were.
+> /bin/t_unix file\r
+< t_unix: file passed
+< \r\n~> 
+# Plan part F6 (ADR-0415 item 2, INV-0415-2): a program that spawns its own image (/proc/self/exe)
+# makes no image of its own, so its job is charged nothing for the second and third spawn, where a
+# spawn of the file adds the image's pages; the children's own jobs hold their own pages only.
+> /bin/t_shared\r
+< t_shared: image keeps
+< t_shared: children's own jobs:
+< t_shared: passed
+< \r\n~> 
 > posixrun /bin/t_unix calls\r
 < t_unix: calls passed
 < posixrun: exit 0

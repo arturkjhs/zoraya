@@ -460,14 +460,47 @@ protocol! {
         used: u64,
     }
 
+    /// On a connection to a socket node of the temporary directory service
+    /// (proposed ADR-0439, ADR-0412 item 5): the handle is the service's
+    /// end of the listener channel, which `SocketConnect` forwards each new
+    /// connection to. `sock_type` is the listener's `SOCK_STREAM` (1) or
+    /// `SOCK_SEQPACKET` (5). Needs `WRITE`. Answered by `Done`: `EXISTS`
+    /// when the node has a listener, `UNSUPPORTED` from a service with no
+    /// socket nodes, `INVALID_ARGUMENT` on an object that is not one.
+    message SocketListen = 41, handles 1 {
+        sock_type: Below<8>,
+    }
+
+    /// On a connection to a socket node (`WRITE` needed): `record` is the
+    /// connector's description of the far end of a new connected pair, which
+    /// the service forwards, unread, with the handle to the node's listener
+    /// channel. A packet socket's far end is one channel end. Answered by
+    /// `Done`: `NOT_FOUND` when nothing listens (`ECONNREFUSED`),
+    /// `LIMIT_REACHED` when the listener's queue is full, `INVALID_ARGUMENT`
+    /// when `sock_type` is not the listener's.
+    message SocketConnect<'a> = 42, handles 1 {
+        sock_type: Below<8>,
+        record: Data<'a, MAX_SOCKET_RECORD>,
+    }
+
+    /// `SocketConnect` for a stream socket: the far end's read stream end,
+    /// write stream end and ancillary channel end, in that order.
+    message SocketConnectStream<'a> = 43, handles 3 {
+        sock_type: Below<8>,
+        record: Data<'a, MAX_SOCKET_RECORD>,
+    }
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
     }
 }
 
+/// The longest `record` of a socket connection (`libposix`'s is 24 bytes).
+pub const MAX_SOCKET_RECORD: usize = 64;
+
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 40] = [
+pub const REQUESTS: [(&str, u32); 43] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -508,6 +541,9 @@ pub const REQUESTS: [(&str, u32); 40] = [
     ("set_limit", 38),
     ("get_limit", 39),
     ("clone_account", 40),
+    ("socket_listen", 41),
+    ("socket_connect", 42),
+    ("socket_connect_stream", 43),
 ];
 
 /// `fifo_open`'s side.
@@ -519,6 +555,10 @@ pub mod fifo_side {
 /// The type bits of a FIFO's `posix_mode` (`S_IFIFO`), which the temporary
 /// directory service gives their meaning (ADR-0107 item 13).
 pub const S_IFIFO: u32 = 0o010000;
+/// The type bits of a socket node's `posix_mode` (`S_IFSOCK`), which the
+/// temporary directory service keeps as it keeps a FIFO's (proposed
+/// ADR-0439).
+pub const S_IFSOCK: u32 = 0o140000;
 /// The type bits' mask (`S_IFMT`).
 pub const S_IFMT: u32 = 0o170000;
 
@@ -661,6 +701,12 @@ mod tests {
         check(TimeBase {}, 0);
         check(FreeSpace {}, 0);
         check(
+            SocketListen {
+                sock_type: Below(5),
+            },
+            1,
+        );
+        check(
             FifoOpenReply {
                 status: Below(status::OK),
             },
@@ -731,6 +777,22 @@ mod tests {
 
     #[test]
     fn borrowed_messages_round_trip_and_decode_totally() {
+        borrowed!(
+            SocketConnect {
+                sock_type: Below(1),
+                record: Data(&[1, 2, 3]),
+            },
+            SocketConnect<'_>,
+            1
+        );
+        borrowed!(
+            SocketConnectStream {
+                sock_type: Below(1),
+                record: Data(&[0; 24]),
+            },
+            SocketConnectStream<'_>,
+            3
+        );
         borrowed!(
             Open {
                 flags: Flags(open_flags::CREATE),

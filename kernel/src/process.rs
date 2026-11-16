@@ -24,7 +24,7 @@ use zoraya_abi::{
     RequestKind, Rights, SEED_SLOT, Status, process_signals,
 };
 use zoraya_abi::{POWER, PowerObject};
-use zoraya_elf::{Error as ElfError, PAGE_SIZE, PHDR_SIZE, Program, Segment};
+use zoraya_elf::{EHDR_SIZE, Error as ElfError, Header, PAGE_SIZE, PHDR_SIZE, Program, Segment};
 use zoraya_events::{RequestQueue, SourceId};
 use zoraya_pagetable::{Attributes, MemoryType};
 use zoraya_thread::Members;
@@ -34,7 +34,8 @@ use crate::charge::{self, Paid};
 use crate::job::Job;
 use crate::memory::heap::OutOfMemory;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
+use crate::memory::phys_to_virt;
+use crate::memory::user::{AddressSpace, MapFailed, MappingError, USER_HIGH, USER_LOW};
 use crate::object::{self, HandleTable, MemoryImage, Object};
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
@@ -156,6 +157,17 @@ pub struct Process {
     park_head: SpinLock<Option<Arc<Thread>>>,
     /// The first thread to leave an ending process woke the others.
     swept: AtomicBool,
+    /// The process is ending (ADR-0460): its exit record is fixed. Set only
+    /// by [`Process::end_from_now`], right after the record, and never
+    /// cleared. The scheduler reads it without a lock (`sched::schedule`, with
+    /// `SCHED` held) to take this process's threads even when the job's
+    /// budget is spent: from here on a thread of it runs only the kernel's
+    /// way out (the rest of its current call, `leave_current`, `teardown`),
+    /// since every way to EL0 passes [`exit_if_requested`] after the last
+    /// switch. That holds with one CPU running, as the kernel starts today: on
+    /// several, a sibling at EL0 elsewhere runs on to its next exception
+    /// (ADR-0460's open questions).
+    ending: AtomicBool,
     /// The mapping lock is held (ADR-0301 item 6).
     map_locked: AtomicBool,
     /// A user address to read as the process ends, and what was there.
@@ -310,6 +322,26 @@ impl Process {
         self.requests.lock().exit.is_some()
     }
 
+    /// Whether the process is ending (ADR-0460): its exit record is fixed,
+    /// so none of its threads returns to EL0 again. Lock-free, for the
+    /// scheduler. True implies [`Process::exit_requested`].
+    pub fn is_ending(&self) -> bool {
+        self.ending.load(Ordering::Acquire)
+    }
+
+    /// Fixes `record` as the exit record, unless one is fixed, and marks the
+    /// process as ending. The only writer of the record and of `ending`:
+    /// the kernel's, at a kill, a terminating request, a fault, the
+    /// `process_exit` call or the last thread's exit; user code reaches it
+    /// only by asking to end, after which it never runs again. `ending` is
+    /// stored after the record (Release), so a thread the scheduler took
+    /// because it read `ending` (Acquire) finds the record at its next
+    /// [`exit_if_requested`].
+    fn end_from_now(&self, record: ExitRecord) {
+        self.requests.lock().exit.get_or_insert(record);
+        self.ending.store(true, Ordering::Release);
+    }
+
     /// Asks the process to end with `record`, unless it was already asked: the
     /// first phase (ADR-0300 item 6). One thread is woken, the first of the
     /// list, never all: the walks of `Job::kill` call this under the job tree's
@@ -317,7 +349,7 @@ impl Process {
     /// or ready sees the record at its next return to EL0; the one woken wakes
     /// the rest from its own context, in steps, before it leaves.
     pub fn request_exit(&self, record: ExitRecord) {
-        self.requests.lock().exit.get_or_insert(record);
+        self.end_from_now(record);
         let first = {
             let mut members = self.members.lock();
             members.begin_end();
@@ -426,8 +458,10 @@ const USER_STACK: Attributes = Attributes {
 pub enum Source<'a> {
     /// A file in one slice: the ramdisk.
     Bytes(&'a [u8]),
-    /// A memory object a process filled (ADR-0108).
-    Memory(&'a MemoryObject),
+    /// An image's kept pages (ADR-0108, ADR-0415 item 2): the program's
+    /// segments as `image_create` laid them out, which `Program::kept`
+    /// describes.
+    Kept(&'a Arc<MemoryObject>),
 }
 
 impl Source<'_> {
@@ -444,7 +478,8 @@ impl Source<'_> {
                 out.copy_from_slice(bytes);
                 true
             }
-            Source::Memory(object) => object.read(offset, out),
+            // Not file bytes: the pages are laid out by segment.
+            Source::Kept(_) => false,
         }
     }
 }
@@ -477,7 +512,7 @@ impl<'a> Loadable<'a> {
     pub fn from_image(image: &'a MemoryImage) -> Loadable<'a> {
         Loadable {
             program: image.program,
-            source: Source::Memory(&image.memory),
+            source: Source::Kept(&image.kept),
             table: &image.table,
         }
     }
@@ -548,6 +583,185 @@ fn load_segment(
     Ok(())
 }
 
+/// One unit of the load's work (a page, a record): the step point and the room
+/// in the space's list of frames come first at every `STEP`th (ADR-0270
+/// point 2). `pages` counts from the first page of the first segment.
+fn tick(space: &mut AddressSpace, pages: &mut usize) -> Result<(), SpawnError> {
+    if pages.is_multiple_of(steps::STEP) {
+        if *pages > 0 {
+            steps::between()?;
+        }
+        space.prepare_step();
+    }
+    *pages += 1;
+    Ok(())
+}
+
+/// Loads a segment of an image from its kept pages (ADR-0415 item 2, proposed
+/// ADR-0438). A segment that is not writable maps the image's frames, as
+/// they are, read-only (and executable for text): no frame is taken, none
+/// is charged to this process's job, and none is ever writable. A writable
+/// one gets a page of its own for each, and a copy of the kept page where the
+/// file has bytes.
+fn load_kept(
+    space: &mut AddressSpace,
+    object: &Arc<MemoryObject>,
+    kept: &zoraya_elf::Kept,
+    index: usize,
+    s: &Segment,
+    pages: &mut usize,
+) -> Result<(), SpawnError> {
+    let attributes = attributes(s);
+    let (start, end) = s.pages();
+    let first = kept.first_page(index) * PAGE_SIZE;
+    if s.is_shared() {
+        // The record is made and paid for by two units of work; it comes
+        // first, so that what fails later is dropped with the space.
+        tick(space, pages)?;
+        tick(space, pages)?;
+        space
+            .map_kept(start, end - start, attributes, object, first)
+            .map_err(|e| match e {
+                MappingError::Quota => SpawnError::OverQuota,
+                _ => SpawnError::NoMemory,
+            })?;
+        for page in (start..end).step_by(PAGE_SIZE as usize) {
+            tick(space, pages)?;
+            space.map_kept_page(page, object.page(first + (page - start)), attributes)?;
+        }
+        return Ok(());
+    }
+    for (n, page) in (start..end).step_by(PAGE_SIZE as usize).enumerate() {
+        tick(space, pages)?;
+        let target = space.map_new_page(page, attributes)?;
+        if (n as u64) < s.kept_pages() {
+            // SAFETY: `target` is a whole new page, only reachable by this
+            // function until the process runs; the kept page is a whole
+            // frame of the image's object, which `object` holds, in the
+            // direct map, and is another frame.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    phys_to_virt(object.page(first + n as u64 * PAGE_SIZE)) as *const u8,
+                    target,
+                    PAGE_SIZE as usize,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An image of the program in the first `length` bytes of `memory`
+/// (ADR-0108 item 1, ADR-0415 item 2): checks it as the ramdisk's are checked
+/// (INV-0108-1) and copies its pages once, into an object of its own that
+/// `job` pays for as long as the image or any process started from it lives,
+/// however many jobs those are in (ADR-0261 point 8, proposed ADR-0438). What
+/// `memory` holds afterwards changes nothing. Nothing is made if it fails.
+pub fn image_from(
+    memory: &MemoryObject,
+    length: u64,
+    job: &Arc<Job>,
+) -> Result<Arc<MemoryImage>, Status> {
+    if length > memory.size() {
+        return Err(Status::InvalidArgument);
+    }
+    let mut ehdr = [0; EHDR_SIZE];
+    let head = &mut ehdr[..(length as usize).min(EHDR_SIZE)];
+    // In range: `head` is at most `length`, which is at most the size.
+    let read = memory.read(0, head);
+    debug_assert!(read);
+    let header = Header::parse(head).map_err(|_| Status::InvalidArgument)?;
+    let end = header.table_offset as u64 + header.table_length as u64;
+    if end > length {
+        return Err(Status::InvalidArgument);
+    }
+    let mut table = Vec::new();
+    table
+        .try_reserve_exact(header.table_length)
+        .map_err(|_| Status::NoMemory)?;
+    table.resize(header.table_length, 0);
+    // In range: `end <= length <= size`, checked above.
+    let read = memory.read(header.table_offset as u64, &mut table);
+    debug_assert!(read);
+    // The same parser and range as the ramdisk's (INV-0108-1).
+    let program = Program::from_table(&header, &table, length, PROGRAM_LOW, PROGRAM_HIGH)
+        .map_err(|_| Status::InvalidArgument)?;
+    // The object is in no handle table: nothing can map it writable.
+    let kept = program.kept();
+    let object = MemoryObject::new(kept.bytes(), false, Some(job))?;
+    keep_program(memory, &program, &kept, &object)?;
+    charge::arc(
+        Paid::new(Some(job)),
+        charge::vec_cost::<u8>(table.capacity()),
+        |paid| MemoryImage {
+            kept: object,
+            program,
+            table,
+            _paid: paid,
+        },
+    )
+}
+
+/// Fills a new image's object with the program's pages from the file in
+/// `memory` (ADR-0415 item 2, proposed ADR-0438): each segment's file bytes at
+/// their place, in pieces of a step; the rest of the object is zero, as it
+/// was made. The text's pages are then made visible to instruction fetches.
+/// No lock is held.
+pub fn keep_program(
+    memory: &MemoryObject,
+    program: &Program,
+    kept: &zoraya_elf::Kept,
+    object: &MemoryObject,
+) -> Result<(), Status> {
+    let piece = steps::STEP as u64 * PAGE_SIZE;
+    let mut text = false;
+    // The object's last frames were made in the interval this starts in: a step
+    // point before the first piece, so that they are not added to it.
+    steps::between()?;
+    for (index, s) in program.segments().iter().enumerate() {
+        let copy = kept.copy_of(index, s);
+        let mut done = 0;
+        while done < copy.length {
+            let n = (copy.length - done).min(piece);
+            if !object.copy_from(copy.to + done, memory, copy.from + done, n) {
+                return Err(Status::InvalidArgument);
+            }
+            steps::count(n.div_ceil(PAGE_SIZE) as usize);
+            done += n;
+            steps::between()?;
+        }
+        if s.execute {
+            // Every kept page of the text, the zero tail too: a frame's old
+            // contents may still be in the instruction cache.
+            let first = kept.first_page(index);
+            for n in 0..s.kept_pages() {
+                if n > 0 && n.is_multiple_of(steps::STEP as u64) {
+                    steps::between()?;
+                }
+                // A page cleaned is a unit of the step (INV-0270-1).
+                steps::count(1);
+                // SAFETY: a whole frame of `object` in the direct map.
+                unsafe {
+                    mmu::clean_to_unification(
+                        phys_to_virt(object.page((first + n) * PAGE_SIZE)),
+                        PAGE_SIZE,
+                    );
+                }
+            }
+            text = true;
+            // The last cleans must not share an interval with the next
+            // segment's first piece (up to 2 * STEP units otherwise).
+            steps::between()?;
+        }
+    }
+    if text {
+        // After every clean: fetches then see the copies (Arm ARM D7.5.9),
+        // as a snapshot does (`SnapshotBuild::finish`).
+        mmu::invalidate_instruction_cache();
+    }
+    Ok(())
+}
+
 /// Maps the block a process reads its vectors and program headers from
 /// (ADR-0042, ADR-0109 item 5).
 fn map_startup_block(
@@ -607,8 +821,14 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     let first = sched::reserve_thread(&start.job)?;
     let mut space = AddressSpace::new(Some(&start.job))?;
     let mut pages = 0;
-    for segment in program.segments() {
-        load_segment(&mut space, start.image.source, segment, &mut pages)?;
+    let kept = program.kept();
+    for (index, segment) in program.segments().iter().enumerate() {
+        match start.image.source {
+            Source::Kept(object) => {
+                load_kept(&mut space, object, &kept, index, segment, &mut pages)?;
+            }
+            source => load_segment(&mut space, source, segment, &mut pages)?,
+        }
     }
     let stack_low = USER_STACK_TOP - USER_STACK_SIZE;
     for page in (stack_low..USER_STACK_TOP).step_by(PAGE_SIZE as usize) {
@@ -693,6 +913,7 @@ fn assemble(
         park_head: SpinLock::new(None),
         frozen: AtomicBool::new(false),
         swept: AtomicBool::new(false),
+        ending: AtomicBool::new(false),
         map_locked: AtomicBool::new(false),
         requests: SpinLock::new(Requests {
             dispositions,
@@ -863,6 +1084,23 @@ pub fn spawn_with_devices_and(
     })
 }
 
+/// Starts the ramdisk's `name` in `job`, for tests of a job's processes;
+/// `suspended` as for [`spawn_suspended`].
+#[cfg(feature = "qemu-test")]
+pub fn spawn_in(job: &Arc<Job>, name: &str, suspended: bool) -> Result<Arc<Process>, SpawnError> {
+    let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
+    create(Start {
+        name,
+        image: Loadable::from_file(file)?,
+        job: job.clone(),
+        handles: kernel_handles(job.clone())?,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended,
+    })
+}
+
 /// Starts a process from ELF bytes, in the root job.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
@@ -997,7 +1235,7 @@ pub fn leave_current() -> ! {
     if left.began_end {
         // The last thread's exit ends the process as `Exited` with code 0
         // (ADR-0300 item 3).
-        process.requests.lock().exit.get_or_insert(ExitRecord {
+        process.end_from_now(ExitRecord {
             code: 0,
             reason: ExitReason::Exited,
             detail: 0,

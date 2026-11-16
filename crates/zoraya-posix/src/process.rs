@@ -259,6 +259,13 @@ pub(crate) struct Opened<H> {
     meta: Meta,
 }
 
+impl<H> Opened<H> {
+    /// What the service said of the object when it opened it.
+    pub(crate) fn meta(&self) -> &Meta {
+        &self.meta
+    }
+}
+
 enum Outcome<H> {
     Opened(Opened<H>),
     Link { remaining: String, target: String },
@@ -322,6 +329,11 @@ pub struct Posix<S: Sys> {
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
     pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
+    /// A handler without `SA_RESTART` ran at this call's entry: its next
+    /// wait point is `EINTR` instead of a wait (`Posix::wait_for`). Set and
+    /// cleared by the C boundary inside one run of the call (`pub` for the
+    /// host tests).
+    pub interrupt_wait: bool,
     /// What `Read` a terminal connection has outstanding, by connection
     /// (`pub`, like `tty_rest`, for the host tests).
     pub tty_reads: Vec<(S::H, u32)>,
@@ -404,6 +416,7 @@ impl<S: Sys> Posix<S> {
             threads: Default::default(),
             pending: None,
             resume: None,
+            interrupt_wait: false,
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),
@@ -913,6 +926,24 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// The handle of this process's own image, if `path` names it
+    /// (`/proc/self/exe`, ADR-0107 item 4): a spawn or an `exec` of that path
+    /// uses the image the process was started from instead of reading a file
+    /// (ADR-0415 item 2 (a), proposed ADR-0438), so every process of the
+    /// program shares its read-only pages and the spawner needs no grant for
+    /// a file. Only a path that resolves to the image entry itself, whatever
+    /// the cwd and `..`: the executable's own path as a file name is
+    /// loaded as before, since the file may have changed since. `None`
+    /// without the entry's handle (a table that listed the entry without the
+    /// handle).
+    pub fn own_image(&mut self, path: &[u8]) -> Option<S::H> {
+        let r = self.resolve(AT_FDCWD, path, Access::Read).ok()?;
+        let entry = self.entries.get(r.place.entry)?;
+        (entry.kind == EntryKind::Image && r.place.path.is_empty())
+            .then_some(entry.handle)
+            .flatten()
+    }
+
     /// The entry `r` lands in, if it is not a directory: those are answered
     /// here (`/dev/null`, `/proc/self/exe`, `/dev/tty`).
     pub(crate) fn special(&self, r: &Resolved) -> Option<EntryKind> {
@@ -990,6 +1021,10 @@ impl<S: Sys> Posix<S> {
         }
         if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFIFO {
             return self.open_fifo(conn, flags);
+        }
+        // A socket file is connected to, not opened (POSIX: `ENXIO`).
+        if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFSOCK {
+            return fail(self, ENXIO);
         }
         // ADR-0014 rule 6: as for a file's owner who is not root; an object
         // this open made is its creator's whatever its mode.
@@ -1198,6 +1233,9 @@ impl<S: Sys> Posix<S> {
                     if let Some(h) = u.held.take() {
                         more.extend(h.handles);
                     }
+                    // The connection to a bound socket's file: its closing
+                    // ends the listener (proposed ADR-0439).
+                    more.extend(u.node.take());
                     for h in more {
                         self.sys.close(h);
                     }

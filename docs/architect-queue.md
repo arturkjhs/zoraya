@@ -8,18 +8,16 @@ adds, remove what the architect has decided (the decision itself is recorded in 
 **Both dispatchers** (TASK-31 on the Mac mini, TASK-34 on the MacBook Air) keep this file. TASK-34's dispatcher: add your
 items here too, under the same headings, with the part's name in front.
 
-Last updated: 2026-11-15 (the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
+Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; before that 2026-11-15, the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
 `test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass on `work/10c`).
 
 ## A. Proposed ADRs, with the agent's one-line recommendation
 
 | ADR | What | Recommendation | From |
 |---|---|---|---|
-| ADR-0392 | libposix: a signal sent during `execve` follows the new image (`exec_carry`); a handler that ran at a call's entry ends its first wait with `EINTR`; `exec_hold` marks default-terminating signals `Deliver` during the spawn | **Tension with accepted ADR-0106** (INV-0106-2: a take in every handler-less `execve`; item 2's mapping during the spawn). Recommend Option A (library route); the fallback A' is a kernel change. Yours to accept or to choose A' | sigint-exec |
-| ADR-0390, ADR-0391 | 10d: surface for curses, less and vi; the layout, descriptions and refusals of 10d | Option A both. ADR-0391 item 8 (two files of one directory) is now a refusal and an open question: should `narrow` take a list? | 10d |
+| ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
+| ADR-0461 | git's licence: `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS (its GPL-2.0-or-later option), for git only. Decided by the architect 2026-11-16; it must be accepted before 10h wires git in | Option A (decided) | ports-early, TASK-31 |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
-| ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
-| ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
 | ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
 | ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
 
@@ -61,11 +59,33 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 
 ## D. Open questions
 
-- **git's licence in a static program (ADR-0347, ports-early):** git is GPL-2.0-only and `git-remote-http` links libcurl with Apache-2.0 OpenSSL statically; GPL-2.0-only and Apache-2.0 are not combinable, so `git-remote-http` cannot be shipped as built (GNU wget is GPL-3.0-or-later, which is compatible). Options: git over a GPL-compatible TLS library, `git-remote-http` as a program not linked to OpenSSL (a helper process), an OpenSSL exception, or no HTTPS transport. Decide before 10h wires git into the image.
-- **DB 1 for nvi (ADR-0390):** 1.85 under the 4-clause UC licence; a maintained copy is an open question.
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
+- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note.
+- **`curses-flake`: the GUI runner's per-step limit.** Each step of a GUI script now has 120 s, four times that under TCG
+  (480 s), and a `pause` its own time on top; `limit SECONDS STEP` gives one step more (`tools/test-runner/src/gui.rs`,
+  `STEP_LIMIT`, `TCG_FACTOR`). Chosen generous: in the full CI run of 2026-11-15 (43749759496) the longest GUI run
+  outside TCG took 47 s in all and the longest under TCG 332 s (`netsurf-auto`), so no current step needs a `limit`.
+  Questions: (1) keep 120 s and x4, or shorter (a stuck step then costs less)? (2) Give the serial-line scripts
+  (`--script`, the `<` steps) the same? Not done: some of their runs have single steps that wait for a whole suite
+  (`test-cxx-libcxx` up to 7200 s, `test-python-regr` 1500 s), and no per-step times are recorded yet to set their limits.
+- **`curses-flake`: should zosh's prompt clear the rest of its row?** `editor.start` writes the prompt only. Keys typed
+  before a program has the terminal in raw mode are echoed by the discipline on the primary screen; after the program
+  leaves the alternate screen the echo is back, and the next prompt overwrites only its own width (`~> other` from an
+  echoed `:w other`, run 43802095122). Option A: write `\r` and erase to the end of the row (`ESC [ K`) before the
+  prompt, so that a prompt row is always clean. Option B: keep it as dash and bash do, and make scripts wait for a
+  program's own screen before typing to it (done for `posix-curses.script`). Recommendation: A, as it costs one sequence
+  and no script can be caught by it again.
 
+
+## E. Decided 2026-11-16 (removed from the lists above)
+
+- ADR-0392 Option A accepted (a signal sent during `execve` follows the new image; a handler run at a call's entry ends its first wait with `EINTR`); the amendments of ADR-0106 accepted (INV-0106-2 gains `execve`, item 2's mapping holds during the spawn as amended).
+- ADR-0386, ADR-0387, ADR-0390, ADR-0391 Option A accepted. ADR-0391 item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (10f built `narrow` with a list at run time; 10j or 10f for the rest).
+- DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
+- git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
+- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, proposed; to be accepted after the implementation).
+- ADR-0460 open question 2: the overdraft, not acceptance. The overrun of an ending process is debt that the room and its parents pay back in the following periods (cap 100 budgets; a dead room's debt goes to its nearest ancestor with a ceiling); built on `work/park-ending`, INV-0460-4.
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 
@@ -73,6 +93,27 @@ ADR-0280, 0281, 0285, 0286, 0384, 0385, 0398 accepted; ADR-0383 Option C (`kbs=^
 System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal; a refused
 `tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
 the runner itself in a job of their own; `vttest` pinned and built with 10d.
+
+## Condition of the untrusted-room gate (ADR-0268), from F6 (ADR-0438, 2026-11-16)
+
+**An image must be charged to the room it is started in.** Since F6 `image_create` copies a program's pages into an object charged to the
+job that calls it. The shell (`user/src/posix_child.rs` `load`, called from `user/src/bin/zosh.rs` `ready_from_volume`) and the broker
+make the image for a program they start, so a room's memory limit no longer covers the text of the programs run in it (before F6 a spawn
+copied the pages into the child's job). A room with `--mem 64M` can run a program of any size and pays nothing for its text; the shell's
+job pays, one image per start, while any process of the room runs from it. ADR-0262's rule (what is made for a client is paid by the
+client) says the room pays.
+
+*What F6 found (estimate; not built).* The fix is `image_create(memory, length, job)`: the kernel charges `job` (`process::image_from`
+already takes the payer) after checking `CREATE_PROCESS` on it, the right it already needs to put a process there, so no program can charge
+a job it could not spawn into and no new right is needed. The shell passes `self.room_job.unwrap_or(JOB)`; the broker the job of the
+child it loads for; `posixrun` and `libposix`'s `load_fd` their own job (slot 2 / `PROCESS_JOB`, which has `CREATE_PROCESS`). Touches: the
+syscall table and signature test in `zoraya-abi` (`lib.rs` line 1238, `tests.rs` lines 37-44 and 431), `zoraya-rt`, `zoraya-user`, the
+kernel handler, `posix_child.rs`, `zosh.rs` (two calls), `broker.rs`, `posixrun.rs`, `crates/zoraya-posix/src/ffi/procs.rs`, and the 14
+calls of `t_image`. Judged not small: a kernel ABI change with six callers in the shell, the broker and the library, and the steps that load
+programs through the shell (`test-posix`, `test-apps`, the Python lanes) are more than a part session runs. *Tests the gate needs:* a room at
+its memory limit cannot start a program through the shell (a script step: `room new r --mem 2M`, then a program whose image is larger is refused
+with the room's `OverQuota`, the room's `top` row unchanged), and a kernel test that `image_create` with a job the caller cannot spawn into
+is `AccessDenied`.
 
 ## For the TASK-34 dispatcher (MacBook Air)
 
@@ -83,3 +124,19 @@ steps whose recipes or variables it changes); do not wait for `main`'s run after
 own candidate is green; `main`'s full set runs every 4 hours if `main` changed, and nightly; a red scheduled run
 (`gh run list --workflow 'make test' --event schedule`; a skipping 4-hourly run fails if the last full run was red) is fixed first, before the next merge, and its summary lists the merges
 since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
+
+**2026-11-15, for the TASK-34 dispatcher:** the scheduled full run 43749759496 (head `9b78d380`) is green, 78 of 78 jobs,
+including the TCG `w9-term` job and all five `test-qemu-*` jobs. `main`'s red scheduled run (`w9-term`, run 43699859694) was
+fixed first (`work/w9-fix`, merged as `0693daf`; the cause was the test's own poll loop starving `make -j4` under TCG).
+That run includes F3's merge (`db938461`) and F2's, so `stage-f3` can be tagged and `stage-f2`'s tag confirmed
+(`tools/ci-last-full.rb --green-for SHA` names that run for each). The Mac mini tagged `stage-10c` and `stage-10d` on it.
+
+**2026-11-16, from plan part F7 (ADR-0439 and ADR-0440, proposed):** (1) The Unix half of F7 is built for the line's `/tmp` only; a socket file in a
+program's own directory needs a kind for "own directory" in the bootstrap record and a transient node in `fsd`: say whether it is wanted
+before tmux (ADR-0439 item 1, open question). (2) TCP `bind`/`listen`/`accept` is not built, so `python3 -m http.server` does not serve to `curl`: decide
+whether it becomes its own plan part with a network step (ADR-0440: the listen rule the scope already has, a `listen` request, a loopback
+interface in `netd` after a smoltcp spike), and the word a person types for a listen rule (ADR-0225 item 5).
+
+**2026-11-16, F7 review:** a socket name authenticates nothing: any program of the line that can write `/tmp` can unlink or rename a live
+server's name and bind its own. Should `unlink` and `rename` of a node with a listener be restricted to the connection that made it
+(ADR-0439)?

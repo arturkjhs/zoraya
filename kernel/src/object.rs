@@ -34,10 +34,17 @@ pub enum Image {
 }
 
 /// An image from a memory object (ADR-0108 item 1). The headers were checked
-/// when it was made and are kept, so W^X and the ranges hold whatever the
-/// object's bytes become; `spawn` copies the segments' bytes as they are then.
+/// when it was made and are kept, and so are the bytes (ADR-0415 item 2,
+/// proposed ADR-0438): `image_create` copied the program's pages into `kept`,
+/// so what the object holds afterwards, or the file it came from, changes
+/// nothing. `spawn` maps the frames of the segments that are not writable
+/// as they are, into every process of the image, and copies the pages of the
+/// writable ones.
 pub struct MemoryImage {
-    pub memory: Arc<MemoryObject>,
+    /// The pages of every segment, laid out by `Program::kept`. Nothing but
+    /// this record and the mappings of the processes started from it holds
+    /// it: no handle names it, so no process can map it writable.
+    pub kept: Arc<MemoryObject>,
     pub program: Program,
     /// The file's whole program header table, for the startup block.
     pub table: Vec<u8>,
@@ -198,6 +205,9 @@ pub(crate) const SUBSCRIPTIONS_PER_UNIT: usize = 16;
 pub fn weight(entry: &Entry) -> usize {
     let subscriptions = match &entry.object {
         Object::Memory(object) => return crate::memory::object::weight(object),
+        // The last handle of an image frees its pages (a step of them, or the
+        // reaper's).
+        Object::Image(Image::Memory(image)) => return crate::memory::object::weight(&image.kept),
         Object::Port(p) => p.subscriptions(),
         object => object
             .signals()

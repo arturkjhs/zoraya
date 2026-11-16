@@ -41,6 +41,20 @@ fn entry_of(f: extern "C" fn(u64) -> !) -> u64 {
 const HANDLE_AT: u64 = 0x7010;
 const HEAP_BACKING: u64 = 0x7017;
 
+/// The raw handles in the table, slot by slot (the test kernel's `HANDLE_AT`
+/// over every slot), into `into`, whose room is reserved by the caller so that
+/// nothing here grows the heap (which a job's charge would show).
+fn handles_in_use(into: &mut alloc::vec::Vec<u64>) {
+    into.clear();
+    for slot in 1..=1024u64 {
+        let raw = raw_syscall(HANDLE_AT, [slot, 0, 0, 0, 0, 0]).1;
+        if raw != 0 {
+            assert!(into.len() < into.capacity(), "room for the handles");
+            into.push(raw);
+        }
+    }
+}
+
 /// Handle slots in use (the test kernel's `HANDLE_AT` over every slot).
 fn slots_in_use() -> usize {
     (1..=1024u64)
@@ -580,41 +594,99 @@ extern "C" fn ends_unmapper(arg: u64) -> ! {
 /// then fails, and must leave no handle in the table, where the caller does
 /// not know of it, and the job's charges go back. `PAUSE_IN_PREPARE` makes
 /// the pause certain (a warm heap does not pause by itself) and
-/// `FORCE_SWITCH` hands the CPU to the sibling there, so every round fails
-/// and reaches the undo (the mutant that keeps the handles dies here).
+/// `FORCE_SWITCH` hands the CPU to the sibling there. The sibling must then
+/// leave its loop and finish `memory_unmap` within its slice (1 ms with
+/// `FORCE_SWITCH`), which a host that stalls the vCPU can prevent: the call
+/// then succeeds (seen once under TCG with the host loaded). Such a round is
+/// a miss only if the sibling had not finished when the call returned
+/// (`ENDS_GO` read at once): a call that succeeds after the unmap is the
+/// defect this case is for, and fails it. (One residual false failure: the
+/// sibling's slice ending exactly at the call's return to EL0, so that it
+/// finishes its unmap before the read.) A miss closes the call's two handles
+/// and the round is repeated, so that 8 rounds still fail and reach the undo
+/// (the mutant that keeps the handles dies here), with a bound on the
+/// misses. The first round of each call is a miss on purpose (no pause, no
+/// switch, the sibling let go after the call), so that the miss path, its
+/// handle closing and its charge check, runs in every run.
 fn creating_calls_leave_no_handles() {
     const CALLS: [(&str, u64); 2] = [("stream_create", 42), ("channel_create", 30)];
+    const ROUNDS: usize = 8;
+    const MAX_MISSES: usize = 56;
+    // Reserved before any charge is read: a round allocates nothing.
+    let mut before = alloc::vec::Vec::with_capacity(1024);
+    let mut after = alloc::vec::Vec::with_capacity(1024);
     for (name, call) in CALLS {
         let mut failed = 0;
-        for _ in 0..8 {
+        let mut missed = 0;
+        let mut forced = true;
+        while failed < ROUNDS {
             let charged = job_get_usage(JOB, false).expect("usage").memory.used;
             let ends = new_stack();
             ENDS_AT.store(ends, SeqCst);
             ENDS_GO.store(0, SeqCst);
             let (t, flag) = start(ends_unmapper, OWN_BASE);
-            let slots = slots_in_use();
-            raw_syscall(PAUSE_IN_PREPARE, [1, 0, 0, 0, 0, 0]);
-            raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
-            ENDS_GO.store(1, SeqCst);
+            handles_in_use(&mut before);
+            if !forced {
+                raw_syscall(PAUSE_IN_PREPARE, [1, 0, 0, 0, 0, 0]);
+                raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+                ENDS_GO.store(1, SeqCst);
+            }
             let (status, _) = raw_syscall(call, [ends, 16, 0, 0, 0, 0]);
+            let unmapped = ENDS_GO.load(SeqCst) == 2;
             raw_syscall(FORCE_SWITCH, [0; 6]);
             raw_syscall(PAUSE_IN_PREPARE, [0; 6]);
+            if forced {
+                assert_eq!(
+                    status,
+                    Status::Ok as u64,
+                    "{name}: the call with its buffer mapped"
+                );
+                ENDS_GO.store(1, SeqCst);
+            }
             while ENDS_GO.load(SeqCst) != 2 {
                 thread_yield();
             }
-            assert_ne!(status, Status::Ok as u64, "{name}: the sibling ran first");
-            failed += 1;
-            assert_eq!(status, Status::BadAddress as u64, "{name}");
-            assert_eq!(slots_in_use(), slots, "{name}: a failed call left handles");
+            if status == Status::Ok as u64 {
+                assert!(
+                    !unmapped,
+                    "{name}: the call succeeded after the sibling had unmapped its buffer"
+                );
+                // The sibling had not unmapped in time: the call made its two
+                // ends, which are the two new handles. Close them; the round
+                // does not count.
+                handles_in_use(&mut after);
+                let mut made = 0;
+                for raw in after.iter().filter(|h| !before.contains(h)) {
+                    handle_close(Handle::new(*raw).expect("a handle")).expect("close");
+                    made += 1;
+                }
+                assert_eq!(made, 2, "{name}: a call that succeeded made {made} handles");
+                if !forced {
+                    missed += 1;
+                }
+                assert!(
+                    missed <= MAX_MISSES,
+                    "{name}: the sibling never unmapped in time ({missed} calls succeeded)"
+                );
+            } else {
+                failed += 1;
+                assert_eq!(status, Status::BadAddress as u64, "{name}");
+                handles_in_use(&mut after);
+                assert_eq!(after, before, "{name}: a failed call left handles");
+            }
+            forced = false;
             join(flag);
             handle_close(t).expect("close");
             assert_eq!(
                 job_get_usage(JOB, false).expect("usage").memory.used,
                 charged,
-                "{name}: a failed call left a charge"
+                "{name}: a call left a charge"
             );
         }
-        println!("t_thread: {name}: {failed} of 8 failed");
+        println!(
+            "t_thread: {name}: {failed} of {} failed ({missed} missed, 1 forced miss)",
+            failed + missed
+        );
     }
     println!("t_thread: creating calls ok");
 }

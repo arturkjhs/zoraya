@@ -29,6 +29,7 @@ zoraya-elf = { path = "../crates/zoraya-elf" }
 zoraya-events = { path = "../crates/zoraya-events" }
 zoraya-handle = { path = "../crates/zoraya-handle" }
 zoraya-heap = { path = "../crates/zoraya-heap" }
+zoraya-mappings = { path = "../crates/zoraya-mappings" }
 zoraya-pagetable = { path = "../crates/zoraya-pagetable" }
 zoraya-pmm = { path = "../crates/zoraya-pmm" }
 zoraya-ramdisk = { path = "../crates/zoraya-ramdisk" }

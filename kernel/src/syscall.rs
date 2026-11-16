@@ -18,7 +18,6 @@ use zoraya_abi::{
     StreamReadObject, StreamWriteObject, UsageFlags, Word32, request_value,
 };
 use zoraya_console::INPUT_SIZE;
-use zoraya_elf::{EHDR_SIZE, Header, Program};
 use zoraya_pagetable::{Attributes, MemoryType as PageMemory};
 use zoraya_pmm::FRAME_SIZE;
 use zoraya_ramdisk::NAME_SIZE;
@@ -31,10 +30,12 @@ use crate::device::Pin;
 use crate::job::Job;
 use crate::memory::heap;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{AddressSpace, Copied, Holder, MappingError, SnapshotBuild, USER_HIGH};
-use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
+use crate::memory::user::{
+    AddressSpace, Copied, Holder, MappingError, PlanItem, SnapshotBuild, USER_HIGH,
+};
+use crate::object::{self, Event, HandleTable, Image, Object};
 use crate::port::Port;
-use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
+use crate::process::{self, Loadable, Process, Snapshot, Start};
 use crate::stream::Stream;
 use crate::thread::{self, MapGuard};
 use crate::{console, port, print, ramdisk, sched, steps, timer};
@@ -361,6 +362,34 @@ impl Calls<'_> {
         drop(claim);
     }
 
+    /// Undoes the first `done` bytes a `memory_map` mapped at `va`, and its
+    /// reservation, in steps of `STEP` pages as they were mapped (INV-0270-1):
+    /// a step point between steps and no lock held across one. It runs to its
+    /// end whatever the process was asked meanwhile: `steps::pause` lets a
+    /// pending interrupt run and may switch away, but never fails, as in
+    /// `unmap_exact`. The caller holds the mapping lock throughout, and the
+    /// range is in no mapping record (only `map_commit` makes one), so no
+    /// other thread of the process maps there or finds a mapping half undone.
+    /// A space already gone (the process's end took it) has nothing to undo.
+    fn undo_map(&self, va: u64, done: u64) {
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut undone = 0;
+        while undone < done {
+            let n = step.min(done - undone);
+            {
+                let mut space = self.process.space.lock();
+                let Some(space) = space.as_mut() else { return };
+                space.unmap_range(va, undone, n);
+            }
+            undone += n;
+            steps::pause();
+        }
+        let mut space = self.process.space.lock();
+        if let Some(space) = space.as_mut() {
+            space.map_abort();
+        }
+    }
+
     /// Unmaps the mapping that is exactly `[va, va + length)`, in steps, with
     /// the mapping lock held by the caller.
     fn unmap_exact(&self, va: u64, length: u64) -> Result<(), Status> {
@@ -394,6 +423,12 @@ impl Calls<'_> {
                 .unmap_commit(va, length)
                 .map_err(|_| Status::InvalidArgument)?
         };
+        // The holder may be the last of its object, whose frames (a step of
+        // them, more go to the reaper) are freed here: a step point of its
+        // own first, so that they do not add to the work of the last
+        // unmapping and the list (INV-0270-1).
+        steps::before(holder.weight());
+        steps::count(1);
         drop(holder);
         Ok(())
     }
@@ -818,32 +853,37 @@ impl Handlers for Calls<'_> {
                 space.as_ref().map_or(0, AddressSpace::step_growth)
             };
             heap::prepare(growth);
-            {
+            let mapped = {
                 let mut space = self.process.space.lock();
                 let space = space.as_mut().ok_or(Status::BadState)?;
                 space.reserve_step();
-                if let Err(e) = space.map_range(va, done, n, attributes, &page) {
-                    if done > 0 {
-                        space.unmap_range(va, 0, done);
-                    }
-                    return Err(to_status(e));
-                }
+                // A failed step has undone its own part (`map_range`).
+                space.map_range(va, done, n, attributes, &page)
+            };
+            if let Err(e) = mapped {
+                self.undo_map(va, done);
+                return Err(to_status(e));
             }
             done += n;
             if done < length
                 && let Err(status) = steps::between()
             {
-                let mut space = self.process.space.lock();
-                if let Some(space) = space.as_mut() {
-                    space.unmap_range(va, 0, done);
-                }
+                self.undo_map(va, done);
                 return Err(status);
             }
         }
-        let mut space = self.process.space.lock();
-        let space = space.as_mut().ok_or(Status::BadState)?;
         let share = flags.is_shared().then_some(offset);
-        space.map_commit(va, length, attributes, Holder::Memory(object), share);
+        let committed = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space.map_commit(va, length, attributes, Holder::Memory(object), share)
+        };
+        if let Err(holder) = committed {
+            self.undo_map(va, length);
+            // After the unmap, with no lock: it may be the last of its object.
+            drop(holder);
+            return Err(Status::NoMemory);
+        }
         Ok(va)
     }
 
@@ -1340,10 +1380,34 @@ impl Handlers for Calls<'_> {
         // with no lock held, then up to `STEP` pages at a time under the
         // parent's lock, with the call open to a `job_kill` between them. The
         // child is in no table until the end; a cancelled call drops it.
-        let plan = {
+        let mappings = {
             let space = self.process.space.lock();
-            space.as_ref().ok_or(Status::BadState)?.snapshot_plan()?
+            space.as_ref().ok_or(Status::BadState)?.mapping_count()
         };
+        // The plan is as long as the list (up to 4096 mappings), made in
+        // steps with a step point between them (INV-0270-1); its room is
+        // mapped ahead with no lock held.
+        heap::prepare(mappings.saturating_mul(size_of::<PlanItem>()));
+        let mut plan = Vec::new();
+        plan.try_reserve_exact(mappings)
+            .map_err(|_| Status::NoMemory)?;
+        let mut from = 0;
+        loop {
+            let next = {
+                let space = self.process.space.lock();
+                space
+                    .as_ref()
+                    .ok_or(Status::BadState)?
+                    .snapshot_plan_step(&mut plan, from)?
+            };
+            match next {
+                Some(at) => {
+                    from = at;
+                    steps::between()?;
+                }
+                None => break,
+            }
+        }
         let mut build = SnapshotBuild::new(plan, Some(&job))?;
         loop {
             build.prepare_step();
@@ -1389,46 +1453,23 @@ impl Handlers for Calls<'_> {
         let Object::Memory(memory) = self.object(memory, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
-        let length = length.0;
-        if length > memory.size() {
-            return Err(Status::InvalidArgument);
-        }
-        let mut ehdr = [0; EHDR_SIZE];
-        let head = &mut ehdr[..(length as usize).min(EHDR_SIZE)];
-        // In range: `head` is at most `length`, which is at most the size.
-        let read = memory.read(0, head);
-        debug_assert!(read);
-        let header = Header::parse(head).map_err(|_| Status::InvalidArgument)?;
-        let end = header.table_offset as u64 + header.table_length as u64;
-        if end > length {
-            return Err(Status::InvalidArgument);
-        }
-        let mut table = Vec::new();
-        table
-            .try_reserve_exact(header.table_length)
-            .map_err(|_| Status::NoMemory)?;
-        table.resize(header.table_length, 0);
-        // In range: `end <= length <= size`, checked above.
-        let read = memory.read(header.table_offset as u64, &mut table);
-        debug_assert!(read);
-        // The same parser and range as the ramdisk's (INV-0108-1).
-        let program = Program::from_table(&header, &table, length, PROGRAM_LOW, PROGRAM_HIGH)
-            .map_err(|_| Status::InvalidArgument)?;
-        let mut handles = self.process.handles.lock();
-        handles.reserve()?;
-        let image = charge::arc(
-            Paid::new(Some(self.process.job())),
-            charge::vec_cost::<u8>(table.capacity()),
-            |paid| MemoryImage {
-                memory,
-                program,
-                table,
-                _paid: paid,
-            },
-        )?;
+        // The room for the handle is kept from here: a full table refuses
+        // before the pages are made, and a sibling thread cannot fill it
+        // while the copy pauses (INV-0040-3).
+        self.process.handles.lock().keep_room()?;
+        let image = match process::image_from(&memory, length.0, self.process.job()) {
+            Ok(image) => image,
+            Err(status) => {
+                self.process.handles.lock().drop_kept();
+                return Err(status);
+            }
+        };
         let image = Object::Image(Image::Memory(image));
-        Ok(handles
-            .insert(image, ImageObject::RIGHTS, object::next_id())?
+        Ok(self
+            .process
+            .handles
+            .lock()
+            .insert_kept(image, ImageObject::RIGHTS, object::next_id())?
             .raw())
     }
 
@@ -1640,6 +1681,14 @@ pub mod test_calls {
     /// a creating call then always lets a sibling run before it makes its
     /// handles. The test that sets it clears it.
     pub const PAUSE_IN_PREPARE: u64 = 0x701b;
+    /// Makes the calling process's next mappings go at or above address x0
+    /// (0: no floor), so that a test lays out a sparse space without spacer
+    /// mappings (`t_bound`).
+    pub const SET_MAP_FLOOR: u64 = 0x701c;
+    /// Returns `MIDR_EL1`: `tools/run-qemu.sh` gives TCG a Cortex-A72 and
+    /// HVF the host's CPU, so a test can tell which accelerator runs it
+    /// (`t_bound`'s 2 ms bound under HVF), without a timing calibration.
+    pub const MIDR: u64 = 0x701d;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1688,6 +1737,26 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             crate::memory::heap::PAUSE_IN_PREPARE
                 .store(a0 != 0, core::sync::atomic::Ordering::Relaxed);
             Some(Ok(0))
+        }
+        test_calls::SET_MAP_FLOOR => {
+            use crate::memory::user::{MAP_HIGH, MAP_LOW};
+            let valid =
+                a0 == 0 || (a0.is_multiple_of(FRAME_SIZE) && (MAP_LOW..MAP_HIGH).contains(&a0));
+            if !valid {
+                return Some(Err(Status::InvalidArgument));
+            }
+            let thread = sched::current();
+            let mut space = thread.process()?.space.lock();
+            space.as_mut()?.set_map_floor(a0);
+            Some(Ok(0))
+        }
+        test_calls::MIDR => {
+            let midr: u64;
+            // SAFETY: reads an ID register, which changes nothing.
+            unsafe {
+                core::arch::asm!("mrs {}, midr_el1", out(reg) midr, options(nomem, nostack, preserves_flags));
+            }
+            Some(Ok(midr))
         }
         test_calls::DIAGNOSE_UNITS => {
             crate::steps::diagnose_units();

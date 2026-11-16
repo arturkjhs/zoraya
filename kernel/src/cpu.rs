@@ -109,16 +109,45 @@ pub fn restore_limit(job: &Job, limit: Option<u32>) {
     job.cpu().lock().limit = limit;
 }
 
-/// The CPU part of `job_get_usage`.
+/// The CPU part of `job_get_usage`. `period_used` includes the debt paid
+/// back in this period (ADR-0460).
 pub fn usage(job: &Job) -> CpuUsage {
     let a = *job.cpu().lock();
+    let period_ns = period_ns();
     CpuUsage {
         limit: a.limit,
         used_ns: a.used_ns,
-        period_used: a.used_in(zoraya_cpu::period_of(
-            crate::timer::now().as_nanos(),
-            period_ns(),
-        )),
+        period_used: a.used_in(
+            zoraya_cpu::period_of(crate::timer::now().as_nanos(), period_ns),
+            period_ns,
+        ),
         parked: a.parked,
     }
+}
+
+/// The debt `job` still owes, as of now (ADR-0460), for tests.
+#[cfg(feature = "qemu-test")]
+pub fn debt(job: &Job) -> u64 {
+    let period_ns = period_ns();
+    let period = zoraya_cpu::period_of(crate::timer::now().as_nanos(), period_ns);
+    zoraya_cpu::settle(*job.cpu().lock(), period, period_ns).debt
+}
+
+/// `job`'s record is dropped: its debt goes to the nearest ancestor with a
+/// ceiling (ADR-0460, `zoraya_cpu::pass_debt`). Takes the job's `cpu` lock
+/// and then an ancestor's, one at a time, with nothing else held.
+pub fn pass_debt(job: &Job) {
+    let from = *job.cpu().lock();
+    if from.debt == 0 {
+        return;
+    }
+    // SAFETY: the parent is held by `job`, which is borrowed for the call.
+    let parent = job.parent_ref().map(|p| unsafe { JobRef::of(p) });
+    zoraya_cpu::pass_debt(
+        &mut JobTree::new(),
+        from,
+        parent,
+        crate::timer::now().as_nanos(),
+        period_ns(),
+    );
 }

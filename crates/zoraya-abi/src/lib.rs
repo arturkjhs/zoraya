@@ -85,6 +85,11 @@ statuses! {
     OverQuota = 16,
 }
 
+/// Mappings one process may hold (ADR-0051, raised from 256 by ADR-0415 item
+/// 1). The kernel's limit and the size of `libposix`'s table of private
+/// mappings are this one number (INV-0415-1).
+pub const MAPPING_SLOTS: usize = 4096;
+
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
 pub const MAX_HANDLES: u32 = 1024;
 const SLOT_BITS: u32 = 16;

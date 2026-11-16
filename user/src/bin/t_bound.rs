@@ -50,12 +50,32 @@ const REFERENCE_FILL_NS: u64 = 10_000;
 const MAX_FACTOR: u64 = 64;
 
 /// How many times slower than the reference host this one is, from
-/// `calibrate`; 1 under HVF.
+/// `calibrate`; 1 under HVF on the reference host. It scales the host-speed
+/// floors of some checks; it does not choose the time bound (`on_tcg`).
 static FACTOR: AtomicU64 = AtomicU64::new(1);
 
+/// The test kernel's `MIDR_EL1`.
+const MIDR: u64 = 0x701d;
+/// 0 not read yet, 1 HVF (or any CPU but TCG's), 2 TCG.
+static ACCELERATOR: AtomicU64 = AtomicU64::new(0);
+
+/// True under TCG: `tools/run-qemu.sh` gives TCG a Cortex-A72 and HVF the
+/// host's CPU. The time bound follows the accelerator, not a calibration (a
+/// fill on a busy HVF host once took 11167 ns against the reference's 10000
+/// and turned the 2 ms bound into 1 s). Any CPU but the Cortex-A72 is held
+/// to the 2 ms bound, so a mistake fails loudly.
+fn on_tcg() -> bool {
+    if ACCELERATOR.load(Ordering::Relaxed) == 0 {
+        let midr = raw_syscall(MIDR, [0; 6]).1;
+        let cortex_a72 = (midr >> 24) & 0xff == 0x41 && (midr >> 4) & 0xfff == 0xd08;
+        ACCELERATOR.store(if cortex_a72 { 2 } else { 1 }, Ordering::Relaxed);
+    }
+    ACCELERATOR.load(Ordering::Relaxed) == 2
+}
+
 /// Times a fixed amount of work (a 256 KiB fill, the size of a step's
-/// pages, five times, the best) against the reference: a factor of 1 is
-/// HVF, where the time bound is INV-0270-1's 2 ms (`bound_ns`).
+/// pages, five times, the best) against the reference: the factor scales
+/// the host-speed floors (as the shared snapshot's).
 fn calibrate() {
     let mut buffer = alloc::vec![0u64; 32768];
     let mut best = u64::MAX;
@@ -69,12 +89,16 @@ fn calibrate() {
     }
     let factor = best.div_ceil(REFERENCE_FILL_NS).clamp(1, MAX_FACTOR);
     FACTOR.store(factor, Ordering::Relaxed);
-    let limit_ms = if factor > 1 {
-        SLOW_HOST_LIMIT_NS
-    } else {
-        BOUND_NS
-    } / 1_000_000;
-    println!("t_bound: fill of 256 KiB takes {best} ns: factor {factor}, time bound {limit_ms} ms");
+    let accelerator = if on_tcg() { "TCG" } else { "HVF" };
+    let limit_ms = bound_ns() / 1_000_000;
+    println!(
+        "t_bound: fill of 256 KiB takes {best} ns: factor {factor}; {accelerator} (by the CPU model), time bound {limit_ms} ms"
+    );
+    if factor > 1 && !on_tcg() {
+        println!(
+            "t_bound: factor {factor} under HVF: the host ran the fill {factor} times slower than the reference (busy or slow); the bound stays 2 ms"
+        );
+    }
 }
 
 /// What the longest masked interval of a case may last in wall time. Under
@@ -88,10 +112,51 @@ fn calibrate() {
 /// step points is bounded, and the time only that nothing ran masked for a
 /// second.
 fn bound_ns() -> u64 {
-    if FACTOR.load(Ordering::Relaxed) > 1 {
+    if on_tcg() {
         return SLOW_HOST_LIMIT_NS;
     }
     BOUND_NS
+}
+
+/// Masked-time checks over the limit off HVF in this process (`time_ok`).
+static OVER: AtomicU64 = AtomicU64::new(0);
+/// The exit code of a run or a child that went over the time limit.
+const OVER_TIME: i32 = 3;
+
+/// A case's longest masked interval against `bound_ns`. The guest's clock
+/// runs while the host stalls the vCPU, under TCG (6 of 10 rounds under 10
+/// CPU hogs went over 1 s at different sites, with their units in bound) and
+/// under HVF too (a preemption of the vCPU thread, three guests in parallel
+/// lanes): a run over the limit is noted and repeated (`outer`), and fails if
+/// three runs in a row go over. A kernel loop repeats, a stall does not; a
+/// time-only loop that shows in one run of three passes about 26 times in 27,
+/// which is why the units carry the claim for work that is counted: they are
+/// checked in every run (`measure`) and fail at once.
+fn time_ok(site: &str, ns: u64) {
+    let limit = bound_ns();
+    if ns <= limit {
+        return;
+    }
+    println!("t_bound: {site}: {ns} ns masked, over the limit {limit}: the run is repeated");
+    OVER.fetch_add(1, Ordering::Relaxed);
+}
+
+/// This process's verdict on time: 0, or `OVER_TIME`.
+fn time_verdict() -> i32 {
+    if OVER.load(Ordering::Relaxed) > 0 {
+        OVER_TIME
+    } else {
+        0
+    }
+}
+
+/// A child's record: its own time verdict counts as this process's.
+fn child_ended(label: &str, record: zoraya_abi::ExitRecord) {
+    if record.code == OVER_TIME {
+        OVER.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    assert_eq!(record.code, 0, "{label}: {record:?}");
 }
 
 /// The masked-time limit off HVF (`bound_ns`): about 3.5 times the longest
@@ -184,15 +249,31 @@ fn check(site: &str, step: u64, big: u64) {
         step / 1000,
         big / 1000
     );
-    let limit = bound_ns();
-    assert!(big <= limit, "{site}: {big} ns masked, limit {limit}");
+    time_ok(site, big);
 }
 
 fn child(job: Handle, role: &[u8]) -> Result<Handle, Status> {
+    child_with(job, role, None)
+}
+
+/// The slot where a teardown child finds the channel end it reports on.
+const BUILT_SLOT: u32 = 20;
+
+/// As `child`, with `built` moved to `BUILT_SLOT`: the child writes one
+/// message there once it holds all it was to build (`built`).
+fn child_with(job: Handle, role: &[u8], built: Option<Handle>) -> Result<Handle, Status> {
     let mut buffer = [0; 512];
     let program = image("t_bound");
     let mut e = Encoder::new(&mut buffer, job, program);
     e.handle(console_again());
+    if let Some(end) = built {
+        e.handle(HandleEntry {
+            slot: BUILT_SLOT,
+            handle: end,
+            rights: rights_of(end),
+            transfer: Transfer::Move,
+        });
+    }
     // The child's own job, at the slot a process finds it (a spawned process
     // gets only what its list names).
     e.handle(HandleEntry {
@@ -263,7 +344,7 @@ fn contiguous_sites() {
     let free = free_frames();
     let (refused, ns) = measure(|| memory_create(CONTIGUOUS_CAP + PAGE, MemoryFlags::CONTIGUOUS));
     assert_eq!(refused.err(), Some(Status::NoMemory), "above the cap");
-    assert!(ns <= bound_ns(), "the refusal took {ns} ns masked");
+    time_ok("the refusal", ns);
     assert_eq!(free_frames(), free, "a refusal keeps nothing");
 }
 
@@ -307,6 +388,210 @@ fn snapshot_of(size: u64, shared: bool) -> u64 {
     ns
 }
 
+/// Mappings the process holds in the cases of 4096 (ADR-0415 item 1,
+/// INV-0415-1): the limit less the few the program, its stack and the case's
+/// own take.
+const MANY: usize = zoraya_abi::MAPPING_SLOTS - 64;
+
+/// The cases of a process with the most mappings it may hold, each a step's
+/// work between two step points (INV-0270-1, ADR-0415 item 1): `memory_map`
+/// that searches all of them, `memory_unmap` that ends one, `snapshot_process`
+/// that plans, copies and records them, and the process's exit and kill that
+/// drop them one by one. Then the same with every mapping in a page-table of
+/// its own (the layout that makes one table frame for each page), and
+/// the refusal at the limit with nothing changed.
+fn many_mappings_sites() {
+    // The cases before left 40 unmapped mappings of 24 MiB: a thousand empty
+    // page-tables, which every snapshot from here walks (INV-0270-1: in steps
+    // of `WALK_READS` descriptors, counted).
+    let small = best_snapshot();
+    let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let mut places = alloc::vec::Vec::new();
+    let (mut first, mut worst) = (u64::MAX, 0);
+    for _ in 0..MANY {
+        let (at, ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ).expect("map"));
+        first = first.min(ns);
+        worst = worst.max(ns);
+        places.push(at);
+    }
+    check("memory_map, up to 4032 mappings", first, worst);
+    // A hole in the middle: the next map finds it by the walk from the top.
+    let hole = places.swap_remove(MANY / 2);
+    let (_, unmap_ns) = measure(|| memory_unmap(hole, PAGE).expect("unmap"));
+    let (again, map_ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ).expect("map"));
+    assert_eq!(again, hole, "the lowest place is the hole");
+    places.push(again);
+    check("memory_unmap of one of 4032", unmap_ns, unmap_ns);
+    check("memory_map into a hole of 4032", map_ns, map_ns);
+    // Up to the limit: the next is refused, and nothing is left behind.
+    let mut at_limit = alloc::vec::Vec::new();
+    let refused = loop {
+        match memory_map(object, 0, PAGE, MapFlags::READ) {
+            Ok(at) => at_limit.push(at),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(refused, Status::LimitReached, "the limit");
+    assert!(
+        at_limit.len() <= 64,
+        "{} mappings besides the {MANY}: the program's own are few",
+        at_limit.len()
+    );
+    let (r, ns) = measure(|| memory_map(object, 0, PAGE, MapFlags::READ));
+    assert_eq!(r.err(), Some(Status::LimitReached), "still the limit");
+    time_ok("the refusal", ns);
+    for at in at_limit.drain(..) {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+
+    // A snapshot of the process with the mappings of the plan, the copy and
+    // the record, and the end of the child that drops them.
+    let large = best_snapshot();
+    check("snapshot_process, 4032 mappings", small, large);
+    for at in places.drain(..) {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    handle_close(object).expect("close");
+
+    // The same, one mapping in each table of the page-table: every page of
+    // the copy brings its own table frames (INV-0270-1: a step is 64 frames,
+    // not 64 pages).
+    let (spread, spacers) = spread_mappings(MANY / 2);
+    let large = best_snapshot();
+    check(
+        "snapshot_process, a table for each of 2016 pages",
+        small,
+        large,
+    );
+    for at in spread {
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    for object in spacers {
+        handle_close(object).expect("close");
+    }
+
+    // 22 mappings of one page, each in a gigabyte of its own (two tables
+    // each): a child builds them, so that its tables go with it. Placed by
+    // the test kernel's floor, they need 44 table frames, so every guest runs
+    // it (with spacer mappings it needed 45 MB of tables: 2 GiB guests only).
+    let p = child(JOB, b"far-pages").expect("spawn");
+    let record = wait_exit(p);
+    handle_close(p).expect("close");
+    child_ended("far pages", record);
+
+    // `memory_unmap` of a mapping whose handle was closed frees the object's
+    // frames in the call (up to a step; more go to the reaper): one step
+    // point keeps them out of the interval of the unmapping and the list.
+    let (mut worst, mut worst_big) = (0, 0);
+    for (size, worst) in [(STEP, &mut worst), (BIG, &mut worst_big)] {
+        for _ in 0..3 {
+            let object = memory_create(size, MemoryFlags::NONE).expect("create");
+            let at = memory_map(object, 0, size, MapFlags::WRITE).expect("map");
+            handle_close(object).expect("close: the mapping holds the object");
+            let ((), ns) = measure(|| memory_unmap(at, size).expect("unmap"));
+            *worst = (*worst).max(ns);
+        }
+    }
+    check("memory_unmap of the last holder", worst, worst_big);
+}
+
+/// 22 one-page mappings 1 GiB apart: each brings two page-table frames to
+/// the copy of a snapshot (`SnapshotBuild::finish`: a step is 64 units, and
+/// 22 such mappings are 88 without the count of the tables).
+fn far_pages() -> i32 {
+    const GIB: u64 = 1 << 30;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    // A gigabyte of empty page-tables under a valid table descriptor: a page
+    // in each 2 MiB, mapped and unmapped (tables left empty stay allocated),
+    // so that the snapshot's walk reads 512 empty tables in counted steps
+    // (the old spacers left 11 264 of them, 5.8 million descriptors).
+    for i in 0..512 {
+        let at = map_page_at(page, SPARSE_BASE + 22 * GIB + i * (2 << 20));
+        memory_unmap(at, PAGE).expect("unmap");
+    }
+    for k in 0..22 {
+        map_page_at(page, SPARSE_BASE + k * GIB);
+    }
+    let large = best_snapshot();
+    println!(
+        "t_bound: snapshot_process, 22 pages 1 GiB apart: {} us masked",
+        large / 1000
+    );
+    time_ok("snapshot_process, 22 pages 1 GiB apart", large);
+    time_verdict()
+}
+
+/// The test kernel's floor for the next mappings' addresses (0: none).
+const SET_MAP_FLOOR: u64 = 0x701c;
+/// Where the sparse layouts below begin: 16 TiB above the lowest user
+/// address, far above every mapping the cases make, below `MAP_HIGH`.
+const SPARSE_BASE: u64 = (1 << 46) + (1 << 44);
+
+/// Maps one page of `page` at `va`, by the test kernel's floor: the place a
+/// spacer mapping would have made, without the page-table entry for every
+/// page a spacer spans (22 GiB of them in `far_pages` took 22 s under TCG).
+fn map_page_at(page: Handle, va: u64) -> u64 {
+    raw_syscall(SET_MAP_FLOOR, [va, 0, 0, 0, 0, 0]);
+    let at = memory_map(page, 0, PAGE, MapFlags::READ).expect("page");
+    raw_syscall(SET_MAP_FLOOR, [0; 6]);
+    assert_eq!(at, va, "the floor places the page");
+    at
+}
+
+/// `count` one-page mappings, each in its own 2 MiB of address space, so
+/// each in a page-table of its own. Gives the pages and the objects to
+/// close.
+fn spread_mappings(count: usize) -> (alloc::vec::Vec<u64>, alloc::vec::Vec<Handle>) {
+    const REGION: u64 = 2 << 20;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let pages = (0..count as u64)
+        .map(|i| map_page_at(page, SPARSE_BASE + i * REGION))
+        .collect();
+    (pages, alloc::vec![page])
+}
+
+/// A snapshot's longest masked interval; the best of three if the first is
+/// over the bound: a pause of the host, or work of another thread inside the
+/// interval, is not the kernel holding IRQ masked, and a regression shows in
+/// all three (as in `memory_sites`). The units of each are checked
+/// (`measure`).
+fn best_snapshot() -> u64 {
+    let first = snapshot_with();
+    if first <= bound_ns() {
+        return first;
+    }
+    (0..2).map(|_| snapshot_with()).fold(first, u64::min)
+}
+
+/// A snapshot of this process into a suspended child, and its end: the longest
+/// masked interval of the call (the units of every interval are checked by
+/// `measure`).
+fn snapshot_with() -> u64 {
+    let job = job_create(JOB, JobFlags::POSIX).expect("job");
+    let mut buffer = alloc::vec![0u8; 512];
+    let mut e = SnapshotEncoder::new(&mut buffer, job);
+    e.suspended();
+    let length = e.finish().expect("room");
+    let (child, ns) = measure(|| snapshot_process(&buffer[..length]).expect("snapshot"));
+    let Some(child) = child else { process_exit(0) };
+    // The child's end drops every mapping it was given, one by one.
+    let (_, end_ns) = measure(|| {
+        job_kill(job).expect("kill");
+        wait_exit(child);
+    });
+    println!(
+        "t_bound: snapshot_with: the call {} us masked, the child's end {} us; {} pages copied in {} us",
+        ns / 1000,
+        end_ns / 1000,
+        raw_syscall(0x700f, [0; 6]).1,
+        raw_syscall(0x700e, [0; 6]).1 / 1000
+    );
+    time_ok("the snapshot child's end", end_ns);
+    handle_close(child).expect("close");
+    handle_close(job).expect("job");
+    ns
+}
+
 /// More mappings of one shared object than a limited job's tables would
 /// allow it to copy.
 const SHARED_COPIES: usize = 40;
@@ -343,8 +628,17 @@ fn chain_close() -> (u64, u64) {
 fn hold(wait_ms: u64) -> i32 {
     let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
     memory_map(object, 0, BIG, MapFlags::WRITE).expect("map");
+    built();
     nap(wait_ms);
     0
+}
+
+/// Tells the parent that this child holds all it was to build, if it was
+/// given the channel end (the long children of `teardown`).
+fn built() {
+    if let Some(end) = Handle::from_parts(BUILT_SLOT, 0) {
+        let _ = channel_write(end, b"built", &[]);
+    }
 }
 
 /// A child that makes and closes contiguous objects without end.
@@ -357,6 +651,16 @@ fn churn_contiguous() -> i32 {
             Err(Status::NoMemory) => nap(1),
             Err(status) => panic!("create: {status:?}"),
         }
+    }
+}
+
+/// A child that maps and unmaps one `BIG` object without end: a kill in the
+/// middle of a `memory_map` undoes what it mapped, in steps (INV-0270-1).
+fn churn_maps() -> i32 {
+    let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
+    loop {
+        let at = memory_map(object, 0, BIG, MapFlags::WRITE).expect("map");
+        memory_unmap(at, BIG).expect("unmap");
     }
 }
 
@@ -409,7 +713,12 @@ fn a_kill_between_steps_leaves_nothing() {
         "t_bound: calibration: one call takes {} us; kill delays sweep 0..{span_ms} ms",
         samples[1] / 1000
     );
-    for role in [&b"create-loop"[..], b"snapshot-loop", b"contiguous-loop"] {
+    for role in [
+        &b"create-loop"[..],
+        b"snapshot-loop",
+        b"contiguous-loop",
+        b"map-loop",
+    ] {
         // The first round lets the kernel heap take the room it will use
         // (it keeps what it grew by); the next is the one that counts. A
         // kill may land at the child's return to EL0 and not inside the
@@ -449,9 +758,20 @@ fn kill_round(role: &[u8], strict: bool, delay_ms: u64) {
     let p = child(room, role).expect("spawn");
     nap(delay_ms);
     masked(true);
+    units(true);
     job_kill(room).expect("kill");
     let record = wait_exit(p);
     assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
+    // The kill and what it undoes (a `memory_map` cut in the middle, a
+    // snapshot's child): the work between two step points (INV-0270-1).
+    let kill_units = units(false);
+    if kill_units > MAX_UNITS {
+        raw_syscall(DIAGNOSE_UNITS, [0; 6]);
+    }
+    assert!(
+        kill_units <= MAX_UNITS,
+        "{role:?}: {kill_units} units of work between two step points in the kill, limit {MAX_UNITS}"
+    );
     // A zombie keeps its record charged until its last handle closes.
     handle_close(p).expect("close");
     let mut tries = 0;
@@ -467,11 +787,14 @@ fn kill_round(role: &[u8], strict: bool, delay_ms: u64) {
         assert_eq!(usage.memory.used, base, "{role:?}: the room's use");
         assert_eq!(usage.processes.used, 0, "{role:?}: the room's processes");
         assert_eq!(frames_accounted(), free, "{role:?}: frames");
+        let ns = masked(true);
         println!(
-            "t_bound: job_kill during {}: nothing left; {} us masked",
+            "t_bound: job_kill during {}: nothing left; {} us masked, {} units",
             core::str::from_utf8(role).unwrap_or("?"),
-            masked(true) / 1000
+            ns / 1000,
+            units(true)
         );
+        time_ok("job_kill during a loop", ns);
     }
     handle_close(room).expect("close");
 }
@@ -489,13 +812,35 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
     handle_close(p).expect("close");
     let exit_ns = masked(true);
     let exit_units = units(true);
-    let p = child(room, long).expect("spawn");
-    nap(500);
+    // The long child says when it holds all it builds (a fixed wait was too
+    // long under HVF and could be too short on a stalled host; its charge
+    // comes before its frames). Within 25 s: it ends by itself after 30.
+    let (ours, theirs) = channel_create().expect("channel");
+    let p = child_with(room, long, Some(theirs)).expect("spawn");
+    let began = clock_monotonic();
+    loop {
+        let signals = object_get_signals(ours).expect("signals");
+        if signals & channel_signals::READABLE != 0 {
+            break;
+        }
+        if signals & channel_signals::PEER_CLOSED != 0 {
+            // It ended before it said it was built.
+            let record = wait_exit(p);
+            panic!("{label}: the long child ended before its build: {record:?}");
+        }
+        assert!(
+            clock_monotonic() - began < 25_000_000_000,
+            "{label}: the long child did not finish its build in 25 s"
+        );
+        nap(5);
+    }
+    handle_close(ours).expect("close");
     masked(true);
     units(true);
     job_kill(room).expect("kill");
     wait_exit(p);
-    nap(100);
+    // The reaper's part of the kill is in the interval too: until it is idle.
+    let _ = frames_accounted();
     let kill_ns = masked(true);
     let kill_units = units(true);
     handle_close(p).expect("close");
@@ -506,15 +851,8 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
         kill_ns / 1000
     );
     // The bound itself (INV-0270-1); off HVF only a sanity limit.
-    let limit = bound_ns();
-    assert!(
-        exit_ns <= limit,
-        "{label}: exit {exit_ns} ns, limit {limit}"
-    );
-    assert!(
-        kill_ns <= limit,
-        "{label}: kill {kill_ns} ns, limit {limit}"
-    );
+    time_ok(label, exit_ns);
+    time_ok(label, kill_ns);
     assert!(exit_units <= MAX_UNITS, "{label}: exit {exit_units} units");
     assert!(kill_units <= MAX_UNITS, "{label}: kill {kill_units} units");
     // The frames are back (INV-0270-2 for a killed process).
@@ -918,9 +1256,8 @@ fn wide_source() -> i32 {
         "t_bound: free_source of 32 subscribers on ports of 1024: {} us masked",
         ns / 1000
     );
-    let limit = bound_ns();
-    assert!(ns <= limit, "free_source: {ns} ns masked, limit {limit}");
-    0
+    time_ok("free_source", ns);
+    time_verdict()
 }
 
 /// ADR-0299, review errors 3 and 4: the two bounds are on a port and on a
@@ -935,8 +1272,7 @@ fn many_subscriptions_sites() {
         let began = clock_monotonic();
         let (p, ns) = measure(|| {
             let p = child(room, role).expect("spawn");
-            let record = wait_exit(p);
-            assert_eq!(record.code, 0, "{label}: the child");
+            child_ended(label, wait_exit(p));
             p
         });
         handle_close(p).expect("close");
@@ -945,8 +1281,7 @@ fn many_subscriptions_sites() {
             ns / 1000,
             (clock_monotonic() - began) / 1_000_000
         );
-        let limit = bound_ns();
-        assert!(ns <= limit, "{label}: {ns} ns masked, limit {limit}");
+        time_ok(label, ns);
     }
     handle_close(room).expect("room");
 }
@@ -954,11 +1289,26 @@ fn many_subscriptions_sites() {
 fn teardown_sites() {
     teardown("a process holding 24 MiB", b"hold-short", b"hold-long");
     teardown("400 objects of 256 KiB", b"crowd-short", b"crowd-long");
+    teardown("4000 mappings of 4000 objects", b"maps-short", b"maps-long");
     teardown(
         "256 mappings and 1024 handles",
         b"crowd-mapped-short",
         b"crowd-mapped-long",
     );
+}
+
+/// A child that maps 4000 objects of one page each and closes their handles
+/// (ADR-0415 item 1: what holds each object is its mapping), then waits, to end
+/// by itself or to be killed.
+fn maps(wait_ms: u64) -> i32 {
+    for _ in 0..4000 {
+        let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+        memory_map(object, 0, PAGE, MapFlags::WRITE).expect("map");
+        handle_close(object).expect("close");
+    }
+    built();
+    nap(wait_ms);
+    0
 }
 
 /// A child that holds many objects of 64 pages (256 KiB), up to 400 or as
@@ -975,8 +1325,17 @@ fn crowd(mapped: bool, wait_ms: u64) -> i32 {
         }
     }
     if mapped {
-        while memory_create(PAGE, MemoryFlags::NONE).is_ok() {}
+        // Until a create is refused; the last one made is closed again, so
+        // that the message saying it is built has room.
+        let mut last = None;
+        while let Ok(object) = memory_create(PAGE, MemoryFlags::NONE) {
+            last = Some(object);
+        }
+        if let Some(object) = last {
+            handle_close(object).expect("close");
+        }
     }
+    built();
     nap(wait_ms);
     0
 }
@@ -1003,12 +1362,21 @@ fn outer() -> i32 {
     });
     e.arg(b"inner");
     let length = e.finish().expect("room");
-    let child = spawn(&buffer[..length]).expect("spawn inner");
-    let record = wait_exit(child);
-    handle_close(child).expect("close");
+    // A run over the time limit is repeated, up to three runs
+    // (`time_ok`).
+    let mut code = OVER_TIME;
+    for run in 1..=3 {
+        let child = spawn(&buffer[..length]).expect("spawn inner");
+        code = wait_exit(child).code;
+        handle_close(child).expect("close");
+        if code != OVER_TIME {
+            break;
+        }
+        println!("t_bound: run {run} went over the time limit");
+    }
     handle_close(me).expect("close");
     handle_close(posix).expect("close");
-    record.code
+    code
 }
 
 fn inner() -> i32 {
@@ -1029,6 +1397,7 @@ fn inner() -> i32 {
         large <= 10 * small.max(floor),
         "shared snapshot grows with the pages: {small} ns, {large} ns"
     );
+    many_mappings_sites();
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();
@@ -1038,8 +1407,10 @@ fn inner() -> i32 {
     moved_memory_is_freed_a_step_at_a_time();
     teardown_sites();
     a_kill_between_steps_leaves_nothing();
-    println!("t_bound: all passed");
-    0
+    if time_verdict() == 0 {
+        println!("t_bound: all passed");
+    }
+    time_verdict()
 }
 
 #[unsafe(no_mangle)]
@@ -1047,11 +1418,15 @@ fn main() -> i32 {
     match startup().argv.next() {
         Some(b"hold-short") => hold(50),
         Some(b"hold-long") => hold(30_000),
+        Some(b"far-pages") => far_pages(),
+        Some(b"maps-short") => maps(50),
+        Some(b"maps-long") => maps(30_000),
         Some(b"crowd-short") => crowd(false, 50),
         Some(b"crowd-long") => crowd(false, 30_000),
         Some(b"crowd-mapped-short") => crowd(true, 50),
         Some(b"crowd-mapped-long") => crowd(true, 30_000),
         Some(b"contiguous-loop") => churn_contiguous(),
+        Some(b"map-loop") => churn_maps(),
         Some(b"create-loop") => churn(false),
         Some(b"snapshot-loop") => churn(true),
         Some(b"wide-source") => wide_source(),

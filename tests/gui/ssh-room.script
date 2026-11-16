@@ -55,5 +55,9 @@ prefix Enter passphrase
 type \r
 prefix Enter same passphrase again
 type \r
+# The program's own last line before the shell reads again (keys typed earlier could be flushed with its
+# passphrase prompt's terminal mode).
+prefix The key fingerprint is:
+screen plain ~/p> _
 type ls /data/plain/ssh; echo made-plain-$status\r
 screen made-plain-0

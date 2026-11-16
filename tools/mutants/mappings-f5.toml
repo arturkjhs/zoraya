@@ -1,0 +1,111 @@
+# Plan part F5 (ADR-0415 item 1, proposed ADR-0437, INV-0415-1, INV-0437-1,
+# INV-0437-2): 4096 mappings per process, the list charged by what the heap
+# holds, and each walk of it bounded. One QEMU configuration per mutant; the
+# tests are the in-kernel `a_space_holds_4096_mappings_and_pays_for_the_list`,
+# `t_memory`'s `mapping_limit` and `t_bound`'s cases of 4032 mappings. The host
+# half (`zoraya-mappings`, `zoraya-posix`'s `maptab`) is run by
+# `make mutants-host CRATE=zoraya-mappings` and `CRATE=zoraya-posix`.
+tests = ["make -s test-qemu-one"]
+timeout = 1500
+
+[[mutant]]
+id = "F5-limit-one-too-many"
+file = "kernel/src/memory/user.rs"
+find = 'pub const MAX_MAPPINGS: usize = zoraya_abi::MAPPING_SLOTS;'
+replace = 'pub const MAX_MAPPINGS: usize = zoraya_abi::MAPPING_SLOTS + 1;'
+note = "INV-0415-1: the 4097th mapping is refused (the kernel test and t_memory)"
+
+[[mutant]]
+id = "F5-removal-keeps-the-charge"
+file = "kernel/src/memory/user.rs"
+find = '''        self.release_records(before);
+        Ok(entry.value.holder)'''
+replace = '''        let _ = before;
+        Ok(entry.value.holder)'''
+note = "INV-0437-1: the charge follows the list down after an unmap (the kernel test empties the top chunk and asserts the fall by one chunk)"
+
+[[mutant]]
+id = "F5-exit-keeps-the-charge"
+file = "kernel/src/memory/user.rs"
+find = '''        self.release_records(before);
+        Some(entry.value.holder)'''
+replace = '''        let _ = before;
+        Some(entry.value.holder)'''
+note = "equivalent for every test: an exit gives the charge back when the reaper drops the space's `Paid`, so the release in `pop_mapping` only makes it earlier; kept as the record of the release"
+
+[[mutant]]
+id = "F5-worst-growth-kept"
+file = "kernel/src/memory/user.rs"
+find = 'self.memory.paid.release_kernel(worst - grown.min(worst));'
+replace = 'let _ = (worst, grown);'
+note = "survives, not equivalent: when `reserve_for` fails (`NoRoom`) nothing grew and the whole chunk charged first must be given back; the mutant keeps it charged until the space is reaped. No test can reach it without a heap failure injected. When a chunk is made the difference is 0, because `growth_for` predicts the growth exactly (a host test asserts it)."
+
+[[mutant]]
+id = "F5-quota-not-asked"
+file = "kernel/src/memory/user.rs"
+find = '''        self.memory
+            .paid
+            .kernel(worst)
+            .map_err(|_| MappingError::Quota)?;'''
+replace = '''        let _ = self.memory.paid.kernel(worst);'''
+note = "INV-0437-1: a job that cannot take the list's growth refuses the mapping"
+
+[[mutant]]
+id = "F5-plan-in-one-step"
+file = "kernel/src/memory/user.rs"
+find = 'if taken == PLAN_STEP {'
+replace = 'if taken == usize::MAX {'
+note = "INV-0437-2: the plan of a snapshot is made in steps of PLAN_STEP records"
+
+[[mutant]]
+id = "F5-snapshot-objects-without-step-points"
+file = "kernel/src/memory/user.rs"
+find = 'if pending + units > STEP {'
+replace = 'if false && pending + units > STEP {'
+note = "INV-0437-2: 4032 one-page objects are not one interval (t_bound, snapshot_process, 4032 mappings)"
+
+[[mutant]]
+id = "F5-snapshot-step-ignores-tables"
+file = "kernel/src/memory/user.rs"
+find = 'taken + grown(build) < STEP'
+replace = 'taken < STEP'
+note = "survives: the pages of a snapshot step that bring tables are the process's own (image, stack), whose layout no test varies (a sparse image is unverified); the mappings' pages are copied into objects and their tables are made by `finish`, which `F5-finish-ignores-tables` covers."
+
+[[mutant]]
+id = "F5-space-drops-its-mappings-at-once"
+file = "kernel/src/memory/user.rs"
+find = 'steps::before(entry.value.holder.weight());'
+replace = 'let _ = entry.value.holder.weight();'
+note = "INV-0437-2: a space dropped with 4096 mappings frees them a step at a time"
+
+[[mutant]]
+id = "F5-walk-reads-uncounted-and-unbounded"
+file = "kernel/src/memory/user.rs"
+find = 'pub const WALK_READS: usize = 1024;'
+replace = 'pub const WALK_READS: usize = usize::MAX;'
+note = "INV-0437-2: a snapshot's walk reads a bounded number of descriptors a step, empty tables included (t_bound: the 40 unmapped 24 MiB mappings of the cases before leave about a thousand empty tables)"
+
+[[mutant]]
+id = "F5-abort-keeps-the-chunk"
+file = "kernel/src/memory/user.rs"
+find = '''            if mapped.is_err() {
+                if offset > 0 {
+                    let _ = self.table.unmap(&mut self.memory, va, offset);
+                }
+                self.map_abort();'''
+replace = '''            if mapped.is_err() {
+                if offset > 0 {
+                    let _ = self.table.unmap(&mut self.memory, va, offset);
+                }'''
+note = "INV-0437-1: a mapping refused for a page-table frame gives its chunk back (the kernel test's poor job with room for a chunk and not for the tables)"
+
+[[mutant]]
+id = "F5-unmap-has-no-step-point-before-the-free"
+file = "kernel/src/syscall.rs"
+find = '''        steps::before(holder.weight());
+        steps::count(1);
+        drop(holder);
+        Ok(())'''
+replace = '''        drop(holder);
+        Ok(())'''
+note = "equivalent under the unit check: the last holder's frames (at most 64) and the unmapping's own work together stay under 80 units (t_bound, memory_unmap of the last holder, 64 pages and 24 MiB); the step point is for the margin, not a bound the tests can tell"

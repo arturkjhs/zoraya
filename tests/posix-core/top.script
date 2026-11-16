@@ -1,0 +1,79 @@
+# Plan part F6's "done when" (ADR-0415 item 2, ADR-0438): `top` in a room around a
+# program that spawns its own image three times. `t_shared keep` starts a
+# launcher L, which reads a file once (its transfer buffer), and waits at three
+# phases for the file this script writes after `top tab`; before each phase it
+# waits for L's job to stop changing (a closed file's object is charged until
+# the reaper has it): L alone; then three children of its own image; then one
+# child of the file. The whole is run twice in one room.
+# tools/check-top-image.py reads the room's memory at each phase from the log
+# and checks that the three spawns of the image cost the room their own pages and
+# no text, that the spawn of the file cost one more than that by the image's
+# pages (which the program prints), and that after each run the room holds what
+# it held before: the second run ends where the first did, so a kept image or
+# buffer fails (make test-libposix runs this with the checker).
+! panicked
+! ZORAYA-PANIC
+< \r\n~> 
+> room new tab --mem 64M --procs 64 +w /work\r
+< tab --colour
+< \r\n~> 
+> room tab\r
+< tab /work> 
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> /bin/t_shared keep &\r
+< t_shared: keep: L alone
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> echo go > /work/t_shared.go\r
+< t_shared: keep: three children of its own image
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> echo go > /work/t_shared.go\r
+< t_shared: keep: and one child of the file
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> echo go > /work/t_shared.go\r
+< t_shared: passed
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> /bin/t_shared keep &\r
+< t_shared: keep: L alone
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> echo go > /work/t_shared.go\r
+< t_shared: keep: three children of its own image
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> echo go > /work/t_shared.go\r
+< t_shared: keep: and one child of the file
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> echo go > /work/t_shared.go\r
+< t_shared: passed
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> top tab\r
+< limits --mem 64M
+< tab /work> 
+> room --leave\r
+> room remove tab --kill\r
+> poweroff\r

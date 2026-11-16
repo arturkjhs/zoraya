@@ -1,0 +1,37 @@
+# The 2 GiB guest of the browser's steps (plan part F8; ADR-0415 item 5): run
+# with `--mem 2G` (`make test-keeper`; the step passes 2G itself). The room keeper sizes the
+# session from the frames the kernel has: a room of 1200M, more than a 512 MiB
+# guest's session (about 356 MiB) and less than this one's (about 1.4 GiB),
+# is accepted, and a limit of 1800M is refused as above the session's; `top`
+# shows the room's row and the session row of the guest, as the desktop's pills
+# do. The ordinary kernel on the serial console, with a disk, no window and no network:
+# not the command line of `make run-browser`, which no step boots.
+! panicked
+! storage failed
+< Type help to begin
+< \r\n~> 
+> room new tab --mem 1200M --procs 64 +w /t/w\r
+< tab --colour 1 --mem 1200M --procs 64 +w /t/w
+< \r\n~> 
+> room tab\r
+< tab /t/w> 
+> grants probe\r
+< limits --mem 1200M --procs 64  (room tab)
+< tab /t/w> 
+> top\r
+< ROOM
+< tab
+< of 1200M
+< session
+< tab /t/w> 
+> room set tab --mem 1800M\r
+< --mem 1800M: above the session's
+< tab /t/w> 
+> grants probe\r
+< limits --mem 1200M --procs 64  (room tab)
+< tab /t/w> 
+> room --leave\r
+< \r\n/t/w> 
+> room remove tab --kill\r
+< /t/w> 
+> poweroff\r

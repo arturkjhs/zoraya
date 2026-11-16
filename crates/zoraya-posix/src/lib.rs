@@ -17,6 +17,7 @@ mod fcntl_locks;
 pub mod fd;
 pub mod jobs;
 pub mod lock;
+pub mod maptab;
 pub mod memfd;
 pub mod net;
 pub mod path;
@@ -32,6 +33,7 @@ pub mod sys;
 pub mod termios;
 pub mod threads;
 pub mod unix;
+mod unix_file;
 mod unix_io;
 pub mod wait;
 
