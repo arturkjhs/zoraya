@@ -536,3 +536,27 @@ fn records_below_the_window_do_not_move_the_search() {
     assert_eq!(list.find_gap(HIGH, LOW, HIGH, PAGE).0, None);
     list.check();
 }
+
+/// The boundary cases of the same fix, with the answers written out and not taken
+/// from the model: a record ending a page below `low` leaves the guard exactly at
+/// `low`; one ending at `low` pushes the place a guard above it; one that
+/// straddles `low` pushes it past its own end.
+#[test]
+fn a_record_near_the_windows_start_moves_the_search_by_its_guard() {
+    let find = |va: u64, length: u64| {
+        let mut list = Mappings::new();
+        list.reserve_for(va).expect("room");
+        list.insert(va, length, 0u32).expect("insert");
+        list.find_gap(PAGE, LOW, HIGH, PAGE).0
+    };
+    // Ends at LOW - PAGE: its guard page is LOW - PAGE .. LOW, the place is LOW.
+    assert_eq!(find(LOW - 3 * PAGE, 2 * PAGE), Some(LOW));
+    // Ends within the guard of LOW (the guard reaches LOW + 0): same.
+    assert_eq!(find(LOW - 2 * PAGE, PAGE), Some(LOW));
+    // Ends at LOW: the guard page is LOW .. LOW + PAGE.
+    assert_eq!(find(LOW - 2 * PAGE, 2 * PAGE), Some(LOW + PAGE));
+    // Straddles LOW: ends at LOW + 2 pages, the guard makes it LOW + 3 pages.
+    assert_eq!(find(LOW - 2 * PAGE, 4 * PAGE), Some(LOW + 3 * PAGE));
+    // Starts at LOW: as any record of the window.
+    assert_eq!(find(LOW, PAGE), Some(LOW + 2 * PAGE));
+}

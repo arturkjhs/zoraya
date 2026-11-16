@@ -1436,15 +1436,23 @@ impl Handlers for Calls<'_> {
         let Object::Memory(memory) = self.object(memory, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
-        // A full table refuses before the pages are made (INV-0040-3).
-        self.process.handles.lock().reserve()?;
-        let image = process::image_from(&memory, length.0, self.process.job())?;
+        // The room for the handle is kept from here: a full table refuses
+        // before the pages are made, and a sibling thread cannot fill it
+        // while the copy pauses (INV-0040-3).
+        self.process.handles.lock().keep_room()?;
+        let image = match process::image_from(&memory, length.0, self.process.job()) {
+            Ok(image) => image,
+            Err(status) => {
+                self.process.handles.lock().drop_kept();
+                return Err(status);
+            }
+        };
         let image = Object::Image(Image::Memory(image));
         Ok(self
             .process
             .handles
             .lock()
-            .insert(image, ImageObject::RIGHTS, object::next_id())?
+            .insert_kept(image, ImageObject::RIGHTS, object::next_id())?
             .raw())
     }
 

@@ -683,6 +683,10 @@ pub fn keep_program(
     object: &MemoryObject,
 ) -> Result<(), Status> {
     let piece = steps::STEP as u64 * PAGE_SIZE;
+    let mut text = false;
+    // The object's last frames were made in the interval this starts in: a step
+    // point before the first piece, so that they are not added to it.
+    steps::between()?;
     for (index, s) in program.segments().iter().enumerate() {
         let copy = kept.copy_of(index, s);
         let mut done = 0;
@@ -705,13 +709,19 @@ pub fn keep_program(
                 }
                 // SAFETY: a whole frame of `object` in the direct map.
                 unsafe {
-                    mmu::sync_instruction_cache(
+                    mmu::clean_to_unification(
                         phys_to_virt(object.page((first + n) * PAGE_SIZE)),
                         PAGE_SIZE,
                     );
                 }
             }
+            text = true;
         }
+    }
+    if text {
+        // After every clean: fetches then see the copies (Arm ARM D7.5.9),
+        // as a snapshot does (`SnapshotBuild::finish`).
+        mmu::invalidate_instruction_cache();
     }
     Ok(())
 }
