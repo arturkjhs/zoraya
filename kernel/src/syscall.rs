@@ -362,6 +362,34 @@ impl Calls<'_> {
         drop(claim);
     }
 
+    /// Undoes the first `done` bytes a `memory_map` mapped at `va`, and its
+    /// reservation, in steps of `STEP` pages as they were mapped (INV-0270-1):
+    /// a step point between steps and no lock held across one. It runs to its
+    /// end whatever the process was asked meanwhile: `steps::pause` lets a
+    /// pending interrupt run and may switch away, but never fails, as in
+    /// `unmap_exact`. The caller holds the mapping lock throughout, and the
+    /// range is in no mapping record (only `map_commit` makes one), so no
+    /// other thread of the process maps there or finds a mapping half undone.
+    /// A space already gone (the process's end took it) has nothing to undo.
+    fn undo_map(&self, va: u64, done: u64) {
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut undone = 0;
+        while undone < done {
+            let n = step.min(done - undone);
+            {
+                let mut space = self.process.space.lock();
+                let Some(space) = space.as_mut() else { return };
+                space.unmap_range(va, undone, n);
+            }
+            undone += n;
+            steps::pause();
+        }
+        let mut space = self.process.space.lock();
+        if let Some(space) = space.as_mut() {
+            space.map_abort();
+        }
+    }
+
     /// Unmaps the mapping that is exactly `[va, va + length)`, in steps, with
     /// the mapping lock held by the caller.
     fn unmap_exact(&self, va: u64, length: u64) -> Result<(), Status> {
@@ -825,44 +853,33 @@ impl Handlers for Calls<'_> {
                 space.as_ref().map_or(0, AddressSpace::step_growth)
             };
             heap::prepare(growth);
-            {
+            let mapped = {
                 let mut space = self.process.space.lock();
                 let space = space.as_mut().ok_or(Status::BadState)?;
                 space.reserve_step();
-                if let Err(e) = space.map_range(va, done, n, attributes, &page) {
-                    if done > 0 {
-                        space.unmap_range(va, 0, done);
-                    }
-                    space.map_abort();
-                    return Err(to_status(e));
-                }
+                // A failed step has undone its own part (`map_range`).
+                space.map_range(va, done, n, attributes, &page)
+            };
+            if let Err(e) = mapped {
+                self.undo_map(va, done);
+                return Err(to_status(e));
             }
             done += n;
             if done < length
                 && let Err(status) = steps::between()
             {
-                let mut space = self.process.space.lock();
-                if let Some(space) = space.as_mut() {
-                    space.unmap_range(va, 0, done);
-                    space.map_abort();
-                }
+                self.undo_map(va, done);
                 return Err(status);
             }
         }
         let share = flags.is_shared().then_some(offset);
-        let failed = {
+        let committed = {
             let mut space = self.process.space.lock();
             let space = space.as_mut().ok_or(Status::BadState)?;
-            match space.map_commit(va, length, attributes, Holder::Memory(object), share) {
-                Ok(()) => None,
-                Err(holder) => {
-                    space.unmap_range(va, 0, length);
-                    space.map_abort();
-                    Some(holder)
-                }
-            }
+            space.map_commit(va, length, attributes, Holder::Memory(object), share)
         };
-        if let Some(holder) = failed {
+        if let Err(holder) = committed {
+            self.undo_map(va, length);
             // After the unmap, with no lock: it may be the last of its object.
             drop(holder);
             return Err(Status::NoMemory);
@@ -1664,6 +1681,14 @@ pub mod test_calls {
     /// a creating call then always lets a sibling run before it makes its
     /// handles. The test that sets it clears it.
     pub const PAUSE_IN_PREPARE: u64 = 0x701b;
+    /// Makes the calling process's next mappings go at or above address x0
+    /// (0: no floor), so that a test lays out a sparse space without spacer
+    /// mappings (`t_bound`).
+    pub const SET_MAP_FLOOR: u64 = 0x701c;
+    /// Returns `MIDR_EL1`: `tools/run-qemu.sh` gives TCG a Cortex-A72 and
+    /// HVF the host's CPU, so a test can tell which accelerator runs it
+    /// (`t_bound`'s 2 ms bound under HVF), without a timing calibration.
+    pub const MIDR: u64 = 0x701d;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1712,6 +1737,26 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             crate::memory::heap::PAUSE_IN_PREPARE
                 .store(a0 != 0, core::sync::atomic::Ordering::Relaxed);
             Some(Ok(0))
+        }
+        test_calls::SET_MAP_FLOOR => {
+            use crate::memory::user::{MAP_HIGH, MAP_LOW};
+            let valid =
+                a0 == 0 || (a0.is_multiple_of(FRAME_SIZE) && (MAP_LOW..MAP_HIGH).contains(&a0));
+            if !valid {
+                return Some(Err(Status::InvalidArgument));
+            }
+            let thread = sched::current();
+            let mut space = thread.process()?.space.lock();
+            space.as_mut()?.set_map_floor(a0);
+            Some(Ok(0))
+        }
+        test_calls::MIDR => {
+            let midr: u64;
+            // SAFETY: reads an ID register, which changes nothing.
+            unsafe {
+                core::arch::asm!("mrs {}, midr_el1", out(reg) midr, options(nomem, nostack, preserves_flags));
+            }
+            Some(Ok(midr))
         }
         test_calls::DIAGNOSE_UNITS => {
             crate::steps::diagnose_units();

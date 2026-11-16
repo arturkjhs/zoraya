@@ -155,6 +155,30 @@ fn insert_without_room_gives_the_record_back() {
     list.check();
 }
 
+/// `low` above some records: the gap is at or above `low`, never in the
+/// records' range below it (the test kernel's mapping floor, `t_bound`).
+#[test]
+fn find_gap_stays_at_or_above_low() {
+    let mut list = Mappings::new();
+    let mut model = Model(Vec::new());
+    for n in 0..10u32 {
+        add(&mut list, &mut model, PAGE, n);
+    }
+    let last_end = model.0.iter().map(|(va, len)| va + len).max().unwrap();
+    // A hole below the floor, which a search from `LOW` would find.
+    let (hole, len) = model.0.remove(2);
+    list.remove_exact(hole, len).unwrap();
+    assert_eq!(list.find_gap(PAGE, LOW, HIGH, PAGE).0, Some(hole));
+    // A floor in the middle of the records: not the hole below it, but the
+    // first gap above it, after the last record and its guard.
+    let middle = model.0[4].0;
+    let (va, _) = list.find_gap(PAGE, middle, HIGH, PAGE);
+    assert_eq!(va, Some(last_end + PAGE));
+    // A floor above every record: the floor itself.
+    let far = LOW + (1 << 40);
+    assert_eq!(list.find_gap(PAGE, far, HIGH, PAGE).0, Some(far));
+}
+
 #[test]
 fn find_gap_reports_what_it_visited() {
     let mut list = Mappings::new();
