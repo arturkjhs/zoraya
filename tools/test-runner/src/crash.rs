@@ -24,8 +24,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const RUN_QEMU: &str = "tools/run-qemu.sh";
 /// The shell's prompt in its home on a fresh line (TASK-18): a redraw of the
-/// line being typed starts with `\r`, not a line end.
-const PROMPT: &str = "\n~> ";
+/// line being typed starts with `\r`, not a line end. The prompt starts with
+/// `\r` and erase in line (`ESC [ K`) to clear its row (ADR-0387).
+const PROMPT: &str = "\n\r\x1b[K~> ";
 const WAIT: Duration = Duration::from_secs(60);
 /// `T_COMMIT` and one commit, with room.
 const COMMITTED: Duration = Duration::from_secs(8);
@@ -314,5 +315,19 @@ fn main() -> ExitCode {
             esay!("zoraya-crash-test: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PROMPT;
+
+    #[test]
+    fn the_prompt_is_a_fresh_line_then_the_rows_clear_then_the_prompt() {
+        // What `editor.start` writes after a command's output (`START_CLEAR`).
+        let shell_output = "crashcheck: ok\r\n\r\x1b[K~> ";
+        assert!(shell_output.contains(PROMPT));
+        // A redraw of the line being typed is not a prompt on a fresh line.
+        assert!(!"x\r\x1b[J~> ".contains(PROMPT));
     }
 }

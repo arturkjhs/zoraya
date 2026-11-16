@@ -21,11 +21,11 @@
 # - A push to main runs the document checks only (the plan's doc_checks;
 #   build and tests are skipped, so the run is green), whatever changed, and
 #   cancels nothing that runs.
-# - The full set of main runs on a schedule: every 4 hours (cron 23 */4 * * *, an off minute)
+# - The full set of main runs on a schedule: every 2 hours (cron 23 */2 * * *, an off minute)
 #   if main changed since the last full run (tools/ci-last-full.rb reads that
 #   from the API; unknown means run), and nightly (17 2 * * *, always, with the
 #   nightly's own jobs). The summary of a scheduled run lists the merges since
-#   the last green full run. A skipping 4-hourly run fails if the last full run was red
+#   the last green full run. A skipping 2-hourly run fails if the last full run was red
 #   (it must not read as green over it). A stage tag needs a green scheduled or nightly
 #   run that includes the tagged commit (tools/ci-last-full.rb --green-for SHA).
 # - On demand (a manual run with full=true, to chase a flake) and on a tag
@@ -57,10 +57,10 @@ on:
   schedule:
     # Nightly, on main: always the full set and the nightly's own jobs.
     - cron: '17 2 * * *'
-    # Every 4 hours, on main: the full set if main changed since the last full run.
+    # Every 2 hours, on main: the full set if main changed since the last full run.
     # A red scheduled run is fixed first, before the next merge (CLAUDE.md):
     # gh run list --workflow 'make test' --event schedule (a skipping run fails if the last full run was red)
-    - cron: '23 */4 * * *'
+    - cron: '23 */2 * * *'
 
 concurrency:
   # One group per kind of event, ref and (for a schedule) cron: a push to main

@@ -125,6 +125,11 @@ not outlive its line. Target 3: nothing here is per-machine.
 ## Revisit triggers
 
 - The broker gains a group for a whole line (Option B).
+- Whether zosh's prompt clears the rest of its row (`curses-flake`, run 43802095122: an echoed `:w other` left behind a
+  program's screen showed after the next prompt as `~> other`). Decided by the architect, 2026-11-16: Option A, `editor.start` writes
+  `\r` and erase in line (`ESC [ K`) before the prompt, so that a prompt row is always clean. Built (`crates/zoraya-shell/src/editor.rs`,
+  `START_CLEAR`; test `start_clears_the_row_before_the_prompt`). Recorded by an agent.
+
 - A person cannot leave a program because it ignores Ctrl-C.
 
 ## Architect's decision

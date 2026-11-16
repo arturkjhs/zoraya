@@ -512,11 +512,11 @@ printf 'skip=1\nlast_run=7\nlast_sha=headsha\nlast_conclusion=failure\n' > "$aux
 printf 'skip=0\nlast_run=7\nlast_sha=old\nlast_conclusion=failure\n' > "$aux/last.new"
 ev="GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main" step_plan "a push to main" 0 '^docs_only=1$'
 ev="GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/work/x" FAKE_OUT="$aux/last.new" step_plan "a push to a branch plans a candidate (no merge base here: full)" 0 '^tests='
-ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green SCHEDULE=4h" step_plan "the 4-hourly run, nothing new, last run green: nothing runs, green" 0 '^summary=nothing to run'
-ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.red SCHEDULE=4h" step_plan "the 4-hourly run, nothing new, last run red: the run is red" 1 '^summary=nothing to run'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green SCHEDULE=2h" step_plan "the 2-hourly run, nothing new, last run green: nothing runs, green" 0 '^summary=nothing to run'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.red SCHEDULE=2h" step_plan "the 2-hourly run, nothing new, last run red: the run is red" 1 '^summary=nothing to run'
 grep -q 'is red' "$aux/step.err" "$aux/summary" 2>/dev/null || grep -q 'is red' "$aux/step.out" "$aux/summary" || { echo "check-ci-plan: plan step: a red skip does not say why" >&2; fail=$((fail + 1)); }
-ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.new SCHEDULE=4h" step_plan "the 4-hourly run, main moved: the full set" 0 '^summary=full set: [0-9]+ jobs'
-ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_FAIL=1 SCHEDULE=4h" step_plan "the 4-hourly run, the lookup fails: the full set" 0 '^summary=full set: [0-9]+ jobs'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.new SCHEDULE=2h" step_plan "the 2-hourly run, main moved: the full set" 0 '^summary=full set: [0-9]+ jobs'
+ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_FAIL=1 SCHEDULE=2h" step_plan "the 2-hourly run, the lookup fails: the full set" 0 '^summary=full set: [0-9]+ jobs'
 nightly_cron=$(sed -n "s/^NIGHTLY_CRON='\(.*\)'$/\1/p" tools/ci-plan-step.sh)
 ev="GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main FAKE_OUT=$aux/last.skip.green" SCHEDULE="$nightly_cron" step_plan "the nightly never skips" 0 "nightly's own jobs"
 ev="GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/work/x FULL_INPUT=true" step_plan "a manual full run" 0 '^summary=full set: [0-9]+ jobs'

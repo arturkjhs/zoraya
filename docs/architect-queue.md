@@ -61,21 +61,7 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
-- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note.
-- **`curses-flake`: the GUI runner's per-step limit.** Each step of a GUI script now has 120 s, four times that under TCG
-  (480 s), and a `pause` its own time on top; `limit SECONDS STEP` gives one step more (`tools/test-runner/src/gui.rs`,
-  `STEP_LIMIT`, `TCG_FACTOR`). Chosen generous: in the full CI run of 2026-11-15 (43749759496) the longest GUI run
-  outside TCG took 47 s in all and the longest under TCG 332 s (`netsurf-auto`), so no current step needs a `limit`.
-  Questions: (1) keep 120 s and x4, or shorter (a stuck step then costs less)? (2) Give the serial-line scripts
-  (`--script`, the `<` steps) the same? Not done: some of their runs have single steps that wait for a whole suite
-  (`test-cxx-libcxx` up to 7200 s, `test-python-regr` 1500 s), and no per-step times are recorded yet to set their limits.
-- **`curses-flake`: should zosh's prompt clear the rest of its row?** `editor.start` writes the prompt only. Keys typed
-  before a program has the terminal in raw mode are echoed by the discipline on the primary screen; after the program
-  leaves the alternate screen the echo is back, and the next prompt overwrites only its own width (`~> other` from an
-  echoed `:w other`, run 43802095122). Option A: write `\r` and erase to the end of the row (`ESC [ K`) before the
-  prompt, so that a prompt row is always clean. Option B: keep it as dash and bash do, and make scripts wait for a
-  program's own screen before typing to it (done for `posix-curses.script`). Recommendation: A, as it costs one sequence
-  and no script can be caught by it again.
+
 
 
 ## E. Decided 2026-11-16 (removed from the lists above)
@@ -84,8 +70,11 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - ADR-0386, ADR-0387, ADR-0390, ADR-0391 Option A accepted. ADR-0391 item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (10f built `narrow` with a list at run time; 10j or 10f for the rest).
 - DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
 - git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
-- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, proposed; to be accepted after the implementation).
+- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, accepted 2026-11-16 with the overdraft as built; ADR-0285's note resolved).
 - ADR-0460 open question 2: the overdraft, not acceptance. The overrun of an ending process is debt that the room and its parents pay back in the following periods (cap 100 budgets; a dead room's debt goes to its nearest ancestor with a ceiling); built on `work/park-ending`, INV-0460-4.
+
+- `curses-flake`: the GUI runner's per-step limit stays 120 s with the factor 4 under TCG (480 s); extended to the serial-line scripts (`limit SECONDS STEP`, explicit limits for the steps that wait long).
+- `curses-flake`: zosh's prompt clears the rest of its row (Option A: `\r` and `ESC [ K` before the prompt); built in `editor.start`.
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 
@@ -117,13 +106,14 @@ is `AccessDenied`.
 
 ## For the TASK-34 dispatcher (MacBook Air)
 
-The CI policy of ADR-0348 (the architect, 2026-11-15) applies to this dispatcher as it does to the Mac mini's: a push to
-`work/*` runs `make check` only (no full `workflow_dispatch` runs, except to chase a flake); a candidate runs the steps
-`tools/ci-plan.sh` selects (the full set only for `kernel/`, libposix or `tools/test-runner/`; a `Makefile` change maps to the
-steps whose recipes or variables it changes); do not wait for `main`'s run after a merge, the next part merges as soon as its
-own candidate is green; `main`'s full set runs every 4 hours if `main` changed, and nightly; a red scheduled run
-(`gh run list --workflow 'make test' --event schedule`; a skipping 4-hourly run fails if the last full run was red) is fixed first, before the next merge, and its summary lists the merges
-since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
+The CI policy of ADR-0463 (the architect, 2026-11-16; it replaces the candidate rules of ADR-0348) applies to this dispatcher as
+it does to the Mac mini's: a part merges after `make check`, `make test-changed` under HVF and its independent Opus review pass
+locally, with no candidate run in CI, so F7b may merge on its local tests and review; a candidate run is needed only if F7b changes
+`.github/workflows`, `tools/ci-plan.sh` (or what it reads) or `tools/test-runner/`, or for a failure that shows only under TCG. A push to
+`work/*` runs `make check` only. `main`'s full set runs every 2 hours if `main` changed, and nightly. A red scheduled run
+(`gh run list --workflow 'make test' --event schedule`) is fixed first, before any merge; if it is not fixed within an hour, revert the
+merge that broke it and fix it on its branch (the red run of 2026-11-16, libc++ `mutex_try_to_lock`, is the first case). A stage tag
+needs a green scheduled, nightly or `candidate-full/` run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
 
 **2026-11-15, for the TASK-34 dispatcher:** the scheduled full run 43749759496 (head `9b78d380`) is green, 78 of 78 jobs,
 including the TCG `w9-term` job and all five `test-qemu-*` jobs. `main`'s red scheduled run (`w9-term`, run 43699859694) was
@@ -140,3 +130,17 @@ interface in `netd` after a smoltcp spike), and the word a person types for a li
 **2026-11-16, F7 review:** a socket name authenticates nothing: any program of the line that can write `/tmp` can unlink or rename a live
 server's name and bind its own. Should `unlink` and `rename` of a node with a listener be restricted to the connection that made it
 (ADR-0439)?
+
+**2026-11-16, for the TASK-34 dispatcher (and the architect):** main's red scheduled run 43778039826 (head `e7c34c69`, job
+`make test-cxx-libcxx`: `forbidden output: posixrun: ended`) was one libc++ test aborting on its own timing assertion:
+`thread.lock.shared.cons/mutex_try_to_lock.pass.cpp` (`Assertion failed: d < Tolerance`, 200 ms; five threads wait on a
+mutex that main holds for 250 ms). No kernel panic, fault or exit record is in the log. The same job passed in 11 of 11 later
+runs on commits that contain `e7c34c69` (park-ending, kwb-time, f5, f7, curses-flake candidates and scheduled run
+43819664106), and in 12 local runs (6 HVF, 6 TCG, 1303 to 1357 steps each); the test alone 40 of 40 under TCG, with the
+largest measured `d` 4 to 7 ms. Nothing between `9b78d380` and `e7c34c69` touches the paths the measured interval uses. So
+no Zoraya change explains it; the likely cause is one stall of the QEMU process on the runner of more than about 195 ms,
+but that is not proven (the CI log has no per-test times). F4 (spawn) and F5 (4096 mappings) are not implicated. The
+scheduled run 43819664106 (head `4e86f859`) is green: F5, F8, F6 and F7a (and `stage-f3`) can be tagged on it
+(`tools/ci-last-full.rb --green-for SHA`). Open for the architect: exclude this test and its `unique_lock` twin, and other
+wall-clock tests, from the TCG libc++ run (`tests/cxx/libcxx-tcg-excluded.txt`, HVF only, as for LWG3343), or keep them and
+re-run a failed job once; the new `RUNNER-STEP` lines in the serial runner will show per-step times in the next full run.
