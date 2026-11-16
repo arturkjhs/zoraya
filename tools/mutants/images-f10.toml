@@ -1,0 +1,37 @@
+# Plan part F10 (proposed ADR-0443, INV-0443-1 to -5): `image_create` names the job that
+# pays. The kernel half runs in the test kernel's `t_image`
+# (`an_image_is_charged_to_the_job_it_names`); the shell half runs in
+# `images-f10-libposix.toml`, whose `room-image.script` and `tools/check-room-image.py` read it.
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "F10-charge-the-creator"
+file = "kernel/src/syscall.rs"
+find = '''process::image_from(&memory, length.0, &payer)'''
+replace = '''process::image_from(&memory, length.0, self.process.job())'''
+note = "INV-0443-1: the named job is checked and then ignored: the creator pays and the named job's use does not move"
+
+[[mutant]]
+id = "F10-skip-the-create-process-check"
+file = "kernel/src/syscall.rs"
+find = '''let payer = self.job(job, Rights::CREATE_PROCESS)?;'''
+replace = '''let payer = self.job(job, Rights::NONE)?;'''
+note = "INV-0443-2: a job handle without CREATE_PROCESS is charged (a program pays into a job it cannot spawn into)"
+
+[[mutant]]
+id = "F10-a-refusal-keeps-the-table-room"
+file = "kernel/src/syscall.rs"
+find = '''            Err(status) => {
+                self.process.handles.lock().drop_kept();
+                return Err(status);
+            }
+        };
+        let image = Object::Image(Image::Memory(image));'''
+replace = '''            Err(status) => {
+                return Err(status);
+            }
+        };
+        let image = Object::Image(Image::Memory(image));'''
+note = "INV-0443-3 (and INV-0040-3): a refusal at the named job's limit leaves the caller's table room kept, so a later call finds the table full"
+

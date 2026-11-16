@@ -297,6 +297,11 @@ fn an_image_is_charged_to_the_job_it_names(hello: &[u8]) {
         refused + 1
     );
     assert_eq!((free_frames(), heap_live()), (frames, heap), "nothing kept");
+    // More refusals than the table has slots: each keeps no room in it (a refusal
+    // that kept one would end in `LimitReached` for the next call).
+    for _ in 0..zoraya_abi::MAX_HANDLES + 8 {
+        assert_err!(image_create(object, length, tight), Status::OverQuota);
+    }
     let roomy = image_create(object, length, other).expect("the same file elsewhere");
     assert_eq!(used(other) - other_before, cost, "the same cost");
     for h in [first, roomy] {

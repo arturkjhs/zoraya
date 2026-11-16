@@ -129,3 +129,18 @@ Updated 2026-11-16. **All of F2 to F8 are merged.**
   request (5) and `Accepted` (19); `+listen PORT` in the shell; the loopback as `netd` handing the client's stream ends to the listener
   (no second smoltcp interface: read, not measured). Plan part F7's "done when" is met: `make test-python-serve`.
 - Not built: listening on the NIC, `localhost`, per-connection `ECONNRESET`, rooms' words for `+listen`. Limits in `docs/design.md` and ADR-0441.
+
+## F10 notes
+
+- Built (proposed ADR-0443, added by the architect on 2026-11-16): `image_create(memory, length, job)` charges the named job after
+  the kernel checks `CREATE_PROCESS` on it (a refusal holds nothing). The shell names the room's launch job (`room_job`, its own job
+  outside a room), the broker the child's job, `posixrun` and `libposix` their own. A room at its memory limit cannot start a program
+  whose image does not fit: `tests/posix-core/room-image.script` and `tools/check-room-image.py` (in `make test-libposix`): the shell
+  says `over quota`, the room's row is unchanged and its own refusal count goes 1, 2; the same program starts in a roomy room.
+- Kernel and user tests: `t_image`'s `an_image_is_charged_to_the_job_it_names` (charge on the named job and not a sibling, refusal
+  without `CREATE_PROCESS`, refusal at the limit with nothing kept, the payer job killed or its handle closed while the image lives).
+- This meets one condition of the untrusted-room gate (ADR-0268): what a room starts is paid by the room. Others remain: ADR-0269's
+  untrusted launcher is not built.
+- Known limitations: the shell's staging object (the program's bytes before the image exists) is charged to the shell's job; a POSIX
+  process with no `PROCESS_JOB` handle names `JOB` and its program loads fail with `ENOEXEC` if that is not a spawner's handle (none
+  exists today).

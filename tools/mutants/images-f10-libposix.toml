@@ -1,0 +1,17 @@
+# Plan part F10 (proposed ADR-0443, INV-0443-5): the shell half. `room-image.script` starts a
+# 1.1 MiB program in a room at 1M and `tools/check-room-image.py` reads the log.
+tests = ["make -s test-libposix POSIX_CORE_SCRIPT=tools/mutants/empty.script POSIX_CORE_MAPS_SCRIPT=tools/mutants/empty.script"]
+timeout = 3000
+
+[[mutant]]
+id = "F10-the-shell-names-its-own-job"
+file = "user/src/bin/zosh.rs"
+find = '''        self.room_job.unwrap_or(JOB)
+    }
+
+    /// A program of the volume'''
+replace = '''        JOB
+    }
+
+    /// A program of the volume'''
+note = "INV-0443-5: the shell charges the room's programs to itself: no refusal in a room at its limit"
