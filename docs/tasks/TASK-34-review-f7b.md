@@ -170,3 +170,83 @@ Severities: **error** (wrong; fix before merge), **warning** (fix in this part o
 and the documents claim Python servers work. Remove the three stubs and run a candidate with the Python and apps steps, or correct
 the claims. Findings 2 and 3 are documentation of the security model and should land with it; 4 is a test gap of the one fix that
 matters for liveness. Notes 5 to 12 may go to the backlog. The decision on the TCP half (ADR-0440) is the architect's.
+
+## Re-check
+
+Re-check by the `opus-review` subagent of `git diff d9e4051c..ab0ed008` (four commits), 2026-11-16, against the findings above.
+Run by the reviewer on the worktree, one at a time, `CARGO_BUILD_JOBS=2`, output to files:
+
+- `make check`: exit 0 ("all checks passed").
+- `cargo test -p zoraya-fs-service -p zoraya-posix -p zoraya-proto-file`: exit 0, 20 suites, 452 passed, 0 failed
+  (`tests/socket.rs` 18, `tests/socketfile.rs` 17).
+- `make test-libposix`: exit 0 (`libposix-auto` PASS 167 steps with `t_unix: file passed`, `libposix-maps-auto` PASS 17,
+  `libposix-top-auto` PASS 66).
+
+Not run: `test-python`, `test-python-regr`, `test-apps` (the CI candidate runs them), the hand mutants, `make mutants-host`.
+
+### The findings
+
+1. **Fixed.** `zshim.c` no longer defines `bind`, `listen`, `accept`. I grepped the other shims for socket names `libc.a` exports
+   (`tools/libposix-widths.txt`): `pyshim.c`, `gitshim.c`, `nsshim.c` define none (`getnameinfo`, `getservbyname`, `getifaddrs`,
+   `gethostbyname` are not exported by `libc.a`); `sshshim.c` defines `socketpair` (R4 below). `accept4`, `getsockname`, `connect`,
+   `getpeername` are reached in `libc.a` by every `-lzshim` program. Behaviour that changes: `ssh` and `ssh-keygen` are the only
+   OpenSSH programs built (`ports/Makefile:518`; no `ssh-agent`, no `sshd`), and ControlMaster is off unless configured; git builds
+   `git` and `git-remote-http` only, and `credential-cache` runs only when a configuration names it; curl binds only for
+   `--interface` or FTP active mode, wget for FTP `PORT`. No test script names any of these (grep of `tests/`), so nothing can now
+   wait on a listener in a test. The `python.script` check is one process: `connect` queues on the listener's channel and returns
+   without waiting for `accept`, then `accept` reads it, so there is no wall time and no race; a fresh memory `/tmp` per boot makes
+   the left `/tmp/pyu` harmless. The `AF_INET` case prints `OSError: [Errno 95]` (`EOPNOTSUPP`, which is also `ENOTSUP`), matched by
+   `95`. Python regression: `test_socket`, `test_unix_events` and `multiprocessing` are not in `regr-modules.txt`; of
+   `test_asyncio.test_base_events`, the cases that bind are in `regr-ignore.txt:44-56`, and the rest see `OSError` as before
+   (`EOPNOTSUPP` for `ENOSYS`). The CI candidate must still show it.
+2. **Fixed** in the ADR's effect of the vision and `docs/backlog.md`; true to the code.
+3. **Fixed**: the ADR says a socket name authenticates nothing; the architect's question is in `docs/architect-queue.md`.
+4. **Fixed**: `zoraya_fs_service::outgoing_for`, called by `fsd.rs`, with a test over `Status::ALL` (every status, each arm) and two
+   hand mutants. `zoraya-abi` is an in-house `no_std` crate that a dozen crates under `crates/` already depend on: no external
+   dependency, nothing for `docs/dependencies.md`, and the test file already installs `cap_memory!()`.
+5. **Fixed in code, untested** (R2). The state after the one `ECONNABORTED` is sound: `ctl` closed once and cleared, so no handle
+   leaks and nothing queued survives (the queue dies with the channel); `accept` is then `EINVAL`; `SO_ACCEPTCONN` 0; `listen` asks
+   the service again over `node`. A poll loop then sees the socket ready at once (`wait_source` returns `None` for a not-connected
+   socket, `socket.rs:633-640`) and `accept` is `EINVAL`, as on Linux, where an unconnected socket polls `POLLHUP`; no worse.
+6. **Half fixed** (R3).
+7. **Fixed**: the owner check is before the bound, a non-owner past the bound is `ACCESS_DENIED` (tested), the mutant's `find`
+   follows the new code.
+8. **Recorded** in `docs/backlog.md`.
+9. (a) **Fixed** in ADR-0439 and `invariants.md` (the test does assert the handle count and the 24-byte form of whatever decodes).
+   (b) **Fixed**: `a_read_only_tmp_cannot_connect` (`EACCES` for `connect` and `bind`).
+10. **Fixed with a new error in its text** (R1).
+11. **Fixed.**
+12. Unchanged, as the note allowed.
+
+Bookkeeping: `invariants.md` Total 859; ADR-0439's Status line and no Architect's decision section are touched.
+
+### New findings
+
+R1. **warning**: ADR-0439 item 7 now says "a listed listening socket is `EINVAL`". It is `EBADF`: `pass_to_child` refuses any Unix
+   socket whose state is not `Connected` (`crates/zoraya-posix/src/unix_io.rs:416-418`), and `unix_listen` leaves the state `Fresh`
+   (`unix_file.rs:143`, `:171-175`). *Scenario:* a server lists its listener in `posix_spawn_file_actions_adddup2` to hand it to a
+   worker: `posix_spawn` returns `EBADF`, not the `EINVAL` the ADR promises. *Fix:* say `EBADF` in both cases (and for a bound
+   socket); no test covers the listed case, so add one to `t_unix` or `socketfile.rs` if the sentence stays.
+
+R2. **warning**: the new `ECONNABORTED`-once path (`unix_file.rs:324-335`) has no test and no hand mutant; the commit and the
+   report claim it. It can be tested in `tests/socketfile.rs`: close the service's end of the listener channel (or drop the
+   service), then `accept` twice (`ECONNABORTED`, then `EINVAL`), `getsockopt(SO_ACCEPTCONN)` 0, and the handle count back.
+
+R3. **note**: finding 6 is half fixed. A refused `bind` (`LIMIT_REACHED`, when the transport's `interest` fails,
+   `lib.rs:906-912`) no longer adds a `SocketNode`, but the `S_IFSOCK` file stays named in `/tmp`: the library returns at the `?`
+   of `open_resolved` (`unix_file.rs:116-118`) without unlinking, so the name is `EADDRINUSE` until unlinked and `connect` to it is
+   `ECONNREFUSED`, and it is now outside the 256-node bound (bounded only by the volume). It is testable: the fake transport's
+   `interest` (`tests/socket.rs:115`) can return `false` for a marked end. *Fix:* remove the new name in `open_as` when the
+   connection cannot be added, with that test; or record it.
+
+R4. **note**, outside this diff but the same mechanism as finding 1: `ports/apps/sshshim.c:28` defines `socketpair` as `ENOSYS`, and
+   `libc.a` exports `socketpair` (`tools/libposix-widths.txt:189`; ADR-0430), so `ssh` never reaches it; the file's header says it
+   holds names `libc.a` does not export. Harmless today (ProxyCommand and ProxyJump only, not offered); record it for part 10g.
+
+R5. **note**: the new case in `the_table_of_nodes_and_of_listeners_is_bounded` says the non-owner's refusal "counts nothing against
+   anyone" but asserts only `ACCESS_DENIED`; the count of refusals is not checked.
+
+### Verdict
+
+No error. **Merge once the CI candidate (with `test-python`, `test-python-regr`, `test-apps`) is green and R1 is corrected**
+(one sentence of ADR-0439); R2 should get its test in this part or go to the backlog; R3 to R5 may go to the backlog.
