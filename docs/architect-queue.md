@@ -71,6 +71,7 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
 - git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
 - A killed room's threads: charged but not parked while they end (Option A of ADR-0460, proposed; to be accepted after the implementation).
+- ADR-0460 open question 2: the overdraft, not acceptance. The overrun of an ending process is debt that the room and its parents pay back in the following periods (cap 100 budgets; a dead room's debt goes to its nearest ancestor with a ceiling); built on `work/park-ending`, INV-0460-4.
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 

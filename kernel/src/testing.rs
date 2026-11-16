@@ -603,6 +603,14 @@ static TESTS: &[Test] = &[
         run: cpu_ceiling_from_a_process,
     },
     Test {
+        name: "a_killed_room_ends_in_the_period_after_the_kill",
+        run: a_killed_room_ends_in_the_period_after_the_kill,
+    },
+    Test {
+        name: "a_start_and_end_loop_keeps_its_ceiling",
+        run: a_start_and_end_loop_keeps_its_ceiling,
+    },
+    Test {
         name: "room_keeper_from_a_process",
         run: room_keeper_from_a_process,
     },
@@ -653,6 +661,7 @@ pub fn run(start: usize) -> ! {
         LOST.store(0, Ordering::Relaxed);
         sched::set_test_slice(0);
         crate::cpu::set_test_period(0);
+        sched::ending_watch::watch(None);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
         bump(&PASSED);
@@ -2047,6 +2056,258 @@ fn quotas_from_a_process() {
 /// rooms (INV-0264-1, -2, -4 and the kernel half of -3).
 fn cpu_ceiling_from_a_process() {
     assert_eq!(run_program("t_cpu"), exited(0));
+}
+
+/// ADR-0285 item 7 with ADR-0460: a room at a ceiling of one thousandth
+/// (100 us of a 100 ms period) is killed with its 16 spinners parked. They
+/// come back at the next boundary and, their processes ending, are not
+/// parked again: the room has no process left before the end of the period
+/// after the kill's (INV-0460-1). Their 16 ways out take several times the
+/// room's budget, so without the exception each period's budget ends a few
+/// of them and the room takes a period for each few (TASK-31 4.3: up to nine
+/// periods for 20 at 10%).
+///
+/// The bound assumes the 16 ways out fit in one period. Where in its period
+/// the kill lands does not matter: the parked threads wait for the next
+/// boundary whatever the phase, and those released at a boundary are parked
+/// again within microseconds, so the ways out always have exactly the period
+/// after the kill's. Under TCG 40 ways out ran 58 to 71 ms; 16 take some 25
+/// ms, a quarter of the period.
+///
+/// The way out is charged to the room at least for the time the scheduler
+/// saw the room's ending threads run (`sched::ending_watch`, counted apart
+/// from the charge), and to its parent, which holds nothing else
+/// (INV-0460-2).
+fn a_killed_room_ends_in_the_period_after_the_kill() {
+    const PERIOD: u64 = 100_000_000;
+    const SPINNERS: usize = 16;
+    let began = timer::now();
+    crate::cpu::set_test_period(PERIOD);
+    let parent = Job::create(&root(), false).expect("parent");
+    let room = Job::create(&parent, false).expect("room");
+    crate::cpu::set_limit(&room, Some(1)).expect("limit");
+    let budget = zoraya_cpu::budget_ns(1, PERIOD);
+    sched::ending_watch::watch(Some(&room));
+    let spinners: Vec<_> = (0..SPINNERS)
+        .map(|_| process::spawn_in(&room, "spin", false).expect("spin"))
+        .collect();
+    let nap = || {
+        sched::sleep_until(Deadline::At(timer::now().plus_nanos(1_000_000))).expect("queue");
+    };
+    let start = timer::now();
+    loop {
+        let u = crate::cpu::usage(&room);
+        if u.parked > 0 && u.period_used >= budget {
+            break;
+        }
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "the room never spent its budget"
+        );
+        nap();
+    }
+    drop(spinners);
+    let parked_before = crate::cpu::usage(&room).parked;
+    let used_before = (
+        crate::cpu::usage(&room).used_ns,
+        crate::cpu::usage(&parent).used_ns,
+    );
+    crate::steps::masked_max_ns(true);
+    room.kill();
+    let killed = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let start = timer::now();
+    while room.live() > 0 {
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "the killed room still has {} processes after 10 s",
+            room.live()
+        );
+        nap();
+    }
+    let died = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let masked = crate::steps::masked_max_ns(true);
+    let ran = sched::ending_watch::ran_ns();
+    sched::ending_watch::watch(None);
+    let parks = crate::cpu::usage(&room).parked - parked_before;
+    let charged = crate::cpu::usage(&room).used_ns - used_before.0;
+    let parent_charged = crate::cpu::usage(&parent).used_ns - used_before.1;
+    println!(
+        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill, {charged} ns charged after it, {ran} ns run by its ending threads, {masked} ns longest masked; {} ms in all",
+        died - killed,
+        timer::now().nanos_since(start) / 1_000_000,
+        timer::now().nanos_since(began) / 1_000_000
+    );
+    // Every one of the ways out ran after the kill (the spinners were
+    // parked or spinning), so the room is charged for them, and the parent
+    // as much: each charge walks up (ADR-0264 point 3).
+    assert!(ran > 0, "no ending thread of the room ran");
+    assert!(
+        charged >= ran,
+        "the room was charged {charged} ns, its ending threads ran {ran} ns"
+    );
+    assert!(
+        parent_charged >= charged,
+        "the parent was charged {parent_charged} ns, the room {charged} ns"
+    );
+    assert!(
+        died <= killed + 1,
+        "the killed room ended {} periods after the kill's period, {parks} parks after the kill",
+        died - killed
+    );
+}
+
+/// ADR-0460, the architect's decision on its open question 2 (INV-0460-4):
+/// a room whose processes end one after the other, each with a way out far
+/// longer than the room's budget, gains nothing from them beyond their own
+/// work. Each process is `spin`, started suspended with 300 one-page
+/// objects the test puts in its table (free to the room), so that its way
+/// out, closing them, takes many budgets. The test ends it (as `job_kill`
+/// does, `request_exit`) as soon as it has run, that is, as soon as the room
+/// had budget for it, and starts the next when the room is empty. So with
+/// the debt the loop waits while the room pays; without it a new way out
+/// began about every period. (A process that ends itself by a fault, as
+/// `f_null` did, overran the budget by the kernel's fault report, a console
+/// line written before the process is ending, 2.2 ms under slowed TCG: the
+/// overrun to the next return to EL0 that ADR-0264 point 4 allows, not this
+/// test's subject.)
+///
+/// Over the 11 periods after the one in which the first way out began, both
+/// measured in this boot:
+/// - the room's charge is at most 11 budgets, a floor slice a period and
+///   one more budget, plus what its ending threads ran in the window (read
+///   from the clock at each switch apart from the charge,
+///   `sched::ending_watch`): the room's own code keeps the ceiling, however
+///   long a way out takes on this machine;
+/// - no way out begins in the window: the first way out's debt (its run
+///   past the budget, some 400 us on the fastest host for 300 objects
+///   against 20 us a period, capped at 2 ms) parks the room for longer than
+///   the window, on any host slower than that.
+fn a_start_and_end_loop_keeps_its_ceiling() {
+    use crate::memory::object::MemoryObject;
+    const LIMIT: u32 = 1; // 20 us of the 20 ms period.
+    const OBJECTS: usize = 300;
+    let began = timer::now();
+    let period_ns = crate::cpu::period_ns();
+    let parent = Job::create(&root(), false).expect("parent");
+    let room = Job::create(&parent, false).expect("room");
+    crate::cpu::set_limit(&room, Some(LIMIT)).expect("limit");
+    let budget = zoraya_cpu::budget_ns(LIMIT, period_ns);
+    sched::ending_watch::watch(Some(&room));
+    let period_of = |t: u64| zoraya_cpu::period_of(t, period_ns);
+    let now_period = || period_of(timer::now().as_nanos());
+    // (charge, all turns, ending turns, period)
+    let sample = || {
+        (
+            crate::cpu::usage(&room).used_ns,
+            sched::ending_watch::all_ns(),
+            sched::ending_watch::ran_ns(),
+            now_period(),
+        )
+    };
+    let start = now_period();
+    // The window: the 11 periods after the one in which the first way out
+    // began, so that the first process's own turn (which may run late past
+    // the budget on a slow host, ADR-0264 point 4) is not in it.
+    let mut window: Option<(u64, u64)> = None;
+    let mut at_first = None;
+    let mut at_last = None;
+    let mut ends: Vec<(u64, bool)> = Vec::new(); // (period its end was seen, inside the window)
+    let rights = <zoraya_abi::MemoryObject as zoraya_abi::ObjectType>::RIGHTS;
+    while at_last.is_none() {
+        let child = process::spawn_in(&room, "spin", true).expect("spin");
+        {
+            let mut table = child.handles.lock();
+            for _ in 0..OBJECTS {
+                let object = MemoryObject::new(PAGE_SIZE, false, None).expect("memory");
+                table
+                    .insert(object::Object::Memory(object), rights, object::next_id())
+                    .expect("a handle");
+            }
+        }
+        let charged_before = crate::cpu::usage(&room).used_ns;
+        child.resume().expect("resume");
+        let mut seen = false;
+        loop {
+            if !child.exit_requested() && crate::cpu::usage(&room).used_ns > charged_before {
+                // It ran: end it, without closing the room.
+                child.request_exit(ExitRecord {
+                    code: 0,
+                    reason: ExitReason::Killed,
+                    detail: 0,
+                    request_kind: None,
+                });
+            }
+            if let Some((first, _)) = window
+                && at_first.is_none()
+                && now_period() >= first
+            {
+                at_first = Some(sample());
+            }
+            if let Some((_, last)) = window
+                && now_period() >= last
+            {
+                at_last = Some(sample());
+                break;
+            }
+            if !seen && child.is_ending() {
+                seen = true;
+                let p = now_period();
+                ends.push((p, at_first.is_some()));
+                window.get_or_insert((p + 1, p + 11));
+            }
+            if child.exit_record().is_some() {
+                break;
+            }
+            sched::sleep_until(Deadline::At(timer::now().plus_nanos(200_000))).expect("queue");
+        }
+        if child.exit_record().is_none() {
+            // The window is over with this one not yet gone.
+            room.kill();
+        }
+        drop(child);
+        // Napping, not yielding: a yield loop would take a turn between every
+        // two of the way out's floor slices.
+        let waited = timer::now();
+        while room.live() > 0 {
+            assert!(
+                timer::now().nanos_since(waited) < PATIENCE_NS,
+                "the room did not empty"
+            );
+            sched::sleep_until(Deadline::At(timer::now().plus_nanos(200_000))).expect("queue");
+        }
+    }
+    let (used_first, all_first, ending_first, from) = at_first.expect("the window began");
+    let (used_last, all_last, ending_last, to) = at_last.expect("the window ended");
+    sched::ending_watch::watch(None);
+    let charged = used_last - used_first;
+    let ran = all_last - all_first;
+    let ending = ending_last - ending_first;
+    // The window runs from a moment in period `from` to one in period `to`:
+    // at most `to - from + 1` periods' budgets.
+    let periods = to - from + 1;
+    let allowance = periods * budget + budget + periods * zoraya_cpu::MIN_SLICE_NS;
+    let bound = allowance + ending;
+    let begun = ends.iter().filter(|(_, inside)| *inside).count();
+    println!(
+        "a start-and-end loop: ways out begun in periods {:?} (window {} to {}), {begun} in the window; charged {charged} ns, ran {ran} ns by the clock, of it {ending} ns by ending threads; bound {bound} ns; debt left {} ns; {} ms",
+        ends.iter().map(|(p, _)| p - start).collect::<Vec<_>>(),
+        from - start,
+        to - start,
+        crate::cpu::debt(&room),
+        timer::now().nanos_since(began) / 1_000_000
+    );
+    assert!(
+        charged <= bound,
+        "charged {charged} ns over {periods} periods, bound {bound} ns ({ending} ns of ways out)"
+    );
+    assert!(
+        ran <= bound,
+        "ran {ran} ns by the clock over {periods} periods, bound {bound} ns"
+    );
+    assert!(
+        begun == 0,
+        "{begun} ways out began in the window: the debt did not park the room"
+    );
 }
 
 /// ADR-0269, ADR-0266 and ADR-0261 point 10 (INV-0269-1 to -3, INV-0266-1,

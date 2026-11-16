@@ -521,7 +521,12 @@ fn schedule() {
                 ran,
                 now.saturating_sub(since),
                 zoraya_cpu::period_of(now, period_ns),
+                period_ns,
+                // ADR-0460: what an ending thread runs past a budget is debt.
+                process.is_ending(),
             );
+            #[cfg(feature = "qemu-test")]
+            ending_watch::count(process, ran);
         }
         let idle = s.idle.as_ref().expect("idle thread");
         let is_idle = Arc::ptr_eq(&current, idle);
@@ -537,14 +542,24 @@ fn schedule() {
             _ => {}
         }
         // The first ready thread whose job has budget; those ahead of it
-        // whose job has none are parked (ADR-0264 point 5).
+        // whose job has none are parked (ADR-0264 point 5), unless their
+        // process is ending (ADR-0460): such a thread runs only the way out
+        // (`Process::is_ending`), charged above like any other, so a killed
+        // job dies in its threads' first turn and not in as many periods as
+        // its teardown has turns (ADR-0285 item 7).
         // `None` with threads still ready: the cap of parks per pick was hit;
         // idle runs and calls `schedule` again (see `RunQueue::pick`).
-        let picked = s.ready.pick(&mut JobTree::new(), now, period_ns, |t| {
-            // SAFETY: `pick` owns `t` (popped from the queue) until it has
-            // decided on it, and a thread holds its process and so the jobs.
-            t.process.as_ref().map(|p| unsafe { JobRef::of(p.job()) })
-        });
+        let picked = s.ready.pick(
+            &mut JobTree::new(),
+            now,
+            period_ns,
+            |t| {
+                // SAFETY: `pick` owns `t` (popped from the queue) until it has
+                // decided on it, and a thread holds its process and so the jobs.
+                t.process.as_ref().map(|p| unsafe { JobRef::of(p.job()) })
+            },
+            |t| t.process.as_ref().is_some_and(|p| p.is_ending()),
+        );
         arm_release(s, now);
         let (next, limited) = match picked {
             Some(p) => (p.thread, p.slice_ns),
@@ -582,6 +597,53 @@ fn schedule() {
         unsafe { arch::switch((*prev).context.get(), (*next).context.get()) };
     }
     arch::restore_interrupts(daif);
+}
+
+/// The test kernel's measure of what the threads of one watched job ran,
+/// all of them and those of ending processes (INV-0460-2 and -4): the time
+/// of every turn, read from the clock at each switch apart from the charge.
+#[cfg(feature = "qemu-test")]
+pub mod ending_watch {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use crate::job::Job;
+    use crate::process::Process;
+
+    /// The watched job's address, or 0.
+    static JOB: AtomicUsize = AtomicUsize::new(0);
+    static RAN_NS: AtomicU64 = AtomicU64::new(0);
+    static ALL_NS: AtomicU64 = AtomicU64::new(0);
+
+    /// Watches `job` from now on, from zero; `None` stops.
+    pub fn watch(job: Option<&Job>) {
+        RAN_NS.store(0, Ordering::Relaxed);
+        ALL_NS.store(0, Ordering::Relaxed);
+        JOB.store(
+            job.map_or(0, |j| j as *const Job as usize),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// The time the watched job's ending threads ran since [`watch`].
+    pub fn ran_ns() -> u64 {
+        RAN_NS.load(Ordering::Relaxed)
+    }
+
+    /// The time every thread of the watched job ran since [`watch`].
+    pub fn all_ns() -> u64 {
+        ALL_NS.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count(process: &Process, ran: u64) {
+        let job: &Job = process.job();
+        if JOB.load(Ordering::Relaxed) != job as *const Job as usize {
+            return;
+        }
+        ALL_NS.fetch_add(ran, Ordering::Relaxed);
+        if process.is_ending() {
+            RAN_NS.fetch_add(ran, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Gives way to any ready thread.

@@ -219,6 +219,28 @@ pub struct AddressSpace {
     /// The transport devices this process holds (INV-0295-3): one entry
     /// each, ended when it holds no handle that can write one, or ends.
     claims: Vec<DeviceClaim>,
+    /// The test kernel's floor for the next mappings' addresses
+    /// (`SET_MAP_FLOOR`): lays out a sparse space without the spacer mappings
+    /// that would cost a page-table entry for every page they span. 0: none.
+    #[cfg(feature = "qemu-test")]
+    map_floor: u64,
+}
+
+/// Page-table entries that one unit of work stands for (INV-0270-1): a step of
+/// `memory_map` or `memory_unmap` writes `STEP` of them and allocates almost
+/// no frames, so without this count a call that lost its step points would
+/// show only in the time, which off HVF has a loose limit. The weight catches
+/// the loss of the step points, not a larger step: a step of 4096 entries is
+/// 64 units and passes `t_bound`'s 80 (about 0.9 ms under HVF, also within
+/// 2 ms); a finer weight would make a `memory_unmap` step that also frees a
+/// step of frames pass the limit.
+const ENTRIES_PER_UNIT: u64 = 64;
+
+/// Counts the units of writing or clearing the entries of `length` bytes,
+/// at the caller's line (`steps::diagnose_units` names the call site).
+#[track_caller]
+fn count_entries(length: u64) {
+    steps::count((length / FRAME_SIZE).div_ceil(ENTRIES_PER_UNIT) as usize);
 }
 
 impl AddressSpace {
@@ -294,6 +316,8 @@ impl AddressSpace {
                 memory,
                 mappings: Mappings::new(),
                 claims: Vec::new(),
+                #[cfg(feature = "qemu-test")]
+                map_floor: 0,
             }),
             Err(_) => {
                 let failure = memory.failure();
@@ -404,9 +428,11 @@ impl AddressSpace {
     /// comes before it, so that running off a mapping faults. The search
     /// visits every mapping that lies below the place: counted as work.
     fn find_gap(&self, length: u64) -> Option<u64> {
-        let (at, visited) = self
-            .mappings
-            .find_gap(length, MAP_LOW, MAP_HIGH, FRAME_SIZE);
+        #[cfg(feature = "qemu-test")]
+        let low = MAP_LOW.max(self.map_floor);
+        #[cfg(not(feature = "qemu-test"))]
+        let low = MAP_LOW;
+        let (at, visited) = self.mappings.find_gap(length, low, MAP_HIGH, FRAME_SIZE);
         steps::count(visited.div_ceil(RECORDS_PER_UNIT));
         at
     }
@@ -505,6 +531,13 @@ impl AddressSpace {
         Ok(va)
     }
 
+    /// Sets the floor of the next mappings' addresses (0: none); the test
+    /// kernel's `SET_MAP_FLOOR`.
+    #[cfg(feature = "qemu-test")]
+    pub fn set_map_floor(&mut self, va: u64) {
+        self.map_floor = va;
+    }
+
     /// The first of the three parts of a mapping made in steps (ADR-0270):
     /// checks the room and finds the address. Nothing is changed.
     pub fn map_reserve(&mut self, length: u64) -> Result<u64, MappingError> {
@@ -519,6 +552,7 @@ impl AddressSpace {
     /// The second part: maps the pages of `[offset, offset + length)` of the
     /// range at `va`. On failure it unmaps what it did of this range, and the
     /// caller what it did before (see [`AddressSpace::unmap_range`]).
+    #[track_caller]
     pub fn map_range(
         &mut self,
         va: u64,
@@ -527,6 +561,7 @@ impl AddressSpace {
         attributes: Attributes,
         page: &impl Fn(u64) -> u64,
     ) -> Result<(), MappingError> {
+        count_entries(length);
         for at in (offset..offset + length).step_by(FRAME_SIZE as usize) {
             let mapped =
                 self.table
@@ -546,7 +581,9 @@ impl AddressSpace {
 
     /// Unmaps `[va + offset, va + offset + length)` of a range being built or
     /// ended, without touching the list of mappings.
+    #[track_caller]
     pub fn unmap_range(&mut self, va: u64, offset: u64, length: u64) {
+        count_entries(length);
         let _ = self.table.unmap(&mut self.memory, va + offset, length);
     }
 
