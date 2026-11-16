@@ -594,7 +594,8 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	mkdir -p $(NET_POSIX_ROOT) target/test-logs && cp -R rootfs/. $(NET_POSIX_ROOT)/ && mkdir -p $(NET_POSIX_ROOT)/bin && \
 	printf 'net.hosts = test.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
 	tools/zcc -O2 -o $(NET_POSIX_ROOT)/bin/zfetch tests/posix-net/zfetch.c && \
-	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NET_POSIX_ROOT)/bin/zfetch && \
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(NET_POSIX_ROOT)/bin/tcptest tests/posix-net/tcptest.c && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NET_POSIX_ROOT)/bin/zfetch $(NET_POSIX_ROOT)/bin/tcptest && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_POSIX_ROOT) $(NET_POSIX_DISK) && \
 	: > $(NET_HTTP_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-posix.log 2>&1 & echo $$! > $(BUILD)/net-httpd-posix.pid; } && \

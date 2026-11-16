@@ -179,6 +179,7 @@ ports/patches/curl/           test-apps test-hand-run
 user/describe/posix/curl.cmd  test-apps test-files
 user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
+user/describe/posix/tcptest.cmd test-net test-files
 
 # The POSIX personality.
 crates/zoraya-posix/          check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest

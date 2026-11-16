@@ -58,5 +58,23 @@
 < zfetch: @HOST@: Permission denied
 < posixrun: exit 1
 < \r\n~>
+# Plan part F7b (proposed ADR-0441): TCP listen, accept and connect over netd's
+# loopback, one C program as server and client. The line is the grant: listen
+# rules for its ports and a reach rule for 127.0.0.1 (ADR-0224's +listen and +net).
+> +listen 9000-9009 +listen 50000-50010 +net 127.0.0.1 tcptest\r
+< tcptest: basics ok
+< tcptest: refusals ok
+< tcptest: port zero ok
+< tcptest: bulk ok
+< tcptest: backlog bound and a closed listener with pending connections ok
+< tcptest: all ok
+< \r\n~>
+# `grants` says what the line gives: the reach rule and the listen rules.
+> grants +listen 9000-9009 +net 127.0.0.1 tcptest\r
+< net: 127.0.0.1
+< reach, any port
+< net: ports 9000-9009
+< listen (grant +listen)
+< \r\n~>
 x power off
 > poweroff\r

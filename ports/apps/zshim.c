@@ -7,7 +7,7 @@
  * caller that tries one reports an error instead of crashing.
  *
  * `bind`, `listen` and `accept` were here until plan part F7: libc.a exports them now
- * (ADR-0439; TCP says `EOPNOTSUPP`, Unix socket files work).
+ * (ADR-0439 Unix socket files; ADR-0441 TCP listeners over netd).
  * `select` and `tcsetattr` were here until stage 10 part 10c: libc.a
  * exports both now (ADR-0342 item 3, ADR-0389), and curl's password prompt
  * has a real terminal to turn echo off on.
