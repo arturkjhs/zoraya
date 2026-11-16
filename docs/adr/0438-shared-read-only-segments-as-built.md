@@ -68,6 +68,9 @@ The shape ADR-0212's broker cache would take. Not in the kernel and not built; O
    call refuses with `OverQuota` or `NoMemory` having taken nothing. **A change from ADR-0108:** what the source object or the file
    holds after the call changes no process started from the image, those already running nor those spawned later; the creator may
    close its object at once, which it had to keep before. *At its peak the call holds the file's object and the copy.*
+   **A deviation from ADR-0108 for the architect to accept:** ADR-0108 says a creator who rewrites the object harms only the child
+   it spawns afterwards; with this item a rewrite of the source object after `image_create` no longer reaches any child. ADR-0415
+   item 2 (accepted) asks for the frames to be filled once at `image_create`, which has this effect.
 2. **The spawn.** A segment that is not writable is one mapping record, `SHARED` (ADR-0431), over the image's frames at the
    segment's address, never writable (the kernel refuses a writable record, `map_kept`), executable for text, with one page-table
    entry per page; the child's job pays for the record and the tables, not for a frame. A writable segment gets a page of its own
@@ -78,9 +81,25 @@ The shape ADR-0212's broker cache would take. Not in the kernel and not built; O
    lives; the frames go with the last of them, the charge with the frames. Neither the spawner nor a child nor a `fork` child
    is charged for them; a child's job is charged for its own pages and tables alone. A creator at its limit is refused at
    `image_create`; a child at its own limit is refused at the spawn with the creator's room unchanged.
-   **What the person sees:** `top` shows a room's memory, which includes the images its jobs made once, however many processes
-   run from them. A line of its own for an image, as ADR-0415 item 6's example shows, is **not built**: `top` has rows for
-   rooms, and the kernel does not name images.
+   **What the person sees (measured, `make test-libposix`, `tests/posix-core/top.script`).** `top` lists rooms, and a room's row
+   holds every job in it; the image of a program the *shell* started is made by the shell, whose job is in no room, so
+   that image is charged outside every room row, and `top` does not show it at all. What `top` does show is the image a
+   room's own job makes, once, and nothing for a spawn of an image that exists. With `t_shared keep` in a room whose launcher L
+   reads a file first, `top tab` read:
+
+   ```
+   ROOM  MEM           CPU  PROCS    DISK  CONNS
+   tab   4259K of 64M  -    2 of 64  -     -        L alone (and the driver)
+   tab   9302K of 64M  -    5 of 64  -     -        + three children of the program's own image
+   tab   11946K of 64M  4%   6 of 64  -     -       + one child of the file: L made an image
+   tab   1407K of 64M  4%   0 of 64  -     -        everything ended
+   ```
+
+   Each child of the image cost the room 1681K (its own job 1545K and the pipe L keeps), no image; the child of the file cost
+   2644K, that and the image's 956K (`tools/check-top-image.py` compares these, and pins none). **The plan's "done when" is
+   met through this job-level proxy, not as "the shared text appears once on a line of `top`":** for the programs a shell
+   starts, the text is held once, paid by the shell's side, and `top` has no row for it. *For the architect:* accept the
+   proxy, or build a line per image (or count the shell's images in the session row) in `top`; neither is built.
 4. **The key is the image, not the content.** There is no cache in the kernel. Two `image_create`s of one file make two images
    and two copies; the processes of one image share. A program shares by spawning from the image it holds. A launcher or the
    broker's cache (ADR-0212, not built) shares across programs by handing one image handle to every spawn.
@@ -102,20 +121,20 @@ zoraya_child_memory t_shared
 
 ### Effect of the vision
 
-Target 3 (big programs): a browser's three processes hold one copy of its text in the guest, charged to the room that started it
-(which `top` shows once). Target 2: shared text is read-only frames of an image the process was given; it can neither be written
+Target 3 (big programs): a browser's three processes hold one copy of its text in the guest, charged to the job that made the image
+(the shell's side, which `top`'s room rows do not show). Target 2: shared text is read-only frames of an image the process was given; it can neither be written
 nor changed by anyone, and a spawn of itself needs no file.
 
 ### Examples
 
 ```
 $ /bin/t_shared
-t_shared: image keeps at least 548864 bytes; L's job: 1455040, +2176256 for a spawn of the file, +139264 +139264 for two of its image
-t_shared: children (own image, file, own image, own image): 1315904 1315904 1315904 1315904 bytes
+t_shared: image keeps 978944 bytes; L's job: 2776256, +1125504 for a spawn of the file, +139264 +139264 for two of its image
+t_shared: children's own jobs: 1582144 1582144 1582144 1582144 bytes (the one of the file is second)
 t_shared: passed
 ```
 
-(one run under HVF; the test compares the numbers with each other, never with these. The spawn of the file costs the image's pages and a pipe; each spawn of the image costs the pipe alone, and the same each time.)
+(one run under HVF; the test compares the numbers with each other, never with these. The spawn of the file costs the image's pages (978944, read from the program headers: the difference is 986240) and a pipe; each spawn of the image costs the pipe alone, and the same each time.)
 
 ## Consequences
 

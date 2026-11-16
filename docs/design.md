@@ -1276,9 +1276,9 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   and tables. Rewriting the object or the file after the call changes nothing. `libposix`'s `posix_spawn` and `execve` of
   `/proc/self/exe` use a duplicate of the bootstrap's `Image` handle (`Posix::own_image`); any other path reads its file and
   makes an image of its own. `zoraya_child_memory(pid, &used)` reads a child's job's memory through the parent's handle
-  (`t_shared`). Known limitations: `image_create` holds the file's object and the copy at once; two images of one file share
+  (`t_shared`; `top.script` and `tools/check-top-image.py` read `top` in a room around it). Known limitations: `image_create` holds the file's object and the copy at once; two images of one file share
   nothing (the key is the image); programs started from the ramdisk (the first processes) still copy every page; `top` has no
-  line per image.
+  line per image and shows an image only in the room whose job made it (the shell's own is in no room).
 - **Startup block (ADR-0109 item 5).** `argc`, `envc`, a header size of 16 and the number of program headers, the
   strings, zeros to a multiple of 8, then the ELF's whole program header table, for `AT_PHDR`.
 - **`job_suspend`, `job_resume`.** Need `KILL`. A flag on every job of the tree and `SUSPENDED` on each; every

@@ -165,8 +165,8 @@ x missing.h
 # makes no image of its own, so its job is charged nothing for the second and third spawn, where a
 # spawn of the file adds the image's pages; the children's own jobs hold their own pages only.
 > /bin/t_shared\r
-< t_shared: image keeps at least
-< t_shared: children (own image, file, own image, own image)
+< t_shared: image keeps
+< t_shared: children's own jobs:
 < t_shared: passed
 < \r\n~> 
 > posixrun /bin/t_unix calls\r
