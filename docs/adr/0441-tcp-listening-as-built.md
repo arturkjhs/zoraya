@@ -129,6 +129,24 @@ its own: a listener cannot do more to the client than the client's ends allow, a
 - **Follow-up.** The architect decides whether the loopback must be per-account or per-room once rooms are known to `netd`;
   Option B for the NIC; `localhost`.
 
+- **Decisions for the architect, before accepting this ADR.**
+  1. **The loopback belongs to the whole machine.** A program whose scope has a reach rule naming 127.0.0.1 (or `any`) can
+     connect to *any* listener on the machine, another room's server included, can tell which ports are listened on (a refused
+     connect against an accepted one), and can fill a listener's 64-slot queue so that its owner's own clients are refused.
+     `netd` cannot tell rooms (the shell carves an account per POSIX program, so `python3` and `curl` of one line are two
+     accounts), which is why it is not narrower. This is a **condition of the untrusted-room gate (ADR-0268)**: an untrusted
+     room must not be given a reach rule for the loopback until one of these exists: (a) a per-room loopback once `netd` knows
+     rooms; (b) an ACL on a listener, by account (the listening account names the accounts that may connect). Until then an
+     untrusted line has no `+net 127.0.0.1` word to give, and a trusted one is the person's own grant.
+  2. Whether the NIC is listenable (Option B).
+- **Known limitations of the build.** `bind` of port 0 followed by `getsockname` *before* `listen` reads port 0: the port is
+  picked by `netd` at `listen` (CPython's `socketserver` reads it after `listen`, but `test.support`'s `find_unused_port`,
+  xmlrpc and some servers read it before). Fixing it needs a port reserved at `bind` (a new request or a library-side pick that
+  `netd` may refuse), so it is not built; recorded in `docs/backlog.md`. `netd` keys listeners on the port alone (not
+  address): `bind` of 127.0.0.1 and of 0.0.0.0 on one port are the same listener. If the holders of the session account (a
+  line's own programs that join it instead of carving) take all 8 listeners, a `+listen` line of a carved account has its
+  listen refused (`ENOBUFS`) and the network of that line is useless for serving.
+
 ## Invariants
 
 - **INV-0441-1.** A loopback `connect` leaves nothing in `netd`: the two stream ends are in the listener's queue or closed, the

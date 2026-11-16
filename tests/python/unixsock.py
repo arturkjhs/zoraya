@@ -23,7 +23,7 @@ for x in (a, c, s):
     x.close()
 os.unlink(path)
 # An AF_INET socket binds (the address is recorded) and its `listen` is refused by `netd`'s grant: the line has no
-# +listen word (plan part F7b; the served case is tests/python/serve.py's).
+# +listen word (plan part F7b; the served case is tests/shell/python-serve.script's).
 t = socket.socket()
 t.bind(("127.0.0.1", 0))
 try:

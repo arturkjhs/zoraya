@@ -165,3 +165,9 @@ not serve `python3` and `curl` of one line). Should rooms get a loopback of thei
 row of ADR-0262's table in code changed from 4, 0, 0 to 8, 1 (only for a carve whose rights have `listen`), 4. (4) `+listen` is
 built in the shell (ADR-0224's word), not the rooms' words or the pills. (5) `tests/python/regr-ignore.txt` was not re-evaluated
 (no regrtest run here): `test-python-regr` will show which asyncio and `test_socket` server cases now pass or hang.
+
+**2026-11-16, F7b review (TASK-34-review-f7c), decision needed BEFORE accepting ADR-0441, and a condition of the untrusted-room gate
+(ADR-0268):** the loopback belongs to the whole machine. A program with a reach rule naming 127.0.0.1 can connect to any
+account's listener (another room's server too), learn which ports are listened on, and fill a listener's 64-slot queue. Options:
+(a) a per-room loopback once `netd` knows rooms; (b) an ACL on a listener by account. Until one exists an untrusted room must
+not be given a loopback reach rule. ADR-0441 says so in its "Decisions for the architect".

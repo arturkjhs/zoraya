@@ -235,7 +235,7 @@ protocol! {
     /// that covers the port and TCP (ADR-0220, ADR-0224; proposed ADR-0441).
     /// The one handle is the server end of the *listener channel* the client
     /// made: `netd` writes an `Accepted` to it for each connection to the
-    /// port from the same account, and the listener ends when the channel
+    /// port (the machine's, whoever's account: proposed ADR-0441 item 4), and the listener ends when the channel
     /// closes. Answered with `Listening`: `BUSY` when the port is in use,
     /// `OVER_QUOTA` at the account's bound of listeners.
     message Listen = 5, handles 1 {

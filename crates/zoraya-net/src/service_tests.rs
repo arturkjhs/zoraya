@@ -406,12 +406,14 @@ fn random_requests_never_panic() {
             },
             1,
         ),
+        listen_message(8000, 1),
+        listen_message(0, 1),
     ];
     for _ in 0..20_000 {
         let mut m = if rng.next().is_multiple_of(4) {
             (0..(rng.next() % 120)).map(|_| rng.next() as u8).collect()
         } else {
-            seeds[(rng.next() % 3) as usize].clone()
+            seeds[(rng.next() % 5) as usize].clone()
         };
         if !m.is_empty() {
             for _ in 0..(rng.next() % 4) {
