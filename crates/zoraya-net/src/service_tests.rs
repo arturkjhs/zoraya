@@ -1234,7 +1234,7 @@ fn loop_scope(reach: Option<Ports>, listen: &[Ports]) -> Vec<u8> {
     let listen_rules: Vec<ListenRule> = listen
         .iter()
         .map(|ports| ListenRule {
-            ports: ports.clone(),
+            ports: *ports,
             protocols: Protocols::BOTH,
         })
         .collect();
@@ -1450,7 +1450,7 @@ fn listeners_are_bounded_per_account_at_exactly_the_bound() {
         assert!(made < 100, "the bound never came");
     }
     // 8001 and the ones after it: GLOBAL, less the carved account's one.
-    assert_eq!(made as u32, GLOBAL[Kind::Listeners as usize] - 1);
+    assert_eq!(made, GLOBAL[Kind::Listeners as usize] - 1);
 }
 
 #[test]

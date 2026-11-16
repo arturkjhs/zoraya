@@ -186,8 +186,14 @@ note = "a listener is never writable"
 [[mutant]]
 id = "F7b-listen-word-no-right"
 file = "crates/zoraya-shell/src/netgrant.rs"
-find = '''        | (if listens.is_empty() { 0 } else { rights::LISTEN });'''
-replace = '''        | 0;'''
+find = '''            0
+        } else {
+            rights::LISTEN
+        });'''
+replace = '''            0
+        } else {
+            0
+        });'''
 note = "a +listen word gives the listen right"
 
 [[mutant]]
