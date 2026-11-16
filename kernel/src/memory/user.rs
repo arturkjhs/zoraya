@@ -229,10 +229,16 @@ pub struct AddressSpace {
 /// Page-table entries that one unit of work stands for (INV-0270-1): a step of
 /// `memory_map` or `memory_unmap` writes `STEP` of them and allocates almost
 /// no frames, so without this count a call that lost its step points would
-/// show only in the time, which off HVF has a loose limit.
+/// show only in the time, which off HVF has a loose limit. The weight catches
+/// the loss of the step points, not a larger step: a step of 4096 entries is
+/// 64 units and passes `t_bound`'s 80 (about 0.9 ms under HVF, also within
+/// 2 ms); a finer weight would make a `memory_unmap` step that also frees a
+/// step of frames pass the limit.
 const ENTRIES_PER_UNIT: u64 = 64;
 
-/// Counts the units of writing or clearing the entries of `length` bytes.
+/// Counts the units of writing or clearing the entries of `length` bytes,
+/// at the caller's line (`steps::diagnose_units` names the call site).
+#[track_caller]
 fn count_entries(length: u64) {
     steps::count((length / FRAME_SIZE).div_ceil(ENTRIES_PER_UNIT) as usize);
 }
@@ -546,6 +552,7 @@ impl AddressSpace {
     /// The second part: maps the pages of `[offset, offset + length)` of the
     /// range at `va`. On failure it unmaps what it did of this range, and the
     /// caller what it did before (see [`AddressSpace::unmap_range`]).
+    #[track_caller]
     pub fn map_range(
         &mut self,
         va: u64,
@@ -574,6 +581,7 @@ impl AddressSpace {
 
     /// Unmaps `[va + offset, va + offset + length)` of a range being built or
     /// ended, without touching the list of mappings.
+    #[track_caller]
     pub fn unmap_range(&mut self, va: u64, offset: u64, length: u64) {
         count_entries(length);
         let _ = self.table.unmap(&mut self.memory, va + offset, length);
