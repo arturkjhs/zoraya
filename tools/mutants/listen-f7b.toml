@@ -148,19 +148,11 @@ replace = '''    true'''
 note = "bind takes only the wildcard and 127/8"
 
 [[mutant]]
-id = "F7b-listener-writable"
-file = "crates/zoraya-posix/src/socket.rs"
-find = '''            return if writing {
-                None
-            } else {
-                self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
-            };
-        }
-        match self.state {'''
-replace = '''            return self.ctl.map(|c| (c, READABLE | PEER_CLOSED));
-        }
-        match self.state {'''
-note = "a listener is never writable"
+id = "F7b-listener-pollout"
+file = "crates/zoraya-posix/src/poll.rs"
+find = '''if want_out && !sk.listening && !sk.unix.as_ref().is_some_and(|u| u.listening) {'''
+replace = '''if want_out {'''
+note = "a listener is never writable: POLLOUT is not reported"
 
 [[mutant]]
 id = "F7b-listen-word-no-right"

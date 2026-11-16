@@ -1016,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn a_listener_is_waited_on_by_its_channel_and_is_never_writable() {
+    fn a_listener_is_waited_on_by_its_channel_for_reading() {
         use crate::sys::signals::{PEER_CLOSED, READABLE};
         let mut s: Socket<u8> = Socket::fresh(SOCK_STREAM, false);
         s.ctl = Some(9);
@@ -1026,6 +1026,8 @@ mod tests {
         assert_eq!(s.wait_source(false), None);
         s.listening = true;
         assert_eq!(s.wait_source(false), Some((9, READABLE | PEER_CLOSED)));
+        // Writing has no source here; `poll` does not report a listener as
+        // writable (tests/tcplisten.rs).
         assert_eq!(s.wait_source(true), None);
     }
 

@@ -375,6 +375,22 @@ fn poll_says_pollin_on_a_listener_exactly_when_a_connection_waits() {
     t.r.p.fcntl(l, F_SETFL, i64::from(o::NONBLOCK)).unwrap();
     t.r.p.accept(l, false, false).unwrap();
     assert!(!ready(&mut t), "nothing waits after the accept");
+    // A listener is never writable: POLLOUT alone reports nothing, with
+    // or without a waiting connection.
+    let out = |t: &mut Rigged| {
+        let mut f = [PollFd {
+            fd: l,
+            events: POLLOUT,
+            revents: 0,
+        }];
+        t.r.p.poll_once(&mut f, Some(0)).unwrap();
+        f[0].revents
+    };
+    assert_eq!(out(&mut t), 0);
+    let c2 = stream(&mut t.r);
+    t.r.p.connect(c2, &addr([127, 0, 0, 1], 8000)).unwrap();
+    assert_eq!(out(&mut t), 0);
+    t.r.p.accept(l, false, false).unwrap();
     assert_eq!(t.r.p.accept(l, false, false), Err(EAGAIN));
 }
 
