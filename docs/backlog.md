@@ -599,8 +599,10 @@ across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its
   (a busy HVF host gave factor 2, which turned 2 ms into 1 s). Under TCG a masked time over 1 s is noted and the run
   repeated, up to three runs; the units are checked in every run. Under 10 CPU hogs 6 of 10 rounds had gone over 1 s at
   different sites with their units in bound (stalls of the vCPU thread).
-- **Note:** the undo of a failed `memory_map` (`syscall.rs`, `unmap_range(va, 0, done)`) unmaps all it had done in one
-  interval; with the entries counted, a large failed map would now show as units. Not reached by a test.
+- **Fixed (second check, C1):** the undo of a cancelled or failed `memory_map` cleared all it had mapped in one interval
+  (about 110 ms for a room's 2 GiB under HVF); it now goes in steps (`Calls::undo_map`), and `t_bound`'s `map-loop`
+  kills a process in the middle of a 24 MiB map (87 units against 80 with the old undo). A run over the time bound is
+  now repeated under HVF too.
 
 ## A line per image in `top` (F6, ADR-0438; relayed from the architect, 2026-11-16)
 
