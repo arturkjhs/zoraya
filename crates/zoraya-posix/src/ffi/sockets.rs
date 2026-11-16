@@ -3,7 +3,8 @@
 //! given. Every call is a thin wrapper over `net.rs`, which is host tested;
 //! what is here is pointers, lengths and `struct` layouts. `bind`, `listen`
 //! and `accept` are socket files for Unix sockets (plan part F7, proposed
-//! ADR-0439) and `EOPNOTSUPP` for TCP; not offered: datagram sockets.
+//! ADR-0439) and a listener of `netd` for TCP (plan part F7b, proposed
+//! ADR-0441); not offered: datagram sockets.
 
 use super::procs::{after_write, poll, restartable, waiting};
 use super::*;
@@ -98,7 +99,7 @@ extern "C" fn connect(fd: i32, addr: *const u8, len: u32) -> i32 {
 }
 
 /// `bind` (ADR-0412 item 5, proposed ADR-0439): a socket file in the line's
-/// `/tmp` for a Unix socket; a TCP listener is not built.
+/// `/tmp` for a Unix socket; for TCP the address `listen` asks `netd` for.
 #[unsafe(no_mangle)]
 extern "C" fn bind(fd: i32, addr: *const u8, len: u32) -> i32 {
     // SAFETY: C's contract: `addr` is a `struct sockaddr` of `len` bytes.
@@ -117,7 +118,7 @@ extern "C" fn listen(fd: i32, backlog: i32) -> i32 {
 }
 
 /// `accept4`: the flags are `SOCK_NONBLOCK` and `SOCK_CLOEXEC`; the peer of
-/// an accepted Unix socket has no name.
+/// an accepted Unix socket has no name, a TCP one is a `sockaddr_in`.
 fn accept_with(fd: i32, addr: *mut u8, len: *mut u32, flags: i32) -> i32 {
     testcancel();
     if flags & !(sock::SOCK_NONBLOCK | sock::SOCK_CLOEXEC) != 0 {
@@ -131,8 +132,17 @@ fn accept_with(fd: i32, addr: *mut u8, len: *mut u32, flags: i32) -> i32 {
     match waiting(|p| p.accept(fd, nonblock, cloexec)) {
         Ok(new) => {
             let family = (crate::unix::AF_UNIX as u16).to_ne_bytes();
-            // SAFETY: C's contract for `addr` and `len`.
-            if let Err(e) = unsafe { put_unix_addr(addr, len, &family) } {
+            let put = if with(|p| p.is_unix(new)).unwrap_or(true) {
+                // SAFETY: C's contract for `addr` and `len`.
+                unsafe { put_unix_addr(addr, len, &family) }
+            } else {
+                match state(|p| p.getpeername(new)) {
+                    // SAFETY: C's contract for `addr` and `len`.
+                    Ok((a, port)) => unsafe { put_sockaddr(addr, len, a, port) },
+                    Err(e) => Err(e),
+                }
+            };
+            if let Err(e) = put {
                 let _ = state(|p| p.close(new));
                 return int(Err(e));
             }

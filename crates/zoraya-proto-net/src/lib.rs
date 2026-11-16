@@ -3,8 +3,9 @@
 //! now: `status`, `ping` (a diagnostic echo, proposed ADR-0281), `narrow`
 //! and, since N3, `connect` for TCP with the client's stream ends
 //! (ADR-0222 item 3 and its note of 2026-11-10; proposed ADR-0286).
-//! `datagram`, `listen` and `resolve` come later, each with a new ordinal; an
-//! unknown ordinal gets `ErrorReply` and the connection stays.
+//! `datagram` comes later with a new ordinal; `resolve` came with N4 and
+//! `listen` with plan part F7b (proposed ADR-0441); an unknown ordinal gets
+//! `ErrorReply` and the connection stays.
 //!
 //! One request at a time per connection (ADR-0055); `ping`'s reply comes when
 //! the run is over, so the connection is busy until then. Addresses are IPv4
@@ -229,6 +230,23 @@ protocol! {
         addresses: Seq<'a, Address, MAX_ADDRESSES>,
     }
 
+    /// Listens for TCP connections on `port` (0: a port `netd` picks above
+    /// 49151 that a listen rule covers), right `listen` and a listen rule
+    /// that covers the port and TCP (ADR-0220, ADR-0224; proposed ADR-0441).
+    /// The one handle is the server end of the *listener channel* the client
+    /// made: `netd` writes an `Accepted` to it for each connection to the
+    /// port (the machine's, whoever's account: proposed ADR-0441 item 4), and the listener ends when the channel
+    /// closes. Answered with `Listening`: `BUSY` when the port is in use,
+    /// `OVER_QUOTA` at the account's bound of listeners.
+    message Listen = 5, handles 1 {
+        port: Below<65536>,
+    }
+    message Listening = 5, handles 0 {
+        status: Code,
+        /// The port listened on (the request's, or the one picked).
+        port: Below<65536>,
+    }
+
     /// On the connection channel, from `netd`: the connection is open.
     message Connected = 16, handles 0 {
         address: u32,
@@ -279,6 +297,17 @@ protocol! {
         status: Code,
     }
 
+    /// On a listener channel, from `netd`: a connection arrived (proposed
+    /// ADR-0441). The two handles are the *read* end of the stream the peer
+    /// writes and the *write* end of the stream it reads, which the peer made
+    /// itself (the same two a `connect` gave `netd`), so the listener holds
+    /// the connection's own byte rings and `netd` nothing. `address` and
+    /// `port` are the peer's (127.0.0.1 and a number `netd` made up).
+    message Accepted = 19, handles 2 {
+        address: u32,
+        port: Below<65536>,
+    }
+
     /// On a launcher's *services channel*, from `init` (ADR-0221 item 6,
     /// proposed ADR-0296): the network was restarted, and the handle is the
     /// launcher's new root connection. Not a request: `netd` never sees it.
@@ -298,22 +327,30 @@ protocol! {
 /// `Crash`'s ordinal, for a `netd` that checks it before the service does.
 pub const CRASH_ORDINAL: u32 = 40;
 
+/// The address of a connection that came through `netd`'s loopback.
+pub const LOOPBACK: u32 = 0x7f00_0001;
+/// The first port `netd` picks for a `listen` of port 0 and for the made-up
+/// port of a loopback connection's client.
+pub const EPHEMERAL_FIRST: u32 = 49152;
+
 /// The most connections one carved account may be given (ADR-0262's
 /// `--conns`, scaled to `netd`'s 16: a quarter).
 pub const MAX_BUDGET: u32 = 4;
 
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 13] = [
+pub const ORDINALS: [(&str, u32); 15] = [
     ("status", 1),
     ("ping", 2),
     ("connect", 3),
     ("resolve", 4),
+    ("listen", 5),
     ("narrow", 6),
     ("narrow_account", 7),
     ("duplicate", 8),
     ("connected", 16),
     ("failed", 17),
     ("reset", 18),
+    ("accepted", 19),
     ("network_restarted", 32),
     ("network_down", 33),
     ("crash", 40),

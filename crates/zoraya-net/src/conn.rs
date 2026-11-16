@@ -196,7 +196,10 @@ impl<C: Client> Conn<C> {
                 self.saw_local = true;
                 continue;
             }
-            if Some(a) == stack.address() {
+            // 127.0.0.0/8 is `netd`'s loopback, served from the address of a
+            // `connect` (`Action::Loopback`); a name that resolved to it has
+            // no way there, and the frame must not leave by the NIC.
+            if Some(a) == stack.address() || a[0] == 127 {
                 self.last_failure = reason::UNREACHABLE;
                 continue;
             }

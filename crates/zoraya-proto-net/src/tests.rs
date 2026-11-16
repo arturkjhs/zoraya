@@ -408,3 +408,45 @@ fn a_ping_by_name_is_answered_within_the_lookup_bound_and_its_run() {
         LOOKUP_US + 15 * PING_INTERVAL_US + 30_000_000
     );
 }
+
+#[test]
+fn listen_and_accepted_round_trip_are_total_and_count_their_handles() {
+    for port in [0u32, 1, 8000, 65535] {
+        total(Listen { port: Below(port) });
+        total(Accepted {
+            address: LOOPBACK,
+            port: Below(port),
+        });
+        for s in 0..9 {
+            total(Listening {
+                status: Below(s),
+                port: Below(port),
+            });
+        }
+    }
+    assert_eq!(<Listen as Message>::HANDLES, 1);
+    assert_eq!(<Accepted as Message>::HANDLES, 2);
+    assert_eq!(<Listening as Message>::HANDLES, 0);
+    assert_eq!(<Listen as Message>::ORDINAL, 5);
+    assert_eq!(<Listening as Message>::ORDINAL, 5);
+    assert_eq!(<Accepted as Message>::ORDINAL, 19);
+    // A port past 65535 is refused, and so is a handle count that is not the
+    // message's.
+    let mut out = [0; 64];
+    let n = encode(&Listen { port: Below(80) }, 1, &mut out).unwrap();
+    assert!(decode::<Listen>(&out[..n], 0).is_err());
+    assert!(decode::<Listen>(&out[..n], 2).is_err());
+    let n = encode(
+        &Accepted {
+            address: LOOPBACK,
+            port: Below(80),
+        },
+        NO_REPLY_FOR_TEST,
+        &mut out,
+    )
+    .unwrap();
+    assert!(decode::<Accepted>(&out[..n], 1).is_err());
+    assert!(decode::<Accepted>(&out[..n], 3).is_err());
+}
+
+const NO_REPLY_FOR_TEST: u32 = zoraya_protocol::NO_REPLY;

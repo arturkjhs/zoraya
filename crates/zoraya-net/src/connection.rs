@@ -21,6 +21,8 @@ pub enum Request<'a> {
         target: ConnectTarget<'a>,
         port: u16,
     },
+    /// A TCP listener on a port (plan part F7b, proposed ADR-0441).
+    Listen { port: u16 },
     /// The addresses of a name (N4).
     Resolve { name: &'a str },
     /// `narrow` with the rights and the encoded scope asked for.
@@ -136,6 +138,11 @@ impl Connection {
                     ConnectTarget::Address(a) => scope.allows_address(a, port, Protocols::TCP),
                 })
             }
+            Request::Listen { port } => verdict(
+                self.rights & rights::LISTEN != 0
+                    && port != 0
+                    && self.scope().allows_listen(port, Protocols::TCP),
+            ),
             Request::Resolve { name } => verdict(
                 self.rights & rights::REACH != 0
                     && self.scope().resolve_grant(name) != NameGrant::No,

@@ -143,3 +143,21 @@ scheduled run 43819664106 (head `4e86f859`) is green: F5, F8, F6 and F7a (and `s
 (`tools/ci-last-full.rb --green-for SHA`). Open for the architect: exclude this test and its `unique_lock` twin, and other
 wall-clock tests, from the TCG libc++ run (`tests/cxx/libcxx-tcg-excluded.txt`, HVF only, as for LWG3343), or keep them and
 re-run a failed job once; the new `RUNNER-STEP` lines in the serial runner will show per-step times in the next full run.
+
+**2026-11-16, from plan part F7b (TCP listening, proposed ADR-0441):** `python3 -m http.server` serves a file to `curl`
+(`make test-python-serve`, PASS 26 steps; `tcptest` in `make test-net-posix`). Decisions for the architect: (1) the
+loopback is `netd` handing the client's two stream ends to the listener, not a second smoltcp interface (ADR-0440 item 5; the
+spike was a reading of smoltcp's `socket_egress`, not an experiment): a listener is therefore not reachable from the NIC. Keep, or
+have a later part build the second interface? (2) The loopback is the machine's: a reach rule for 127.0.0.1 and a listen rule are
+two grants, and `netd` cannot tell rooms (the shell carves one account per POSIX program, so an account-scoped loopback would
+not serve `python3` and `curl` of one line). Should rooms get a loopback of their own once `netd` knows them? (3) The listeners
+row of ADR-0262's table in code changed from 4, 0, 0 to 8, 1 (only for a carve whose rights have `listen`), 4. (4) `+listen` is
+built in the shell (ADR-0224's word), not the rooms' words or the pills. (5) `tests/python/regr-ignore.txt` was not re-evaluated
+(no regrtest run here): `test-python-regr` will show which asyncio and `test_socket` server cases now pass or hang.
+
+**2026-11-16, F7b review (TASK-34-review-f7c), decision needed BEFORE accepting ADR-0441, and a condition of the untrusted-room gate
+(ADR-0268):** the loopback belongs to the whole machine. A program with a reach rule naming 127.0.0.1 can connect to any
+account's listener (another room's server too), learn which ports are listened on, and fill a listener's 64-slot queue. Options:
+(a) a per-room loopback once `netd` knows rooms; (b) an ACL on a listener by account. Until one exists an untrusted room must
+not be given a loopback reach rule from any source: a `+net 127.0.0.1` word, `any`, a 127/8 prefix, or ADR-0328's URL-operand
+grant (a literal `curl http://127.0.0.1:PORT/` gets the rule automatically). ADR-0441 says so in its "Decisions for the architect".

@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
+.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-serve test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -594,7 +594,8 @@ test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	mkdir -p $(NET_POSIX_ROOT) target/test-logs && cp -R rootfs/. $(NET_POSIX_ROOT)/ && mkdir -p $(NET_POSIX_ROOT)/bin && \
 	printf 'net.hosts = test.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
 	tools/zcc -O2 -o $(NET_POSIX_ROOT)/bin/zfetch tests/posix-net/zfetch.c && \
-	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NET_POSIX_ROOT)/bin/zfetch && \
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(NET_POSIX_ROOT)/bin/tcptest tests/posix-net/tcptest.c && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NET_POSIX_ROOT)/bin/zfetch $(NET_POSIX_ROOT)/bin/tcptest && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_POSIX_ROOT) $(NET_POSIX_DISK) && \
 	: > $(NET_HTTP_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-posix.log 2>&1 & echo $$! > $(BUILD)/net-httpd-posix.pid; } && \
@@ -784,6 +785,21 @@ test-python-mem: $(KERNEL) $(RUNNER) tools-storage python
 	target/debug/zoraya-mkfs --size 256M --from $(BUILD)/$@-root $(BUILD)/$@-disk.img && \
 	$(RUNNER) --timeout $(PYTHON_MEM_TIMEOUT) --script tests/shell/python-mem.script --label python-mem-$(PYTHON_ACCEL) --expect-line "2048 MiB  RAM" -- \
 		$(RUN_QEMU) --test --keys --disk $(BUILD)/$@-disk.img $(PYTHON_MEM_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL) && \
+	target/debug/zoraya-fsck $(BUILD)/$@-disk.img
+# Plan part F7b (proposed ADR-0441), the plan's "done when": `python3 -m http.server`
+# serves a file to `curl` in the same room (tests/shell/python-serve.script). A
+# volume of rootfs/, python's root and curl; the guest has a NIC so that netd runs, and
+# the exchange stays on netd's loopback: no host server, no guestfwd.
+PYTHON_SERVE_TIMEOUT ?= 900
+test-python-serve: $(KERNEL) $(RUNNER) tools-storage python apps
+	@$(call NET_OR_SKIP,$@,skipped) \
+	rm -rf $(BUILD)/$@-root && mkdir -p $(BUILD)/$@-root target/test-logs && cp -R rootfs/. $(BUILD)/$@-root/ && \
+	cp -R $(PYTHON_ROOT)/. $(BUILD)/$@-root/ && cp $(APPS_ROOT)/bin/curl $(BUILD)/$@-root/bin/curl && \
+	mkdir -p $(BUILD)/$@-root/home && cp tests/python/served.txt $(BUILD)/$@-root/home/ && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(BUILD)/$@-root/bin && \
+	target/debug/zoraya-mkfs --size 256M --from $(BUILD)/$@-root $(BUILD)/$@-disk.img && \
+	$(RUNNER) --timeout $(PYTHON_SERVE_TIMEOUT) --script tests/shell/python-serve.script --label python-serve-$(PYTHON_ACCEL) -- \
+		$(RUN_QEMU) --test --keys --net --disk $(BUILD)/$@-disk.img $(PYTHON_QEMU) --accel $(PYTHON_ACCEL) $(KERNEL) && \
 	target/debug/zoraya-fsck $(BUILD)/$@-disk.img
 # The TLS check (INV-0320-3) reads the server's log of test-python only: the
 # regrtest scripts make no connection to it.
@@ -1837,7 +1853,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-tour-terminal test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and

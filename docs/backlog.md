@@ -656,3 +656,10 @@ per image (the image's pages once, however many processes run from it, as ADR-04
 - The service's 64 listeners, 256 nodes and queued connections (paid by `tmp_job`, no limit of its own) are the line's: a per-account bound
   would stop one program from filling them (ADR-0439 effect of the vision).
 - `ports/apps/sshshim.c` replaces libc's `socketpair` with an `ENOSYS` stub for ssh: drop it so ssh (ControlMaster, proxy commands) can use Unix socket pairs (F7 review, R4).
+
+## TCP bind of port 0 before listen (plan part F7b)
+
+`bind(0)` then `getsockname` before `listen` gives port 0: netd picks the port at `listen` (ADR-0441). CPython's
+`socketserver` reads `getsockname()` straight after `bind` (`server_port` is 0, `wsgiref` gives `SERVER_PORT=0`; `http.server` prints
+the right port only because it reads again after `listen`), and `find_unused_port` and xmlrpc read it before too. Needs a port reserved with `netd`
+at `bind` (a request, a bound on reservations) or a library-side pick that `listen` asks for exactly.

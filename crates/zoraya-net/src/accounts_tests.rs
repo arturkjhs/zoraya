@@ -44,6 +44,7 @@ fn a_carve_takes_its_limits_from_the_caller_and_gives_them_back() {
     assert_eq!(a.limit(c, Kind::Resolutions), 2);
     assert_eq!(a.limit(c, Kind::CacheEntries), 16);
     assert_eq!(a.limit(c, Kind::Listeners), 0);
+    assert_eq!(a.limit(SESSION, Kind::Listeners), 8);
     assert_eq!(a.limit(SESSION, Kind::Connections), 12);
     // Nothing holds it: it ends at the last hold.
     a.join(c);
@@ -446,4 +447,34 @@ fn inv_0262_1_connect_at_the_bound_is_over_quota_while_another_account_connects(
     service.connection_ended(acct);
     assert!(!over(&connect_to(&mut service, &mut net, x)));
     assert_eq!(service.accounts().used(acct, Kind::Connections), 2);
+}
+
+/// ADR-0262: "0 listeners unless `+listen`": a carve that asks for one gets one,
+/// from the session's, and gives it back at its end; no more than one.
+#[test]
+fn a_carve_with_a_listener_takes_one_from_the_caller_and_gives_it_back() {
+    let mut a = Accounts::new();
+    let c = a.carve_with(SESSION, 2, 1).unwrap();
+    sums_hold(&a);
+    assert_eq!(a.limit(c, Kind::Listeners), 1);
+    assert_eq!(
+        a.limit(SESSION, Kind::Listeners),
+        GLOBAL[Kind::Listeners as usize] - 1
+    );
+    assert_eq!(a.carve_with(SESSION, 2, 2), Err(CarveError::Invalid));
+    // The column: all carved accounts together hold at most COLUMN's.
+    let mut carved = vec![c];
+    while let Ok(x) = a.carve_with(SESSION, 1, 1) {
+        carved.push(x);
+    }
+    let held: u32 = carved.iter().map(|x| a.limit(*x, Kind::Listeners)).sum();
+    assert!(held <= COLUMN[Kind::Listeners as usize]);
+    assert_eq!(
+        carved.len(),
+        MAX_CARVED.min(COLUMN[Kind::Listeners as usize] as usize)
+    );
+    a.join(c);
+    a.leave(c);
+    assert!(!a.exists(c));
+    sums_hold(&a);
 }

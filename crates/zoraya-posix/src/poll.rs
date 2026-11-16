@@ -266,7 +266,11 @@ impl<S: Sys> Posix<S> {
                         None => now |= ins,
                     }
                 }
-                if want_out {
+                // A listener is never writable (proposed ADR-0441), though
+                // `wait_source(true)` is `None`, which reads as "ready now":
+                // no bit and no probe, so POLLOUT alone reports nothing and
+                // waits out its timeout (or a signal), as Linux does.
+                if want_out && !sk.listening && !sk.unix.as_ref().is_some_and(|u| u.listening) {
                     match sk.wait_source(true) {
                         Some((e, m)) => probes.push(write_probe(e, m)),
                         None => now |= outs,

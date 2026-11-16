@@ -27,6 +27,23 @@ fn go_nets(
     nets: &[&str],
     base: bool,
 ) -> Result<Option<(u32, Vec<u8>)>, Refused> {
+    go_all(text, args, nets, &[], base)
+}
+
+fn go_all(
+    text: &str,
+    args: &[(&str, bool)],
+    nets: &[&str],
+    listens: &[&str],
+    base: bool,
+) -> Result<Option<(u32, Vec<u8>)>, Refused> {
+    let listens: Vec<Value> = listens
+        .iter()
+        .map(|a| Value {
+            text: String::from(*a),
+            literal: true,
+        })
+        .collect();
     let d: Description = zoraya_describe::parse(text.as_bytes()).unwrap();
     let values: Vec<Value> = args
         .iter()
@@ -54,6 +71,7 @@ fn go_nets(
         cwd: "/",
         grants: &[],
         nets: &nets,
+        listens: &listens,
         base_system: base,
     })
 }
@@ -881,4 +899,79 @@ fn curl_and_wget_take_a_url_name_with_public_answers_only() {
         // From a value: refused without a word.
         assert!(go(d, &[("http://test.zoraya/", false)], true).is_err());
     }
+}
+
+#[test]
+fn a_listen_word_gives_the_listen_right_and_a_listen_rule_and_no_reach() {
+    use crate::netgrant::{describe, parse_listen};
+    let (r, bytes) = scope_of(go_all(CAT, &[], &[], &["8000"], false).unwrap());
+    assert_eq!(r, rights::LISTEN);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_listen(8000, Protocols::TCP) && s.allows_listen(8000, Protocols::UDP));
+    assert!(!s.allows_listen(8001, Protocols::TCP) && !s.allows_listen(7999, Protocols::TCP));
+    assert_eq!(s.reach_rules().count(), 0, "a listener reaches nothing");
+    assert_eq!(
+        describe(&bytes),
+        vec![String::from(
+            "net: port 8000               listen (grant +listen)"
+        )]
+    );
+    // With a `+net` word: both rights, the reach rules first in `grants`.
+    let (r, bytes) =
+        scope_of(go_all(CAT, &[], &["127.0.0.1:8000"], &["8000-8002", "9000"], false).unwrap());
+    assert_eq!(r, rights::REACH | rights::LISTEN);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_listen(8002, Protocols::TCP) && s.allows_listen(9000, Protocols::TCP));
+    assert!(!s.allows_listen(8003, Protocols::TCP));
+    let lines = describe(&bytes);
+    assert_eq!(lines.len(), 3);
+    assert!(
+        lines[0].contains("127.0.0.1:8000") && lines[0].contains("reach"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].contains("ports 8000-8002") && lines[2].contains("port 9000"),
+        "{lines:?}"
+    );
+    // The pills of the reach rules still pair with their own lines.
+    assert_eq!(
+        crate::netgrant::pills(&bytes),
+        vec![String::from("+net 127.0.0.1:8000")]
+    );
+    // The word is a port or a range, 1 to 65535, and nothing else.
+    for bad in [
+        "",
+        "0",
+        "65536",
+        "-1",
+        "80-",
+        "-80",
+        "90-80",
+        "a",
+        "80,81",
+        "any",
+        "80-90-100",
+        " 80",
+    ] {
+        assert!(parse_listen(bad).is_err(), "{bad:?}");
+        let e = go_all(CAT, &[], &[], &[bad], false).unwrap_err();
+        assert_eq!(e.subject, format!("+listen {bad}"));
+    }
+    assert!(
+        parse_listen("65535").is_ok()
+            && parse_listen("1").is_ok()
+            && parse_listen("1-65535").is_ok()
+    );
+    // Total on any text.
+    for text in ["\u{0}", "9999999999999999999", "1-2-3", "\u{10ffff}"] {
+        let _ = parse_listen(text);
+    }
+}
+
+#[test]
+fn no_words_and_no_listen_word_give_no_listen_right() {
+    let (r, bytes) = scope_of(go_all(CAT, &[], &["example.org:443"], &[], false).unwrap());
+    assert_eq!(r, rights::REACH);
+    assert_eq!(Scope::decode(&bytes).unwrap().listen_count(), 0);
+    assert_eq!(go_all(CAT, &[], &[], &[], false).unwrap(), None);
 }

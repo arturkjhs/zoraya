@@ -83,6 +83,8 @@ pub struct Exec<'a> {
     pub grants: &'a [(bool, Value)],
     /// `+net` words' arguments (ADR-0224 item 1).
     pub nets: &'a [Value],
+    /// `+listen` words' arguments (ADR-0224 item 1; plan part F7b).
+    pub listens: &'a [Value],
     /// Its own redirections, which take the place of what the pipeline
     /// gives that stream (ADR-0152 rule 3).
     pub redirects: &'a [(Stream, bool, String)],
@@ -1395,12 +1397,20 @@ impl<H: Host> Shell<H> {
         let mut rest = args;
         let mut given: Vec<(bool, Value)> = Vec::new();
         let mut nets: Vec<Value> = Vec::new();
+        let mut listens: Vec<Value> = Vec::new();
         while let [g, path, after @ ..] = rest {
-            if !(g.literal && (g.text == "+r" || g.text == "+w" || g.text == "+net")) {
+            if !(g.literal
+                && (g.text == "+r" || g.text == "+w" || g.text == "+net" || g.text == "+listen"))
+            {
                 break;
             }
             if g.text == "+net" {
                 nets.push(path.clone());
+                rest = after;
+                continue;
+            }
+            if g.text == "+listen" {
+                listens.push(path.clone());
                 rest = after;
                 continue;
             }
@@ -1431,6 +1441,7 @@ impl<H: Host> Shell<H> {
             env: &[],
             grants: &given,
             nets: &nets,
+            listens: &listens,
             redirects: &[],
             err_too: false,
         };
@@ -1595,6 +1606,7 @@ impl<H: Host> Shell<H> {
         }
         let mut grants = Vec::new();
         let mut nets = Vec::new();
+        let mut listens = Vec::new();
         for g in &s.grants {
             let v = match self.expand(src, &g.path, Context::Grant) {
                 Ok(v) => v,
@@ -1605,6 +1617,13 @@ impl<H: Host> Shell<H> {
                     return Err(self.report(&shell_error("+net", "needs exactly one host")));
                 }
                 nets.push(v[0].clone());
+                continue;
+            }
+            if g.listen {
+                if v.len() != 1 {
+                    return Err(self.report(&shell_error("+listen", "needs exactly one port")));
+                }
+                listens.push(v[0].clone());
                 continue;
             }
             if v.len() != 1 {
@@ -1644,6 +1663,7 @@ impl<H: Host> Shell<H> {
             env,
             grants,
             nets,
+            listens,
             redirects,
             err_too: false,
         })
@@ -1844,6 +1864,7 @@ struct Prepared {
     env: Vec<String>,
     grants: Vec<(bool, Value)>,
     nets: Vec<Value>,
+    listens: Vec<Value>,
     redirects: Vec<(Stream, bool, String)>,
     err_too: bool,
 }
@@ -1856,6 +1877,7 @@ impl Prepared {
             env: &self.env,
             grants: &self.grants,
             nets: &self.nets,
+            listens: &self.listens,
             redirects: &self.redirects,
             err_too: self.err_too,
         }

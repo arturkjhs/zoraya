@@ -122,3 +122,10 @@ Updated 2026-11-16.
   messages and a blocking `connect` into a full queue is `EAGAIN`; `readdir` shows a socket file as a plain name; CPython's `test_socket`
   server classes and the asyncio cases that said "bind (plan part F7)" in `tests/python/regr-ignore.txt` were not run (no Python rootfs
   was built here): `test-python-regr` must show whether an `AF_UNIX` server now passes or hangs a case.
+
+## F7b notes
+
+- Built (proposed ADR-0441): TCP `bind`, `listen`, `accept`, `accept4`, `getsockname`, `SO_ACCEPTCONN` and `poll` of a listener; `netd`'s `listen`
+  request (5) and `Accepted` (19); `+listen PORT` in the shell; the loopback as `netd` handing the client's stream ends to the listener
+  (no second smoltcp interface: read, not measured). Plan part F7's "done when" is met: `make test-python-serve`.
+- Not built: listening on the NIC, `localhost`, per-connection `ECONNRESET`, rooms' words for `+listen`. Limits in `docs/design.md` and ADR-0441.

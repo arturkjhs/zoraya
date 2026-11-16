@@ -53,6 +53,7 @@ make test-python
 make test-python-ext
 make test-python-regr
 make test-python-mem
+make test-python-serve
 make test-cxx
 make test-cxx-libcxx
 make test-cxx-gtest

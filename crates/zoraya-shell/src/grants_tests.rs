@@ -59,6 +59,7 @@ fn go(
         cwd,
         grants: &grants,
         nets: &[],
+        listens: &[],
         base_system: base,
     })
 }

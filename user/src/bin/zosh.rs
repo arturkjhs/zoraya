@@ -1075,6 +1075,7 @@ impl Z {
             cwd,
             grants: exec.grants,
             nets: exec.nets,
+            listens: exec.listens,
             base_system: base,
         };
         zoraya_shell::netgrant::net_for(&line).map_err(|r| {
@@ -1166,6 +1167,7 @@ impl Z {
             cwd: &self.cwd,
             grants: exec.grants,
             nets: exec.nets,
+            listens: exec.listens,
             base_system: base,
         };
         let planned = grants::plan(&line).and_then(|p| {
