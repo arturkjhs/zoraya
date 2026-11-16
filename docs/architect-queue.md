@@ -140,3 +140,17 @@ interface in `netd` after a smoltcp spike), and the word a person types for a li
 **2026-11-16, F7 review:** a socket name authenticates nothing: any program of the line that can write `/tmp` can unlink or rename a live
 server's name and bind its own. Should `unlink` and `rename` of a node with a listener be restricted to the connection that made it
 (ADR-0439)?
+
+**2026-11-16, for the TASK-34 dispatcher (and the architect):** main's red scheduled run 43778039826 (head `e7c34c69`, job
+`make test-cxx-libcxx`: `forbidden output: posixrun: ended`) was one libc++ test aborting on its own timing assertion:
+`thread.lock.shared.cons/mutex_try_to_lock.pass.cpp` (`Assertion failed: d < Tolerance`, 200 ms; five threads wait on a
+mutex that main holds for 250 ms). No kernel panic, fault or exit record is in the log. The same job passed in 11 of 11 later
+runs on commits that contain `e7c34c69` (park-ending, kwb-time, f5, f7, curses-flake candidates and scheduled run
+43819664106), and in 12 local runs (6 HVF, 6 TCG, 1303 to 1357 steps each); the test alone 40 of 40 under TCG, with the
+largest measured `d` 4 to 7 ms. Nothing between `9b78d380` and `e7c34c69` touches the paths the measured interval uses. So
+no Zoraya change explains it; the likely cause is one stall of the QEMU process on the runner of more than about 195 ms,
+but that is not proven (the CI log has no per-test times). F4 (spawn) and F5 (4096 mappings) are not implicated. The
+scheduled run 43819664106 (head `4e86f859`) is green: F5, F8, F6 and F7a (and `stage-f3`) can be tagged on it
+(`tools/ci-last-full.rb --green-for SHA`). Open for the architect: exclude this test and its `unique_lock` twin, and other
+wall-clock tests, from the TCG libc++ run (`tests/cxx/libcxx-tcg-excluded.txt`, HVF only, as for LWG3343), or keep them and
+re-run a failed job once; the new `RUNNER-STEP` lines in the serial runner will show per-step times in the next full run.
