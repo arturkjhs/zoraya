@@ -1,6 +1,6 @@
 # ADR-0392: Signals across `exec` and at the entry of a call that waits, amending ADR-0106
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0004, ADR-0104, ADR-0106, ADR-0190, ADR-0315, ADR-0331
 - **Evidence:** CP-10
@@ -191,3 +191,6 @@ fallback, with the kernel route.
 
 ## Architect's decision
 
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A (the library route). Its amendments of ADR-0106 are accepted: INV-0106-2 gains `execve` (and `execv`, `execvp`, `execl`), and item 2's mapping of ADR-0106 holds during the spawn "as amended by ADR-0392". Option A' (no hold) is not chosen; it stays the fallback if the hold's cost is measured to matter.

@@ -113,7 +113,7 @@ utime git
 - Which git release when git's Rust becomes mandatory (`NO_RUST` is removed)? Pin an earlier release or accept a Rust
   step in the port.
 - Is `NO_PREAD`'s emulation safe for git's threaded pack reads? `compat/pread.c` saves the offset, seeks, reads and seeks back with no lock, so two threads reading one descriptor can interleave: 10h measures, or sets `NO_PTHREADS`.
-- Git is GPL-2.0-only and `git-remote-http` links Apache-2.0 OpenSSL statically (through libcurl): not combinable. `docs/architect-queue.md` D has the options. Until decided git does not enter the image.
+- Git is GPL-2.0-only and `git-remote-http` links Apache-2.0 OpenSSL statically (through libcurl): not combinable. `docs/architect-queue.md` D has the options. Until decided git does not enter the image. Decided by the architect, 2026-11-16 (recorded in ADR-0461, proposed): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only; the pin is made by 10h's part. Until ADR-0461 is accepted and that part builds it, git does not enter the image.
 - Pins: the git archive and the hashes are of the first download (trust on first use).
 
 ## Revisit triggers
