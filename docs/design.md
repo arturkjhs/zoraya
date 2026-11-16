@@ -2213,11 +2213,33 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   service writes, unread, to the listener's channel and the listener checks (`unix::decode_connect`). 256 nodes and 64 listeners in
   a service; the accept queue is the channel's 64 messages (`backlog` is a hint; a full queue is `EAGAIN`). A node stays, inert, after
   its listener goes, until `unlink` (as on Linux); `stat` says socket, `open` is `ENXIO`. A listening socket is not sent (`EINVAL`), spawned or exec'd (`EBADF`) or forked (`ENOTSUP`); only the connection that made a node may
-  make it listen. **Limits:** TCP `bind`, `listen` and `accept` are `EOPNOTSUPP` (ADR-0440,
-  proposed, records what listening over `netd` needs: the listen rule the scope already has, a `listen` request, a loopback interface;
-  not built, so `python3 -m http.server` does not serve yet); no datagram `bind`; `readdir` shows a socket file as a plain name.
+  make it listen. **Limits:** no datagram `bind`; `readdir` shows a socket file as a plain name; TCP is the next entry.
   Tests: `crates/zoraya-fs-service/tests/socket.rs`, `crates/zoraya-posix/tests/socketfile.rs`, `tests/posix-core/t_unix.c` (`file`, run
   by zosh in `make test-libposix`).
+- **TCP listeners and the loopback** (plan part F7b, ADR-0225 item 5, ADR-0224 item 1; ADR-0441, proposed, records what the code
+  decided and ADR-0440 is its design): `bind`, `listen`, `accept`, `accept4`, `getsockname` and `SO_ACCEPTCONN` of an `AF_INET`
+  stream socket (`crates/zoraya-posix/src/net.rs`), and in `netd` (`crates/zoraya-net/src/service.rs`, `user/src/bin/netd.rs`) a
+  `listen` request (5, with the server end of the listener channel) answered `Listening { status, port }`. A program listens only
+  if its connection has the right `LISTEN` and a listen rule that covers the port (`+listen PORT` or `+listen LOW-HIGH` on the
+  line, built in the shell: `zoraya_shell::netgrant::parse_listen`; `grants` prints it); port 0 is a port above 49151 that a rule
+  covers. **The loopback is not on smoltcp:** a `connect` by address to 127.0.0.0/8 that a reach rule *naming* the address allows
+  (`+net 127.0.0.1[:PORT]`, a literal `http://127.0.0.1:PORT/` URL operand; `web` never covers it) is handed to the listener on that
+  port, whoever's account, as `Accepted` (19) with the client's own two stream ends (the read end of the stream it writes, the write
+  end of the stream it reads); the client is told `Connected` and `netd` keeps nothing (no slot, no charge, no socket). No listener,
+  a full queue or a gone listener is `Failed { REFUSED }` with every handle closed. A name that resolves to 127.0.0.0/8 is
+  `UNREACHABLE` (nothing for the loopback leaves by the NIC). Bounds: 8 listeners in `netd`, one per carved account whose rights
+  have `listen` (the shell carves one per POSIX program), 64 pending connections per listener (the channel's queue; `backlog` is a
+  hint). An accepted socket is a connected `Socket` with two handles and no connection channel (no `Reset`: a dead peer is the
+  end of the stream or `EPIPE`); its peer is 127.0.0.1 and a made-up port above 49151. `poll` on a listener is `POLLIN` while a
+  connection waits. A TCP socket does not cross `fork` or `spawn` (`ENOTSUP`). **Limits (ADR-0441):** only the loopback is
+  served: no connection from the NIC reaches a listener (a second smoltcp interface with a listening socket would, ADR-0440
+  item 5, read in smoltcp's source and not measured); the loopback is the machine's, not an account's or a room's (`netd` knows
+  no rooms); no `localhost`; no per-connection `ECONNRESET`; `getsockname` of a socket `connect` made is the wildcard and 0;
+  `bind` takes only the wildcard and 127.0.0.0/8; `SO_REUSEADDR` is ignored; CPython's `test_socket` server classes were not
+  run (`tests/python/regr-ignore.txt` still lists the asyncio cases F2 and F7a ignored). Tests: `cargo test -p zoraya-net`
+  (`service_tests.rs`: the grant, the bounds at exactly the bound, the loopback's rules), `crates/zoraya-posix/tests/tcplisten.rs`
+  (a fake `netd`), `cargo test -p zoraya-shell netgrant`, `tests/posix-net/tcptest.c` (in `make test-net-posix`: the refusals, the 65th
+  connection, a closed listener with 64 queued) and `make test-python-serve` (`python3 -m http.server` serves a file to `curl`).
 - **Memory descriptors** (plan part F3, ADR-0413; ADR-0431 and ADR-0432, proposed, record what the code decided):
   `memfd_create` and `shm_open(SHM_ANON)` make a descriptor of size 0 (`crates/zoraya-posix/src/memfd.rs`, the state in the
   description entry); its first `ftruncate` makes the memory object, committed at once and paid by the creator's job for its life.

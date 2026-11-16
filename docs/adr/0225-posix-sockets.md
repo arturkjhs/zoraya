@@ -202,6 +202,10 @@ Target 3: desktop programs are native and use ADR-0222's crate. Threads: the fd 
 - How many addresses to try on `connect(Name)` and in which order (Happy Eyeballs is DM-074's example of what an
   application should not have to do).
 - Amended by ADR-0412 (accepted 2026-11-14), recorded by plan part F2 (as built: ADR-0430): item 1 no longer refuses `AF_UNIX` for `socketpair` and `socket(AF_UNIX)` (`SOCK_STREAM`, `SOCK_SEQPACKET`, `SOCK_DGRAM`); a path is still refused (`bind` outside a program's own places stays plan part F7's). Item 10: a stream pair keeps its two crossed byte streams and gains an ancillary channel that carries `SCM_RIGHTS` descriptors; sequenced-packet and datagram pairs are one channel. The rest of this ADR stands.
+- *Note, 2026-11-16 (plan part F7b, recorded by an agent; ADR-0001 rule 6):* item 5's `bind`, `listen` and `accept` for TCP are built
+  (proposed ADR-0441), with two differences from the item's text: `accept` makes its `Socket` from *two* handles (the streams), with no
+  connection channel, and the loopback is `netd` pairing the streams; `getsockname` of a socket `connect` made is still the
+  wildcard and 0 (item 7's `local()` is not built).
 
 ## Revisit triggers
 - A program in scope using `getnameinfo`, raw sockets, filesystem `AF_UNIX` sockets or `MSG_PEEK`.

@@ -90,8 +90,9 @@ it.**
    (49152 and above, from a counter). A listener ends with its channel: `netd` watches `PEER_CLOSED` and frees the port and the
    account's charge; connections still queued go with the channel's last end (the kernel closes their handles, their clients
    read the end of the stream).
-3. **Bounds.** Listeners (account table, row changed from 4, 0, 0 to 8, 1, 4): 8 on the machine, one per carved account (the
-   shell's per-program account), the column of carved accounts 4, the session's the rest. Pending connections per listener:
+3. **Bounds.** Listeners (the code's account table, row changed from 4, 0, 0 to 8, 1, 4; ADR-0262's rule "0 listeners unless
+   `+listen`" is kept: a carve whose rights have `listen` takes one, any other none): 8 on the machine, one per carved account
+   with the right (the shell's per-program account), the column of carved accounts 4, the session's the rest. Pending connections per listener:
    the listener channel's 64 messages (`zoraya_channel::MAX_QUEUED`, as for ADR-0439), not a number of `netd`'s: the
    65th `connect` is refused with `Failed { REFUSED }` and every handle it gave closed. `listen`'s `backlog` is a hint and
    changes nothing. A loopback connection is charged to no account and holds nothing in `netd` after the request, so `connect`
@@ -134,7 +135,7 @@ its own: a listener cannot do more to the client than the client's ends allow, a
   connection channel's end is closed, and no account is charged; a refused one (no listener, a full queue, a listener gone) is told
   `REFUSED` with every handle closed. *Check:* `make test-net-posix` (`tcptest`: the 65th connect, a closed listener with 64
   connections queued) and `cargo test -p zoraya-net` (the loopback's decision charges nothing).
-- **INV-0441-2.** Listeners are bounded: 8 on the machine, one per carved account, a port has at most one, and a closed or
+- **INV-0441-2.** Listeners are bounded: 8 on the machine, one per carved account whose rights have `listen`, a port has at most one, and a closed or
   unserved listener gives the port and the charge back exactly once. *Check:* `cargo test -p zoraya-net` (`listeners_are_bounded_per_account_at_exactly_the_bound`,
   `a_port_in_use_is_busy_for_anyone_and_closing_frees_it_and_the_charge`).
 - **INV-0441-3.** A name that resolves to 127.0.0.0/8 opens no socket: nothing addressed to the loopback leaves by the NIC.

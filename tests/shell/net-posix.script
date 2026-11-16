@@ -76,5 +76,14 @@
 < net: ports 9000-9009
 < listen (grant +listen)
 < \r\n~>
+# Without a listen word the program has no listener (INV-0440-1), and without a
+# reach word for 127.0.0.1 it cannot connect to the loopback (INV-0440-2): each
+# line fails at its first check and says so.
+> +net 127.0.0.1 tcptest\r
+< tcptest: FAIL line
+< \r\n~>
+> +listen 9000-9009 tcptest\r
+< tcptest: FAIL line
+< \r\n~>
 x power off
 > poweroff\r

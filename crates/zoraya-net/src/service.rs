@@ -660,7 +660,8 @@ impl Service {
                             return answer(code::INVALID);
                         };
                         let parent = connection.account();
-                        let carved = match self.accounts.carve(parent, m.budget.0) {
+                        let listeners = u32::from(m.rights & zoraya_abi::net::rights::LISTEN != 0);
+                        let carved = match self.accounts.carve_with(parent, m.budget.0, listeners) {
                             Ok(a) => a,
                             Err(CarveError::Invalid) => return answer(code::INVALID),
                             Err(CarveError::OverQuota) => return answer(code::OVER_QUOTA),
