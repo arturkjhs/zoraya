@@ -4,6 +4,8 @@
 
 Updated 2026-11-15, after 10d.
 
+- **CI policy (2026-11-16, ADR-0463, accepted):** parts merge on local `make check`, `make test-changed` and review, with no candidate run (except for workflow, `tools/ci-plan.sh` or `tools/test-runner` changes); `main`'s full set runs every 2 hours and nightly; a red scheduled run not fixed within an hour has its merge reverted.
+
 - **Merged on `main`:**
   - `stage-10a` (`e3e5774`), `stage-10b` (`23b338d`), `stage-10e` (`3981656`): tagged.
   - `stage-10c` on `abaa43c` and `stage-10d` on `c9bab16` (with `work/ports-early`): tagged 2026-11-15 on the scheduled full run
