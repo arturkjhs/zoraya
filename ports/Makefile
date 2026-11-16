@@ -927,12 +927,11 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) ports/apps/etc/passwd por
 	@# OpenSSH's client needs a user-database entry (ADR-0342 item 7, ADR-0340 item 5): the image's one identity.
 	mkdir -p $(APPS_ROOT)/etc && cp ports/apps/etc/passwd ports/apps/etc/group $(APPS_ROOT)/etc/
 	$(ELF_CHECK) $(APPS_ROOT)/bin
-	@echo "== no ssh server, agent or other OpenSSH tool in the image, and libc.a exports no listener (INV-0340-4)"
+	@echo "== no ssh server, agent or other OpenSSH tool in the image, (INV-0340-4)"
 	@for b in sshd sshd-session sshd-auth ssh-agent ssh-add ssh-keyscan ssh-keysign sftp scp sftp-server; do \
 	  if [ -e $(APPS_ROOT)/bin/$$b ]; then echo "$$b is in the image"; exit 1; fi; done
-	@# listen and accept in the programs are libzshim's, which fail with ENOSYS (ports/apps/zshim.c).
-	@if nm $(SYSROOT)/usr/lib/libc.a | grep -q -e ' T listen$$' -e ' T accept$$'; then \
-	  echo "libc.a exports listen or accept"; exit 1; fi
+	@# libc.a exports listen and accept since the Unix sockets (ADR-0430, ADR-0439): they listen on a path in the
+	@# program's /tmp, never on a TCP port (netd has no listener). INV-0340-4 is about sshd: none is in the image.
 	@echo "== no entropy source but getrandom, and no TLS before 1.2 (INV-0310-5)"
 	@for b in curl wget; do \
 	  if LC_ALL=C grep -a -q -e '/dev/urandom' -e '/dev/random' $(APPS_ROOT)/bin/$$b; then \
