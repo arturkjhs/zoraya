@@ -18,7 +18,7 @@ Updated 2026-11-16.
 | F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
 | F8 | merged | stage-f8 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error, 5 warnings) and re-check; candidate run 43751085581 green after one fix (the keeper script pinned a session size that varies with boot) and one rerun of the `test-tour-terminal` TCG job |
 | F5 | merged | stage-f5 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error: the plan's CPython command was never run; 5 warnings), re-check (1 warning) and a test-only follow-up; candidate run 43770158088 green, 79 of 79 jobs, including the new `test-python-mem` (python at 2 GiB, 5,000,000 `bytearray(100)`, 2 m 51 s under TCG) |
-| F6 | in progress on `work/f6` | | | Sonnet |
+| F6 | built on `work/f6`, not merged; review not yet done | | one session | Sonnet |
 | F7 | not started | | | |
 
 ## F2 notes
@@ -82,3 +82,13 @@ Updated 2026-11-16.
 ## Curses tour flake count
 
 `test-tour-terminal` (TCG, `posix-curses.script`, step 55) hung once in the F4 candidate run and once in the first F8 candidate run (both passed on rerun, and it passed in the F5 run). Follow-up for stage 10: wait for `vi`'s screen with a `screen` step instead of fixed pauses.
+
+## F6 notes
+
+- Built: `image_create` copies the program's pages once into an object of the creator's job (`Program::kept`, `zoraya-elf`); `spawn` maps each read-only segment as a `SHARED` record over those frames and copies the writable ones; `posix_spawn` and `execve` of `/proc/self/exe` use the bootstrap's `Image` handle; `zoraya_child_memory`; `t_shared` in `make test-libposix`. Proposed ADR-0438 (recommended as written). INV-0415-2 and INV-0438-1 to -4 checked (Total 849).
+- Run: `cargo test -p zoraya-elf` (17), `-p zoraya-mappings` (17), `-p zoraya-posix --test spawn own_executable`; `make test-qemu-one` (127 passed, 10 expected failures); `make test-libposix` (passed, `t_shared` included); `make check`. Not run: `make test-changed`, `make test-posix` and the other lanes that use libposix (CI does).
+- `t_shared` (one run, HVF): a launcher's job grew by 2176256 bytes for a spawn of the file and by 139264 each for two spawns of its own image (the same pipe cost); the four children's jobs hold 1315904 each. `top` shows a room's memory, so the image's pages appear once in the creator's room; no line per image (not built).
+- Found by `test-libposix`: `Mappings::find_gap` let a record below the mmap window pull the search below it, so every C program aborted at start once its segments were records (fixed, host test).
+- Changed behaviour: rewriting the source object after `image_create` no longer reaches children (t_image's case flipped; note on ADR-0108). `image_create` holds the file's object and the copy at once.
+- Mutation: host `--in-diff` zoraya-elf 34 mutants (32 caught, 2 unviable), zoraya-mappings 10 of 10 caught; kernel `tools/mutants/images-f6.toml` 5 of 5 caught (two survived first: a multi-piece fill and an unstepped shared loop; closed by `an_images_pages_hold_the_files_bytes_piece_by_piece` and a unit per mapped page), 1 equivalent not run.
+- Limitations: no live `top` capture was made; the `fork` child sharing of text rests on ADR-0431's tests and `test-libposix`'s fork cases, with no test of its own; ramdisk-started programs still copy; two `execve`s of one file make two images.
