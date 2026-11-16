@@ -70,7 +70,14 @@
 //! shot NAME         keep the screen as `build/shots/NAME-LABEL.ppm` (the screens
 //!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
+//! limit SECONDS STEP  STEP (any of the above) with SECONDS as its limit
 //! ```
+//!
+//! Each step has a limit of its own: 120 s (`STEP_LIMIT`), or what `limit`
+//! gives it, four times that under TCG (`TCG_FACTOR`), and a `pause` gets
+//! its time on top. A step that passes it fails with its number, the step
+//! and, for a `screen`, what the screen shows; the run's `--timeout` still
+//! bounds the whole.
 //!
 //! Every run fails on `ZORAYA-PANIC`, `ZORAYA-FAULT` or `panicked` on the
 //! serial line.
@@ -160,6 +167,17 @@ const KEYS_PER_SETTLE: usize = 8;
 /// The longest `settle` waits: a screen that keeps changing (a clock, a
 /// program's output) must not hold the typing for good.
 const SETTLE_MOST: Duration = Duration::from_secs(10);
+/// The longest one step may take outside TCG, unless the script gives it
+/// its own (`limit SECONDS STEP`); a `pause` gets its own time on top. Before
+/// this a step had only the run's limit, so a screen that never came cost
+/// the run's whole 1200 to 1800 s (run 43802095122, 2026-11-16). In a full
+/// CI run of 2026-11-15 the longest GUI run outside TCG took 47 s, every
+/// step included.
+const STEP_LIMIT: Duration = Duration::from_secs(120);
+/// How many times [`STEP_LIMIT`] (or a step's own limit) a step gets under
+/// TCG: the longest GUI run under TCG took 332 s in the same CI run
+/// (`netsurf-auto`, 186 steps), so no step of it took more than 480 s.
+const TCG_FACTOR: u32 = 4;
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -218,6 +236,9 @@ pub enum Step {
     /// before and after (TASK-27 9d re-review, N2).
     Mark(u16, String),
     Exit,
+    /// `limit SECONDS STEP`: the step with its own limit instead of
+    /// [`STEP_LIMIT`] (multiplied by [`TCG_FACTOR`] under TCG as that is).
+    Limited(u64, Box<Step>),
 }
 
 /// QEMU's key code for a script's modifier name.
@@ -232,214 +253,235 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
-        let bad = |what: &str| format!("line {n}: {what}");
-        steps.push(match kind {
-            "serial" => Step::Serial(rest.to_string()),
-            "then" => Step::Then(rest.to_string()),
-            "screen" => Step::Screen(rest.to_string()),
-            "prefix" => Step::Prefix(rest.to_string()),
-            "pause" => Step::Pause(
-                rest.parse()
-                    .map_err(|_| bad("not a number of milliseconds"))?,
-            ),
-            "type" => Step::Type(crate::script::unescape(rest).map_err(|e| bad(&e))?),
-            "key" => Step::Key(rest.to_string()),
-            "chord" => {
-                let (m, code) = rest.split_once(' ').ok_or_else(|| bad("chord MOD QCODE"))?;
-                if !m
-                    .split('+')
-                    .all(|m| matches!(m, "ctrl" | "shift" | "alt" | "meta"))
-                {
-                    return Err(bad(
-                        "chord's modifiers are ctrl, shift, alt or meta, joined by +",
-                    ));
+        steps.push(match line.strip_prefix("limit ") {
+            Some(rest) => {
+                let bad = |what: &str| format!("line {n}: {what}");
+                let (secs, step) = rest
+                    .split_once(' ')
+                    .ok_or_else(|| bad("limit SECONDS STEP"))?;
+                let secs: u64 =
+                    secs.parse().ok().filter(|s| *s > 0).ok_or_else(|| {
+                        bad("limit SECONDS STEP, a whole number of seconds above 0")
+                    })?;
+                if step == "limit" || step.starts_with("limit ") {
+                    return Err(bad("one limit to a step"));
                 }
-                Step::Chord(m.to_string(), code.to_string())
+                Step::Limited(secs, Box::new(parse_step(n, step)?))
             }
-            "region" => {
-                let v: Vec<&str> = rest.split_whitespace().collect();
-                if v.len() != 5 {
-                    return Err(bad("region X Y W H RGB"));
-                }
-                let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
-                let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
-                Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
-            }
-            "ink" => {
-                let v: Vec<&str> = rest.split_whitespace().collect();
-                if v.len() != 6 {
-                    return Err(bad("ink X Y W H RGB N"));
-                }
-                let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
-                let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
-                let n = v[5].parse::<usize>().map_err(|_| bad("not a count"))?;
-                if n == 0 {
-                    return Err(bad("an ink count of 0 checks nothing"));
-                }
-                Step::Ink(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour, n)
-            }
-            "layout" => Step::Layout(
-                zoraya_keymap::by_name(rest).ok_or_else(|| bad("layout us, ua, ru or cz"))?,
-            ),
-            "click" => {
-                let v: Vec<i64> = rest
-                    .split_whitespace()
-                    .map(|n| n.parse().map_err(|_| bad("not a number")))
-                    .collect::<Result<_, _>>()?;
-                let [x, y] = v[..] else {
-                    return Err(bad("click X Y"));
-                };
-                Step::Click(x, y)
-            }
-            "dclick" | "rclick" => {
-                let v: Vec<i64> = rest
-                    .split_whitespace()
-                    .map(|n| n.parse().map_err(|_| bad("not a number")))
-                    .collect::<Result<_, _>>()?;
-                let [x, y] = v[..] else {
-                    return Err(bad("dclick X Y or rclick X Y"));
-                };
-                if kind == "dclick" {
-                    Step::DoubleClick(x, y)
-                } else {
-                    Step::RightClick(x, y)
-                }
-            }
-            "wheel" => {
-                let v: Vec<&str> = rest.split_whitespace().collect();
-                let place = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
-                let (x, y, way, n) = match v[..] {
-                    [x, y, way] => (place(x)?, place(y)?, way, 1),
-                    [x, y, way, n] => (
-                        place(x)?,
-                        place(y)?,
-                        way,
-                        n.parse::<u32>().map_err(|_| bad("not a count"))?,
-                    ),
-                    _ => return Err(bad("wheel X Y up|down [N]")),
-                };
-                let down = match way {
-                    "down" => true,
-                    "up" => false,
-                    _ => return Err(bad("wheel X Y up|down [N]")),
-                };
-                if !(1..=64).contains(&n) {
-                    return Err(bad("a wheel turns 1 to 64 notches"));
-                }
-                Step::Wheel(x, y, down, n)
-            }
-            "mclick" | "mdrag" => {
-                let (m, rest) = rest.split_once(' ').ok_or_else(|| bad("MOD and a place"))?;
-                if !matches!(m, "ctrl" | "shift" | "alt" | "meta") {
-                    return Err(bad("the modifier is ctrl, shift, alt or meta"));
-                }
-                let v: Vec<i64> = rest
-                    .split_whitespace()
-                    .map(|n| n.parse().map_err(|_| bad("not a number")))
-                    .collect::<Result<_, _>>()?;
-                match (kind, &v[..]) {
-                    ("mclick", [x, y]) => Step::ModClick(m.to_string(), *x, *y),
-                    ("mdrag", [x, y, x2, y2]) => Step::ModDrag(m.to_string(), *x, *y, *x2, *y2, 0),
-                    ("mdrag", [x, y, x2, y2, h]) if *h >= 0 => {
-                        Step::ModDrag(m.to_string(), *x, *y, *x2, *y2, *h as u64)
-                    }
-                    _ => return Err(bad("mclick MOD X Y or mdrag MOD X Y X2 Y2 [HOLD_MS]")),
-                }
-            }
-            "drag" => {
-                let v: Vec<i64> = rest
-                    .split_whitespace()
-                    .map(|n| n.parse().map_err(|_| bad("not a number")))
-                    .collect::<Result<_, _>>()?;
-                let (x, y, x2, y2, hold) = match v[..] {
-                    [x, y, x2, y2] => (x, y, x2, y2, 0),
-                    [x, y, x2, y2, h] if h >= 0 => (x, y, x2, y2, h as u64),
-                    _ => return Err(bad("drag X Y X2 Y2 [HOLD_MS]")),
-                };
-                Step::Drag(x, y, x2, y2, hold)
-            }
-            "latency" => {
-                let mut words = rest.split_whitespace();
-                let n = words
-                    .next()
-                    .and_then(|w| w.parse().ok())
-                    .ok_or_else(|| bad("latency N [MS | +MS]"))?;
-                let ms = |w: &str| w.parse().map_err(|_| bad("not a number of ms"));
-                let bound = |w: &str| -> Result<Bound, String> {
-                    Ok(match w.strip_prefix('+') {
-                        Some(w) => Bound::OverBase(ms(w)?),
-                        None => Bound::Fixed(ms(w)?),
-                    })
-                };
-                let first = words.next().map(bound).transpose()?;
-                let tcg = match (words.next(), words.next()) {
-                    (None, _) => None,
-                    (Some("tcg"), Some(w)) if first.is_some() => Some(bound(w)?),
-                    _ => return Err(bad("latency N [MS | +MS [tcg MS | +MS]]")),
-                };
-                if words.next().is_some() {
-                    return Err(bad("latency N [MS | +MS [tcg MS | +MS]]"));
-                }
-                Step::Latency(n, first, tcg)
-            }
-            "origin" => {
-                let v: Vec<i64> = rest
-                    .split_whitespace()
-                    .map(|n| n.parse().map_err(|_| bad("not a number")))
-                    .collect::<Result<_, _>>()?;
-                let [x, y] = v[..] else {
-                    return Err(bad("origin X Y"));
-                };
-                Step::Origin(x, y)
-            }
-            "clickc" | "pointc" => {
-                let v: Vec<&str> = rest.split_whitespace().collect();
-                if v.len() != 5 {
-                    return Err(bad("clickc RGB X Y W H"));
-                }
-                let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
-                let colour = u32::from_str_radix(v[0], 16).map_err(|_| bad("not a colour"))?;
-                Step::AtColour(
-                    kind == "clickc",
-                    colour,
-                    num(v[1])?,
-                    num(v[2])?,
-                    num(v[3])?,
-                    num(v[4])?,
-                )
-            }
-            "window" => Step::Window,
-            "top" => Step::Top(rest.to_string()),
-            "shot" => {
-                let ok = !rest.is_empty()
-                    && rest
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                if !ok {
-                    return Err(bad("shot NAME, of letters, digits, - and _"));
-                }
-                Step::Shot(rest.to_string())
-            }
-            "mark" => {
-                let (port, path) = rest.split_once(' ').ok_or_else(|| bad("mark PORT PATH"))?;
-                let port: u16 = port.parse().map_err(|_| bad("mark PORT PATH"))?;
-                let ok = path.starts_with('/')
-                    && path
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b));
-                if !ok || port == 0 {
-                    return Err(bad(
-                        "mark PORT PATH, a path of letters, digits, /, -, _ and .",
-                    ));
-                }
-                Step::Mark(port, path.to_string())
-            }
-            "exit" => Step::Exit,
-            _ => return Err(bad("unknown step")),
+            None => parse_step(n, line)?,
         });
     }
     Ok(steps)
+}
+
+/// One step of line `n` (`limit` taken off).
+fn parse_step(n: usize, line: &str) -> Result<Step, String> {
+    let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
+    let bad = |what: &str| format!("line {n}: {what}");
+    Ok(match kind {
+        "serial" => Step::Serial(rest.to_string()),
+        "then" => Step::Then(rest.to_string()),
+        "screen" => Step::Screen(rest.to_string()),
+        "prefix" => Step::Prefix(rest.to_string()),
+        "pause" => Step::Pause(
+            rest.parse()
+                .map_err(|_| bad("not a number of milliseconds"))?,
+        ),
+        "type" => Step::Type(crate::script::unescape(rest).map_err(|e| bad(&e))?),
+        "key" => Step::Key(rest.to_string()),
+        "chord" => {
+            let (m, code) = rest.split_once(' ').ok_or_else(|| bad("chord MOD QCODE"))?;
+            if !m
+                .split('+')
+                .all(|m| matches!(m, "ctrl" | "shift" | "alt" | "meta"))
+            {
+                return Err(bad(
+                    "chord's modifiers are ctrl, shift, alt or meta, joined by +",
+                ));
+            }
+            Step::Chord(m.to_string(), code.to_string())
+        }
+        "region" => {
+            let v: Vec<&str> = rest.split_whitespace().collect();
+            if v.len() != 5 {
+                return Err(bad("region X Y W H RGB"));
+            }
+            let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+            let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
+            Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
+        }
+        "ink" => {
+            let v: Vec<&str> = rest.split_whitespace().collect();
+            if v.len() != 6 {
+                return Err(bad("ink X Y W H RGB N"));
+            }
+            let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+            let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
+            let n = v[5].parse::<usize>().map_err(|_| bad("not a count"))?;
+            if n == 0 {
+                return Err(bad("an ink count of 0 checks nothing"));
+            }
+            Step::Ink(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour, n)
+        }
+        "layout" => Step::Layout(
+            zoraya_keymap::by_name(rest).ok_or_else(|| bad("layout us, ua, ru or cz"))?,
+        ),
+        "click" => {
+            let v: Vec<i64> = rest
+                .split_whitespace()
+                .map(|n| n.parse().map_err(|_| bad("not a number")))
+                .collect::<Result<_, _>>()?;
+            let [x, y] = v[..] else {
+                return Err(bad("click X Y"));
+            };
+            Step::Click(x, y)
+        }
+        "dclick" | "rclick" => {
+            let v: Vec<i64> = rest
+                .split_whitespace()
+                .map(|n| n.parse().map_err(|_| bad("not a number")))
+                .collect::<Result<_, _>>()?;
+            let [x, y] = v[..] else {
+                return Err(bad("dclick X Y or rclick X Y"));
+            };
+            if kind == "dclick" {
+                Step::DoubleClick(x, y)
+            } else {
+                Step::RightClick(x, y)
+            }
+        }
+        "wheel" => {
+            let v: Vec<&str> = rest.split_whitespace().collect();
+            let place = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+            let (x, y, way, n) = match v[..] {
+                [x, y, way] => (place(x)?, place(y)?, way, 1),
+                [x, y, way, n] => (
+                    place(x)?,
+                    place(y)?,
+                    way,
+                    n.parse::<u32>().map_err(|_| bad("not a count"))?,
+                ),
+                _ => return Err(bad("wheel X Y up|down [N]")),
+            };
+            let down = match way {
+                "down" => true,
+                "up" => false,
+                _ => return Err(bad("wheel X Y up|down [N]")),
+            };
+            if !(1..=64).contains(&n) {
+                return Err(bad("a wheel turns 1 to 64 notches"));
+            }
+            Step::Wheel(x, y, down, n)
+        }
+        "mclick" | "mdrag" => {
+            let (m, rest) = rest.split_once(' ').ok_or_else(|| bad("MOD and a place"))?;
+            if !matches!(m, "ctrl" | "shift" | "alt" | "meta") {
+                return Err(bad("the modifier is ctrl, shift, alt or meta"));
+            }
+            let v: Vec<i64> = rest
+                .split_whitespace()
+                .map(|n| n.parse().map_err(|_| bad("not a number")))
+                .collect::<Result<_, _>>()?;
+            match (kind, &v[..]) {
+                ("mclick", [x, y]) => Step::ModClick(m.to_string(), *x, *y),
+                ("mdrag", [x, y, x2, y2]) => Step::ModDrag(m.to_string(), *x, *y, *x2, *y2, 0),
+                ("mdrag", [x, y, x2, y2, h]) if *h >= 0 => {
+                    Step::ModDrag(m.to_string(), *x, *y, *x2, *y2, *h as u64)
+                }
+                _ => return Err(bad("mclick MOD X Y or mdrag MOD X Y X2 Y2 [HOLD_MS]")),
+            }
+        }
+        "drag" => {
+            let v: Vec<i64> = rest
+                .split_whitespace()
+                .map(|n| n.parse().map_err(|_| bad("not a number")))
+                .collect::<Result<_, _>>()?;
+            let (x, y, x2, y2, hold) = match v[..] {
+                [x, y, x2, y2] => (x, y, x2, y2, 0),
+                [x, y, x2, y2, h] if h >= 0 => (x, y, x2, y2, h as u64),
+                _ => return Err(bad("drag X Y X2 Y2 [HOLD_MS]")),
+            };
+            Step::Drag(x, y, x2, y2, hold)
+        }
+        "latency" => {
+            let mut words = rest.split_whitespace();
+            let n = words
+                .next()
+                .and_then(|w| w.parse().ok())
+                .ok_or_else(|| bad("latency N [MS | +MS]"))?;
+            let ms = |w: &str| w.parse().map_err(|_| bad("not a number of ms"));
+            let bound = |w: &str| -> Result<Bound, String> {
+                Ok(match w.strip_prefix('+') {
+                    Some(w) => Bound::OverBase(ms(w)?),
+                    None => Bound::Fixed(ms(w)?),
+                })
+            };
+            let first = words.next().map(bound).transpose()?;
+            let tcg = match (words.next(), words.next()) {
+                (None, _) => None,
+                (Some("tcg"), Some(w)) if first.is_some() => Some(bound(w)?),
+                _ => return Err(bad("latency N [MS | +MS [tcg MS | +MS]]")),
+            };
+            if words.next().is_some() {
+                return Err(bad("latency N [MS | +MS [tcg MS | +MS]]"));
+            }
+            Step::Latency(n, first, tcg)
+        }
+        "origin" => {
+            let v: Vec<i64> = rest
+                .split_whitespace()
+                .map(|n| n.parse().map_err(|_| bad("not a number")))
+                .collect::<Result<_, _>>()?;
+            let [x, y] = v[..] else {
+                return Err(bad("origin X Y"));
+            };
+            Step::Origin(x, y)
+        }
+        "clickc" | "pointc" => {
+            let v: Vec<&str> = rest.split_whitespace().collect();
+            if v.len() != 5 {
+                return Err(bad("clickc RGB X Y W H"));
+            }
+            let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+            let colour = u32::from_str_radix(v[0], 16).map_err(|_| bad("not a colour"))?;
+            Step::AtColour(
+                kind == "clickc",
+                colour,
+                num(v[1])?,
+                num(v[2])?,
+                num(v[3])?,
+                num(v[4])?,
+            )
+        }
+        "window" => Step::Window,
+        "top" => Step::Top(rest.to_string()),
+        "shot" => {
+            let ok = !rest.is_empty()
+                && rest
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !ok {
+                return Err(bad("shot NAME, of letters, digits, - and _"));
+            }
+            Step::Shot(rest.to_string())
+        }
+        "mark" => {
+            let (port, path) = rest.split_once(' ').ok_or_else(|| bad("mark PORT PATH"))?;
+            let port: u16 = port.parse().map_err(|_| bad("mark PORT PATH"))?;
+            let ok = path.starts_with('/')
+                && path
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b));
+            if !ok || port == 0 {
+                return Err(bad(
+                    "mark PORT PATH, a path of letters, digits, /, -, _ and .",
+                ));
+            }
+            Step::Mark(port, path.to_string())
+        }
+        "exit" => Step::Exit,
+        _ => return Err(bad("unknown step")),
+    })
 }
 
 /// `mark`: one GET of `path` from 127.0.0.1:`port`, the answer read to its
@@ -837,7 +879,11 @@ struct Run {
     mark: usize,
     out: output::Output,
     label: String,
+    /// When the step being played must be done: its own limit, or the
+    /// run's (`run_deadline`) if that comes first. Every wait reads this.
     deadline: Instant,
+    /// When the whole run must be done (`--timeout`).
+    run_deadline: Instant,
     /// The row of the last `screen` match.
     row: Option<usize>,
     reader: Reader,
@@ -1396,6 +1442,8 @@ impl Run {
                     None => std::thread::sleep(Duration::from_millis(20)),
                 }
             },
+            // The run's loop plays the step inside (`step_limit`).
+            Step::Limited(_, inner) => self.step(inner),
         }
     }
 }
@@ -1470,6 +1518,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             out: output::Output::new(label),
             label: label.to_string(),
             deadline,
+            run_deadline: deadline,
             row: None,
             origin: None,
             latency_base: None,
@@ -1480,9 +1529,25 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
         };
         // A failure names its step, so that a script of a thousand says where.
         let r = steps.iter().enumerate().try_for_each(|(i, s)| {
-            run.step(s)
-                .map_err(|e| format!("step {} of {} ({s:?}): {e}", i + 1, steps.len()))
+            let (limit, step) = step_limit(s, run.tcg);
+            let until = run.run_deadline.min(Instant::now() + limit);
+            run.deadline = until;
+            run.step(step).map_err(|e| {
+                // The step's own limit, not the run's: say so, and how to
+                // give the step more.
+                let own = until < run.run_deadline && Instant::now() >= until;
+                let e = if own {
+                    format!(
+                        "{e} (the step's limit of {} s; `limit SECONDS` before it gives it more)",
+                        limit.as_secs()
+                    )
+                } else {
+                    e
+                };
+                format!("step {} of {} ({s:?}): {e}", i + 1, steps.len())
+            })
         });
+        run.deadline = run.run_deadline;
         // The last drain fails the run on a flood or forbidden text, not on
         // a deadline the steps already met.
         let r = r.and(match run.pump() {
@@ -1504,6 +1569,21 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             say!("[{label}] FAIL: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The step to play and how long it may take: its own limit or
+/// [`STEP_LIMIT`], times [`TCG_FACTOR`] under TCG, and a `pause`'s own time
+/// on top.
+fn step_limit(step: &Step, tcg: bool) -> (Duration, &Step) {
+    let (limit, step) = match step {
+        Step::Limited(secs, inner) => (Duration::from_secs(*secs), inner.as_ref()),
+        s => (STEP_LIMIT, s),
+    };
+    let limit = if tcg { limit * TCG_FACTOR } else { limit };
+    match step {
+        Step::Pause(ms) => (limit + Duration::from_millis(*ms), step),
+        s => (limit, s),
     }
 }
 
@@ -1550,6 +1630,51 @@ mod tests {
         assert_eq!(count_ink((0, 0, 1, 4), 0xff_ffff, at), 0);
         assert_eq!(count_ink((2, 2, 2, 2), 0xff_ffff, at), 1);
         assert_eq!(count_ink((0, 0, 4, 4), 0, at), 12);
+    }
+
+    #[test]
+    fn a_limit_is_a_step_of_its_own_limit() {
+        assert_eq!(
+            parse("limit 600 screen made\n").unwrap(),
+            [Step::Limited(600, Box::new(Step::Screen("made".into())))]
+        );
+        assert_eq!(
+            parse("limit 5 pause 300\n").unwrap(),
+            [Step::Limited(5, Box::new(Step::Pause(300)))]
+        );
+        for bad in [
+            "limit 0 screen x\n",
+            "limit x screen x\n",
+            "limit -5 screen x\n",
+            "limit 5\n",
+            "limit 5 \n",
+            "limit 5 dance\n",
+            "limit 5 limit 5 screen x\n",
+            "limit 5 limit\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+        assert!(
+            parse("limit 5 pause x\n")
+                .unwrap_err()
+                .starts_with("line 1:")
+        );
+    }
+
+    #[test]
+    fn a_step_gets_its_limit_four_times_under_tcg_and_a_pause_its_time_on_top() {
+        let screen = Step::Screen("x".into());
+        assert_eq!(step_limit(&screen, false), (STEP_LIMIT, &screen));
+        assert_eq!(step_limit(&screen, true).0, STEP_LIMIT * TCG_FACTOR);
+        assert_eq!(step_limit(&screen, true).0, Duration::from_secs(480));
+        let own = Step::Limited(600, Box::new(Step::Screen("x".into())));
+        assert_eq!(step_limit(&own, false), (Duration::from_secs(600), &screen));
+        assert_eq!(step_limit(&own, true).0, Duration::from_secs(2400));
+        let pause = Step::Pause(90_000);
+        assert_eq!(step_limit(&pause, false).0, Duration::from_secs(210));
+        assert_eq!(step_limit(&pause, true).0, Duration::from_secs(570));
+        let short = Step::Limited(1, Box::new(Step::Pause(3000)));
+        assert_eq!(step_limit(&short, false).0, Duration::from_secs(4));
     }
 
     #[test]

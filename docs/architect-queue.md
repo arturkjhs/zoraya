@@ -62,6 +62,20 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
 - **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note.
+- **`curses-flake`: the GUI runner's per-step limit.** Each step of a GUI script now has 120 s, four times that under TCG
+  (480 s), and a `pause` its own time on top; `limit SECONDS STEP` gives one step more (`tools/test-runner/src/gui.rs`,
+  `STEP_LIMIT`, `TCG_FACTOR`). Chosen generous: in the full CI run of 2026-11-15 (43749759496) the longest GUI run
+  outside TCG took 47 s in all and the longest under TCG 332 s (`netsurf-auto`), so no current step needs a `limit`.
+  Questions: (1) keep 120 s and x4, or shorter (a stuck step then costs less)? (2) Give the serial-line scripts
+  (`--script`, the `<` steps) the same? Not done: some of their runs have single steps that wait for a whole suite
+  (`test-cxx-libcxx` up to 7200 s, `test-python-regr` 1500 s), and no per-step times are recorded yet to set their limits.
+- **`curses-flake`: should zosh's prompt clear the rest of its row?** `editor.start` writes the prompt only. Keys typed
+  before a program has the terminal in raw mode are echoed by the discipline on the primary screen; after the program
+  leaves the alternate screen the echo is back, and the next prompt overwrites only its own width (`~> other` from an
+  echoed `:w other`, run 43802095122). Option A: write `\r` and erase to the end of the row (`ESC [ K`) before the
+  prompt, so that a prompt row is always clean. Option B: keep it as dash and bash do, and make scripts wait for a
+  program's own screen before typing to it (done for `posix-curses.script`). Recommendation: A, as it costs one sequence
+  and no script can be caught by it again.
 
 
 ## E. Decided 2026-11-16 (removed from the lists above)
