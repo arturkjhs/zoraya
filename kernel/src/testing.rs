@@ -667,8 +667,12 @@ fn shard_argument() -> Option<(usize, usize)> {
     let spec = args
         .split_whitespace()
         .find_map(|w| w.strip_prefix("zoraya.shard="))?;
-    let (n, m) = spec.split_once('/')?;
-    Some((n.parse().ok()?, m.parse().ok()?))
+    // A word that is present and malformed is an error, not "no shard": the
+    // run would otherwise cover every test without a word.
+    let parsed = spec
+        .split_once('/')
+        .and_then(|(n, m)| Some((n.parse().ok()?, m.parse().ok()?)));
+    Some(parsed.unwrap_or_else(|| panic!("malformed zoraya.shard={spec}")))
 }
 
 /// The tests this run covers, `lo..hi` (the whole list without a shard).
@@ -714,6 +718,14 @@ pub fn run(start: usize) -> ! {
         bump(&PASSED);
         println!("ZORAYA-TEST ok {}", t.name);
     }
+    // Outside any test, so that every run, sharded or not, ends with it: the
+    // overflow test (`fault_report_for_stack_overflow`, shard 1) re-arms the
+    // canary in `resume`, and `stack_canary_intact` (shard 2) alone would not
+    // see it. A failure panics with no test running, which fails the run.
+    assert!(
+        arch::stack_canary_intact(),
+        "boot stack overflowed into its canary (end of the run)"
+    );
     println!(
         "ZORAYA-TEST end pass={} fail={}",
         PASSED.load(Ordering::Relaxed),
