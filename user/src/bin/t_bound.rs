@@ -120,24 +120,24 @@ fn bound_ns() -> u64 {
 
 /// Masked-time checks over the limit off HVF in this process (`time_ok`).
 static OVER: AtomicU64 = AtomicU64::new(0);
-/// The exit code of a run or a child that went over the time limit off HVF.
+/// The exit code of a run or a child that went over the time limit.
 const OVER_TIME: i32 = 3;
 
-/// A case's longest masked interval against `bound_ns`. Under HVF over it
-/// fails. Under TCG the guest's clock runs while the host stalls the vCPU
-/// (6 of 10 rounds under 10 CPU hogs went over 1 s at different sites, with
-/// their units in bound): the run is noted and repeated (`outer`), and fails
-/// if three runs in a row go over; a kernel loop repeats, a stall does not.
-/// The units (`measure`) are checked on every run, on every host.
+/// A case's longest masked interval against `bound_ns`. The guest's clock
+/// runs while the host stalls the vCPU, under TCG (6 of 10 rounds under 10
+/// CPU hogs went over 1 s at different sites, with their units in bound) and
+/// under HVF too (a preemption of the vCPU thread, three guests in parallel
+/// lanes): a run over the limit is noted and repeated (`outer`), and fails if
+/// three runs in a row go over. A kernel loop repeats, a stall does not; a
+/// time-only loop that shows in one run of three passes about 26 times in 27,
+/// which is why the units carry the claim for work that is counted: they are
+/// checked in every run (`measure`) and fail at once.
 fn time_ok(site: &str, ns: u64) {
     let limit = bound_ns();
     if ns <= limit {
         return;
     }
-    assert!(on_tcg(), "{site}: {ns} ns masked, limit {limit}");
-    println!(
-        "t_bound: {site}: {ns} ns masked, over the limit {limit} under TCG: the run is repeated"
-    );
+    println!("t_bound: {site}: {ns} ns masked, over the limit {limit}: the run is repeated");
     OVER.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -654,6 +654,16 @@ fn churn_contiguous() -> i32 {
     }
 }
 
+/// A child that maps and unmaps one `BIG` object without end: a kill in the
+/// middle of a `memory_map` undoes what it mapped, in steps (INV-0270-1).
+fn churn_maps() -> i32 {
+    let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
+    loop {
+        let at = memory_map(object, 0, BIG, MapFlags::WRITE).expect("map");
+        memory_unmap(at, BIG).expect("unmap");
+    }
+}
+
 /// A child that makes and closes `BIG` objects without end, or snapshots
 /// itself with `BIG` mapped without end, until it is killed.
 fn churn(snapshots: bool) -> i32 {
@@ -703,7 +713,12 @@ fn a_kill_between_steps_leaves_nothing() {
         "t_bound: calibration: one call takes {} us; kill delays sweep 0..{span_ms} ms",
         samples[1] / 1000
     );
-    for role in [&b"create-loop"[..], b"snapshot-loop", b"contiguous-loop"] {
+    for role in [
+        &b"create-loop"[..],
+        b"snapshot-loop",
+        b"contiguous-loop",
+        b"map-loop",
+    ] {
         // The first round lets the kernel heap take the room it will use
         // (it keeps what it grew by); the next is the one that counts. A
         // kill may land at the child's return to EL0 and not inside the
@@ -743,9 +758,20 @@ fn kill_round(role: &[u8], strict: bool, delay_ms: u64) {
     let p = child(room, role).expect("spawn");
     nap(delay_ms);
     masked(true);
+    units(true);
     job_kill(room).expect("kill");
     let record = wait_exit(p);
     assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
+    // The kill and what it undoes (a `memory_map` cut in the middle, a
+    // snapshot's child): the work between two step points (INV-0270-1).
+    let kill_units = units(false);
+    if kill_units > MAX_UNITS {
+        raw_syscall(DIAGNOSE_UNITS, [0; 6]);
+    }
+    assert!(
+        kill_units <= MAX_UNITS,
+        "{role:?}: {kill_units} units of work between two step points in the kill, limit {MAX_UNITS}"
+    );
     // A zombie keeps its record charged until its last handle closes.
     handle_close(p).expect("close");
     let mut tries = 0;
@@ -761,11 +787,14 @@ fn kill_round(role: &[u8], strict: bool, delay_ms: u64) {
         assert_eq!(usage.memory.used, base, "{role:?}: the room's use");
         assert_eq!(usage.processes.used, 0, "{role:?}: the room's processes");
         assert_eq!(frames_accounted(), free, "{role:?}: frames");
+        let ns = masked(true);
         println!(
-            "t_bound: job_kill during {}: nothing left; {} us masked",
+            "t_bound: job_kill during {}: nothing left; {} us masked, {} units",
             core::str::from_utf8(role).unwrap_or("?"),
-            masked(true) / 1000
+            ns / 1000,
+            units(true)
         );
+        time_ok("job_kill during a loop", ns);
     }
     handle_close(room).expect("close");
 }
@@ -789,7 +818,16 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
     let (ours, theirs) = channel_create().expect("channel");
     let p = child_with(room, long, Some(theirs)).expect("spawn");
     let began = clock_monotonic();
-    while object_get_signals(ours).expect("signals") & channel_signals::READABLE == 0 {
+    loop {
+        let signals = object_get_signals(ours).expect("signals");
+        if signals & channel_signals::READABLE != 0 {
+            break;
+        }
+        if signals & channel_signals::PEER_CLOSED != 0 {
+            // It ended before it said it was built.
+            let record = wait_exit(p);
+            panic!("{label}: the long child ended before its build: {record:?}");
+        }
         assert!(
             clock_monotonic() - began < 25_000_000_000,
             "{label}: the long child did not finish its build in 25 s"
@@ -1324,7 +1362,7 @@ fn outer() -> i32 {
     });
     e.arg(b"inner");
     let length = e.finish().expect("room");
-    // A run over the time limit under TCG is repeated, up to three runs
+    // A run over the time limit is repeated, up to three runs
     // (`time_ok`).
     let mut code = OVER_TIME;
     for run in 1..=3 {
@@ -1334,7 +1372,7 @@ fn outer() -> i32 {
         if code != OVER_TIME {
             break;
         }
-        println!("t_bound: run {run} went over the time limit under TCG");
+        println!("t_bound: run {run} went over the time limit");
     }
     handle_close(me).expect("close");
     handle_close(posix).expect("close");
@@ -1388,6 +1426,7 @@ fn main() -> i32 {
         Some(b"crowd-mapped-short") => crowd(true, 50),
         Some(b"crowd-mapped-long") => crowd(true, 30_000),
         Some(b"contiguous-loop") => churn_contiguous(),
+        Some(b"map-loop") => churn_maps(),
         Some(b"create-loop") => churn(false),
         Some(b"snapshot-loop") => churn(true),
         Some(b"wide-source") => wide_source(),
