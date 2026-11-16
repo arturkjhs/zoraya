@@ -13,6 +13,7 @@ use std::rc::Rc;
 use kernel::*;
 use zoraya_abi::posix::{EntryKind, Facts};
 use zoraya_posix::errno::*;
+use zoraya_posix::jobs::FileAction;
 use zoraya_posix::poll::*;
 use zoraya_posix::process::{AT_FDCWD, Desc, Posix, o};
 use zoraya_posix::socket::{SO_ACCEPTCONN, SO_PROTOCOL, SOCK_NONBLOCK, SOL_SOCKET};
@@ -632,4 +633,66 @@ fn a_read_only_tmp_cannot_connect() {
     assert_eq!(b.p.connect(c, &un("/tmp/ro")), Err(EACCES));
     let n = sock(&mut b, SOCK_STREAM);
     assert_eq!(b.p.bind(n, &un("/tmp/new")), Err(EACCES));
+}
+
+/// R1: a listening socket named in the file actions is refused, `EBADF` (not `EINVAL`): it is not connected, and `pass_to_child` takes
+/// only connected sockets. Nothing is moved, and the listener still serves.
+#[test]
+fn a_listening_socket_in_the_file_actions_makes_the_spawn_ebadf() {
+    let (mut a, svc) = tmp_rig();
+    let mut b = peer(&a, &svc, true);
+    let s = server(&mut a, SOCK_STREAM, "/tmp/spawned");
+    assert_eq!(
+        a.p.inherit(&[FileAction::Dup2(s, 20)], 0).err(),
+        Some(EBADF)
+    );
+    // A bound socket that does not listen: the same.
+    let t = sock(&mut a, SOCK_STREAM);
+    a.p.bind(t, &un("/tmp/bound")).unwrap();
+    assert_eq!(
+        a.p.inherit(&[FileAction::Dup2(t, 21)], 0).err(),
+        Some(EBADF)
+    );
+    let c = sock(&mut b, SOCK_STREAM);
+    b.p.connect(c, &un("/tmp/spawned")).unwrap();
+    assert!(
+        a.p.accept(s, false, false).is_ok(),
+        "the listener is still the parent's"
+    );
+}
+
+/// R2: a listener the service dropped says `ECONNABORTED` once; the socket is then not listening (`EINVAL`) and may
+/// listen again.
+#[test]
+fn a_dropped_listener_is_econnaborted_once_then_einval_and_can_listen_again() {
+    let (mut a, svc) = tmp_rig();
+    let s = server(&mut a, SOCK_STREAM, "/tmp/dropped");
+    let node = match a.p.fds.get(s) {
+        Some(Desc::Socket(sk)) => sk.unix.as_ref().unwrap().node.unwrap(),
+        _ => panic!(),
+    };
+    // The service sees its connection close, as a crashed owner's: the listener goes.
+    a.p.sys.close(node);
+    a.settle();
+    assert_eq!(svc.borrow().socket_nodes(), (1, 0));
+    assert_eq!(a.p.accept(s, true, false), Err(ECONNABORTED));
+    assert_eq!(a.p.accept(s, true, false), Err(EINVAL));
+    assert_eq!(a.p.getsockopt(s, SOL_SOCKET, SO_ACCEPTCONN), Ok(0));
+}
+
+/// R3: a bind whose connection the service cannot watch is refused, and the file stays: a named `S_IFSOCK` entry the
+/// library does not unlink, outside the service's table of nodes (ADR-0439, known limits).
+#[test]
+fn a_refused_bind_leaves_the_named_file_outside_the_node_table() {
+    let (mut r, svc) = tmp_rig();
+    r.net.borrow_mut().interest_fails = true;
+    let s = sock(&mut r, SOCK_STREAM);
+    let e = r.p.bind(s, &un("/tmp/left")).unwrap_err();
+    r.net.borrow_mut().interest_fails = false;
+    assert_ne!(e, 0);
+    // The file is there, and the service tracks no node for it.
+    assert!(r.p.stat_at(AT_FDCWD, b"/tmp/left", 0).is_ok());
+    assert_eq!(svc.borrow().socket_nodes(), (0, 0));
+    // The name is taken, and cannot be listened on.
+    assert_eq!(r.p.bind(s, &un("/tmp/left")), Err(EADDRINUSE));
 }

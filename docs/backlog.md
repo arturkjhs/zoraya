@@ -601,3 +601,4 @@ per image (the image's pages once, however many processes run from it, as ADR-04
   `SOCK_DGRAM` socket is `EINVAL` (Linux `EOPNOTSUPP`); a far end the kernel refuses is `EPROTOTYPE` to the connector.
 - The service's 64 listeners, 256 nodes and queued connections (paid by `tmp_job`, no limit of its own) are the line's: a per-account bound
   would stop one program from filling them (ADR-0439 effect of the vision).
+- `ports/apps/sshshim.c` replaces libc's `socketpair` with an `ENOSYS` stub for ssh: drop it so ssh (ControlMaster, proxy commands) can use Unix socket pairs (F7 review, R4).

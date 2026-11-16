@@ -255,3 +255,14 @@ file = "crates/zoraya-fs-service/src/lib.rs"
 find = '''        Status::AccessDenied | Status::BadState | Status::BadHandle => Outgoing::Refused,'''
 replace = '''        Status::AccessDenied | Status::BadState => Outgoing::Refused,'''
 note = "fsd's kernel error mapping: a handle the kernel will not move is the connector's fault"
+
+[[mutant]]
+id = "F7-aborted-listener-keeps-listening"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''                        if let Some(u) = sock.unix.as_mut() {
+                            u.listening = false;
+                        }'''
+replace = '''                        if let Some(u) = sock.unix.as_mut() {
+                            let _ = u;
+                        }'''
+note = "ECONNABORTED comes once: a server that retries must not spin on it"

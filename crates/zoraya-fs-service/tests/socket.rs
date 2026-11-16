@@ -760,8 +760,20 @@ fn the_table_of_nodes_and_of_listeners_is_bounded() {
     // Past the bound a program that is not the binder is refused for that, and
     // counts nothing against anyone.
     let thief = r.connection("s100", rights::READ | rights::WRITE).unwrap();
-    let (s, _) = r.listen(thief, 1);
+    let open = r.service.open_count();
+    let (s, end) = r.listen(thief, 1);
     assert_eq!(s, status::ACCESS_DENIED);
+    assert!(r.is_closed(end));
+    assert_eq!(
+        r.service.open_count(),
+        open,
+        "nothing counted against the account"
+    );
+    assert_eq!(
+        r.service.socket_nodes().1,
+        zoraya_fs_service::MAX_LISTENERS,
+        "no listener added"
+    );
 }
 
 /// What `fsd` makes of a kernel error on a write (`fsd.rs` calls this): only a closed peer kills a listener.

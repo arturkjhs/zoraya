@@ -91,7 +91,7 @@ A socket file anywhere a program may write, persisting until unlinked, any numbe
 6. **Names.** `getsockname` of a bound or accepted socket is the path as the program gave it (`struct sockaddr_un` with a NUL);
    `getpeername` of a connected socket is the path it connected to, and empty for an accepted one; `SO_ACCEPTCONN` is 1 on a
    listener. Poll: a listener is readable when a connection waits and never writable.
-7. **What is not carried.** A listening socket is not sent with `SCM_RIGHTS` (`EINVAL`), not inherited by `spawn` or `execve` (`EBADF`: a Unix socket the file actions do not list fails the spawn, as ADR-0433 item 6 says, and a listed listening socket is `EINVAL`), and `fork` with one is `ENOTSUP`: its listener is tied to the connection the library
+7. **What is not carried.** A listening socket is not sent with `SCM_RIGHTS` (`EINVAL`), not inherited by `spawn` or `execve` (`EBADF`: a Unix socket the file actions do not list fails the spawn, as ADR-0433 item 6 says, and a listening or bound socket the file actions do list is `EBADF` too, since only a connected Unix socket can be handed down), and `fork` with one is `ENOTSUP`: its listener is tied to the connection the library
    holds. A bound socket that does not listen is the same.
 8. **TCP.** `bind`, `listen` and `accept` on an `AF_INET` socket are `EOPNOTSUPP` (the symbols exist so that programs link and say so
    at run time); ADR-0440 records what listening over `netd` needs.
@@ -119,7 +119,8 @@ another service.
 
 - **Positive.** `AF_UNIX` servers (a Python `socketserver` on a Unix socket, a `multiprocessing` listener, later tmux) can run between two
   programs of a line; the service has no new account, no event, and one table of 256.
-- **Negative.** No own-directory sockets (tmux's default place); a node stays until `unlink` after its server dies; no datagram
+- **Negative.** A `bind` whose connection the service cannot watch (its table is full) is refused after the file was made: the file stays, named and
+  `S_IFSOCK`, outside the 256-node table, and the library does not unlink it (`bind` of the name is `EADDRINUSE` until someone does). No own-directory sockets (tmux's default place); a node stays until `unlink` after its server dies; no datagram
   `bind`; the accept queue is 64; `readdir` shows no socket type.
 - **Follow-up.** The own-directory place once the record can say which entry is a program's own (stage 10's planner) and the volume's
   service can hold a transient node; datagram sockets with a name; ADR-0440.

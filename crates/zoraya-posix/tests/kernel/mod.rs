@@ -67,6 +67,8 @@ pub struct Net {
     /// The live mappings made by `memory_map_at`: address, length, writable,
     /// shared.
     mapped: Vec<(u64, u64, bool, bool)>,
+    /// A service's `interest` answers false while set: it cannot watch a new connection.
+    pub interest_fails: bool,
     /// Numbers the mappings (bits 24 to 31 of an address).
     map_serial: u64,
 }
@@ -355,6 +357,9 @@ impl Transport for Wire {
     }
 
     fn interest(&mut self, end: H, key: u64, interest: Interest) -> bool {
+        if self.0.borrow().interest_fails {
+            return false;
+        }
         let id = self.1;
         self.0
             .borrow_mut()
