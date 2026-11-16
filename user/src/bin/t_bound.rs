@@ -390,17 +390,13 @@ fn many_mappings_sites() {
     }
 
     // 22 mappings of one page, each in a gigabyte of its own (two tables
-    // each): a child builds them, so that its tables go with it.
-    // It needs 22 gigabytes of address space in tables (45 MB): the 2 GiB
-    // guests only.
-    if free_frames() > 40_000 {
-        let p = child(JOB, b"far-pages").expect("spawn");
-        let record = wait_exit(p);
-        handle_close(p).expect("close");
-        assert_eq!(record.code, 0, "far pages: {record:?}");
-    } else {
-        println!("t_bound: snapshot_process, 22 pages 1 GiB apart: skipped, too little memory");
-    }
+    // each): a child builds them, so that its tables go with it. Placed by
+    // the test kernel's floor, they need 44 table frames, so every guest runs
+    // it (with spacer mappings it needed 45 MB of tables: 2 GiB guests only).
+    let p = child(JOB, b"far-pages").expect("spawn");
+    let record = wait_exit(p);
+    handle_close(p).expect("close");
+    assert_eq!(record.code, 0, "far pages: {record:?}");
 
     // `memory_unmap` of a mapping whose handle was closed frees the object's
     // frames in the call (up to a step; more go to the reaper): one step
@@ -422,20 +418,13 @@ fn many_mappings_sites() {
 /// the copy of a snapshot (`SnapshotBuild::finish`: a step is 64 units, and
 /// 22 such mappings are 88 without the count of the tables).
 fn far_pages() -> i32 {
-    const SPACER: u64 = 64 << 20;
+    const GIB: u64 = 1 << 30;
+    // A process of its own: its time bound needs its own calibration (without
+    // it the factor stays 1, the bound for HVF, under TCG too).
+    calibrate();
     let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
-    let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
-    let mut spacers = alloc::vec::Vec::new();
-    let mut pages = alloc::vec::Vec::new();
-    for _ in 0..22 {
-        pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
-        // 16 mappings of 64 MiB are the gigabyte; the next page goes after it.
-        for _ in 0..16 {
-            spacers.push(memory_map(spacer, 0, SPACER, MapFlags::READ).expect("spacer"));
-        }
-    }
-    for at in spacers {
-        memory_unmap(at, SPACER).expect("unmap spacer");
+    for k in 0..22 {
+        map_page_at(page, SPARSE_BASE + k * GIB);
     }
     let large = best_snapshot();
     println!(
@@ -446,32 +435,46 @@ fn far_pages() -> i32 {
     0
 }
 
-/// `count` one-page mappings, each in its own 2 MiB of address space: a page,
-/// then a spacer of 510 pages (mapped, so that the next page lands after it,
-/// then unmapped). Gives the pages and the spacer's object, which the caller
-/// closes.
-fn spread_mappings(count: usize) -> (alloc::vec::Vec<u64>, alloc::vec::Vec<Handle>) {
-    const SPACER: u64 = 510 * PAGE;
-    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
-    let spacer = memory_create(SPACER, MemoryFlags::NONE).expect("create");
-    let mut pages = alloc::vec::Vec::new();
-    let mut spacers = alloc::vec::Vec::new();
-    for _ in 0..count {
-        pages.push(memory_map(page, 0, PAGE, MapFlags::READ).expect("page"));
-        spacers.push(memory_map(spacer, 0, SPACER, MapFlags::READ).expect("spacer"));
-    }
-    for at in spacers {
-        memory_unmap(at, SPACER).expect("unmap spacer");
-    }
-    handle_close(page).expect("close");
-    (pages, alloc::vec![spacer])
+/// The test kernel's floor for the next mappings' addresses (0: none).
+const SET_MAP_FLOOR: u64 = 0x701c;
+/// Where the sparse layouts below begin: 16 TiB above the lowest user
+/// address, far above every mapping the cases make, below `MAP_HIGH`.
+const SPARSE_BASE: u64 = (1 << 46) + (1 << 44);
+
+/// Maps one page of `page` at `va`, by the test kernel's floor: the place a
+/// spacer mapping would have made, without the page-table entry for every
+/// page a spacer spans (22 GiB of them in `far_pages` took 22 s under TCG).
+fn map_page_at(page: Handle, va: u64) -> u64 {
+    raw_syscall(SET_MAP_FLOOR, [va, 0, 0, 0, 0, 0]);
+    let at = memory_map(page, 0, PAGE, MapFlags::READ).expect("page");
+    raw_syscall(SET_MAP_FLOOR, [0; 6]);
+    assert_eq!(at, va, "the floor places the page");
+    at
 }
 
-/// The best of three snapshots: a pause of the host, or work of another
-/// thread inside the interval, is not the kernel holding IRQ masked, and a
-/// regression shows in all three (as in `memory_sites`).
+/// `count` one-page mappings, each in its own 2 MiB of address space, so
+/// each in a page-table of its own. Gives the pages and the objects to
+/// close.
+fn spread_mappings(count: usize) -> (alloc::vec::Vec<u64>, alloc::vec::Vec<Handle>) {
+    const REGION: u64 = 2 << 20;
+    let page = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let pages = (0..count as u64)
+        .map(|i| map_page_at(page, SPARSE_BASE + i * REGION))
+        .collect();
+    (pages, alloc::vec![page])
+}
+
+/// A snapshot's longest masked interval; the best of three if the first is
+/// over the bound: a pause of the host, or work of another thread inside the
+/// interval, is not the kernel holding IRQ masked, and a regression shows in
+/// all three (as in `memory_sites`). The units of each are checked
+/// (`measure`).
 fn best_snapshot() -> u64 {
-    (0..3).map(|_| snapshot_with()).min().unwrap_or(u64::MAX)
+    let first = snapshot_with();
+    if first <= bound_ns() {
+        return first;
+    }
+    (0..2).map(|_| snapshot_with()).fold(first, u64::min)
 }
 
 /// A snapshot of this process into a suspended child, and its end: the longest
@@ -688,13 +691,26 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
     handle_close(p).expect("close");
     let exit_ns = masked(true);
     let exit_units = units(true);
+    // The long child holds what the short one held once it has made it:
+    // the room's use reaches the short one's peak (a fixed wait was too long
+    // under HVF and could be too short on a stalled host).
+    let _ = frames_accounted();
+    let peak = job_get_usage(room, false).expect("usage").memory.peak;
     let p = child(room, long).expect("spawn");
-    nap(500);
+    let began = clock_monotonic();
+    while job_get_usage(room, false).expect("usage").memory.used < peak / 16 * 15 {
+        assert!(
+            clock_monotonic() - began < 60_000_000_000,
+            "{label}: the long child never held what the short one did"
+        );
+        nap(5);
+    }
     masked(true);
     units(true);
     job_kill(room).expect("kill");
     wait_exit(p);
-    nap(100);
+    // The reaper's part of the kill is in the interval too: until it is idle.
+    let _ = frames_accounted();
     let kill_ns = masked(true);
     let kill_units = units(true);
     handle_close(p).expect("close");

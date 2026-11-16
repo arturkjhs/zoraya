@@ -219,6 +219,11 @@ pub struct AddressSpace {
     /// The transport devices this process holds (INV-0295-3): one entry
     /// each, ended when it holds no handle that can write one, or ends.
     claims: Vec<DeviceClaim>,
+    /// The test kernel's floor for the next mappings' addresses
+    /// (`SET_MAP_FLOOR`): lays out a sparse space without the spacer mappings
+    /// that would cost a page-table entry for every page they span. 0: none.
+    #[cfg(feature = "qemu-test")]
+    map_floor: u64,
 }
 
 impl AddressSpace {
@@ -294,6 +299,8 @@ impl AddressSpace {
                 memory,
                 mappings: Mappings::new(),
                 claims: Vec::new(),
+                #[cfg(feature = "qemu-test")]
+                map_floor: 0,
             }),
             Err(_) => {
                 let failure = memory.failure();
@@ -340,9 +347,11 @@ impl AddressSpace {
     /// comes before it, so that running off a mapping faults. The search
     /// visits every mapping that lies below the place: counted as work.
     fn find_gap(&self, length: u64) -> Option<u64> {
-        let (at, visited) = self
-            .mappings
-            .find_gap(length, MAP_LOW, MAP_HIGH, FRAME_SIZE);
+        #[cfg(feature = "qemu-test")]
+        let low = MAP_LOW.max(self.map_floor);
+        #[cfg(not(feature = "qemu-test"))]
+        let low = MAP_LOW;
+        let (at, visited) = self.mappings.find_gap(length, low, MAP_HIGH, FRAME_SIZE);
         steps::count(visited.div_ceil(RECORDS_PER_UNIT));
         at
     }
@@ -439,6 +448,13 @@ impl AddressSpace {
             return Err(MappingError::Memory);
         }
         Ok(va)
+    }
+
+    /// Sets the floor of the next mappings' addresses (0: none); the test
+    /// kernel's `SET_MAP_FLOOR`.
+    #[cfg(feature = "qemu-test")]
+    pub fn set_map_floor(&mut self, va: u64) {
+        self.map_floor = va;
     }
 
     /// The first of the three parts of a mapping made in steps (ADR-0270):

@@ -1688,6 +1688,10 @@ pub mod test_calls {
     /// a creating call then always lets a sibling run before it makes its
     /// handles. The test that sets it clears it.
     pub const PAUSE_IN_PREPARE: u64 = 0x701b;
+    /// Makes the calling process's next mappings go at or above address x0
+    /// (0: no floor), so that a test lays out a sparse space without spacer
+    /// mappings (`t_bound`).
+    pub const SET_MAP_FLOOR: u64 = 0x701c;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1735,6 +1739,12 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::PAUSE_IN_PREPARE => {
             crate::memory::heap::PAUSE_IN_PREPARE
                 .store(a0 != 0, core::sync::atomic::Ordering::Relaxed);
+            Some(Ok(0))
+        }
+        test_calls::SET_MAP_FLOOR => {
+            let thread = sched::current();
+            let mut space = thread.process()?.space.lock();
+            space.as_mut()?.set_map_floor(a0);
             Some(Ok(0))
         }
         test_calls::DIAGNOSE_UNITS => {

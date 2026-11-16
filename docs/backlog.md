@@ -574,3 +574,23 @@ harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, 
 `execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets
 across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its streams and ancillary channel) crosses
 `exec`, and lift the limit.
+
+## `kernel_work_is_bounded`'s time under TCG (2026-11-16, branch `work/kwb-time`)
+
+- **Cause of the 5x spread** (CI: 12.5 to 48 s in the 128 MiB configurations, 66 to 122.5 s in the 2 GiB ones): the
+  test's time was mostly setup, not measured work. `t_bound`'s far-pages child (2 GiB guests only) mapped and unmapped
+  352 spacers of 64 MiB, 5.8 million page-table entries, only to place 22 pages 1 GiB apart; `spread_mappings` did a
+  million more for 2 MiB spacing; every `best_snapshot` took three snapshots; `teardown` slept 600 ms for each of its
+  four cases. Locally under TCG `-smp 4` the test took 54.3 to 54.8 s at 2 GiB (10 idle rounds), 31 s of it in the far
+  pages, and 101 to 107 s with 10 CPU hogs: proportional to the CPU share QEMU gets, so a slower or loaded runner
+  multiplies a large constant. `-smp 1` took 51.7 s, so the cross-vCPU TLB flushes add about 5%.
+- **Done:** a test-kernel call `SET_MAP_FLOOR` places a mapping at or above an address (the same layouts without
+  spacers; `zoraya-mappings::find_gap` keeps a search at or above `low`, as its doc says); `best_snapshot` takes more
+  than one only if the first is over the bound; `teardown` waits until the long child holds the short one's peak, and
+  for the reaper. The far-pages case now runs in every guest, and calibrates its own bound (it used HVF's 2 ms under
+  TCG). After: 13.96 to 14.32 s at 2 GiB and 13.6 to 13.7 s at 128 MiB, 10 idle rounds each.
+- **Open:** under 10 CPU hogs on the 10-core host, 6 of 10 rounds failed the off-HVF masked-time limit (1 s) with
+  intervals of 1.1 to 2.9 s at different sites, while their units of work stayed within the bound: multi-second stalls
+  of the vCPU thread. The old version failed all 10 such rounds (its far-pages child's 2 ms bound). Proposed: off HVF,
+  repeat a site whose time is over the limit (a stall does not repeat, a kernel loop does), as `best_snapshot` does;
+  the units remain the host-independent half of INV-0270-1.
