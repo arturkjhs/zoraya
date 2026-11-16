@@ -1565,25 +1565,34 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
 
 /// ADR-0460, the architect's decision on its open question 2 (INV-0460-4):
 /// a room whose processes end one after the other, each with a way out far
-/// longer than the room's budget, gets no more CPU over 10 periods than its
-/// ceiling allows, plus one way out. Each process is `f_null`, which ends
-/// at the first instruction of its `main` with a fault, started suspended
-/// with 1000 one-page objects the test puts in its table (free to the
-/// room), so that its way out, closing them, takes many budgets; the next
-/// one is started as soon as the room is empty. A process needs the
-/// room's budget to run to its exit, so with the debt (the way out paid back
-/// from the next periods' budgets) the loop waits; without it each way out
-/// came on top of the ceiling, about one a period.
+/// longer than the room's budget, gains nothing from them beyond their own
+/// work. Each process is `spin`, started suspended with 300 one-page
+/// objects the test puts in its table (free to the room), so that its way
+/// out, closing them, takes many budgets. The test ends it (as `job_kill`
+/// does, `request_exit`) as soon as it has run, that is, as soon as the room
+/// had budget for it, and starts the next when the room is empty. So with
+/// the debt the loop waits while the room pays; without it a new way out
+/// began about every period. (A process that ends itself by a fault, as
+/// `f_null` did, overran the budget by the kernel's fault report, a console
+/// line written before the process is ending, 2.2 ms under slowed TCG: the
+/// overrun to the next return to EL0 that ADR-0264 point 4 allows, not this
+/// test's subject.)
 ///
-/// Measured twice, over the same periods: the kernel's charge to the room
-/// (`used_ns`), and the turns of the room's threads read from the clock at
-/// each switch apart from the charge (`sched::ending_watch`). Bound: a
-/// budget a period, the longest way out seen, one more budget (a period's
-/// debt is paid only from the next) and a floor slice a period.
+/// Over the 11 periods after the one in which the first way out began, both
+/// measured in this boot:
+/// - the room's charge is at most 11 budgets, a floor slice a period and
+///   one more budget, plus what its ending threads ran in the window (read
+///   from the clock at each switch apart from the charge,
+///   `sched::ending_watch`): the room's own code keeps the ceiling, however
+///   long a way out takes on this machine;
+/// - no way out begins in the window: the first way out's debt (its run
+///   past the budget, some 400 us on the fastest host for 300 objects
+///   against 20 us a period, capped at 2 ms) parks the room for longer than
+///   the window, on any host slower than that.
 fn a_start_and_end_loop_keeps_its_ceiling() {
     use crate::memory::object::MemoryObject;
     const LIMIT: u32 = 1; // 20 us of the 20 ms period.
-    const OBJECTS: usize = 1000;
+    const OBJECTS: usize = 300;
     let began = timer::now();
     let period_ns = crate::cpu::period_ns();
     let parent = Job::create(&root(), false).expect("parent");
@@ -1592,16 +1601,27 @@ fn a_start_and_end_loop_keeps_its_ceiling() {
     let budget = zoraya_cpu::budget_ns(LIMIT, period_ns);
     sched::ending_watch::watch(Some(&room));
     let period_of = |t: u64| zoraya_cpu::period_of(t, period_ns);
-    let start = period_of(timer::now().as_nanos());
-    let (first, last) = (start + 2, start + 12);
+    let now_period = || period_of(timer::now().as_nanos());
+    // (charge, all turns, ending turns, period)
+    let sample = || {
+        (
+            crate::cpu::usage(&room).used_ns,
+            sched::ending_watch::all_ns(),
+            sched::ending_watch::ran_ns(),
+            now_period(),
+        )
+    };
+    let start = now_period();
+    // The window: the 11 periods after the one in which the first way out
+    // began, so that the first process's own turn (which may run late past
+    // the budget on a slow host, ADR-0264 point 4) is not in it.
+    let mut window: Option<(u64, u64)> = None;
     let mut at_first = None;
     let mut at_last = None;
-    let mut ways_out = 0;
-    let mut longest = 0;
+    let mut ends: Vec<(u64, bool)> = Vec::new(); // (period its end was seen, inside the window)
     let rights = <zoraya_abi::MemoryObject as zoraya_abi::ObjectType>::RIGHTS;
     while at_last.is_none() {
-        let before = sched::ending_watch::ran_ns();
-        let child = process::spawn_in(&room, "f_null", true).expect("f_null");
+        let child = process::spawn_in(&room, "spin", true).expect("spin");
         {
             let mut table = child.handles.lock();
             for _ in 0..OBJECTS {
@@ -1611,64 +1631,89 @@ fn a_start_and_end_loop_keeps_its_ceiling() {
                     .expect("a handle");
             }
         }
+        let charged_before = crate::cpu::usage(&room).used_ns;
         child.resume().expect("resume");
+        let mut seen = false;
         loop {
-            if at_first.is_none() && period_of(timer::now().as_nanos()) >= first {
-                at_first = Some((
-                    crate::cpu::usage(&room).used_ns,
-                    sched::ending_watch::all_ns(),
-                    period_of(timer::now().as_nanos()),
-                ));
+            if !child.exit_requested() && crate::cpu::usage(&room).used_ns > charged_before {
+                // It ran: end it, without closing the room.
+                child.request_exit(ExitRecord {
+                    code: 0,
+                    reason: ExitReason::Killed,
+                    detail: 0,
+                    request_kind: None,
+                });
             }
-            if period_of(timer::now().as_nanos()) >= last {
-                at_last = Some((
-                    crate::cpu::usage(&room).used_ns,
-                    sched::ending_watch::all_ns(),
-                    period_of(timer::now().as_nanos()),
-                ));
+            if let Some((first, _)) = window
+                && at_first.is_none()
+                && now_period() >= first
+            {
+                at_first = Some(sample());
+            }
+            if let Some((_, last)) = window
+                && now_period() >= last
+            {
+                at_last = Some(sample());
                 break;
+            }
+            if !seen && child.is_ending() {
+                seen = true;
+                let p = now_period();
+                ends.push((p, at_first.is_some()));
+                window.get_or_insert((p + 1, p + 11));
             }
             if child.exit_record().is_some() {
                 break;
             }
             sched::sleep_until(Deadline::At(timer::now().plus_nanos(200_000))).expect("queue");
         }
-        if at_last.is_some() && child.exit_record().is_none() {
-            // The window is over with this one still running or waiting
-            // for budget.
+        if child.exit_record().is_none() {
+            // The window is over with this one not yet gone.
             room.kill();
         }
-        let ended = child
-            .exit_record()
-            .is_some_and(|r| r.reason == ExitReason::Fault);
         drop(child);
-        yield_until(|| room.live() == 0);
-        if ended {
-            longest = longest.max(sched::ending_watch::ran_ns() - before);
-            ways_out += 1;
+        // Napping, not yielding: a yield loop would take a turn between every
+        // two of the way out's floor slices.
+        let waited = timer::now();
+        while room.live() > 0 {
+            assert!(
+                timer::now().nanos_since(waited) < PATIENCE_NS,
+                "the room did not empty"
+            );
+            sched::sleep_until(Deadline::At(timer::now().plus_nanos(200_000))).expect("queue");
         }
     }
-    let (used_first, all_first, from) = at_first.expect("the window began");
-    let (used_last, all_last, to) = at_last.expect("the window ended");
+    let (used_first, all_first, ending_first, from) = at_first.expect("the window began");
+    let (used_last, all_last, ending_last, to) = at_last.expect("the window ended");
+    sched::ending_watch::watch(None);
     let charged = used_last - used_first;
     let ran = all_last - all_first;
+    let ending = ending_last - ending_first;
     // The window runs from a moment in period `from` to one in period `to`:
     // at most `to - from + 1` periods' budgets.
     let periods = to - from + 1;
-    sched::ending_watch::watch(None);
-    let bound = periods * budget + longest + budget + periods * zoraya_cpu::MIN_SLICE_NS;
+    let allowance = periods * budget + budget + periods * zoraya_cpu::MIN_SLICE_NS;
+    let bound = allowance + ending;
+    let begun = ends.iter().filter(|(_, inside)| *inside).count();
     println!(
-        "a start-and-end loop: {ways_out} ways out, the longest {longest} ns; over {periods} periods charged {charged} ns, ran {ran} ns by the clock, bound {bound} ns, debt left {} ns; {} ms",
+        "a start-and-end loop: ways out begun in periods {:?} (window {} to {}), {begun} in the window; charged {charged} ns, ran {ran} ns by the clock, of it {ending} ns by ending threads; bound {bound} ns; debt left {} ns; {} ms",
+        ends.iter().map(|(p, _)| p - start).collect::<Vec<_>>(),
+        from - start,
+        to - start,
         crate::cpu::debt(&room),
         timer::now().nanos_since(began) / 1_000_000
     );
     assert!(
         charged <= bound,
-        "charged {charged} ns over {periods} periods, bound {bound} ns"
+        "charged {charged} ns over {periods} periods, bound {bound} ns ({ending} ns of ways out)"
     );
     assert!(
         ran <= bound,
         "ran {ran} ns by the clock over {periods} periods, bound {bound} ns"
+    );
+    assert!(
+        begun == 0,
+        "{begun} ways out began in the window: the debt did not park the room"
     );
 }
 

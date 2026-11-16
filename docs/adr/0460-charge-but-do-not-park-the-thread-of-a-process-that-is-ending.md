@@ -147,7 +147,9 @@ past its ceiling.
   most `N * B + N * F` plus one way out (the last, whose debt is still owed) plus one budget (a period's debt is paid
   only from the next), unless one way out is longer than the cap of 100 budgets, whose excess is forgiven once per
   such child, that is at most one excess per 100 periods. The test kernel's `a_start_and_end_loop_keeps_its_ceiling`
-  checks this bound over 11 periods; without the debt the same loop is charged 16.6 ms against a bound of 2.8 ms (HVF).
+  checks over 11 periods that the room's charge beyond its ending threads' own time (measured in the same boot, since
+  a way out's length depends on the machine) stays within the ceiling's allowance, and that no second way out begins
+  while the debt stands.
 - **A busy machine stretches a way out.** An ending thread of a spent job runs in turns of the floor slice (50 us)
   between other ready threads' turns of up to 10 ms, so a long way out next to busy jobs takes many rounds; a killed
   room's death is "at once" only in the room's own terms (seen in the host model: with an uncapped spinner beside the
@@ -188,9 +190,10 @@ past its ceiling.
 - **INV-0460-4.** What an ending process's threads run past a budget is debt that the job and each ancestor with a
   ceiling pay back from the next periods' budgets, up to a cap of 100 budgets, and a dead room's debt goes to its
   nearest ancestor with a ceiling: over N periods a room whose processes end one after the other is charged at most N
-  budgets, a floor slice a period, one way out and one budget. *Check:* `cargo test -p zoraya-cpu` (carry, cap, parent
-  chain, dead room, the loop with and without the debt) and the test kernel's `a_start_and_end_loop_keeps_its_ceiling`
-  (the room's charge and the clock over 11 periods).
+  budgets, a floor slice a period and one budget beyond what its ending threads ran, and while the debt stands no new
+  way out begins. *Check:* `cargo test -p zoraya-cpu` (carry, cap, parent chain, dead room, the loop with and without
+  the debt) and the test kernel's `a_start_and_end_loop_keeps_its_ceiling` (over 11 periods, the room's charge and the
+  clock against that bound with the ending threads' time measured in the same boot, and no way out begun in the 11 periods after the first).
 
 ## Open questions
 
