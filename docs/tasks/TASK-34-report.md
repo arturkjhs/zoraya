@@ -129,3 +129,30 @@ Updated 2026-11-16. **All of F2 to F8 are merged.**
   request (5) and `Accepted` (19); `+listen PORT` in the shell; the loopback as `netd` handing the client's stream ends to the listener
   (no second smoltcp interface: read, not measured). Plan part F7's "done when" is met: `make test-python-serve`.
 - Not built: listening on the NIC, `localhost`, per-connection `ECONNRESET`, rooms' words for `+listen`. Limits in `docs/design.md` and ADR-0441.
+
+## F10 notes
+
+- Built (proposed ADR-0443, added by the architect on 2026-11-16): `image_create(memory, length, job)` charges the named job after
+  the kernel checks `CREATE_PROCESS` on it (a refusal holds nothing). The shell names the room's launch job (`room_job`, its own job
+  outside a room), the broker the child's job, `posixrun` and `libposix` their own. A room at its memory limit cannot start a program
+  whose image does not fit: `tests/posix-core/room-image.script` and `tools/check-room-image.py` (in `make test-libposix`): the shell
+  says `over quota`, the room's row is unchanged and its own refusal count goes 1, 2; the same program starts in a roomy room.
+- Kernel and user tests: `t_image`'s `an_image_is_charged_to_the_job_it_names` (charge on the named job and not a sibling, refusal
+  without `CREATE_PROCESS`, refusal at the limit with nothing kept, the payer job killed or its handle closed while the image lives).
+- This meets one condition of the untrusted-room gate (ADR-0268): what a room starts is paid by the room. Others remain: ADR-0269's
+  untrusted launcher is not built.
+- Known limitations: the shell's staging object (the program's bytes before the image exists) is charged to the shell's job; a POSIX
+  process with no `PROCESS_JOB` handle names `JOB` and its program loads fail with `ENOEXEC` if that is not a spawner's handle (none
+  exists today).
+- Hand mutants run (make test-qemu-one, and test-libposix for the shell one): charge the creator, skip the `CREATE_PROCESS` check, keep the
+  table room on a refusal, the shell names its own job: all killed (the third only after `t_image` refused more often than the table has
+  slots). Not covered: the broker's `first.job` and libposix's `process_job` (no test sees them). The shell mutant is killed by
+  `room-image.script` but the script cannot tell the image from the child's own pages alone in a 1M room; the room's row in `top.script`
+  reads 987K higher with F10 than with the shell naming its own job (about the 984K image), recorded here, not asserted.
+- Open for the architect: `image_create` still charges a killed job (`spawn` refuses one); see ADR-0443 open questions.
+- Correction (review of F10, finding 1): the failure of `test-qemu-auto-smp4-2g` in `make test-changed` is not the contiguous-create
+  race. It is `t_bound` going over its 2 ms masked limit on process exits (`run 2` and `run 3` over the limit, exit code 3). Measured on
+  this host with `make test-qemu-auto-smp4-2g` alone, three runs each: this branch failed 2 of 3, `origin/main` failed 3 of 3. Largest
+  masked time of the exit steps, in microseconds (branch / main): 400 objects of 256 KiB 4864 / 6847; a process holding 24 MiB 3241 / 4454;
+  256 mappings and 1024 handles 4747 / 4950; 4000 mappings of 4000 objects 2044 / 4440; 16 full ports 1195 / 1157. F10 adds nothing on
+  the exit path, and the failure is on `main` too; it is a backlog item of its own (`t_bound`'s exit paths under 4 CPUs and 2 GiB).

@@ -1143,6 +1143,7 @@ POSIX_CORE := $(BUILD)/posix-core
 POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
 POSIX_CORE_MAPS_SCRIPT := tests/posix-core/maps.script
 POSIX_CORE_TOP_SCRIPT := tests/posix-core/top.script
+POSIX_CORE_ROOM_IMAGE_SCRIPT := tests/posix-core/room-image.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
 	@$(MAKE) -s -f ports/Makefile check-libc
@@ -1183,6 +1184,14 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_TOP_SCRIPT) --label libposix-top-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  python3 tools/check-top-image.py target/test-logs/libposix-top-$$accel.log && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+# F10 (proposed ADR-0443, INV-0443-5): a room at its memory limit cannot start a program
+# whose image does not fit, and its row does not change; a roomy room starts it.
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_ROOM_IMAGE_SCRIPT) --label libposix-room-image-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  python3 tools/check-room-image.py target/test-logs/libposix-room-image-$$accel.log && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
 # Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,

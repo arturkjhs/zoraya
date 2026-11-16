@@ -11,9 +11,10 @@ twice, and checks the room's memory against itself (no number is pinned). Per ru
   a spawn of the image costs the room its child's own pages and the pipe L keeps for it,
   never an image: so it is far less than the child's own job plus the image's pages
   (printed by the program as "an image keeps exactly N bytes"); a spawn of the file costs
-  the same and the image's pages, and a few for the record and the tables. What the room
-  does not show is the image of the program itself, which the shell made: it is charged to
-  the shell's job, outside every room.
+  the same and the image's pages, and a few for the record and the tables. The room also
+  shows the image of the program itself, which the shell made for it (plan part F10, proposed
+  ADR-0443: it is charged to the room's job, not the shell's); it is in P0 and in every later
+  reading alike, so none of the differences above sees it.
 
   The room gets everything back: each run ends within 16K of the empty room's reading, and
   the second run reads as the first did, so an image or a transfer buffer kept after a run
@@ -26,13 +27,16 @@ import sys
 log = open(sys.argv[1], errors="replace").read().splitlines()
 runs = []        # one dict per run: marker -> last reading in K
 kept = None
+l_job = None
 children = None
 marker = "start"
 cur = {"start": []}
 for line in log:
-    m = re.search(r"an image keeps exactly (\d+) bytes", line)
+    m = re.search(r"an image keeps exactly (\d+) bytes(?:; L's job holds (\d+) bytes)?", line)
     if m:
         kept = int(m.group(1))
+        if m.group(2) and l_job is None:
+            l_job = int(m.group(2))
     if "keep: L alone" in line:
         runs.append({})
         marker = "p0"
@@ -62,6 +66,18 @@ empty = cur["start"][-1]
 kk = kept / 1024
 child = sum(children[:3]) / 3 / 1024
 errors = []
+# The positive control of the shell's charge (plan part F10, INV-0443-5): the room holds the image
+# of the program the shell started in it. What a room holds at P0 is at least the launcher's own job,
+# a child's own job (the driver is the same program) and an image's pages; a shell that charged the
+# image to its own job leaves the room about an image short (845K here).
+if l_job is None:
+    errors.append("no 'L's job holds' reading: the program does not print it")
+else:
+    need = (l_job + children[0]) / 1024 + kk * 0.75
+    for n, r in enumerate(runs, 1):
+        if r["p0"] < need:
+            errors.append("run %d: the room reads %dK alone, less than L's job (%.0fK) and a child's (%.0fK) with three quarters of the image (%.0fK) it holds: the program's image is not charged to the room"
+                          % (n, r["p0"], l_job / 1024, children[0] / 1024, kk * 0.75))
 for n, r in enumerate(runs, 1):
     own = (r["p3"] - r["p0"]) / 3
     file_child = r["p4"] - r["p3"]

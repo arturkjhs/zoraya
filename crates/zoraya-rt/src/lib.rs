@@ -592,9 +592,11 @@ pub fn snapshot_process(buffer: &[u8]) -> Result<Option<Handle>, Status> {
     )?))
 }
 
-/// An image from the first `length` bytes of a memory object (ADR-0108).
-pub fn image_create(memory: Handle, length: u64) -> Result<Handle, Status> {
-    handle(stubs::image_create::<Svc>(memory, Size(length))?)
+/// An image from the first `length` bytes of a memory object (ADR-0108),
+/// charged to `job` (proposed ADR-0443): the caller needs `CREATE_PROCESS` on
+/// it, the right it needs to start a process there.
+pub fn image_create(memory: Handle, length: u64, job: Handle) -> Result<Handle, Status> {
+    handle(stubs::image_create::<Svc>(memory, Size(length), job)?)
 }
 
 /// Stops every process in a job tree (ADR-0105 item 8).

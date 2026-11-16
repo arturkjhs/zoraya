@@ -86,5 +86,72 @@
 > +listen 9000-9009 tcptest --no-reach\r
 < tcptest: no reach grant ok
 < \r\n~>
+# Plan part F9 (proposed ADR-0442, INV-0442-1 to -3): each room has its own loopback. Room ra serves
+# A on ports 9100 and 9102; room rb serves B on 9100, the same port, which is no EADDRINUSE: the ports
+# are per room. A connect reaches the listeners of its own room only, and every other answer is that of
+# no listener (ECONNREFUSED), also past the 64 a queue holds, so that a room neither learns which ports
+# another listens on nor fills its queue. The line's grant is the same in every room: `+net 127.0.0.1`.
+> room new ra +w /home\r
+< ra
+> room new rb +w /home\r
+< rb
+> room new rc +w /home\r
+< rc
+> room ra\r
+< ra ~>
+> +listen 9100 tcptest --serve 9100 A &\r
+< tcptest: serving A on 9100
+> +listen 9102 tcptest --serve 9102 A &\r
+< tcptest: serving A on 9102
+> +net 127.0.0.1 tcptest --probe 9100 A 3\r
+< tcptest: probe 9100 A x3 ok
+< ra ~>
+> room --leave\r
+< \r\n~>
+> room rb\r
+< rb ~>
+> +listen 9100 tcptest --serve 9100 B &\r
+< tcptest: serving B on 9100
+# Room rb reaches its own listener on 9100, not ra's, and finds nothing on 9102 (70 times: more than the queue).
+> +net 127.0.0.1 tcptest --probe 9100 B 3\r
+< tcptest: probe 9100 B x3 ok
+< rb ~>
+> +net 127.0.0.1 tcptest --probe 9102 none 70\r
+< tcptest: probe 9102 none x70 ok
+< rb ~>
+# A room with no listener at all finds nothing on either port.
+> room --leave\r
+< \r\n~>
+> room rc\r
+< rc ~>
+> +net 127.0.0.1 tcptest --probe 9100 none 3\r
+< tcptest: probe 9100 none x3 ok
+< rc ~>
+> +net 127.0.0.1 tcptest --probe 9102 none 3\r
+< tcptest: probe 9102 none x3 ok
+< rc ~>
+# Back in ra, its listeners answer as before.
+> room --leave\r
+< \r\n~>
+> room ra\r
+< ra ~>
+> +net 127.0.0.1 tcptest --probe 9100 A 3\r
+< tcptest: probe 9100 A x3 ok
+< ra ~>
+> +net 127.0.0.1 tcptest --probe 9102 A 3\r
+< tcptest: probe 9102 A x3 ok
+< ra ~>
+# The home room has its own loopback too: none of the rooms' listeners.
+> room --leave\r
+< \r\n~>
+> +net 127.0.0.1 tcptest --probe 9100 none 3\r
+< tcptest: probe 9100 none x3 ok
+< \r\n~>
+> room remove ra --kill\r
+< \r\n~>
+> room remove rb --kill\r
+< \r\n~>
+> room remove rc --kill\r
+< \r\n~>
 x power off
 > poweroff\r

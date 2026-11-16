@@ -2208,9 +2208,20 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
         parent_charged >= charged,
         "the parent was charged {parent_charged} ns, the room {charged} ns"
     );
+    // INV-0460-1 holds while the ways out fit in one period. The wall time
+    // the room's ending threads ran is what the test can read (`ran`): the
+    // 16 ways out took some 25 ms where this was written and 102 ms on CI's
+    // TCG (scheduled run 43843667050), more than the period. What never
+    // depends on the speed is that no ending thread is parked again, and
+    // that the room goes in the period after the kill's plus one for each
+    // whole period the ways out ran.
     assert!(
-        died <= killed + 1,
-        "the killed room ended {} periods after the kill's period, {parks} parks after the kill",
+        parks == 0,
+        "{parks} parks after the kill: an ending thread was parked again"
+    );
+    assert!(
+        died <= killed + 1 + ran / PERIOD,
+        "the killed room ended {} periods after the kill's period, {parks} parks after the kill, its ending threads ran {ran} ns",
         died - killed
     );
 }
@@ -2218,7 +2229,7 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
 /// ADR-0460, the architect's decision on its open question 2 (INV-0460-4):
 /// a room whose processes end one after the other, each with a way out far
 /// longer than the room's budget, gains nothing from them beyond their own
-/// work. Each process is `spin`, started suspended with 300 one-page
+/// work. Each process is `spin`, started suspended with 900 one-page
 /// objects the test puts in its table (free to the room), so that its way
 /// out, closing them, takes many budgets. The test ends it (as `job_kill`
 /// does, `request_exit`) as soon as it has run, that is, as soon as the room
@@ -2238,13 +2249,16 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
 ///   `sched::ending_watch`): the room's own code keeps the ceiling, however
 ///   long a way out takes on this machine;
 /// - no way out begins in the window: the first way out's debt (its run
-///   past the budget, some 400 us on the fastest host for 300 objects
+///   past the budget, some 500 us on the fastest host for 900 objects
 ///   against 20 us a period, capped at 2 ms) parks the room for longer than
-///   the window, on any host slower than that.
+///   the window, on any host slower than that. (With 300 objects a way out
+///   cost 170 us under HVF on the Mac mini, 8 periods' budgets, so the second
+///   began inside the window: the number of objects, now 900 (a table holds 1024 handles), is what sets
+///   the debt, not the host's speed.)
 fn a_start_and_end_loop_keeps_its_ceiling() {
     use crate::memory::object::MemoryObject;
     const LIMIT: u32 = 1; // 20 us of the 20 ms period.
-    const OBJECTS: usize = 300;
+    const OBJECTS: usize = 900;
     let began = timer::now();
     let period_ns = crate::cpu::period_ns();
     let parent = Job::create(&root(), false).expect("parent");

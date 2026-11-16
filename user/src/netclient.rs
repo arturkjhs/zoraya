@@ -12,7 +12,8 @@ use zoraya_abi::{
     ChannelEntry, ChannelObject, Handle, Mode, ObjectType, Packet, Status, channel_signals,
 };
 use zoraya_proto_net::{
-    GetStatus, Narrow, NarrowAccount, Narrowed, Ping, PingReply, StatusReply, status,
+    GetStatus, MAX_ROOM, Narrow, NarrowAccount, NarrowRoom, Narrowed, Ping, PingReply, StatusReply,
+    status,
 };
 use zoraya_protocol::{Below, Data, Message, decode, encode};
 
@@ -98,6 +99,31 @@ pub fn narrow_account(conn: Handle, rights: u32, budget: u32, scope: &[u8]) -> R
             rights,
             budget: Below(budget),
             scope: Data(scope),
+        },
+    )
+}
+
+/// `NarrowRoom` (proposed ADR-0442): a new connection inside `conn`'s in the
+/// room `room` (`""` keeps `conn`'s), with an account of `budget`
+/// connections (0: `conn`'s own). Only a connection with the right `ROOM`, the
+/// launcher's root, may name a room; any other is refused `NOT_GRANTED`.
+pub fn narrow_room(
+    conn: Handle,
+    rights: u32,
+    budget: u32,
+    scope: &[u8],
+    room: &str,
+) -> Result<Handle, u32> {
+    if room.len() > MAX_ROOM {
+        return Err(status::INVALID);
+    }
+    narrow_with(
+        conn,
+        &NarrowRoom {
+            rights,
+            budget: Below(budget),
+            scope: Data(scope),
+            room: Data(room.as_bytes()),
         },
     )
 }
