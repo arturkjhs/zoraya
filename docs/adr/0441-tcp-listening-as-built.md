@@ -153,8 +153,9 @@ its own: a listener cannot do more to the client than the client's ends allow, a
 
 - **INV-0441-1.** A loopback `connect` leaves nothing in `netd`: the two stream ends are in the listener's queue or closed, the
   connection channel's end is closed, and no account is charged; a refused one (no listener, a full queue, a listener gone) is told
-  `REFUSED` with every handle closed. *Check:* `make test-net-posix` (`tcptest`: the 65th connect, a closed listener with 64
-  connections queued) and `cargo test -p zoraya-net` (the loopback's decision charges nothing).
+  `REFUSED` with every handle closed. *Check:* `cargo test -p zoraya-net loopback::tests` (every handle of a refused or delivered handover is moved or closed, over a counting
+  kernel) and `service_tests` (the decision charges nothing), and `make test-net-posix` (`tcptest`: the 65th connect, a closed listener with 64
+  connections queued); the arm of `netd` that closes the handles of a request whose types are wrong (`netd.rs`, `Action::Loopback`) is checked by reading only.
 - **INV-0441-2.** Listeners are bounded: 8 on the machine, one per carved account whose rights have `listen`, a port has at most one, and a closed or
   unserved listener gives the port and the charge back exactly once. *Check:* `cargo test -p zoraya-net` (`listeners_are_bounded_per_account_at_exactly_the_bound`,
   `a_port_in_use_is_busy_for_anyone_and_closing_frees_it_and_the_charge`).

@@ -347,6 +347,10 @@ static void test_expect_no_listen(void)
 {
 	int err = 0;
 	CHECK(listener(LOW, &err) < 0 && err == EACCES);
+	/* A connect to a port nobody listens on is refused by the loopback
+	 * (ECONNREFUSED, the line has the reach rule), not by the grant: it
+	 * fails if the line had no netd connection at all (EACCES). */
+	CHECK(client(LOW) < 0 && errno == ECONNREFUSED);
 	printf("tcptest: no listen grant ok\n");
 }
 
@@ -364,11 +368,11 @@ static void test_expect_no_reach(void)
 
 int main(int argc, char **argv)
 {
-	if (argc > 1 && strcmp(argv[1], "--no-listen") == 0) {
+	if (argc > 1 && (strcmp(argv[1], "--no-listen") == 0 || strcmp(argv[1], "-L") == 0)) {
 		test_expect_no_listen();
 		return failures ? 1 : 0;
 	}
-	if (argc > 1 && strcmp(argv[1], "--no-reach") == 0) {
+	if (argc > 1 && (strcmp(argv[1], "--no-reach") == 0 || strcmp(argv[1], "-R") == 0)) {
 		test_expect_no_reach();
 		return failures ? 1 : 0;
 	}
