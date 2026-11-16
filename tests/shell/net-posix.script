@@ -98,46 +98,60 @@
 > room new rc +w /home\r
 < rc
 > room ra\r
-< ra /home> 
+< ra ~>
 > +listen 9100 tcptest --serve 9100 A &\r
 < tcptest: serving A on 9100
 > +listen 9102 tcptest --serve 9102 A &\r
 < tcptest: serving A on 9102
 > +net 127.0.0.1 tcptest --probe 9100 A 3\r
 < tcptest: probe 9100 A x3 ok
+< ra ~>
+> room --leave\r
+< \r\n~>
 > room rb\r
-< rb /home> 
+< rb ~>
 > +listen 9100 tcptest --serve 9100 B &\r
 < tcptest: serving B on 9100
 # Room rb reaches its own listener on 9100, not ra's, and finds nothing on 9102 (70 times: more than the queue).
 > +net 127.0.0.1 tcptest --probe 9100 B 3\r
 < tcptest: probe 9100 B x3 ok
+< rb ~>
 > +net 127.0.0.1 tcptest --probe 9102 none 70\r
 < tcptest: probe 9102 none x70 ok
+< rb ~>
 # A room with no listener at all finds nothing on either port.
+> room --leave\r
+< \r\n~>
 > room rc\r
-< rc /home> 
+< rc ~>
 > +net 127.0.0.1 tcptest --probe 9100 none 3\r
 < tcptest: probe 9100 none x3 ok
+< rc ~>
 > +net 127.0.0.1 tcptest --probe 9102 none 3\r
 < tcptest: probe 9102 none x3 ok
+< rc ~>
 # Back in ra, its listeners answer as before.
+> room --leave\r
+< \r\n~>
 > room ra\r
-< ra /home> 
+< ra ~>
 > +net 127.0.0.1 tcptest --probe 9100 A 3\r
 < tcptest: probe 9100 A x3 ok
+< ra ~>
 > +net 127.0.0.1 tcptest --probe 9102 A 3\r
 < tcptest: probe 9102 A x3 ok
+< ra ~>
 # The home room has its own loopback too: none of the rooms' listeners.
 > room --leave\r
-< \r\n/home> 
+< \r\n~>
 > +net 127.0.0.1 tcptest --probe 9100 none 3\r
 < tcptest: probe 9100 none x3 ok
+< \r\n~>
 > room remove ra --kill\r
-< /home> 
+< \r\n~>
 > room remove rb --kill\r
-< /home> 
+< \r\n~>
 > room remove rc --kill\r
-< /home> 
+< \r\n~>
 x power off
 > poweroff\r
