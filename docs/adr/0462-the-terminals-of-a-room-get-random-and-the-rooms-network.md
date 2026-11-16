@@ -87,6 +87,15 @@ HOST). This ADR records the shape built in 10g and the second review's findings 
 6. **The first terminal after `room r`** holds `init`'s root connection: the words bound its lines in the shell
    (items 1 and the room bound above), but the connection itself is not narrowed there.
 
+### Decision on the line's network (item 1 of Option A)
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+A room's `+net` words bound what a line may be given; a line gets a network connection only when its own words or its
+description ask for it and the room allows it; a line with no network request gets no connection and no carved account;
+at the carved-account limit the line is refused with a hint. The alternative (every line gets the room's connection,
+Option B) is refused. This records that decision only; the ADR's status is the architect's.
+
 ## Consequences
 
 - **Positive.** `ssh` and `ssh-keygen` run in a room's window; the room's words bound what it reaches; a room's

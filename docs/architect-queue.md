@@ -50,12 +50,6 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - **Test infrastructure:** the semaphore, barrier and latch groups of libc++'s tests run only in the nightly (TCG);
   INV-0042-1 stays `not yet applicable`. INV-0172-4's narrowing of `room new` inside a room is built and checked in 10c.
 
-- **10g, room words bound a line and give it nothing** (ADR-0462; the architect may overrule): the architect's text was
-  "the network by the room's grants (a room made with `+net HOST:22` can ssh there)". Taken: the room's words bound
-  what a line may be given and let a value host designate; a line gets a connection only if its own words (a `+net`
-  on it, or the description's `HOST`/`URL` operand) ask for it inside them. Otherwise every `cat` in the room would
-  take one of `netd`'s four carved accounts and starve home's `curl` and `ssh`. Option B (every line gets the room's
-  connection) is in the ADR with its cost.
 - **10g, ADR-0288/0435:** a launcher's connection to the random service (`ShareLauncher`, only `init`'s may ask) so that
   the shells the panel starts are shells, not programs, for `rngd`.
 - **10g, ADR-0340 INV-0340-4:** its half "`libc.a` exports no `listen` or `accept`" is false since the Unix sockets
@@ -81,6 +75,7 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 
 ## E. Decided 2026-11-16 (removed from the lists above)
 
+- ADR-0462's rule for a room's network (recorded in the ADR): a room's `+net` words bound what a line may be given; a line gets a connection only when its own words or its description ask for it and the room allows it; a line with no network request gets none and no carved account; at the carved-account limit the line is refused with a hint. Every line getting the room's connection is refused.
 - ADR-0392 Option A accepted (a signal sent during `execve` follows the new image; a handler run at a call's entry ends its first wait with `EINTR`); the amendments of ADR-0106 accepted (INV-0106-2 gains `execve`, item 2's mapping holds during the spawn as amended).
 - ADR-0386, ADR-0387, ADR-0390, ADR-0391 Option A accepted. ADR-0391 item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (10f built `narrow` with a list at run time; 10j or 10f for the rest).
 - DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
