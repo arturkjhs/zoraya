@@ -141,7 +141,9 @@ while [ $# -gt 0 ]; do
         --smp) [ $# -ge 2 ] || die "--smp needs a value"; smp=$2; shift 2 ;;
         --mem) [ $# -ge 2 ] || die "--mem needs a value"; mem=$2; shift 2 ;;
         --machine-opt) [ $# -ge 2 ] || die "--machine-opt needs a value"; machine="$machine,$2"; shift 2 ;;
-        --shard) [ $# -ge 2 ] || die "--shard needs N/M"; shard=$2; shift 2 ;;
+        --shard) [ $# -ge 2 ] || die "--shard needs 1/2 or 2/2"
+            case $2 in 1/2|2/2) ;; *) die "--shard needs 1/2 or 2/2, not $2" ;; esac
+            shard=$2; shift 2 ;;
         --test) mode=test; shift ;;
         --keys) keys=1; shift ;;
         --test-disk) test_disk=1; shift ;;
@@ -242,7 +244,11 @@ set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
     -smp "$smp" -m "$mem" -nodefaults
 [ -n "$reboot" ] || set -- "$@" -no-reboot
 [ -n "$kernel" ] && [ -z "$dumpdtb" ] && set -- "$@" -kernel "$kernel"
-[ -z "$shard" ] || set -- "$@" -append "zoraya.shard=$shard"
+if [ -n "$shard" ]; then
+    [ "$mode" = test ] || die "--shard needs --test"
+    [ -z "$dumpdtb" ] || die "--shard does not go with --dumpdtb"
+    set -- "$@" -append "zoraya.shard=$shard"
+fi
 
 # Interactive with --gui: QEMU's display opens a window. On macOS the
 # cocoa display keeps the Command keys for the host unless told otherwise;
