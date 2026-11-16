@@ -8,21 +8,18 @@ adds, remove what the architect has decided (the decision itself is recorded in 
 **Both dispatchers** (TASK-31 on the Mac mini, TASK-34 on the MacBook Air) keep this file. TASK-34's dispatcher: add your
 items here too, under the same headings, with the part's name in front.
 
-Last updated: 2026-11-15 (the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
+Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; before that 2026-11-15, the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
 `test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass on `work/10c`).
 
 ## A. Proposed ADRs, with the agent's one-line recommendation
 
 | ADR | What | Recommendation | From |
 |---|---|---|---|
-| ADR-0392 | libposix: a signal sent during `execve` follows the new image (`exec_carry`); a handler that ran at a call's entry ends its first wait with `EINTR`; `exec_hold` marks default-terminating signals `Deliver` during the spawn | **Tension with accepted ADR-0106** (INV-0106-2: a take in every handler-less `execve`; item 2's mapping during the spawn). Recommend Option A (library route); the fallback A' is a kernel change. Yours to accept or to choose A' | sigint-exec |
-| ADR-0390, ADR-0391 | 10d: surface for curses, less and vi; the layout, descriptions and refusals of 10d | Option A both. ADR-0391 item 8 (two files of one directory) is now a refusal and an open question: should `narrow` take a list? | 10d |
+| ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
+| ADR-0461 | git's licence: `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS (its GPL-2.0-or-later option), for git only. Decided by the architect 2026-11-16; it must be accepted before 10h wires git in | Option A (decided) | ports-early, TASK-31 |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
-| ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
-| ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
 | ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
 | ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
-| ADR-0392 | `work/sigint-exec`: signals across `exec` (the old image's queued and pending signals carried to the new one, the default-terminating ones held as `Deliver` during the spawn) and a handler run at a call's entry making the call's wait `EINTR`. **Tension:** amends accepted ADR-0106 (INV-0106-2 gains `execve`, also cited by INV-0304-5; item 2's mapping during the spawn); note in ADR-0106's open questions | Option A (Option A', no hold, if its 22 calls per `exec` are measured to matter); accept the deviations or ask for a superseding ADR | `work/sigint-exec` |
 
 ## B. Decisions taken to continue (the architect may overrule)
 
@@ -62,16 +59,18 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 
 ## D. Open questions
 
-- **git's licence in a static program (ADR-0347, ports-early):** git is GPL-2.0-only and `git-remote-http` links libcurl with Apache-2.0 OpenSSL statically; GPL-2.0-only and Apache-2.0 are not combinable, so `git-remote-http` cannot be shipped as built (GNU wget is GPL-3.0-or-later, which is compatible). Options: git over a GPL-compatible TLS library, `git-remote-http` as a program not linked to OpenSSL (a helper process), an OpenSSL exception, or no HTTPS transport. Decide before 10h wires git into the image.
-- **DB 1 for nvi (ADR-0390):** 1.85 under the 4-clause UC licence; a maintained copy is an open question.
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
-- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the dying thread runs its
-  teardown and is charged and parked like the room's other threads, so a killed room at a low ceiling takes as many
-  periods to die as its teardown needs (measured: 55 parks after the kill, nine periods; up to 12 periods). Options:
-  charge but do not park an ending process's thread, or move the teardown to the reaper. A proposed ADR needs a number:
-  none of 0380..0399 outside 0390..0395 is free on the remote branches. ADR-0285's open questions have the note.
+- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note.
 
+
+## E. Decided 2026-11-16 (removed from the lists above)
+
+- ADR-0392 Option A accepted (a signal sent during `execve` follows the new image; a handler run at a call's entry ends its first wait with `EINTR`); the amendments of ADR-0106 accepted (INV-0106-2 gains `execve`, item 2's mapping holds during the spawn as amended).
+- ADR-0386, ADR-0387, ADR-0390, ADR-0391 Option A accepted. ADR-0391 item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (10f built `narrow` with a list at run time; 10j or 10f for the rest).
+- DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
+- git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
+- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, proposed; to be accepted after the implementation).
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 

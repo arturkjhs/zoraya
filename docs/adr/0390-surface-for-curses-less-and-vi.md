@@ -1,6 +1,6 @@
 # ADR-0390: The names ncurses, less and nvi add to libc.a, what is left for the terminal part, and how the three were built
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0005, ADR-0100, ADR-0141, ADR-0331, ADR-0334, ADR-0335, ADR-0342, ADR-0343
 - **Evidence:** CP-27, stage-10/survey.md#what-ncurses-needs-from-libc, stage-10/survey.md#editors-and-pagers-compared
@@ -159,7 +159,7 @@ wmemset nvi
   file, `:g` over it, and a write-back. Part 10d.
 - Should the `lock` option be removed from nvi's option table (ADR-0335 item 1 says removed)? A larger patch to
   `common/options.c`; 10d decides.
-- DB 1.85 is under the 4-clause UC licence (the advertising clause, withdrawn by UC in 1999, is still in the files); a maintained copy may have the 3-clause one. The pins: nvi2 is a GitHub-generated archive of a tag, DB 1.85 has one URL and no mirror, hashes are those of the first download.
+- DB 1.85 is under the 4-clause UC licence (the advertising clause, withdrawn by UC in 1999, is still in the files); a maintained copy may have the 3-clause one. Decided by the architect, 2026-11-16: the licence is accepted, because the University of California rescinded the advertising clause in 1999 and the licence reads as 3-clause BSD. Recorded by an agent. The pins: nvi2 is a GitHub-generated archive of a tag, DB 1.85 has one URL and no mirror, hashes are those of the first download.
 - Whether `less` and `vi` need `-g` in the image (the debug sections are 1.3 MB of each file here, from `libc.a`'s own `-g`).
 
 ## Revisit triggers
@@ -168,4 +168,6 @@ wmemset nvi
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A. The open question about DB 1 (which copy) is covered by ADR-0391 item 9 (1.85 stays; a maintained copy is a swap of the archive and `ports/db1/build.sh`) and by the licence decision below. DB 1.85's licence is accepted: the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so the licence reads as the 3-clause BSD licence. The question about `lock` is covered by ADR-0391 item 9 (the option stays and locks nothing, a recorded difference from ADR-0335 item 1). The question about `-g` stays open.
