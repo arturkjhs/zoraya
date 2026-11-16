@@ -564,6 +564,17 @@ pub struct UnixPart<H> {
     pub held: Option<Held<H>>,
     pub shut_rd: bool,
     pub shut_wr: bool,
+    /// The path `bind` made this socket's file at, as the program gave it
+    /// (`getsockname`).
+    pub name: Option<Vec<u8>>,
+    /// The path `connect` went to (`getpeername`); an accepted socket has none.
+    pub peer_name: Option<Vec<u8>>,
+    /// The connection to the socket's file that `bind` made: `listen` asks
+    /// the service over it, and its closing ends the listener (proposed
+    /// ADR-0439).
+    pub node: Option<H>,
+    /// `listen` was answered: `ctl` is the channel new connections arrive on.
+    pub listening: bool,
 }
 
 /// A packet message waiting for room in the fd table.
@@ -584,6 +595,10 @@ impl<H> Socket<H> {
             held: None,
             shut_rd: false,
             shut_wr: false,
+            name: None,
+            peer_name: None,
+            node: None,
+            listening: false,
         }));
         s
     }
@@ -615,6 +630,14 @@ impl<H: Copy> Socket<H> {
         if let Some(u) = &self.unix {
             // A Unix socket: a packet one is one channel, a stream one the
             // two byte streams; what the library already holds is ready.
+            if u.listening {
+                // Readable: a connection waits to be accepted; never writable.
+                return if writing {
+                    None
+                } else {
+                    self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
+                };
+            }
             if self.state != State::Connected {
                 return None;
             }

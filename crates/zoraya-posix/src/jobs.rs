@@ -1270,8 +1270,10 @@ impl<S: Sys> Posix<S> {
                 // cross `fork` yet (ADR-0225 item 9; ADR-0287 lists it as not
                 // built): refused rather than copied as a description with no
                 // handles.
+                // A socket bound to a file keeps the connection that makes
+                // its listener (proposed ADR-0439): not copied, refused.
                 Desc::Socket(ref s)
-                    if s.unix.is_some()
+                    if s.unix.as_ref().is_some_and(|u| u.node.is_none())
                         && (s.kind == crate::unix::SOCK_STREAM || s.ctl.is_none()) => {}
                 Desc::Socket(_) => return Err(crate::errno::ENOTSUP),
                 _ => {}

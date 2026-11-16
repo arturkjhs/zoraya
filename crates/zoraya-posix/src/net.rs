@@ -176,13 +176,8 @@ impl<S: Sys> Posix<S> {
     /// `Connected` or `Failed` (ADR-0225 items 3 and 11).
     pub fn connect(&mut self, fd: i32, addr: &[u8]) -> Result<(), i32> {
         if self.is_unix(fd) {
-            // Socket files are plan part F7's: a path names nothing yet
-            // (ADR-0412 item 5), and a connected pair is already connected.
-            return Err(if self.socket_of(fd)?.state == State::Connected {
-                EISCONN
-            } else {
-                crate::errno::ENOENT
-            });
+            // A socket file (ADR-0412 item 5; `unix_file.rs`).
+            return self.unix_connect(fd, addr);
         }
         let (state, nonblock) = {
             let s = self.socket_of(fd)?;
@@ -529,12 +524,43 @@ impl<S: Sys> Posix<S> {
             return match (level, name) {
                 (sock::SOL_SOCKET, sock::SO_DOMAIN) => Ok(crate::unix::AF_UNIX),
                 (sock::SOL_SOCKET, sock::SO_PROTOCOL) => Ok(0),
-                (sock::SOL_SOCKET, sock::SO_ACCEPTCONN) => Ok(0),
+                (sock::SOL_SOCKET, sock::SO_ACCEPTCONN) => {
+                    Ok(i32::from(s.unix.as_ref().is_some_and(|u| u.listening)))
+                }
                 (sock::IPPROTO_TCP, _) => Err(crate::errno::ENOPROTOOPT),
                 _ => sock::get_option(&s.options, s.kind, false, level, name),
             };
         }
         sock::get_option(&s.options, s.kind, false, level, name)
+    }
+
+    /// `bind`: a socket file for a Unix socket; a TCP listener is not built
+    /// (`EOPNOTSUPP`, after the descriptor is known to be a socket).
+    pub fn bind(&mut self, fd: i32, addr: &[u8]) -> Result<(), i32> {
+        if self.is_unix(fd) {
+            return self.unix_bind(fd, addr);
+        }
+        self.socket_of(fd)?;
+        Err(EOPNOTSUPP)
+    }
+
+    /// `listen`: as `bind`.
+    pub fn listen(&mut self, fd: i32, backlog: i32) -> Result<(), i32> {
+        if self.is_unix(fd) {
+            return self.unix_listen(fd, backlog);
+        }
+        self.socket_of(fd)?;
+        Err(EOPNOTSUPP)
+    }
+
+    /// `accept4`: as `bind`. The new socket's fd, and for a Unix socket the
+    /// peer's address (an accepted socket's peer has no name).
+    pub fn accept(&mut self, fd: i32, nonblock: bool, cloexec: bool) -> Result<i32, i32> {
+        if self.is_unix(fd) {
+            return self.unix_accept(fd, nonblock, cloexec);
+        }
+        self.socket_of(fd)?;
+        Err(EOPNOTSUPP)
     }
 
     /// `getpeername`.

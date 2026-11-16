@@ -216,6 +216,7 @@ tests/cxx/gtest               test-cxx-gtest
 user/describe/posix/cxxtest.cmd test-cxx test-files
 docs/adr/0366-surface-for-cxx.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-cxx test-cxx-libcxx test-cxx-gtest
 docs/adr/0398-poll-and-ppoll-as-built.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-python-mem
+docs/adr/0439-socket-files-as-built.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-python-mem
 docs/adr/0438-shared-read-only-segments-as-built.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-python-mem
 docs/adr/0389-the-terminal-calls-of-libposix-where-adr-0331-and-adr-0342-are-silent.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-python-mem
 docs/adr/0392-signals-across-exec-and-at-the-entry-of-a-wait.md check test-libposix test-posix-threads test-posix
@@ -237,11 +238,11 @@ tests/shell/                  test-boot test-files
 
 # Storage.
 crates/zoraya-fs/             test-files test-crash test-qemu test-posix test-hand-run
-crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix
+crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix test-libposix
 tools/zoraya-mkfs/            test-files test-posix test-hand-run
 tools/zoraya-ar/              check test-libposix test-posix test-apps test-netsurf test-python test-python-ext
-crates/zoraya-proto-file/     test-files test-crash test-gui test-posix
-user/src/bin/fsd.rs           test-files test-crash test-hand-run
+crates/zoraya-proto-file/     test-files test-crash test-gui test-posix test-libposix
+user/src/bin/fsd.rs           test-files test-crash test-hand-run test-libposix
 user/src/bin/blkd.rs          test-files test-crash
 user/src/files.rs             test-files test-gui
 user/src/stack.rs             test-files test-crash

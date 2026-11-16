@@ -342,6 +342,11 @@ impl Transport for Wire {
         };
         match n.objects.get_mut(&peer) {
             Some(Obj::End { queue, .. }) => {
+                // A channel queues `CHANNEL_QUEUE` messages and then its
+                // writer waits (ADR-0050): the service's reply is `Full`.
+                if queue.len() >= CHANNEL_QUEUE {
+                    return Outgoing::Full;
+                }
                 queue.push_back((bytes.to_vec(), handles.to_vec()));
                 Outgoing::Sent
             }
@@ -941,6 +946,24 @@ pub const NOW: Timestamp = Timestamp {
 /// `blocks` of 4 KiB: every test of a binary holds its rigs at once, under
 /// one 512 MiB cap.
 pub fn volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
+    volume_with(net, blocks, false)
+}
+
+/// The temporary directory service, `fsd --memory`: FIFO nodes and socket
+/// nodes (proposed ADR-0439).
+pub fn tmp_volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
+    volume_with(net, blocks, true)
+}
+
+/// Another root connection to `service`, as a second process would be given.
+pub fn another_root(net: &Rc<RefCell<Net>>, service: &Rc<RefCell<Svc>>) -> H {
+    let mut fake = Fake::new(net.clone(), vec![]);
+    let (client, server) = fake.channel_create().unwrap();
+    assert!(service.borrow_mut().add_root(server));
+    client
+}
+
+fn volume_with(net: &Rc<RefCell<Net>>, blocks: u64, tmp: bool) -> (Rc<RefCell<Svc>>, H) {
     let mut device = MemDevice::new(blocks);
     mkfs(
         &mut device,
@@ -962,7 +985,12 @@ pub fn volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
         n.services += 1;
         n.services
     };
-    let service = Rc::new(RefCell::new(Service::new(volume, Wire(net.clone(), id))));
+    let mut svc = Service::new(volume, Wire(net.clone(), id));
+    if tmp {
+        svc.enable_fifos();
+        svc.enable_sockets();
+    }
+    let service = Rc::new(RefCell::new(svc));
     let mut fake = Fake::new(net.clone(), vec![]);
     let (client, server) = fake.channel_create().unwrap();
     assert!(service.borrow_mut().add_root(server));

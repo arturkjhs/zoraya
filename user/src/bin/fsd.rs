@@ -6,7 +6,7 @@
 //! slot 7 the supervisor channel.
 //!
 //! `fsd --memory MIB` is the temporary directory service (ADR-0107 item 12):
-//! a fresh volume of that size in memory, with FIFO nodes, and no driver;
+//! a fresh volume of that size in memory, with FIFO and socket nodes, and no driver;
 //! slot 6 is the root connection's end and slot 7, when present, the
 //! supervisor channel.
 //!
@@ -19,8 +19,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
-    ChannelEntry, DEADLINE_INFINITE, EventObject, Handle, MapFlags, MemoryFlags, MemoryObject,
-    Mode, ObjectType, Packet, Rights, Status, StreamReadObject, StreamWriteObject, channel_signals,
+    ChannelEntry, ChannelObject, DEADLINE_INFINITE, EventObject, Handle, MapFlags, MemoryFlags,
+    MemoryObject, Mode, ObjectType, Packet, Rights, Status, StreamReadObject, StreamWriteObject,
+    channel_signals,
 };
 use zoraya_fs::{Clock, MkfsOptions, MountOptions, Timestamp, Volume, mkfs};
 use zoraya_fs_service::block::{ChannelDevice, Link, LinkError};
@@ -44,6 +45,9 @@ extern crate alloc;
 const DATA_SIZE: usize = 2 << 20;
 /// ADR-0054's deadline on a block request.
 const BLOCK_DEADLINE: u64 = 30_000_000_000;
+/// The most handles one message of the service carries: a stream socket's
+/// far end (read end, write end, ancillary channel; proposed ADR-0439).
+const MAX_SENT: usize = 3;
 const DRIVER_KEY: u64 = 1;
 const FIRST_KEY: u64 = 16;
 
@@ -91,11 +95,13 @@ impl Clock for Time {
 }
 
 /// The rights a handle keeps when it is moved or duplicated: a stream end's
-/// own, else a token's (the only other kind this service hands out).
+/// or a channel end's own (a socket's far end goes on to its listener whole,
+/// proposed ADR-0439), else a token's.
 fn rights_of(h: Handle) -> Rights {
     match handle_type(h) {
         Ok("stream-read") => StreamReadObject::RIGHTS,
         Ok("stream-write") => StreamWriteObject::RIGHTS,
+        Ok("channel") => ChannelObject::RIGHTS,
         _ => EventObject::RIGHTS,
     }
 }
@@ -125,20 +131,21 @@ impl Transport for Kernel {
     }
 
     fn write(&mut self, end: Handle, bytes: &[u8], handles: &[Handle]) -> Outgoing {
+        // At most the three ends of a stream socket's far end (`socket_connect`);
+        // every other reply carries one.
         let mut entries = [ChannelEntry {
             handle: end,
             rights: EventObject::RIGHTS,
             transfer: Transfer::Move,
-        }; 1];
-        let list = match handles.first() {
-            Some(handle) => {
-                entries[0].handle = *handle;
-                entries[0].rights = rights_of(*handle);
-                &entries[..1]
-            }
-            None => &entries[..0],
-        };
-        match channel_write(end, bytes, list) {
+        }; MAX_SENT];
+        if handles.len() > MAX_SENT {
+            return Outgoing::Closed;
+        }
+        for (entry, handle) in entries.iter_mut().zip(handles) {
+            entry.handle = *handle;
+            entry.rights = rights_of(*handle);
+        }
+        match channel_write(end, bytes, &entries[..handles.len()]) {
             Ok(()) => Outgoing::Sent,
             Err(Status::WouldBlock) => Outgoing::Full,
             Err(Status::NoMemory) => Outgoing::NoMemory,
@@ -276,6 +283,7 @@ fn serve<D: Device>(
     service.set_time_base(BASE.load(Ordering::Relaxed));
     if fifos {
         service.enable_fifos();
+        service.enable_sockets();
     }
     if sealed {
         service.seal("system");

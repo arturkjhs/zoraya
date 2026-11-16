@@ -259,6 +259,13 @@ pub(crate) struct Opened<H> {
     meta: Meta,
 }
 
+impl<H> Opened<H> {
+    /// What the service said of the object when it opened it.
+    pub(crate) fn meta(&self) -> &Meta {
+        &self.meta
+    }
+}
+
 enum Outcome<H> {
     Opened(Opened<H>),
     Link { remaining: String, target: String },
@@ -1005,6 +1012,10 @@ impl<S: Sys> Posix<S> {
         if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFIFO {
             return self.open_fifo(conn, flags);
         }
+        // A socket file is connected to, not opened (POSIX: `ENXIO`).
+        if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFSOCK {
+            return fail(self, ENXIO);
+        }
         // ADR-0014 rule 6: as for a file's owner who is not root; an object
         // this open made is its creator's whatever its mode.
         let read = accmode != o::WRONLY;
@@ -1212,6 +1223,9 @@ impl<S: Sys> Posix<S> {
                     if let Some(h) = u.held.take() {
                         more.extend(h.handles);
                     }
+                    // The connection to a bound socket's file: its closing
+                    // ends the listener (proposed ADR-0439).
+                    more.extend(u.node.take());
                     for h in more {
                         self.sys.close(h);
                     }

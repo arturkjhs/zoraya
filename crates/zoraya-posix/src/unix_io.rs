@@ -969,7 +969,7 @@ impl<S: Sys> Posix<S> {
     }
 
     /// The description a record and its handles make in the receiver.
-    fn desc_from(&mut self, r: Record, handles: Vec<S::H>) -> Desc<S::H> {
+    pub(crate) fn desc_from(&mut self, r: Record, handles: Vec<S::H>) -> Desc<S::H> {
         // Every kind but a stream socket has one handle, and a stream socket
         // at least one (`unix::Record::decode` and the handle count).
         let first = handles[0];

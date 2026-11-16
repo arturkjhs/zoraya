@@ -33,6 +33,7 @@ pub mod sys;
 pub mod termios;
 pub mod threads;
 pub mod unix;
+mod unix_file;
 mod unix_io;
 pub mod wait;
 

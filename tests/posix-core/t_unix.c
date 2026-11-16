@@ -26,7 +26,14 @@
  *                    memory in the receiver, the size fixed by the send, a
  *                    sealed descriptor read-only in the receiver, no object
  *                    to send (INV-0413-1, INV-0413-2)
- *   t_unix all       every case
+ *   t_unix file      socket files (plan part F7, proposed ADR-0439), run by zosh,
+ *                    whose table has /tmp (the line's temporary directory) and
+ *                    /bin read-only: bind, listen, connect and accept of a
+ *                    stream and a packet socket, what each call refuses
+ *                    (INV-0412-3: bind outside /tmp is EACCES), a second
+ *                    program (this one, spawned) that connects through its own
+ *                    table and talks, unlink, and that the fds come back
+ *   t_unix all       every case but `file`, which needs the shell's table
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,13 +43,18 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+extern char **environ;
 
 #define CHECK(cond)                                                             \
 	do {                                                                    \
@@ -546,10 +558,191 @@ static void memfd_case(void)
 	printf("t_unix: memfd passed\n");
 }
 
+
+/* ------------------------------------------------------------- socket files */
+
+#define SOCK_PATH "/tmp/t_unix_sock"
+
+static socklen_t un_addr(struct sockaddr_un *a, const char *path)
+{
+	memset(a, 0, sizeof *a);
+	a->sun_family = AF_UNIX;
+	strncpy(a->sun_path, path, sizeof a->sun_path - 1);
+	return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + strlen(path) + 1);
+}
+
+static int un_bind(int s, const char *path)
+{
+	struct sockaddr_un a;
+	socklen_t n = un_addr(&a, path);
+	return bind(s, (struct sockaddr *)&a, n);
+}
+
+static int un_connect(int s, const char *path)
+{
+	struct sockaddr_un a;
+	socklen_t n = un_addr(&a, path);
+	return connect(s, (struct sockaddr *)&a, n);
+}
+
+/* The second program: connects to argv[2] as a stream, says hello, reads the
+ * answer, then does the same with a packet socket at argv[3]. */
+static int file_child(const char *stream_path, const char *packet_path)
+{
+	char b[64];
+	int c = socket(AF_UNIX, SOCK_STREAM, 0);
+	CHECK(c >= 0);
+	OK(un_connect(c, stream_path));
+	CHECK(write(c, "hello from the child", 20) == 20);
+	CHECK(read(c, b, sizeof b) == 9 && memcmp(b, "the reply", 9) == 0);
+	CHECK(read(c, b, sizeof b) == 0);
+	close(c);
+	int p = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	CHECK(p >= 0);
+	OK(un_connect(p, packet_path));
+	CHECK(send(p, "one", 3, 0) == 3 && send(p, "twotwo", 6, 0) == 6);
+	close(p);
+	return 0;
+}
+
+static void file_case(void)
+{
+	char b[64];
+	struct sockaddr_un a;
+	socklen_t len;
+	int base = first_free();
+	unlink(SOCK_PATH);
+	unlink(SOCK_PATH "2");
+
+	/* A stream socket bound in /tmp: a socket file, with its name. */
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	CHECK(s >= 0);
+	OK(un_bind(s, SOCK_PATH));
+	struct stat st;
+	OK(stat(SOCK_PATH, &st));
+	CHECK(S_ISSOCK(st.st_mode));
+	len = sizeof a;
+	OK(getsockname(s, (struct sockaddr *)&a, &len));
+	CHECK(a.sun_family == AF_UNIX && strcmp(a.sun_path, SOCK_PATH) == 0);
+	CHECK(len == offsetof(struct sockaddr_un, sun_path) + strlen(SOCK_PATH) + 1);
+
+	/* What bind refuses (INV-0412-3), and a name taken once. */
+	int t = socket(AF_UNIX, SOCK_STREAM, 0);
+	FAILS(un_bind(t, SOCK_PATH), EADDRINUSE);
+	FAILS(un_bind(s, SOCK_PATH "2"), EINVAL);
+	FAILS(un_bind(t, "/bin/t_unix_sock"), EACCES);
+	FAILS(un_bind(t, "/tmp"), EINVAL);
+	FAILS(un_bind(t, "/nowhere/x"), ENOENT);
+	FAILS(un_bind(t, "/tmp/missing/x"), ENOENT);
+	CHECK(access("/bin/t_unix_sock", F_OK) == -1);
+	/* An abstract name, a datagram socket: not offered. */
+	struct sockaddr_un ab;
+	memset(&ab, 0, sizeof ab);
+	ab.sun_family = AF_UNIX;
+	memcpy(ab.sun_path + 1, "abc", 3);
+	FAILS(bind(t, (struct sockaddr *)&ab, offsetof(struct sockaddr_un, sun_path) + 4), EAFNOSUPPORT);
+	int d = socket(AF_UNIX, SOCK_DGRAM, 0);
+	FAILS(un_bind(d, SOCK_PATH "d"), EOPNOTSUPP);
+	close(d);
+	/* A socket file is connected to, not opened. */
+	FAILS(open(SOCK_PATH, O_RDWR), ENXIO);
+
+	/* Bound, not listening: refused; no listener to accept on. */
+	int c = socket(AF_UNIX, SOCK_STREAM, 0);
+	FAILS(un_connect(c, SOCK_PATH), ECONNREFUSED);
+	FAILS(accept(s, NULL, NULL), EINVAL);
+	FAILS(listen(t, 5), EINVAL);
+	FAILS(un_connect(c, "/tmp/t_unix_none"), ENOENT);
+	FAILS(un_connect(c, "/bin/t_unix"), EACCES);
+	OK(listen(s, 5));
+	int on;
+	socklen_t onlen = sizeof on;
+	OK(getsockopt(s, SOL_SOCKET, SO_ACCEPTCONN, &on, &onlen));
+	CHECK(on == 1);
+
+	/* Connect and accept, in one process: both ends talk. */
+	OK(un_connect(c, SOCK_PATH));
+	FAILS(un_connect(c, SOCK_PATH), EISCONN);
+	struct pollfd pf = {s, POLLIN, 0};
+	CHECK(poll(&pf, 1, 1000) == 1 && (pf.revents & POLLIN));
+	struct sockaddr_un peer;
+	len = sizeof peer;
+	int acc = accept(s, (struct sockaddr *)&peer, &len);
+	CHECK(acc >= 0 && peer.sun_family == AF_UNIX);
+	len = sizeof a;
+	OK(getsockname(acc, (struct sockaddr *)&a, &len));
+	CHECK(strcmp(a.sun_path, SOCK_PATH) == 0);
+	len = sizeof a;
+	OK(getpeername(c, (struct sockaddr *)&a, &len));
+	CHECK(strcmp(a.sun_path, SOCK_PATH) == 0);
+	CHECK(write(c, "ping", 4) == 4 && read(acc, b, sizeof b) == 4 && memcmp(b, "ping", 4) == 0);
+	CHECK(write(acc, "pong", 4) == 4 && read(c, b, sizeof b) == 4 && memcmp(b, "pong", 4) == 0);
+	/* A descriptor crosses the connection. */
+	int pp[2];
+	OK(pipe(pp));
+	CHECK(write(pp[1], "via pipe", 8) == 8);
+	CHECK(send_fds(c, "!", 1, &pp[0], 1, 0) == 1);
+	int got[1], ng = 0;
+	CHECK(recv_fds(acc, b, sizeof b, got, 1, &ng, NULL, 0) == 1 && ng == 1);
+	CHECK(read(got[0], b, sizeof b) == 8 && memcmp(b, "via pipe", 8) == 0);
+	close(got[0]);
+	close(pp[0]);
+	close(pp[1]);
+	/* A non-blocking listener with nothing queued: EAGAIN, and back. */
+	int fl = fcntl(s, F_GETFL);
+	CHECK(fl >= 0 && fcntl(s, F_SETFL, fl | O_NONBLOCK) == 0);
+	FAILS(accept4(s, NULL, NULL, SOCK_CLOEXEC), EAGAIN);
+	CHECK(fcntl(s, F_SETFL, fl) == 0);
+	close(c);
+	CHECK(read(acc, b, sizeof b) == 0);
+	close(acc);
+
+	/* A packet listener, and a stream connect to it is the wrong type. */
+	int ps = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	OK(un_bind(ps, SOCK_PATH "2"));
+	OK(listen(ps, 5));
+	int wrong = socket(AF_UNIX, SOCK_STREAM, 0);
+	FAILS(un_connect(wrong, SOCK_PATH "2"), EPROTOTYPE);
+	close(wrong);
+
+	/* A second program, in the same directory, through its own table. */
+	pid_t pid;
+	char *argv[] = {"/bin/t_unix", "filechild", SOCK_PATH, SOCK_PATH "2", NULL};
+	CHECK(posix_spawn(&pid, "/bin/t_unix", NULL, NULL, argv, environ) == 0);
+	int sa = accept(s, NULL, NULL);
+	CHECK(sa >= 0);
+	CHECK(read(sa, b, sizeof b) == 20 && memcmp(b, "hello from the child", 20) == 0);
+	CHECK(write(sa, "the reply", 9) == 9);
+	close(sa);
+	int pa = accept(ps, NULL, NULL);
+	CHECK(pa >= 0);
+	CHECK(recv(pa, b, sizeof b, 0) == 3 && memcmp(b, "one", 3) == 0);
+	CHECK(recv(pa, b, sizeof b, 0) == 6 && memcmp(b, "twotwo", 6) == 0);
+	CHECK(recv(pa, b, sizeof b, 0) == 0);
+	close(pa);
+	int status = 0;
+	CHECK(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+	/* Closing the listener leaves an inert file; unlink removes it. */
+	close(s);
+	int c2 = socket(AF_UNIX, SOCK_STREAM, 0);
+	FAILS(un_connect(c2, SOCK_PATH), ECONNREFUSED);
+	OK(unlink(SOCK_PATH));
+	FAILS(un_connect(c2, SOCK_PATH), ENOENT);
+	OK(unlink(SOCK_PATH "2"));
+	close(ps);
+	close(c2);
+	close(t);
+	CHECK(first_free() == base);
+	printf("t_unix: file passed\n");
+}
+
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	const char *mode = argc > 1 ? argv[1] : "all";
+	if (argc > 3 && strcmp(mode, "filechild") == 0)
+		return file_child(argv[2], argv[3]);
 	int all = strcmp(mode, "all") == 0, known = 0;
 #define CASE(name, fn)                                                     \
 	if (all || strcmp(mode, name) == 0) {                              \
@@ -564,6 +757,11 @@ int main(int argc, char **argv)
 	CASE("block", block_case)
 	CASE("calls", calls_case)
 	CASE("memfd", memfd_case)
+	/* Not in `all`: it needs the shell's table (/tmp, /bin read-only). */
+	if (strcmp(mode, "file") == 0) {
+		known = 1;
+		file_case();
+	}
 	if (!known) {
 		printf("t_unix: unknown case %s FAIL\n", mode);
 		return 2;
