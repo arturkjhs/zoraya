@@ -287,7 +287,8 @@ the three named.
   `execvp`, `execl`), which takes `process_take_request` calls after the spawn of the new image to carry what the old one
   was sent, and item 2's mapping is deviated from for the length of that spawn: every `SIG_DFL` signal whose default
   terminates has the kernel disposition `Deliver`, put back if the spawn fails. INV-0304-5 cites the same list. The
-  architect accepts the deviations or asks for a superseding ADR.
+  architect accepts the deviations or asks for a superseding ADR. Accepted 2026-11-16 (ADR-0392, accepted): INV-0106-2's
+  list gains `execve`, and item 2's mapping holds during the spawn "as amended by ADR-0392".
 
 ## Revisit triggers
 

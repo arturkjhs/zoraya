@@ -1,6 +1,6 @@
 # ADR-0386: The shell's host of the discipline where ADR-0331 is silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-14
 - **Depends on:** ADR-0052, ADR-0096, ADR-0105, ADR-0331, ADR-0332, ADR-0384
 - **Evidence:** CP-25, DM-072, stage-10/survey.md#the-terminal-as-built
@@ -133,4 +133,7 @@ pasted; it cannot make input. Target 3: nothing here is per-machine.
 - ADR-0337's status line is built.
 
 ## Architect's decision
-(Left empty for the architect.)
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.
