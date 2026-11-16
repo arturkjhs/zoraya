@@ -115,3 +115,9 @@ including the TCG `w9-term` job and all five `test-qemu-*` jobs. `main`'s red sc
 fixed first (`work/w9-fix`, merged as `0693daf`; the cause was the test's own poll loop starving `make -j4` under TCG).
 That run includes F3's merge (`db938461`) and F2's, so `stage-f3` can be tagged and `stage-f2`'s tag confirmed
 (`tools/ci-last-full.rb --green-for SHA` names that run for each). The Mac mini tagged `stage-10c` and `stage-10d` on it.
+
+**2026-11-16, from plan part F7 (ADR-0439 and ADR-0440, proposed):** (1) The Unix half of F7 is built for the line's `/tmp` only; a socket file in a
+program's own directory needs a kind for "own directory" in the bootstrap record and a transient node in `fsd`: say whether it is wanted
+before tmux (ADR-0439 item 1, open question). (2) TCP `bind`/`listen`/`accept` is not built, so `python3 -m http.server` does not serve to `curl`: decide
+whether it becomes its own plan part with a network step (ADR-0440: the listen rule the scope already has, a `listen` request, a loopback
+interface in `netd` after a smoltcp spike), and the word a person types for a listen rule (ADR-0225 item 5).

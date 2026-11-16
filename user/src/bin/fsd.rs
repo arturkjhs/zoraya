@@ -148,7 +148,9 @@ impl Transport for Kernel {
         match channel_write(end, bytes, &entries[..handles.len()]) {
             Ok(()) => Outgoing::Sent,
             Err(Status::WouldBlock) => Outgoing::Full,
-            Err(Status::NoMemory) => Outgoing::NoMemory,
+            // The service's own job is over its limit: the queue is not the
+            // listener's fault, and the listener lives.
+            Err(Status::NoMemory | Status::OverQuota) => Outgoing::NoMemory,
             // A handle that lacks the rights the entry names or cannot travel:
             // the peer is there (`socket_connect` keeps its listener).
             Err(Status::AccessDenied | Status::BadState | Status::BadHandle) => Outgoing::Refused,

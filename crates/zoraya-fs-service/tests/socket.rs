@@ -516,9 +516,10 @@ fn one_listener_a_node_and_one_node_a_connection_and_only_two_types() {
     let a = r.bind("a").unwrap();
     let b = r.connection("a", rights::WRITE).unwrap();
     assert_eq!(r.listen(a, 1).0, status::OK);
-    // Another connection to the same node: taken.
+    // Another connection to the same node, with WRITE: not the binder's, refused
+    // (it could not take the name over), and taken anyway.
     let (s, end) = r.listen(b, 1);
-    assert_eq!(s, status::EXISTS);
+    assert_eq!(s, status::ACCESS_DENIED);
     assert!(r.is_closed(end));
     // The same connection again: refused.
     let (s, end) = r.listen(a, 1);
@@ -730,11 +731,10 @@ fn publishing_over_a_socket_node_takes_its_name() {
 #[test]
 fn the_table_of_nodes_and_of_listeners_is_bounded() {
     let mut r = rig();
+    let mut conns = Vec::new();
     for n in 0..zoraya_fs_service::MAX_SOCKET_NODES {
-        let c = r.bind(&format!("s{n}")).unwrap();
-        r.net.client_close(c);
+        conns.push(r.bind(&format!("s{n}")).unwrap());
     }
-    r.run();
     assert_eq!(
         r.bind("one-more"),
         Err(status::LIMIT_REACHED),
@@ -742,27 +742,41 @@ fn the_table_of_nodes_and_of_listeners_is_bounded() {
     );
     // Unlinking frees an entry.
     assert_eq!(r.remove("s0"), status::OK);
-    let c = r.bind("one-more").unwrap();
-    r.net.client_close(c);
-    r.run();
-    // Listeners: a bound of their own.
-    let mut conns = Vec::new();
-    for n in 1..=zoraya_fs_service::MAX_LISTENERS {
-        let c = r
-            .connection(&format!("s{n}"), rights::READ | rights::WRITE)
-            .unwrap();
-        assert_eq!(r.listen(c, 1).0, status::OK, "listener {n}");
-        conns.push(c);
+    let extra = r.bind("one-more").unwrap();
+    // Listeners: a bound of their own, by the binders' connections.
+    for (n, c) in conns
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(zoraya_fs_service::MAX_LISTENERS)
+    {
+        assert_eq!(r.listen(*c, 1).0, status::OK, "listener {n}");
     }
-    let c = r
-        .connection(
-            &format!("s{}", zoraya_fs_service::MAX_LISTENERS + 1),
-            rights::WRITE,
-        )
-        .unwrap();
-    let (s, end) = r.listen(c, 1);
+    let (s, end) = r.listen(extra, 1);
     assert_eq!(s, status::TOO_MANY_OPEN);
     assert!(r.is_closed(end));
+}
+
+/// Only the connection that made a node makes it listen: another program with `WRITE` on the file cannot
+/// win the race between `bind` and `listen`, nor take an inert node over when its server has gone.
+#[test]
+fn only_the_binder_may_listen_and_a_node_is_inert_when_it_goes() {
+    let mut r = rig();
+    let a = r.bind("a").unwrap();
+    let thief = r.connection("a", rights::READ | rights::WRITE).unwrap();
+    let (s, end) = r.listen(thief, 1);
+    assert_eq!(s, status::ACCESS_DENIED);
+    assert!(r.is_closed(end));
+    assert_eq!(r.service.socket_nodes(), (1, 0));
+    // The binder goes without listening: the node stays, and nobody takes it.
+    r.net.client_close(a);
+    r.run();
+    let (s, _) = r.listen(thief, 1);
+    assert_eq!(s, status::ACCESS_DENIED);
+    // A new connection that happens to get the freed index is not the owner either.
+    let late = r.connection("a", rights::READ | rights::WRITE).unwrap();
+    assert_eq!(r.listen(late, 1).0, status::ACCESS_DENIED);
+    assert_eq!(r.service.socket_nodes(), (1, 0));
 }
 
 #[test]

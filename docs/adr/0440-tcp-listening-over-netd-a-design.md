@@ -27,8 +27,8 @@ programs are `python3 -m http.server` and a test server of ours.
    grant itself.
 3. **Bounded in `netd`** (ADR-0262, ADR-0434): listeners and pending connections per account.
 4. **Loopback is not the Internet** (ADR-0223 item 4): reaching it is a rule a person writes, never covered by `web`.
-5. **Nothing in this design may be built without a network step that runs** (`make test-net`: QEMU with `restrict=on`), which an
-   agent on the 8 GB machine of this task could not run alongside the other work.
+5. **Nothing in this design may be built without a network step that runs** (`make test-net`: QEMU with `restrict=on`), which was judged out of reach on the 8 GB machine of this task
+   alongside the Unix half.
 
 ## Considered options
 

@@ -67,7 +67,9 @@ A socket file anywhere a program may write, persisting until unlinked, any numbe
    `bind` of the name `EADDRINUSE`. Nothing is written to a volume (the service is memory only).
 3. **Listening.** `listen` on a bound `SOCK_STREAM` or `SOCK_SEQPACKET` socket makes a channel and sends the service one end
    (`socket_listen`, message 41, needs `WRITE`); the service holds it, charged as one handle to the connection's account, for as long
-   as the connection that sent it lives. The connection is the one `bind` made and the socket keeps, so closing the socket (or the
+   as the connection that sent it lives. Only the connection that made the node may send it (`EACCES` for any other with
+   `WRITE` on the file), and when that connection closes the node can never listen again: another program cannot win the race
+   between `bind` and `listen` or take an inert node over. The connection is the one `bind` made and the socket keeps, so closing the socket (or the
    process ending) ends the listener, and no event wiring is needed. One listener per node, one node per connection (`EADDRINUSE`
    by the status `EXISTS`), 64 listeners in a service (`ENFILE`); a datagram socket cannot be bound (`EOPNOTSUPP`). `backlog` is a
    hint: the queue is the channel's 64 messages (ADR-0050), and the 65th connect is `EAGAIN` (Linux blocks; a blocking `connect` here
@@ -89,8 +91,7 @@ A socket file anywhere a program may write, persisting until unlinked, any numbe
 6. **Names.** `getsockname` of a bound or accepted socket is the path as the program gave it (`struct sockaddr_un` with a NUL);
    `getpeername` of a connected socket is the path it connected to, and empty for an accepted one; `SO_ACCEPTCONN` is 1 on a
    listener. Poll: a listener is readable when a connection waits and never writable.
-7. **What is not carried.** A listening socket is not sent with `SCM_RIGHTS` (`EINVAL`), not inherited by `spawn` (`EINVAL`) or
-   `execve` (`EBADF`, ADR-0433 item 6), and `fork` with one is `ENOTSUP`: its listener is tied to the connection the library
+7. **What is not carried.** A listening socket is not sent with `SCM_RIGHTS` (`EINVAL`), not inherited by `spawn` or `execve` (`EBADF`, ADR-0433 item 6), and `fork` with one is `ENOTSUP`: its listener is tied to the connection the library
    holds. A bound socket that does not listen is the same.
 8. **TCP.** `bind`, `listen` and `accept` on an `AF_INET` socket are `EOPNOTSUPP` (the symbols exist so that programs link and say so
    at run time); ADR-0440 records what listening over `netd` needs.

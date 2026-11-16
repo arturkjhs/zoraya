@@ -216,6 +216,11 @@ struct Listener<E> {
 struct SocketNode<E> {
     listener: Option<Listener<E>>,
     unlinked: bool,
+    /// The connection `bind` made the node on: the only one that may make it
+    /// listen. It is `None` once that connection closes, and the node is
+    /// then inert until unlinked (another program with `WRITE` on the file
+    /// cannot take the name over).
+    owner: Option<usize>,
 }
 
 /// The most socket nodes a service tracks at once: a bind past it is
@@ -963,6 +968,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         if let Some(id) = c.listening.take() {
             self.socket_listener_gone(id);
+        }
+        if let Some(nodes) = self.sockets.as_mut() {
+            for n in nodes.values_mut().filter(|n| n.owner == Some(index)) {
+                n.owner = None;
+            }
         }
         let last = match self.records.get_mut(c.record).and_then(Option::as_mut) {
             Some(r) => {
@@ -1718,6 +1728,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(node) = self.sockets.as_mut().and_then(|m| m.get_mut(&id)) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
+        if node.owner != Some(i) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
         if node.listener.is_some() {
             return self.done(i, t, status::EXISTS, 0);
         }
@@ -2209,9 +2222,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             None
         };
         let account = self.account_of(i);
-        let s = match self.add_connection(end, record, m.rights.0, account) {
-            Some(_) => status::OK,
-            None => status::LIMIT_REACHED,
+        let added = self.add_connection(end, record, m.rights.0, account);
+        let s = if added.is_some() {
+            status::OK
+        } else {
+            status::LIMIT_REACHED
         };
         if self.fifo_create
             && let Some(a) = attr.filter(|a| a.id >= first_new)
@@ -2227,6 +2242,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 SocketNode {
                     listener: None,
                     unlinked: false,
+                    owner: added,
                 },
             );
         }

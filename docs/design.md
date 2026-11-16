@@ -2212,8 +2212,8 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   with it read-only, cannot connect), opens the node with `WRITE` and sends the far end of a new pair with a 24-byte record, which the
   service writes, unread, to the listener's channel and the listener checks (`unix::decode_connect`). 256 nodes and 64 listeners in
   a service; the accept queue is the channel's 64 messages (`backlog` is a hint; a full queue is `EAGAIN`). A node stays, inert, after
-  its listener goes, until `unlink` (as on Linux); `stat` says socket, `open` is `ENXIO`. A listening socket is not sent, spawned
-  (`EINVAL`), exec'd (`EBADF`) or forked (`ENOTSUP`). **Limits:** TCP `bind`, `listen` and `accept` are `EOPNOTSUPP` (ADR-0440,
+  its listener goes, until `unlink` (as on Linux); `stat` says socket, `open` is `ENXIO`. A listening socket is not sent (`EINVAL`), spawned or exec'd (`EBADF`) or forked (`ENOTSUP`); only the connection that made a node may
+  make it listen. **Limits:** TCP `bind`, `listen` and `accept` are `EOPNOTSUPP` (ADR-0440,
   proposed, records what listening over `netd` needs: the listen rule the scope already has, a `listen` request, a loopback interface;
   not built, so `python3 -m http.server` does not serve yet); no datagram `bind`; `readdir` shows a socket file as a plain name.
   Tests: `crates/zoraya-fs-service/tests/socket.rs`, `crates/zoraya-posix/tests/socketfile.rs`, `tests/posix-core/t_unix.c` (`file`, run

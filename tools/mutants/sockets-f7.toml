@@ -234,3 +234,14 @@ file = "crates/zoraya-fs-service/src/lib.rs"
 find = '''        let replaced = if mode == PublishMode::Replace {'''
 replace = '''        let replaced = if false {'''
 note = "INV-0439-2: a name taken by publish frees the node's entry"
+
+[[mutant]]
+id = "F7-anyone-may-listen"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if node.owner != Some(i) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }'''
+replace = '''        if false {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }'''
+note = "INV-0439-1: only the connection that made the node listens on it"

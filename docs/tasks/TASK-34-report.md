@@ -116,8 +116,8 @@ Updated 2026-11-16.
   makes its sockets close-on-exec, as a program that spawns a second one does. Found by thinking about the kernel's rule for moved handles:
   the service forwards a far end with the type's full rights, and the kernel refuses a handle that has fewer; the first version read that
   refusal as a dead listener, so any connector could have ended a listener. `Outgoing::Refused` separates them (test and mutant).
-- Mutation: `tools/mutants/sockets-f7.toml`, 23 hand mutants of the service and the library, 23 caught after two survivors got tests
-  (a rename onto itself, `accept4`'s flags) and two equivalent ones were noted in the list; `make mutants-host CRATE=zoraya-posix --in-diff` below.
+- Mutation: `tools/mutants/sockets-f7.toml`, 26 hand mutants of the service and the library, all caught after survivors got tests; `make mutants-host --in-diff`: zoraya-posix cut at 20 minutes (114 of 147 run caught, 12 missed: equivalent disjoint-bit `|`/`^`, defence-in-depth checks, and the fork guard, since tested in `t_unix file`), zoraya-fs-service 52 of 60 caught (misses closed with tests).
+- Review: `docs/tasks/TASK-34-review-f7.md` (no errors, five warnings): fixed the listener takeover (only the binder listens), a quota refusal killing a live listener (`OverQuota` is not `Closed`), and the wrong `spawn` errno in ADR-0439; the rest in the ADR and backlog.
 - Limits (ADR-0439): the 256 nodes of the service are shared by the line; a node stays after its listener goes until `unlink`; the queue is the channel's 64
   messages and a blocking `connect` into a full queue is `EAGAIN`; `readdir` shows a socket file as a plain name; CPython's `test_socket`
   server classes and the asyncio cases that said "bind (plan part F7)" in `tests/python/regr-ignore.txt` were not run (no Python rootfs
