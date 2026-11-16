@@ -1468,12 +1468,15 @@ fn cpu_ceiling_from_a_process() {
 /// the exception each period's budget ends a few of them and the room takes
 /// a period for each few (TASK-31 4.3: up to nine periods for 20 at 10%).
 /// The bound is in periods, with the whole of the next period for the
-/// teardowns, so a slow host does not move it.
+/// teardowns, so a slow host does not move it (INV-0460-1). The way out is
+/// still charged, to the room and to its parent, which holds nothing else
+/// (INV-0460-2).
 fn a_killed_room_ends_in_the_period_after_the_kill() {
     const PERIOD: u64 = 100_000_000;
     const SPINNERS: usize = 40;
     crate::cpu::set_test_period(PERIOD);
-    let room = Job::create(&root(), false).expect("room");
+    let parent = Job::create(&root(), false).expect("parent");
+    let room = Job::create(&parent, false).expect("room");
     crate::cpu::set_limit(&room, Some(1)).expect("limit");
     let budget = zoraya_cpu::budget_ns(1, PERIOD);
     let spinners: Vec<_> = (0..SPINNERS)
@@ -1496,6 +1499,10 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
     }
     drop(spinners);
     let parked_before = crate::cpu::usage(&room).parked;
+    let used_before = (
+        crate::cpu::usage(&room).used_ns,
+        crate::cpu::usage(&parent).used_ns,
+    );
     room.kill();
     let killed = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
     let start = timer::now();
@@ -1509,10 +1516,20 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
     }
     let died = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
     let parks = crate::cpu::usage(&room).parked - parked_before;
+    let charged = crate::cpu::usage(&room).used_ns - used_before.0;
+    let parent_charged = crate::cpu::usage(&parent).used_ns - used_before.1;
     println!(
-        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill",
+        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill, {charged} ns charged after it",
         died - killed,
         timer::now().nanos_since(start) / 1_000_000
+    );
+    // Every one of the 40 ways out ran after the kill (the spinners were
+    // parked or spinning), so the room is charged for them, and the parent
+    // as much: each charge walks up (ADR-0264 point 3).
+    assert!(charged > 0, "the ways out were not charged to the room");
+    assert!(
+        parent_charged >= charged,
+        "the parent was charged {parent_charged} ns, the room {charged} ns"
     );
     assert!(
         died <= killed + 1,
