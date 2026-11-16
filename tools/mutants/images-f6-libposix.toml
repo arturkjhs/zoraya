@@ -1,0 +1,12 @@
+# Plan part F6 (INV-0438-2): the C half. With no image charge, a spawn of the file costs the
+# launcher's job nothing for the image and `t_shared` must fail (review 2: before, the
+# 1 MiB buffer alone passed it). Run by `make mutants`; one build and one boot each.
+tests = ["make -s test-libposix"]
+timeout = 3000
+
+[[mutant]]
+id = "F6-creator-does-not-pay-c"
+file = "kernel/src/process.rs"
+find = '''    let object = MemoryObject::new(kept.bytes(), false, Some(job))?;'''
+replace = '''    let object = MemoryObject::new(kept.bytes(), false, None)?;'''
+note = "INV-0438-2: t_shared sees the spawn of the file cost L nothing for the image"

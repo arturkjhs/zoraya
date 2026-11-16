@@ -56,4 +56,36 @@ id = "F6-the-image-keeps-the-source"
 file = "kernel/src/memory/object.rs"
 find = '''        if core::ptr::eq(self, source) || !inside(to, self) || !inside(from, source) {'''
 replace = '''        if !inside(to, self) || !inside(from, source) {'''
-note = "equivalent in the kernel (the two objects are never one); the guard is for a caller's bug"
+note = "equivalent, survives: the kept object is always new, so it is never the source; the guard is for a caller's bug (review 7). Not run by hand."
+
+[[mutant]]
+id = "F6-no-step-in-the-copy"
+file = "kernel/src/process.rs"
+find = '''            steps::count(n.div_ceil(PAGE_SIZE) as usize);
+            done += n;
+            steps::between()?;'''
+replace = '''            steps::count(n.div_ceil(PAGE_SIZE) as usize);
+            done += n;'''
+note = "INV-0438-4: image_create of 2048 pages of text copies them in one interval (an_image_of_a_large_program_is_bounded)"
+
+[[mutant]]
+id = "F6-no-step-in-the-cache-loop"
+file = "kernel/src/process.rs"
+find = '''                if n > 0 && n.is_multiple_of(steps::STEP as u64) {
+                    steps::between()?;
+                }
+                // SAFETY: a whole frame of `object` in the direct map.
+                unsafe {
+                    mmu::clean_to_unification('''
+replace = '''                // SAFETY: a whole frame of `object` in the direct map.
+                unsafe {
+                    mmu::clean_to_unification('''
+note = "INV-0438-4: the clean of 2048 text pages in one interval (the copy's step points leave them alone)"
+
+[[mutant]]
+id = "F6-no-step-before-the-first-piece"
+file = "kernel/src/process.rs"
+find = '''    // point before the first piece, so that they are not added to it.
+    steps::between()?;'''
+replace = '''    // point before the first piece, so that they are not added to it.'''
+note = "INV-0438-4: the object's last frames and the first piece in one interval (128 units, found by the test)"
