@@ -178,3 +178,105 @@ Severities: **error** (wrong; fix before merge), **warning** (fix in this part o
 No errors. Fix first, all small: warnings 1 to 3 (vacuous negative lines, `POLLOUT` on a listener, port 0 in `getsockname`
 before `listen`), and record or test warning 4. Warning 5 is the architect's call before ADR-0441 is accepted, and it does not
 block the merge of a proposed design that records it.
+
+## Re-check (930ba9dc)
+
+Re-check by the `opus-review` subagent of `git diff 7638e73a..930ba9dc` (the four fix commits) against the findings above, 2026-11-16.
+Read: the diff, `zoraya_net::loopback`, `netd.rs`'s `Action::Loopback` arm and `LoopbackKernel`, `poll.rs`'s socket probes,
+`socket.rs`'s `wait_source`, `net.rs`'s `net_call_with` and `listen`, `ffi.rs`'s `channel_write`, the fake kernel's `channel_write`
+(`tests/kernel/mod.rs`), `accounts.rs`'s `carve_with`, `zosh.rs`'s carve call, CPython 3.15's `socketserver.py`,
+`http/server.py` and `wsgiref/simple_server.py`.
+
+Run by the reviewer, one at a time, `CARGO_BUILD_JOBS=2`, output to files:
+
+- `make check`: exit 0 ("all checks passed"); the invariants table has 864 rows and says Total 864.
+- `cargo test -p zoraya-net -p zoraya-posix -p zoraya-proto-net -p zoraya-shell`: exit 0; `zoraya-net` 124 passed,
+  `tests/tcplisten.rs` 13, `zoraya-shell` 217, every suite 0 failed.
+- `make test-net-posix`: exit 0, `net-posix-auto` PASS 66 steps: the five `tcptest: ... ok` lines, `all ok`,
+  `tcptest: no listen grant ok`, `tcptest: no reach grant ok`, and no `FAIL` line (the `EADDRINUSE`-only check passes).
+- `make test-python-serve`: exit 0, `python-serve-auto` PASS 26 steps.
+- Hand mutants, each reverted: the three of `tools/mutants/listen-f7b.toml` on `loopback.rs` (drop `close(in_write)`, drop
+  `close(control)`, swap the ends) are each killed by `cargo test -p zoraya-net --lib loopback`. Dropping `self.sys.close(mine)`
+  in `listen`'s `Err` arm is killed by `a_request_to_a_gone_netd_leaks_no_handle`. Dropping only the Unix half of the new `poll`
+  guard **survives** `cargo test -p zoraya-posix` (R2).
+
+### The earlier findings
+
+1. Fixed. `--no-listen` checks `listen` is `EACCES`; `--no-reach` checks `l >= 0` (so the line has a working `netd` connection)
+   and then that the loopback `connect` is `EACCES`. The script waits for each mode's ok line and forbids `tcptest: FAIL`
+   everywhere, so a `netd` that grants `listen` with no rule, or connects to the loopback with no reach rule, fails the step.
+   R5 is a remaining gap in `--no-listen`.
+2. Fixed for TCP: `poll` skips `POLLOUT` for a listener, and `tcplisten.rs` checks `poll(l, POLLOUT, 0) == 0` with and without a
+   queued connection. Ordinary sockets are unchanged (the guard only tests `listening`; `net.rs`, `unix.rs` and `poll.rs` POLLOUT
+   cases pass). The Unix half has no test (R2).
+3. Recorded in ADR-0441 and `docs/backlog.md`, accepted as a limitation. Part of what the ADR says about it is wrong (R1a).
+4. Fixed for the refusal decision: `netd.rs`'s `loopback` is now `zoraya_net::loopback::deliver` over `LoopbackKernel`, with the
+   same accounting as before: the listener lookup is the same, a delivered connection moves the two ends and closes `control`,
+   and every refusal (no listener, `WouldBlock`, `PeerClosed`) sends `Failed { REFUSED }` and closes all three. The counting fake
+   fails on a close that is dropped or repeated. `EMFILE` is not a `netd` path: it is the library's `accept` and leaves the
+   connection queued (INV-0441-4). The arm that rejects wrong handle types (`netd.rs:528-537`) is still not host-tested (R4).
+5. Recorded plainly in ADR-0441 "Decisions for the architect" and `docs/architect-queue.md`, as a condition of ADR-0268's gate.
+   R7 is one gap in how it is worded.
+6. My note was wrong. `ffi.rs:107-112` closes the moved handles when the kernel write fails, as `Sys::channel_write`'s contract
+   says, and the fake kernel does the same. The new test guards the library's own end (`mine`), which a hand mutant confirms.
+   (The one path that keeps them is `moved.len() > 4`, `ffi.rs:103`'s early `?`; no caller passes more than 3.)
+7. Fixed (the `Listen` doc comment; the wrong INV citation is gone with the old doc comment).
+8. Recorded in the ADR's known limitations. 9: recorded, but wrongly (R1b). 10: `EADDRINUSE` only, the listen seeds and the
+   `unixsock.py` comment are done; the INV-0441-3 bullet is not (the row still names a test that passes without the guard).
+   11: the reason in `regr-ignore.txt` is updated.
+
+### New findings
+
+R1. **warning**: ADR-0441's "Known limitations of the build" (`docs/adr/0441-tcp-listening-as-built.md:142-148`) states two
+    things that are not true.
+    (a) "CPython's `socketserver` reads it after `listen`". It reads it right after `bind`: `socketserver.py:475-476`,
+    `self.socket.bind(...)` then `self.server_address = self.socket.getsockname()`, inside `server_bind`, before
+    `server_activate`. So every `socketserver` server on port 0 has `server_address` and `HTTPServer.server_port` set to port 0.
+    `wsgiref.simple_server` (`simple_server.py:57`) puts `SERVER_PORT=0` into every request's environment, and a test that
+    connects to `server.server_address` connects to port 0. `python3 -m http.server 0` prints the right port only because
+    `http/server.py:1068` reads `getsockname()` again after the constructor has listened.
+    (b) "a `+listen` line of a carved account has its listen refused (`ENOBUFS`) and the network of that line is useless for
+    serving". When the session holds all 8 listeners, `carve_with` fails `parent_ok` (`accounts.rs:213-221`, `OverQuota`), and
+    `zosh.rs:1143` turns that into no connection (`.ok()`). The program then has no `netd` connection at all: `listen` is
+    `EACCES` (`net.rs:585-587`) and every `connect` fails too, reach rules included. That was the point of note 9.
+    Fix: correct both sentences (and name `socketserver` and `wsgiref` in the backlog entry).
+
+R2. **note**: the Unix half of the guard (`poll.rs:271`, `!sk.unix.as_ref().is_some_and(|u| u.listening)`) has no test. Removing
+    it survives `cargo test -p zoraya-posix` (run). The mutant in `listen-f7b.toml` removes both halves at once, so the TCP test
+    kills it. Fix: a `unix.rs` case (`poll(listener, POLLOUT, 0) == 0`), and a mutant for that half alone.
+
+R3. **note**: the comment at `poll.rs:269-270` says "POLLOUT alone waits for a hang-up only". With `POLLOUT` alone no probe is
+    pushed: the hang-up branch below runs only when neither `POLLIN` nor `POLLOUT` is asked. So it waits for nothing, which matches
+    Linux (a listener reports neither `POLLOUT` nor `POLLHUP`). The comment is what is wrong. Likewise the two "never writable"
+    comments in `wait_source` (`socket.rs:664`, `:693`) sit on a `None` that `poll` reads as "ready now".
+
+R4. **note**: the check text of INV-0441-1 (ADR-0441 and `invariants.md:749`) is unchanged. It does not name `loopback::tests`,
+    and it does not say that the wrong-handle-types arm (`netd.rs:532-537`) is checked by reading only. Finding 4 asked for that.
+
+R5. **note**: `tcptest --no-listen` gets `EACCES` both from a `netd` that refuses and from the library when the program has no
+    `netd` connection at all (`net.rs:585-587`). The mode would therefore also pass if the shell stopped giving the line a
+    connection. The netd mutant that matters fails the step, as said above, so this is not vacuous. Fix: in the same mode,
+    connect to `127.0.0.1:LOW` and expect `ECONNREFUSED`, which only `netd` answers.
+
+R6. **note**: `docs/design.md`'s "Limits (ADR-0441)" paragraph does not list `bind(0)` then `getsockname`, or that the address of
+    a bind is not used. They are in the ADR and the backlog only.
+
+R7. **note**: the decision for the architect says "an untrusted line has no `+net 127.0.0.1` word to give". There are other ways
+    to get a reach rule for the loopback: the shell's own grant for a literal `http://127.0.0.1:PORT/` operand (ADR-0328,
+    `netgrant_tests.rs:164-166`), `any`, and a prefix over 127/8. The gate condition should name all of them, or say "no reach
+    rule that covers 127.0.0.0/8, however made".
+
+R8. **note**: `user/describe/posix/tcptest.cmd` declares `-L` and `-R`, which `tcptest.c` does not parse: `tcptest -L` runs the
+    full suite. Either drop the short forms or accept them.
+
+### Checked and found sound
+
+No ADR status or "Architect's decision" section changed. The changes to ADR-0441 are a proposed ADR's own text. The diff adds no
+`unsafe`, no host paths or addresses, and does not touch `docs/research/`, a task file or `CLAUDE.md`. `deliver` sends
+`Accepted` with the read end first, as before. If `Connected` failed to encode, it would now send an empty message where the old
+code sent nothing, but 64 bytes always suffice.
+
+### Verdict
+
+Fix first, documentation only: R1 (two false sentences in ADR-0441's limitations, and the backlog entry). The code fixes for
+findings 1, 2, 4 and 6 are sound and measured. R2 to R8 are notes and can go with R1 or be recorded.
