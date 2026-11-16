@@ -168,3 +168,144 @@ accept or remove.
 
 Fix first: finding 1 (or the architect's acceptance of the proxy, with the `top` sentences corrected), then 2 to 4.
 The kernel mechanism itself (copy, W^X, lifetime, charge, spawn bound) is sound as far as I could find.
+
+## Re-check
+
+Re-check by the `opus-review` subagent of `git diff 99b344a0..16d69b1b` (the fixes and the merge of `origin/main`; the
+merged files are not reviewed), 2026-11-16. Read: `keep_program` and `image_from` (`kernel/src/process.rs`),
+`mmu::clean_to_unification` and `invalidate_instruction_cache`, `SnapshotBuild::finish` and the snapshot's clean,
+`steps::between`/`count`, the reaper's `REAPER_STEP` and `MemoryObject::drop`, `image_create` with
+`Table::keep_room`/`insert_kept`/`drop_kept`, the new and changed kernel tests, `t_shared.c`, `top.script`,
+`tools/check-top-image.py`, the Makefile lines, both mutant lists, ADR-0438, the notes on ADR-0108 and ADR-0415, the report.
+
+Tests run on the worktree, one at a time, `CARGO_BUILD_JOBS=2`, output to files:
+
+- `make check`: exit 0 ("make test: all checks passed"; `adr-check` with Total 854).
+- `cargo test -p zoraya-elf -p zoraya-mappings -p zoraya-posix`: exit 0, 359 passed, 0 failed.
+- `make test-qemu-one` (HVF): exit 0, `PASS: 128 passed, 10 expected failures`;
+  `a_fork_child_of_an_image_process_maps_the_images_frames` and `an_image_of_a_large_program_is_bounded` print
+  `ZORAYA-TEST ok`.
+- `make test-libposix` (HVF): exit 0; `libposix-auto` `PASS: 164 steps` (`t_shared: image keeps 978944 bytes; L's job:
+  2776256, +1125504 for a spawn of the file, +139264 +139264 for two of its image`, children 1582144 each, `passed`),
+  `libposix-maps-auto` `PASS: 17 steps`, `libposix-top-auto` `PASS: 34 steps`; `top tab` read `1K` (empty room), `4259K`,
+  `9302K`, `11946K`, `1407K` (0 procs); `check-top-image: ... 1681K each ... +2644K ... an image keeps 956K`, `a child of
+  the image holds 1545K in its own job`, `check-top-image: ok`.
+- Not run: any TCG step, any mutation run (no kernel mutant report is in the worktree's `build/mutants/`).
+
+### Status of the findings
+
+1. **Addressed, with the decision left to the architect** (see R3 for what it is). `top.script` reads `top` in a room
+   around three self-spawns and one spawn of the file, and the checker compares the readings with each other and with
+   the printed image size, pins none. The numbers the report and ADR-0438 quote are the ones this run produced. ADR-0438
+   item 3 and the report now say plainly that `top` cannot show the program's own image (the shell makes it, outside
+   every room) and that the done-when is met by a job-level proxy. Two weaknesses of the step are in R2.
+2. **Fixed.** `t_shared` warms L's buffer (`'r'`) before measuring, waits for L's usage to settle, and compares
+   `d_path - d_self` with the exact kept size from the program headers within 16 pages (978944 against 986240 in the run).
+   With no image charge `d_path - d_self` is about 0, so the C mutant `F6-creator-does-not-pay-c` fails the lower bound
+   (arithmetic on the run; the mutant itself I did not run). The settle loop is bounded by its count (100000 × 20 ms, so
+   in practice by the runner's timeout). Two equal readings 20 ms apart is a heuristic: the reaper drops a
+   610-frame item's charge at once (`REAPER_STEP` 1024), so an equal pair taken before the reaper ran gives an
+   `after_path` that is too large. That fails the upper bound, a flake and never a false pass; on one CPU with T asleep
+   the reaper runs in the gap.
+3. **Fixed, with one gap left (R1).** `an_image_of_a_large_program_is_bounded` now measures `image_from` of 2048 pages
+   of R X file bytes, through both loops, at most `STEP + 16` units. The three step points have mutants.
+4. **Fixed.** The new kernel test snapshots a process of an image: the same frames, not writable, attributes as the
+   segment's, writable pages copied, the child's job charged what the parent's is, the creator's use unchanged, the
+   frames gone with the last holder. It checks only one order of ending (R6).
+5. **Fixed.** `keep_room` before `image_from`, `drop_kept` on its only error path (`Cancelled`, `NoMemory`,
+   `OverQuota`, `InvalidArgument` all come back through it), `insert_kept` after. No leak of the kept count.
+6. **Fixed.** Exact partition assertion, the three later spawns into `snug` must be `OverQuota`, and the boundary cases
+   of `find_gap` with written-out answers (the first two cases are the same boundary, both records end at `LOW - PAGE`).
+7. **Fixed in the list** (the equivalent mutant is marked). Whether the list was run is not on record (R4).
+8. **Not resolved.** The ADR-0108 note is relabelled "Open-question note (ADR-0001 rule 6)". Rule 6 is about an
+   invariant whose check cannot be built yet, and this note records a change in semantics, so the label does not fit.
+   ADR-0438 item 1 now states the deviation for the architect, and that is the right place. The note stays for the
+   architect to accept or remove.
+
+### New findings
+
+#### R1. warning: an executable segment's last cleans and the next segment's first copied piece fall in one interval (up to 2 × STEP units)
+
+- **Where:** `kernel/src/process.rs:704-722` (`keep_program`: the clean loop has a step point only before page
+  `n > 0, n % STEP == 0`, and nothing after the loop; the next segment's copy counts its first piece, up to `STEP` pages,
+  before its own `between`).
+- **What is wrong:** the last chunk of cleans (1 to 64 units) and the next segment's first piece (up to 64) share one
+  interval: up to 128 units, against the test's `STEP + 16 = 80`. The test cannot see it, because `patterned_elf` has a
+  single segment. Every real program is laid out `r--, r-x, rw-`. For `t_shared` it is 201 text pages (201 mod 64 = 9)
+  plus a first piece of 64 of its 65 data pages, 73 units, under the limit by luck. A program with a text of `64k`
+  kept pages, or a remainder above 16, and a data segment of 64 or more file pages exceeds it (python's data is several MB).
+  The loop is still bounded at any image size: at most `2 × STEP` units per interval, plus the one `ic ialluis`. But
+  INV-0270-1's per-interval bound is broken by a factor of up to 2.
+- **Fix:** `steps::between()?` after each executable segment's clean loop. Add a case to
+  `an_image_of_a_large_program_is_bounded` with an R X segment of 2048 pages followed by an RW segment of at least 64
+  file pages, and a mutant that removes the new step point.
+
+#### R2. warning: the `top` step reads the room without waiting for the reaper, and its last check cannot see a leak
+
+- **Where:** `tests/posix-core/t_shared.c` `driver(keep = 1)` (`ask('p')` then `phase(...)`, no `memory_of`);
+  `tools/check-top-image.py` (`end > p0 + 16`).
+- **What is wrong:** (a) after `'p'` L has closed the file's object (about 610 pages), which goes to the reaper with its
+  charge. `top tab` is typed as soon as the phase line appears. If the reaper has not dropped the item by then, P4 is
+  about 2440K too high and `file_child - own` fails `<= kk + 64`. HVF passed. Under TCG, which CI runs, this depends on
+  timing that the test does not control. The non-keep mode settles exactly for this reason. (b) The last reading was
+  1407K with 0 processes, against 1K for the empty room at the start. The checker compares it with P0 (4259K), so a
+  leaked image (956K) or a leaked transfer buffer (1024K) passes. The docstring's claim that "the room gets everything
+  back" is not checked, and the report quotes 1407K without saying what it is (reaper lag, or something kept).
+- **Fix:** in keep mode, T calls `memory_of(l)` before each `phase` (and the hold children are at rest by then). The
+  script waits for `[1] done`, then reads `top tab` until it stops changing, or T waits for the room to empty. The
+  checker captures the empty-room reading and requires `end` within a few K of it.
+
+#### R3. warning: what the architect has to decide is wider than the display: a room's memory limit no longer covers the text of the programs run in it
+
+- **Where:** `docs/adr/0438-shared-read-only-segments-as-built.md` item 3 and "Effect of the vision"; the report's F6 notes.
+- **What is wrong:** before F6 a spawn copied the program's pages into frames charged to the child's job, inside the
+  room. Now the image of a program the shell starts is charged to the shell's job, outside every room. A room with
+  `--mem 64M` can therefore run a program whose text is far above 64 MB, and the room pays nothing for it. The shell's
+  job pays, a separate image for each start (there is no cache), for as long as any process of the room runs from it.
+  The ADR states only the effect on `top` ("`top` does not show it at all").
+- **Fix (documents):** list for the architect, in ADR-0438 and the report, the three things to decide. (1) Accept the
+  job-level proxy as F6's done-when, or ask for a line per image in `top`. (2) Accept that a room's limit does not
+  cover shell-made images, or have the shell make each image in the job of the room it starts the program in. (3) The
+  ADR-0108 deviation (item 1).
+
+#### R4. note: the report is not updated for the re-run and the new mutants
+
+`docs/tasks/TASK-34-report.md` F6 still quotes the old `t_shared` run (2176256, 1315904). ADR-0438 quotes the new one
+(1125504, 1582144), which this re-check reproduced. The mutation line still says "`images-f6.toml` 5 of 5 caught, 1
+equivalent not run". The three new kernel mutants and `images-f6-libposix.toml` have no recorded result, and nothing in
+the worktree shows a run. Run them (`make mutants` with both lists) and record the outcome, or say they were not run.
+
+#### R5. note: cache maintenance across step points relies on one CPU
+
+`keep_program`, like `SnapshotBuild::finish`, issues `dc cvau` across step points and one `dsb ish; ic ialluis; dsb
+ish; isb` at the end. A DSB completes only the maintenance its own PE issued, and `__context_switch` has no DSB. On an
+SMP kernel, a thread that migrates between a clean and the final barrier could leave a clean incomplete when the I-cache
+is invalidated. The kernel runs on one CPU (`docs/design.md`), so this is sound today. Record it as a limitation for
+the SMP work (a `dsb ish` in the switch path, as other kernels do).
+
+#### R6. note: the fork test checks one order of ending
+
+`a_fork_child_of_an_image_process_maps_the_images_frames` says "whichever ends first" but drops the image, then the
+parent, then the child. It also runs the snapshot's steps by hand rather than through `snapshot_process`, so it does not
+test the charge path of the real call.
+
+### Checked and sound
+
+- **Bound at any size.** The copy steps once per piece of `STEP` pages. The clean steps every `STEP` pages, each page
+  one unit. There is a step point before the first piece. So `image_create` of a 100 MB text is at most `2 × STEP`
+  units in an interval (R1), plus one `ic ialluis`.
+- **Instruction cache.** Only executable segments are cleaned, every kept page including the zero tail (zeroed by
+  `MemoryObject::new` through the cacheable direct map). The line size is `CTR_EL0.DminLine`, and the start is aligned.
+  The `dsb ish` that completes the cleans comes before `ic ialluis` (all lines, so frames that once held other code are
+  covered), and `dsb ish; isb` come after. All of it happens before the image is returned, so before any mapping of its
+  frames exists. A pause between the cleans and the invalidate is harmless because nothing maps the frames yet (one CPU,
+  R5). Read-only and writable data are not cleaned, and the W^X refusal is unchanged.
+- **`image_create`'s handle room.** Sound (finding 5).
+- **Invariants.** Total 854 is the count of the rows, and `make adr-check` passes. The test-map line for the checker is
+  present.
+
+### Verdict
+
+Fix first: R1, which is small (one step point and one test case), and R2 (a settle before each phase and an
+end-of-room check), with R4's report and mutation record. R3 and finding 8 go to the architect with the decision listed.
+The fixes for 1 to 7 are otherwise sound.
