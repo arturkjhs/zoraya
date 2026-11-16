@@ -696,3 +696,22 @@ fn a_refused_bind_leaves_the_named_file_outside_the_node_table() {
     // The name is taken, and cannot be listened on.
     assert_eq!(r.p.bind(s, &un("/tmp/left")), Err(EADDRINUSE));
 }
+
+/// CI found a Python step stuck for 14 minutes on connect and accept in one process; the cause was a 270-character line typed
+/// into the shell. The semantics are what Linux has: a connect to a listener with room completes at once, without the
+/// listener's `accept`, and the pair waits in the queue.
+#[test]
+fn connect_completes_before_accept_in_one_process() {
+    for ty in [SOCK_STREAM, SOCK_SEQPACKET] {
+        let (mut a, _svc) = tmp_rig();
+        let s = server(&mut a, ty, "/tmp/same");
+        let c = sock(&mut a, ty);
+        assert_eq!(a.p.connect(c, &un("/tmp/same")), Ok(()), "type {ty}");
+        // The client writes into the queued pair before anyone accepts.
+        a.write(c, b"early").unwrap();
+        let d = a.p.accept(s, false, false).unwrap();
+        assert_eq!(a.read(d, 100).unwrap(), b"early");
+        a.write(d, b"late").unwrap();
+        assert_eq!(a.read(c, 100).unwrap(), b"late");
+    }
+}

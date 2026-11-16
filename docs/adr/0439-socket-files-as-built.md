@@ -74,7 +74,8 @@ A socket file anywhere a program may write, persisting until unlinked, any numbe
    by the status `EXISTS`), 64 listeners in a service (`ENFILE`); a datagram socket cannot be bound (`EOPNOTSUPP`). `backlog` is a
    hint: the queue is the channel's 64 messages (ADR-0050), and the 65th connect is `EAGAIN` (Linux blocks; a blocking `connect` here
    is `EAGAIN` too).
-4. **Connecting.** `connect(path)` resolves the path in the connecting program's own table, opens the node with `WRITE`
+4. **Connecting.** `connect` completes as soon as the service has put the pair on the listener's channel, whether or not the listener ever
+   calls `accept` (one process may connect and then accept, as Linux allows; a full queue is `EAGAIN`, not a wait). `connect(path)` resolves the path in the connecting program's own table, opens the node with `WRITE`
    (`EACCES` without it, `ENOENT` for a path the table does not cover or a name that is not there), makes the pair, and sends the
    far end's handles with a 24-byte record of what it is (message 42 for one channel end, 43 for a stream's three) on the node's
    connection. The service checks the right, finds the listener and the type, and writes the record and handles to the listener's
