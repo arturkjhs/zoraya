@@ -629,8 +629,12 @@ per image (the image's pages once, however many processes run from it, as ADR-04
   pauses (a window, the pointer or the clipboard, not a terminal's mode). The serial scripts have no pause; each start
   of `sh`, `dash`, `t_tty`, `t_curses`, `vi`, `less` or `view` there is followed by a `<` wait before the next keys.
 - **A stuck GUI step cost the whole run (1200 to 1800 s):** each GUI step now has a limit of its own (120 s, x4 under
-  TCG, a `pause`'s time on top; `limit SECONDS STEP` for more). The default and the serial scripts are in
-  `docs/architect-queue.md` section D, with the question of a prompt that clears its row.
+  TCG, a `pause`'s time on top; `limit SECONDS STEP` for more). The serial scripts have the same (architect's decision of
+  2026-11-16, `tools/test-runner/src/script.rs`); a step of 5 s or more prints `RUNNER-STEP N SECONDS STEP`, so that the
+  next full run gives each step's time. No per-step times existed in the CI logs (run 43749759496 has each run's total
+  only), so the explicit limits (`w2j`, `w3j`, `w4`, `w8` and its single builds, `python-regr`, `python-mem`, the slow
+  libc++ groups) are set from the run's `--timeout` (a quarter of it, as TCG multiplies by 4) and the run totals of
+  that run, with a wide margin; shorten them from the `RUNNER-STEP` lines.
 
 ## Socket files and TCP listening: what F7 left (plan part F7, ADR-0439 and ADR-0440, proposed)
 

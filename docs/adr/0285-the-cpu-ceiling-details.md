@@ -115,7 +115,7 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
   ceiling keeps its frames and charges for as many periods as its teardown needs. Options for a proposed ADR: a thread
   whose process is ending is charged but never parked (an overrun of one teardown, whose steps ADR-0270 bounds), or the
   teardown moves to the reaper, charged to no one. The scheduler is unchanged until the architect decides.
-  *Resolved by ADR-0460 once it is accepted* (agent's note, `work/park-ending`, 2026-11-16; the architect chose the
+  *Resolved by ADR-0460, accepted 2026-11-16* (agent's note, `work/park-ending`, 2026-11-16; the architect chose the
   first option on 2026-11-16): `RunQueue::pick` takes a thread whose process is ending (`Process::is_ending`, set by
   the kernel with the exit record and never cleared) even when its job is spent, with the floor slice, and does not
   count it as parked; `schedule` still charges its run to the job. Such a thread runs only the way out: every way to

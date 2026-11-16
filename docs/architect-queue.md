@@ -61,21 +61,7 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
-- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note.
-- **`curses-flake`: the GUI runner's per-step limit.** Each step of a GUI script now has 120 s, four times that under TCG
-  (480 s), and a `pause` its own time on top; `limit SECONDS STEP` gives one step more (`tools/test-runner/src/gui.rs`,
-  `STEP_LIMIT`, `TCG_FACTOR`). Chosen generous: in the full CI run of 2026-11-15 (43749759496) the longest GUI run
-  outside TCG took 47 s in all and the longest under TCG 332 s (`netsurf-auto`), so no current step needs a `limit`.
-  Questions: (1) keep 120 s and x4, or shorter (a stuck step then costs less)? (2) Give the serial-line scripts
-  (`--script`, the `<` steps) the same? Not done: some of their runs have single steps that wait for a whole suite
-  (`test-cxx-libcxx` up to 7200 s, `test-python-regr` 1500 s), and no per-step times are recorded yet to set their limits.
-- **`curses-flake`: should zosh's prompt clear the rest of its row?** `editor.start` writes the prompt only. Keys typed
-  before a program has the terminal in raw mode are echoed by the discipline on the primary screen; after the program
-  leaves the alternate screen the echo is back, and the next prompt overwrites only its own width (`~> other` from an
-  echoed `:w other`, run 43802095122). Option A: write `\r` and erase to the end of the row (`ESC [ K`) before the
-  prompt, so that a prompt row is always clean. Option B: keep it as dash and bash do, and make scripts wait for a
-  program's own screen before typing to it (done for `posix-curses.script`). Recommendation: A, as it costs one sequence
-  and no script can be caught by it again.
+
 
 
 ## E. Decided 2026-11-16 (removed from the lists above)
@@ -84,8 +70,11 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - ADR-0386, ADR-0387, ADR-0390, ADR-0391 Option A accepted. ADR-0391 item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (10f built `narrow` with a list at run time; 10j or 10f for the rest).
 - DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
 - git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
-- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, proposed; to be accepted after the implementation).
+- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, accepted 2026-11-16 with the overdraft as built; ADR-0285's note resolved).
 - ADR-0460 open question 2: the overdraft, not acceptance. The overrun of an ending process is debt that the room and its parents pay back in the following periods (cap 100 budgets; a dead room's debt goes to its nearest ancestor with a ceiling); built on `work/park-ending`, INV-0460-4.
+
+- `curses-flake`: the GUI runner's per-step limit stays 120 s with the factor 4 under TCG (480 s); extended to the serial-line scripts (`limit SECONDS STEP`, explicit limits for the steps that wait long).
+- `curses-flake`: zosh's prompt clears the rest of its row (Option A: `\r` and `ESC [ K` before the prompt); built in `editor.start`.
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 

@@ -8,19 +8,19 @@
 < Type help to begin, or help tour.
 < \r\n~>
 > python3 -c "x=[bytearray(100) for _ in range(5_000_000)]; print('five million', len(x))"\r
-< five million 5000000
+limit 225 < five million 5000000
 < \r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)
 < \r\n~>
 > python3 mappings.py\r
-< free mappings at the start
-< 4000 threads
-< 30 forks
-< free mappings after
-< recursion to 200000 frames
-< bytearrays 5000000
-< ok mappings
+limit 225 < free mappings at the start
+limit 225 < 4000 threads
+limit 225 < 30 forks
+limit 225 < free mappings after
+limit 225 < recursion to 200000 frames
+limit 225 < bytearrays 5000000
+limit 225 < ok mappings
 < \r\n~>
 > status\r
 < \r\nsucceeded (exit status 0)

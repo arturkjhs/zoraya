@@ -19,6 +19,9 @@ use alloc::vec::Vec;
 
 /// Most characters in one entry, continuation lines included.
 pub const MAX_CHARS: usize = 4096;
+/// What `start` writes before the prompt: carriage return, erase in line.
+pub const START_CLEAR: &str = "\r\x1b[K";
+
 /// The prompt of a continuation line.
 pub const CONTINUATION: &str = "...> ";
 
@@ -300,7 +303,10 @@ impl Editor {
         }
     }
 
-    /// Starts a new entry and draws its prompt.
+    /// Starts a new entry and draws its prompt on a clean row: `\r`, then
+    /// erase to the end of the row (`ESC [ K`), so that an echo the
+    /// discipline left there does not show behind the prompt (ADR-0387,
+    /// architect's decision of 2026-11-16).
     pub fn start(&mut self, prompt: &str, out: &mut String) {
         self.prompt = prompt.into();
         self.lines.clear();
@@ -313,6 +319,7 @@ impl Editor {
         self.quote = None;
         self.row = 0;
         self.shown_suggestion = false;
+        out.push_str(START_CLEAR);
         out.push_str(&self.prompt);
     }
 

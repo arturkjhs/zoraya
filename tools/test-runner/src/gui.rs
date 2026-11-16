@@ -1451,7 +1451,7 @@ impl Run {
 /// Whether the machine `command` starts runs under TCG: what the launcher
 /// says it resolved `--accel` to (`--print-accel`, so that `auto` on a host
 /// without HVF counts), else what the command line says.
-fn runs_under_tcg(command: &[String]) -> bool {
+pub(crate) fn runs_under_tcg(command: &[String]) -> bool {
     let asked = Command::new(&command[0])
         .args(&command[1..])
         .arg("--print-accel")

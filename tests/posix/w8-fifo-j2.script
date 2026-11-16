@@ -7,8 +7,8 @@
 < PSURF> 
 > sh /tests/w8.sh fifo-j2\r
 % boot
-< W8-RECIPES w8-fifo-j2 72
-< W8-OK w8-fifo-j2
+limit 150 < W8-RECIPES w8-fifo-j2 72
+limit 150 < W8-OK w8-fifo-j2
 % w8-fifo-j2
 < W8-STATUS 0
 < PSURF> 

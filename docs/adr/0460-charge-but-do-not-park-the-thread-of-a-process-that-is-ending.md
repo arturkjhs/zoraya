@@ -1,6 +1,6 @@
 # ADR-0460: Charge but do not park the thread of a process that is ending
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0264, ADR-0270, ADR-0285, ADR-0300
 - **Evidence:** CP-07, quotas/survey.md#cpu, quotas/survey.md#linux-cgroups-v2
@@ -31,8 +31,8 @@ period; 1 to 9 parks, two periods; 12 parks, four; 55 parks, nine. In 74 rounds 
 147 ms, and the test failed twice. A killed room at a low ceiling keeps its frames, and is charged, for as many periods as
 its teardown has parked turns. **Assumed:** one CPU (ADR-0264's revisit trigger for SMP).
 
-**The architect decided, on 2026-11-16, Option A below.** The ADR itself stays `proposed`: the architect accepts it after
-the implementation and its test exist. Option A is the architect's decision of 2026-11-16.
+**The architect decided, on 2026-11-16, Option A below.** The architect accepted the ADR the same day, after the
+implementation and its test existed. Option A is the architect's decision of 2026-11-16.
 
 ## Decision drivers
 
@@ -230,5 +230,8 @@ past its ceiling.
 
 ## Architect's decision
 
-(Left empty for the architect. The architect decided Option A on 2026-11-16; the status is set to accepted by the
-architect after the implementation.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+- Option A is accepted, and the decision includes the overdraft as built (open question 2): the overrun of an ending process is debt that
+  the room and its parents pay back in the following periods (cap 100 budgets), as `INV-0460-4` checks.
+- `INV-0460-1` to `INV-0460-4` are checked by the tests named in the invariants table; the rows that are `not yet applicable` keep that status.
