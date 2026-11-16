@@ -1,6 +1,6 @@
 # ADR-0438: Shared read-only segments as built (plan part F6): an image keeps its program's pages, the creator pays, a program spawns its own image, and one name
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0033, ADR-0051, ADR-0102, ADR-0107, ADR-0108, ADR-0261, ADR-0270, ADR-0415, ADR-0431, ADR-0433, ADR-0437
 - **Evidence:** CP-14, CP-16
@@ -201,4 +201,11 @@ t_shared: passed
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+- The job-level proxy is accepted as F6's "done when"; a per-image line in `top` is in `docs/backlog.md`.
+- The snapshot semantics (a rewrite of the source object after `image_create` no longer reaches the children) are accepted as a
+  deviation from ADR-0108, stated in this ADR.
+- Room limits: not accepted as is. By ADR-0262's rule (what is made for a client is paid by the client), the image of a program the
+  shell starts in a room is charged to that room's job, not to the shell's. It was not small (a kernel ABI change with six callers), so
+  it is recorded in `docs/architect-queue.md` as a condition of the untrusted-room gate (ADR-0268), and F6 merged without it.
