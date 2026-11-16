@@ -526,8 +526,12 @@ fn an_ending_thread_of_a_spent_job_runs_and_the_others_park() {
 /// killed; each thread's way out (its teardown) takes 300 us against a
 /// budget of 20 us a period, 6 ms in all. The threads come back at the next
 /// boundary, every one runs its way out in that period, and the room is
-/// charged for all of it. Without the exception each period's turn would
-/// end one teardown, and the room would need 20 periods.
+/// charged for all of it. A way out is many turns, as in the kernel (it
+/// yields at its step points once its slice ends): each turn is the slice
+/// `pick` gave, and the thread goes to the back of the queue between turns,
+/// so it is taken again and again from a spent job. Without the exception
+/// each period's budget would end a turn or two (20 us and the floor), and
+/// the room would not be gone within the 100 periods the test runs.
 #[test]
 fn a_killed_room_dies_in_the_period_after_the_kill_and_pays_for_it() {
     use core::cell::Cell;
@@ -557,6 +561,7 @@ fn a_killed_room_dies_in_the_period_after_the_kill_and_pays_for_it() {
     let mut kill_period = None;
     let mut died = None;
     let used_before_kill = Cell::new(0);
+    let mut left = [TEARDOWN; 20];
     while now < 100 * PERIOD_NS && died.is_none() {
         let p = period_of(now, PERIOD_NS);
         if p != released {
@@ -585,9 +590,15 @@ fn a_killed_room_dies_in_the_period_after_the_kill_and_pays_for_it() {
             continue;
         }
         if ending(&th) {
-            // The way out, which does not yield: the thread is gone after.
-            charge(&mut a, room, TEARDOWN, TEARDOWN, period_of(now, PERIOD_NS));
-            now += TEARDOWN;
+            // One turn of the way out: the slice, or what is left of it.
+            let turn = picked.slice_ns.unwrap_or(SLICE_NS).min(left[th.id]);
+            charge(&mut a, room, turn, turn, period_of(now, PERIOD_NS));
+            now += turn;
+            left[th.id] -= turn;
+            if left[th.id] > 0 {
+                q.push_back(th);
+                continue;
+            }
             alive -= 1;
             if alive == 0 {
                 died = Some(period_of(now, PERIOD_NS));

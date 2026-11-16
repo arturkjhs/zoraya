@@ -92,11 +92,14 @@ the charge true, and puts one named exception into `pick`. This is a proposal fo
 implementation.
 
 **How A keeps `pick`'s rule.** `pick` says no thread of a spent job runs, so that the overrun per period is one floor
-slice. With A, a thread of a spent job runs only if it belongs to a process that is ending, and then only to run that
-process's teardown, which is finite (ADR-0270 bounds each step, and the steps follow what the process owns), is charged
-(so the next period's budget of the job and of its parents is reduced by what it used, and a job that overran is
-charged at its release as before), and runs once per process (the process cannot end twice, and an ended process has no
-thread). A process cannot make itself "ending" without ending: `exit_requested` is set by `exit`, a fatal signal or a
+slice. With A, a thread of a spent job runs only if it belongs to a process that is ending, and then only to run the
+rest of its current call (to the call's next cancellation point, `steps::between` or a wait's `exit_requested` check, or
+to its end for a call that only pauses), `leave_current` and the process's teardown. That work is finite (ADR-0270
+bounds each step, and the steps follow what the process owns), is charged to the job and its parents (to `used_ns`, the
+usage record, and to the period it runs in), and runs once per process (the process cannot end twice, and an ended
+process has no thread). The charge is not paid back: the period it lands in is already over the budget, and the next
+period starts with the full budget (`CpuAcct::used_in` reads zero for any period but the one counted), so the overrun is
+lasting and not an overdraft (open question 2). A process cannot make itself "ending" without ending: `exit_requested` is set by `exit`, a fatal signal or a
 kill, and the thread does not return to user mode after it. So a limited job cannot use the exception to run user code
 past its ceiling.
 
@@ -104,23 +107,40 @@ past its ceiling.
 
 - **Positive.** A killed room dies at once, whatever its ceiling; ADR-0285 item 7 holds again; the test of
   `a_killed_room_with_parked_threads_dies` no longer needs a bound of many periods.
-- **Negative.** A job overruns its ceiling by one teardown. A job that makes its teardown long (many handles, a large
-  space) gets that time beyond the ceiling once per process; a job that starts and kills processes in a loop gets it
-  once per process.
-- **Follow-up work.** The flag and the branch in `kernel/src/sched.rs`, `crates/zoraya-cpu` and `kernel/src/process.rs`;
+- **Negative.** A job overruns its ceiling, and every ceiling above it (the exception overrides the `Park { at }` of any
+  ancestor), by the way out of each of its processes that ends: the rest of the current calls of its threads,
+  `leave_current` and the teardown. The overrun is charged to `used_ns` but not paid back in a later period (no
+  overdraft, open question 2). The bound: one way out per process that ends, each bounded by ADR-0270's steps over what
+  the process owns. The loop that uses it: a room at 10% spends each period's budget building a child process in the
+  room that holds much (handles, mappings, a large space within its frame quota) and kills it; the child's teardown runs
+  past the budget, unparked, and the next period starts full. Its steady use is its ceiling plus one teardown per
+  cycle. Under TCG, 40 spinner processes' ways out ran 58 ms against a budget of 100 us (the kernel test).
+- **What runs unparked is per process, not per thread.** The guard is `Process::is_ending`, a flag of the process, so
+  every thread of an ending process is taken unparked, including one in the middle of a call; no user code runs (below).
+- **One CPU.** "No user code after `ending`" holds because a thread reaches EL0 only through `exit_if_requested` after
+  its last switch, with interrupts masked to the `eret`. The kernel starts one CPU in every configuration today. With
+  SMP, a sibling at EL0 on another CPU when `ending` is set runs there to its next exception (open question 4).
+- **The host test models the way out as turns of the slice `pick` gives** (`zoraya-cpu`,
+  `a_killed_room_dies_in_the_period_after_the_kill_and_pays_for_it`), and not as the kernel's real step points.
+- **Follow-up work.** The flag and the branch in `kernel/src/sched.rs`, `crates/zoraya-cpu` and `kernel/src/process.rs`
+  (built on `work/park-ending`: `Process::is_ending`, set only by `Process::end_from_now` with the exit record, and
+  read by a second closure, `ending`, of `RunQueue::pick`, not by `job_of` or `decide`);
   a host test in `zoraya-cpu`; the QEMU kernel test of INV-0460-1, **to be built by another agent** (the part that
   implements this ADR); ADR-0285's open question gets a note that this ADR answers it, and ADR-0285 item 7 is restated
   when this ADR is accepted.
 
 ## Invariants
 
-- **INV-0460-1.** A room killed with its ceiling at 10% and 20 parked spinners has no process left within one period
-  (plus the floor slice) of the kill, whatever number of steps its teardown has. *Check:* a QEMU kernel test in
-  `kernel/src/testing.rs` (the case `a_killed_room_with_parked_threads_dies`, bound to one period and not to the parks),
-  to be built by the agent that implements this ADR.
+- **INV-0460-1.** A room killed with its budget spent and its threads parked has no process left before the end of the
+  period after the kill's, whatever number of steps its teardown has, while its ways out fit in one period. *Check:*
+  the room has no process left before the end of the period after the kill's, checked by the test kernel's
+  `a_killed_room_ends_in_the_period_after_the_kill` in `kernel/src/testing.rs` (one thousandth of a 250 ms period, 40
+  parked spinners, a bound in periods).
 - **INV-0460-2.** The ending process's teardown time is charged to its job: the job's usage after the kill is at least the
-  time the teardown ran. *Check:* a QEMU kernel test that reads `job_get_usage` of the killed room's parent before and
-  after, to be built with INV-0460-1.
+  time the teardown ran. *Check:* the test kernel's `a_killed_room_ends_in_the_period_after_the_kill` reads
+  `cpu::usage` of the room and of its parent before the kill and after the room is empty, and asserts that the room is
+  charged at least the time its ending threads ran, which `sched::ending_watch` counts at each switch apart from the
+  charge.
 - **INV-0460-3.** `RunQueue::pick` parks every thread of a spent job except a thread of an ending process; a thread of a
   process that is not ending is parked as before. *Check:* `cargo test -p zoraya-cpu`.
 
@@ -128,10 +148,26 @@ past its ceiling.
 
 - Whether the floor slice limits a teardown thread's turn, or the thread runs until its next step point: the second is
   simpler, the first keeps the masked-time figures of ADR-0270 as measured. The implementer measures `t_bound` and says.
-- Whether the job's `used` figure may go below zero of budget (an overdraft carried into the next period) or is clamped
-  at the ceiling: ADR-0285 item 2's floor already lets a job overrun by one slice.
+  *The floor slice was built* (agent's note under ADR-0001 rule 6, `work/park-ending`, 2026-11-16): `pick` returns
+  `MIN_SLICE_NS` for an ending thread of a spent job. The kernel is not preempted, so the slice decides only at which
+  step point the thread yields, not how long an interval is masked: each interval is still one step (ADR-0270), and the
+  other jobs get their turns between an ending thread's turns of 50 us. Figures of one HVF run of
+  `make test-qemu-auto-default` with the change: `t_bound`'s exits 82 to 572 us masked at 64 to 65 units, `job_kill` of
+  one 86 to 252 us (these rooms have no ceiling, so they do not take the exception); the killed room at one thousandth,
+  whose 40 ways out all take it, 235 us longest masked from the kill to the room's end (45 us in another run). Under TCG
+  `-smp 4` the same case read 14.5 ms, a figure not compared with a run without the change and not separated from TCG's
+  own stalls (which the counter counts); it stays to be explained. The other option was not built, so it was not
+  measured.
+- *For the architect:* whether the overrun is paid back. Two options: (a) an overdraft carried into the next period
+  (`period_used - budget` counted against the next period's budget, a change to ADR-0264's accounting), so that the
+  loop of the Consequences gets its ceiling over time; or (b) accept the overrun as it is built: charged to `used_ns`,
+  never paid back, at most one way out per process that ends. ADR-0285 item 2's floor already lets a job overrun by one
+  slice. Built: (b), the least committing.
 - The teardown's moving to the reaper (charged to no one) is a different decision, Option B's family, and is not
   chosen.
+- With more than one CPU running: a thread of an ending process at EL0 on another CPU runs user code to its next
+  exception, possibly past the ceiling if its job spent the budget meanwhile. Whether the kill should then interrupt
+  the other CPUs (an IPI) is for the multi-CPU stage.
 
 ## Revisit triggers
 

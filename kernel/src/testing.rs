@@ -628,6 +628,7 @@ pub fn run(start: usize) -> ! {
         LOST.store(0, Ordering::Relaxed);
         sched::set_test_slice(0);
         crate::cpu::set_test_period(0);
+        sched::ending_watch::watch(None);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
         bump(&PASSED);
@@ -1461,24 +1462,34 @@ fn cpu_ceiling_from_a_process() {
 }
 
 /// ADR-0285 item 7 with ADR-0460: a room at a ceiling of one thousandth
-/// (100 us of a 100 ms period) is killed with its 40 spinners parked. They
+/// (250 us of a 250 ms period) is killed with its 40 spinners parked. They
 /// come back at the next boundary and, their processes ending, are not
-/// parked again: the room has no process left before the boundary after
-/// that. Their 40 teardowns take many times the room's budget, so without
-/// the exception each period's budget ends a few of them and the room takes
-/// a period for each few (TASK-31 4.3: up to nine periods for 20 at 10%).
-/// The bound is in periods, with the whole of the next period for the
-/// teardowns, so a slow host does not move it (INV-0460-1). The way out is
-/// still charged, to the room and to its parent, which holds nothing else
+/// parked again: the room has no process left before the end of the period
+/// after the kill's (INV-0460-1). Their 40 teardowns take many times the
+/// room's budget, so without the exception each period's budget ends a few
+/// of them and the room takes a period for each few (TASK-31 4.3: up to nine
+/// periods for 20 at 10%; 34 to 43 periods here).
+///
+/// The bound assumes the 40 ways out fit in one period. Where in its period
+/// the kill lands does not matter: the parked threads wait for the next
+/// boundary whatever the phase, and those released at a boundary are parked
+/// again within microseconds, so the ways out always have exactly the period
+/// after the kill's. That is why the period is 250 ms, not 100: under TCG the
+/// ways out ran 58 ms in all, and a loaded host may take some times that.
+///
+/// The way out is charged to the room at least for the time the scheduler
+/// saw the room's ending threads run (`sched::ending_watch`, counted apart
+/// from the charge), and to its parent, which holds nothing else
 /// (INV-0460-2).
 fn a_killed_room_ends_in_the_period_after_the_kill() {
-    const PERIOD: u64 = 100_000_000;
+    const PERIOD: u64 = 250_000_000;
     const SPINNERS: usize = 40;
     crate::cpu::set_test_period(PERIOD);
     let parent = Job::create(&root(), false).expect("parent");
     let room = Job::create(&parent, false).expect("room");
     crate::cpu::set_limit(&room, Some(1)).expect("limit");
     let budget = zoraya_cpu::budget_ns(1, PERIOD);
+    sched::ending_watch::watch(Some(&room));
     let spinners: Vec<_> = (0..SPINNERS)
         .map(|_| process::spawn_in(&room, "spin").expect("spin"))
         .collect();
@@ -1503,6 +1514,7 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
         crate::cpu::usage(&room).used_ns,
         crate::cpu::usage(&parent).used_ns,
     );
+    crate::steps::masked_max_ns(true);
     room.kill();
     let killed = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
     let start = timer::now();
@@ -1515,18 +1527,25 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
         nap();
     }
     let died = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let masked = crate::steps::masked_max_ns(true);
+    let ran = sched::ending_watch::ran_ns();
+    sched::ending_watch::watch(None);
     let parks = crate::cpu::usage(&room).parked - parked_before;
     let charged = crate::cpu::usage(&room).used_ns - used_before.0;
     let parent_charged = crate::cpu::usage(&parent).used_ns - used_before.1;
     println!(
-        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill, {charged} ns charged after it",
+        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill, {charged} ns charged after it, {ran} ns run by its ending threads, {masked} ns longest masked",
         died - killed,
         timer::now().nanos_since(start) / 1_000_000
     );
     // Every one of the 40 ways out ran after the kill (the spinners were
     // parked or spinning), so the room is charged for them, and the parent
     // as much: each charge walks up (ADR-0264 point 3).
-    assert!(charged > 0, "the ways out were not charged to the room");
+    assert!(ran > 0, "no ending thread of the room ran");
+    assert!(
+        charged >= ran,
+        "the room was charged {charged} ns, its ending threads ran {ran} ns"
+    );
     assert!(
         parent_charged >= charged,
         "the parent was charged {parent_charged} ns, the room {charged} ns"

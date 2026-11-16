@@ -161,8 +161,11 @@ pub struct Process {
     /// cleared. The scheduler reads it without a lock (`sched::schedule`, with
     /// `SCHED` held) to take this process's threads even when the job's
     /// budget is spent: from here on a thread of it runs only the kernel's
-    /// way out, since every way to EL0 passes [`exit_if_requested`] after the
-    /// last switch.
+    /// way out (the rest of its current call, `leave_current`, `teardown`),
+    /// since every way to EL0 passes [`exit_if_requested`] after the last
+    /// switch. That holds with one CPU running, as the kernel starts today: on
+    /// several, a sibling at EL0 elsewhere runs on to its next exception
+    /// (ADR-0460's open questions).
     ending: AtomicBool,
     /// The mapping lock is held (ADR-0301 item 6).
     map_locked: AtomicBool,
