@@ -43,6 +43,11 @@ pub const MAX_PARKS_PER_PICK: usize = 16;
 pub const RELEASE_BATCH: usize = 64;
 /// A ceiling of the whole machine, in thousandths.
 pub const FULL: u32 = 1000;
+/// The most debt a job carries (ADR-0460, the architect's decision on open
+/// question 2), in periods of its budget: what an ending process ran past
+/// the budget beyond this is forgiven, so that one large teardown cannot
+/// park a job for longer than this many periods.
+pub const DEBT_CAP_PERIODS: u64 = 100;
 
 /// The CPU use of one job, and of everything below it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,6 +62,11 @@ pub struct CpuAcct {
     pub period_used: u64,
     /// Times a thread was parked because this node was over budget.
     pub parked: u64,
+    /// What the threads of ending processes ran past this node's budget, not
+    /// yet paid back (ADR-0460): each later period begins with as much of it
+    /// as fits in the budget already used, see [`settle`]. Zero without a
+    /// ceiling.
+    pub debt: u64,
 }
 
 impl CpuAcct {
@@ -67,17 +77,54 @@ impl CpuAcct {
             period: 0,
             period_used: 0,
             parked: 0,
+            debt: 0,
         }
     }
 
-    /// `period_used` as of `period`: zero if it was counted in another one.
-    pub const fn used_in(&self, period: u64) -> u64 {
-        if self.period == period {
-            self.period_used
-        } else {
-            0
+    /// `period_used` as of `period`: zero if it was counted in an earlier
+    /// one, apart from the debt paid back in `period` (see [`settle`]).
+    pub fn used_in(&self, period: u64, period_ns: u64) -> u64 {
+        if self.period > period {
+            return 0;
         }
+        settle(*self, period, period_ns).period_used
     }
+}
+
+/// The node as of `period` (ADR-0460's debt). Nothing changes if it was
+/// counted in `period` or a later one. Otherwise each period after the one
+/// counted pays back up to one budget of the debt: the periods between, in
+/// which nothing was counted, pay a whole budget each (the job could have
+/// used it and did not), and `period` begins with `period_used` set to what
+/// is paid in it, `min(debt, budget)`, and that much less debt. So a job
+/// whose debt is at least its budget is parked for the whole period, and a
+/// job's use over any run of periods stays within its budgets plus the debt
+/// it began with (and the floor slices of ADR-0285). Without a ceiling a
+/// node keeps no debt.
+pub fn settle(a: CpuAcct, period: u64, period_ns: u64) -> CpuAcct {
+    if a.period >= period {
+        return a;
+    }
+    let mut next = CpuAcct {
+        period,
+        period_used: 0,
+        debt: 0,
+        ..a
+    };
+    if let Some(limit) = a.limit {
+        let budget = budget_ns(limit, period_ns);
+        let between = period - a.period - 1;
+        let debt = a.debt.saturating_sub(between.saturating_mul(budget));
+        let paid = debt.min(budget);
+        next.period_used = paid;
+        next.debt = debt - paid;
+    }
+    next
+}
+
+/// The cap of a node's debt: [`DEBT_CAP_PERIODS`] budgets.
+pub const fn debt_cap(limit: u32, period_ns: u64) -> u64 {
+    budget_ns(limit, period_ns).saturating_mul(DEBT_CAP_PERIODS)
 }
 
 /// A tree of nodes with CPU counters. The caller keeps it still during a call.
@@ -158,6 +205,10 @@ pub fn set_limit<T: Tree>(tree: &mut T, id: T::Id, limit: Option<u32>) -> Result
     }
     let mut acct = tree.get(id);
     acct.limit = limit;
+    if limit.is_none() {
+        // No ceiling, no budget to pay a debt from.
+        acct.debt = 0;
+    }
     tree.set(id, acct);
     Ok(())
 }
@@ -166,17 +217,69 @@ pub fn set_limit<T: Tree>(tree: &mut T, id: T::Id, limit: Option<u32>) -> Result
 /// `in_period_ns` is the part of it that lies in `period`, the period of the
 /// switch: a run that began in the period before charges only the part after
 /// the boundary to the budget.
-pub fn charge<T: Tree>(tree: &mut T, id: T::Id, ran_ns: u64, in_period_ns: u64, period: u64) {
+///
+/// `ending`: the run was a thread of an ending process (ADR-0460), which
+/// `RunQueue::pick` takes even from a spent job. The part of its in-period
+/// run past a node's budget is also added to that node's debt, up to
+/// [`debt_cap`], at every node with a ceiling, by the same rule up the chain:
+/// each node's own budget decides its own debt.
+pub fn charge<T: Tree>(
+    tree: &mut T,
+    id: T::Id,
+    ran_ns: u64,
+    in_period_ns: u64,
+    period: u64,
+    period_ns: u64,
+    ending: bool,
+) {
     let in_period_ns = in_period_ns.min(ran_ns);
     let mut at = Some(id);
     while let Some(node) = at {
-        let mut a = tree.get(node);
+        let mut a = settle(tree.get(node), period, period_ns);
+        let before = a.period_used;
+        let after = before.saturating_add(in_period_ns);
+        if ending && let Some(limit) = a.limit {
+            let past = after.saturating_sub(before.max(budget_ns(limit, period_ns)));
+            a.debt = a.debt.saturating_add(past).min(debt_cap(limit, period_ns));
+        }
         a.used_ns = a.used_ns.saturating_add(ran_ns);
-        a.period_used = a.used_in(period).saturating_add(in_period_ns);
-        a.period = period;
+        a.period_used = after;
         tree.set(node, a);
         at = tree.parent(node);
     }
+}
+
+/// A job ends for good (its record is dropped) with `from`, its counters:
+/// its debt, as of `now_ns`, goes to the nearest ancestor from `parent` up
+/// that has a ceiling, up to that node's [`debt_cap`] (ADR-0460: a dead room
+/// keeps no debt, and what it owed still reaches its parents). An ancestor
+/// that went past its own budget in the same runs has a debt of its own for
+/// them too, so it pays that part twice; that errs on the side of the
+/// ceiling. Returns the debt passed on.
+pub fn pass_debt<T: Tree>(
+    tree: &mut T,
+    from: CpuAcct,
+    parent: Option<T::Id>,
+    now_ns: u64,
+    period_ns: u64,
+) -> u64 {
+    let period = period_of(now_ns, period_ns);
+    let debt = settle(from, period, period_ns).debt;
+    if debt == 0 {
+        return 0;
+    }
+    let mut at = parent;
+    while let Some(node) = at {
+        let a = tree.get(node);
+        if let Some(limit) = a.limit {
+            let mut a = settle(a, period, period_ns);
+            a.debt = a.debt.saturating_add(debt).min(debt_cap(limit, period_ns));
+            tree.set(node, a);
+            return debt;
+        }
+        at = tree.parent(node);
+    }
+    0
 }
 
 /// What the scheduler does with a thread of a job about to run.
@@ -200,7 +303,7 @@ pub fn decide<T: Tree>(tree: &T, id: T::Id, now_ns: u64, period_ns: u64) -> Deci
     while let Some(node) = at {
         let a = tree.get(node);
         if let Some(limit) = a.limit {
-            let left = budget_ns(limit, period_ns).saturating_sub(a.used_in(period));
+            let left = budget_ns(limit, period_ns).saturating_sub(a.used_in(period, period_ns));
             if left == 0 {
                 return Decision::Park { at: node };
             }

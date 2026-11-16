@@ -895,9 +895,10 @@ pub fn spawn_with_devices_and(
     })
 }
 
-/// Starts the ramdisk's `name` in `job`, for tests of a job's processes.
+/// Starts the ramdisk's `name` in `job`, for tests of a job's processes;
+/// `suspended` as for [`spawn_suspended`].
 #[cfg(feature = "qemu-test")]
-pub fn spawn_in(job: &Arc<Job>, name: &str) -> Result<Arc<Process>, SpawnError> {
+pub fn spawn_in(job: &Arc<Job>, name: &str, suspended: bool) -> Result<Arc<Process>, SpawnError> {
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
     create(Start {
         name,
@@ -907,7 +908,7 @@ pub fn spawn_in(job: &Arc<Job>, name: &str) -> Result<Arc<Process>, SpawnError> 
         argv: Strings::empty(),
         envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
-        suspended: false,
+        suspended,
     })
 }
 

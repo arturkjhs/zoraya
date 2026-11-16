@@ -521,6 +521,9 @@ fn schedule() {
                 ran,
                 now.saturating_sub(since),
                 zoraya_cpu::period_of(now, period_ns),
+                period_ns,
+                // ADR-0460: what an ending thread runs past a budget is debt.
+                process.is_ending(),
             );
             #[cfg(feature = "qemu-test")]
             ending_watch::count(process, ran);
@@ -596,9 +599,9 @@ fn schedule() {
     arch::restore_interrupts(daif);
 }
 
-/// The test kernel's measure of what the threads of ending processes ran
-/// (INV-0460-2): the time of every turn of such a thread in one watched job,
-/// counted by the scheduler apart from the charge.
+/// The test kernel's measure of what the threads of one watched job ran,
+/// all of them and those of ending processes (INV-0460-2 and -4): the time
+/// of every turn, read from the clock at each switch apart from the charge.
 #[cfg(feature = "qemu-test")]
 pub mod ending_watch {
     use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -609,10 +612,12 @@ pub mod ending_watch {
     /// The watched job's address, or 0.
     static JOB: AtomicUsize = AtomicUsize::new(0);
     static RAN_NS: AtomicU64 = AtomicU64::new(0);
+    static ALL_NS: AtomicU64 = AtomicU64::new(0);
 
     /// Watches `job` from now on, from zero; `None` stops.
     pub fn watch(job: Option<&Job>) {
         RAN_NS.store(0, Ordering::Relaxed);
+        ALL_NS.store(0, Ordering::Relaxed);
         JOB.store(
             job.map_or(0, |j| j as *const Job as usize),
             Ordering::Relaxed,
@@ -624,9 +629,18 @@ pub mod ending_watch {
         RAN_NS.load(Ordering::Relaxed)
     }
 
+    /// The time every thread of the watched job ran since [`watch`].
+    pub fn all_ns() -> u64 {
+        ALL_NS.load(Ordering::Relaxed)
+    }
+
     pub(super) fn count(process: &Process, ran: u64) {
         let job: &Job = process.job();
-        if process.is_ending() && JOB.load(Ordering::Relaxed) == job as *const Job as usize {
+        if JOB.load(Ordering::Relaxed) != job as *const Job as usize {
+            return;
+        }
+        ALL_NS.fetch_add(ran, Ordering::Relaxed);
+        if process.is_ending() {
             RAN_NS.fetch_add(ran, Ordering::Relaxed);
         }
     }

@@ -121,7 +121,7 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
   count it as parked; `schedule` still charges its run to the job. Such a thread runs only the way out: every way to
   EL0 passes `exit_if_requested` after the last switch. Tested by `zoraya-cpu`'s
   `a_killed_room_dies_in_the_period_after_the_kill_and_pays_for_it` and the test kernel's
-  `a_killed_room_ends_in_the_period_after_the_kill` (a room at one thousandth with 40 parked spinners ends in the
+  `a_killed_room_ends_in_the_period_after_the_kill` (a room at one thousandth with 16 parked spinners ends in the
   period after the kill's).
 
 ## Revisit triggers

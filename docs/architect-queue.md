@@ -61,7 +61,7 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
-- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note. Open for you (ADR-0460 open question 2, `work/park-ending`): the overrun of an ending process's way out is charged but not paid back; a room that starts and kills processes in a loop overruns its ceiling, and its parent's, by one way out per process. Options: (a) an overdraft carried into the next period; (b) accept (built).
+- **A killed room's threads are parked while they die (ADR-0285 item 7, `work/smp-tcg`):** the architect decided Option A on 2026-11-16 (charge but do not park an ending process's thread); ADR-0460 (proposed) records it, and is to be accepted after the implementation and its kernel test. ADR-0285's open questions have the note.
 
 
 ## E. Decided 2026-11-16 (removed from the lists above)
@@ -71,6 +71,7 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
 - git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
 - A killed room's threads: charged but not parked while they end (Option A of ADR-0460, proposed; to be accepted after the implementation).
+- ADR-0460 open question 2: the overdraft, not acceptance. The overrun of an ending process is debt that the room and its parents pay back in the following periods (cap 100 budgets; a dead room's debt goes to its nearest ancestor with a ceiling); built on `work/park-ending`, INV-0460-4.
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 
