@@ -1145,7 +1145,11 @@ kernel reads `zoraya.shard=N/2` from `/chosen/bootargs` (`tools/run-qemu.sh --sh
 tests before `SHARD_2_FIRST` (`kernel/src/testing.rs`), shard 2 the rest, in the registered order, so each test runs
 in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that ran after earlier ones
 and needs what they left (`memory_objects_from_a_process` needs the heap grown by the earlier tests) must stay after them:
-the cut is not moved before it. The `auto-*` suites stay whole (HVF runs one in under two minutes).
+the cut is not moved before it. The `auto-*` suites stay whole (HVF runs one in under two minutes). Known limits:
+`tools/check-test-shards.sh` sees only the multi-line `name: "..."` entries of rustfmt's layout (a one-line `Test {..}`
+would escape its uniqueness check); shard 2 holds `kernel_work_is_bounded`, the most variable test (29 to 117 s in CI),
+so a shard-2 job near its limit will be that test. Each run ends with a boot-stack canary check outside any test, since
+the overflow test (shard 1) and `stack_canary_intact` (shard 2) are in different shards.
 
 How the in-QEMU tests run and report:
 - The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A
@@ -2838,7 +2842,7 @@ ADR-0221 items 5, 6 and 8).
   `tools/run-qemu.sh --probe-el2` creates the VM with `--dumpdtb`, once without and once with `virtualization=on`.
   If only the second fails under HVF, the configuration prints `[LABEL] skipped: HVF on this Mac has no EL2 (needs M3
   or later)` and does not run. `make test` counts this as a skip, not a failure, and lists it in its summary. On such
-  a Mac EL2 entry is covered only by TCG (`tcg-el2`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
+  a Mac EL2 entry is covered only by TCG (`tcg-el2-a`/`-b`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
   probed. The probe tests the host, not the kernel: if HVF creates the EL2 VM, a kernel failure at EL2 still fails.
 - **Storage stack.** `t_storage` kills the driver "during a commit" and "during a read", but on one CPU the driver
   ends before the request reaches the device, so no test kills a driver with a write in flight on the device; the
