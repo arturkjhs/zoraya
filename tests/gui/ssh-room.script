@@ -1,4 +1,4 @@
-# ssh from a room's own terminal windows (review of 10g, finding 1; ADR-0341 item 2; ADR-0394). A terminal the
+# ssh from a room's own terminal windows (review of 10g, finding 1; ADR-0341 item 2; ADR-0462). A terminal the
 # panel starts has the random service always and the network narrowed to its room's `+net` words, so:
 #   - a room made with `+net HOST:PB` logs in to server B (the confined test sshd) with the key in its own
 #     directory `/data/netroom/ssh` (made below the shell's hold, never from `/data`), and is refused server A
@@ -31,15 +31,20 @@ prefix ED25519 key fingerprint is
 type yes\r
 screen echo far-in-room
 screen netroom ~/n> _
-# Another port of the same host is not in the room's words.
+# What the line gives it: the one rule of its own operand, not the room's other words (ADR-0462: the room's
+# words bound a line and give it nothing; a line with no host asks for no network).
+type grants ssh -p @PB@ -l @USER@ @HOST@\r
+prefix net: @HOST@:@PB@
+screen netroom ~/n> _
+# Another port of the same host is not in the room's words: refused before it runs.
 type ssh -p @PA@ -l @USER@ @HOST@ true\r
-screen ssh: connect to host @HOST@ port @PA@: Permission denied
+screen zosh: @HOST@:@PA@: outside the network words of room netroom
 screen netroom ~/n> _
 # The room's own directory holds the client key the test put there (a person's `ssh-keygen` and a line in
 # the far side's authorized_keys would have): the login above used it, and the host key it stored is there.
 type ls /data/netroom/ssh; echo made-$status\r
 screen made-0
-# The second room has no network word: ssh is refused, its key is made.
+# The second room has no network word: ssh is refused before it runs, its key is made.
 clickc 6b58a8 300 719 600 7
 chord meta ret
 origin 137 170
@@ -47,7 +52,7 @@ screen Type help to begin, or help tour.
 screen plain ~/p> _
 click 450 152
 type ssh -p @PB@ -l @USER@ @HOST@ true\r
-prefix ssh: connect to host @HOST@ port @PB@
+screen zosh: @HOST@:@PB@: outside the network words of room plain
 type ssh-keygen -t ed25519\r
 prefix Enter file in which to save the key
 type \r

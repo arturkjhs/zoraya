@@ -298,10 +298,10 @@ struct State {
     /// The chooser's registration channel (proposed ADR-0245), from `init`.
     chooser: Option<Handle>,
     /// `init`'s connection to the random service (slot 11): each terminal's
-    /// shell gets one of its own made from it (ADR-0394).
+    /// shell gets one of its own made from it (ADR-0462).
     random: Option<Handle>,
     /// `init`'s root network connection (slot 12): each terminal's shell in a
-    /// room with `+net` words gets one narrowed to them (ADR-0394).
+    /// room with `+net` words gets one narrowed to them (ADR-0462).
     net: Option<Handle>,
     next_tag: u32,
     port: Handle,
@@ -501,15 +501,24 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         beside.as_ref().map(|b| b.client),
         beside.as_ref().map(|b| b.tmp),
     );
-    // The shell's random service and network (ADR-0394): its own connection to
+    // The shell's random service and network (ADR-0462): its own connection to
     // the service, and the network narrowed to the room's `+net` words, none
     // when the room has none (the line then meets the usual refusal).
     let random_root = st.random;
     let net_root = st.net;
-    let net_scope = l
-        .room
-        .as_ref()
-        .and_then(|r| zoraya_shell::netgrant::words_scope(&r.nets).ok().flatten());
+    let net_scope = Some(zoraya_panel::net_words(l))
+        .filter(|w| !w.is_empty())
+        .and_then(|nets| {
+            // A word the reader let through that is no `+net` argument gives
+            // nothing and takes no other word with it (the shell says which,
+            // once, when the room is entered).
+            let good: Vec<String> = nets
+                .iter()
+                .filter(|w| zoraya_shell::netgrant::parse_word(w).is_ok())
+                .cloned()
+                .collect();
+            zoraya_shell::netgrant::words_scope(&good).ok().flatten()
+        });
     for (i, p) in l.programs.iter().enumerate() {
         let root = st.root.as_ref();
         let chooser = st.chooser;

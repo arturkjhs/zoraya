@@ -20,7 +20,7 @@ pub const SLOTS: u8 = 4;
 pub const MAX_ROOMS: usize = 32;
 /// Grants of one room.
 pub const MAX_GRANTS: usize = 16;
-/// The most `+net` words a room's line has (ADR-0224 item 1, ADR-0394).
+/// The most `+net` words a room's line has (ADR-0224 item 1, ADR-0462).
 pub const MAX_NETS: usize = 8;
 /// The longest room name, in bytes.
 pub const MAX_NAME: usize = 24;
@@ -326,7 +326,7 @@ pub struct Room {
     /// The limit words of the line (ADR-0266).
     pub limits: Limits,
     pub grants: Vec<Grant>,
-    /// The `+net` words of the line (ADR-0224 items 1 and 2, ADR-0394), as
+    /// The `+net` words of the line (ADR-0224 items 1 and 2, ADR-0462), as
     /// written after `+net`: what the network connection of the room's
     /// terminals reaches. Empty: no network.
     pub nets: Vec<String>,

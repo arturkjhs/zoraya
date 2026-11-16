@@ -16,6 +16,8 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 | ADR | What | Recommendation | From |
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
+| ADR-0462 | 10g: a room's terminals get the random service (a launcher's connection, at `init`'s depth) and, in a room with `+net` words, a network connection narrowed to them; the words BOUND a line and give it nothing (a line that asks for no network gets none and takes no carved account) | Option A | 10g |
+| ADR-0393 | 10g: what 10g decided where ADR-0340 and ADR-0341 are silent (`EntryKind::Own`, the names list, `/home` as the view, the shell's `/data/ROOM` hold, ssh on ADR-0346's port plus patches 0005 to 0008, short options only, the host's sshd as a confined test server) | Option A | 10g |
 | ADR-0461 | git's licence: `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS (its GPL-2.0-or-later option), for git only. Decided by the architect 2026-11-16; it must be accepted before 10h wires git in | Option A (decided) | ports-early, TASK-31 |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 | ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
@@ -47,6 +49,19 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - **`work/py-hook`:** the hook builds a second CPython, in the test job (4 minutes in CI).
 - **Test infrastructure:** the semaphore, barrier and latch groups of libc++'s tests run only in the nightly (TCG);
   INV-0042-1 stays `not yet applicable`. INV-0172-4's narrowing of `room new` inside a room is built and checked in 10c.
+
+- **10g, room words bound a line and give it nothing** (ADR-0462; the architect may overrule): the architect's text was
+  "the network by the room's grants (a room made with `+net HOST:22` can ssh there)". Taken: the room's words bound
+  what a line may be given and let a value host designate; a line gets a connection only if its own words (a `+net`
+  on it, or the description's `HOST`/`URL` operand) ask for it inside them. Otherwise every `cat` in the room would
+  take one of `netd`'s four carved accounts and starve home's `curl` and `ssh`. Option B (every line gets the room's
+  connection) is in the ADR with its cost.
+- **10g, ADR-0288/0435:** a launcher's connection to the random service (`ShareLauncher`, only `init`'s may ask) so that
+  the shells the panel starts are shells, not programs, for `rngd`.
+- **10g, ADR-0340 INV-0340-4:** its half "`libc.a` exports no `listen` or `accept`" is false since the Unix sockets
+  (ADR-0430, ADR-0439); the row says "checked: ... (partly ...)"; the new text of the invariant is yours.
+- **10g, not built:** the `/data/ROOM` storage limit (ADR-0341 item 6), `scp` and `sftp`; a file held open for writing in an
+  own directory stays writable in a child that inherits it (ADR-0393 item 13, before 10h's git hooks).
 
 ## C. Hand checks (exact commands)
 

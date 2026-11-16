@@ -36,6 +36,32 @@ pub fn share(conn: Handle) -> Option<Handle> {
     }
 }
 
+/// A new *launcher* connection made through `conn`, which must be `init`'s
+/// own (ADR-0462): the shells it makes through `share` are shells, with a
+/// shell's room to make programs, not programs. `None` from any other
+/// connection or when the table is full.
+pub fn share_launcher(conn: Handle) -> Option<Handle> {
+    let (mine, theirs) = channel_create().ok()?;
+    let mut out = [0u8; 64];
+    let n = encode(&zoraya_rng::ShareLauncher {}, 1, &mut out).ok()?;
+    let entry = ChannelEntry {
+        handle: theirs,
+        rights: ChannelObject::RIGHTS,
+        transfer: Transfer::Move,
+    };
+    let reply = exchange(conn, &out[..n], &[entry], WAIT_NS);
+    let ok = reply
+        .as_deref()
+        .and_then(|r| decode::<ShareReply>(r, 0).ok())
+        .is_some_and(|(_, r)| r.status.0 == status::OK);
+    if ok {
+        Some(mine)
+    } else {
+        let _ = handle_close(mine);
+        None
+    }
+}
+
 /// Fills `buffer` from the service over `conn`. `false` if the service did
 /// not answer; then nothing in `buffer` may be used.
 pub fn fill(conn: Handle, buffer: &mut [u8]) -> bool {

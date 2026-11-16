@@ -91,7 +91,7 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             (6, Give::Terminal),
             (7, Give::Broker),
             (8, Give::Tmp),
-            // ADR-0394: the random service always, the network when the
+            // ADR-0462: the random service always, the network when the
             // room has `+net` words (the panel gives none else).
             (NET_SLOT, Give::Net),
             (RANDOM_SLOT, Give::Random),
@@ -847,7 +847,25 @@ fn the_reserve_is_out_of_the_sessions_share() {
     assert_eq!(w.admit(room, "netsurf", SESSION_CLIENTS), Ok(()));
 }
 
-/// ADR-0394: a room's `+net` words are shown as pills with its grants, and are no hold.
+/// ADR-0462: which launch gets a network connection to narrow: only a room with words.
+#[test]
+fn only_a_room_with_words_is_given_a_network() {
+    let mut p = Panel::default();
+    assert!(p.reload(b"ops --colour 1 +w ~/ops +net 10.0.2.50:22\nplain --colour 2 +w ~/p\n"));
+    assert!(net_words(&terminal(None)).is_empty(), "home");
+    assert_eq!(p.pressed(ROOM, 1), Action::Entered);
+    let Action::Launch(ops) = p.pressed(LAUNCH, 0) else {
+        panic!()
+    };
+    assert_eq!(net_words(&ops), ["10.0.2.50:22"]);
+    assert_eq!(p.pressed(ROOM, 2), Action::Entered);
+    let Action::Launch(plain) = p.pressed(LAUNCH, 0) else {
+        panic!()
+    };
+    assert!(net_words(&plain).is_empty(), "a room without words");
+}
+
+/// ADR-0462: a room's `+net` words are shown as pills with its grants, and are no hold.
 #[test]
 fn a_rooms_net_words_are_pills_and_no_hold() {
     let mut p = Panel::default();

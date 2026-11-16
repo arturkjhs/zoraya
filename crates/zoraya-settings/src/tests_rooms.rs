@@ -545,7 +545,7 @@ fn limits_are_complete_with_six_words_and_take_the_missing_from_another() {
     );
 }
 
-/// ADR-0394: a trusted room's line carries `+net` words, written back as read; an
+/// ADR-0462: a trusted room's line carries `+net` words, written back as read; an
 /// untrusted room's line with one is a problem (the gate).
 #[test]
 fn net_words_are_read_written_and_bounded() {

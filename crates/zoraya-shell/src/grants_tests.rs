@@ -60,6 +60,7 @@ fn go(
         grants: &grants,
         nets: &[],
         base_system: base,
+        room: None,
     })
 }
 
@@ -1360,11 +1361,26 @@ fn a_cluster_with_r_still_reads_only() {
 fn a_room_grant_cannot_name_the_own_directory_either() {
     use crate::grants::{own_conflict, own_directory};
     let own = own_directory(&d(SSH_CMD), true, Some("r")).unwrap();
-    let room = |p: &str| vec![String::from(p)];
+    let room = |p: &str| vec![(true, String::from(p))];
     assert!(own_conflict(&own, "/u", &[], &room("/u/work")).is_ok());
     for p in ["/home/.ssh", "/home/.ssh/keys"] {
         assert!(own_conflict(&own, "/u", &[], &room(p)).is_err(), "{p}");
     }
+    // A write that covers the real directory (`/data/r/ssh` here) is refused too (finding 5);
+    // a read is not.
+    for p in ["/data", "/data/r", "/"] {
+        let r = own_conflict(&own, "/u", &[], &room(p)).unwrap_err();
+        assert!(r.problem.contains("write handle"), "{p}: {}", r.problem);
+        assert!(
+            own_conflict(&own, "/u", &[(true, Value::literal(p))], &[]).is_err(),
+            "{p}"
+        );
+        assert!(
+            own_conflict(&own, "/u", &[(false, Value::literal(p))], &[]).is_ok(),
+            "{p} read"
+        );
+    }
+    assert!(own_conflict(&own, "/u", &[(true, Value::literal("/data/other"))], &[]).is_ok());
 }
 
 /// The program reads short options only: the shell names the short form

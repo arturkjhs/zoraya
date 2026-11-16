@@ -96,3 +96,22 @@ network connection narrowed to them (plus `/system/tls` to read). `tests/gui/ssh
 a room with `+net HOST:PB` logs in to the confined test sshd from its window, is refused another port, a room with
 no words is refused, and ssh-keygen makes a key there. Also fixed here: the CI failure of `candidate-full/10g-b`
 (`closefrom` needed `dirfd` when configure finds `/proc/PID/fd` on a Linux host: patch `0008`).
+
+## Hand checks, as the second review corrects them
+
+- `ssh` and `ssh-keygen` are in `build/rootfs-apps`, which `tools/run-disk.sh` uses only if it exists: run `make fetch-ports`
+  and `make apps` first.
+- At home `ssh -l ada build.example.org` takes the name's *public* answers only: a host on the LAN (a private address)
+  needs `+net build.example.org:22 ssh -l ada build.example.org`, or its address.
+- The room part is typed in a window opened in the room (the chip, then System+Enter), not in the first terminal after
+  `room r` (ADR-0393 item 11): the room must be made `room new r +w ~/r +net build.example.org:22`; its directory is
+  empty, so run `ssh-keygen -t ed25519` there and put that key in the host's `authorized_keys`.
+- `make run-gui` has the Internet through SLIRP; nothing listens in the guest and the key is the person's.
+
+## Second fix pass (docs/tasks/TASK-31-review-10g-2.md)
+
+ADR-0462 now says: the panel's connection to the random service is a launcher's (`ShareLauncher`), the panel's root
+network connection is `REACH | NARROW`, and a room's words BOUND a line and give it nothing. Also: `own_conflict` refuses
+a `+w` that covers the own directory; a bad `+net` word is said once and ignored; `room new` compares words by the rules;
+`tools/test-map.txt` sends the room script, the panel, `init` and the rest to `test-apps`; the shim no longer shadows
+`libc.a`'s `socketpair`; every citation of the number 0394 is 0462.

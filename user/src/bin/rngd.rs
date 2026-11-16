@@ -139,6 +139,8 @@ impl Rngd {
             if let Some(c) = self.ends[id].as_mut() {
                 c.conn = conn;
             }
+            // A launcher's share (ADR-0462) makes a launcher's connection, `init`'s depth.
+            let launcher = matches!(action, Action::ShareLauncher { .. });
             match action {
                 Action::Reply(n) => {
                     for h in &handles[..count] {
@@ -149,12 +151,17 @@ impl Rngd {
                         return;
                     }
                 }
-                Action::Share { reply, attach } => {
+                Action::Share { reply, attach } | Action::ShareLauncher { reply, attach } => {
                     let given = handles[0];
+                    let made = if launcher {
+                        zoraya_rng::Conn::launcher()
+                    } else {
+                        conn.child()
+                    };
                     let ok = count == 1
                         && handle_type(given) == Ok("channel")
                         && attach
-                        && self.attach(given, conn.child(), Some(id));
+                        && self.attach(given, made, Some(id));
                     if !ok {
                         let _ = handle_close(given);
                         if attach {

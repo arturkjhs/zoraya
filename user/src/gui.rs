@@ -445,7 +445,7 @@ impl Gui {
         services: (Option<Handle>, Option<Handle>),
     ) -> Option<Running> {
         // The random service (slot 11) and the root network connection
-        // (slot 12) of the shells the panel starts (ADR-0394): moved in with
+        // (slot 12) of the shells the panel starts (ADR-0462): moved in with
         // the spawn, closed here when the panel does not start.
         let close_services = || {
             for h in [services.0, services.1].into_iter().flatten() {

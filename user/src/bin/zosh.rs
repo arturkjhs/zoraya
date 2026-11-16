@@ -786,7 +786,7 @@ struct Z {
     /// The CPU share of each room since this shell last asked (`top`).
     usage_tracker: zoraya_rooms::Tracker,
     /// The `+net` words the panel started this shell's room with (`--net`,
-    /// ADR-0394): what the network connection at slot 9 reaches. A shell that
+    /// ADR-0462): what the network connection at slot 9 reaches. A shell that
     /// enters a room by `room NAME` takes the table's.
     launch_nets: Vec<String>,
 }
@@ -998,14 +998,6 @@ impl Z {
         self.plan_with(exec, &d, base).map(Some)
     }
 
-    /// The `+net` words of the room the shell is in (none at home).
-    fn room_nets(&self) -> Vec<String> {
-        self.room
-            .as_ref()
-            .map(|r| r.nets.clone())
-            .unwrap_or_default()
-    }
-
     /// The network connection the line gives its command (ADR-0224 item 2,
     /// `zoraya_shell::netgrant`): a value where a literal `url` is needed
     /// refuses the line.
@@ -1015,7 +1007,7 @@ impl Z {
         };
         // untrusted-gate: web-refusal-call (the POSIX path below has its own)
         self.refuse_web_in_untrusted_room(&d)?;
-        let net = Self::net_grant_with(exec, &d, base, &self.cwd, &self.room_nets())?;
+        let net = Self::net_grant_with(exec, &d, base, &self.cwd, self.room.as_ref())?;
         if net.is_some() {
             // untrusted-gate: net-refusal-call (the POSIX path below has its own)
             self.refuse_net_in_untrusted_room(exec.name)?;
@@ -1077,30 +1069,27 @@ impl Z {
         d: &Description,
         base: bool,
         cwd: &str,
-        room_nets: &[String],
+        room: Option<&zoraya_settings::rooms::Room>,
     ) -> Result<Option<(u32, Vec<u8>)>, String> {
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
         let parsed = match zoraya_command::parse(d, &texts) {
             Ok(zoraya_command::Outcome::Run(p)) => p,
             _ => zoraya_command::Parsed::default(),
         };
-        // The room's `+net` words stand on every line of its terminals, as the
-        // person's own (ADR-0224 item 2, ADR-0394): a host from a value
-        // designates inside them.
-        let mut nets: Vec<zoraya_shell::eval::Value> = exec.nets.to_vec();
-        nets.extend(
-            room_nets
-                .iter()
-                .map(|w| zoraya_shell::eval::Value::literal(w)),
-        );
+        // The room's `+net` words bound the line and let a value designate
+        // inside them; they give it no network (ADR-0224 item 2, ADR-0462).
         let line = grants::Line {
             description: d,
             parsed: &parsed,
             args: exec.args,
             cwd,
             grants: exec.grants,
-            nets: &nets,
+            nets: exec.nets,
             base_system: base,
+            room: room.map(|r| grants::RoomBound {
+                name: &r.name,
+                words: &r.nets,
+            }),
         };
         zoraya_shell::netgrant::net_for(&line).map_err(|r| {
             let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
@@ -1125,7 +1114,7 @@ impl Z {
         };
         // untrusted-gate: web-refusal-call (the native path above has its own)
         self.refuse_web_in_untrusted_room(d)?;
-        Self::net_grant_with(exec, d, true, &self.cwd, &self.room_nets())
+        Self::net_grant_with(exec, d, true, &self.cwd, self.room.as_ref())
     }
 
     /// ADR-0324 item 7: a description's `net web` is never honoured in an
@@ -1163,9 +1152,29 @@ impl Z {
         // Each POSIX program counts against an account of its own, carved
         // from the shell's (ADR-0262 item 2; Q3): what it opens does not use
         // up the shell's, or another program's, connections.
-        Ok(self.net.and_then(|root| {
-            zoraya_user::netclient::narrow_account(root, rights, POSIX_NET_BUDGET, &scope).ok()
-        }))
+        let Some(root) = self.net else {
+            return Ok(None);
+        };
+        // At the limit (the network service carves a few accounts at once,
+        // session-wide) or when the room's connection refuses a wider scope, the
+        // line is refused with the reason, not run without a connection
+        // (review of 10g, finding 2).
+        zoraya_user::netclient::narrow_account(root, rights, POSIX_NET_BUDGET, &scope)
+            .map(Some)
+            .map_err(|status| {
+                let (problem, hint) = if status == zoraya_proto_net::status::OVER_QUOTA {
+                    (
+                        "the network has no room for another program's connection",
+                        "programs that use the network hold one each, a few at once: wait for one to end (jobs)",
+                    )
+                } else {
+                    (
+                        "the network service refused this program's connection",
+                        "the room's +net words (room) bound what a line may reach",
+                    )
+                };
+                zoraya_command::error("zosh", Some(exec.name), problem, &[hint])
+            })
     }
 
     /// The plan of a line running `exec` under description `d` (rules 1
@@ -1192,6 +1201,7 @@ impl Z {
             grants: exec.grants,
             nets: exec.nets,
             base_system: base,
+            room: None,
         };
         let planned = grants::plan(&line).and_then(|p| {
             // Rule 5: designated paths through link objects.
@@ -1790,10 +1800,15 @@ impl Z {
                 &["write the line without HOME="],
             ));
         }
-        let room_paths: Vec<String> = self
+        let room_paths: Vec<(bool, String)> = self
             .room
             .as_ref()
-            .map(|r| r.grants.iter().map(|g| self.room_path(&g.path)).collect())
+            .map(|r| {
+                r.grants
+                    .iter()
+                    .map(|g| (g.write, self.room_path(&g.path)))
+                    .collect()
+            })
             .unwrap_or_default();
         grants::own_conflict(&own, &self.cwd, exec.grants, &room_paths).map_err(|r| {
             let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
@@ -3967,6 +3982,22 @@ impl Z {
                 ],
             ));
         }
+        // A `+net` word of the room's line that is no word (a hand edit of
+        // /config/rooms) is said once and dropped: it must not make every
+        // command of the room fail (review of 10g, finding 9).
+        let mut room = room;
+        let mut dropped = String::new();
+        room.nets
+            .retain(|w| match zoraya_shell::netgrant::parse_word(w) {
+                Ok(_) => true,
+                Err(why) => {
+                    dropped.push_str(&format!("room {name}: +net {w}: {why}: ignored\n"));
+                    false
+                }
+            });
+        if !dropped.is_empty() {
+            show(&dropped);
+        }
         // The room's one job (ADR-0269 point 4): asked for before anything
         // else changes, so that a refusal leaves the shell where it was.
         self.join_room_job(&room)?;
@@ -4451,7 +4482,7 @@ impl Z {
                 let mut nets: Vec<String> = Vec::new();
                 for pair in rest.chunks(2) {
                     if pair[0] == "+net" {
-                        // ADR-0394: the room's terminals get the network narrowed to
+                        // ADR-0462: the room's terminals get the network narrowed to
                         // these words. A room holds only what its creator holds: a
                         // shell with no network root has none to give, and a room's
                         // shell gives no word its own room lacks.
@@ -4469,7 +4500,7 @@ impl Z {
                         if self
                             .room
                             .as_ref()
-                            .is_some_and(|r| !r.nets.iter().any(|n| n == pair[1]))
+                            .is_some_and(|r| !zoraya_shell::netgrant::word_within(pair[1], &r.nets))
                         {
                             return fail(
                                 io,
@@ -4844,7 +4875,7 @@ impl Host for Z {
             self.refuse_web_in_untrusted_room(&d)
                 .ok()
                 .and_then(|()| {
-                    Self::net_grant_with(exec, &d, base, &self.cwd, &self.room_nets()).ok()
+                    Self::net_grant_with(exec, &d, base, &self.cwd, self.room.as_ref()).ok()
                 })
                 .flatten()
         } else if self.lookup(exec.name) == Found::Program

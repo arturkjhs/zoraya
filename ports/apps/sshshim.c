@@ -26,14 +26,6 @@ struct servent *getservbyname(const char *name, const char *proto)
 	return NULL;
 }
 
-/* sshconnect.c: ProxyCommand, ProxyJump. */
-int socketpair(int domain, int type, int protocol, int sv[2])
-{
-	(void)domain; (void)type; (void)protocol; (void)sv;
-	errno = ENOSYS;
-	return -1;
-}
-
 /* sshconnect.c: BindInterface. */
 struct ifaddrs;
 int getifaddrs(struct ifaddrs **ifap)

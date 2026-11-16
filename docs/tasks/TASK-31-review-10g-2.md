@@ -202,3 +202,32 @@ Run here (a throwaway worktree at `405b51a5`):
   `Own` arms of spawn and fork are tested and the mutants listed (`tools/mutants/own-directory.toml`); the
   `files-write.script` refusal step; `known_hosts.old` by copy; INV-0340-1/-2, INV-0341-4/-5/-6 Status texts say what
   runs and what does not; ADR-0393 has no collision; one OpenSSH port, one `sshshim.c`; the series applies in order.
+
+## Dispositions (fix pass)
+
+1. **Fixed.** `rngd` has a launcher's connection (`ShareLauncher`, only `init`'s own may ask, a launcher cannot make
+   another); `init` gives the panel one, so its shells are depth 1. `a_launchers_shells_are_shells_not_programs`
+   (`zoraya-rng`) is the reviewer's scratch test made real. Recorded in ADR-0462 item 2 (a row of ADR-0288/0435's table).
+2. **Fixed, decision recorded** (ADR-0462 Option A; docs/architect-queue.md section B): a room's words bound a line and
+   give it nothing. `net_for` takes the room (`Line.room`), refuses a rule outside the words naming them, and gives a
+   connection only when the line asks; `posix_net` refuses a line at `netd`'s account limit with a reason.
+   Host test `a_rooms_words_bound_a_line_and_give_it_nothing`; `ssh-room.script` checks `grants` and the refusal.
+   *Not tested in QEMU:* four room programs not starving home (the host test shows a line that asks for nothing gets
+   no connection).
+3. **Fixed.** Every citation of 0394 is 0462 (the architect's reservation of 0460 to 0469 for TASK-31).
+4. **Fixed.** The room bound is built in the shell for both shells (the first terminal after `room r` and a room's
+   window): a rule outside the words is refused with the words in the hint.
+5. **Fixed.** `own_conflict` refuses a `+w` (line or room) that covers the own directory; host test.
+6. **Fixed.** The panel's root connection is `REACH | NARROW`.
+7. **Fixed.** `tools/test-map.txt` sends the room script, `panel.rs`, `zoraya-panel`, `init.rs`, `gui.rs`,
+   `zoraya-settings`, `netgrant.rs`, `random.rs` and `rngd.rs` to `test-apps`; `zoraya_panel::net_words` is the choice
+   of words per launch, with a host test (home and a room without words get none).
+8. **Fixed.** INV-0340-4's Status says "checked: ... (partly: ...)" with the false half named; the architect decides
+   the new text (queue, section B). A proposed ADR for the changed invariant is the architect's to ask for.
+9. **Fixed.** A bad word is said once at `room NAME` and ignored; the panel gives the good words only; host test.
+10. **Fixed.** `room new` compares words with the rules' `within` (`word_within`); host test. The refusal paths have a
+    host test of the comparison, not a QEMU run.
+11. **Done.** The four hand-check corrections are in the part report.
+12. **Done.** The script header says it.
+13. **Fixed.** `socketpair` is out of the shim.
+14. **Fixed.** ADR-0462 is rewritten (Depends on, Options with descriptions and costs, Consequences, open questions).

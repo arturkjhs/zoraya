@@ -9,6 +9,10 @@
 #                                           prints "PORTA PORTB USER FPA FPB" (one line)
 #   tools/test-sshd.sh stop DIR             ends the servers
 #
+# Left behind on purpose: the keys stay under DIR (build/apps-sshd, and in the test disks) after the run; the
+# servers end, so the client key opens nothing afterwards. `ForceCommand` is run by the test user's login shell, which
+# reads that user's start-up files (and /etc/ssh/sshrc if present): not the guest's to choose.
+#
 # Server A shows the key `host_a`; B shows `host_b`. DIR/wrong.pub is a key
 # neither shows, for the test that stores a key for A's address that is not A's
 # (a changed host key, INV-0340-3).

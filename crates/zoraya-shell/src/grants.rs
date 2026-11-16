@@ -128,6 +128,17 @@ pub struct Line<'a> {
     /// The description is the system image's own (ADR-0153's Decision):
     /// only then are kinds other than `read` designated.
     pub base_system: bool,
+    /// The room the line runs in, with its `+net` words (ADR-0224 item 2,
+    /// ADR-0462): they bound what the line may be given and let a value
+    /// designate inside them; they give a line nothing by themselves.
+    pub room: Option<RoomBound<'a>>,
+}
+
+/// A room's name and `+net` words, as the bound of a line's network.
+#[derive(Debug, Clone, Copy)]
+pub struct RoomBound<'a> {
+    pub name: &'a str,
+    pub words: &'a [String],
 }
 
 /// Why a line may not run (rule 3, rule 4).
@@ -857,15 +868,15 @@ pub fn own_conflict(
     own: &Own,
     cwd: &str,
     grants: &[(bool, Value)],
-    room_paths: &[String],
+    room_paths: &[(bool, String)],
 ) -> Result<(), Refused> {
     // A room's grants too (absolute): a room entry on the view path would
     // sit beside the own entry with the same prefix.
-    let room = room_paths.iter().map(|p| (p.clone(), p.clone()));
+    let room = room_paths.iter().map(|(w, p)| (*w, p.clone(), p.clone()));
     let line = grants
         .iter()
-        .map(|(_, v)| (join(cwd, 0, &v.text), v.text.clone()));
-    for (abs, shown_as) in line.chain(room) {
+        .map(|(w, v)| (*w, join(cwd, 0, &v.text), v.text.clone()));
+    for (write, abs, shown_as) in line.chain(room) {
         if covers(&own.view, &abs) {
             return Err(Refused {
                 subject: shown_as,
@@ -876,6 +887,21 @@ pub fn own_conflict(
                 hint: Some(format!(
                     "to read the files yourself, name them: cat {}/FILE",
                     own.real
+                )),
+            });
+        }
+        // A `+w` that covers the real directory (`/data`, `/data/home`, the room's own
+        // `/data/ROOM`) would be a writable entry a child inherits beside the read-only
+        // one of the own entry (ADR-0341 item 7, review of 10g-2, finding 5).
+        if write && covers(&abs, &own.real) {
+            return Err(Refused {
+                subject: shown_as,
+                problem: format!(
+                    "would give a write handle on {}, {}'s own directory, to its children",
+                    own.real, own.name
+                ),
+                hint: Some(String::from(
+                    "give a narrower directory, or +r: the program is given its own files already",
                 )),
             });
         }
