@@ -1867,6 +1867,24 @@ fn patterned_elf(pages: u64) -> Vec<u8> {
     f
 }
 
+/// As [`patterned_elf`], with an RW segment of `data_pages` pages of file bytes
+/// after the text, as a real program is laid out.
+fn patterned_elf_with_data(text_pages: u64, data_pages: u64) -> Vec<u8> {
+    let mut f = patterned_elf(text_pages + data_pages);
+    f[56..58].copy_from_slice(&2u16.to_le_bytes());
+    // The text: the first `text_pages`.
+    f[64 + 32..64 + 40].copy_from_slice(&(text_pages * PAGE_SIZE).to_le_bytes());
+    f[64 + 40..64 + 48].copy_from_slice(&(text_pages * PAGE_SIZE).to_le_bytes());
+    let ph = 64 + 56;
+    f[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+    f[ph + 4..ph + 8].copy_from_slice(&6u32.to_le_bytes()); // R W
+    f[ph + 8..ph + 16].copy_from_slice(&((1 + text_pages) * PAGE_SIZE).to_le_bytes());
+    f[ph + 16..ph + 24].copy_from_slice(&(0x40_0000 + text_pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 32..ph + 40].copy_from_slice(&(data_pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 40..ph + 48].copy_from_slice(&(data_pages * PAGE_SIZE).to_le_bytes());
+    f
+}
+
 /// INV-0438-1: a segment of many steps (200 pages, four pieces) is in the
 /// image byte for byte, where the file had it, and nothing else is.
 fn an_images_pages_hold_the_files_bytes_piece_by_piece() {
@@ -1929,6 +1947,26 @@ fn an_image_of_a_large_program_is_bounded() {
         "{units} units in an interval of image_create of {PAGES} pages of text (INV-0270-1)"
     );
     drop((text_image, text_object));
+    crate::reaper::drain();
+    // A real program is laid out text then data: the last cleans of the text
+    // and the first piece of the data copy must not share an interval.
+    let both = patterned_elf_with_data(PAGES, 128);
+    let both_object = file_object(&both);
+    let mut made_both = None;
+    let units = measured(&mut || {
+        made_both = Some(process::image_from(
+            &both_object,
+            both.len() as u64,
+            &creator,
+        ));
+    });
+    let both_image = made_both.expect("ran").expect("an image of text and data");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create of text then data (INV-0270-1)"
+    );
+    assert_eq!(both_image.program.segments().len(), 2);
+    drop((both_image, both_object));
     crate::reaper::drain();
     let mut made = None;
     let units = measured(&mut || {

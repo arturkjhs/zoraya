@@ -718,6 +718,9 @@ pub fn keep_program(
                 }
             }
             text = true;
+            // The last cleans must not share an interval with the next
+            // segment's first piece (up to 2 * STEP units otherwise).
+            steps::between()?;
         }
     }
     if text {

@@ -87,3 +87,13 @@ find = '''    // point before the first piece, so that they are not added to it.
     steps::between()?;'''
 replace = '''    // point before the first piece, so that they are not added to it.'''
 note = "INV-0438-4: the object's last frames and the first piece in one interval (128 units, found by the test)"
+
+[[mutant]]
+id = "F6-no-step-after-the-cache-loop"
+file = "kernel/src/process.rs"
+find = '''            text = true;
+            // The last cleans must not share an interval with the next
+            // segment's first piece (up to 2 * STEP units otherwise).
+            steps::between()?;'''
+replace = '''            text = true;'''
+note = "INV-0438-4: the text's last 64 cleans and the data's first 64-page piece in one interval (128 units; re-check R1)"

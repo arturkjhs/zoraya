@@ -206,7 +206,6 @@ could be a table entry of kind `Ramdisk` later).
 - Whether tcc's ARM64 ELF output needs a patch for the loader's range or alignment checks: the first toolchain task
   finds out with a host-side `zoraya-elf` check of tcc's output before anything boots.
 - The cost of the two copies on W4's 3,002 `exec`s: ADR-0110.
-- *Open-question note (ADR-0001 rule 6; F6, 2026-11-16, ADR-0438, proposed):* since plan part F6 `image_create` copies the program's pages into an object of its own, so "a creator who rewrites them harms only the child it spawns" no longer holds: rewriting the object or the file after the call changes no child; `spawn` maps the read-only pages of the image as they are and copies the writable ones.
 - As of TASK-16 (ADR-0001 rule 6): INV-0108-1 and -2 are checked. INV-0108-3 needs `libposix`'s `execve`, which is stage 6c and 6d work, and INV-0108-4 the toolchain inside Zoraya (6b, 6e); neither can be checked before them. INV-0108-2's test writes the ramdisk's `hello` to the test volume through `fsd` and reads it back into a memory object, because the test volume is made from `rootfs/` and holds no program.
 
 ## Revisit triggers
