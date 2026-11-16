@@ -60,9 +60,9 @@ simplest, safest and most reversible choice, so that the architect can accept or
    10g keeps that one shim (without its early-build marker, since the programs are now in the apps' image) and finds no
    other name undefined after the merge. None is reached on a path a Zoraya ssh takes.
 8. **The port.** OpenSSH portable 10.6p2 and ADR-0346's four patches (`0001` to `0004`: the include, no configuration
-   file and no `-o`/`-F`, no options after the host, a user name needed, no askpass, no DNS host-key check) plus three
+   file and no `-o`/`-F`, no options after the host, a user name needed, no askpass, no DNS host-key check) plus four
    of 10g under `__zoraya__`: `0005` (`getopt` offers only `-T -V -t -v -l -p`), `0006` (no agent), `0007` (no hard
-   links: `known_hosts.old` is a copy and `known_hosts` stays until replaced; `ssh-keygen -R` renames). The message of
+   links: `known_hosts.old` is a copy and `known_hosts` stays until replaced; `ssh-keygen -R` renames) and `0008` (`closefrom` closes descriptors one by one: configure finds `/proc/PID/fd` on a Linux build host, and `libc.a` has no `dirfd`). The message of
    a missing user name is ADR-0346's.
 9. **The test server** is the host's own `sshd` on the loopback with throwaway keys (`tools/test-sshd.sh`), reached
    through `--net-guestfwd` relays; the guest's client key is placed on the test disk with mode 600. CI's image and
@@ -76,7 +76,7 @@ simplest, safest and most reversible choice, so that the architect can accept or
     above; `own_connection` finds the deepest level that opens and makes only the levels below it. The first
     terminal's shell, after `room r`, does not hold `/data/r`: ssh and ssh-keygen are refused there with a hint that
     says so and names a terminal in the room (the alternative, a hold on all of `/data`, would reach every room's and
-    every application's files).
+    every application's files). A room's terminals get the random service and the network its words allow (ADR-0462).
 12. **Options.** A description with `data` or `reach` is held to its options; the program reads short options only, so a
     long form is refused with the short one named; `--help` with other words is refused; the first `-p` is the port, as
     OpenSSH reads it; `ssh://...` is refused as a host. A room's grant on the view path is refused like a line's.

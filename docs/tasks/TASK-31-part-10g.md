@@ -85,7 +85,14 @@ host. In a room (`room new r +net build.example.org:22`): the same line, an empt
 
 `origin/work/10d` (with ports-early) is merged: one OpenSSH port. The review's must-fix and should-fix findings are
 fixed or recorded; the room-terminal test (`tests/gui/ssh-room.script`, run by `tools/test-apps-ssh.sh` in
-`make test-apps`) fails with the old `own_connection` and passes with the fix. Found and left open: a terminal the
-panel starts has no network and no random service, so ssh and ssh-keygen cannot run in it (architect's decision).
+`make test-apps`) fails with the old `own_connection` and passes with the fix. (That gap, found there, was closed by the architect's decision of 2026-11-16: proposed ADR-0462, below.)
 Run: `make check`, `make test-changed` (all steps green but the skipped `test-python*`), `make test-apps`'s ssh steps
 (console 102 steps, room window 20 steps). Not run: CI, `FULL=1`, mutation runs, a root sshd (`/run/sshd`).
+
+## Room terminals' random service and network (the architect's decision of 2026-11-16; proposed ADR-0462)
+
+Rooms carry `+net` words; the panel gives each terminal's shell its own random connection and, in a room with words, a
+network connection narrowed to them (plus `/system/tls` to read). `tests/gui/ssh-room.script` (in `make test-apps`):
+a room with `+net HOST:PB` logs in to the confined test sshd from its window, is refused another port, a room with
+no words is refused, and ssh-keygen makes a key there. Also fixed here: the CI failure of `candidate-full/10g-b`
+(`closefrom` needed `dirfd` when configure finds `/proc/PID/fd` on a Linux host: patch `0008`).

@@ -772,11 +772,18 @@ fn main() -> i32 {
                 Some((manage, theirs, ours))
             });
             let window = channel_create().ok();
+            // The terminals it starts get their own random connection and, in a room
+            // with `+net` words, the network narrowed to them (ADR-0394).
+            let panel_random = rng
+                .as_ref()
+                .and_then(|(_, conn)| zoraya_user::random::share(*conn));
+            let panel_net = network.as_ref().and_then(root_connection);
             panel = g.start_panel(
                 &s.root,
                 registration,
                 keeper.map(|k| (k.0, k.1)),
                 window.map(|w| w.1),
+                (panel_random, panel_net),
             );
             if panel.is_some() {
                 shell_window = window.map(|w| w.0);

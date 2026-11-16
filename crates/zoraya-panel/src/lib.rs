@@ -58,12 +58,29 @@ pub enum Give {
     Broker,
     /// That broker's temporary service's root, the shell's `/tmp`.
     Tmp,
+    /// The random service: a connection of its own to it, for every terminal's
+    /// shell, in a room or at home (ADR-0394), so that the C programs it
+    /// starts can seed OpenSSL's and OpenSSH's generators. It reveals
+    /// nothing of other rooms: each shell has its own.
+    Random,
+    /// The network: a connection narrowed to the room's `+net` words, for the
+    /// shell of a terminal in a room that has any (ADR-0394, ADR-0224 item
+    /// 2); none else is given one.
+    Net,
     /// A `Room(R)` channel to the room keeper (ADR-0269 point 3): the
     /// shell of a terminal in a room only, for `grants`' limits line, `top`
     /// and the quota hint. Nothing else in a room holds a keeper channel
     /// (INV-0269-2).
     Keeper,
 }
+
+/// The directory of the system's roots (ADR-0228 item 3).
+pub const TLS_DIR: &str = "/system/tls";
+
+/// The slots of a shell's network and random connections, `init`'s own
+/// shell's (ADR-0221 item 4, ADR-0227 item 3).
+pub const NET_SLOT: u32 = 9;
+pub const RANDOM_SLOT: u32 = 10;
 
 /// The slot of a room shell's `Room(R)` channel to the keeper.
 pub const KEEPER_SLOT: u32 = 11;
@@ -365,6 +382,12 @@ pub fn terminal(room: Option<&Room>) -> Launch {
         Some(r) => {
             args.push(String::from("--room"));
             args.push(r.name.clone());
+            // The room's `+net` words, for the shell's own view of its room
+            // (ADR-0394): what the connection it is given reaches.
+            if !r.nets.is_empty() {
+                args.push(String::from("--net"));
+                args.push(r.nets.join(" "));
+            }
             line = format!("room {} term", r.name);
             let mut holds: Vec<(String, bool)> =
                 r.grants.iter().map(|g| (g.path.clone(), g.write)).collect();
@@ -375,6 +398,12 @@ pub fn terminal(room: Option<&Room>) -> Launch {
                     }
                 }
             }
+            // A POSIX program with a network is given the system's roots to read
+            // (ADR-0311 item 4), which only a shell that holds them can give
+            // (ADR-0394): a room with `+net` words holds `/system/tls`, read only.
+            if !r.nets.is_empty() && !r.grants.iter().any(|g| covers(&g.path, TLS_DIR)) {
+                holds.push((String::from(TLS_DIR), false));
+            }
             holds
         }
         None => HOME_GRANTS
@@ -382,7 +411,11 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             .map(|(p, w)| (String::from(*p), *w))
             .collect(),
     };
-    let entries = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
+    let mut entries: Vec<String> = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
+    // The network the shell is given is shown as the room's words (ADR-0394).
+    if let Some(r) = room {
+        entries.extend(r.nets.iter().map(|n| format!("+net {n}")));
+    }
     // ADR-0341 item 2: the shell's own entry `/data/ROOM` (`/data/home` for
     // the first terminal), to change anything in, so that it can make and
     // give the directory of a program's own files. It is not a grant of the
@@ -449,6 +482,14 @@ pub fn terminal(room: Option<&Room>) -> Launch {
                     Slot {
                         slot: 8,
                         give: Give::Tmp,
+                    },
+                    Slot {
+                        slot: NET_SLOT,
+                        give: Give::Net,
+                    },
+                    Slot {
+                        slot: RANDOM_SLOT,
+                        give: Give::Random,
                     },
                 ],
                 args,

@@ -20,6 +20,8 @@ pub const SLOTS: u8 = 4;
 pub const MAX_ROOMS: usize = 32;
 /// Grants of one room.
 pub const MAX_GRANTS: usize = 16;
+/// The most `+net` words a room's line has (ADR-0224 item 1, ADR-0394).
+pub const MAX_NETS: usize = 8;
 /// The longest room name, in bytes.
 pub const MAX_NAME: usize = 24;
 /// The longest path of a grant, in bytes.
@@ -324,6 +326,17 @@ pub struct Room {
     /// The limit words of the line (ADR-0266).
     pub limits: Limits,
     pub grants: Vec<Grant>,
+    /// The `+net` words of the line (ADR-0224 items 1 and 2, ADR-0394), as
+    /// written after `+net`: what the network connection of the room's
+    /// terminals reaches. Empty: no network.
+    pub nets: Vec<String>,
+}
+
+/// Whether `word` can be the argument of a `+net` in a room's line: one
+/// non-empty word of printable ASCII, no space. Its meaning (a host, a
+/// suffix, an address, a port) is the shell's `netgrant::parse_word`.
+pub fn is_net_word(word: &str) -> bool {
+    !word.is_empty() && word.len() <= 100 && word.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
 }
 
 impl Room {
@@ -343,6 +356,10 @@ impl Room {
         for g in &self.grants {
             s.push(' ');
             s.push_str(&g.words());
+        }
+        for n in &self.nets {
+            s.push_str(" +net ");
+            s.push_str(n);
         }
         s
     }
@@ -418,7 +435,7 @@ fn words(mut s: &str) -> Result<Vec<String>, &'static str> {
         }
         let (w, rest) = split_value(s)?;
         out.push(w);
-        if out.len() > 4 + 2 * (MAX_GRANTS + LIMIT_WORDS.len()) {
+        if out.len() > 4 + 2 * (MAX_GRANTS + MAX_NETS + LIMIT_WORDS.len()) {
             return Err("too many grants");
         }
         s = rest;
@@ -446,6 +463,7 @@ fn parse(text: &str) -> Result<Option<Room>, String> {
         colour: 0,
         limits: Limits::default(),
         grants: Vec::new(),
+        nets: Vec::new(),
     };
     let mut i = 1;
     let mut colour = None;
@@ -500,9 +518,25 @@ fn parse(text: &str) -> Result<Option<Room>, String> {
                 });
                 i += 1;
             }
+            "+net" => {
+                let word = w
+                    .get(i + 1)
+                    .ok_or(format!("{name}: +net needs a host, an address or a suffix"))?;
+                if !is_net_word(word) {
+                    return Err(format!(
+                        "{name}: {}: not a word after +net",
+                        quote_value(word)
+                    ));
+                }
+                if room.nets.len() == MAX_NETS {
+                    return Err(format!("{name}: more than {MAX_NETS} +net words"));
+                }
+                room.nets.push(word.clone());
+                i += 1;
+            }
             other => {
                 return Err(format!(
-                    "{name}: {}: not --untrusted, --colour N, a limit word, +r PATH or +w PATH",
+                    "{name}: {}: not --untrusted, --colour N, a limit word, +r PATH, +w PATH or +net WORD",
                     quote_value(other)
                 ));
             }
@@ -513,6 +547,10 @@ fn parse(text: &str) -> Result<Option<Room>, String> {
         return Err(format!(
             "{name}: an untrusted room has the reserved colour, not --colour"
         ));
+    }
+    if room.untrusted && !room.nets.is_empty() {
+        // No network for an untrusted room until stage 2's tests (the gate).
+        return Err(format!("{name}: an untrusted room has no +net word yet"));
     }
     if !room.untrusted && room.limits.tmp.is_some() {
         return Err(format!("{name}: --tmp is for untrusted rooms only"));

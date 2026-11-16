@@ -1021,3 +1021,23 @@ fn ssh_from_a_value_needs_a_net_word_and_a_bad_port_gives_nothing() {
     // A name that is no host.
     assert!(go(SSH, &[("a b", true)], true).unwrap().is_none());
 }
+
+/// ADR-0394: a room's words make the scope its terminals' connection has.
+#[test]
+fn a_rooms_net_words_make_the_scope_of_its_terminals() {
+    use crate::netgrant::words_scope;
+    assert!(words_scope(&[]).unwrap().is_none());
+    let words = [
+        String::from("10.0.2.50:22"),
+        String::from("build.example.org:2222"),
+    ];
+    let (r, bytes) = words_scope(&words).unwrap().expect("a scope");
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 23, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 51], 22, Protocols::TCP));
+    assert!(s.allows_name("build.example.org", 2222, Protocols::TCP));
+    assert!(!s.allows_name("build.example.org", 22, Protocols::TCP));
+    assert!(words_scope(&[String::from("a b")]).is_err());
+}

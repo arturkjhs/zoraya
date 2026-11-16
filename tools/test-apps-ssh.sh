@@ -55,6 +55,11 @@ mkdir -p "$root/etc/ssh"
 printf '%s\n' "$cfg" > "$root/etc/ssh/ssh_config"
 # The room terminal's disk (tests/gui/ssh-room.script) is the same root without the settings below.
 rm -rf "$root_gui" && cp -R "$root" "$root_gui"
+# The room `netroom` of tests/gui/ssh-room.script has the client key in its own directory.
+mkdir -p "$root_gui/data/netroom/ssh"
+cp "$sshd_dir/client" "$root_gui/data/netroom/ssh/id_ed25519"
+cp "$sshd_dir/client.pub" "$root_gui/data/netroom/ssh/id_ed25519.pub"
+chmod 600 "$root_gui/data/netroom/ssh/id_ed25519"
 # INV-0341-5: `shell.home` is another directory than the image user's home: the own directory and the
 # program's HOME do not follow it.
 mkdir -p "$root/u"
@@ -78,10 +83,11 @@ set -e
 [ "$rc" = 0 ] || exit "$rc"
 
 # The same from a room's terminal window, whose shell holds the room's directory and nothing above it.
-sed -e "s/@HOST@/$NET_HOST/g" -e "s/@PB@/$pb/g" -e "s/@USER@/$user/g" tests/gui/ssh-room.script > "$gui_script"
+sed -e "s/@HOST@/$NET_HOST/g" -e "s/@PA@/$pa/g" -e "s/@PB@/$pb/g" -e "s/@USER@/$user/g" tests/gui/ssh-room.script > "$gui_script"
 set +e
 $RUNNER --timeout "$TIMEOUT" --gui-script "$gui_script" --qmp "$BUILD/apps-ssh-room.qmp" --label apps-ssh-room -- \
-	$RUN_QEMU --test --gui --gui-scale 1 --net --net-guestfwd "$NET_HOST:$pb=$PWD/$HTTPD --relay 127.0.0.1:$pb" \
+	$RUN_QEMU --test --gui --gui-scale 1 --net --net-guestfwd "$NET_HOST:$pa=$PWD/$HTTPD --relay 127.0.0.1:$pa" \
+	--net-guestfwd "$NET_HOST:$pb=$PWD/$HTTPD --relay 127.0.0.1:$pb" \
 	--disk "$disk_gui" --mem 512M --qmp "$BUILD/apps-ssh-room.qmp" --accel "$ACCEL" "$KERNEL"
 rc=$?
 set -e

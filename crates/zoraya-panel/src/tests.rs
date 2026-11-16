@@ -91,6 +91,10 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             (6, Give::Terminal),
             (7, Give::Broker),
             (8, Give::Tmp),
+            // ADR-0394: the random service always, the network when the
+            // room has `+net` words (the panel gives none else).
+            (NET_SLOT, Give::Net),
+            (RANDOM_SLOT, Give::Random),
             (WINDOW_SLOT, Give::Launcher)
         ]
     );
@@ -841,4 +845,38 @@ fn the_reserve_is_out_of_the_sessions_share() {
     assert_eq!(w.admit(room, "netsurf", SESSION_CLIENTS), Err(why::BUSY));
     w.gone(200);
     assert_eq!(w.admit(room, "netsurf", SESSION_CLIENTS), Ok(()));
+}
+
+/// ADR-0394: a room's `+net` words are shown as pills with its grants, and are no hold.
+#[test]
+fn a_rooms_net_words_are_pills_and_no_hold() {
+    let mut p = Panel::default();
+    assert!(p.reload(b"ops --colour 1 +w ~/ops +net build.example.org:22 +net 10.0.2.50:22\n"));
+    assert_eq!(p.pressed(ROOM, 1), Action::Entered);
+    let Action::Launch(l) = p.pressed(LAUNCH, 0) else {
+        panic!()
+    };
+    assert_eq!(
+        l.entries,
+        [
+            "+w ~/ops",
+            "+r /bin",
+            "+r /usr",
+            "+r /etc",
+            "+r /system/tls",
+            "+net build.example.org:22",
+            "+net 10.0.2.50:22"
+        ]
+    );
+    assert!(l.holds.iter().all(|(h, _)| !h.contains("net")));
+    assert_eq!(l.room.as_ref().unwrap().nets.len(), 2);
+    assert_eq!(
+        spawned(&l)[1].2,
+        [
+            "--room",
+            "ops",
+            "--net",
+            "build.example.org:22 10.0.2.50:22"
+        ]
+    );
 }

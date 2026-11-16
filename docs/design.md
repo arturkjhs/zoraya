@@ -2337,6 +2337,15 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   data_names` keeps the descriptions and the panel's applications to it. `grants` shows both paths. A child of such a
   program gets the directory to read only (`libposix` `clone_read_only`, spawn and fork), and a link outside it is not
   followed into it. Proposed ADR-0393 holds the shapes.
+- **Room terminals' services** (proposed ADR-0462, the architect's decision of 2026-11-16). A room's line may carry
+  `+net WORD` words (`room new NAME +w ~/x +net HOST:PORT`, at most eight; none in an untrusted room). The panel gives
+  every terminal's shell, in a room or at home, a random connection of its own (slot 10), and in a room with words a
+  network connection narrowed to `REACH | NARROW` and exactly those words (slot 9, from the root connection `init` gives the
+  panel at slot 12; random at slot 11), plus `/system/tls` to read; the words are also on each line as the person's
+  own (a value host designates inside them) and the frame shows them as pills. A room without words has no network.
+  Not given: status, listen, the services channel (a restart of the network is not followed), and no network at home's
+  second terminals. `tests/gui/ssh-room.script` logs in from a room's window with a word, is refused another port and a
+  room with none, and makes a key.
 - **The shell's own hold.** A terminal's shell holds `/data/home` (first terminal) or `/data/ROOM` (a room's) to change
   anything in, as its own entry: not a room grant, not in `/config/rooms`, not a pill, not listed by `room`. A room's
   shell makes its own directories below that hold only. The first terminal's shell, after `room r`, holds nothing of

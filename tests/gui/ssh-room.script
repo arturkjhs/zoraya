@@ -1,27 +1,59 @@
-# ssh from a room's own terminal window (review of 10g, finding 1; ADR-0341 item 2): the shell of a
-# terminal in a room is a table of the room's grants and `/data/ROOM` and nothing above, so the
-# own directory `/data/ROOM/ssh` is made below the entry that holds it and never from `/data`.
-# `tools/test-apps-ssh.sh` turns @HOST@, @PB@ and @USER@ into values. A terminal the panel starts has no
-# network connection and no random service (only init's first shell gets them: ADR-0221 item 4), so ssh
-# cannot connect here and stops at once; what this run shows is that its own directory is made, which
-# the old code refused ("not granted") before the program started. Open question in ADR-0393.
+# ssh from a room's own terminal windows (review of 10g, finding 1; ADR-0341 item 2; ADR-0394). A terminal the
+# panel starts has the random service always and the network narrowed to its room's `+net` words, so:
+#   - a room made with `+net HOST:PB` logs in to server B (the confined test sshd) with the key in its own
+#     directory `/data/netroom/ssh` (made below the shell's hold, never from `/data`), and is refused server A
+#     (another port: the room's words do not reach it);
+#   - a room with no `+net` word is refused B too, and ssh-keygen still works there.
+# `tools/test-apps-ssh.sh` turns @HOST@, @PA@, @PB@ and @USER@ into values. Server B's key is not stored on this
+# disk, so the first login asks.
 serial init: gui: gpu on its own page
 serial init: device slot
 screen Type help to begin, or help tour.
 screen ~> _
 pause 3000
-type mkdir project\r
+type mkdir n p\r
 screen ~> _
-type room new project +w ~/project\r
-screen project --colour 1 +w ~/project
+type room new netroom +w ~/n +net @HOST@:@PB@\r
+screen netroom --colour 1 +w ~/n +net @HOST@:@PB@
 screen ~> _
+type room new plain +w ~/p\r
+screen plain --colour 2 +w ~/p
+screen ~> _
+# The first room's chip; a terminal in it.
 clickc 2f7f8f 300 719 600 7
 chord meta ret
 origin 105 138
 screen Type help to begin, or help tour.
-screen project ~/project> _
+screen netroom ~/n> _
 click 400 120
-type ssh -p @PB@ -l @USER@ @HOST@ true\r
-pause 4000
-type ls /data/project/ssh; echo made-$status\r
+type ssh -p @PB@ -l @USER@ @HOST@ echo far-in-room\r
+prefix ED25519 key fingerprint is
+type yes\r
+screen echo far-in-room
+screen netroom ~/n> _
+# Another port of the same host is not in the room's words.
+type ssh -p @PA@ -l @USER@ @HOST@ true\r
+screen ssh: connect to host @HOST@ port @PA@: Permission denied
+screen netroom ~/n> _
+# The room's own directory holds the client key the test put there (a person's `ssh-keygen` and a line in
+# the far side's authorized_keys would have): the login above used it, and the host key it stored is there.
+type ls /data/netroom/ssh; echo made-$status\r
 screen made-0
+# The second room has no network word: ssh is refused, its key is made.
+clickc 6b58a8 300 719 600 7
+chord meta ret
+origin 137 170
+screen Type help to begin, or help tour.
+screen plain ~/p> _
+click 450 152
+type ssh -p @PB@ -l @USER@ @HOST@ true\r
+prefix ssh: connect to host @HOST@ port @PB@
+type ssh-keygen -t ed25519\r
+prefix Enter file in which to save the key
+type \r
+prefix Enter passphrase
+type \r
+prefix Enter same passphrase again
+type \r
+type ls /data/plain/ssh; echo made-plain-$status\r
+screen made-plain-0

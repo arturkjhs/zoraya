@@ -297,6 +297,12 @@ struct State {
     root: Option<File>,
     /// The chooser's registration channel (proposed ADR-0245), from `init`.
     chooser: Option<Handle>,
+    /// `init`'s connection to the random service (slot 11): each terminal's
+    /// shell gets one of its own made from it (ADR-0394).
+    random: Option<Handle>,
+    /// `init`'s root network connection (slot 12): each terminal's shell in a
+    /// room with `+net` words gets one narrowed to them (ADR-0394).
+    net: Option<Handle>,
     next_tag: u32,
     port: Handle,
     /// Each launcher channel, the application it was given to and the room
@@ -495,6 +501,15 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         beside.as_ref().map(|b| b.client),
         beside.as_ref().map(|b| b.tmp),
     );
+    // The shell's random service and network (ADR-0394): its own connection to
+    // the service, and the network narrowed to the room's `+net` words, none
+    // when the room has none (the line then meets the usual refusal).
+    let random_root = st.random;
+    let net_root = st.net;
+    let net_scope = l
+        .room
+        .as_ref()
+        .and_then(|r| zoraya_shell::netgrant::words_scope(&r.nets).ok().flatten());
     for (i, p) in l.programs.iter().enumerate() {
         let root = st.root.as_ref();
         let chooser = st.chooser;
@@ -508,6 +523,18 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 zoraya_user::namespace::record(root?, home, &start, &l.holds)
             }
             Give::Chooser => chooser_channel(chooser?, tag, l.app),
+            Give::Random => zoraya_user::random::share(random_root?),
+            Give::Net => {
+                let (rights, scope) = net_scope.as_ref()?;
+                // REACH to the room's words, and `NARROW` so that the shell can carve each
+                // program's own connection from it (an account), as from `init`'s.
+                zoraya_user::netclient::narrow(
+                    net_root?,
+                    *rights | zoraya_abi::net::rights::NARROW,
+                    scope,
+                )
+                .ok()
+            }
             Give::Data => {
                 let d = data_dir(root?, &data_path)?;
                 let h = d.end;
@@ -898,6 +925,8 @@ fn main() -> i32 {
         manager,
         root,
         chooser: channel(7),
+        random: channel(11),
+        net: channel(12),
         next_tag: 1,
         port,
         launchers: Vec::new(),

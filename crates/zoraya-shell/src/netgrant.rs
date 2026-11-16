@@ -258,6 +258,30 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     }))
 }
 
+/// The rights and scope of a room's `+net` words (ADR-0394): what the network
+/// connection of the room's terminals reaches, for `narrow` from the root.
+/// `None` for no word; an `Err` names the first word that is no `+net`
+/// argument. Names have local answers too, as a `+net` word's do on a line
+/// (ADR-0223: the person named the host).
+pub fn words_scope(words: &[String]) -> Result<Option<(u32, Vec<u8>)>, String> {
+    let mut parsed: Vec<NetWord> = Vec::new();
+    for w in words {
+        parsed.push(parse_word(w).map_err(|why| alloc::format!("+net {w}: {why}"))?);
+    }
+    let rules: Vec<ReachRule<'_>> = parsed.iter().map(NetWord::rule).collect();
+    if rules.is_empty() {
+        return Ok(None);
+    }
+    if rules.len() > MAX_RULES {
+        return Err(String::from("too many network rules"));
+    }
+    let mut out = alloc::vec![0u8; 512 + 128 * rules.len()];
+    Ok(encode(&rules, &[], &mut out).map(|n| {
+        out.truncate(n);
+        (rights::REACH, out)
+    }))
+}
+
 /// The rule a `host` operand adds (ADR-0330): the host, a name or a dotted
 /// address, for ICMP echo requests and nothing else: no TCP, no UDP, no
 /// port. Designation as for a `url`: a literal operand adds its own rule, one

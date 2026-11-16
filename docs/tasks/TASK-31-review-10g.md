@@ -303,3 +303,8 @@ programs are in the apps' image; ADR-0346's syslog block is kept, so 10g's own s
 `LDFLAGS` lacked `-L$(PORTS)/ttyshim` (configure could not find `-lsshshim`; fixed for ssh; `git`'s link has the same
 line and is not touched here). `IP_TOS_IS_BROKEN` is defined so that ssh prints no `setsockopt IP_TOS` line per
 connection. The user-name message is ADR-0346's. The invariants Total is recomputed from the rows.
+
+**Update of 2026-11-16.** The gap found under finding 1 (a terminal the panel starts has no network and no random
+service) is closed: proposed ADR-0462 (`+net` words of a room, the panel's random and network connections for each
+terminal). `tests/gui/ssh-room.script` now logs in from a room's window, is refused another port, and a room with no
+word is refused; ssh-keygen works in both.

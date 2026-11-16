@@ -1,0 +1,20 @@
+diff --git a/openbsd-compat/bsd-closefrom.c b/openbsd-compat/bsd-closefrom.c
+index 49a4f35..3122be4 100644
+--- a/openbsd-compat/bsd-closefrom.c
++++ b/openbsd-compat/bsd-closefrom.c
+@@ -16,6 +16,15 @@
+ 
+ #include "includes.h"
+ 
++#ifdef __zoraya__
++/*
++ * Zoraya: libc.a has no dirfd, and the build host's /proc says nothing of the
++ * image (configure finds /proc/PID/fd on Linux and not on macOS). The
++ * descriptors are closed one by one up to the limit, as where there is no /proc.
++ */
++# undef HAVE_PROC_PID
++#endif
++
+ #if !defined(HAVE_CLOSEFROM) || defined(BROKEN_CLOSEFROM)
+ 
+ #include <sys/types.h>

@@ -32,3 +32,4 @@ BSD-2-Clause `LICENSE`**.
 | `git/0002-no-askpass-no-credential-helper.patch` | git 2.56.1 (GPL-2.0-only) | `prompt.c`, `credential.c` | no askpass program, no credential helper in any scope (ADR-0339 items 8 and 9). |
 | `git/0003-no-tls-or-proxy-configuration.patch` | git 2.56.1 (GPL-2.0-only) | `http.c` | the `http.ssl*`, `http.proxy*` and kindred keys are ignored (ADR-0339 item 8). |
 | `git/0004-variables-not-read.patch` | git 2.56.1 (GPL-2.0-only) | `git-compat-util.h`, `wrapper.c` | `getenv` is `zoraya_getenv`, which answers "not set" for the variables that would decide trust, a program to run or the configuration (ADR-0339 item 8). |
+| `openssh/0008-closefrom-without-proc.patch` | OpenSSH portable 10.6p2 (BSD, ISC) | `openbsd-compat/bsd-closefrom.c` | under `__zoraya__`: no `/proc/PID/fd` walk (`HAVE_PROC_PID` undefined): `libc.a` has no `dirfd`, and configure finds `/proc` on a Linux build host and not on macOS (candidate-full/10g-b). |
