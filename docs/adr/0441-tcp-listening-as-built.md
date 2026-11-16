@@ -173,6 +173,9 @@ its own: a listener cannot do more to the client than the client's ends allow, a
 
 ## Open questions
 
+- *Note (rule 6, part F9, 2026-11-16):* the architect's decision above made the loopback per room, built as proposed ADR-0442: item 4, the "machine-wide"
+  paragraph of the decisions for the architect, and INV-0441-2's "a port has at most one" (now: one per room) are replaced by it; the first question
+  below is answered for rooms (an account-scoped loopback is not built).
 - Whether the loopback should be scoped to an account or a room once `netd` knows rooms (item 4), and whether a program with a listen rule and no reach
   rule should reach its own listener.
 - Whether the NIC's address should be listenable (Option B), and the address a listener reports (the wildcard now).

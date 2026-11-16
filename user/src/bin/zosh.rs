@@ -1055,6 +1055,14 @@ impl Z {
             .map_err(|why| zoraya_command::error("zosh", Some(name), why, &[]))
     }
 
+    /// The room a connection made now belongs to (proposed ADR-0442): the
+    /// shell's current room, empty for `home`.
+    fn net_room(&self) -> String {
+        self.room
+            .as_ref()
+            .map_or_else(String::new, |r| r.name.clone())
+    }
+
     /// `net_grant` for a description given: the image's POSIX programs'
     /// as well (N4).
     fn net_grant_with(
@@ -1139,8 +1147,11 @@ impl Z {
         // Each POSIX program counts against an account of its own, carved
         // from the shell's (ADR-0262 item 2; Q3): what it opens does not use
         // up the shell's, or another program's, connections.
+        // The connection is in the shell's current room, which `netd` keys the
+        // loopback by (proposed ADR-0442); the program cannot name another.
+        let room = self.net_room();
         Ok(self.net.and_then(|root| {
-            zoraya_user::netclient::narrow_account(root, rights, POSIX_NET_BUDGET, &scope).ok()
+            zoraya_user::netclient::narrow_room(root, rights, POSIX_NET_BUDGET, &scope, &room).ok()
         }))
     }
 
@@ -1295,7 +1306,8 @@ impl Z {
         // `netd` refuses, the command gets none and says so.
         if let Some((rights, scope)) = net
             && let Some(root) = self.net
-            && let Ok(connection) = zoraya_user::netclient::narrow(root, rights, &scope)
+            && let Ok(connection) =
+                zoraya_user::netclient::narrow_room(root, rights, 0, &scope, &self.net_room())
         {
             handles.push(ChannelEntry {
                 handle: connection,
