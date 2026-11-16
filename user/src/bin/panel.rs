@@ -506,19 +506,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     // when the room has none (the line then meets the usual refusal).
     let random_root = st.random;
     let net_root = st.net;
-    let net_scope = Some(zoraya_panel::net_words(l))
-        .filter(|w| !w.is_empty())
-        .and_then(|nets| {
-            // A word the reader let through that is no `+net` argument gives
-            // nothing and takes no other word with it (the shell says which,
-            // once, when the room is entered).
-            let good: Vec<String> = nets
-                .iter()
-                .filter(|w| zoraya_shell::netgrant::parse_word(w).is_ok())
-                .cloned()
-                .collect();
-            zoraya_shell::netgrant::words_scope(&good).ok().flatten()
-        });
+    let net_scope = zoraya_shell::netgrant::room_scope(zoraya_panel::net_words(l));
     for (i, p) in l.programs.iter().enumerate() {
         let root = st.root.as_ref();
         let chooser = st.chooser;

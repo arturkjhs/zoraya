@@ -2387,8 +2387,10 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   `+net WORD` words (`room new NAME +w ~/x +net HOST:PORT`, at most eight; none in an untrusted room). The panel gives
   every terminal's shell, in a room or at home, a random connection of its own (slot 10), and in a room with words a
   network connection narrowed to `REACH | NARROW` and exactly those words (slot 9, from the root connection `init` gives the
-  panel at slot 12; random at slot 11), plus `/system/tls` to read; the words are also on each line as the person's
-  own (a value host designates inside them) and the frame shows them as pills. A room without words has no network.
+  panel at slot 12; random at slot 11), plus `/system/tls` to read; the words BOUND a line and give it nothing (the architect's rule of 2026-11-16: a
+  line gets a connection only when its own words or its description ask for it, inside them; a value host designates
+  inside them; a rule outside them is refused naming them; no status in a room; at `netd`'s carved-account limit
+  the line is refused with a hint) and the frame shows them as pills. A room without words has no network.
   Not given: status, listen, the services channel (a restart of the network is not followed), and no network at home's
   second terminals. `tests/gui/ssh-room.script` logs in from a room's window with a word, is refused another port and a
   room with none, and makes a key.

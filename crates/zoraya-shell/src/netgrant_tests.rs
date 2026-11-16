@@ -1223,3 +1223,48 @@ fn a_word_is_inside_a_room_by_the_rules_not_the_text() {
     assert!(!word_within("a b", &room));
     assert!(!word_within("10.0.2.50", &[]));
 }
+
+/// ADR-0462 item 5: no status in a room, with a hint; at home it is given.
+#[test]
+fn net_status_is_refused_in_a_room() {
+    const NETCMD: &str = include_str!("../../../user/describe/commands/net.cmd");
+    let room = Some(("ops", &["10.0.2.50:22"][..]));
+    let r = go_room(NETCMD, &[("status", true)], &[], room).unwrap_err();
+    assert_eq!(r.problem, "the network's status is not given in a room");
+    assert!(r.hint.unwrap().contains("room --leave"));
+    let none = Some(("plain", &[][..]));
+    assert!(go_room(NETCMD, &[("status", true)], &[], none).is_err());
+    let (rights_given, _) = go_room(NETCMD, &[("status", true)], &[], None)
+        .unwrap()
+        .expect("at home");
+    assert_eq!(rights_given, rights::STATUS);
+}
+
+/// ADR-0462 item 4: what the line is told at `netd`'s account limit, and for another refusal.
+#[test]
+fn the_account_limit_has_its_own_refusal_and_hint() {
+    use crate::netgrant::connection_refusal;
+    let (problem, hint) = connection_refusal(true);
+    assert_eq!(
+        problem,
+        "the network has no room for another program's connection"
+    );
+    assert!(hint.contains("wait for one to end"));
+    let (problem, hint) = connection_refusal(false);
+    assert!(problem.contains("refused"));
+    assert!(hint.contains("+net words"));
+}
+
+/// The panel's scope for a room: the words that parse; a bad word spoils no other (finding 9).
+#[test]
+fn a_rooms_scope_skips_a_bad_word_and_keeps_the_good() {
+    use crate::netgrant::room_scope;
+    let words = |w: &[&str]| w.iter().map(|w| String::from(*w)).collect::<Vec<_>>();
+    assert!(room_scope(&[]).is_none());
+    assert!(room_scope(&words(&["h:0", "a b"])).is_none());
+    let (r, bytes) = room_scope(&words(&["h:0", "10.0.2.50:22"])).expect("the good word");
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert_eq!(s.reach_rules().count(), 1);
+}

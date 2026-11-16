@@ -283,6 +283,7 @@ vendor/                       test-net
 vendor/ring.sha256            check
 tools/check-vendor-ring.sh    check
 tests/net/tls/                test-net test-apps
+user/src/random.rs           test-files test-net test-apps
 user/src/bin/rngd.rs          test-files test-net test-apps
 
 # The room keeper and the room line (Q6a, ADR-0269): the keeper's decisions and

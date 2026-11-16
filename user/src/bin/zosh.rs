@@ -1162,17 +1162,9 @@ impl Z {
         zoraya_user::netclient::narrow_account(root, rights, POSIX_NET_BUDGET, &scope)
             .map(Some)
             .map_err(|status| {
-                let (problem, hint) = if status == zoraya_proto_net::status::OVER_QUOTA {
-                    (
-                        "the network has no room for another program's connection",
-                        "programs that use the network hold one each, a few at once: wait for one to end (jobs)",
-                    )
-                } else {
-                    (
-                        "the network service refused this program's connection",
-                        "the room's +net words (room) bound what a line may reach",
-                    )
-                };
+                let (problem, hint) = zoraya_shell::netgrant::connection_refusal(
+                    status == zoraya_proto_net::status::OVER_QUOTA,
+                );
                 zoraya_command::error("zosh", Some(exec.name), problem, &[hint])
             })
     }

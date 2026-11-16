@@ -56,7 +56,7 @@ simplest, safest and most reversible choice, so that the architect can accept or
    are.
 7. **No surface change for ssh from 10g.** ADR-0346 (ports-early) holds the block (`openlog`, `closelog`, `syslog`
    from musl) and `ports/apps/sshshim.c` supplies the other names OpenSSH's link probe finds missing
-   (`getservbyname`, `socketpair`, `getifaddrs`, `freeifaddrs`, `execlp`, `madvise`, `gethostbyaddr`, `initgroups`);
+   (`getservbyname`, `getifaddrs`, `freeifaddrs`, `execlp`, `madvise`, `gethostbyaddr`, `initgroups`);
    10g keeps that one shim (without its early-build marker, since the programs are now in the apps' image) and finds no
    other name undefined after the merge. None is reached on a path a Zoraya ssh takes.
 8. **The port.** OpenSSH portable 10.6p2 and ADR-0346's four patches (`0001` to `0004`: the include, no configuration

@@ -6,9 +6,10 @@
 //! Only a *literal* `url` operand designates, as only a literal path does
 //! (ADR-0153 rule 4): one that came from a variable, a substitution or a
 //! glob would let data choose what the command reaches. Such an operand
-//! designates only inside a `+net` rule on the line (N6; the room's rules
-//! come with the rooms' words, which are not built) and is refused before
-//! the line runs otherwise. A `+net` word is the person's, typed literally
+//! designates only inside a `+net` rule on the line or inside the words of
+//! the room it runs in (ADR-0462), and is refused before the line runs
+//! otherwise. A room's words only bound a line: it gets a connection when its
+//! own words or its description ask for one, inside them, and no status. A `+net` word is the person's, typed literally
 //! (the token; its one argument may be expanded, ADR-0153 rule 3).
 
 use alloc::vec::Vec;
@@ -276,6 +277,16 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     let rules: Vec<ReachRule<'_>> = words.iter().map(NetWord::rule).collect();
     if rules.is_empty() {
         if d.needs_net_status && line.base_system {
+            // ADR-0462 item 5: no status in a room's terminal (a window's
+            // connection has none, and the first terminal's would be
+            // `init`'s): refused, not run with the wrong network.
+            if line.room.is_some() {
+                return Err(Refused {
+                    subject: d.name.clone(),
+                    problem: "the network's status is not given in a room".into(),
+                    hint: Some("room --leave first, or use the first terminal at home".into()),
+                });
+            }
             return Ok(Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec())));
         }
         return Ok(None);
@@ -292,6 +303,35 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
         out.truncate(n);
         (rights::REACH, out)
     }))
+}
+
+/// What a refused connection of a line is told (ADR-0462, the carved-account
+/// limit): the problem and the hint, for `netd`'s `OVER_QUOTA` or another
+/// refusal (a scope wider than the room's connection).
+pub fn connection_refusal(over_quota: bool) -> (&'static str, &'static str) {
+    if over_quota {
+        (
+            "the network has no room for another program's connection",
+            "programs that use the network hold one each, a few at once: wait for one to end (jobs)",
+        )
+    } else {
+        (
+            "the network service refused this program's connection",
+            "the room's +net words (room) bound what a line may reach",
+        )
+    }
+}
+
+/// The scope a room's terminal is given: the words that parse, none of the
+/// others (a hand edit of `/config/rooms` is said once by the shell and does
+/// not take the good words with it). `None` for no good word.
+pub fn room_scope(words: &[String]) -> Option<(u32, Vec<u8>)> {
+    let good: Vec<String> = words
+        .iter()
+        .filter(|w| parse_word(w).is_ok())
+        .cloned()
+        .collect();
+    words_scope(&good).ok().flatten()
 }
 
 /// Whether `word` (a `+net` argument) lies inside one of `outer`: what a room
