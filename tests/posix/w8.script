@@ -6,15 +6,15 @@
 < PSURF> 
 > sh /tests/w8.sh\r
 % boot
-< W8-STEP w8-pipe-j2
+limit 450 < W8-STEP w8-pipe-j2
 % w8-j1
-< W8-STEP w8-fifo-j2
+limit 450 < W8-STEP w8-fifo-j2
 % w8-pipe-j2
-< W8-STEP w8-pipe-j4
+limit 450 < W8-STEP w8-pipe-j4
 % w8-fifo-j2
-< W8-STEP w8-fifo-j4
+limit 450 < W8-STEP w8-fifo-j4
 % w8-pipe-j4
-< W8-OK w8-fifo-j4
+limit 450 < W8-OK w8-fifo-j4
 % w8-fifo-j4
 < W8-STATUS 0
 < PSURF> 

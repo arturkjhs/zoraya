@@ -7,8 +7,8 @@
 < PSURF> 
 > sh /tests/w8.sh pipe-j4\r
 % boot
-< W8-RECIPES w8-pipe-j4 72
-< W8-OK w8-pipe-j4
+limit 150 < W8-RECIPES w8-pipe-j4 72
+limit 150 < W8-OK w8-pipe-j4
 % w8-pipe-j4
 < W8-STATUS 0
 < PSURF> 
