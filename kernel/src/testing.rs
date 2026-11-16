@@ -2170,7 +2170,7 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
 /// ADR-0460, the architect's decision on its open question 2 (INV-0460-4):
 /// a room whose processes end one after the other, each with a way out far
 /// longer than the room's budget, gains nothing from them beyond their own
-/// work. Each process is `spin`, started suspended with 300 one-page
+/// work. Each process is `spin`, started suspended with 1500 one-page
 /// objects the test puts in its table (free to the room), so that its way
 /// out, closing them, takes many budgets. The test ends it (as `job_kill`
 /// does, `request_exit`) as soon as it has run, that is, as soon as the room
@@ -2190,13 +2190,16 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
 ///   `sched::ending_watch`): the room's own code keeps the ceiling, however
 ///   long a way out takes on this machine;
 /// - no way out begins in the window: the first way out's debt (its run
-///   past the budget, some 400 us on the fastest host for 300 objects
+///   past the budget, some 850 us on the fastest host for 1500 objects
 ///   against 20 us a period, capped at 2 ms) parks the room for longer than
-///   the window, on any host slower than that.
+///   the window, on any host slower than that. (With 300 objects a way out
+///   cost 170 us under HVF on the Mac mini, 8 periods' budgets, so the second
+///   began inside the window: the number of objects, now 1500, is what sets
+///   the debt, not the host's speed.)
 fn a_start_and_end_loop_keeps_its_ceiling() {
     use crate::memory::object::MemoryObject;
     const LIMIT: u32 = 1; // 20 us of the 20 ms period.
-    const OBJECTS: usize = 300;
+    const OBJECTS: usize = 1500;
     let began = timer::now();
     let period_ns = crate::cpu::period_ns();
     let parent = Job::create(&root(), false).expect("parent");
