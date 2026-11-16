@@ -1268,7 +1268,7 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   the child maps the same frames with the same attributes.
 - **`image_create` (ADR-0108, ADR-0415 item 2, F6, proposed ADR-0438).** `zoraya-elf` parses an ELF in a memory object in two
   steps (header, then table) with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table
-  and **its own copy of the program's pages** (`Program::kept`: one object of the creator's job, no handle names it; every page
+  and **its own copy of the program's pages** (`Program::kept`: one object of the job the creator names, no handle names it; every page
   of a segment that is not writable, its zero tail included, and the pages with file bytes of a writable one), made in steps of
   64 pages. `spawn` maps the frames of each read-only segment as one `SHARED` mapping record (never writable, executable for
   text; a `fork` child maps the same frames) and copies the pages of the writable ones, so the processes of one image hold its

@@ -4455,7 +4455,10 @@ impl Z {
         if self.lookup(name) == Found::Program
             && let Some(path) = self.on_volume.get(name).cloned()
         {
-            let job = self.image_job();
+            // The probe makes a whole image to read its mark and drops it: the
+            // shell's own job, so that `grants` in a room at its limit neither
+            // fails nor counts a refusal for a command that runs nothing.
+            let job = JOB;
             let native = self.root.as_ref().is_some_and(|r| {
                 r.open_followed(path.trim_start_matches('/'), 0, file_rights::READ)
                     .ok()

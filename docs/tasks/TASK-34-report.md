@@ -144,3 +144,9 @@ Updated 2026-11-16. **All of F2 to F8 are merged.**
 - Known limitations: the shell's staging object (the program's bytes before the image exists) is charged to the shell's job; a POSIX
   process with no `PROCESS_JOB` handle names `JOB` and its program loads fail with `ENOEXEC` if that is not a spawner's handle (none
   exists today).
+- Hand mutants run (make test-qemu-one, and test-libposix for the shell one): charge the creator, skip the `CREATE_PROCESS` check, keep the
+  table room on a refusal, the shell names its own job: all killed (the third only after `t_image` refused more often than the table has
+  slots). Not covered: the broker's `first.job` and libposix's `process_job` (no test sees them). The shell mutant is killed by
+  `room-image.script` but the script cannot tell the image from the child's own pages alone in a 1M room; the room's row in `top.script`
+  reads 987K higher with F10 than with the shell naming its own job (about the 984K image), recorded here, not asserted.
+- Open for the architect: `image_create` still charges a killed job (`spawn` refuses one); see ADR-0443 open questions.

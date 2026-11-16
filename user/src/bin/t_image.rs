@@ -236,7 +236,7 @@ fn used(job: Handle) -> u64 {
     job_get_usage(job, false).expect("usage").memory.used
 }
 
-/// INV-0443-1, -2, -3 (proposed ADR-0443): the image's pages are charged to
+/// INV-0443-1 to -4 (proposed ADR-0443): the image's pages are charged to
 /// the job the call names and not to the caller's own; a handle without
 /// `CREATE_PROCESS` is refused and leaves nothing; a job at its memory limit
 /// refuses with `OverQuota` and holds nothing, while a roomy job takes the
@@ -251,10 +251,12 @@ fn an_image_is_charged_to_the_job_it_names(hello: &[u8]) {
     let cost = used(named) - named_before;
     assert!(cost > 0, "the pages are the named job's");
     assert_eq!(used(other), other_before, "a sibling pays nothing");
-    assert!(
-        used(JOB) >= own_before + cost,
-        "the caller's own job holds them only as the named job's parent"
-    );
+    // The caller's own job holds them once, as the named job's parent: not
+    // twice (a double charge would show as nearly 2 * cost; the slack is a
+    // few records and heap pages of this process).
+    let own_delta = used(JOB) - own_before;
+    assert!(own_delta >= cost, "the parent holds what its child holds");
+    assert!(own_delta < cost + cost / 2, "and not a second time");
     // A running process of the image does not change who paid for it.
     assert_eq!(run(image, &[]).code, 7);
     assert_eq!(used(named) - named_before, cost);
@@ -323,8 +325,10 @@ fn an_image_is_charged_to_the_job_it_names(hello: &[u8]) {
         "the image outlives its payer's end"
     );
     let frames = free_frames();
+    let own_with = used(JOB);
     handle_close(image).expect("close");
     assert_eq!(used(doomed), doomed_before);
+    assert_eq!(own_with - used(JOB), cost, "the parent gets it back too");
     assert!(free_frames() > frames, "the pages went back");
     // The caller ends first: closing the job's handle, the image keeps it.
     let held = job_with(None);

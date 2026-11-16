@@ -3,6 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0003, ADR-0108, ADR-0172, ADR-0261, ADR-0262, ADR-0268, ADR-0438
+- **Amends (if accepted):** ADR-0438 item 2 and INV-0438-2 ("the job that made an image pays" becomes "the job the creator names pays"); ADR-0108 item 1's signature `image_create(memory, length)`.
 - **Evidence:** CP-01, GR-008
 
 ## Context
@@ -55,14 +56,14 @@ A call that moves a charge between jobs: a new call with the transfer's own fail
 **Recommendation (not a decision): Option A, as built.**
 
 1. **The call.** `image_create(memory, length, job: Handle)`. After the memory handle's check (`READ`), the kernel looks up `job` with
-   `CREATE_PROCESS` (a wrong kind is `BadHandle`, a missing right `AccessDenied`), before the table room is kept and before
+   `CREATE_PROCESS` (a handle without `CREATE_PROCESS`, whatever its kind, is `AccessDenied`; `BadHandle` only for a non-job handle that carries the right), before the table room is kept and before
    anything is made. The image's kept pages and record are charged to `job` (the payer of ADR-0438 item 2 is now `job`, not the
    caller's own job); a job at its memory limit refuses `OverQuota` and the call holds nothing.
 2. **The lifetime.** As ADR-0438: `Paid` keeps the payer job alive for as long as the image or any process of it lives. A job that
    ends first (`job_kill`, or its last handle closed) keeps what the image holds charged to it as `held` (ADR-0261 point 9) until the
    last holder goes, and then the pages and the charge go back. The creator ending first changes nothing: the image is not the
    creator's.
-3. **Callers.** The shell names the room's launch job when it holds one (`room_job`), else its own job, so a program started outside
+3. **Callers.** The shell names the room's launch job when it holds one (`room_job`), else its own job (a trusted room without limits has no launch job), so a program started outside
    a room is charged as before. The broker names the job of the child it loads for. `posixrun` and `libposix`'s program loader name
    their own job (`JOB`, `PROCESS_JOB`): a job that charges itself keeps its behaviour. Every other caller names `JOB`.
 4. **Not built.** The staging memory object the shell fills before the image exists (`memory_create`, the program's bytes, closed
@@ -103,7 +104,7 @@ charge a job it could not spawn into, so the call adds no way to spend another r
 
 - Whether the staging object of the shell's loader (item 4) should be charged to the room too: it is transient and bounded by the
   program's size, and it is the shell's own memory.
-- Whether the broker's other image (the first child's `/bin/sh`) needs a room: it has none today.
+- A job that was killed: the call still charges it (`held`, ADR-0261 point 9) while `spawn` refuses it; whether `image_create` should refuse a closed job with `BadState`.
 
 ## Revisit triggers
 
