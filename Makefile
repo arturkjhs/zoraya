@@ -1105,7 +1105,6 @@ POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
 POSIX_CORE_MAPS_SCRIPT := tests/posix-core/maps.script
 POSIX_CORE_TOP_SCRIPT := tests/posix-core/top.script
 POSIX_CORE_ROOM_IMAGE_SCRIPT := tests/posix-core/room-image.script
-POSIX_CORE_ROOM_MID_SCRIPT := tests/posix-core/room-mid.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
 	@$(MAKE) -s -f ports/Makefile check-libc
@@ -1154,15 +1153,6 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_ROOM_IMAGE_SCRIPT) --label libposix-room-image-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  python3 tools/check-room-image.py target/test-logs/libposix-room-image-$$accel.log && \
-	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
-# F10, the positive control (INV-0443-5): a room sized from top.script's own reading, less half an
-# image, refuses `t_shared keep` only if its image is charged to the room.
-	@for accel in $(LOCAL_ACCELS); do \
-	  limit=$$(python3 tools/room-mid-limit.py target/test-logs/libposix-top-$$accel.log) && \
-	  sed "s/@LIMIT@/$$limit/" $(POSIX_CORE_ROOM_MID_SCRIPT) > $(POSIX_CORE)/room-mid.script && \
-	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
-	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE)/room-mid.script --label libposix-room-mid-$$accel -- \
-	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
 # Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,

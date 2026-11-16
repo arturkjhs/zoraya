@@ -96,11 +96,11 @@ charge a job it could not spawn into, so the call adds no way to spend another r
 - **INV-0443-4.** An image outlives the end of the job that pays for it and the closing of that job's handle, and its last holder
   gives back the pages and the charge. *Check:* `t_image`'s `an_image_is_charged_to_the_job_it_names` (`make test-qemu-one`).
 - **INV-0443-5.** The image of a program the shell starts in a room with a launch job is charged to that room's job: a room whose
-  limit holds the program's start but not the start and its image refuses it (the shell says `over quota` and the room's row
-  counts the refusal and does not change), while the same program starts in a room with room; and a room sized between the program's
-  start and its start plus its image (from `top.script`'s own reading) does not run it, which a shell that charged its own job would. *Check:*
-  `make test-libposix` (`tests/posix-core/room-image.script` read by `tools/check-room-image.py`, and `tests/posix-core/room-mid.script`
-  with the limit from `tools/room-mid-limit.py`).
+  limit holds the program's start but not the start and its image refuses it (the shell says `over quota`; the room's row counts the
+  refusal and does not change), while the same program starts in a room with room; and the room that runs `t_shared keep` reads at
+  least the launcher's own job, a child's own job and three quarters of an image, which a shell that charged its own job would
+  not. *Check:* `make test-libposix` (`tests/posix-core/room-image.script` read by `tools/check-room-image.py`, and `top.script`
+  read by `tools/check-top-image.py`).
 
 ## Open questions
 
@@ -116,8 +116,11 @@ Programs started in a room whose image is **not** charged to the room:
 - The broker's first child and `posixrun` name their own jobs, outside rooms.
 - The untrusted-room launcher of ADR-0269 is not built; it must name the room's job and hold no job above it.
 
-A refusal in the test of INV-0443-5 comes at the child's launch as well as at the image: the shell prints `over quota` for both, so the
-script alone cannot tell them apart; the room sized by `tools/room-mid-limit.py` is what shows the image is the room's.
+The refusal in `room-image.script` comes at the child's launch as well as at the image: the shell prints `over quota` for both, so
+that script alone cannot tell them apart (with the shell charging itself the program starts and aborts, and `over quota` never
+appears, which is what the mutant shows). The positive control is `check-top-image.py`'s reading of the room against numbers an image
+charge does not touch (the launcher's job and a child's). A room sized between the two was tried and given up: the launcher's
+transient file object during its first read is as large as an image.
 
 ### Questions
 
