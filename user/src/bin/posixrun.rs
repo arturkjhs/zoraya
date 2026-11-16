@@ -233,7 +233,7 @@ fn main() -> i32 {
         measure(&root);
     }
     let (object, length) = load(&root, &o.program);
-    let image = image_create(object, length)
+    let image = image_create(object, length, JOB)
         .unwrap_or_else(|s| fail(&alloc::format!("{}: {s:?}", o.program)));
     let _ = handle_close(object);
 

@@ -1545,7 +1545,10 @@ fn load_fd(p: &mut Posix<RtSys>, fd: i32) -> Result<Program, i32> {
     })();
     let _ = zoraya_rt::memory_unmap(address, pages);
     let image = filled.and_then(|()| {
-        zoraya_rt::image_create(object, size).map_err(|s| {
+        // Charged to the process's own job (a job charges itself,
+        // proposed ADR-0443); `PROCESS_JOB` holds `CREATE_PROCESS`.
+        let job = p.process_job.unwrap_or(zoraya_abi::JOB);
+        zoraya_rt::image_create(object, size, job).map_err(|s| {
             debug_later(p, "load: image_create", s);
             ENOEXEC
         })

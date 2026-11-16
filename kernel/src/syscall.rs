@@ -1449,15 +1449,20 @@ impl Handlers for Calls<'_> {
         Ok(handle.raw())
     }
 
-    fn image_create(&mut self, memory: Handle, length: Size) -> Result<u64, Status> {
+    fn image_create(&mut self, memory: Handle, length: Size, job: Handle) -> Result<u64, Status> {
         let Object::Memory(memory) = self.object(memory, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
+        // The payer is the named job, not the caller's own (proposed ADR-0443):
+        // what is made for a client is paid by the client (ADR-0262). The right
+        // is the one a process needs to be started there, so no program pays
+        // into a job it could not spawn into. Checked before anything is made.
+        let payer = self.job(job, Rights::CREATE_PROCESS)?;
         // The room for the handle is kept from here: a full table refuses
         // before the pages are made, and a sibling thread cannot fill it
         // while the copy pauses (INV-0040-3).
         self.process.handles.lock().keep_room()?;
-        let image = match process::image_from(&memory, length.0, self.process.job()) {
+        let image = match process::image_from(&memory, length.0, &payer) {
             Ok(image) => image,
             Err(status) => {
                 self.process.handles.lock().drop_kept();

@@ -8,18 +8,19 @@
 
 extern crate alloc;
 
+use zoraya_abi::quota::JobLimits;
 use zoraya_abi::spawn::{Encoder, PROGRAM_HEADER_SIZE};
 use zoraya_abi::{
-    DIRECTORY, Handle, ImageObject, JOB, MapFlags, MemoryFlags, MemoryObject, ObjectType, Rights,
-    Status,
+    DIRECTORY, Handle, ImageObject, JOB, JobFlags, MapFlags, MemoryFlags, MemoryObject, ObjectType,
+    Rights, Status,
 };
 use zoraya_proto_file::open_flags;
 use zoraya_user::files::ALL;
 use zoraya_user::stack::{find_disk, start_stack};
 use zoraya_user::{
     assert_err, console_entry, directory_lookup, handle_close, handle_duplicate, image,
-    image_create, memory_create, memory_map, memory_unmap, object_same, println, raw_syscall,
-    spawn, startup, wait_exit,
+    image_create, job_create, job_get_usage, job_kill, job_set_limits, memory_create, memory_map,
+    memory_unmap, object_same, println, raw_syscall, spawn, startup, wait_exit,
 };
 
 const HELLO_SLOT: u64 = 100;
@@ -126,7 +127,7 @@ fn a_program_from_the_volume_runs_as_from_the_ramdisk(hello: &[u8]) {
         .expect("attach");
     assert_eq!(file.read_buffer(0, 0, length as u32), Ok(length));
     drop(file);
-    let program = image_create(target, length).expect("an image of the file");
+    let program = image_create(target, length, JOB).expect("an image of the file");
     handle_close(target).expect("the image holds the object");
     assert_eq!(run(program, &[]), expected, "same behaviour");
     assert_eq!(run(program, &[]), expected, "and again");
@@ -154,7 +155,7 @@ fn bad_programs_are_refused_and_leave_nothing(hello: &[u8]) {
         file[*at..*at + bytes.len()].copy_from_slice(bytes);
         let (object, at, size) = object_with(&file);
         assert_err!(
-            image_create(object, file.len() as u64),
+            image_create(object, file.len() as u64, JOB),
             Status::InvalidArgument
         );
         memory_unmap(at, size).expect("unmap");
@@ -170,21 +171,24 @@ fn bad_programs_are_refused_and_leave_nothing(hello: &[u8]) {
     }
     let (object, at, size) = object_with(&file);
     assert_err!(
-        image_create(object, file.len() as u64),
+        image_create(object, file.len() as u64, JOB),
         Status::InvalidArgument
     );
     // Lengths: none, short, past the object.
-    assert_err!(image_create(object, 0), Status::InvalidArgument);
-    assert_err!(image_create(object, 63), Status::InvalidArgument);
-    assert_err!(image_create(object, size + 1), Status::InvalidArgument);
-    assert_err!(image_create(object, u64::MAX), Status::InvalidArgument);
+    assert_err!(image_create(object, 0, JOB), Status::InvalidArgument);
+    assert_err!(image_create(object, 63, JOB), Status::InvalidArgument);
+    assert_err!(image_create(object, size + 1, JOB), Status::InvalidArgument);
+    assert_err!(image_create(object, u64::MAX, JOB), Status::InvalidArgument);
     memory_unmap(at, size).expect("unmap");
     handle_close(object).expect("close");
     // Past the object with a good program in it: only the length is wrong.
     let (object, at, size) = object_with(hello);
-    assert_err!(image_create(object, size + 1), Status::InvalidArgument);
-    assert_err!(image_create(object, size + 4096), Status::InvalidArgument);
-    let good = image_create(object, hello.len() as u64).expect("the same object, its length");
+    assert_err!(image_create(object, size + 1, JOB), Status::InvalidArgument);
+    assert_err!(
+        image_create(object, size + 4096, JOB),
+        Status::InvalidArgument
+    );
+    let good = image_create(object, hello.len() as u64, JOB).expect("the same object, its length");
     handle_close(good).expect("close");
     memory_unmap(at, size).expect("unmap");
     handle_close(object).expect("close");
@@ -200,10 +204,10 @@ fn bad_programs_are_refused_and_leave_nothing(hello: &[u8]) {
 fn image_create_checks_its_handle() {
     let (object, at, size) = object_with(&[0; 64]);
     let no_read = handle_duplicate(object, Rights::WRITE).expect("dup");
-    assert_err!(image_create(no_read, 64), Status::AccessDenied);
-    assert_err!(image_create(JOB, 64), Status::AccessDenied);
+    assert_err!(image_create(no_read, 64, JOB), Status::AccessDenied);
+    assert_err!(image_create(JOB, 64, JOB), Status::AccessDenied);
     let ramdisk = image("hello");
-    assert_err!(image_create(ramdisk, 64), Status::BadHandle);
+    assert_err!(image_create(ramdisk, 64, JOB), Status::BadHandle);
     let read_dir = handle_duplicate(DIRECTORY, Rights::READ.union(Rights::LOOKUP));
     assert!(read_dir.is_err(), "a directory has no READ");
     memory_unmap(at, size).expect("unmap");
@@ -213,12 +217,131 @@ fn image_create_checks_its_handle() {
     let _ = MemoryObject::RIGHTS;
 }
 
+/// A job under this process's own, with a memory limit if given.
+fn job_with(limit: Option<u64>) -> Handle {
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    if let Some(memory) = limit {
+        let limits = JobLimits {
+            memory: Some(memory),
+            processes: None,
+            cpu: None,
+            threads: None,
+        };
+        job_set_limits(job, &limits).expect("limit");
+    }
+    job
+}
+
+fn used(job: Handle) -> u64 {
+    job_get_usage(job, false).expect("usage").memory.used
+}
+
+/// INV-0443-1, -2, -3 (proposed ADR-0443): the image's pages are charged to
+/// the job the call names and not to the caller's own; a handle without
+/// `CREATE_PROCESS` is refused and leaves nothing; a job at its memory limit
+/// refuses with `OverQuota` and holds nothing, while a roomy job takes the
+/// same file. The numbers are read from the jobs and set against each other.
+fn an_image_is_charged_to_the_job_it_names(hello: &[u8]) {
+    let (object, at, size) = object_with(hello);
+    let length = hello.len() as u64;
+    let (named, other) = (job_with(None), job_with(None));
+    let (named_before, other_before) = (used(named), used(other));
+    let own_before = used(JOB);
+    let image = image_create(object, length, named).expect("charged to the named job");
+    let cost = used(named) - named_before;
+    assert!(cost > 0, "the pages are the named job's");
+    assert_eq!(used(other), other_before, "a sibling pays nothing");
+    assert!(
+        used(JOB) >= own_before + cost,
+        "the caller's own job holds them only as the named job's parent"
+    );
+    // A running process of the image does not change who paid for it.
+    assert_eq!(run(image, &[]).code, 7);
+    assert_eq!(used(named) - named_before, cost);
+    handle_close(image).expect("close");
+    assert_eq!(used(named), named_before, "the last handle gave them back");
+
+    // Without CREATE_PROCESS: refused, and nothing is held or charged.
+    let weak = handle_duplicate(named, Rights::WAIT).expect("dup");
+    let frames = free_frames();
+    let heap = heap_live();
+    assert_err!(image_create(object, length, weak), Status::AccessDenied);
+    assert_err!(image_create(object, length, object), Status::AccessDenied);
+    assert_eq!(used(named), named_before);
+    assert_eq!((free_frames(), heap_live()), (frames, heap), "nothing kept");
+    handle_close(weak).expect("close");
+
+    // A job with room for the image and nothing more: made, then refused,
+    // while a roomy job takes the same file.
+    let tight = job_with(None);
+    let record = used(tight);
+    job_set_limits(
+        tight,
+        &JobLimits {
+            memory: Some(record + cost),
+            processes: None,
+            cpu: None,
+            threads: None,
+        },
+    )
+    .expect("limit");
+    let first = image_create(object, length, tight).expect("exactly enough");
+    assert_eq!(used(tight), record + cost);
+    let refused = job_get_usage(tight, false).expect("usage").memory.refused;
+    let frames = free_frames();
+    let heap = heap_live();
+    assert_err!(image_create(object, length, tight), Status::OverQuota);
+    assert_eq!(used(tight), record + cost, "a refusal charges nothing");
+    assert_eq!(
+        job_get_usage(tight, false).expect("usage").memory.refused,
+        refused + 1
+    );
+    assert_eq!((free_frames(), heap_live()), (frames, heap), "nothing kept");
+    let roomy = image_create(object, length, other).expect("the same file elsewhere");
+    assert_eq!(used(other) - other_before, cost, "the same cost");
+    for h in [first, roomy] {
+        handle_close(h).expect("close");
+    }
+    assert_eq!(used(tight), record);
+    assert_eq!(used(other), other_before);
+
+    // The job ends first: the image lives, its pages stay charged to the
+    // job that paid, and the last handle gives them all back.
+    let doomed = job_with(None);
+    let doomed_before = used(doomed);
+    let image = image_create(object, length, doomed).expect("image");
+    job_kill(doomed).expect("kill");
+    assert_eq!(used(doomed) - doomed_before, cost, "still charged");
+    assert_eq!(
+        run(image, &[]).code,
+        7,
+        "the image outlives its payer's end"
+    );
+    let frames = free_frames();
+    handle_close(image).expect("close");
+    assert_eq!(used(doomed), doomed_before);
+    assert!(free_frames() > frames, "the pages went back");
+    // The caller ends first: closing the job's handle, the image keeps it.
+    let held = job_with(None);
+    let image = image_create(object, length, held).expect("image");
+    let frames = free_frames();
+    handle_close(held).expect("the image holds the job");
+    assert_eq!(run(image, &[]).code, 7);
+    handle_close(image).expect("close");
+    assert!(free_frames() > frames, "the pages went back with the last");
+
+    memory_unmap(at, size).expect("unmap");
+    for h in [object, named, other, tight, doomed] {
+        handle_close(h).expect("close");
+    }
+}
+
 /// The image keeps its headers and its bytes (ADR-0415 item 2, proposed
 /// ADR-0438): new bytes in the object after `image_create` reach no child.
 /// Before ADR-0438 they reached the children spawned after, and harmed them.
 fn rewriting_the_object_after_the_image_changes_nothing(hello: &[u8]) {
     let (object, at, size) = object_with(hello);
-    let program = image_create(object, hello.len() as u64).expect("image");
+    let program = image_create(object, hello.len() as u64, JOB).expect("image");
     let same = handle_duplicate(program, ImageObject::RIGHTS).expect("dup");
     assert_eq!(object_same(program, same), Ok(true));
     assert_eq!(run(program, &[]).code, 7);
@@ -244,13 +367,13 @@ fn a_full_table_refuses_an_image(hello: &[u8]) {
         held.push(h);
     }
     assert_err!(
-        image_create(object, hello.len() as u64),
+        image_create(object, hello.len() as u64, JOB),
         Status::LimitReached
     );
     for h in held {
         handle_close(h).expect("close");
     }
-    let program = image_create(object, hello.len() as u64).expect("room again");
+    let program = image_create(object, hello.len() as u64, JOB).expect("room again");
     handle_close(program).expect("close");
     memory_unmap(at, size).expect("unmap");
     handle_close(object).expect("close");
@@ -261,7 +384,7 @@ fn images_come_and_go(hello: &[u8]) {
     let frames = free_frames();
     for round in 0..16 {
         let (object, at, size) = object_with(hello);
-        let program = image_create(object, hello.len() as u64).expect("image");
+        let program = image_create(object, hello.len() as u64, JOB).expect("image");
         if round % 4 == 0 {
             assert_eq!(run(program, &[]).code, 7);
         }
@@ -283,7 +406,7 @@ fn the_startup_block_holds_the_program_headers(hello: &[u8]) {
     assert_eq!(run(me, &[b"headers"]).code, 0, "from the ramdisk");
     handle_close(me).expect("close");
     let (object, at, size) = object_with(hello);
-    let program = image_create(object, hello.len() as u64).expect("image");
+    let program = image_create(object, hello.len() as u64, JOB).expect("image");
     // `hello` reads its arguments through its description and refuses
     // these as a usage mistake (exit 2, ADR-0155): it could read the block
     // the kernel wrote.
@@ -330,6 +453,7 @@ fn main() -> i32 {
     a_program_from_the_volume_runs_as_from_the_ramdisk(&hello);
     bad_programs_are_refused_and_leave_nothing(&hello);
     image_create_checks_its_handle();
+    an_image_is_charged_to_the_job_it_names(&hello);
     rewriting_the_object_after_the_image_changes_nothing(&hello);
     a_full_table_refuses_an_image(&hello);
     images_come_and_go(&hello);
