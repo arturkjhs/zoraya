@@ -604,6 +604,10 @@ fn a_listener_channel_that_closed_is_a_dead_listener() {
         base,
         "the end was released: the connection `c` is one more"
     );
+    // The connection that listened is free to listen again: the dead listener
+    // is not still its own.
+    let (s, _) = r.listen(conn, 1);
+    assert_eq!(s, status::OK);
 }
 
 #[test]
@@ -690,6 +694,37 @@ fn a_rename_over_a_socket_node_takes_its_name_and_the_listener_outlives_it() {
     r.net.client_close(a);
     r.run();
     assert_eq!(r.service.socket_nodes(), (0, 0));
+}
+
+#[test]
+fn publishing_over_a_socket_node_takes_its_name() {
+    let mut r = rig();
+    let a = r.bind("s").unwrap();
+    r.net.client_close(a);
+    r.run();
+    assert_eq!(r.service.socket_nodes(), (1, 0));
+    let (file, _) = r
+        .open("ignored", open_flags::UNNAMED, 0o600, rights::ALL)
+        .unwrap();
+    let root = r.root;
+    r.post(root, &proto::GetToken {}, vec![]);
+    r.run();
+    let (_, handles) = r.reply(root).unwrap();
+    r.post(
+        file,
+        &proto::Publish {
+            mode: Below(proto::publish_mode::REPLACE),
+            name: Name("s"),
+        },
+        vec![handles[0]],
+    );
+    r.run();
+    assert_eq!(r.status_of(file), status::OK);
+    assert_eq!(
+        r.service.socket_nodes(),
+        (0, 0),
+        "the name went to the file"
+    );
 }
 
 #[test]

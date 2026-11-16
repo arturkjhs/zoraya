@@ -30,7 +30,8 @@
  *                    whose table has /tmp (the line's temporary directory) and
  *                    /bin read-only: bind, listen, connect and accept of a
  *                    stream and a packet socket, what each call refuses
- *                    (INV-0412-3: bind outside /tmp is EACCES), a second
+ *                    (INV-0412-3: bind outside /tmp is EACCES), fork refused with a
+ *                    bound or listening socket open, a second
  *                    program (this one, spawned) that connects through its own
  *                    table and talks, unlink, and that the fds come back
  *   t_unix all       every case but `file`, which needs the shell's table
@@ -648,6 +649,13 @@ static void file_case(void)
 	/* A socket file is connected to, not opened. */
 	FAILS(open(SOCK_PATH, O_RDWR), ENXIO);
 
+	/* A socket bound to a file holds the connection that makes its listener:
+	 * a fork child would have a description with nothing behind it. */
+	pid_t forked = fork();
+	if (forked == 0)
+		_exit(3);
+	CHECK(forked == -1 && errno == ENOTSUP);
+
 	/* Bound, not listening: refused; no listener to accept on. */
 	int c = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	FAILS(un_connect(c, SOCK_PATH), ECONNREFUSED);
@@ -656,6 +664,10 @@ static void file_case(void)
 	FAILS(un_connect(c, "/tmp/t_unix_none"), ENOENT);
 	FAILS(un_connect(c, "/bin/t_unix"), EACCES);
 	OK(listen(s, 5));
+	forked = fork();
+	if (forked == 0)
+		_exit(3);
+	CHECK(forked == -1 && errno == ENOTSUP);
 	int on;
 	socklen_t onlen = sizeof on;
 	OK(getsockopt(s, SOL_SOCKET, SO_ACCEPTCONN, &on, &onlen));

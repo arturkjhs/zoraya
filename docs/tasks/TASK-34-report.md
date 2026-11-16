@@ -19,7 +19,7 @@ Updated 2026-11-16.
 | F8 | merged | stage-f8 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error, 5 warnings) and re-check; candidate run 43751085581 green after one fix (the keeper script pinned a session size that varies with boot) and one rerun of the `test-tour-terminal` TCG job |
 | F5 | merged | stage-f5 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error: the plan's CPython command was never run; 5 warnings), re-check (1 warning) and a test-only follow-up; candidate run 43770158088 green, 79 of 79 jobs, including the new `test-python-mem` (python at 2 GiB, 5,000,000 `bytearray(100)`, 2 m 51 s under TCG) |
 | F6 | built on `work/f6`, not merged; review not yet done | | one session | Sonnet |
-| F7 | not started | | | |
+| F7 | built on `work/f7`: the Unix half (socket files in `/tmp`); the TCP half is a design only (ADR-0440) | | one session | Sonnet |
 
 ## F2 notes
 
@@ -93,3 +93,32 @@ Updated 2026-11-16.
 - Run: `cargo test -p zoraya-elf -p zoraya-mappings -p zoraya-posix`, `make test-qemu-one` (128 passed), `make test-libposix` (164, 17 and 66 steps), `make test-posix-threads` (104) earlier on this branch.
 - Mutation: host `--in-diff` zoraya-elf 32 of 34 caught (2 unviable), zoraya-mappings 10 of 10; kernel `tools/mutants/images-f6.toml` 10 of 10 non-equivalent caught (the copy, the charge, the piece, three step points in `keep_program` and one in the spawn, a writable record; the equivalent one is marked, not run); `images-f6-libposix.toml` 2 of 2 caught (no image charge: `t_shared` fails; image never freed: `check-top-image` fails, 961K then 1921K at the end).
 - Limitations: `image_create` holds the file's object and the copy at once; two images of one file share nothing; programs started from the ramdisk still copy; instruction-cache maintenance across step points is correct on one CPU only (ADR-0438); no TCG run.
+
+## F7 notes
+
+- Built (ADR-0439, proposed): `bind`, `listen`, `accept`, `accept4` and `connect` of a path for `SOCK_STREAM` and `SOCK_SEQPACKET` Unix
+  sockets. The node is a file of the `/tmp` service (`fsd --memory`) with `S_IFSOCK` kept in the service; `listen` sends the
+  service the listener channel's end; `connect` opens the node with `WRITE` through the connecting program's own table and sends the far end of a
+  new pair, which the service forwards unread and the listener validates. `crates/zoraya-posix/src/unix_file.rs`, the socket nodes of
+  `crates/zoraya-fs-service` (messages 41 to 43), `fsd`'s transport (three handles in a write; `Outgoing::Refused`).
+- **Not built, and the "done when" is not met:** TCP `bind`/`listen`/`accept` (`EOPNOTSUPP`), so `python3 -m http.server` does not serve a
+  file to `curl`. Reading the code: the scope already has `ListenRule` (so the listener grant is a rule that exists, ADR-0440 item 1), but `netd` has no
+  `listen` request and its stack has no loopback interface, so a connection to `127.0.0.1` leaves through the NIC and does not return.
+  Both are new network code with a QEMU network step to prove it, which I judged out of reach on this machine alongside the Unix half; ADR-0440 records the design
+  and the first spike (smoltcp's two-interface dispatch). No Python step was added for the same reason.
+- Not built: sockets in a program's own directory (no kind in the bootstrap record, and `fsd` has no transient nodes; ADR-0439 item 1, the
+  architect's question), datagram `bind`.
+- Checked: INV-0412-3 (`unix::tests::bind_is_allowed_only_in_the_tmp_entry`, `tests/socketfile.rs`, `t_unix file`) and INV-0439-1 to -3
+  (`docs/adr/invariants.md`; Total 859).
+- Run: `cargo test -p zoraya-fs-service -p zoraya-posix -p zoraya-proto-file` (all pass), `make check` (passes), `make test-libposix`
+  (exit 0: `t_unix file` through zosh, `t_spawn` and the other cases, `t_shared`, the `top` check, `zoraya-fsck` clean).
+- Found by the in-QEMU test, not the host's: a socket made without `SOCK_CLOEXEC` makes `posix_spawn` fail with `EBADF` (ADR-0433 item 6), so `t_unix file`
+  makes its sockets close-on-exec, as a program that spawns a second one does. Found by thinking about the kernel's rule for moved handles:
+  the service forwards a far end with the type's full rights, and the kernel refuses a handle that has fewer; the first version read that
+  refusal as a dead listener, so any connector could have ended a listener. `Outgoing::Refused` separates them (test and mutant).
+- Mutation: `tools/mutants/sockets-f7.toml`, 23 hand mutants of the service and the library, 23 caught after two survivors got tests
+  (a rename onto itself, `accept4`'s flags) and two equivalent ones were noted in the list; `make mutants-host CRATE=zoraya-posix --in-diff` below.
+- Limits (ADR-0439): the 256 nodes of the service are shared by the line; a node stays after its listener goes until `unlink`; the queue is the channel's 64
+  messages and a blocking `connect` into a full queue is `EAGAIN`; `readdir` shows a socket file as a plain name; CPython's `test_socket`
+  server classes and the asyncio cases that said "bind (plan part F7)" in `tests/python/regr-ignore.txt` were not run (no Python rootfs
+  was built here): `test-python-regr` must show whether an `AF_UNIX` server now passes or hangs a case.

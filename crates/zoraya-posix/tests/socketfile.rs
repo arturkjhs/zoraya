@@ -15,7 +15,7 @@ use zoraya_abi::posix::{EntryKind, Facts};
 use zoraya_posix::errno::*;
 use zoraya_posix::poll::*;
 use zoraya_posix::process::{AT_FDCWD, Desc, Posix, o};
-use zoraya_posix::socket::{SO_ACCEPTCONN, SOCK_NONBLOCK, SOL_SOCKET};
+use zoraya_posix::socket::{SO_ACCEPTCONN, SO_PROTOCOL, SOCK_NONBLOCK, SOL_SOCKET};
 use zoraya_posix::sys::Sys;
 use zoraya_posix::unix::{AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
 
@@ -131,6 +131,7 @@ fn a_stream_connects_by_path_and_both_sides_talk() {
     assert_eq!(revents(&mut a, s, POLLIN) & POLLIN, POLLIN);
     let d = a.p.accept(s, false, false).unwrap();
     assert_eq!(a.p.getsockopt(s, SOL_SOCKET, SO_ACCEPTCONN), Ok(1));
+    assert_eq!(a.p.getsockopt(s, SOL_SOCKET, SO_PROTOCOL), Ok(0));
     assert_eq!(a.p.getsockopt(d, SOL_SOCKET, SO_ACCEPTCONN), Ok(0));
     // The accepted socket has the listener's name and no peer name.
     assert_eq!(a.p.unix_sockaddr(d, false).unwrap(), un("/tmp/sock"));
@@ -576,4 +577,24 @@ fn descriptors_cross_a_connection_made_through_a_socket_file() {
         a.write(y, b"hello over a moved end").unwrap();
         assert_eq!(b.read(got.fds[0], 100).unwrap(), b"hello over a moved end");
     }
+}
+
+/// A `/tmp` entry whose service keeps no socket nodes (an older or foreign service) refuses the type bits
+/// (`EINVAL`) and leaves nothing behind.
+#[test]
+fn a_tmp_service_without_socket_nodes_refuses_bind_and_leaves_nothing() {
+    let mut r = rig();
+    let net = r.net.clone();
+    let (plain, tmp) = volume(&net, 256);
+    r.p.sys.services.push(plain);
+    r.p.add_entry("/tmp", EntryKind::Tmp, Some(tmp));
+    let s = sock(&mut r, SOCK_STREAM);
+    assert_eq!(r.p.bind(s, &un("/tmp/x")), Err(EINVAL));
+    assert_eq!(
+        r.p.stat_at(AT_FDCWD, b"/tmp/x", 0),
+        Err(ENOENT),
+        "no file left"
+    );
+    // The socket is still unbound, and can bind where the service allows it.
+    assert_eq!(r.p.listen(s, 1), Err(EINVAL));
 }

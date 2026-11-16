@@ -220,3 +220,17 @@ replace = '''                    None
             }
             if self.state != State::Connected {'''
 note = "poll: a listener is readable when a connection waits"
+
+[[mutant]]
+id = "F7-dead-listener-keeps-its-owner"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''                    if c.listening == Some(id) {'''
+replace = '''                    if c.listening != Some(id) {'''
+note = "a connection whose listener died listens again"
+
+[[mutant]]
+id = "F7-publish-over-keeps-the-entry"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        let replaced = if mode == PublishMode::Replace {'''
+replace = '''        let replaced = if false {'''
+note = "INV-0439-2: a name taken by publish frees the node's entry"
