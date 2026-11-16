@@ -575,6 +575,10 @@ static TESTS: &[Test] = &[
         run: a_fork_child_of_an_image_process_maps_the_images_frames,
     },
     Test {
+        name: "a_fork_child_of_an_image_process_ending_first_frees_with_the_last",
+        run: a_fork_child_of_an_image_process_ending_first_frees_with_the_last,
+    },
+    Test {
         name: "an_images_pages_hold_the_files_bytes_piece_by_piece",
         run: an_images_pages_hold_the_files_bytes_piece_by_piece,
     },
@@ -1652,6 +1656,15 @@ fn an_images_pages_outlive_its_handle_and_go_with_its_last_process() {
 /// segments, takes no frame and no charge for them, and the creator's use does
 /// not move; the frames go with the last holder, whichever ends first.
 fn a_fork_child_of_an_image_process_maps_the_images_frames() {
+    a_fork_child_of_an_image_process(false);
+}
+
+/// The same, with the child ending first.
+fn a_fork_child_of_an_image_process_ending_first_frees_with_the_last() {
+    a_fork_child_of_an_image_process(true);
+}
+
+fn a_fork_child_of_an_image_process(child_first: bool) {
     use crate::memory::user::{Copied, PlanItem, SnapshotBuild};
     let (_, file) = ramdisk::find("hello").expect("hello");
     let before = frames_accounted();
@@ -1715,21 +1728,35 @@ fn a_fork_child_of_an_image_process_maps_the_images_frames() {
     // nobody but the creator pays; the creator's use is as it was.
     assert_eq!(job2.usage(false).user, job1.usage(false).user);
     assert_eq!(creator.usage(false), paid, "a fork charged the creator");
-    // Ends in either order: the image, the parent, then the child last.
-    drop(image);
-    end_suspended(&parent);
-    drop(parent);
-    crate::reaper::drain();
-    assert_eq!(
-        creator.usage(false).user,
-        kept.bytes(),
-        "the child holds the pages"
-    );
-    assert!(
-        frames_accounted() < before,
-        "and the frames are still there"
-    );
-    drop(child);
+    let held = kept.bytes();
+    if child_first {
+        // The child first: the image and the parent still hold the pages.
+        drop(child);
+        crate::reaper::drain();
+        assert_eq!(
+            creator.usage(false).user,
+            held,
+            "the parent holds the pages"
+        );
+        end_suspended(&parent);
+        drop(parent);
+        crate::reaper::drain();
+        assert_eq!(creator.usage(false).user, held, "the image holds the pages");
+        assert!(frames_accounted() < before);
+        drop(image);
+    } else {
+        // The creator's side first: the image, the parent, then the child last.
+        drop(image);
+        end_suspended(&parent);
+        drop(parent);
+        crate::reaper::drain();
+        assert_eq!(creator.usage(false).user, held, "the child holds the pages");
+        assert!(
+            frames_accounted() < before,
+            "and the frames are still there"
+        );
+        drop(child);
+    }
     crate::reaper::drain();
     assert_eq!(creator.usage(false).user, 0);
     assert_eq!(frames_accounted(), before);

@@ -1,6 +1,7 @@
 # Plan part F6 (INV-0438-2): the C half. With no image charge, a spawn of the file costs the
 # launcher's job nothing for the image and `t_shared` must fail (review 2: before, the
-# 1 MiB buffer alone passed it). Run by `make mutants`; one build and one boot each.
+# 1 MiB buffer alone passed it), and a leaked image must fail the `top` step (re-check R2).
+# Run by `make mutants`; one build and one boot each.
 tests = ["make -s test-libposix"]
 timeout = 3000
 
@@ -10,3 +11,11 @@ file = "kernel/src/process.rs"
 find = '''    let object = MemoryObject::new(kept.bytes(), false, Some(job))?;'''
 replace = '''    let object = MemoryObject::new(kept.bytes(), false, None)?;'''
 note = "INV-0438-2: t_shared sees the spawn of the file cost L nothing for the image"
+
+[[mutant]]
+id = "F6-image-never-freed"
+file = "kernel/src/process.rs"
+find = '''    keep_program(memory, &program, &kept, &object)?;'''
+replace = '''    keep_program(memory, &program, &kept, &object)?;
+    core::mem::forget(object.clone());'''
+note = "INV-0438-3 (run alone with the two other scripts of the target replaced by an empty one, because the leak ends t_spawn first: make test-libposix POSIX_CORE_SCRIPT=EMPTY POSIX_CORE_MAPS_SCRIPT=EMPTY): every image's pages stay charged for ever; the room of `top.script` ends the second run 956K higher than the first (tools/check-top-image.py)"

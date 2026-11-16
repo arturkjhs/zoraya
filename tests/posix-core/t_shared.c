@@ -274,9 +274,12 @@ static unsigned long long memory_of(pid_t pid)
 
 /* Waits for the file the script writes after it has read `top`, with no time
  * limit but the runner's. */
-static void phase(const char *what, unsigned long long kept)
+static void phase(pid_t l, const char *what, unsigned long long kept)
 {
 	struct stat sb;
+	/* L's job settled first: a file's object that L closed is still charged
+	 * while the reaper holds it, and the script reads `top` right after. */
+	(void)memory_of(l);
 	printf("t_shared: keep: %s (an image keeps exactly %llu bytes)\n", what, kept);
 	fflush(stdout);
 	while (stat("/work/t_shared.go", &sb))
@@ -329,13 +332,13 @@ static int driver(int keep)
 		/* The script reads `top` in a room at each phase (plan part F6's
 		 * "done when"): L alone; then three spawns of its own image; then one
 		 * spawn of the file. */
-		phase("L alone", kept);
+		phase(l, "L alone", kept);
 		ask('s', u, 8);
 		ask('s', u, 8);
 		ask('s', u, 8);
-		phase("three children of its own image", kept);
+		phase(l, "three children of its own image", kept);
 		ask('p', u, 8);
-		phase("and one child of the file", kept);
+		phase(l, "and one child of the file", kept);
 	} else {
 		/* The first spawn of its own image, which also settles L's heap. */
 		ask('s', u, 8);
