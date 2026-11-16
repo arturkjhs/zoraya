@@ -366,8 +366,74 @@ static void test_expect_no_reach(void)
 	printf("tcptest: no reach grant ok\n");
 }
 
+/* Plan part F9 (proposed ADR-0442): each room has its own loopback. The script
+ * starts `--serve PORT TAG` as a background job in one room, then in another
+ * room (or the same) runs `--probe PORT EXPECT [COUNT]`.
+ *
+ * serve: listens on PORT (any room may use the same port: a bind in another
+ * room is no EADDRINUSE), prints a line the script waits for, and answers each
+ * connection with the one byte TAG. It gives up after 120 s with no client. */
+static int serve(int port, char tag)
+{
+	int err = 0, l = listener(port, &err);
+	if (l < 0) {
+		printf("tcptest: serve %d FAIL: listener errno %d\n", port, err);
+		return 1;
+	}
+	printf("tcptest: serving %c on %d\n", tag, port);
+	fflush(stdout);
+	for (;;) {
+		struct pollfd p = {.fd = l, .events = POLLIN};
+		int c;
+		if (poll(&p, 1, 120000) <= 0)
+			break;
+		c = accept(l, NULL, NULL);
+		if (c < 0)
+			continue;
+		(void)!write(c, &tag, 1);
+		close(c);
+	}
+	close(l);
+	return 0;
+}
+
+/* probe: EXPECT is the tag a listener of this room answers with, or `none`:
+ * every one of COUNT connects must then be ECONNREFUSED (the answer of no
+ * listener, not EACCES or anything that says another room listens), and more
+ * than the 64 a queue holds changes nothing for another room's listener. */
+static int probe(int port, const char *expect, int count)
+{
+	int none = strcmp(expect, "none") == 0;
+	for (int i = 0; i < count; i++) {
+		int fd = client(port);
+		char b = 0;
+		if (none) {
+			if (fd >= 0 || errno != ECONNREFUSED) {
+				printf("tcptest: probe %d FAIL: connect %d gave %d errno %d, want ECONNREFUSED\n", port, i, fd, errno);
+				if (fd >= 0)
+					close(fd);
+				return 1;
+			}
+			continue;
+		}
+		if (fd < 0 || !ready(fd) || read(fd, &b, 1) != 1 || b != expect[0]) {
+			printf("tcptest: probe %d FAIL: wanted %s, got fd %d errno %d byte %d\n", port, expect, fd, errno, b);
+			if (fd >= 0)
+				close(fd);
+			return 1;
+		}
+		close(fd);
+	}
+	printf("tcptest: probe %d %s x%d ok\n", port, expect, count);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc > 3 && strcmp(argv[1], "--serve") == 0)
+		return serve(atoi(argv[2]), argv[3][0]);
+	if (argc > 3 && strcmp(argv[1], "--probe") == 0)
+		return probe(atoi(argv[2]), argv[3], argc > 4 ? atoi(argv[4]) : 1);
 	if (argc > 1 && (strcmp(argv[1], "--no-listen") == 0 || strcmp(argv[1], "-L") == 0)) {
 		test_expect_no_listen();
 		return failures ? 1 : 0;

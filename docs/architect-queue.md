@@ -89,6 +89,7 @@ the runner itself in a job of their own; `vttest` pinned and built with 10d.
 - ADR-0441 accepted with a change: each room has its own loopback (a connect to `127.0.0.1:PORT` reaches only listeners of the connecting program's
   room; reaching another room is a later, explicit grant). Built as **part F9**, with a test that a program in room B cannot reach a listener in room A
   with `+net 127.0.0.1:PORT`. A gate condition (ADR-0268).
+  **F9 built** (branch `work/f9`, ADR-0442 proposed): the loopback is per room and the loopback condition of ADR-0268's gate is met; see the F9 report for the head commit.
 - F6: the room charging of a program image is built now as **part F10** (`image_create` takes the job to charge; the shell passes the room's job; a test
   that a room at its memory limit cannot start a new program through the shell). A gate condition too (ADR-0262: what is made for a client is paid by the client).
 - Backlog (next stage): listeners reachable from the NIC (ADR-0440 Option B, a second smoltcp interface) and the rooms' `+listen` words and pills.
