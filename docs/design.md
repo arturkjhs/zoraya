@@ -2235,7 +2235,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   served: no connection from the NIC reaches a listener (a second smoltcp interface with a listening socket would, ADR-0440
   item 5, read in smoltcp's source and not measured); the loopback is the machine's, not an account's or a room's (`netd` knows
   no rooms); no `localhost`; no per-connection `ECONNRESET`; `getsockname` of a socket `connect` made is the wildcard and 0;
-  `bind` takes only the wildcard and 127.0.0.0/8; `SO_REUSEADDR` is ignored; CPython's `test_socket` server classes were not
+  `bind` takes only the wildcard and 127.0.0.0/8; `bind(0)` then `getsockname` before `listen` reads port 0 (netd picks at `listen`: `socketserver`'s `server_port` is 0, backlog); if the session account holds all 8 listeners a `+listen` line gets no `netd` connection at all (the carve fails whole); `SO_REUSEADDR` is ignored; CPython's `test_socket` server classes were not
   run (`tests/python/regr-ignore.txt` still lists the asyncio cases F2 and F7a ignored). Tests: `cargo test -p zoraya-net`
   (`service_tests.rs`: the grant, the bounds at exactly the bound, the loopback's rules), `crates/zoraya-posix/tests/tcplisten.rs`
   (a fake `netd`), `cargo test -p zoraya-shell netgrant`, `tests/posix-net/tcptest.c` (in `make test-net-posix`: the refusals, the 65th

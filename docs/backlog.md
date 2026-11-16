@@ -656,5 +656,6 @@ per image (the image's pages once, however many processes run from it, as ADR-04
 ## TCP bind of port 0 before listen (plan part F7b)
 
 `bind(0)` then `getsockname` before `listen` gives port 0: netd picks the port at `listen` (ADR-0441). CPython's
-`find_unused_port`, xmlrpc and servers that read the port before listening need it at `bind`. Needs a port reserved with `netd`
+`socketserver` reads `getsockname()` straight after `bind` (`server_port` is 0, `wsgiref` gives `SERVER_PORT=0`; `http.server` prints
+the right port only because it reads again after `listen`), and `find_unused_port` and xmlrpc read it before too. Needs a port reserved with `netd`
 at `bind` (a request, a bound on reservations) or a library-side pick that `listen` asks for exactly.

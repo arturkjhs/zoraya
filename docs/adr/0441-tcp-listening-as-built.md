@@ -140,12 +140,14 @@ its own: a listener cannot do more to the client than the client's ends allow, a
      untrusted line has no `+net 127.0.0.1` word to give, and a trusted one is the person's own grant.
   2. Whether the NIC is listenable (Option B).
 - **Known limitations of the build.** `bind` of port 0 followed by `getsockname` *before* `listen` reads port 0: the port is
-  picked by `netd` at `listen` (CPython's `socketserver` reads it after `listen`, but `test.support`'s `find_unused_port`,
-  xmlrpc and some servers read it before). Fixing it needs a port reserved at `bind` (a new request or a library-side pick that
-  `netd` may refuse), so it is not built; recorded in `docs/backlog.md`. `netd` keys listeners on the port alone (not
-  address): `bind` of 127.0.0.1 and of 0.0.0.0 on one port are the same listener. If the holders of the session account (a
-  line's own programs that join it instead of carving) take all 8 listeners, a `+listen` line of a carved account has its
-  listen refused (`ENOBUFS`) and the network of that line is useless for serving.
+  picked by `netd` at `listen`. CPython's `socketserver` reads `getsockname()` straight after `bind` (so on port 0
+  `server_address` and `server_port` are 0, and `wsgiref` gives `SERVER_PORT=0`); `http.server` prints the right port only
+  because it reads `getsockname()` again after `listen`; `test.support`'s `find_unused_port` and xmlrpc read it before too.
+  Fixing it needs a port reserved at `bind` (a new request or a library-side pick that `netd` may refuse), so it is not built;
+  recorded in `docs/backlog.md` and `docs/design.md`. `netd` keys listeners on the port alone (not address): `bind` of 127.0.0.1
+  and of 0.0.0.0 on one port are the same listener. If the holders of the session account take all 8 listeners, a `+listen` line's
+  carve fails as a whole (`carve_with`: the parent cannot give the listener) and the shell's `.ok()` gives the program no `netd`
+  connection at all: every network call of that line fails (`EACCES`), not only `listen`.
 
 ## Invariants
 
