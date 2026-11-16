@@ -6,13 +6,13 @@
 < PSURF> 
 > sh /tests/w4.sh\r
 % boot
-< W4-CONFIGURE w4-g
+limit 450 < W4-CONFIGURE w4-g
 % w4-g-configure
-< W4-STEP w4-p configure
+limit 450 < W4-STEP w4-p configure
 % w4-g-rest
-< W4-CONFIGURE w4-p
+limit 450 < W4-CONFIGURE w4-p
 % w4-p-configure
-< W4-DONE
+limit 450 < W4-DONE
 % w4-p-rest
 < PSURF> 
 > exit\r

@@ -29,6 +29,17 @@
 //!                 previous `%` (or the start), for the stage 6 tables
 //! ```
 //!
+//! limit SECONDS STEP
+//!                 STEP (any of the above) with SECONDS as its limit
+//! ```
+//!
+//! Each step that waits has a limit of its own: 120 s (`STEP_LIMIT`), or what
+//! `limit` gives it, four times that under TCG (`TCG_FACTOR`), and a `~`
+//! gets its own time on top. Before this a step had only the run's limit
+//! (`--timeout`), so a line that never came cost the whole of it. A step
+//! that takes 5 s or more prints `RUNNER-STEP N SECONDS STEP` (N counts the
+//! steps from 1), so that the limits can be set from what the runs measured.
+//!
 //! TEXT and KEYS take the escapes \r \n \e \\ and \xHH.
 //!
 //! A run passes if every step passed, no forbidden text appeared, and QEMU
@@ -61,7 +72,19 @@ pub enum Step {
     Distinct(usize, String),
     /// A UTC time the guest printed, within this many seconds of the host's.
     Clock(u64),
+    /// `limit SECONDS STEP`: the step with its own limit instead of
+    /// [`STEP_LIMIT`] (times [`TCG_FACTOR`] under TCG as that is).
+    Limit(u64, Box<Step>),
 }
+
+/// How long a step that waits may take, when no `limit` says otherwise.
+/// The run's own limit (`--timeout`) still ends the run.
+const STEP_LIMIT: Duration = Duration::from_secs(120);
+/// How many times [`STEP_LIMIT`] (or a step's own limit) a step gets under
+/// TCG, as in the GUI runner.
+const TCG_FACTOR: u32 = 4;
+/// A step that takes at least this long is reported (`RUNNER-STEP`).
+const REPORT_STEP: Duration = Duration::from_secs(5);
 
 /// The words that follow each occurrence of `prefix` in `text`, each up to
 /// the next whitespace, and only if the word is finished (followed by one).
@@ -173,7 +196,33 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
         let (kind, rest) = line
             .split_once(' ')
             .ok_or(format!("line {number}: no argument"))?;
-        steps.push(match kind {
+        if kind == "limit" {
+            let bad = |what: &str| format!("line {number}: {what}");
+            let (secs, step) = rest
+                .split_once(' ')
+                .ok_or_else(|| bad("limit SECONDS STEP"))?;
+            let secs: u64 = secs
+                .parse()
+                .ok()
+                .filter(|s| *s > 0)
+                .ok_or_else(|| bad("limit SECONDS STEP, a whole number of seconds above 0"))?;
+            let (kind, rest) = step
+                .split_once(' ')
+                .ok_or_else(|| bad("limit SECONDS STEP"))?;
+            if kind == "limit" {
+                return Err(bad("one limit to a step"));
+            }
+            steps.push(Step::Limit(secs, Box::new(parse_step(number, kind, rest)?)));
+            continue;
+        }
+        steps.push(parse_step(number, kind, rest)?);
+    }
+    Ok(steps)
+}
+
+fn parse_step(number: usize, kind: &str, rest: &str) -> Result<Step, String> {
+    {
+        Ok(match kind {
             "<" => Step::Expect(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "^" => Step::Next(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             ">" => Step::Send(unescape(rest).map_err(|e| format!("line {number}: {e}"))?),
@@ -236,9 +285,8 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                     .map_err(|_| format!("line {number}: not a number of seconds"))?,
             ),
             _ => return Err(format!("line {number}: unknown step")),
-        });
+        })
     }
-    Ok(steps)
 }
 
 /// What has been seen so far, and where the next expectation starts. At
@@ -260,12 +308,26 @@ pub struct Seen {
 }
 
 /// Drops SGR sequences (`ESC [ digits ; ... m`): colour and faint are not
-/// text, so scripts match what a person reads (ADR-0154). Gives the bytes
+/// text, so scripts match what a person reads (ADR-0154), and the prompt's
+/// `CR ESC [ K` (see below). Gives the bytes
 /// kept, and the start of a sequence the input ends inside.
 pub fn strip_sgr(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        // The shell's prompt starts with `CR ESC [ K` (clear the row, ADR-0387),
+        // which shows nothing on a clean row: a script matches `\r\n~>`.
+        if bytes[i] == b'\r' {
+            let rest = &bytes[i + 1..];
+            if rest.starts_with(b"\x1b[K") {
+                i += 4;
+                continue;
+            }
+            if b"\x1b[K".starts_with(rest) {
+                // The sequence may go on in the next read.
+                return (out, bytes[i..].to_vec());
+            }
+        }
         if bytes[i] == 0x1b {
             let mut j = i + 1;
             if j == bytes.len() {
@@ -419,11 +481,23 @@ fn pump(child: &mut Child) -> mpsc::Receiver<Vec<u8>> {
 struct Link<'a> {
     rx: mpsc::Receiver<Vec<u8>>,
     seen: &'a mut Seen,
+    /// What ends the wait now: the step's, or the run's if that comes first.
     deadline: Instant,
+    /// The run's own end (`--timeout`).
+    run_deadline: Instant,
+    /// What the step being played may take.
+    limit: Duration,
+    /// The machine runs under TCG.
+    tcg: bool,
     out: output::Output,
 }
 
 impl Link<'_> {
+    /// Starts the step's time now.
+    fn arm(&mut self) {
+        self.deadline = self.run_deadline.min(Instant::now() + self.limit);
+    }
+
     /// Takes what arrives before `limit`: false if the output has ended,
     /// and an error past `output::LOG_CAP` of it.
     fn receive(&mut self, limit: Instant) -> Result<bool, String> {
@@ -474,6 +548,7 @@ fn drive(
     seen: &mut Seen,
     deadline: Instant,
     label: &str,
+    tcg: bool,
 ) -> Result<(), String> {
     let stdin = child.stdin.take().ok_or("stdin is not piped")?;
     let rx = pump(child);
@@ -481,6 +556,9 @@ fn drive(
         rx,
         seen,
         deadline,
+        run_deadline: deadline,
+        limit: STEP_LIMIT,
+        tcg,
         // The unit tests keep their logs out of the tree.
         #[cfg(not(test))]
         out: output::Output::new(label),
@@ -501,123 +579,155 @@ fn steps_then_drain(
     let deadline = link.deadline;
     let far = deadline + Duration::from_secs(1);
     let mut mark = Instant::now();
-    for step in steps {
-        match step {
-            Step::Mark(name) => {
-                let now = Instant::now();
-                let line = format!(
-                    "RUNNER-TIME {name} {:.3}",
-                    now.duration_since(mark).as_secs_f64()
-                );
-                link.out.counted_line(&line, false, line.len() + 1)?;
-                mark = now;
-            }
-            Step::Forbid(text) => link.seen.forbid(text),
-            Step::Distinct(n, prefix) => loop {
-                let words = words_after(link.seen.all(), prefix);
-                if words.len() >= *n {
-                    for (i, a) in words.iter().enumerate() {
-                        if words[..i].contains(a) {
-                            return Err(format!("{prefix:?} was followed by {a:?} twice"));
+    for (index, outer) in steps.iter().enumerate() {
+        let (limit, step) = step_limit(outer, link.tcg);
+        link.limit = limit;
+        link.arm();
+        let began = Instant::now();
+        let done = (|| -> Result<(), String> {
+            match step {
+                Step::Mark(name) => {
+                    let now = Instant::now();
+                    let line = format!(
+                        "RUNNER-TIME {name} {:.3}",
+                        now.duration_since(mark).as_secs_f64()
+                    );
+                    link.out.counted_line(&line, false, line.len() + 1)?;
+                    mark = now;
+                }
+                Step::Forbid(text) => link.seen.forbid(text),
+                Step::Distinct(n, prefix) => loop {
+                    let words = words_after(link.seen.all(), prefix);
+                    if words.len() >= *n {
+                        for (i, a) in words.iter().enumerate() {
+                            if words[..i].contains(a) {
+                                return Err(format!("{prefix:?} was followed by {a:?} twice"));
+                            }
                         }
+                        break;
                     }
-                    break;
-                }
-                if let Some(bad) = link.seen.violation() {
-                    return Err(format!("forbidden output: {bad}"));
-                }
-                if Instant::now() >= link.deadline {
-                    return Err(format!("timed out waiting for {n} words after {prefix:?}"));
-                }
-                if !link.receive(link.deadline)? {
-                    return Err(format!("output ended before {n} words after {prefix:?}"));
-                }
-            },
-            Step::Clock(within) => loop {
-                if let Some((guest, end)) = find_utc(link.seen.since_match()) {
-                    let host = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs() as i64);
-                    link.seen.advance(end);
-                    if (host - guest).unsigned_abs() > *within {
-                        return Err(format!(
-                            "the guest's clock is {guest}, the host's {host}: more than {within} s apart"
-                        ));
-                    }
-                    break;
-                }
-                if let Some(bad) = link.seen.violation() {
-                    return Err(format!("forbidden output: {bad}"));
-                }
-                if Instant::now() >= link.deadline {
-                    return Err("timed out waiting for a UTC time".to_string());
-                }
-                if !link.receive(link.deadline)? {
-                    return Err("output ended before a UTC time".to_string());
-                }
-            },
-            Step::Send(bytes) => send(&mut stdin, bytes)?,
-            Step::Expect(text) => {
-                link.expect(text, far)?;
-            }
-            Step::Next(text) => {
-                link.expect(text, far)?;
-                let gap = link.seen.gap(text.len());
-                if !gap.is_empty() {
-                    return Err(format!("{gap:?} came before {text:?}"));
-                }
-            }
-            Step::Absent(text) => {
-                if link.seen.between(text) {
-                    return Err(format!("{text:?} appeared where it must not"));
-                }
-            }
-            Step::Once(text) => {
-                let count = link.seen.count(text);
-                if count != 1 {
-                    return Err(format!("{text:?} appeared {count} times"));
-                }
-            }
-            Step::Wait(text) => {
-                while !link.seen.since_match().contains(text.as_str()) {
                     if let Some(bad) = link.seen.violation() {
                         return Err(format!("forbidden output: {bad}"));
                     }
                     if Instant::now() >= link.deadline {
-                        return Err(format!("timed out waiting for {text:?}"));
+                        return Err(format!("timed out waiting for {n} words after {prefix:?}"));
                     }
                     if !link.receive(link.deadline)? {
-                        return Err(format!("output ended before {text:?}"));
+                        return Err(format!("output ended before {n} words after {prefix:?}"));
                     }
-                }
-            }
-            Step::Quiet(ms, text) => {
-                let until = Instant::now() + Duration::from_millis(*ms);
-                let start = link.seen.since_match().len();
-                while Instant::now() < until {
-                    if !link.receive(until)? {
+                },
+                Step::Clock(within) => loop {
+                    if let Some((guest, end)) = find_utc(link.seen.since_match()) {
+                        let host = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs() as i64);
+                        link.seen.advance(end);
+                        if (host - guest).unsigned_abs() > *within {
+                            return Err(format!(
+                                "the guest's clock is {guest}, the host's {host}: more than {within} s apart"
+                            ));
+                        }
                         break;
                     }
-                }
-                if link.seen.since_match()[start..].contains(text.as_str()) {
-                    return Err(format!("{text:?} arrived in a quiet time"));
-                }
-            }
-            Step::Until(keys, text) => loop {
-                send(&mut stdin, keys)?;
-                let limit = Instant::now() + Duration::from_millis(200);
-                if link.expect(text, limit)? {
-                    break;
-                }
-            },
-            Step::Repeat(n, keys, text) => {
-                for _ in 0..*n {
-                    send(&mut stdin, keys)?;
+                    if let Some(bad) = link.seen.violation() {
+                        return Err(format!("forbidden output: {bad}"));
+                    }
+                    if Instant::now() >= link.deadline {
+                        return Err("timed out waiting for a UTC time".to_string());
+                    }
+                    if !link.receive(link.deadline)? {
+                        return Err("output ended before a UTC time".to_string());
+                    }
+                },
+                Step::Send(bytes) => send(&mut stdin, bytes)?,
+                Step::Expect(text) => {
                     link.expect(text, far)?;
                 }
+                Step::Next(text) => {
+                    link.expect(text, far)?;
+                    let gap = link.seen.gap(text.len());
+                    if !gap.is_empty() {
+                        return Err(format!("{gap:?} came before {text:?}"));
+                    }
+                }
+                Step::Absent(text) => {
+                    if link.seen.between(text) {
+                        return Err(format!("{text:?} appeared where it must not"));
+                    }
+                }
+                Step::Once(text) => {
+                    let count = link.seen.count(text);
+                    if count != 1 {
+                        return Err(format!("{text:?} appeared {count} times"));
+                    }
+                }
+                Step::Wait(text) => {
+                    while !link.seen.since_match().contains(text.as_str()) {
+                        if let Some(bad) = link.seen.violation() {
+                            return Err(format!("forbidden output: {bad}"));
+                        }
+                        if Instant::now() >= link.deadline {
+                            return Err(format!("timed out waiting for {text:?}"));
+                        }
+                        if !link.receive(link.deadline)? {
+                            return Err(format!("output ended before {text:?}"));
+                        }
+                    }
+                }
+                Step::Quiet(ms, text) => {
+                    let until = Instant::now() + Duration::from_millis(*ms);
+                    let start = link.seen.since_match().len();
+                    while Instant::now() < until {
+                        if !link.receive(until)? {
+                            break;
+                        }
+                    }
+                    if link.seen.since_match()[start..].contains(text.as_str()) {
+                        return Err(format!("{text:?} arrived in a quiet time"));
+                    }
+                }
+                Step::Until(keys, text) => loop {
+                    send(&mut stdin, keys)?;
+                    let limit = Instant::now() + Duration::from_millis(200);
+                    if link.expect(text, limit)? {
+                        break;
+                    }
+                },
+                Step::Repeat(n, keys, text) => {
+                    for _ in 0..*n {
+                        // Each round has the limit, not the whole.
+                        link.arm();
+                        send(&mut stdin, keys)?;
+                        link.expect(text, far)?;
+                    }
+                }
+                Step::Limit(..) => unreachable!("step_limit takes the limit off"),
             }
+            Ok(())
+        })();
+        let took = began.elapsed();
+        if took >= REPORT_STEP {
+            let line = format!(
+                "RUNNER-STEP {} {:.1} {}",
+                index + 1,
+                took.as_secs_f64(),
+                summary(step)
+            );
+            link.out.counted_line(&line, false, line.len() + 1)?;
+        }
+        if let Err(e) = done {
+            return Err(if e.starts_with("timed out") && link.deadline < deadline {
+                format!(
+                    "{e} (step {} was given {} s; `limit SECONDS` before it gives it more)",
+                    index + 1,
+                    limit.as_secs()
+                )
+            } else {
+                e
+            });
         }
     }
+    link.deadline = deadline;
     // The script's last step should have ended the machine: drain the rest.
     drop(stdin);
     while link.receive(deadline)? && Instant::now() < deadline {}
@@ -625,6 +735,43 @@ fn steps_then_drain(
         return Err(format!("forbidden output: {bad}"));
     }
     wait_exit(child, deadline)
+}
+
+/// The step to play and how long it may take: its own limit or
+/// [`STEP_LIMIT`], times [`TCG_FACTOR`] under TCG, and a `~`'s own time on top.
+fn step_limit(step: &Step, tcg: bool) -> (Duration, &Step) {
+    let (limit, step) = match step {
+        Step::Limit(secs, inner) => (Duration::from_secs(*secs), &**inner),
+        s => (STEP_LIMIT, s),
+    };
+    let limit = if tcg { limit * TCG_FACTOR } else { limit };
+    match step {
+        Step::Quiet(ms, _) => (limit + Duration::from_millis(*ms), step),
+        s => (limit, s),
+    }
+}
+
+/// Whether the machine runs under TCG. Only the QEMU launcher is asked what
+/// `auto` resolved to (`--print-accel`); any other command, such as the guests
+/// of the runner's own tests, is not started a second time.
+fn under_tcg(command: &[String]) -> bool {
+    if std::path::Path::new(&command[0]).file_name() == Some(std::ffi::OsStr::new("run-qemu.sh")) {
+        crate::gui::runs_under_tcg(command)
+    } else {
+        command
+            .windows(2)
+            .any(|w| w[0] == "--accel" && w[1] == "tcg")
+    }
+}
+
+/// A step in a few words, for `RUNNER-STEP`.
+fn summary(step: &Step) -> String {
+    let text = format!("{step:?}");
+    let mut short: String = text.chars().take(60).collect();
+    if short.len() < text.len() {
+        short.push_str("...");
+    }
+    short
 }
 
 fn wait_exit(child: &mut Child, deadline: Instant) -> Result<(), String> {
@@ -649,7 +796,7 @@ pub fn run(file: &str, label: &str, timeout: u64, command: &[String]) -> ExitCod
             return ExitCode::FAILURE;
         }
     };
-    match play(&steps, timeout, command, label) {
+    match play_on(&steps, timeout, command, label, under_tcg(command)) {
         Ok(()) => {
             say!("[{label}] PASS: {} steps", steps.len());
             ExitCode::SUCCESS
@@ -661,7 +808,18 @@ pub fn run(file: &str, label: &str, timeout: u64, command: &[String]) -> ExitCod
     }
 }
 
+#[cfg(test)]
 fn play(steps: &[Step], timeout: u64, command: &[String], label: &str) -> Result<(), String> {
+    play_on(steps, timeout, command, label, false)
+}
+
+fn play_on(
+    steps: &[Step],
+    timeout: u64,
+    command: &[String],
+    label: &str,
+    tcg: bool,
+) -> Result<(), String> {
     let mut child = Command::new(&command[0])
         .args(&command[1..])
         .stdin(Stdio::piped())
@@ -671,7 +829,7 @@ fn play(steps: &[Step], timeout: u64, command: &[String], label: &str) -> Result
         .map_err(|e| format!("cannot start {}: {e}", command[0]))?;
     let mut seen = Seen::default();
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let result = drive(steps, &mut child, &mut seen, deadline, label);
+    let result = drive(steps, &mut child, &mut seen, deadline, label, tcg);
     let _ = child.kill();
     let _ = child.wait();
     result
@@ -689,6 +847,25 @@ mod tests {
         seen.add(b"2my\x1b").unwrap();
         seen.add(b"[mz").unwrap();
         assert!(seen.take("xyz"));
+    }
+
+    #[test]
+    fn a_prompts_row_clear_is_dropped_even_when_cut() {
+        assert_eq!(strip_sgr(b"a\r\n\r\x1b[K~> ").0, b"a\r\n~> ");
+        // Other uses of CR and erase-in-line stay.
+        assert_eq!(strip_sgr(b"a\rb\x1b[Kc").0, b"a\rb\x1b[Kc");
+        for cut in 1..4 {
+            let whole = b"x\r\x1b[Ky";
+            let mut seen = Seen::default();
+            seen.add(&whole[..1 + cut]).unwrap();
+            seen.add(&whole[1 + cut..]).unwrap();
+            assert!(seen.take("xy"), "cut after {cut}");
+        }
+        // A CR at the end is kept back until the next read says what it is.
+        let mut seen = Seen::default();
+        seen.add(b"a\r").unwrap();
+        seen.add(b"\nb").unwrap();
+        assert!(seen.take("a\r\nb"));
     }
 
     #[test]
@@ -772,6 +949,53 @@ mod tests {
     fn shell(script: &str, steps: &str, timeout: u64) -> Result<(), String> {
         let command = ["sh", "-c", script].map(String::from);
         play(&parse(steps).unwrap(), timeout, &command, "script-test")
+    }
+
+    #[test]
+    fn a_limit_is_a_step_of_its_own_limit() {
+        assert_eq!(
+            parse("limit 600 < done\n").unwrap(),
+            vec![Step::Limit(600, Box::new(Step::Expect("done".into())))]
+        );
+        for bad in [
+            "limit 0 < x\n",
+            "limit x < x\n",
+            "limit -5 < x\n",
+            "limit 5\n",
+            "limit 5 <\n",
+            "limit 5 ? x\n",
+            "limit 5 limit 5 < x\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_step_gets_its_limit_four_times_under_tcg_and_a_quiet_time_on_top() {
+        let plain = parse("< a\nlimit 600 < a\nlimit 5 ~ 300 a\n").unwrap();
+        assert_eq!(step_limit(&plain[0], false).0, Duration::from_secs(120));
+        assert_eq!(step_limit(&plain[0], true).0, Duration::from_secs(480));
+        assert_eq!(step_limit(&plain[1], false).0, Duration::from_secs(600));
+        assert_eq!(step_limit(&plain[1], true).0, Duration::from_secs(2400));
+        assert_eq!(step_limit(&plain[1], true).1, &Step::Expect("a".into()));
+        assert_eq!(step_limit(&plain[2], false).0, Duration::from_millis(5300));
+    }
+
+    #[test]
+    fn a_step_that_waits_past_its_limit_fails_before_the_run_does() {
+        let began = Instant::now();
+        let e = shell("sleep 30", "limit 1 < never\n", 25).unwrap_err();
+        assert!(e.contains("timed out waiting"), "{e}");
+        assert!(e.contains("step 1 was given 1 s"), "{e}");
+        assert!(began.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_step_within_its_limit_passes_and_a_slow_one_is_reported() {
+        assert_eq!(
+            shell("sleep 1; echo ready", "limit 5 < ready\n", 20),
+            Ok(())
+        );
     }
 
     #[test]

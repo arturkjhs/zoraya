@@ -1267,3 +1267,11 @@ fn a_paste_clears_a_pending_quote_and_a_lone_escape() {
     feed(&mut e, &mut a, b"a");
     assert_eq!(e.text(), "xa");
 }
+
+#[test]
+fn start_clears_the_row_before_the_prompt() {
+    let mut e = Editor::new(Options::default());
+    let mut out = String::new();
+    e.start("~> ", &mut out);
+    assert_eq!(out, "\r\x1b[K~> ");
+}

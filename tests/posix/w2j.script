@@ -6,13 +6,13 @@
 < PSURF> 
 > sh /tests/w2.sh parallel\r
 % boot
-< W2-OK w2j-pipe-j2
+limit 225 < W2-OK w2j-pipe-j2
 % w2j-pipe-j2
-< W2-OK w2j-fifo-j2
+limit 225 < W2-OK w2j-fifo-j2
 % w2j-fifo-j2
-< W2-OK w2j-pipe-j4
+limit 225 < W2-OK w2j-pipe-j4
 % w2j-pipe-j4
-< W2-OK w2j-fifo-j4
+limit 225 < W2-OK w2j-fifo-j4
 % w2j-fifo-j4
 < W2-STATUS 0
 < PSURF> 

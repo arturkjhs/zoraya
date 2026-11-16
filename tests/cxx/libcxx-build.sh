@@ -128,7 +128,11 @@ script() {
         if [ "$1" = slow ] && ! awk -v n="$rel" '{ sub(/#.*/, "") } $1 != "" && ($1 == n || (substr($1, length($1)) == "/" && index(n, $1) == 1)) { f = 1 } END { exit !f }' "$slow"; then
             continue
         fi
-        printf '# %s\n> posixrun -C /work /bin/lc/%s\\r\n< posixrun: exit 0\n< \\r\\n~> \n' "$rel" "$name"
+        # The slow groups' tests take minutes under TCG: each has a quarter of
+        # the run's timeout, as `limit` is multiplied by 4 under TCG.
+        lim=
+        [ "$1" != slow ] || lim='limit 1800 '
+        printf '# %s\n> posixrun -C /work /bin/lc/%s\\r\n%s< posixrun: exit 0\n< \\r\\n~> \n' "$rel" "$name" "$lim"
     done < "$out/list"
     printf '%s\n' '> poweroff\r'
 }

@@ -7,8 +7,8 @@
 < PSURF> 
 > sh /tests/w8.sh j1\r
 % boot
-< W8-RECIPES w8-j1 72
-< W8-OK w8-j1
+limit 150 < W8-RECIPES w8-j1 72
+limit 150 < W8-OK w8-j1
 % w8-j1
 < W8-STATUS 0
 < PSURF> 
