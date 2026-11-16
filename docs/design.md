@@ -2246,7 +2246,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   `NOT_GRANTED` unless the asker holds the new right `ROOM` (16, in `rights::ALL`: `init`'s connection and the shell's root have it, no
   program does); every connection made from one (`Narrow`, `NarrowAccount`, `Duplicate`) keeps its room, so `python3` and `curl` of one
   line (two accounts) are in one room. The shell narrows each program's connection with its current room's name
-  (`zosh.rs`, `net_room`). A refusal across rooms is the answer of no listener (`Failed { REFUSED }`, the same first made-up port), and the
+  (`zosh.rs`, `net_room`). The machine-wide bounds are not room-blind (eight `+listen` programs in one room leave another room's `+listen` line with no `netd` connection: a one-bit channel, an open question of ADR-0442). A refusal across rooms is the answer of no listener (`Failed { REFUSED }`, the same first made-up port), and the
   made-up client port is a counter per listener. Bounds are as before and machine-wide (8 listeners, 64 pending). Limits: a shell names its
   room, so the shell is trusted for it (an untrusted room's launcher, ADR-0269, must get a connection with its room fixed and no `ROOM`: not
   built, net grants in an untrusted room are refused today); one room can use the machine's listener budget and leave another's `listen`

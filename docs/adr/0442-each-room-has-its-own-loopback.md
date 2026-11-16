@@ -96,7 +96,7 @@ a room's `+net 127.0.0.1` reaches that room's own listeners only.
 ## Consequences
 
 - **Positive.** The gate condition of ADR-0441 is met; `python3 -m http.server` and `curl` of one line still meet (same room); a room
-  may use any port; no leak of ports, errors or counters across rooms.
+  may use any port; no port, error code or counter of the connect lookup differs with what another room does. The machine-wide bounds are not room-blind: eight `+listen` programs in room A leave room B's `+listen` line with no `netd` connection at all (a one-bit channel from A to B, and a denial of service); see the open questions.
 - **Negative.** `rights::ALL` has a new bit (a program given `ALL` can name rooms: none is); the wire has a new request; one room can
   exhaust the machine's 8 listeners for another's `listen` (a denial of service of the grant, not a leak).
 - **Follow-up.** The explicit cross-room grant; per-room listener bounds with the room keeper; the untrusted room's connection from
@@ -113,7 +113,7 @@ a room's `+net 127.0.0.1` reaches that room's own listeners only.
 - **INV-0442-3.** A refusal is indistinguishable from no listener, and nothing a listener sees (its clients' made-up ports) depends on another
   room. *Check:* `cargo test -p zoraya-net` (`a_connect_reaches_only_the_listeners_of_its_own_room` compares the whole answer; `a_room_does_not_see_the_peer_ports_of_another`)
   and `make test-net-posix` (70 refused connects, past the 64 a queue holds).
-- **INV-0442-4.** The shell narrows each program's connection into its current room and into no other. *Check:* `make test-net-posix` (the probes of
+- **INV-0442-4.** The shell narrows each POSIX program's connection into its current room and into no other (the native-command path is not tested). *Check:* `make test-net-posix` (the probes of
   each room reach the room's own listener with the same `+net` word); by reading `user/src/bin/zosh.rs` (`net_room`) for the call sites.
 
 ## Open questions
@@ -127,6 +127,10 @@ a room's `+net 127.0.0.1` reaches that room's own listeners only.
   its loopback (both ways). Refuse the name while the old room runs, or add a generation from the keeper.
 - The made-up port search of `listen` 0 starts at the range's start for every room (no cursor shared across rooms, so no room sees another's listens).
 - A native command's connection (the shell's `narrow_room` with budget 0) joins the session account in every room; its room is not covered by a QEMU test.
+
+- **For the architect:** the bounds are machine-wide (item 4), so one room using the listeners or the carved accounts changes what another room's `listen` and carve answer. Either per-room bounds (the room keeper's accounting) or accept the one-bit channel. The gate condition (no port and no queue of another room is exposed) is met either way.
+- **For the architect:** a room removed without `--kill` that keeps running shares its loopback with a new room of the same name, and the room keeper also finds rooms by name (`zoraya-rooms` lib.rs), so the new room joins the old job too. Decide: `room new` refuses a name that still runs, or a generation number in the name.
+- INV-0442-4 is checked on the POSIX path only (the native path, `zosh.rs` `net_room` at the `narrow_room` call for a native command, has no test).
 
 ## Revisit triggers
 
