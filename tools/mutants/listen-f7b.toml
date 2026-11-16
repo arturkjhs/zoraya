@@ -9,7 +9,7 @@
 # `next_candidate` (the stack has no route to 127.x and `tcp_open` refuses it: defence in depth); `handles.len() == 2`
 # in `accept` (`decode` is given the handle count and refuses any but 2); the ephemeral search's start (`next_port`: a rotating start, any covered free port is
 # right); `self.next_peer`'s modulus (the made-up port only has to differ between nearby connections).
-tests = ["cargo test -q -p zoraya-net", "cargo test -q -p zoraya-posix --test tcplisten --lib", "cargo test -q -p zoraya-shell netgrant"]
+tests = ["cargo test -q -p zoraya-net", "cargo test -q -p zoraya-posix --test tcplisten --test socketfile --lib", "cargo test -q -p zoraya-shell netgrant"]
 timeout = 900
 
 [[mutant]]
@@ -196,3 +196,10 @@ file = "crates/zoraya-net/src/loopback.rs"
 find = '''k.accept(end, &accepted, out_read, in_write)'''
 replace = '''k.accept(end, &accepted, in_write, out_read)'''
 note = "the listener reads what the client writes"
+
+[[mutant]]
+id = "F7b-unix-listener-pollout"
+file = "crates/zoraya-posix/src/poll.rs"
+find = '''if want_out && !sk.listening && !sk.unix.as_ref().is_some_and(|u| u.listening) {'''
+replace = '''if want_out && !sk.listening {'''
+note = "a listening Unix socket is never writable either"

@@ -717,3 +717,20 @@ fn connect_completes_before_accept_in_one_process() {
         assert_eq!(a.read(c, 100).unwrap(), b"late");
     }
 }
+
+/// Review of F7b, R2: a listening Unix socket is never writable either:
+/// POLLOUT alone reports nothing, with or without a connection waiting.
+#[test]
+fn a_listening_unix_socket_is_not_reported_writable() {
+    let (mut r, _svc) = tmp_rig();
+    let s = sock(&mut r, SOCK_STREAM);
+    r.p.bind(s, &un("/tmp/pw")).unwrap();
+    r.p.listen(s, 4).unwrap();
+    let mut f = [PollFd {
+        fd: s,
+        events: POLLOUT,
+        revents: 0,
+    }];
+    assert_eq!(r.p.poll_once(&mut f, Some(0)), Ok(Some(0)));
+    assert_eq!(f[0].revents, 0);
+}

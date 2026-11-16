@@ -661,7 +661,8 @@ impl<H: Copy> Socket<H> {
             // A Unix socket: a packet one is one channel, a stream one the
             // two byte streams; what the library already holds is ready.
             if u.listening {
-                // Readable: a connection waits to be accepted; never writable.
+                // Readable: a connection waits to be accepted. `None` for writing
+                // is not "writable": `poll` skips a listener's write side.
                 return if writing {
                     None
                 } else {
@@ -690,7 +691,8 @@ impl<H: Copy> Socket<H> {
             }
         }
         if self.listening {
-            // Readable: a connection waits to be accepted; never writable.
+            // Readable: a connection waits to be accepted. `None` for writing
+            // is not "writable": `poll` skips a listener's write side.
             return if writing {
                 None
             } else {
