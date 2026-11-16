@@ -150,3 +150,9 @@ Updated 2026-11-16. **All of F2 to F8 are merged.**
   `room-image.script` but the script cannot tell the image from the child's own pages alone in a 1M room; the room's row in `top.script`
   reads 987K higher with F10 than with the shell naming its own job (about the 984K image), recorded here, not asserted.
 - Open for the architect: `image_create` still charges a killed job (`spawn` refuses one); see ADR-0443 open questions.
+- Correction (review of F10, finding 1): the failure of `test-qemu-auto-smp4-2g` in `make test-changed` is not the contiguous-create
+  race. It is `t_bound` going over its 2 ms masked limit on process exits (`run 2` and `run 3` over the limit, exit code 3). Measured on
+  this host with `make test-qemu-auto-smp4-2g` alone, three runs each: this branch failed 2 of 3, `origin/main` failed 3 of 3. Largest
+  masked time of the exit steps, in microseconds (branch / main): 400 objects of 256 KiB 4864 / 6847; a process holding 24 MiB 3241 / 4454;
+  256 mappings and 1024 handles 4747 / 4950; 4000 mappings of 4000 objects 2044 / 4440; 16 full ports 1195 / 1157. F10 adds nothing on
+  the exit path, and the failure is on `main` too; it is a backlog item of its own (`t_bound`'s exit paths under 4 CPUs and 2 GiB).
