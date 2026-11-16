@@ -1536,6 +1536,8 @@ fn a_loopback_connect_needs_a_rule_that_names_the_address_and_finds_the_listener
         })
         .collect();
     assert!(ports[0] != ports[1] && ports[1] != ports[2]);
+    assert!(ports.iter().all(|p| *p >= 49152), "{ports:?}");
+    assert_eq!(ports[1], ports[0] + 1);
     // Another address of the /8 is the same loopback, but the rule names
     // 127.0.0.1 only: not granted.
     let Action::Reply(r) = ask(&mut service, client, [127, 0, 0, 2], 8000) else {
