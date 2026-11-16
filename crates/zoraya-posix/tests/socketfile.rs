@@ -328,13 +328,15 @@ fn listen_and_accept_need_a_bound_listening_socket() {
     assert_eq!(r.p.listen(99, 1), Err(EBADF));
     let (p, _) = r.p.pipe(0).unwrap();
     assert_eq!(r.p.accept(p, true, false), Err(ENOTSOCK));
-    // A TCP socket has no listener yet: honest, not silent.
+    // A TCP socket is netd's (plan part F7b, `tests/tcplisten.rs`): this rig
+    // has no network, so `bind` records and `listen` is refused as a
+    // grant-less `connect` is.
     let t = r.p.socket(2, SOCK_STREAM, 0).unwrap();
-    assert_eq!(r.p.listen(t, 1), Err(EOPNOTSUPP));
     assert_eq!(
         r.p.bind(t, &[2, 0, 0, 80, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
-        Err(EOPNOTSUPP)
+        Ok(())
     );
+    assert_eq!(r.p.listen(t, 1), Err(EACCES));
 }
 
 #[test]

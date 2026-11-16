@@ -2,8 +2,8 @@
 //! messages out, over the scripted peers of the parent module.
 
 use super::*;
-use crate::connection::{ConnectTarget, Request, Verdict};
 use crate::accounts::Kind;
+use crate::connection::{ConnectTarget, Request, Verdict};
 use crate::service::{Action, MAX_CONNECTIONS, Service};
 use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode as encode_scope, rights};
 use zoraya_proto_net::{
@@ -1245,10 +1245,7 @@ fn loop_scope(reach: Option<Ports>, listen: &[Ports]) -> Vec<u8> {
 }
 
 fn listen_message(port: u32, t: u32) -> Vec<u8> {
-    bytes(
-        &zoraya_proto_net::Listen { port: Below(port) },
-        t,
-    )
+    bytes(&zoraya_proto_net::Listen { port: Below(port) }, t)
 }
 
 /// `Ok((id, port))` for an allowed listen, `Err(status)` for a refusal.
@@ -1393,7 +1390,7 @@ fn port_zero_picks_a_free_port_above_49151_that_a_rule_covers() {
 #[test]
 fn listeners_are_bounded_per_account_at_exactly_the_bound() {
     use crate::accounts::GLOBAL;
-    use zoraya_proto_net::{Narrowed};
+    use zoraya_proto_net::Narrowed;
     let mut net = Net::new(static_config());
     let mut service = Service::new();
     let root = service.add(Connection::root()).unwrap();
@@ -1416,7 +1413,10 @@ fn listeners_are_bounded_per_account_at_exactly_the_bound() {
     let Action::Narrowed { id: program, reply } = carve else {
         panic!("{carve:?}");
     };
-    assert_eq!(decode::<Narrowed>(&reply, 0).unwrap().1.status.0, status::OK);
+    assert_eq!(
+        decode::<Narrowed>(&reply, 0).unwrap().1.status.0,
+        status::OK
+    );
     let (first, _) = listen_on(&mut service, &mut net, program, 8000).unwrap();
     assert_eq!(
         listen_on(&mut service, &mut net, program, 8001),
@@ -1588,20 +1588,19 @@ fn a_listen_rule_narrows_like_a_reach_rule_and_never_widens() {
     let parent = service
         .add(Connection::new(rights::LISTEN | rights::NARROW, &outer).unwrap())
         .unwrap();
-    let narrow = |service: &mut Service, net: &mut Net, rights, scope: &[u8]| match service
-        .handle(
-            parent,
-            &bytes(
-                &Narrow {
-                    rights,
-                    scope: Data(scope),
-                },
-                2,
-            ),
-            1,
-            &mut net.client,
-            0,
-        ) {
+    let narrow = |service: &mut Service, net: &mut Net, rights, scope: &[u8]| match service.handle(
+        parent,
+        &bytes(
+            &Narrow {
+                rights,
+                scope: Data(scope),
+            },
+            2,
+        ),
+        1,
+        &mut net.client,
+        0,
+    ) {
         Action::Narrowed { id, .. } => Some(id),
         Action::Reply(_) => None,
         other => panic!("{other:?}"),

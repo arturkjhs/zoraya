@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, MemoryObject, Mode, ObjectType,
-    Packet, Status, channel_signals, stream_signals,
+    Packet, Status, StreamReadObject, StreamWriteObject, channel_signals, stream_signals,
 };
 use zoraya_net::accounts::Kind;
 use zoraya_net::config;
@@ -32,7 +32,7 @@ use zoraya_net::dns::Owner;
 use zoraya_net::nic::{Nic, Read, SlotMemory, Wire, Write};
 use zoraya_net::service::{Action, Service};
 use zoraya_net::stack::{Event, Stack};
-use zoraya_proto_net::{Failed, reason};
+use zoraya_proto_net::{Accepted, Connected, Failed, LOOPBACK, Listening, reason};
 use zoraya_proto_nic::{
     Attach, Done, Info, InfoReply, OBJECT_SIZE, SLOT_SIZE, SLOTS, status as nic_status,
 };
@@ -58,6 +58,12 @@ const KEY_CONNECTION: u64 = 100;
 /// (writable). A slot is below `zoraya_net::conn::MAX_CONNS`.
 const KEY_OUT: u64 = 1000;
 const KEY_IN: u64 = 2000;
+/// Keys of the listener channels (`KEY_LISTENER + id`; ids are below
+/// `MAX_LISTENERS`): only `PEER_CLOSED` is watched, a listener ends with its
+/// channel (proposed ADR-0441).
+const KEY_LISTENER: u64 = 3000;
+/// The most listener ids: the accounts' global bound of listeners.
+const MAX_LISTENERS: u64 = 8;
 
 /// How long the driver may take to answer `info` and `attach`.
 const HANDSHAKE_NS: u64 = 5_000_000_000;
@@ -278,6 +284,8 @@ struct Netd {
     conns: Conns<StreamClient>,
     /// The channel of each connection, by the service's id.
     channels: Vec<Option<Handle>>,
+    /// The server end of each listener's channel, by the service's id.
+    listeners: Vec<Option<Handle>>,
     ethd: Handle,
     watching: bool,
     request: Vec<u8>,
@@ -316,6 +324,109 @@ impl Netd {
     fn refuse(mut client: StreamClient, why: u32) {
         let _ = client.notify(&failed(why));
         client.close_inbound();
+    }
+
+    /// Whether listener `id` is served now: its channel is watched for the
+    /// client closing it. If not, the end is closed and the listener given
+    /// up.
+    fn attach_listener(&mut self, id: usize, end: Handle) -> bool {
+        if id as u64 >= MAX_LISTENERS
+            || port_subscribe(
+                self.port,
+                end,
+                channel_signals::PEER_CLOSED,
+                KEY_LISTENER + id as u64,
+                Mode::Level,
+            )
+            .is_err()
+        {
+            let _ = handle_close(end);
+            self.service.listener_closed(id);
+            return false;
+        }
+        if self.listeners.len() <= id {
+            self.listeners.resize(id + 1, None);
+        }
+        self.listeners[id] = Some(end);
+        true
+    }
+
+    /// The client closed listener `id`'s channel (or the service gave it up):
+    /// the end and the subscription go, and the port and the account's
+    /// charge with them. Connections still in the channel's queue are
+    /// closed with it by the kernel: their clients see the end of their
+    /// streams.
+    fn drop_listener(&mut self, id: usize) {
+        if let Some(end) = self.listeners.get_mut(id).and_then(Option::take) {
+            let _ = port_unsubscribe(self.port, KEY_LISTENER + id as u64);
+            let _ = handle_close(end);
+        }
+        self.service.listener_closed(id);
+    }
+
+    /// A `connect` to 127.0.0.0/8, already allowed by the scope: the
+    /// client's two stream ends go to the listener as an `Accepted`, and the
+    /// client is told `Connected`; with no listener, a full queue or a
+    /// listener that is gone, it is told `Failed { REFUSED }` and everything
+    /// it gave is closed. `handles` are the request's three (checked: the
+    /// connection channel, the write end of the stream the client reads, the
+    /// read end of the one it writes). Nothing is kept: the loopback holds no
+    /// state in `netd` (INV-0441-2).
+    fn loopback(&mut self, listener: Option<usize>, port: u16, peer_port: u16, handles: &[Handle]) {
+        let (control, in_write, out_read) = (handles[0], handles[1], handles[2]);
+        let delivered = listener
+            .and_then(|l| self.listeners.get(l).copied().flatten())
+            .is_some_and(|end| {
+                let mut out = [0u8; 64];
+                let Ok(n) = encode(
+                    &Accepted {
+                        address: LOOPBACK,
+                        port: Below(u32::from(peer_port)),
+                    },
+                    NO_REPLY,
+                    &mut out,
+                ) else {
+                    return false;
+                };
+                // The listener reads what the client writes and writes what
+                // the client reads: the ends go to it as they came, the
+                // client keeps the other two.
+                let entries = [
+                    ChannelEntry {
+                        handle: out_read,
+                        rights: StreamReadObject::RIGHTS,
+                        transfer: Transfer::Move,
+                    },
+                    ChannelEntry {
+                        handle: in_write,
+                        rights: StreamWriteObject::RIGHTS,
+                        transfer: Transfer::Move,
+                    },
+                ];
+                // A full queue (`WouldBlock`, 64 connections waiting) or a
+                // listener that went (`PeerClosed`) moves nothing: the
+                // handles are still ours.
+                channel_write(end, &out[..n], &entries).is_ok()
+            });
+        let mut out = [0u8; 64];
+        if delivered {
+            if let Ok(n) = encode(
+                &Connected {
+                    address: LOOPBACK,
+                    port: Below(u32::from(port)),
+                },
+                NO_REPLY,
+                &mut out,
+            ) {
+                let _ = channel_write(control, &out[..n], &[]);
+            }
+        } else {
+            let _ = channel_write(control, &failed(reason::REFUSED), &[]);
+            let _ = handle_close(in_write);
+            let _ = handle_close(out_read);
+        }
+        // The message stays readable after this end closes.
+        let _ = handle_close(control);
     }
 
     fn drop_connection(&mut self, id: usize) {
@@ -397,6 +508,53 @@ impl Netd {
                         return;
                     }
                 }
+                Action::Listen { id: lid, reply } => {
+                    let given = handles[0];
+                    if count == 1 && handle_type(given) == Ok("channel") {
+                        if self.attach_listener(lid, given) {
+                            self.write_to(id, &reply);
+                        } else {
+                            let refused = Listening {
+                                status: Below(zoraya_proto_net::status::UNAVAILABLE),
+                                port: Below(0),
+                            };
+                            let mut out = [0u8; 64];
+                            if let Ok(n) = encode(&refused, 0, &mut out) {
+                                self.write_to(id, &out[..n]);
+                            }
+                        }
+                    } else {
+                        // Not a channel end: the request was not the one it
+                        // said.
+                        self.service.listener_closed(lid);
+                        for h in &handles[..count] {
+                            let _ = handle_close(*h);
+                        }
+                        self.drop_connection(id);
+                        return;
+                    }
+                }
+                Action::Loopback {
+                    listener,
+                    port,
+                    peer_port,
+                    reply,
+                    ..
+                } => {
+                    let right = count == 3
+                        && handle_type(handles[0]) == Ok("channel")
+                        && handle_type(handles[1]) == Ok("stream-write")
+                        && handle_type(handles[2]) == Ok("stream-read");
+                    if !right {
+                        for h in &handles[..count] {
+                            let _ = handle_close(*h);
+                        }
+                        self.drop_connection(id);
+                        return;
+                    }
+                    self.write_to(id, &reply);
+                    self.loopback(listener, port, peer_port, &handles[..3]);
+                }
                 Action::Connect {
                     target,
                     port,
@@ -464,7 +622,11 @@ impl Netd {
                             self.drop_connection(id);
                             return;
                         }
-                        Action::Deferred | Action::Narrowed { .. } | Action::Connect { .. } => {}
+                        Action::Deferred
+                        | Action::Narrowed { .. }
+                        | Action::Connect { .. }
+                        | Action::Listen { .. }
+                        | Action::Loopback { .. } => {}
                     }
                 }
             }
@@ -686,6 +848,7 @@ fn main() -> i32 {
         service: Service::new(),
         conns: Conns::new(),
         channels: Vec::new(),
+        listeners: Vec::new(),
         ethd,
         watching: false,
         request: vec![0u8; REQUEST],
@@ -726,6 +889,9 @@ fn main() -> i32 {
                 KEY_ETHD | KEY_WRITABLE => {}
                 k if (KEY_CONNECTION..KEY_OUT).contains(&k) => {
                     netd.serve((k - KEY_CONNECTION) as usize)
+                }
+                k if (KEY_LISTENER..KEY_LISTENER + MAX_LISTENERS).contains(&k) => {
+                    netd.drop_listener((k - KEY_LISTENER) as usize)
                 }
                 _ => {}
             }

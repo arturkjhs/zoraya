@@ -233,7 +233,11 @@ impl Service {
                 return Ok(port);
             }
         }
-        Err(if covered { code::BUSY } else { code::NOT_GRANTED })
+        Err(if covered {
+            code::BUSY
+        } else {
+            code::NOT_GRANTED
+        })
     }
 
     /// Adds a connection; its id, or `None` at the bound.
