@@ -707,6 +707,8 @@ pub fn keep_program(
                 if n > 0 && n.is_multiple_of(steps::STEP as u64) {
                     steps::between()?;
                 }
+                // A page cleaned is a unit of the step (INV-0270-1).
+                steps::count(1);
                 // SAFETY: a whole frame of `object` in the direct map.
                 unsafe {
                     mmu::clean_to_unification(

@@ -74,12 +74,10 @@ file = "kernel/src/process.rs"
 find = '''                if n > 0 && n.is_multiple_of(steps::STEP as u64) {
                     steps::between()?;
                 }
-                // SAFETY: a whole frame of `object` in the direct map.
-                unsafe {
-                    mmu::clean_to_unification('''
-replace = '''                // SAFETY: a whole frame of `object` in the direct map.
-                unsafe {
-                    mmu::clean_to_unification('''
+                // A page cleaned is a unit of the step (INV-0270-1).
+                steps::count(1);'''
+replace = '''                // A page cleaned is a unit of the step (INV-0270-1).
+                steps::count(1);'''
 note = "INV-0438-4: the clean of 2048 text pages in one interval (the copy's step points leave them alone)"
 
 [[mutant]]
