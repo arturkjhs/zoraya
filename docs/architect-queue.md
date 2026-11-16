@@ -106,13 +106,14 @@ is `AccessDenied`.
 
 ## For the TASK-34 dispatcher (MacBook Air)
 
-The CI policy of ADR-0348 (the architect, 2026-11-15) applies to this dispatcher as it does to the Mac mini's: a push to
-`work/*` runs `make check` only (no full `workflow_dispatch` runs, except to chase a flake); a candidate runs the steps
-`tools/ci-plan.sh` selects (the full set only for `kernel/`, libposix or `tools/test-runner/`; a `Makefile` change maps to the
-steps whose recipes or variables it changes); do not wait for `main`'s run after a merge, the next part merges as soon as its
-own candidate is green; `main`'s full set runs every 4 hours if `main` changed, and nightly; a red scheduled run
-(`gh run list --workflow 'make test' --event schedule`; a skipping 4-hourly run fails if the last full run was red) is fixed first, before the next merge, and its summary lists the merges
-since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
+The CI policy of ADR-0463 (the architect, 2026-11-16; it replaces the candidate rules of ADR-0348) applies to this dispatcher as
+it does to the Mac mini's: a part merges after `make check`, `make test-changed` under HVF and its independent Opus review pass
+locally, with no candidate run in CI, so F7b may merge on its local tests and review; a candidate run is needed only if F7b changes
+`.github/workflows`, `tools/ci-plan.sh` (or what it reads) or `tools/test-runner/`, or for a failure that shows only under TCG. A push to
+`work/*` runs `make check` only. `main`'s full set runs every 2 hours if `main` changed, and nightly. A red scheduled run
+(`gh run list --workflow 'make test' --event schedule`) is fixed first, before any merge; if it is not fixed within an hour, revert the
+merge that broke it and fix it on its branch (the red run of 2026-11-16, libc++ `mutex_try_to_lock`, is the first case). A stage tag
+needs a green scheduled, nightly or `candidate-full/` run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
 
 **2026-11-15, for the TASK-34 dispatcher:** the scheduled full run 43749759496 (head `9b78d380`) is green, 78 of 78 jobs,
 including the TCG `w9-term` job and all five `test-qemu-*` jobs. `main`'s red scheduled run (`w9-term`, run 43699859694) was

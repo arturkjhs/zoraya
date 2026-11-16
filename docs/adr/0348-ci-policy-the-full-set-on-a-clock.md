@@ -60,6 +60,7 @@ Known limits: a `.PHONY` change always runs the full set (every new target is a 
 
 ## Open questions
 
+- Superseded by ADR-0463 (2026-11-16): the items about candidate runs (decision items 2 and 3: a candidate run before every merge, and the next part merging when its own candidate is green) and the 4-hourly schedule (now every two hours). The rest of this ADR stands.
 - Whether a `.PHONY` change should map to the targets whose names were added or removed instead of the full set.
 - Whether the scheduled run should open an issue or tag when it is red, instead of the list of merges in its summary only.
 
