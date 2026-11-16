@@ -628,3 +628,6 @@ per image (the image's pages once, however many processes run from it, as ADR-04
   programs; the script is generated from `docs/tour.md`); `net status` and the NetSurf, windows, wheel, selection, files and settings
   pauses (a window, the pointer or the clipboard, not a terminal's mode). The serial scripts have no pause; each start
   of `sh`, `dash`, `t_tty`, `t_curses`, `vi`, `less` or `view` there is followed by a `<` wait before the next keys.
+- **A stuck GUI step cost the whole run (1200 to 1800 s):** each GUI step now has a limit of its own (120 s, x4 under
+  TCG, a `pause`'s time on top; `limit SECONDS STEP` for more). The default and the serial scripts are in
+  `docs/architect-queue.md` section D, with the question of a prompt that clears its row.
