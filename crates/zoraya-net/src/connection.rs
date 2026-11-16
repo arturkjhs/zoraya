@@ -45,6 +45,39 @@ pub enum Verdict {
     Invalid,
 }
 
+/// The room a connection belongs to (proposed ADR-0442): the name the shell
+/// gave it when it made the connection from its root (right `ROOM`), empty
+/// for the session's own (`home`). It only decides which loopback the
+/// connection sees; it is inherited by every connection made from this one
+/// and a program cannot change it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Room {
+    len: u8,
+    bytes: [u8; zoraya_proto_net::MAX_ROOM],
+}
+
+impl Room {
+    /// The room of the session's own connections.
+    pub const HOME: Room = Room {
+        len: 0,
+        bytes: [0; zoraya_proto_net::MAX_ROOM],
+    };
+
+    /// `None` for a name longer than a room's.
+    pub fn new(name: &[u8]) -> Option<Room> {
+        let mut bytes = [0u8; zoraya_proto_net::MAX_ROOM];
+        bytes.get_mut(..name.len())?.copy_from_slice(name);
+        Some(Room {
+            len: name.len() as u8,
+            bytes,
+        })
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
+
 /// A connection's scope (encoded, checked at creation) and rights.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Connection {
@@ -53,6 +86,8 @@ pub struct Connection {
     /// The account it belongs to (ADR-0262; N4): its parent's, unless a
     /// `narrow_account` carved a new one.
     account: usize,
+    /// Its room (proposed ADR-0442), which the loopback is keyed by.
+    room: Room,
 }
 
 impl Connection {
@@ -75,6 +110,7 @@ impl Connection {
             scope: bytes[..n].to_vec(),
             rights: rights::ALL,
             account: SESSION,
+            room: Room::HOME,
         }
     }
 
@@ -86,6 +122,7 @@ impl Connection {
             scope: scope.to_vec(),
             rights,
             account: SESSION,
+            room: Room::HOME,
         })
     }
 
@@ -103,6 +140,17 @@ impl Connection {
     /// The same connection in another account (a carve).
     pub fn in_account(mut self, account: usize) -> Connection {
         self.account = account;
+        self
+    }
+
+    /// The room this connection belongs to.
+    pub fn room(&self) -> Room {
+        self.room
+    }
+
+    /// The same connection in another room (what `NarrowRoom` makes).
+    pub fn in_room(mut self, room: Room) -> Connection {
+        self.room = room;
         self
     }
 
@@ -168,7 +216,7 @@ impl Connection {
     pub fn narrowed(&self, rights: u32, scope: &[u8]) -> Option<Connection> {
         (self.decide(Request::Narrow { rights, scope }) == Verdict::Allowed)
             .then(|| Connection::new(rights, scope))?
-            .map(|c| c.in_account(self.account))
+            .map(|c| c.in_account(self.account).in_room(self.room))
     }
 }
 

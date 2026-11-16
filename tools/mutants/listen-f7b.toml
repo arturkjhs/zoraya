@@ -8,7 +8,7 @@
 # (`decide` already refuses 127.x unless a rule covers it, and `web` never does: defence in depth); `a[0] == 127` in
 # `next_candidate` (the stack has no route to 127.x and `tcp_open` refuses it: defence in depth); `handles.len() == 2`
 # in `accept` (`decode` is given the handle count and refuses any but 2); the ephemeral search's start (`next_port`: a rotating start, any covered free port is
-# right); `self.next_peer`'s modulus (the made-up port only has to differ between nearby connections).
+# right); a listener's `peers` modulus (the made-up port only has to differ between nearby connections).
 tests = ["cargo test -q -p zoraya-net", "cargo test -q -p zoraya-posix --test tcplisten --test socketfile --lib", "cargo test -q -p zoraya-shell netgrant"]
 timeout = 900
 
@@ -40,7 +40,7 @@ note = "port 0 needs the right too"
 [[mutant]]
 id = "F7b-busy-not-checked"
 file = "crates/zoraya-net/src/service.rs"
-find = '''                    if self.listener_on(asked).is_some() {
+find = '''                    if self.listener_on(connection.room(), asked).is_some() {
                         return answer(code::BUSY, 0);
                     }'''
 replace = ''''''
@@ -76,24 +76,22 @@ note = "INV-0441-2: closing frees the port"
 [[mutant]]
 id = "F7b-loopback-charged"
 file = "crates/zoraya-net/src/service.rs"
-find = '''                        self.next_peer = (self.next_peer + 1) % EPHEMERAL_SPAN;'''
-replace = '''                        self.next_peer = (self.next_peer + 1) % EPHEMERAL_SPAN;
-                        let _ = self.accounts.charge(connection.account(), Kind::Connections);'''
+find = '''                        let mut peer = 0;'''
+replace = '''                        let _ = self.accounts.charge(account, Kind::Connections);
+                        let mut peer = 0;'''
 note = "INV-0441-1: a loopback connection charges nothing"
 
 [[mutant]]
 id = "F7b-loopback-any-port-listener"
 file = "crates/zoraya-net/src/service.rs"
-find = '''            listener: self.listener_on(port),
-                            address,'''
-replace = '''            listener: self.listener_on(port).or(self.listeners.iter().position(Option::is_some)),
-                            address,'''
+find = '''let listener = self.listener_on(connection.room(), port);'''
+replace = '''let listener = self.listener_on(connection.room(), port).or(self.listeners.iter().position(Option::is_some));'''
 note = "INV-0441-1: the listener is the one on the port"
 
 [[mutant]]
 id = "F7b-carve-always-listens"
 file = "crates/zoraya-net/src/service.rs"
-find = '''let listeners = u32::from(m.rights & zoraya_abi::net::rights::LISTEN != 0);'''
+find = '''let listeners = u32::from(rights & zoraya_abi::net::rights::LISTEN != 0);'''
 replace = '''let listeners = 1;'''
 note = "ADR-0262: 0 listeners unless listen"
 
@@ -203,3 +201,33 @@ file = "crates/zoraya-posix/src/poll.rs"
 find = '''if want_out && !sk.listening && !sk.unix.as_ref().is_some_and(|u| u.listening) {'''
 replace = '''if want_out && !sk.listening {'''
 note = "a listening Unix socket is never writable either"
+
+# Part F9 (proposed ADR-0442, INV-0442-1 to -3): each room has its own loopback.
+
+[[mutant]]
+id = "F9-listener-ignores-room"
+file = "crates/zoraya-net/src/service.rs"
+find = '''l.port == port && l.room == room'''
+replace = '''l.port == port'''
+note = "INV-0442-1: a connect and a bind see only the listeners of their own room"
+
+[[mutant]]
+id = "F9-room-right-not-needed"
+file = "crates/zoraya-net/src/service.rs"
+find = '''if !room.is_empty() && connection.rights() & zoraya_abi::net::rights::ROOM == 0 {'''
+replace = '''if false {'''
+note = "INV-0442-2: a program cannot name a room"
+
+[[mutant]]
+id = "F9-narrowed-loses-room"
+file = "crates/zoraya-net/src/connection.rs"
+find = '''.map(|c| c.in_account(self.account).in_room(self.room))'''
+replace = '''.map(|c| c.in_account(self.account))'''
+note = "INV-0442-2: a connection made from another keeps its room"
+
+[[mutant]]
+id = "F9-named-room-ignored"
+file = "crates/zoraya-net/src/service.rs"
+find = '''let child = child.in_room(room);'''
+replace = '''let child = child.in_room(connection.room());'''
+note = "a launcher's NarrowRoom puts the connection in the room it names"

@@ -1683,3 +1683,322 @@ fn a_listen_rule_narrows_like_a_reach_rule_and_never_widens() {
     );
     assert!(listen_on(&mut service, &mut net, inner, 8005).is_ok());
 }
+
+// ---- Each room has its own loopback (proposed ADR-0442, part F9) ----
+
+/// A `NarrowRoom` from `from`: `Ok(id)` of the new connection, or the status
+/// that refused.
+fn narrow_room(
+    service: &mut Service,
+    net: &mut Net,
+    from: usize,
+    rights: u32,
+    budget: u32,
+    scope: &[u8],
+    room: &str,
+) -> Result<usize, u32> {
+    use zoraya_proto_net::NarrowRoom;
+    let message = bytes(
+        &NarrowRoom {
+            rights,
+            budget: Below(budget),
+            scope: Data(scope),
+            room: Data(room.as_bytes()),
+        },
+        5,
+    );
+    match service.handle(from, &message, 1, &mut net.client, 0) {
+        Action::Narrowed { id, reply } => {
+            assert_eq!(
+                decode::<Narrowed>(&reply, 0).unwrap().1.status.0,
+                status::OK
+            );
+            Ok(id)
+        }
+        Action::Reply(r) => Err(decode::<Narrowed>(&r, 0).unwrap().1.status.0),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn loopback_of(service: &mut Service, net: &mut Net, from: usize, port: u32) -> Action {
+    service.handle(
+        from,
+        &connect_message("", [127, 0, 0, 1], port),
+        3,
+        &mut net.client,
+        0,
+    )
+}
+
+#[test]
+fn a_connect_reaches_only_the_listeners_of_its_own_room() {
+    // INV-0442-1 and INV-0442-3.
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let launcher = service.add(Connection::root()).unwrap();
+    let listen = loop_scope(None, &[Ports::ANY]);
+    let reach = loop_scope(Some(Ports::ANY), &[]);
+    let mut make = |service: &mut Service, rights, scope: &[u8], room| {
+        narrow_room(service, &mut net, launcher, rights, 0, scope, room).unwrap()
+    };
+    let server_a = make(&mut service, rights::LISTEN, &listen, "a");
+    let client_a = make(&mut service, rights::REACH, &reach, "a");
+    let server_b = make(&mut service, rights::LISTEN, &listen, "b");
+    let client_b = make(&mut service, rights::REACH, &reach, "b");
+    let client_c = make(&mut service, rights::REACH, &reach, "c");
+    let client_home = service
+        .add(Connection::new(rights::REACH, &reach).unwrap())
+        .unwrap();
+    let mut net = Net::new(static_config());
+    // Only room a listens on 8000.
+    let (listener_a, _) = listen_on(&mut service, &mut net, server_a, 8000).unwrap();
+    assert!(matches!(
+        loopback_of(&mut service, &mut net, client_a, 8000),
+        Action::Loopback { listener, .. } if listener == Some(listener_a)
+    ));
+    // Every other room is answered exactly as if nobody listened: the same
+    // action as a port that nobody listens on anywhere (peer port included).
+    let nobody = loopback_of(&mut service, &mut net, client_b, 8001);
+    for client in [client_b, client_c, client_home] {
+        let Action::Loopback {
+            listener,
+            peer_port,
+            address,
+            port,
+            reply,
+        } = loopback_of(&mut service, &mut net, client, 8000)
+        else {
+            panic!("a loopback decision");
+        };
+        assert_eq!((listener, address, port), (None, [127, 0, 0, 1], 8000));
+        let Action::Loopback {
+            listener: none,
+            peer_port: nobody_port,
+            reply: nobody_reply,
+            ..
+        } = &nobody
+        else {
+            panic!("a loopback decision");
+        };
+        assert_eq!((&listener, &peer_port), (none, nobody_port));
+        assert_eq!(&reply, nobody_reply);
+    }
+    // The same port in room b is no collision, and each room reaches its own.
+    let (listener_b, _) = listen_on(&mut service, &mut net, server_b, 8000).unwrap();
+    assert_ne!(listener_a, listener_b);
+    assert!(matches!(
+        loopback_of(&mut service, &mut net, client_b, 8000),
+        Action::Loopback { listener, .. } if listener == Some(listener_b)
+    ));
+    assert!(matches!(
+        loopback_of(&mut service, &mut net, client_a, 8000),
+        Action::Loopback { listener, .. } if listener == Some(listener_a)
+    ));
+    // `EADDRINUSE` (`BUSY`) is within one room only.
+    assert_eq!(
+        listen_on(&mut service, &mut net, server_a, 8000),
+        Err(status::BUSY)
+    );
+    // A room that listens on nothing else still sees nothing of a's other port.
+    assert_eq!(
+        listen_on(&mut service, &mut net, server_b, 8000),
+        Err(status::BUSY)
+    );
+    // A room's listener ends: only its own port is freed.
+    service.listener_closed(listener_a);
+    assert!(matches!(
+        loopback_of(&mut service, &mut net, client_a, 8000),
+        Action::Loopback { listener: None, .. }
+    ));
+    assert!(matches!(
+        loopback_of(&mut service, &mut net, client_b, 8000),
+        Action::Loopback { listener, .. } if listener == Some(listener_b)
+    ));
+}
+
+#[test]
+fn accounts_of_one_room_share_its_loopback() {
+    // `python3` and `curl` of one line are two accounts of one room.
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let launcher = service.add(Connection::root()).unwrap();
+    let server = narrow_room(
+        &mut service,
+        &mut net,
+        launcher,
+        rights::LISTEN,
+        2,
+        &loop_scope(None, &[Ports::one(8000)]),
+        "a",
+    )
+    .unwrap();
+    let client = narrow_room(
+        &mut service,
+        &mut net,
+        launcher,
+        rights::REACH,
+        2,
+        &loop_scope(Some(Ports::one(8000)), &[]),
+        "a",
+    )
+    .unwrap();
+    let account = |s: &Service, id| s.connection(id).unwrap().account();
+    assert_ne!(account(&service, server), account(&service, client));
+    let (listener, _) = listen_on(&mut service, &mut net, server, 8000).unwrap();
+    assert!(matches!(
+        loopback_of(&mut service, &mut net, client, 8000),
+        Action::Loopback { listener: l, .. } if l == Some(listener)
+    ));
+}
+
+#[test]
+fn only_a_connection_with_the_room_right_names_a_room_and_it_is_inherited() {
+    // INV-0442-2.
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let launcher = service.add(Connection::root()).unwrap();
+    let reach = loop_scope(Some(Ports::ANY), &[]);
+    let wide = rights::REACH | rights::NARROW;
+    let program = narrow_room(&mut service, &mut net, launcher, wide, 4, &reach, "a").unwrap();
+    let room = |s: &Service, id| s.connection(id).unwrap().room();
+    assert_eq!(room(&service, program).as_bytes(), b"a");
+    // A program names no room, not its own, another's, nor `home`.
+    for name in ["b", "a", "home"] {
+        assert_eq!(
+            narrow_room(
+                &mut service,
+                &mut net,
+                program,
+                rights::REACH,
+                1,
+                &reach,
+                name
+            ),
+            Err(status::NOT_GRANTED),
+            "{name}"
+        );
+    }
+    // It cannot make a connection that may (a right is never widened).
+    assert_eq!(
+        narrow_room(&mut service, &mut net, program, rights::ROOM, 1, &reach, ""),
+        Err(status::NOT_GRANTED)
+    );
+    // Without a name, everything made from it is in its room: narrow, carve,
+    // narrow-room with no name, duplicate.
+    let plain = bytes(
+        &Narrow {
+            rights: rights::REACH,
+            scope: Data(&reach),
+        },
+        6,
+    );
+    let Action::Narrowed { id: narrowed, .. } =
+        service.handle(program, &plain, 1, &mut net.client, 0)
+    else {
+        panic!("narrowed");
+    };
+    let carved = narrow_room(
+        &mut service,
+        &mut net,
+        program,
+        rights::REACH,
+        1,
+        &reach,
+        "",
+    )
+    .unwrap();
+    let joined = narrow_room(
+        &mut service,
+        &mut net,
+        program,
+        rights::REACH,
+        0,
+        &reach,
+        "",
+    )
+    .unwrap();
+    let Action::Narrowed { id: copy, .. } =
+        service.handle(program, &bytes(&Duplicate {}, 7), 1, &mut net.client, 0)
+    else {
+        panic!("duplicated");
+    };
+    for id in [narrowed, carved, joined, copy] {
+        assert_eq!(room(&service, id).as_bytes(), b"a", "connection {id}");
+    }
+    // The launcher's own room is `home`, and a room can be named from it with
+    // no budget (the caller's account).
+    assert_eq!(room(&service, launcher).as_bytes(), b"");
+    let same = narrow_room(
+        &mut service,
+        &mut net,
+        launcher,
+        rights::REACH,
+        0,
+        &reach,
+        "z",
+    )
+    .unwrap();
+    assert_eq!(room(&service, same).as_bytes(), b"z");
+    assert_eq!(
+        service.connection(same).unwrap().account(),
+        service.connection(launcher).unwrap().account()
+    );
+    // A name over the bound is not encoded at all; a bad scope is invalid.
+    assert_eq!(
+        narrow_room(
+            &mut service,
+            &mut net,
+            launcher,
+            rights::REACH,
+            1,
+            &[1, 2, 3],
+            "z"
+        ),
+        Err(status::INVALID)
+    );
+}
+
+#[test]
+fn a_room_does_not_see_the_peer_ports_of_another() {
+    // The made-up client port is a counter per listener: a listener learns
+    // nothing of the connections other listeners get (INV-0442-3).
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let launcher = service.add(Connection::root()).unwrap();
+    let listen = loop_scope(None, &[Ports::ANY]);
+    let reach = loop_scope(Some(Ports::ANY), &[]);
+    let mut ids = Vec::new();
+    for room in ["a", "b"] {
+        let server = narrow_room(
+            &mut service,
+            &mut net,
+            launcher,
+            rights::LISTEN,
+            1,
+            &listen,
+            room,
+        )
+        .unwrap();
+        let client = narrow_room(
+            &mut service,
+            &mut net,
+            launcher,
+            rights::REACH,
+            1,
+            &reach,
+            room,
+        )
+        .unwrap();
+        listen_on(&mut service, &mut net, server, 9000).unwrap();
+        ids.push(client);
+    }
+    let peer = |service: &mut Service, net: &mut Net, c| match loopback_of(service, net, c, 9000) {
+        Action::Loopback { peer_port, .. } => peer_port,
+        other => panic!("{other:?}"),
+    };
+    let first = peer(&mut service, &mut net, ids[0]);
+    for _ in 0..5 {
+        peer(&mut service, &mut net, ids[1]);
+    }
+    assert_eq!(peer(&mut service, &mut net, ids[0]), first + 1);
+}

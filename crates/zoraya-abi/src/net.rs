@@ -55,7 +55,11 @@ pub mod rights {
     pub const LISTEN: u32 = 2;
     pub const STATUS: u32 = 4;
     pub const NARROW: u32 = 8;
-    pub const ALL: u32 = REACH | LISTEN | STATUS | NARROW;
+    /// May name the room of a connection it makes (`NarrowRoom`, proposed
+    /// ADR-0442): only a launcher's root connection has it; the shell never
+    /// gives it to a program.
+    pub const ROOM: u32 = 16;
+    pub const ALL: u32 = REACH | LISTEN | STATUS | NARROW | ROOM;
 }
 
 /// A set of TCP, UDP and ICMP echo (ADR-0330: a rule that grants echo
