@@ -43,7 +43,8 @@ fn a_carve_takes_its_limits_from_the_caller_and_gives_them_back() {
     assert_eq!(a.limit(c, Kind::Connections), 4);
     assert_eq!(a.limit(c, Kind::Resolutions), 2);
     assert_eq!(a.limit(c, Kind::CacheEntries), 16);
-    assert_eq!(a.limit(c, Kind::Listeners), 0);
+    assert_eq!(a.limit(c, Kind::Listeners), 1);
+    assert_eq!(a.limit(SESSION, Kind::Listeners), 7);
     assert_eq!(a.limit(SESSION, Kind::Connections), 12);
     // Nothing holds it: it ends at the last hold.
     a.join(c);

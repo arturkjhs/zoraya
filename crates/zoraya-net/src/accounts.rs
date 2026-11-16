@@ -12,14 +12,15 @@
 //! | kind | global | one carved account | all carved accounts |
 //! |---|---|---|---|
 //! | connections (TCP, any phase) | 16 | `budget`, 1 to 4 | 8 |
-//! | listeners | 4 | 0 | 0 |
+//! | listeners | 8 | 1 | 4 |
 //! | pending resolutions | 8 | `budget / 2`, at least 1 | 4 |
 //! | datagram sockets | 4 | 0 | 0 |
 //! | resolver cache entries | 64 | `4 * budget` | 32 |
 //!
-//! At most four carved accounts live at once. Listeners and datagram
-//! sockets have no request in `netd` yet; their bounds exist so that the
-//! carve is whole when they do.
+//! At most four carved accounts live at once. Listeners have a request since
+//! plan part F7b (`listen`; proposed ADR-0441 changed their row from 4, 0, 0
+//! so that a program of its own account can listen once); datagram sockets
+//! have none yet, their bounds exist so that the carve is whole when they do.
 
 use alloc::vec::Vec;
 
@@ -43,9 +44,9 @@ pub const ALL: [Kind; KINDS] = [
 ];
 
 /// The service's bound of each kind, in [`Kind`] order.
-pub const GLOBAL: [u32; KINDS] = [16, 4, 8, 4, 64];
+pub const GLOBAL: [u32; KINDS] = [16, 8, 8, 4, 64];
 /// What all carved accounts together may hold of each kind.
-pub const COLUMN: [u32; KINDS] = [8, 0, 4, 0, 32];
+pub const COLUMN: [u32; KINDS] = [8, 4, 4, 0, 32];
 /// Carved accounts alive at once.
 pub const MAX_CARVED: usize = 4;
 /// The most connections one carve may ask for.
@@ -57,7 +58,7 @@ pub const SESSION: usize = 0;
 /// The limits a carve with `budget` connections asks for.
 pub const fn carve_of(budget: u32) -> [u32; KINDS] {
     let resolutions = if budget / 2 == 0 { 1 } else { budget / 2 };
-    [budget, 0, resolutions, 0, 4 * budget]
+    [budget, 1, resolutions, 0, 4 * budget]
 }
 
 /// A charge past the account's limit (or on an account that is gone).
