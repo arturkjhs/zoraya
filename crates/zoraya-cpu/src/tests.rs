@@ -48,6 +48,8 @@ impl Tree for Arena {
 struct Th {
     id: usize,
     job: Option<usize>,
+    /// Its process is ending (ADR-0460).
+    ending: bool,
 }
 
 /// One run of a thread: who, when, for how long.
@@ -72,7 +74,7 @@ fn simulate(tree: &mut Arena, queue: &mut RunQueue<Th>, until: u64, period_ns: u
             released_period = p;
             while queue.release() > 0 {}
         }
-        let picked = queue.pick(tree, now, period_ns, |t| t.job);
+        let picked = queue.pick(tree, now, period_ns, |t| t.job, |t| t.ending);
         let Some(picked) = picked else {
             // At the cap of parks per pick, idle calls again at once; with
             // nothing ready, idle waits for the boundary.
@@ -106,7 +108,11 @@ fn simulate(tree: &mut Arena, queue: &mut RunQueue<Th>, until: u64, period_ns: u
 fn spinners(queue: &mut RunQueue<Th>, first: usize, n: usize, job: Option<usize>) {
     queue.try_reserve(n + queue.parked_len() + 256).unwrap();
     for i in 0..n {
-        queue.push_back(Th { id: first + i, job });
+        queue.push_back(Th {
+            id: first + i,
+            job,
+            ending: false,
+        });
     }
 }
 
@@ -365,7 +371,10 @@ fn a_pick_parks_at_most_sixteen_and_runs_none() {
     let mut calls = 0;
     while !q.is_empty() {
         let before = q.parked_len();
-        assert!(q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job).is_none());
+        assert!(
+            q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job, |t| t.ending)
+                .is_none()
+        );
         assert!(q.parked_len() - before <= MAX_PARKS_PER_PICK);
         calls += 1;
     }
@@ -419,10 +428,11 @@ fn release_comes_in_batches_and_keeps_order() {
         q.push_back(Th {
             id: i,
             job: Some(room),
+            ending: false,
         });
     }
     while !q.is_empty() {
-        let _ = q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job);
+        let _ = q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job, |t| t.ending);
     }
     let parked = q.parked_len();
     assert!(parked >= 100);
@@ -430,7 +440,13 @@ fn release_comes_in_batches_and_keeps_order() {
     let mut moved = q.release();
     assert_eq!(moved, RELEASE_BATCH);
     while moved > 0 {
-        while let Some(p) = q.pick(&mut Arena::new(), 0, PERIOD_NS, |t| t.job.map(|_| 0)) {
+        while let Some(p) = q.pick(
+            &mut Arena::new(),
+            0,
+            PERIOD_NS,
+            |t| t.job.map(|_| 0),
+            |t| t.ending,
+        ) {
             got.push(p.thread.id);
         }
         moved = q.release();
@@ -452,11 +468,147 @@ fn retain_covers_both_lists() {
         q.push_back(Th {
             id: i,
             job: Some(room),
+            ending: false,
         });
     }
-    let first = q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job);
+    let first = q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job, |t| t.ending);
     assert!(first.is_none());
     assert_eq!(q.parked_len(), 4);
     q.retain(|t| t.id != 2);
     assert_eq!(q.parked_len(), 3);
+}
+
+/// ADR-0460: a thread whose process is ending is taken from a spent job,
+/// with the floor slice, and is not counted as parked; the job's other
+/// threads are still parked, so no thread that is not ending runs.
+#[test]
+fn an_ending_thread_of_a_spent_job_runs_and_the_others_park() {
+    let mut a = Arena::new();
+    let room = a.child(0, Some(250));
+    charge(&mut a, room, 5 * MS, 5 * MS, 0);
+    let mut q = RunQueue::new();
+    q.try_reserve(8).unwrap();
+    for i in 0..4 {
+        q.push_back(Th {
+            id: i,
+            job: Some(room),
+            ending: i == 2,
+        });
+    }
+    let picked = q
+        .pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job, |t| t.ending)
+        .expect("the ending thread");
+    assert_eq!(picked.thread.id, 2);
+    assert_eq!(picked.slice_ns, Some(MIN_SLICE_NS));
+    assert_eq!(q.parked_len(), 2, "the two ahead of it are parked");
+    assert_eq!(a.get(room).parked, 2, "the ending thread is not counted");
+    assert!(
+        q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job, |t| t.ending)
+            .is_none(),
+        "the one behind it is not ending and does not run"
+    );
+    assert_eq!(q.parked_len(), 3);
+    // With budget left, an ending thread is decided like any other.
+    let mut b = Arena::new();
+    let free = b.child(0, Some(250));
+    q.push_back(Th {
+        id: 9,
+        job: Some(free),
+        ending: true,
+    });
+    let p = q
+        .pick(&mut b, 0, PERIOD_NS, |t| t.job, |t| t.ending)
+        .expect("budget left");
+    assert_eq!(p.slice_ns, Some(5 * MS));
+}
+
+/// ADR-0285 item 7 with ADR-0460: a room whose 20 threads are parked is
+/// killed; each thread's way out (its teardown) takes 300 us against a
+/// budget of 20 us a period, 6 ms in all. The threads come back at the next
+/// boundary, every one runs its way out in that period, and the room is
+/// charged for all of it. Without the exception each period's turn would
+/// end one teardown, and the room would need 20 periods.
+#[test]
+fn a_killed_room_dies_in_the_period_after_the_kill_and_pays_for_it() {
+    use core::cell::Cell;
+    const TEARDOWN: u64 = 300_000;
+    let mut a = Arena::new();
+    // 1 thousandth of 20 ms: 20 us. Spend it.
+    let room = a.child(0, Some(1));
+    let mut q = RunQueue::new();
+    q.try_reserve(64).unwrap();
+    for i in 0..20 {
+        q.push_back(Th {
+            id: i,
+            job: Some(room),
+            ending: false,
+        });
+    }
+    q.push_back(Th {
+        id: 100,
+        job: None,
+        ending: false,
+    });
+    let killed = Cell::new(false);
+    let ending = |t: &Th| killed.get() && t.job == Some(room);
+    let mut now = 0u64;
+    let mut alive = 20;
+    let mut released = 0;
+    let mut kill_period = None;
+    let mut died = None;
+    let used_before_kill = Cell::new(0);
+    while now < 100 * PERIOD_NS && died.is_none() {
+        let p = period_of(now, PERIOD_NS);
+        if p != released {
+            released = p;
+            while q.release() > 0 {}
+        }
+        // The kill lands 10 ms into period 2, with every room thread parked.
+        if !killed.get() && now >= 2 * PERIOD_NS + 10 * MS {
+            assert_eq!(q.parked_len(), 20, "parked when killed");
+            killed.set(true);
+            kill_period = Some(p);
+            used_before_kill.set(a.get(room).used_ns);
+        }
+        let Some(picked) = q.pick(&mut a, now, PERIOD_NS, |t| t.job, ending) else {
+            if q.is_empty() {
+                now = next_boundary(now, PERIOD_NS);
+            }
+            continue;
+        };
+        let th = picked.thread;
+        if th.job.is_none() {
+            // The free thread: runs 1 ms at a time, never past a boundary.
+            let len = MS.min(next_boundary(now, PERIOD_NS) - now);
+            now += len;
+            q.push_back(th);
+            continue;
+        }
+        if ending(&th) {
+            // The way out, which does not yield: the thread is gone after.
+            charge(&mut a, room, TEARDOWN, TEARDOWN, period_of(now, PERIOD_NS));
+            now += TEARDOWN;
+            alive -= 1;
+            if alive == 0 {
+                died = Some(period_of(now, PERIOD_NS));
+            }
+            continue;
+        }
+        // Not yet killed: spin for the slice.
+        let len = picked.slice_ns.unwrap_or(SLICE_NS);
+        charge(&mut a, room, len, len, period_of(now + len, PERIOD_NS));
+        now += len;
+        q.push_back(th);
+    }
+    let kill_period = kill_period.expect("killed");
+    assert_eq!(
+        died,
+        Some(kill_period + 1),
+        "the room dies in the next period"
+    );
+    assert_eq!(
+        a.get(room).used_ns - used_before_kill.get(),
+        20 * TEARDOWN,
+        "every teardown is charged"
+    );
 }

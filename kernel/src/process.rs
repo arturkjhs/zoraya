@@ -156,6 +156,14 @@ pub struct Process {
     park_head: SpinLock<Option<Arc<Thread>>>,
     /// The first thread to leave an ending process woke the others.
     swept: AtomicBool,
+    /// The process is ending (ADR-0460): its exit record is fixed. Set only
+    /// by [`Process::end_from_now`], right after the record, and never
+    /// cleared. The scheduler reads it without a lock (`sched::schedule`, with
+    /// `SCHED` held) to take this process's threads even when the job's
+    /// budget is spent: from here on a thread of it runs only the kernel's
+    /// way out, since every way to EL0 passes [`exit_if_requested`] after the
+    /// last switch.
+    ending: AtomicBool,
     /// The mapping lock is held (ADR-0301 item 6).
     map_locked: AtomicBool,
     /// A user address to read as the process ends, and what was there.
@@ -310,6 +318,26 @@ impl Process {
         self.requests.lock().exit.is_some()
     }
 
+    /// Whether the process is ending (ADR-0460): its exit record is fixed,
+    /// so none of its threads returns to EL0 again. Lock-free, for the
+    /// scheduler. True implies [`Process::exit_requested`].
+    pub fn is_ending(&self) -> bool {
+        self.ending.load(Ordering::Acquire)
+    }
+
+    /// Fixes `record` as the exit record, unless one is fixed, and marks the
+    /// process as ending. The only writer of the record and of `ending`:
+    /// the kernel's, at a kill, a terminating request, a fault, the
+    /// `process_exit` call or the last thread's exit; user code reaches it
+    /// only by asking to end, after which it never runs again. `ending` is
+    /// stored after the record (Release), so a thread the scheduler took
+    /// because it read `ending` (Acquire) finds the record at its next
+    /// [`exit_if_requested`].
+    fn end_from_now(&self, record: ExitRecord) {
+        self.requests.lock().exit.get_or_insert(record);
+        self.ending.store(true, Ordering::Release);
+    }
+
     /// Asks the process to end with `record`, unless it was already asked: the
     /// first phase (ADR-0300 item 6). One thread is woken, the first of the
     /// list, never all: the walks of `Job::kill` call this under the job tree's
@@ -317,7 +345,7 @@ impl Process {
     /// or ready sees the record at its next return to EL0; the one woken wakes
     /// the rest from its own context, in steps, before it leaves.
     pub fn request_exit(&self, record: ExitRecord) {
-        self.requests.lock().exit.get_or_insert(record);
+        self.end_from_now(record);
         let first = {
             let mut members = self.members.lock();
             members.begin_end();
@@ -693,6 +721,7 @@ fn assemble(
         park_head: SpinLock::new(None),
         frozen: AtomicBool::new(false),
         swept: AtomicBool::new(false),
+        ending: AtomicBool::new(false),
         map_locked: AtomicBool::new(false),
         requests: SpinLock::new(Requests {
             dispositions,
@@ -863,6 +892,22 @@ pub fn spawn_with_devices_and(
     })
 }
 
+/// Starts the ramdisk's `name` in `job`, for tests of a job's processes.
+#[cfg(feature = "qemu-test")]
+pub fn spawn_in(job: &Arc<Job>, name: &str) -> Result<Arc<Process>, SpawnError> {
+    let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
+    create(Start {
+        name,
+        image: Loadable::from_file(file)?,
+        job: job.clone(),
+        handles: kernel_handles(job.clone())?,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended: false,
+    })
+}
+
 /// Starts a process from ELF bytes, in the root job.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
@@ -997,7 +1042,7 @@ pub fn leave_current() -> ! {
     if left.began_end {
         // The last thread's exit ends the process as `Exited` with code 0
         // (ADR-0300 item 3).
-        process.requests.lock().exit.get_or_insert(ExitRecord {
+        process.end_from_now(ExitRecord {
             code: 0,
             reason: ExitReason::Exited,
             detail: 0,

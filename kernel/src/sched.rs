@@ -537,14 +537,24 @@ fn schedule() {
             _ => {}
         }
         // The first ready thread whose job has budget; those ahead of it
-        // whose job has none are parked (ADR-0264 point 5).
+        // whose job has none are parked (ADR-0264 point 5), unless their
+        // process is ending (ADR-0460): such a thread runs only the way out
+        // (`Process::is_ending`), charged above like any other, so a killed
+        // job dies in its threads' first turn and not in as many periods as
+        // its teardown has turns (ADR-0285 item 7).
         // `None` with threads still ready: the cap of parks per pick was hit;
         // idle runs and calls `schedule` again (see `RunQueue::pick`).
-        let picked = s.ready.pick(&mut JobTree::new(), now, period_ns, |t| {
-            // SAFETY: `pick` owns `t` (popped from the queue) until it has
-            // decided on it, and a thread holds its process and so the jobs.
-            t.process.as_ref().map(|p| unsafe { JobRef::of(p.job()) })
-        });
+        let picked = s.ready.pick(
+            &mut JobTree::new(),
+            now,
+            period_ns,
+            |t| {
+                // SAFETY: `pick` owns `t` (popped from the queue) until it has
+                // decided on it, and a thread holds its process and so the jobs.
+                t.process.as_ref().map(|p| unsafe { JobRef::of(p.job()) })
+            },
+            |t| t.process.as_ref().is_some_and(|p| p.is_ending()),
+        );
         arm_release(s, now);
         let (next, limited) = match picked {
             Some(p) => (p.thread, p.slice_ns),

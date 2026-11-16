@@ -287,14 +287,23 @@ impl<T> RunQueue<T> {
     /// idle calls again while the ready list is not empty, so the rest are
     /// parked in further intervals and **no thread of a spent job ever runs**
     /// (the overrun per period stays one floor slice however many threads
-    /// the job has). `None` with [`RunQueue::is_empty`] false means "call
-    /// again".
+    /// the job has), with one exception. `None` with [`RunQueue::is_empty`]
+    /// false means "call again".
+    ///
+    /// The exception (ADR-0460): a thread for which `ending` holds belongs to
+    /// a process that is ending, and runs only the kernel's way out of it
+    /// (the caller's guarantee). It is taken even when its job is spent, with
+    /// the floor slice, and not counted as parked; the caller still charges
+    /// its run to the job, so the accounting stays exact. A killed job then
+    /// dies in the first turn its threads get, not in as many periods as its
+    /// teardown has turns.
     pub fn pick<Tr: Tree>(
         &mut self,
         tree: &mut Tr,
         now_ns: u64,
         period_ns: u64,
         job_of: impl Fn(&T) -> Option<Tr::Id>,
+        ending: impl Fn(&T) -> bool,
     ) -> Option<Picked<T>> {
         let mut parks = 0;
         loop {
@@ -316,6 +325,12 @@ impl<T> RunQueue<T> {
                     return Some(Picked {
                         thread,
                         slice_ns: Some(slice_ns),
+                    });
+                }
+                Decision::Park { .. } if ending(&thread) => {
+                    return Some(Picked {
+                        thread,
+                        slice_ns: Some(MIN_SLICE_NS),
                     });
                 }
                 Decision::Park { at } if parks < MAX_PARKS_PER_PICK => {

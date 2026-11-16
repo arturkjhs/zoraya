@@ -574,6 +574,10 @@ static TESTS: &[Test] = &[
         run: cpu_ceiling_from_a_process,
     },
     Test {
+        name: "a_killed_room_ends_in_the_period_after_the_kill",
+        run: a_killed_room_ends_in_the_period_after_the_kill,
+    },
+    Test {
         name: "room_keeper_from_a_process",
         run: room_keeper_from_a_process,
     },
@@ -1454,6 +1458,67 @@ fn quotas_from_a_process() {
 /// rooms (INV-0264-1, -2, -4 and the kernel half of -3).
 fn cpu_ceiling_from_a_process() {
     assert_eq!(run_program("t_cpu"), exited(0));
+}
+
+/// ADR-0285 item 7 with ADR-0460: a room at a ceiling of one thousandth
+/// (100 us of a 100 ms period) is killed with its 40 spinners parked. They
+/// come back at the next boundary and, their processes ending, are not
+/// parked again: the room has no process left before the boundary after
+/// that. Their 40 teardowns take many times the room's budget, so without
+/// the exception each period's budget ends a few of them and the room takes
+/// a period for each few (TASK-31 4.3: up to nine periods for 20 at 10%).
+/// The bound is in periods, with the whole of the next period for the
+/// teardowns, so a slow host does not move it.
+fn a_killed_room_ends_in_the_period_after_the_kill() {
+    const PERIOD: u64 = 100_000_000;
+    const SPINNERS: usize = 40;
+    crate::cpu::set_test_period(PERIOD);
+    let room = Job::create(&root(), false).expect("room");
+    crate::cpu::set_limit(&room, Some(1)).expect("limit");
+    let budget = zoraya_cpu::budget_ns(1, PERIOD);
+    let spinners: Vec<_> = (0..SPINNERS)
+        .map(|_| process::spawn_in(&room, "spin").expect("spin"))
+        .collect();
+    let nap = || {
+        sched::sleep_until(Deadline::At(timer::now().plus_nanos(1_000_000))).expect("queue");
+    };
+    let start = timer::now();
+    loop {
+        let u = crate::cpu::usage(&room);
+        if u.parked > 0 && u.period_used >= budget {
+            break;
+        }
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "the room never spent its budget"
+        );
+        nap();
+    }
+    drop(spinners);
+    let parked_before = crate::cpu::usage(&room).parked;
+    room.kill();
+    let killed = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let start = timer::now();
+    while room.live() > 0 {
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "the killed room still has {} processes after 10 s",
+            room.live()
+        );
+        nap();
+    }
+    let died = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let parks = crate::cpu::usage(&room).parked - parked_before;
+    println!(
+        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill",
+        died - killed,
+        timer::now().nanos_since(start) / 1_000_000
+    );
+    assert!(
+        died <= killed + 1,
+        "the killed room ended {} periods after the kill's period, {parks} parks after the kill",
+        died - killed
+    );
 }
 
 /// ADR-0269, ADR-0266 and ADR-0261 point 10 (INV-0269-1 to -3, INV-0266-1,
