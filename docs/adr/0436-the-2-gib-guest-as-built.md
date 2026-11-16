@@ -1,6 +1,6 @@
 # ADR-0436: The 2 GiB guest as built (plan part F8): the bound of one frame allocation, `make run-browser`, and what `top` shows
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0020, ADR-0021, ADR-0267, ADR-0270, ADR-0415
 - **Evidence:** CP-05, GR-005
@@ -92,3 +92,6 @@ not build. Options: (a) accept `top`'s `session` row plus the keeper's refusal a
 
 ## Architect's decision
 
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

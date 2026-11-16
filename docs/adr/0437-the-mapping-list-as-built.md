@@ -1,6 +1,6 @@
 # ADR-0437: The list of mappings as built (plan part F5): chunks, charged by what the heap holds, walks in steps, no handle kept for a private mapping
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0051, ADR-0102, ADR-0260, ADR-0261, ADR-0270, ADR-0300, ADR-0320, ADR-0415, ADR-0431
 - **Evidence:** CP-05, CP-14, GR-005
@@ -147,4 +147,6 @@ of every record.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

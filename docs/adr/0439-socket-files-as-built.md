@@ -1,6 +1,6 @@
 # ADR-0439: Socket files as built (plan part F7): a node in the line's `/tmp`, a listener channel, a connect that forwards a pair's far end
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0050, ADR-0055, ADR-0107, ADR-0153, ADR-0225, ADR-0262, ADR-0341, ADR-0412, ADR-0430, ADR-0433
 - **Evidence:** CP-01, CP-02, GR-008
@@ -154,3 +154,7 @@ another service.
 - A port that needs a socket file in its own directory or a datagram socket with a name.
 
 ## Architect's decision
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

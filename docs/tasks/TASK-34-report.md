@@ -2,11 +2,11 @@
 
 ## Status for the architect
 
-Updated 2026-11-16.
+Updated 2026-11-16. **All of F2 to F8 are merged.**
 
-- Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`) and F4 (`stage-f4`), the tags placed on the green scheduled full run 43749759496 that includes all three (`tools/ci-last-full.rb --green-for`). **Merged, not yet tagged** (`tools/ci-last-full.rb --green-for` names no green scheduled full run that includes them yet): F8 (d38c0a9c), F5 (c1061eca), F6 (e31fc2ce) and F7a (5a3372c7); I tag `stage-f8`, `stage-f5`, `stage-f6` and `stage-f7` when it does (`stage-f7` only after F7b). F1 (`poll`) was merged before this task.
-- In progress: F7b, TCP `bind`/`listen`/`accept` over `netd` (the plan's "done when" `python3 -m http.server` serving a file to `curl` is not met until it is built). F7a (Unix socket files in the line's `/tmp`, ADR-0439) is merged.
-- ADRs: ADR-0430 (item 7), ADR-0433 and ADR-0435 were accepted by the architect on 2026-11-15 and recorded; sockets surviving `exec` (`execve` with a Unix socket open is `EBADF`) are in the backlog. ADR-0431 (a `SHARED` bit in `memory_map`, kernel ABI), ADR-0432 (memory descriptors as built) and ADR-0434 (netd `Duplicate` makes a connection of the caller's own rights, bounded to 8 live per family) are **proposed**, each recommended as written; ADR-0431 first, as a kernel ABI change. Numbers 0436 to 0449 are free.
+- Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`), F4 (`stage-f4`), F5 (`stage-f5`), F6 (`stage-f6`) and F8 (`stage-f8`), each on a green scheduled full run of `main` that includes it (`tools/ci-last-full.rb --green-for`: runs 43749759496 and 43819664106). **F7 is merged, not tagged**: F7a (5a3372c7) and F7b (7f0c66df); no green scheduled full run includes them yet, and `stage-f7` goes on when the script names one. F1 (`poll`) was merged before this task.
+- In progress: nothing. The next step is the architect's: the decisions below, and the tag `stage-f7` once `main`'s scheduled full run is green on 7f0c66df.
+- ADRs accepted by the architect and recorded: ADR-0430 (2026-11-15), ADR-0433, ADR-0435 (2026-11-15), ADR-0438 (2026-11-16). **Proposed, each recommended as written, for the architect to accept or change:** ADR-0431 (a `SHARED` bit in `memory_map`, a kernel ABI change: look first), ADR-0432 (memory descriptors as built), ADR-0434 (netd `Duplicate`), ADR-0436 (the 2 GiB guest), ADR-0437 (the mapping list), ADR-0439 (Unix socket files), ADR-0440 (TCP listen, the design, superseded in part by ADR-0441), ADR-0441 (TCP listening as built: a loopback of stream pairs, no second smoltcp interface). **Decisions the architect must make:** (1) ADR-0441 first: the loopback is the machine's, not a room's (any program with a rule naming 127.0.0.1 reaches any account's listener; a condition of the untrusted-room gate, ADR-0268, in `docs/architect-queue.md`); (2) F8: accept `top`'s session row plus the ceiling refusal as the plan's `top --session`, or have it built (ADR-0436); (3) F6: charge a program image to the room that starts it (the gate condition in `docs/architect-queue.md`); (4) TCP listen only through the loopback: a second smoltcp interface for the NIC, and the rooms' `+listen` words; (5) the TCG kernel suites sit near the 420 s limit on slow runners; (6) a kernel weakness found in F7b's merge test: a contiguous create is refused while the reaper holds the dead objects' frames (race between `t_bound` and the reaper; `alloc_contig_in_steps` helps at most 17 rounds of 64 frames), under ADR-0270. Numbers 0442 to 0449 are free.
 - Machine: MacBook Air M1, 8 GB, so `CARGO_BUILD_JOBS=2`, one part with builds and one QEMU guest at a time.
 
 ## Parts
@@ -122,3 +122,10 @@ Updated 2026-11-16.
   messages and a blocking `connect` into a full queue is `EAGAIN`; `readdir` shows a socket file as a plain name; CPython's `test_socket`
   server classes and the asyncio cases that said "bind (plan part F7)" in `tests/python/regr-ignore.txt` were not run (no Python rootfs
   was built here): `test-python-regr` must show whether an `AF_UNIX` server now passes or hangs a case.
+
+## F7b notes
+
+- Built (proposed ADR-0441): TCP `bind`, `listen`, `accept`, `accept4`, `getsockname`, `SO_ACCEPTCONN` and `poll` of a listener; `netd`'s `listen`
+  request (5) and `Accepted` (19); `+listen PORT` in the shell; the loopback as `netd` handing the client's stream ends to the listener
+  (no second smoltcp interface: read, not measured). Plan part F7's "done when" is met: `make test-python-serve`.
+- Not built: listening on the NIC, `localhost`, per-connection `ECONNRESET`, rooms' words for `+listen`. Limits in `docs/design.md` and ADR-0441.

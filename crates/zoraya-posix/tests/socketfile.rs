@@ -328,13 +328,15 @@ fn listen_and_accept_need_a_bound_listening_socket() {
     assert_eq!(r.p.listen(99, 1), Err(EBADF));
     let (p, _) = r.p.pipe(0).unwrap();
     assert_eq!(r.p.accept(p, true, false), Err(ENOTSOCK));
-    // A TCP socket has no listener yet: honest, not silent.
+    // A TCP socket is netd's (plan part F7b, `tests/tcplisten.rs`): this rig
+    // has no network, so `bind` records and `listen` is refused as a
+    // grant-less `connect` is.
     let t = r.p.socket(2, SOCK_STREAM, 0).unwrap();
-    assert_eq!(r.p.listen(t, 1), Err(EOPNOTSUPP));
     assert_eq!(
         r.p.bind(t, &[2, 0, 0, 80, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
-        Err(EOPNOTSUPP)
+        Ok(())
     );
+    assert_eq!(r.p.listen(t, 1), Err(EACCES));
 }
 
 #[test]
@@ -714,4 +716,21 @@ fn connect_completes_before_accept_in_one_process() {
         a.write(d, b"late").unwrap();
         assert_eq!(a.read(c, 100).unwrap(), b"late");
     }
+}
+
+/// Review of F7b, R2: a listening Unix socket is never writable either:
+/// POLLOUT alone reports nothing, with or without a connection waiting.
+#[test]
+fn a_listening_unix_socket_is_not_reported_writable() {
+    let (mut r, _svc) = tmp_rig();
+    let s = sock(&mut r, SOCK_STREAM);
+    r.p.bind(s, &un("/tmp/pw")).unwrap();
+    r.p.listen(s, 4).unwrap();
+    let mut f = [PollFd {
+        fd: s,
+        events: POLLOUT,
+        revents: 0,
+    }];
+    assert_eq!(r.p.poll_once(&mut f, Some(0)), Ok(Some(0)));
+    assert_eq!(f[0].revents, 0);
 }

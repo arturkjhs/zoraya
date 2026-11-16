@@ -5,6 +5,7 @@
 # and port of the URL on its line (ADR-0224 item 2) at the NET slot.
 ! panicked
 ! first process ended
+! tcptest: FAIL
 < Type help to begin, or help tour.
 < \r\n~>
 # The lease takes a few hundred milliseconds under TCG.
@@ -57,6 +58,33 @@
 > posixrun -m /bin=/bin:ro -m /home=/home -C /home /bin/zfetch http://@HOST@:@PORT@/\r
 < zfetch: @HOST@: Permission denied
 < posixrun: exit 1
+< \r\n~>
+# Plan part F7b (proposed ADR-0441): TCP listen, accept and connect over netd's
+# loopback, one C program as server and client. The line is the grant: listen
+# rules for its ports and a reach rule for 127.0.0.1 (ADR-0224's +listen and +net).
+> +listen 9000-9009 +listen 50000-50010 +net 127.0.0.1 tcptest\r
+< tcptest: basics ok
+< tcptest: refusals ok
+< tcptest: port zero ok
+< tcptest: bulk ok
+< tcptest: backlog bound and a closed listener with pending connections ok
+< tcptest: all ok
+< \r\n~>
+# `grants` says what the line gives: the reach rule and the listen rules.
+> grants +listen 9000-9009 +net 127.0.0.1 tcptest\r
+< net: 127.0.0.1
+< reach, any port
+< net: ports 9000-9009
+< listen (grant +listen)
+< \r\n~>
+# Without a listen word the program has no listener (INV-0440-1), and without a
+# reach word for 127.0.0.1 it cannot connect to the loopback (INV-0440-2): each
+# mode checks the refusal itself (EACCES) and prints its own ok line.
+> +net 127.0.0.1 tcptest --no-listen\r
+< tcptest: no listen grant ok
+< \r\n~>
+> +listen 9000-9009 tcptest --no-reach\r
+< tcptest: no reach grant ok
 < \r\n~>
 x power off
 > poweroff\r

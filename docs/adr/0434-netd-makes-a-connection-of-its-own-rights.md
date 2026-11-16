@@ -1,6 +1,6 @@
 # ADR-0434: `netd` makes a connection of a connection's own rights and scope (plan part F4)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0220, ADR-0262, ADR-0287, ADR-0310, ADR-0411, ADR-0433
 - **Evidence:** CP-05, GR-005
@@ -65,4 +65,6 @@ program can fill `netd`'s table of 64 (review of plan part F4, finding 3); a dup
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

@@ -1085,6 +1085,7 @@ impl Z {
             cwd,
             grants: exec.grants,
             nets: exec.nets,
+            listens: exec.listens,
             base_system: base,
             room: room.map(|r| grants::RoomBound {
                 name: &r.name,
@@ -1192,6 +1193,7 @@ impl Z {
             cwd: &self.cwd,
             grants: exec.grants,
             nets: exec.nets,
+            listens: exec.listens,
             base_system: base,
             room: None,
         };

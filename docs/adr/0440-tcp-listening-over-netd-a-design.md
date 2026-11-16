@@ -1,6 +1,6 @@
 # ADR-0440: TCP `bind`, `listen` and `accept` over `netd`: what listening needs, and why plan part F7 stops short of it
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0220, ADR-0221, ADR-0222, ADR-0225, ADR-0262, ADR-0287, ADR-0434, ADR-0439
 - **Evidence:** CP-01, GR-008
@@ -107,6 +107,12 @@ untrusted line has no listen rule unless a person wrote one.
 - Whether smoltcp's two-interface dispatch carries a loopback exchange (item 5's spike).
 - Whether the address a listener reports should be the interface's or 0.0.0.0.
 - The word a person writes for a listen rule.
+- *Note, 2026-11-16 (plan part F7b, recorded by an agent; ADR-0001 rule 6):* F7b built Option A's request and bounds and the library
+  of item 6, without the second interface of item 5: the spike was a reading of smoltcp 0.14's `socket_egress` (a socket's
+  packet is sent only by an interface that routes its destination), not an experiment, and the loopback became `netd` handing
+  the client's two stream ends to the listener (proposed ADR-0441). Item 3's `Accepted` has two handles, not three. Item 4's
+  bounds are 8 listeners, one per carved account with the `listen` right, and 64 queued (the listener channel's), not 4 and 8.
+  INV-0440-1 and INV-0440-2 are checked by the host tests of `Service` and `make test-net-posix`, not over smoltcp's loopback.
 
 ## Revisit triggers
 
@@ -114,3 +120,7 @@ untrusted line has no listen rule unless a person wrote one.
 - A program that needs UDP listening (`datagram`).
 
 ## Architect's decision
+
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

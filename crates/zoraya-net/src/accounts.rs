@@ -12,14 +12,15 @@
 //! | kind | global | one carved account | all carved accounts |
 //! |---|---|---|---|
 //! | connections (TCP, any phase) | 16 | `budget`, 1 to 4 | 8 |
-//! | listeners | 4 | 0 | 0 |
+//! | listeners | 8 | 1 if its rights have `listen`, else 0 | 4 |
 //! | pending resolutions | 8 | `budget / 2`, at least 1 | 4 |
 //! | datagram sockets | 4 | 0 | 0 |
 //! | resolver cache entries | 64 | `4 * budget` | 32 |
 //!
-//! At most four carved accounts live at once. Listeners and datagram
-//! sockets have no request in `netd` yet; their bounds exist so that the
-//! carve is whole when they do.
+//! At most four carved accounts live at once. Listeners have a request since
+//! plan part F7b (`listen`; proposed ADR-0441 changed their row from 4, 0, 0
+//! so that a program of its own account can listen once); datagram sockets
+//! have none yet, their bounds exist so that the carve is whole when they do.
 
 use alloc::vec::Vec;
 
@@ -43,9 +44,9 @@ pub const ALL: [Kind; KINDS] = [
 ];
 
 /// The service's bound of each kind, in [`Kind`] order.
-pub const GLOBAL: [u32; KINDS] = [16, 4, 8, 4, 64];
+pub const GLOBAL: [u32; KINDS] = [16, 8, 8, 4, 64];
 /// What all carved accounts together may hold of each kind.
-pub const COLUMN: [u32; KINDS] = [8, 0, 4, 0, 32];
+pub const COLUMN: [u32; KINDS] = [8, 4, 4, 0, 32];
 /// Carved accounts alive at once.
 pub const MAX_CARVED: usize = 4;
 /// The most connections one carve may ask for.
@@ -54,10 +55,12 @@ pub const MAX_BUDGET: u32 = 4;
 /// The session's account: the root connection `init` hands out is in it.
 pub const SESSION: usize = 0;
 
-/// The limits a carve with `budget` connections asks for.
-pub const fn carve_of(budget: u32) -> [u32; KINDS] {
+/// The limits a carve with `budget` connections asks for, and `listeners`
+/// (0 or 1: ADR-0262's "0 listeners unless `+listen`", asked by a carve whose
+/// rights have `listen`).
+pub const fn carve_of(budget: u32, listeners: u32) -> [u32; KINDS] {
     let resolutions = if budget / 2 == 0 { 1 } else { budget / 2 };
-    [budget, 0, resolutions, 0, 4 * budget]
+    [budget, listeners, resolutions, 0, 4 * budget]
 }
 
 /// A charge past the account's limit (or on an account that is gone).
@@ -184,12 +187,24 @@ impl Accounts {
         self.free(a);
     }
 
-    /// Carves a new account from `parent` for `budget` connections.
+    /// Carves a new account from `parent` for `budget` connections and no
+    /// listener.
     pub fn carve(&mut self, parent: usize, budget: u32) -> Result<usize, CarveError> {
-        if budget == 0 || budget > MAX_BUDGET || !self.exists(parent) {
+        self.carve_with(parent, budget, 0)
+    }
+
+    /// Carves a new account from `parent` for `budget` connections and
+    /// `listeners` (at most 1) listeners.
+    pub fn carve_with(
+        &mut self,
+        parent: usize,
+        budget: u32,
+        listeners: u32,
+    ) -> Result<usize, CarveError> {
+        if budget == 0 || budget > MAX_BUDGET || listeners > 1 || !self.exists(parent) {
             return Err(CarveError::Invalid);
         }
-        let want = carve_of(budget);
+        let want = carve_of(budget, listeners);
         // From the session, the column bounds what all carved accounts hold
         // together; from a carved account the limits only move inside it.
         let column_ok = parent != SESSION

@@ -254,6 +254,11 @@ Threads: none.
   half, `+listen`, `grants`' roots entry, the rooms' words (INV-0224-3), the report and hint (INV-0224-4) and the pills
   (INV-0224-5) are not built. INV-0224-2 holds for the scope of the shell's own lines only. The rows stay
   `not yet applicable (stage 8)`.
+- *Note, 2026-11-16 (plan part F7b, recorded by an agent; ADR-0001 rule 6):* F7b builds the `+listen` word in the shell
+  (`zoraya_shell::netgrant::parse_listen`, `net_for`): `+listen PORT` or `+listen LOW-HIGH`, a literal token and one word like
+  `+net`, TCP and UDP, giving the `listen` right and listen rules (no reach rule); `grants` prints `net: port 8000  listen
+  (grant +listen)`. `make test-net-posix` and `make test-python-serve` run it. Still not built: the rooms' words, the pills,
+  the report and hint of a refused `listen`, `grants`' roots entry (INV-0224-3 to -5).
 
 ## Revisit triggers
 - People routinely type `+net any`: the kinds are missing or the hosts too many.
