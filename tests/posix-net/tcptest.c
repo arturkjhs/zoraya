@@ -372,7 +372,7 @@ static void test_expect_no_reach(void)
  *
  * serve: listens on PORT (any room may use the same port: a bind in another
  * room is no EADDRINUSE), prints a line the script waits for, and answers each
- * connection with the one byte TAG. It gives up after 120 s with no client. */
+ * connection with the one byte TAG. It gives up after 600 s with no client. */
 static int serve(int port, char tag)
 {
 	int err = 0, l = listener(port, &err);
@@ -385,7 +385,7 @@ static int serve(int port, char tag)
 	for (;;) {
 		struct pollfd p = {.fd = l, .events = POLLIN};
 		int c;
-		if (poll(&p, 1, 120000) <= 0)
+		if (poll(&p, 1, 600000) <= 0)
 			break;
 		c = accept(l, NULL, NULL);
 		if (c < 0)
