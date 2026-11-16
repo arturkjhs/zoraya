@@ -1799,7 +1799,7 @@ fn a_connect_reaches_only_the_listeners_of_its_own_room() {
         listen_on(&mut service, &mut net, server_a, 8000),
         Err(status::BUSY)
     );
-    // A room that listens on nothing else still sees nothing of a's other port.
+    // Room b's own port is busy for b again (a's listener plays no part).
     assert_eq!(
         listen_on(&mut service, &mut net, server_b, 8000),
         Err(status::BUSY)
@@ -1943,7 +1943,7 @@ fn only_a_connection_with_the_room_right_names_a_room_and_it_is_inherited() {
         service.connection(same).unwrap().account(),
         service.connection(launcher).unwrap().account()
     );
-    // A name over the bound is not encoded at all; a bad scope is invalid.
+    // A bad scope is invalid (a room name over the bound is tested apart).
     assert_eq!(
         narrow_room(
             &mut service,
@@ -2041,4 +2041,24 @@ fn port_zero_is_picked_per_room_and_shows_nothing_of_other_rooms() {
     service.listener_closed(first);
     let (_, again) = listen_on(&mut service, &mut net, a, 0).unwrap();
     assert_eq!(again, port_a);
+}
+
+#[test]
+fn a_room_name_over_the_bound_cannot_be_sent() {
+    // `Data<24>` bounds the name on the wire: 24 bytes encode, 25 do not, so
+    // `netd` never sees one (and `netclient::narrow_room` says INVALID first).
+    use zoraya_proto_net::NarrowRoom;
+    let scope = loop_scope(Some(Ports::ANY), &[]);
+    let name = [b'r'; 25];
+    let mut out = vec![0u8; 4096];
+    fn make<'a>(scope: &'a [u8], room: &'a [u8]) -> NarrowRoom<'a> {
+        NarrowRoom {
+            rights: rights::REACH,
+            budget: Below(0),
+            scope: Data(scope),
+            room: Data(room),
+        }
+    }
+    assert!(encode(&make(&scope, &name[..24]), 5, &mut out).is_ok());
+    assert!(encode(&make(&scope, &name), 5, &mut out).is_err());
 }
