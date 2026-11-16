@@ -54,3 +54,6 @@ test_nonstream_socket
 test_sock_sendfile_fallback
 test_sock_sendfile_fallback_offset_and_count
 test_sock_sendfile_no_fallback
+# test_asyncio.test_base_events (plan part F7, ADR-0439): `skip_unless_bind_unix_socket` probes with a stream socket, which binds now,
+# and the case then binds a datagram socket, which is not built (`EOPNOTSUPP`).
+test_create_datagram_endpoint_existing_sock_unix

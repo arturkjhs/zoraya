@@ -8,6 +8,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+zoraya-abi = { path = "../zoraya-abi" }
 zoraya-fs = { path = "../zoraya-fs" }
 zoraya-proto-block = { path = "../zoraya-proto-block" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }

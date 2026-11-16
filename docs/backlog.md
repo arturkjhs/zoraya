@@ -631,3 +631,24 @@ per image (the image's pages once, however many processes run from it, as ADR-04
 - **A stuck GUI step cost the whole run (1200 to 1800 s):** each GUI step now has a limit of its own (120 s, x4 under
   TCG, a `pause`'s time on top; `limit SECONDS STEP` for more). The default and the serial scripts are in
   `docs/architect-queue.md` section D, with the question of a prompt that clears its row.
+
+## Socket files and TCP listening: what F7 left (plan part F7, ADR-0439 and ADR-0440, proposed)
+
+- **TCP `bind`, `listen`, `accept`** (ADR-0440): `EOPNOTSUPP` today, so `python3 -m http.server` does not serve and the plan's "done when"
+  is not met. Needs a `listen` request in `netd`'s protocol, `Accepted` on a listener channel, a loopback interface in `netd`'s
+  stack (a spike on smoltcp's two-interface dispatch first) and a network step in QEMU; the architect writes the word a person types
+  for a listen rule (ADR-0225 item 5).
+- **A socket file in a program's own directory** (ADR-0412 item 5; ADR-0439 item 1): only the line's `/tmp` is built. Needs a kind in
+  the bootstrap record for "own directory" (stage 10's planner) and a transient node in `fsd`'s volume service. tmux's default place
+  is an own directory.
+- **A datagram socket with a name** (`bind` of `SOCK_DGRAM`): `EOPNOTSUPP`.
+- `readdir` of `/tmp` shows a socket file as a plain name (`DT_REG`); the service's listing does not carry the kind.
+- The `/tmp` service's 256 socket nodes are shared by the whole line: one program can fill them (it can also fill the volume, which has
+  its own limit, ADR-0265). A per-connection count is the next step if a port needs it.
+- CPython's `test_socket` server classes (`AF_UNIX` servers now bind) are not in `tests/python/regr-modules.txt` beyond
+  `BasicSocketPairTest`; `regr-ignore.txt` names the asyncio cases that said "bind (plan part F7)": review them once TCP listens.
+- F7 errno differences from Linux (review of plan part F7): `listen` after the name was unlinked is `EPROTOTYPE`; `listen` of an unbound
+  `SOCK_DGRAM` socket is `EINVAL` (Linux `EOPNOTSUPP`); a far end the kernel refuses is `EPROTOTYPE` to the connector.
+- The service's 64 listeners, 256 nodes and queued connections (paid by `tmp_job`, no limit of its own) are the line's: a per-account bound
+  would stop one program from filling them (ADR-0439 effect of the vision).
+- `ports/apps/sshshim.c` replaces libc's `socketpair` with an `ENOSYS` stub for ssh: drop it so ssh (ControlMaster, proxy commands) can use Unix socket pairs (F7 review, R4).

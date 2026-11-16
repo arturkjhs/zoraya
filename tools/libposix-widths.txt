@@ -19,8 +19,11 @@ __restore_sigs void v
 __unmapself void v
 _exit void v
 abort void v
+accept int 4
+accept4 int 4
 access int 4
 aligned_alloc void_* 8
+bind int 4
 bsd_signal void_(*)() 8
 calloc void_* 8
 cfgetispeed speed_t 4
@@ -96,6 +99,7 @@ killpg int 4
 lchown int 4
 link int 4
 linkat int 4
+listen int 4
 lseek off_t 8
 lstat int 4
 malloc void_* 8

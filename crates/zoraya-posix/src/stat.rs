@@ -82,6 +82,9 @@ pub fn encode(kind: Kind, m: &Meta, uid: u32, gid: u32) -> [u8; SIZE] {
     // (ADR-0190 item 4).
     let kind = if kind == Kind::File && m.mode & S_IFMT == S_IFIFO {
         Kind::Fifo
+    } else if kind == Kind::File && m.mode & S_IFMT == S_IFSOCK {
+        // A socket file of the temporary service (proposed ADR-0439).
+        Kind::Socket
     } else {
         kind
     };
