@@ -610,3 +610,21 @@ across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its
 shell's, in no room, so `top` shows it nowhere. The job-level proxy (`tools/check-top-image.py`) is accepted as F6's "done when"; a line
 per image (the image's pages once, however many processes run from it, as ADR-0415 item 6's example shows) is asked for here.
 
+
+## `posix-curses-tcg-1` stuck at `~> other` (2026-11-16, run 43802095122, branch `work/curses-flake`)
+
+- **Cause, reproduced:** the script typed `:w other.txt` 1.5 s after `vi notes.txt` on a loaded TCG runner (the guest's
+  panel measure 8224 us, 1600 to 2500 us in passing runs), before nvi's `raw()`; the discipline, still canonical, echoed
+  `:w other` on the primary screen, vi read every key and quit, and the next prompt overwrote only `:w ` of the echo.
+  Typing `:w other` ahead of vi's start shows the same screen. **Fixed in the script:** both vi starts wait for a row of
+  vi's own screen (`~`, `hello vi`), which nvi draws only after `raw()`.
+- **Audit of the scripts for a pause before keys to a program in raw mode** (`tests/gui/*.script`, `tests/posix/*.script`,
+  `tests/shell/*.script`; the 44 places where a `pause` comes right before a key): no other one types to a program that
+  switches the terminal to raw mode. Left as they are: `posix-curses.script`'s `\e`, `pause 300`, `:wq` (vi is already
+  in raw mode: its screen was waited for); `posix-terminal.script`'s `/bin/sleep` then Ctrl-C or Ctrl-Z after
+  `pause 1200`, and `kill -9 %1` then `jobs` (the canonical discipline and `sh`, no raw mode; the Ctrl-C lost around
+  `exec` is the entry of `work/tcg-slow` above); its `t_tty box` and `fg` pauses are followed by a wait on the box's own
+  output before any key; `tour-gui.script`'s `spin` and `sleep 5` with Ctrl-C and Ctrl-Z after `pause 1000` (native
+  programs; the script is generated from `docs/tour.md`); `net status` and the NetSurf, windows, wheel, selection, files and settings
+  pauses (a window, the pointer or the clipboard, not a terminal's mode). The serial scripts have no pause; each start
+  of `sh`, `dash`, `t_tty`, `t_curses`, `vi`, `less` or `view` there is followed by a `<` wait before the next keys.
