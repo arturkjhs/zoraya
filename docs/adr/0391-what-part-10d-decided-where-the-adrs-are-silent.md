@@ -1,6 +1,6 @@
 # ADR-0391: What part 10d decided where ADR-0334, ADR-0335, ADR-0383 and ADR-0390 are silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0005, ADR-0153, ADR-0331, ADR-0333, ADR-0334, ADR-0335, ADR-0342, ADR-0383, ADR-0389, ADR-0390
 - **Evidence:** CP-27, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#editors-and-pagers-compared, stage-10/survey.md#what-ncurses-needs-from-libc
@@ -63,6 +63,10 @@ sleep ncurses
 - **Precedent:** ncurses' default for xterm before 2007.
 
 ## Recommendation
+
+### Decision
+
+Accepted as recommended, except item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (the architect, 2026-11-16). The refusal of item 8 stands until it is built.
 
 **Recommendation (not a decision): Option A.**
 
@@ -166,4 +170,6 @@ Target 2: the grants of the two programs are the ones the line names, as listed 
 
 ## Architect's decision
 
-(Left empty for the human.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A, with one amendment. Item 8: `narrow` takes a list of names (ADR-0337 item 8), as decided; to be built (part 10f built `narrow` with a list at run time; part 10j or 10f for the rest, that is the planner's use of it for `vi a.txt b.txt`). Until it is built the refusal of item 8 stands, and INV-0391-6 changes with that build. The other open questions are covered as follows: DB 1 (item 9: 1.85 stays; its licence is accepted, the University of California having rescinded the advertising clause of the 4-clause BSD licence in 1999, so the licence reads as 3-clause BSD); `view`'s operand (item 6: the narrower `read` operand stands, as written); the keys of a pager after a native first element (item 13: stays as written, not decided further here).
