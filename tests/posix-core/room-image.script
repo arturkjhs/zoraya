@@ -1,0 +1,49 @@
+# Plan part F10 (proposed ADR-0443, INV-0443-5; ADR-0262: what is made for a client is paid
+# by the client): the image of a program the shell starts in a room is charged to the room's
+# job. `t_unix` is a 1.1 MiB program. A room at 1M cannot start it: the shell says "over quota"
+# at the image, twice, and the room's row (`top tight`) reads the same before, between and
+# after (tools/check-room-image.py); a room at 64M starts the same program. A refusal at the
+# image leaves nothing in the room: no process, no image, no handle.
+! panicked
+! ZORAYA-PANIC
+< \r\n~> 
+> room new tight --mem 1M --procs 16 +w /work\r
+< tight --colour
+< \r\n~> 
+> room new roomy --mem 64M --procs 16 +w /work\r
+< roomy --colour
+< \r\n~> 
+> room tight\r
+< tight /work> 
+> top tight\r
+< limits --mem 1M
+< tight /work> 
+> /bin/t_unix pair\r
+< over quota
+< tight /work> 
+> top tight\r
+< limits --mem 1M
+< tight /work> 
+> /bin/t_unix pair\r
+< over quota
+< tight /work> 
+> top tight\r
+< limits --mem 1M
+< tight /work> 
+> top tight\r
+< limits --mem 1M
+< tight /work> 
+> room --leave\r
+< \r\n/work> 
+> room roomy\r
+< roomy /work> 
+> /bin/t_unix pair\r
+< t_unix: pair passed
+< roomy /work> 
+> room --leave\r
+< \r\n/work> 
+> room remove tight --kill\r
+< \r\n/work> 
+> room remove roomy --kill\r
+< \r\n/work> 
+> poweroff\r

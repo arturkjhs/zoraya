@@ -11,9 +11,10 @@ twice, and checks the room's memory against itself (no number is pinned). Per ru
   a spawn of the image costs the room its child's own pages and the pipe L keeps for it,
   never an image: so it is far less than the child's own job plus the image's pages
   (printed by the program as "an image keeps exactly N bytes"); a spawn of the file costs
-  the same and the image's pages, and a few for the record and the tables. What the room
-  does not show is the image of the program itself, which the shell made: it is charged to
-  the shell's job, outside every room.
+  the same and the image's pages, and a few for the record and the tables. The room also
+  shows the image of the program itself, which the shell made for it (plan part F10, proposed
+  ADR-0443: it is charged to the room's job, not the shell's); it is in P0 and in every later
+  reading alike, so none of the differences above sees it.
 
   The room gets everything back: each run ends within 16K of the empty room's reading, and
   the second run reads as the first did, so an image or a transfer buffer kept after a run
