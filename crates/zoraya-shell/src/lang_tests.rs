@@ -124,6 +124,14 @@ impl Host for Fake {
             io.out
                 .push_str(&alloc::format!("grant {w} {} {}\n", v.text, v.literal));
         }
+        for n in exec.nets {
+            io.out
+                .push_str(&alloc::format!("net {} {}\n", n.text, n.literal));
+        }
+        for l in exec.listens {
+            io.out
+                .push_str(&alloc::format!("listen {} {}\n", l.text, l.literal));
+        }
         io.out.push_str(&alloc::format!("command {}\n", exec.name));
         for a in exec.args {
             io.out
@@ -1175,6 +1183,31 @@ fn grants_sees_the_line_as_a_run_would() {
         run(&mut sh, "grants cp -f x"),
         "command cp\narg -f true\narg x true\n"
     );
+}
+
+/// `+listen` is a literal token and one word, like `+net` (ADR-0224 item 1,
+/// INV-0224-1): `grants` shows it, a value after the token is not a grant.
+#[test]
+fn a_listen_word_is_a_grant_and_needs_a_port_word() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "grants +listen 8000 +net 127.0.0.1:8000 cat x"),
+        "net 127.0.0.1:8000 true\nlisten 8000 true\ncommand cat\narg x true\n"
+    );
+    // The token is literal: from a value it is the command's name.
+    assert_eq!(
+        run(&mut sh, "set g +listen; grants $g 8000 cat"),
+        "command +listen\narg 8000 true\narg cat true\n"
+    );
+    // After `grants`' own words only: an option of the command is its own.
+    assert_eq!(
+        run(&mut sh, "grants cat +listen 8000"),
+        "command cat\narg +listen true\narg 8000 true\n"
+    );
+    // Missing word, at the end or before a break.
+    assert_eq!(invalid("+listen").1, "+listen needs a port");
+    assert_eq!(invalid("+listen | cat").1, "+listen needs a port");
+    assert_eq!(invalid("+net").1, "+net needs a host");
 }
 
 fn invalid(line: &str) -> (usize, String) {

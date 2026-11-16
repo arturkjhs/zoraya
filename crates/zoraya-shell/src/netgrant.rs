@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 use alloc::string::String;
 use zoraya_abi::net::{
-    MAX_RULES, Ports, Protocols, ReachRule, Scope, Target, encode, rights, valid_name,
+    ListenRule, MAX_RULES, Ports, Protocols, ReachRule, Scope, Target, encode, rights, valid_name,
 };
 use zoraya_command::Outcome;
 use zoraya_describe::{Description, Kind};
@@ -116,6 +116,31 @@ pub fn parse_word(text: &str) -> Result<NetWord, String> {
         ports,
         protocols: Protocols::ALL,
     })
+}
+
+/// Reads the word after `+listen` (ADR-0224 item 1): a port, or `LOW-HIGH`
+/// ports, 1 to 65535, for TCP and UDP. Total: any text gives ports or the
+/// reason. No `any`: a listener on every port is not one word of the line.
+pub fn parse_listen(text: &str) -> Result<Ports, String> {
+    let port = |t: &str| {
+        t.parse::<u32>()
+            .ok()
+            .filter(|n| (1..=65535).contains(n))
+            .map(|n| n as u16)
+            .ok_or_else(|| String::from("a port is a number from 1 to 65535"))
+    };
+    match text.split_once('-') {
+        Some((low, high)) => {
+            let (low, high) = (port(low)?, port(high)?);
+            if low > high {
+                return Err(String::from(
+                    "the range runs from the lower port to the higher",
+                ));
+            }
+            Ports::ranges(&[(low, high)]).ok_or_else(|| String::from("not a range of ports"))
+        }
+        None => Ok(Ports::one(port(text)?)),
+    }
 }
 
 /// The rights and scope to `narrow` the shell's connection to, if the
@@ -232,23 +257,48 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
         });
     }
     let rules: Vec<ReachRule<'_>> = words.iter().map(NetWord::rule).collect();
-    if rules.is_empty() {
+    // `+listen` words (ADR-0224 item 1): the person's own, a literal token and
+    // its one word; they make listen rules and the `listen` right, and
+    // nothing else (a listener needs no reach).
+    let mut listens: Vec<ListenRule> = Vec::new();
+    for v in line.listens {
+        match parse_listen(&v.text) {
+            Ok(ports) => listens.push(ListenRule {
+                ports,
+                protocols: Protocols::BOTH,
+            }),
+            Err(problem) => {
+                return Err(Refused {
+                    subject: alloc::format!("+listen {}", v.text),
+                    problem,
+                    hint: Some(String::from("write a port, or LOW-HIGH ports")),
+                });
+            }
+        }
+    }
+    if rules.is_empty() && listens.is_empty() {
         if d.needs_net_status && line.base_system {
             return Ok(Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec())));
         }
         return Ok(None);
     }
-    if rules.len() > MAX_RULES {
+    if rules.len() + listens.len() > MAX_RULES {
         return Err(Refused {
             subject: "+net".into(),
             problem: "too many network rules on one line".into(),
             hint: None,
         });
     }
-    let mut out = alloc::vec![0u8; 512 + 128 * rules.len()];
-    Ok(encode(&rules, &[], &mut out).map(|n| {
+    let mut out = alloc::vec![0u8; 512 + 128 * (rules.len() + listens.len())];
+    let granted = (if rules.is_empty() { 0 } else { rights::REACH })
+        | (if listens.is_empty() {
+            0
+        } else {
+            rights::LISTEN
+        });
+    Ok(encode(&rules, &listens, &mut out).map(|n| {
         out.truncate(n);
-        (rights::REACH, out)
+        (granted, out)
     }))
 }
 
@@ -378,7 +428,11 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
     let Some(scope) = Scope::decode(scope) else {
         return Vec::new();
     };
-    scope
+    let listening: Vec<String> = scope
+        .listen_rules()
+        .map(|rule| listen_line(&rule))
+        .collect();
+    let reaching: Vec<String> = scope
         .reach_rules()
         .map(|rule| {
             let host = match rule.target {
@@ -463,7 +517,37 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
             };
             alloc::format!("net: {shown:<23} {access} ({source})")
         })
-        .collect()
+        .collect();
+    // The listen rules after the reach rules, so that `pills` still pairs
+    // each reach rule with its line.
+    reaching.into_iter().chain(listening).collect()
+}
+
+/// `net: port 8000             listen (grant +listen)`.
+fn listen_line(rule: &ListenRule) -> String {
+    let list: Vec<String> = rule
+        .ports
+        .list()
+        .iter()
+        .map(|&(l, h)| {
+            if l == h {
+                alloc::format!("{l}")
+            } else {
+                alloc::format!("{l}-{h}")
+            }
+        })
+        .collect();
+    let word = if list.len() == 1 && !list[0].contains('-') {
+        "port"
+    } else {
+        "ports"
+    };
+    let shown = if rule.ports.is_any() {
+        String::from("any port")
+    } else {
+        alloc::format!("{word} {}", list.join(","))
+    };
+    alloc::format!("net: {shown:<23} listen (grant +listen)")
 }
 
 /// The launcher's root connection, as [`available`] sees it.
