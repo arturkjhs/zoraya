@@ -91,7 +91,8 @@ struct Listener {
     peers: u32,
 }
 
-/// Ports `netd` picks from for a `listen` of port 0 and for the made-up port
+/// The search for a port starts at the range's start every time: a cursor shared by rooms would show one
+/// room another's `listen`s (ADR-0442 driver 3). Ports `netd` picks from for a `listen` of port 0 and for the made-up port
 /// of a loopback client: 49152 to 65535.
 const EPHEMERAL_SPAN: u32 = 65536 - EPHEMERAL_FIRST;
 
@@ -142,8 +143,6 @@ pub struct Service {
     /// The listeners, by id; a slot is free when `None` (the account's bound
     /// of listeners keeps the table at most `accounts::GLOBAL` long).
     listeners: Vec<Option<Listener>>,
-    /// Where the next search for an ephemeral listening port starts.
-    next_port: u32,
 }
 
 impl Default for Service {
@@ -188,7 +187,6 @@ impl Service {
             next_token: 0,
             ping: None,
             listeners: Vec::new(),
-            next_port: 0,
         }
     }
 
@@ -223,17 +221,16 @@ impl Service {
     /// A port above 49151 that nobody listens on and `connection`'s listen
     /// rules cover; at most `EPHEMERAL_SPAN` are looked at. `Err` says why
     /// none: not granted (no rule covers any), or all in use.
-    fn pick_port(&mut self, connection: &Connection) -> Result<u16, u32> {
+    fn pick_port(&self, connection: &Connection) -> Result<u16, u32> {
         let scope = connection.scope();
         let mut covered = false;
         for i in 0..EPHEMERAL_SPAN {
-            let port = (EPHEMERAL_FIRST + (self.next_port + i) % EPHEMERAL_SPAN) as u16;
+            let port = (EPHEMERAL_FIRST + i) as u16;
             if !scope.allows_listen(port, zoraya_abi::net::Protocols::TCP) {
                 continue;
             }
             covered = true;
             if self.listener_on(connection.room(), port).is_none() {
-                self.next_port = (self.next_port + i + 1) % EPHEMERAL_SPAN;
                 return Ok(port);
             }
         }
@@ -1060,3 +1057,5 @@ fn status_reply<L: Link>(stack: &Stack<L>, now_us: i64, allowed: bool, t: u32) -
     };
     reply(&body, t)
 }
+
+const _: () = assert!(zoraya_proto_net::MAX_ROOM == zoraya_settings::rooms::MAX_NAME);

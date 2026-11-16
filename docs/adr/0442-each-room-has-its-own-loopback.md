@@ -123,6 +123,11 @@ a room's `+net 127.0.0.1` reaches that room's own listeners only.
 - A shell that is compromised names any room: in an untrusted room's launcher (ADR-0269) the connection `init` makes must have its room
   fixed and no `ROOM`; check when that launcher exists.
 
+- A room is known to `netd` only by its name: a room removed without `--kill` goes on running, and a new room of the same name would share
+  its loopback (both ways). Refuse the name while the old room runs, or add a generation from the keeper.
+- The made-up port search of `listen` 0 starts at the range's start for every room (no cursor shared across rooms, so no room sees another's listens).
+- A native command's connection (the shell's `narrow_room` with budget 0) joins the session account in every room; its room is not covered by a QEMU test.
+
 ## Revisit triggers
 
 - The untrusted room's launcher is built (ADR-0269).

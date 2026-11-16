@@ -7,8 +7,7 @@
 # Not listed, equivalent (each tried and survived): the loopback's `a[0] != 127` bypass of the local-address check
 # (`decide` already refuses 127.x unless a rule covers it, and `web` never does: defence in depth); `a[0] == 127` in
 # `next_candidate` (the stack has no route to 127.x and `tcp_open` refuses it: defence in depth); `handles.len() == 2`
-# in `accept` (`decode` is given the handle count and refuses any but 2); the ephemeral search's start (`next_port`: a rotating start, any covered free port is
-# right); a listener's `peers` modulus (the made-up port only has to differ between nearby connections).
+# in `accept` (`decode` is given the handle count and refuses any but 2); a listener's `peers` modulus (the made-up port only has to differ between nearby connections).
 tests = ["cargo test -q -p zoraya-net", "cargo test -q -p zoraya-posix --test tcplisten --test socketfile --lib", "cargo test -q -p zoraya-shell netgrant"]
 timeout = 900
 

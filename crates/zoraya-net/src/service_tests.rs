@@ -2002,3 +2002,43 @@ fn a_room_does_not_see_the_peer_ports_of_another() {
     }
     assert_eq!(peer(&mut service, &mut net, ids[0]), first + 1);
 }
+
+#[test]
+fn port_zero_is_picked_per_room_and_shows_nothing_of_other_rooms() {
+    // INV-0442-1 and -3: the search is the room's own and has no shared cursor.
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let launcher = service.add(Connection::root()).unwrap();
+    let listen = loop_scope(None, &[Ports::ANY]);
+    let a = narrow_room(
+        &mut service,
+        &mut net,
+        launcher,
+        rights::LISTEN,
+        0,
+        &listen,
+        "a",
+    )
+    .unwrap();
+    let b = narrow_room(
+        &mut service,
+        &mut net,
+        launcher,
+        rights::LISTEN,
+        0,
+        &listen,
+        "b",
+    )
+    .unwrap();
+    let (first, port_a) = listen_on(&mut service, &mut net, a, 0).unwrap();
+    // Room b gets the same first port: a's listener is invisible to it.
+    let (_, port_b) = listen_on(&mut service, &mut net, b, 0).unwrap();
+    assert_eq!(port_a, port_b);
+    // Room a's second port is the next free one of its own.
+    let (_, second) = listen_on(&mut service, &mut net, a, 0).unwrap();
+    assert_eq!(second, port_a + 1);
+    // Closing a's first and listening again gives the same port back, whatever b did.
+    service.listener_closed(first);
+    let (_, again) = listen_on(&mut service, &mut net, a, 0).unwrap();
+    assert_eq!(again, port_a);
+}
