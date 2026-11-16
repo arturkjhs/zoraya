@@ -173,3 +173,26 @@ file = "crates/zoraya-shell/src/netgrant.rs"
 find = '''        None => Ok(Ports::one(port(text)?)),'''
 replace = '''        None => Ok(Ports::ANY),'''
 note = "a +listen word is the port it says"
+
+[[mutant]]
+id = "F7b-loopback-refusal-keeps-in-write"
+file = "crates/zoraya-net/src/loopback.rs"
+find = '''        k.close(in_write);
+        k.close(out_read);'''
+replace = '''        k.close(out_read);'''
+note = "INV-0441-1: a refused loopback connect closes every handle"
+
+[[mutant]]
+id = "F7b-loopback-keeps-control"
+file = "crates/zoraya-net/src/loopback.rs"
+find = '''    k.close(control);
+}'''
+replace = '''}'''
+note = "INV-0441-1: the connection channel's end is always closed"
+
+[[mutant]]
+id = "F7b-loopback-ends-swapped"
+file = "crates/zoraya-net/src/loopback.rs"
+find = '''k.accept(end, &accepted, out_read, in_write)'''
+replace = '''k.accept(end, &accepted, in_write, out_read)'''
+note = "the listener reads what the client writes"

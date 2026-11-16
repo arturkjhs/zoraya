@@ -32,7 +32,7 @@ use zoraya_net::dns::Owner;
 use zoraya_net::nic::{Nic, Read, SlotMemory, Wire, Write};
 use zoraya_net::service::{Action, Service};
 use zoraya_net::stack::{Event, Stack};
-use zoraya_proto_net::{Accepted, Connected, Failed, LOOPBACK, Listening, reason};
+use zoraya_proto_net::{Failed, Listening, reason};
 use zoraya_proto_nic::{
     Attach, Done, Info, InfoReply, OBJECT_SIZE, SLOT_SIZE, SLOTS, status as nic_status,
 };
@@ -276,6 +276,39 @@ impl Drop for StreamClient {
     }
 }
 
+/// The kernel's side of `zoraya_net::loopback::deliver`.
+struct LoopbackKernel;
+
+impl zoraya_net::loopback::Kernel for LoopbackKernel {
+    type H = Handle;
+
+    fn accept(&mut self, end: Handle, message: &[u8], read: Handle, write: Handle) -> bool {
+        let entries = [
+            ChannelEntry {
+                handle: read,
+                rights: StreamReadObject::RIGHTS,
+                transfer: Transfer::Move,
+            },
+            ChannelEntry {
+                handle: write,
+                rights: StreamWriteObject::RIGHTS,
+                transfer: Transfer::Move,
+            },
+        ];
+        // A full queue (`WouldBlock`, 64 connections waiting) or a listener
+        // that went (`PeerClosed`) moves nothing: the handles are still ours.
+        channel_write(end, message, &entries).is_ok()
+    }
+
+    fn notify(&mut self, end: Handle, message: &[u8]) {
+        let _ = channel_write(end, message, &[]);
+    }
+
+    fn close(&mut self, handle: Handle) {
+        let _ = handle_close(handle);
+    }
+}
+
 /// Everything `netd` has once it is running.
 struct Netd {
     port: Handle,
@@ -365,68 +398,19 @@ impl Netd {
     }
 
     /// A `connect` to 127.0.0.0/8, already allowed by the scope: the
-    /// client's two stream ends go to the listener as an `Accepted`, and the
-    /// client is told `Connected`; with no listener, a full queue or a
-    /// listener that is gone, it is told `Failed { REFUSED }` and everything
-    /// it gave is closed. `handles` are the request's three (checked: the
-    /// connection channel, the write end of the stream the client reads, the
-    /// read end of the one it writes). Nothing is kept: the loopback holds no
-    /// state in `netd` (INV-0441-2).
+    /// handover of `zoraya_net::loopback::deliver` (host tested: every
+    /// handle goes to the listener or is closed). `handles` are the
+    /// request's three (checked: the connection channel, the write end of
+    /// the stream the client reads, the read end of the one it writes).
     fn loopback(&mut self, listener: Option<usize>, port: u16, peer_port: u16, handles: &[Handle]) {
-        let (control, in_write, out_read) = (handles[0], handles[1], handles[2]);
-        let delivered = listener
-            .and_then(|l| self.listeners.get(l).copied().flatten())
-            .is_some_and(|end| {
-                let mut out = [0u8; 64];
-                let Ok(n) = encode(
-                    &Accepted {
-                        address: LOOPBACK,
-                        port: Below(u32::from(peer_port)),
-                    },
-                    NO_REPLY,
-                    &mut out,
-                ) else {
-                    return false;
-                };
-                // The listener reads what the client writes and writes what
-                // the client reads: the ends go to it as they came, the
-                // client keeps the other two.
-                let entries = [
-                    ChannelEntry {
-                        handle: out_read,
-                        rights: StreamReadObject::RIGHTS,
-                        transfer: Transfer::Move,
-                    },
-                    ChannelEntry {
-                        handle: in_write,
-                        rights: StreamWriteObject::RIGHTS,
-                        transfer: Transfer::Move,
-                    },
-                ];
-                // A full queue (`WouldBlock`, 64 connections waiting) or a
-                // listener that went (`PeerClosed`) moves nothing: the
-                // handles are still ours.
-                channel_write(end, &out[..n], &entries).is_ok()
-            });
-        let mut out = [0u8; 64];
-        if delivered {
-            if let Ok(n) = encode(
-                &Connected {
-                    address: LOOPBACK,
-                    port: Below(u32::from(port)),
-                },
-                NO_REPLY,
-                &mut out,
-            ) {
-                let _ = channel_write(control, &out[..n], &[]);
-            }
-        } else {
-            let _ = channel_write(control, &failed(reason::REFUSED), &[]);
-            let _ = handle_close(in_write);
-            let _ = handle_close(out_read);
-        }
-        // The message stays readable after this end closes.
-        let _ = handle_close(control);
+        let end = listener.and_then(|l| self.listeners.get(l).copied().flatten());
+        zoraya_net::loopback::deliver(
+            &mut LoopbackKernel,
+            end,
+            port,
+            peer_port,
+            [handles[0], handles[1], handles[2]],
+        );
     }
 
     fn drop_connection(&mut self, id: usize) {

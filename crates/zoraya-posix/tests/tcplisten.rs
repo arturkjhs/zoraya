@@ -492,3 +492,21 @@ fn a_full_descriptor_table_does_not_take_a_connection() {
     assert_eq!(t.r.write(c, b"x"), Ok(1));
     assert_eq!(t.r.read(a, 1).unwrap(), b"x");
 }
+
+/// Review of F7b, note 6: a request that `netd` cannot take (its end of the
+/// connection is gone) leaves no handle behind, for `listen` (one moved) and
+/// `connect` (three). The `Sys` closes what it could not send, as
+/// `ffi.rs`'s does, and the library keeps its own.
+#[test]
+fn a_request_to_a_gone_netd_leaks_no_handle() {
+    let mut r = rig();
+    let (client, server) = r.p.sys.channel_create().unwrap();
+    r.p.net = Some(client);
+    r.net.borrow_mut().close(server);
+    let l = r.p.socket(sock::AF_INET, sock::SOCK_STREAM, 0).unwrap();
+    let c = r.p.socket(sock::AF_INET, sock::SOCK_STREAM, 0).unwrap();
+    let before = r.handles();
+    assert_eq!(r.p.listen(l, 1), Err(ENETDOWN));
+    assert_eq!(r.p.connect(c, &addr([127, 0, 0, 1], 8000)), Err(ENETDOWN));
+    assert_eq!(r.handles(), before, "a handle of a refused request is held");
+}
