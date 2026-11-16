@@ -170,4 +170,5 @@ built in the shell (ADR-0224's word), not the rooms' words or the pills. (5) `te
 (ADR-0268):** the loopback belongs to the whole machine. A program with a reach rule naming 127.0.0.1 can connect to any
 account's listener (another room's server too), learn which ports are listened on, and fill a listener's 64-slot queue. Options:
 (a) a per-room loopback once `netd` knows rooms; (b) an ACL on a listener by account. Until one exists an untrusted room must
-not be given a loopback reach rule. ADR-0441 says so in its "Decisions for the architect".
+not be given a loopback reach rule from any source: a `+net 127.0.0.1` word, `any`, a 127/8 prefix, or ADR-0328's URL-operand
+grant (a literal `curl http://127.0.0.1:PORT/` gets the rule automatically). ADR-0441 says so in its "Decisions for the architect".

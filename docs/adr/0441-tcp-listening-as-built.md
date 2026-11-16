@@ -137,7 +137,10 @@ its own: a listener cannot do more to the client than the client's ends allow, a
      accounts), which is why it is not narrower. This is a **condition of the untrusted-room gate (ADR-0268)**: an untrusted
      room must not be given a reach rule for the loopback until one of these exists: (a) a per-room loopback once `netd` knows
      rooms; (b) an ACL on a listener, by account (the listening account names the accounts that may connect). Until then an
-     untrusted line has no `+net 127.0.0.1` word to give, and a trusted one is the person's own grant.
+     untrusted room must get no loopback reach rule from *any* source: not a `+net 127.0.0.1` word, `any` or a 127.0.0.0/8
+     prefix, and **not ADR-0328's URL-operand grant either**: a literal `curl http://127.0.0.1:PORT/` on a line gets the
+     reach rule for that address and port automatically (an address keeps its own rule), which the gate must refuse for 127/8 in an
+     untrusted room. A trusted room's is the person's own grant.
   2. Whether the NIC is listenable (Option B).
 - **Known limitations of the build.** `bind` of port 0 followed by `getsockname` *before* `listen` reads port 0: the port is
   picked by `netd` at `listen`. CPython's `socketserver` reads `getsockname()` straight after `bind` (so on port 0
