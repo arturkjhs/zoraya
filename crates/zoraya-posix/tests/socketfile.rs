@@ -14,7 +14,7 @@ use kernel::*;
 use zoraya_abi::posix::{EntryKind, Facts};
 use zoraya_posix::errno::*;
 use zoraya_posix::poll::*;
-use zoraya_posix::process::{AT_FDCWD, Posix, o};
+use zoraya_posix::process::{AT_FDCWD, Desc, Posix, o};
 use zoraya_posix::socket::{SO_ACCEPTCONN, SOCK_NONBLOCK, SOL_SOCKET};
 use zoraya_posix::sys::Sys;
 use zoraya_posix::unix::{AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
@@ -182,6 +182,17 @@ fn accept4_sets_the_flags_of_the_new_socket_alone() {
     // Non-blocking: a read with nothing is EAGAIN, not a wait.
     assert_eq!(a.read(d, 10), Err(EAGAIN));
     assert_eq!(a.p.fds.cloexec(d), Ok(true), "SOCK_CLOEXEC");
+    let flag = |r: &Rig, fd: i32| match r.p.fds.get(fd) {
+        Some(Desc::Socket(s)) => s.nonblock,
+        _ => panic!("no socket"),
+    };
+    assert!(flag(&a, d), "SOCK_NONBLOCK of accept4");
+    // Without the flag the new socket blocks, whatever the listener does.
+    let c2 = sock(&mut b, SOCK_STREAM);
+    b.p.connect(c2, &un("/tmp/f")).unwrap();
+    let d2 = a.p.accept(s, false, false).unwrap();
+    assert!(!flag(&a, d2), "no SOCK_NONBLOCK: blocking");
+    assert!(flag(&a, s), "the listener is its own");
     // The listener is neither, and a second accept with nothing queued on a
     // non-blocking accept is EAGAIN.
     assert_eq!(a.p.fds.cloexec(s), Ok(false));

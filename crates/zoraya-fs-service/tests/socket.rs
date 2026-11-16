@@ -638,52 +638,52 @@ fn unlink_frees_a_node_and_a_listening_node_stays_until_its_listener_goes() {
     r.net.client_close(b2);
 }
 
-#[test]
-fn a_rename_over_a_socket_node_takes_its_name_but_onto_itself_changes_nothing() {
-    let mut r = rig();
-    let a = r.bind("a").unwrap();
-    let (s, _) = r.listen(a, 1);
-    assert_eq!(s, status::OK);
+/// `rename` of a directory token from the root: a token copy and the request.
+fn rename(r: &mut Rig, old: &str, new: &str) -> u32 {
     let root = r.root;
-    // A token for the directory, as `rename` needs.
     r.post(root, &proto::GetToken {}, vec![]);
     r.run();
     let (_, handles) = r.reply(root).unwrap();
-    let token = handles[0];
-    // onto itself
     r.post(
         root,
         &proto::Rename {
-            old: Name("a"),
-            new: Name("a"),
+            old: Name(old),
+            new: Name(new),
             mode: Below(proto::rename_mode::REPLACE),
         },
-        vec![token],
+        vec![handles[0]],
     );
     r.run();
-    assert_eq!(r.status_of(root), status::OK);
+    r.status_of(root)
+}
+
+#[test]
+fn a_rename_of_a_name_onto_itself_leaves_the_node_its_name() {
+    let mut r = rig();
+    let a = r.bind("a").unwrap();
+    assert_eq!(r.listen(a, 1).0, status::OK);
+    assert_eq!(rename(&mut r, "a", "a"), status::OK);
     assert_eq!(r.service.socket_nodes(), (1, 1));
+    // The node still has its name: when its listener goes it stays, inert. (A
+    // node taken as unnamed would go with its listener.)
+    r.net.client_close(a);
+    r.run();
+    assert_eq!(r.service.socket_nodes(), (1, 0));
+}
+
+#[test]
+fn a_rename_over_a_socket_node_takes_its_name_and_the_listener_outlives_it() {
+    let mut r = rig();
+    let a = r.bind("a").unwrap();
+    assert_eq!(r.listen(a, 1).0, status::OK);
     let f = r
         .open("f", BIND, 0o600, rights::READ | rights::WRITE)
         .unwrap()
         .0;
     r.net.client_close(f);
     r.run();
-    r.post(root, &proto::GetToken {}, vec![]);
-    r.run();
-    let (_, handles) = r.reply(root).unwrap();
-    r.post(
-        root,
-        &proto::Rename {
-            old: Name("f"),
-            new: Name("a"),
-            mode: Below(proto::rename_mode::REPLACE),
-        },
-        vec![handles[0]],
-    );
-    r.run();
-    assert_eq!(r.status_of(root), status::OK);
-    // The listener stays (its node is unlinked); a new bind to `a` is `EXISTS`
+    assert_eq!(rename(&mut r, "f", "a"), status::OK);
+    // The listener stays (its node is unnamed); a new bind to `a` is `EXISTS`
     // as `a` is the plain file now.
     assert_eq!(r.service.socket_nodes(), (1, 1));
     assert_eq!(r.bind("a"), Err(status::EXISTS));

@@ -581,3 +581,19 @@ across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its
 shell's, in no room, so `top` shows it nowhere. The job-level proxy (`tools/check-top-image.py`) is accepted as F6's "done when"; a line
 per image (the image's pages once, however many processes run from it, as ADR-0415 item 6's example shows) is asked for here.
 
+
+## Socket files and TCP listening: what F7 left (plan part F7, ADR-0439 and ADR-0440, proposed)
+
+- **TCP `bind`, `listen`, `accept`** (ADR-0440): `EOPNOTSUPP` today, so `python3 -m http.server` does not serve and the plan's "done when"
+  is not met. Needs a `listen` request in `netd`'s protocol, `Accepted` on a listener channel, a loopback interface in `netd`'s
+  stack (a spike on smoltcp's two-interface dispatch first) and a network step in QEMU; the architect writes the word a person types
+  for a listen rule (ADR-0225 item 5).
+- **A socket file in a program's own directory** (ADR-0412 item 5; ADR-0439 item 1): only the line's `/tmp` is built. Needs a kind in
+  the bootstrap record for "own directory" (stage 10's planner) and a transient node in `fsd`'s volume service. tmux's default place
+  is an own directory.
+- **A datagram socket with a name** (`bind` of `SOCK_DGRAM`): `EOPNOTSUPP`.
+- `readdir` of `/tmp` shows a socket file as a plain name (`DT_REG`); the service's listing does not carry the kind.
+- The `/tmp` service's 256 socket nodes are shared by the whole line: one program can fill them (it can also fill the volume, which has
+  its own limit, ADR-0265). A per-connection count is the next step if a port needs it.
+- CPython's `test_socket` server classes (`AF_UNIX` servers now bind) are not in `tests/python/regr-modules.txt` beyond
+  `BasicSocketPairTest`; `regr-ignore.txt` names the asyncio cases that said "bind (plan part F7)": review them once TCP listens.

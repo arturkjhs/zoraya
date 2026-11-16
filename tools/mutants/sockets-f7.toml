@@ -3,7 +3,10 @@
 # calls over the real service (`crates/zoraya-posix/tests/socketfile.rs` and the unit tests of `unix`).
 # Host tests only. `make mutants` runs each against the committed tree.
 #
-# Not listed, equivalent: the library's own check that the object it opened is `S_IFSOCK`
+# Not listed, equivalent: `!r.shared` in `decode_connect`'s stream clause (`Record::decode` already refuses a
+# shared record that has its ancillary channel, which `has_anc` requires here); `NO_FOLLOW` in `unix_bind` (the
+# exclusive create of an existing name, a link included, is `EXISTS` before any link is followed: defence in depth,
+# with the check of the entry the node landed in); the library's own check that the object it opened is `S_IFSOCK`
 # (`unix_connect`): the service answers a connect to anything else with `NOT_FOUND`, which is the same
 # `ECONNREFUSED`; the check is defence in depth against a service that would not.
 tests = ["cargo test -q -p zoraya-fs-service --test socket", "cargo test -q -p zoraya-posix --test socketfile --lib"]
@@ -169,27 +172,6 @@ file = "crates/zoraya-posix/src/unix.rs"
 find = '''    (ok && handles == r.handles()).then_some(r)'''
 replace = '''    ok.then_some(r)'''
 note = "INV-0439-3"
-
-[[mutant]]
-id = "F7-decode-shared-stream"
-file = "crates/zoraya-posix/src/unix.rs"
-find = '''                && !r.shared
-                && r.read_off == 0
-                && r.write_off == 0
-        }
-        Kind::Packet'''
-replace = '''                && r.read_off == 0
-                && r.write_off == 0
-        }
-        Kind::Packet'''
-note = "INV-0439-3: a record that says it is shared is not a fresh pair's"
-
-[[mutant]]
-id = "F7-bind-follows-links"
-file = "crates/zoraya-posix/src/unix_file.rs"
-find = '''        let wire = open_flags::CREATE | open_flags::EXCLUSIVE | open_flags::NO_FOLLOW;'''
-replace = '''        let wire = open_flags::CREATE | open_flags::EXCLUSIVE;'''
-note = "a link in /tmp is a taken name and is not followed out of the entry"
 
 [[mutant]]
 id = "F7-bind-not-exclusive"
