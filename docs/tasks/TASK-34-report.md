@@ -4,8 +4,8 @@
 
 Updated 2026-11-16.
 
-- Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`) and F4 (`stage-f4`), the tags placed on the green scheduled full run 43749759496 that includes all three (`tools/ci-last-full.rb --green-for`). Merged, not yet tagged (no green scheduled full run includes them yet): F8 (aabe2b6f) and F5 (c1061eca); I tag `stage-f8` and `stage-f5` when the script names one. F1 (`poll`) was merged before this task.
-- F6 merged; F7 built on `work/f7` (Unix socket files in `/tmp`; TCP listen is a design only, ADR-0440), reviewed twice, not merged.
+- Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`) and F4 (`stage-f4`), the tags placed on the green scheduled full run 43749759496 that includes all three (`tools/ci-last-full.rb --green-for`). **Merged, not yet tagged** (`tools/ci-last-full.rb --green-for` names no green scheduled full run that includes them yet): F8 (d38c0a9c), F5 (c1061eca), F6 (e31fc2ce) and F7a (5a3372c7); I tag `stage-f8`, `stage-f5`, `stage-f6` and `stage-f7` when it does (`stage-f7` only after F7b). F1 (`poll`) was merged before this task.
+- In progress: F7b, TCP `bind`/`listen`/`accept` over `netd` (the plan's "done when" `python3 -m http.server` serving a file to `curl` is not met until it is built). F7a (Unix socket files in the line's `/tmp`, ADR-0439) is merged.
 - ADRs: ADR-0430 (item 7), ADR-0433 and ADR-0435 were accepted by the architect on 2026-11-15 and recorded; sockets surviving `exec` (`execve` with a Unix socket open is `EBADF`) are in the backlog. ADR-0431 (a `SHARED` bit in `memory_map`, kernel ABI), ADR-0432 (memory descriptors as built) and ADR-0434 (netd `Duplicate` makes a connection of the caller's own rights, bounded to 8 live per family) are **proposed**, each recommended as written; ADR-0431 first, as a kernel ABI change. Numbers 0436 to 0449 are free.
 - Machine: MacBook Air M1, 8 GB, so `CARGO_BUILD_JOBS=2`, one part with builds and one QEMU guest at a time.
 
@@ -18,8 +18,8 @@ Updated 2026-11-16.
 | F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
 | F8 | merged | stage-f8 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error, 5 warnings) and re-check; candidate run 43751085581 green after one fix (the keeper script pinned a session size that varies with boot) and one rerun of the `test-tour-terminal` TCG job |
 | F5 | merged | stage-f5 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error: the plan's CPython command was never run; 5 warnings), re-check (1 warning) and a test-only follow-up; candidate run 43770158088 green, 79 of 79 jobs, including the new `test-python-mem` (python at 2 GiB, 5,000,000 `bytearray(100)`, 2 m 51 s under TCG) |
-| F6 | built on `work/f6`, not merged; review not yet done | | one session | Sonnet |
-| F7 | built on `work/f7`: the Unix half (socket files in `/tmp`); the TCP half is a design only (ADR-0440) | | one session | Sonnet |
+| F6 | merged | stage-f6 pending a green full run | about 3 sessions | Sonnet implementation; Opus review (1 error: the plan's `top` check never ran; 3 warnings), two re-checks and the architect's decisions on ADR-0438 (accepted 2026-11-16); candidate run 43789776708 green on attempt 2 (the first attempt timed out in `test-qemu-tcg-smp4-gicv3` at 420 s on a slow runner) |
+| F7 | F7a merged (Unix socket files); F7b (TCP listen) in progress | stage-f7 after F7b | about 4 sessions so far | Sonnet implementation; independent Opus review (1 error: the shim's `ENOSYS` `bind`/`listen`/`accept` stubs hid the new calls from every ported program; warnings) and a re-check; candidate run 43816764155 green after fixes (the python smoke line was slow, not hung: the shell's line editor redrew a 270-character line) |
 
 ## F2 notes
 
