@@ -119,6 +119,26 @@ The shape ADR-0212's broker cache would take. Not in the kernel and not built; O
 zoraya_child_memory t_shared
 ```
 
+### Decisions for the architect
+
+The dispatcher relayed the architect's answers on 2026-11-16; the architect records them in "Architect's decision" (an agent does not edit it).
+This ADR deviates from or narrows what an accepted ADR or the plan says, in three places:
+
+1. **The plan's "done when"** (browser-engine plan row F6: `top` shows its text once for the three children) is met only by a job-level
+   proxy (item 3: the room's memory around three self-spawns, read from `top` and compared by `tools/check-top-image.py`), because the
+   image of a program the shell starts is charged to the shell's job, in no room, and `top` has no row for it. *Relayed:* the proxy is
+   accepted; a line per image in `top` is in `docs/backlog.md`.
+2. **A room's memory limit does not cover the text of the programs the shell starts in it.** Before F6 a spawn copied the program's pages
+   into frames charged to the child's job, inside the room; now the image is charged to the job that made it (the shell's), once for each
+   start (there is no cache), for as long as any process runs from it. A room with `--mem 64M` can run a program whose text is far above
+   64 MB and pays nothing for it. *Relayed:* not accepted as it is (ADR-0262: what is made for a client is paid by the client): the image
+   of a program started in a room is to be charged to the room's job, by `image_create` naming the job to charge, with `CREATE_PROCESS` on
+   it. F6 estimated it as not small (a kernel ABI change in `zoraya-abi`, the kernel, `zoraya-rt`, `zoraya-user` and six callers in the
+   shell, the broker and the library, with steps that load programs through the shell that a part session cannot run in full), so it is
+   written into `docs/architect-queue.md` as a condition of the untrusted-room gate and is not built.
+3. **The semantics change of ADR-0108** (item 1): a rewrite of the source object after `image_create` no longer reaches any child.
+   ADR-0108 is not edited; the deviation is recorded here only. *Relayed:* accepted.
+
 ### Effect of the vision
 
 Target 3 (big programs): a browser's three processes hold one copy of its text in the guest, charged to the job that made the image
@@ -144,6 +164,7 @@ t_shared: passed
   program for a moment), and takes the time of one copy; a read-only segment's zero tail is committed at `image_create` where it
   was committed at each spawn; two `execve`s of one file by a shell still make two images (item 4); a program that spawns itself
   by its file path, not `/proc/self/exe`, gets no sharing.
+- **Known limitation, SMP.** `image_create` cleans the data cache of the text's pages in steps and ends with one `dsb ish; ic ialluis; dsb ish; isb`, before any mapping of the pages exists, as `SnapshotBuild::finish` does. That is correct on one CPU, which the kernel runs on. On an SMP kernel a thread that migrates between a clean and the final barrier could leave a clean incomplete (a DSB completes only its own processor's maintenance), so the context switch would need a `dsb ish`; this is for the SMP work.
 - **Follow-up.** The broker's image cache (ADR-0212) to share across programs; a line per image in `top` if the person needs
   it; a program that `fork`s many children (the browser's zygote, ADR-0411) shares through ADR-0431's records already.
 
