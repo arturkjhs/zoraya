@@ -1668,6 +1668,10 @@ pub mod test_calls {
     /// (0: no floor), so that a test lays out a sparse space without spacer
     /// mappings (`t_bound`).
     pub const SET_MAP_FLOOR: u64 = 0x701c;
+    /// Returns `MIDR_EL1`: `tools/run-qemu.sh` gives TCG a Cortex-A72 and
+    /// HVF the host's CPU, so a test can tell which accelerator runs it
+    /// (`t_bound`'s 2 ms bound under HVF), without a timing calibration.
+    pub const MIDR: u64 = 0x701d;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1718,10 +1722,24 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             Some(Ok(0))
         }
         test_calls::SET_MAP_FLOOR => {
+            use crate::memory::user::{MAP_HIGH, MAP_LOW};
+            let valid =
+                a0 == 0 || (a0.is_multiple_of(FRAME_SIZE) && (MAP_LOW..MAP_HIGH).contains(&a0));
+            if !valid {
+                return Some(Err(Status::InvalidArgument));
+            }
             let thread = sched::current();
             let mut space = thread.process()?.space.lock();
             space.as_mut()?.set_map_floor(a0);
             Some(Ok(0))
+        }
+        test_calls::MIDR => {
+            let midr: u64;
+            // SAFETY: reads an ID register, which changes nothing.
+            unsafe {
+                core::arch::asm!("mrs {}, midr_el1", out(reg) midr, options(nomem, nostack, preserves_flags));
+            }
+            Some(Ok(midr))
         }
         test_calls::DIAGNOSE_UNITS => {
             crate::steps::diagnose_units();

@@ -226,6 +226,17 @@ pub struct AddressSpace {
     map_floor: u64,
 }
 
+/// Page-table entries that one unit of work stands for (INV-0270-1): a step of
+/// `memory_map` or `memory_unmap` writes `STEP` of them and allocates almost
+/// no frames, so without this count a call that lost its step points would
+/// show only in the time, which off HVF has a loose limit.
+const ENTRIES_PER_UNIT: u64 = 64;
+
+/// Counts the units of writing or clearing the entries of `length` bytes.
+fn count_entries(length: u64) {
+    steps::count((length / FRAME_SIZE).div_ceil(ENTRIES_PER_UNIT) as usize);
+}
+
 impl AddressSpace {
     /// The bytes the list of frames would allocate to take a step of
     /// [`STEP_FRAMES`] more, or 0 if it has room: what [`heap::prepare`]
@@ -543,6 +554,7 @@ impl AddressSpace {
         attributes: Attributes,
         page: &impl Fn(u64) -> u64,
     ) -> Result<(), MappingError> {
+        count_entries(length);
         for at in (offset..offset + length).step_by(FRAME_SIZE as usize) {
             let mapped =
                 self.table
@@ -563,6 +575,7 @@ impl AddressSpace {
     /// Unmaps `[va + offset, va + offset + length)` of a range being built or
     /// ended, without touching the list of mappings.
     pub fn unmap_range(&mut self, va: u64, offset: u64, length: u64) {
+        count_entries(length);
         let _ = self.table.unmap(&mut self.memory, va + offset, length);
     }
 
