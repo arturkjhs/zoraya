@@ -584,16 +584,23 @@ across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its
   four cases. Locally under TCG `-smp 4` the test took 54.3 to 54.8 s at 2 GiB (10 idle rounds), 31 s of it in the far
   pages, and 101 to 107 s with 10 CPU hogs: proportional to the CPU share QEMU gets, so a slower or loaded runner
   multiplies a large constant. `-smp 1` took 51.7 s, so the cross-vCPU TLB flushes add about 5%.
-- **Done:** a test-kernel call `SET_MAP_FLOOR` places a mapping at or above an address (the same layouts without
-  spacers; `zoraya-mappings::find_gap` keeps a search at or above `low`, as its doc says); `best_snapshot` takes more
-  than one only if the first is over the bound; `teardown` waits until the long child holds the short one's peak, and
-  for the reaper. The far-pages case now runs in every guest, and calibrates its own bound (it used HVF's 2 ms under
-  TCG). After: 13.96 to 14.32 s at 2 GiB and 13.6 to 13.7 s at 128 MiB, 10 idle rounds each.
-- **Open:** under 10 CPU hogs on the 10-core host, 6 of 10 rounds failed the off-HVF masked-time limit (1 s) with
-  intervals of 1.1 to 2.9 s at different sites, while their units of work stayed within the bound: multi-second stalls
-  of the vCPU thread. The old version failed all 10 such rounds (its far-pages child's 2 ms bound). Proposed: off HVF,
-  repeat a site whose time is over the limit (a stall does not repeat, a kernel loop does), as `best_snapshot` does;
-  the units remain the host-independent half of INV-0270-1.
+- **Done:** a test-kernel call `SET_MAP_FLOOR` places a mapping at or above an address, so the sparse layouts are
+  made without spacers (`zoraya-mappings::find_gap` keeps a search at or above `low`, as its doc says). The layouts are
+  not the same: the old spacers left 11 264 empty L3 tables (5.8 million descriptors for the snapshot's walk). Now the
+  far-pages child leaves 512 empty L3 tables under a valid table descriptor (a page in each 2 MiB of a gigabyte,
+  mapped and unmapped), so the counted walk of empty tables is still covered, at a 22nd of the size; the far-pages
+  case runs in every guest. `best_snapshot` takes more than one only if the first is over the bound; the long teardown
+  children say on a channel when they hold what they build, and the parent kills only then (their charge came before
+  their frames).
+- **Done after the review** (`docs/tasks/TASK-31-review-kwb-time.md`): the page-table entries `memory_map` and
+  `memory_unmap` write count as units (one per 64), so a `memory_map` with no step points fails on every host (hand
+  break: "111 units of work between two step points, limit 80" under HVF and TCG; before, it passed at 1.3 ms under
+  HVF). The 2 ms bound follows the accelerator (`MIDR_EL1`: `tools/run-qemu.sh` gives TCG a Cortex-A72), not the fill
+  (a busy HVF host gave factor 2, which turned 2 ms into 1 s). Under TCG a masked time over 1 s is noted and the run
+  repeated, up to three runs; the units are checked in every run. Under 10 CPU hogs 6 of 10 rounds had gone over 1 s at
+  different sites with their units in bound (stalls of the vCPU thread).
+- **Note:** the undo of a failed `memory_map` (`syscall.rs`, `unmap_range(va, 0, done)`) unmaps all it had done in one
+  interval; with the entries counted, a large failed map would now show as units. Not reached by a test.
 
 ## A line per image in `top` (F6, ADR-0438; relayed from the architect, 2026-11-16)
 
