@@ -594,3 +594,10 @@ across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its
   of the vCPU thread. The old version failed all 10 such rounds (its far-pages child's 2 ms bound). Proposed: off HVF,
   repeat a site whose time is over the limit (a stall does not repeat, a kernel loop does), as `best_snapshot` does;
   the units remain the host-independent half of INV-0270-1.
+
+## A line per image in `top` (F6, ADR-0438; relayed from the architect, 2026-11-16)
+
+`top` lists rooms. The image of a program is charged to the job that made it (ADR-0438), which for a program the shell starts is the
+shell's, in no room, so `top` shows it nowhere. The job-level proxy (`tools/check-top-image.py`) is accepted as F6's "done when"; a line
+per image (the image's pages once, however many processes run from it, as ADR-0415 item 6's example shows) is asked for here.
+

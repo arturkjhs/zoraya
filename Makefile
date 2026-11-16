@@ -1087,6 +1087,7 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 POSIX_CORE := $(BUILD)/posix-core
 POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
 POSIX_CORE_MAPS_SCRIPT := tests/posix-core/maps.script
+POSIX_CORE_TOP_SCRIPT := tests/posix-core/top.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
 	@$(MAKE) -s -f ports/Makefile check-libc
@@ -1099,6 +1100,7 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_spawn tests/posix-core/t_spawn.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_syscall tests/posix-core/t_syscall.c
 	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_maps tests/posix-core/t_maps.c
+	tools/zcc -O2 -Wall -Wextra -Werror -o $(POSIX_CORE)/root/bin/t_shared tests/posix-core/t_shared.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_syscall
@@ -1106,6 +1108,7 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_unix
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_spawn
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_maps
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_shared
 	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
@@ -1117,6 +1120,14 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(POSIX_CORE_MAPS_SCRIPT) --label libposix-maps-$$accel -- \
 	    $(RUN_QEMU) --test --keys --mem 2G --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+# F6 (ADR-0415 item 2, INV-0415-2): `top` in a room around a program that spawns its
+# own image three times, and the checker that compares what it shows.
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_TOP_SCRIPT) --label libposix-top-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  python3 tools/check-top-image.py target/test-logs/libposix-top-$$accel.log && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
 # Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,

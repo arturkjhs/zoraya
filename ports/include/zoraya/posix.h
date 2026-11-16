@@ -34,6 +34,15 @@ extern "C" {
  */
 int zoraya_fork_group(pid_t pgid);
 
+/*
+ * The memory, in bytes, charged to the job of the child `pid` that this
+ * process has not yet waited for (proposed ADR-0438): its own pages, the
+ * shared pages of an image it was started from excluded, which the job that
+ * made the image pays. Reads only what the parent's handle to the child's job
+ * allows. Returns 0, or -1 with errno (ECHILD, EFAULT).
+ */
+int zoraya_child_memory(pid_t pid, unsigned long long *used);
+
 #ifdef __cplusplus
 }
 #endif

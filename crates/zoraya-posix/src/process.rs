@@ -909,6 +909,24 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// The handle of this process's own image, if `path` names it
+    /// (`/proc/self/exe`, ADR-0107 item 4): a spawn or an `exec` of that path
+    /// uses the image the process was started from instead of reading a file
+    /// (ADR-0415 item 2 (a), proposed ADR-0438), so every process of the
+    /// program shares its read-only pages and the spawner needs no grant for
+    /// a file. Only a path that resolves to the image entry itself, whatever
+    /// the cwd and `..`: the executable's own path as a file name is
+    /// loaded as before, since the file may have changed since. `None`
+    /// without the entry's handle (a table that listed the entry without the
+    /// handle).
+    pub fn own_image(&mut self, path: &[u8]) -> Option<S::H> {
+        let r = self.resolve(AT_FDCWD, path, Access::Read).ok()?;
+        let entry = self.entries.get(r.place.entry)?;
+        (entry.kind == EntryKind::Image && r.place.path.is_empty())
+            .then_some(entry.handle)
+            .flatten()
+    }
+
     /// The entry `r` lands in, if it is not a directory: those are answered
     /// here (`/dev/null`, `/proc/self/exe`, `/dev/tty`).
     pub(crate) fn special(&self, r: &Resolved) -> Option<EntryKind> {

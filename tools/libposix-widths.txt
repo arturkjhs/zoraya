@@ -216,6 +216,7 @@ wait3 pid_t 4
 waitpid pid_t 4
 write ssize_t 8
 writev ssize_t 8
+zoraya_child_memory int 4
 zoraya_fork_group int 4
 zoraya_posix_close long 8
 zoraya_posix_exit_group void v
