@@ -107,7 +107,10 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
     candidate; an agent that changes those files reports its head and does not tag it.
   - `main`'s full set runs on a schedule: every 2 hours if `main` changed since the last full run, and nightly (a
     2-hourly run that skips fails if the last full run was red). A push to `main` runs the document checks only,
-    whatever changed, and does not cancel a scheduled or manual full run in progress.
+    whatever changed, and does not cancel a scheduled or manual full run in progress. GitHub's cron is not reliable
+    (on 2026-11-16 the runs of 10:23 to 14:23 UTC never started): when `main` changed and no full run has started for
+    2.5 hours, an agent starts one on `main`'s head (`gh workflow run test.yml --ref main -f full=true`; check
+    `gh run list --workflow test.yml` first, a run already queued or running counts). Architect's rule of 2026-11-17.
 - A red scheduled or nightly run is fixed first, before any merge; its summary lists the merges since the last green
   full run. If it is not fixed within an hour, revert the merge that broke it and fix it on its branch.
 - A stage is not done until a scheduled, nightly or `candidate-full/` full run that includes its last commit is green.
