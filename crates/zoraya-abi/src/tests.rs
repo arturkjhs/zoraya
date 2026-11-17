@@ -428,7 +428,7 @@ echo! {
     stream_read(end: Handle, bytes: Bytes);
     stream_write(end: Handle, bytes: Bytes);
     snapshot_process(args: SnapshotBuffer);
-    image_create(memory: Handle, length: Size);
+    image_create(memory: Handle, length: Size, job: Handle);
     job_suspend(job: Handle);
     job_resume(job: Handle);
     object_get_signals(handle: Handle);

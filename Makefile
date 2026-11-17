@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-serve test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
+.PHONY: check-test-shards FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-serve test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -216,7 +216,7 @@ test-unit:
 # One runner invocation per machine configuration. "auto" is HVF on an
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
 # a Mac both accelerators are exercised.
-EXPECT := --expect-panic harness_reports_panic_as_failure \
+EXPECT_FAULTS := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic harness_fails_with_a_process_left \
 	--expect-panic harness_reports_exception_as_failure \
 	--expect-panic fault_report_for_brk \
@@ -236,11 +236,14 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1" \
 	--expect-line "ZORAYA-FAULT interrupt 40 has no handler" \
 	--expect-line "ZORAYA-FAULT synchronous from EL0 (AArch64)" \
-	--expect-line "hello from EL0" --expect-line "process f_kread: fault, EC 0x24" \
+	--expect-line "process f_kread: fault, EC 0x24"
+# What every boot prints, whichever shard it runs: the banner and `hello`.
+EXPECT_BOOT := --expect-line "hello from EL0" \
 	--expect-line "timer: virtual" --expect-line ", interrupt 27" \
 	--expect-line "uart interrupt 33" \
 	--expect-line "first process: hello" \
 	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
+EXPECT := $(EXPECT_FAULTS) $(EXPECT_BOOT)
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 RUN_TEST_SLOW = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) $(EXPECT)
 
@@ -255,11 +258,11 @@ EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
 # One target per machine configuration (CI runs each as a job of its own,
 # ADR-0213's Decision); make test-qemu runs them all, in this order, on one
 # test disk, with zoraya-fsck after each.
-QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2 tcg-el2 tcg-smp4-gicv3
+QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2-a tcg-smp4-gicv2-b tcg-el2-a tcg-el2-b tcg-smp4-gicv3-a tcg-smp4-gicv3-b
 # The `auto` configurations that are a `tcg` one's machine where `auto` is TCG
 # (the same options but the accelerator; ADR-0350): FULL=1 leaves them
 # out there, and the `tcg` twin expects their lines too.
-QEMU_AUTO_TWINS := auto-default:tcg-default auto-el2:tcg-el2
+QEMU_AUTO_TWINS := auto-default:tcg-default auto-el2:tcg-el2-a
 # The lines an `auto` twin expects, in one place for both targets of the
 # pair: a line added here is expected in CI too (review R2).
 AUTO_DEFAULT_EXPECT := --expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
@@ -295,23 +298,59 @@ test-qemu-tcg-default: test-qemu-disk
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
-test-qemu-tcg-smp4-gicv2: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-smp4-gicv2 \
+# The three TCG suites that are not the GUI one run in two shards, each a job
+# of its own with its own QEMU_SLOW_TIMEOUT: one boot of the whole list took
+# about 300 s on a fast runner and passed 420 s on a slow one (126 of 139
+# tests in 420 s). Shard 1 of 2 is the registered tests up to SHARD_2_FIRST
+# (kernel/src/testing.rs), shard 2 the rest; `make check-test-shards` checks
+# that every test is in exactly one and that the expected panics are in 1.
+# Shard 2 has none of the faults of EXPECT: it expects the lines of the
+# banner and of `hello`, and the shard line each prints. The `auto` suites
+# stay whole (HVF runs them in seconds).
+EXPECT_B := $(EXPECT_BOOT)
+RUN_TEST_SLOW_B = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) $(EXPECT_B)
+SHARD_A_EXPECT := --expect-line "shard: 1/2 runs tests 0.."
+SHARD_B_EXPECT := --expect-line "shard: 2/2 runs tests "
+
+test-qemu-tcg-smp4-gicv2-a: test-qemu-disk
+	$(RUN_TEST_SLOW) --label tcg-smp4-gicv2-a $(SHARD_A_EXPECT) \
 		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
-		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --shard 1/2 --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
-test-qemu-tcg-el2: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-el2 $(AUTO_EL2_EXPECT) --expect-line "psci: arm,psci-1.0 via smc" \
-		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
+test-qemu-tcg-smp4-gicv2-b: test-qemu-disk
+	$(RUN_TEST_SLOW_B) --label tcg-smp4-gicv2-b $(SHARD_B_EXPECT) \
+		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
+		-- $(RUN_QEMU) --test --shard 2/2 --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
-test-qemu-tcg-smp4-gicv3: test-qemu-disk
-	$(RUN_TEST_SLOW) --label tcg-smp4-gicv3 \
+test-qemu-tcg-el2-a: test-qemu-disk
+	$(RUN_TEST_SLOW) --label tcg-el2-a $(SHARD_A_EXPECT) $(AUTO_EL2_EXPECT) --expect-line "psci: arm,psci-1.0 via smc" \
+		-- $(RUN_QEMU) --test --shard 1/2 --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-el2-b: test-qemu-disk
+	$(RUN_TEST_SLOW_B) --label tcg-el2-b $(SHARD_B_EXPECT) $(AUTO_EL2_EXPECT) --expect-line "psci: arm,psci-1.0 via smc" \
+		-- $(RUN_QEMU) --test --shard 2/2 --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-smp4-gicv3-a: test-qemu-disk
+	$(RUN_TEST_SLOW) --label tcg-smp4-gicv3-a $(SHARD_A_EXPECT) \
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
 		--expect-line "gic: version 3" \
-		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --shard 1/2 --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-smp4-gicv3-b: test-qemu-disk
+	$(RUN_TEST_SLOW_B) --label tcg-smp4-gicv3-b $(SHARD_B_EXPECT) \
+		--expect-line "cpus: 4" --expect-line "(GICv3)" \
+		--expect-line "gic: version 3" \
+		-- $(RUN_QEMU) --test --shard 2/2 --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+# Every test of the kernel suite is in exactly one shard (no QEMU).
+check-test-shards:
+	@tools/check-test-shards.sh
 
 test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
@@ -1108,6 +1147,7 @@ POSIX_CORE := $(BUILD)/posix-core
 POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
 POSIX_CORE_MAPS_SCRIPT := tests/posix-core/maps.script
 POSIX_CORE_TOP_SCRIPT := tests/posix-core/top.script
+POSIX_CORE_ROOM_IMAGE_SCRIPT := tests/posix-core/room-image.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
 	@$(MAKE) -s -f ports/Makefile check-libc
@@ -1148,6 +1188,14 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_TOP_SCRIPT) --label libposix-top-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  python3 tools/check-top-image.py target/test-logs/libposix-top-$$accel.log && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+# F10 (proposed ADR-0443, INV-0443-5): a room at its memory limit cannot start a program
+# whose image does not fit, and its row does not change; a roomy room starts it.
+	@for accel in $(LOCAL_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_ROOM_IMAGE_SCRIPT) --label libposix-room-image-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  python3 tools/check-room-image.py target/test-logs/libposix-room-image-$$accel.log && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
 # Part 9b (ADR-0302, ADR-0309): musl's threads over the shim, through libposix,
@@ -1857,7 +1905,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-tour-terminal test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs check-test-shards check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve test-cxx test-cxx-libcxx test-cxx-gtest
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1899,7 +1947,7 @@ check-workflow-syntax:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-port-logs check-ci-jobs check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-port-logs check-ci-jobs check-test-shards check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

@@ -125,6 +125,9 @@ pub const fn ping_answer_us(by_name: bool, count: u32, timeout_ms: u32) -> u64 {
 pub const MAX_ADDRESSES: usize = 8;
 /// The most DNS servers `status` carries.
 pub const MAX_DNS: usize = 4;
+
+/// The longest room name `NarrowRoom` carries (`zoraya_settings::rooms::MAX_NAME`).
+pub const MAX_ROOM: usize = 24;
 /// The most echo requests of one `ping`.
 pub const MAX_PINGS: u32 = 16;
 /// `MAX_PINGS` as a length.
@@ -297,6 +300,19 @@ protocol! {
         status: Code,
     }
 
+    /// `Narrow` that names the *room* of the new connection (proposed
+    /// ADR-0442) and carves an account only for `budget` 1 to `MAX_BUDGET`
+    /// (0 joins the caller's account, as `Narrow`). An empty `room` keeps the
+    /// caller's. A non-empty one needs the right `ROOM`, which only a
+    /// launcher's root connection holds: a program cannot name a room.
+    /// Answered with `Narrowed`.
+    message NarrowRoom<'a> = 9, handles 1 {
+        rights: u32,
+        budget: Below<17>,
+        scope: Data<'a, MAX_SCOPE_BYTES>,
+        room: Data<'a, MAX_ROOM>,
+    }
+
     /// On a listener channel, from `netd`: a connection arrived (proposed
     /// ADR-0441). The two handles are the *read* end of the stream the peer
     /// writes and the *write* end of the stream it reads, which the peer made
@@ -338,7 +354,7 @@ pub const EPHEMERAL_FIRST: u32 = 49152;
 pub const MAX_BUDGET: u32 = 4;
 
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 15] = [
+pub const ORDINALS: [(&str, u32); 16] = [
     ("status", 1),
     ("ping", 2),
     ("connect", 3),
@@ -347,6 +363,7 @@ pub const ORDINALS: [(&str, u32); 15] = [
     ("narrow", 6),
     ("narrow_account", 7),
     ("duplicate", 8),
+    ("narrow_room", 9),
     ("connected", 16),
     ("failed", 17),
     ("reset", 18),

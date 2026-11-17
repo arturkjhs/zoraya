@@ -1131,13 +1131,25 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 | auto-smp4-2g | HVF on a Mac, else TCG | 4 CPUs, 2 GiB | `cpus: 4`, 2048 MiB region |
 | auto-el2 | HVF on a Mac, else TCG | `virtualization=on` | entry at EL2; skipped where HVF has no EL2 (Known limitations) |
 | tcg-default | TCG | default | GICv2 |
-| tcg-smp4-gicv2 | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
-| tcg-el2 | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
-| tcg-smp4-gicv3 | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
+| tcg-smp4-gicv2-a, -b | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
+| tcg-el2-a, -b | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
+| tcg-smp4-gicv3-a, -b | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
 
 On a Mac the three `auto` lines run under HVF, so they cover GICv3 only. GICv2 under HVF is not run, because QEMU
 cannot start it. Where `auto` is TCG (CI's runners), `auto-default` and `auto-el2` are the machines of `tcg-default`
-and `tcg-el2`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
+and `tcg-el2-a`/`-b`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
+
+The three TCG suites that are not `tcg-default` run in two shards (`-a`, `-b`), each a job with its own 420 s limit
+(architect, 2026-11-16: one boot of the list took about 300 s on a fast runner and passed 420 s on a slow one). The test
+kernel reads `zoraya.shard=N/2` from `/chosen/bootargs` (`tools/run-qemu.sh --shard N/2`); shard 1 is the registered
+tests before `SHARD_2_FIRST` (`kernel/src/testing.rs`), shard 2 the rest, in the registered order, so each test runs
+in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that ran after earlier ones
+and needs what they left (`memory_objects_from_a_process` needs the heap grown by the earlier tests) must stay after them:
+the cut is not moved before it. The `auto-*` suites stay whole (HVF runs one in under two minutes). Known limits:
+`tools/check-test-shards.sh` sees only the multi-line `name: "..."` entries of rustfmt's layout (a one-line `Test {..}`
+would escape its uniqueness check); shard 2 holds `kernel_work_is_bounded`, the most variable test (29 to 117 s in CI),
+so a shard-2 job near its limit will be that test. Each run ends with a boot-stack canary check outside any test, since
+the overflow test (shard 1) and `stack_canary_intact` (shard 2) are in different shards.
 
 How the in-QEMU tests run and report:
 - The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A
@@ -1268,17 +1280,19 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   the child maps the same frames with the same attributes.
 - **`image_create` (ADR-0108, ADR-0415 item 2, F6, proposed ADR-0438).** `zoraya-elf` parses an ELF in a memory object in two
   steps (header, then table) with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table
-  and **its own copy of the program's pages** (`Program::kept`: one object of the creator's job, no handle names it; every page
+  and **its own copy of the program's pages** (`Program::kept`: one object of the job the creator names, no handle names it; every page
   of a segment that is not writable, its zero tail included, and the pages with file bytes of a writable one), made in steps of
   64 pages. `spawn` maps the frames of each read-only segment as one `SHARED` mapping record (never writable, executable for
   text; a `fork` child maps the same frames) and copies the pages of the writable ones, so the processes of one image hold its
-  text once. The creator's job pays the kept object while the image or any process of it lives; each child's job its own pages
-  and tables. Rewriting the object or the file after the call changes nothing. `libposix`'s `posix_spawn` and `execve` of
+  text once. Since F10 (proposed ADR-0443) `image_create(memory, length, job)` names the job that pays, after the kernel checks
+  `CREATE_PROCESS` on it: the shell names the room's launch job (its own job outside a room), the broker the job of the child it loads for,
+  `posixrun` and `libposix` their own. That job pays the kept object while the image or any process of it lives; each child's job its own pages
+  and tables. A room at its memory limit cannot start a program whose image does not fit (`tests/posix-core/room-image.script`, `tools/check-room-image.py`). Rewriting the object or the file after the call changes nothing. `libposix`'s `posix_spawn` and `execve` of
   `/proc/self/exe` use a duplicate of the bootstrap's `Image` handle (`Posix::own_image`); any other path reads its file and
   makes an image of its own. `zoraya_child_memory(pid, &used)` reads a child's job's memory through the parent's handle
   (`t_shared`; `top.script` and `tools/check-top-image.py` read `top` in a room around it). Known limitations: `image_create` holds the file's object and the copy at once; two images of one file share
   nothing (the key is the image); programs started from the ramdisk (the first processes) still copy every page; `top` has no
-  line per image and shows an image only in the room whose job made it (the shell's own is in no room).
+  line per image; the shell's staging object (the program's bytes before the image exists) is charged to the shell's own job.
 - **Startup block (ADR-0109 item 5).** `argc`, `envc`, a header size of 16 and the number of program headers, the
   strings, zeros to a multiple of 8, then the ELF's whole program header table, for `AT_PHDR`.
 - **`job_suspend`, `job_resume`.** Need `KILL`. A flag on every job of the tree and `SUSPENDED` on each; every
@@ -2233,13 +2247,26 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   end of the stream or `EPIPE`); its peer is 127.0.0.1 and a made-up port above 49151. `poll` on a listener is `POLLIN` while a
   connection waits. A TCP socket does not cross `fork` or `spawn` (`ENOTSUP`). **Limits (ADR-0441):** only the loopback is
   served: no connection from the NIC reaches a listener (a second smoltcp interface with a listening socket would, ADR-0440
-  item 5, read in smoltcp's source and not measured); the loopback is the machine's, not an account's or a room's (`netd` knows
-  no rooms); no `localhost`; no per-connection `ECONNRESET`; `getsockname` of a socket `connect` made is the wildcard and 0;
+  item 5, read in smoltcp's source and not measured); the loopback is per room, not per account (part F9, below); no `localhost`; no per-connection `ECONNRESET`; `getsockname` of a socket `connect` made is the wildcard and 0;
   `bind` takes only the wildcard and 127.0.0.0/8; `bind(0)` then `getsockname` before `listen` reads port 0 (netd picks at `listen`: `socketserver`'s `server_port` is 0, backlog); if the session account holds all 8 listeners a `+listen` line gets no `netd` connection at all (the carve fails whole); `SO_REUSEADDR` is ignored; CPython's `test_socket` server classes were not
   run (`tests/python/regr-ignore.txt` still lists the asyncio cases F2 and F7a ignored). Tests: `cargo test -p zoraya-net`
   (`service_tests.rs`: the grant, the bounds at exactly the bound, the loopback's rules), `crates/zoraya-posix/tests/tcplisten.rs`
   (a fake `netd`), `cargo test -p zoraya-shell netgrant`, `tests/posix-net/tcptest.c` (in `make test-net-posix`: the refusals, the 65th
   connection, a closed listener with 64 queued) and `make test-python-serve` (`python3 -m http.server` serves a file to `curl`).
+- **Each room has its own loopback** (plan part F9, the architect's decision of 2026-11-16 on ADR-0441; ADR-0442, proposed, records the build):
+  a connect to 127.0.0.1:PORT reaches only the listeners of the connecting program's room, and `bind`/`listen` find a port in use only in
+  their own room (the same port in two rooms is no `EADDRINUSE`). `netd` keeps a room name (at most 24 bytes, empty for `home`) per
+  connection, set by `NarrowRoom` (request 9: `Narrow` with a budget of 0 or `NarrowAccount`, plus the room), which is answered
+  `NOT_GRANTED` unless the asker holds the new right `ROOM` (16, in `rights::ALL`: `init`'s connection and the shell's root have it, no
+  program does); every connection made from one (`Narrow`, `NarrowAccount`, `Duplicate`) keeps its room, so `python3` and `curl` of one
+  line (two accounts) are in one room. The shell narrows each program's connection with its current room's name
+  (`zosh.rs`, `net_room`). The machine-wide bounds are not room-blind (eight `+listen` programs in one room leave another room's `+listen` line with no `netd` connection: a one-bit channel, an open question of ADR-0442). A refusal across rooms is the answer of no listener (`Failed { REFUSED }`, the same first made-up port), and the
+  made-up client port is a counter per listener. Bounds are as before and machine-wide (8 listeners, 64 pending). Limits: a shell names its
+  room, so the shell is trusted for it (an untrusted room's launcher, ADR-0269, must get a connection with its room fixed and no `ROOM`: not
+  built, net grants in an untrusted room are refused today); one room can use the machine's listener budget and leave another's `listen`
+  `OVER_QUOTA`; a grant to reach another room's loopback is not built. Tests: `cargo test -p zoraya-net` (`service_tests.rs`, the
+  `a_connect_reaches_only_the_listeners_of_its_own_room` group) and `make test-net-posix` (`tcptest --serve`/`--probe` in rooms `ra`,
+  `rb`, `rc` and `home`).
 - **Memory descriptors** (plan part F3, ADR-0413; ADR-0431 and ADR-0432, proposed, record what the code decided):
   `memfd_create` and `shm_open(SHM_ANON)` make a descriptor of size 0 (`crates/zoraya-posix/src/memfd.rs`, the state in the
   description entry); its first `ftruncate` makes the memory object, committed at once and paid by the creator's job for its life.
@@ -2874,7 +2901,7 @@ ADR-0221 items 5, 6 and 8).
   `tools/run-qemu.sh --probe-el2` creates the VM with `--dumpdtb`, once without and once with `virtualization=on`.
   If only the second fails under HVF, the configuration prints `[LABEL] skipped: HVF on this Mac has no EL2 (needs M3
   or later)` and does not run. `make test` counts this as a skip, not a failure, and lists it in its summary. On such
-  a Mac EL2 entry is covered only by TCG (`tcg-el2`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
+  a Mac EL2 entry is covered only by TCG (`tcg-el2-a`/`-b`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
   probed. The probe tests the host, not the kernel: if HVF creates the EL2 VM, a kernel failure at EL2 still fails.
 - **Storage stack.** `t_storage` kills the driver "during a commit" and "during a read", but on one CPU the driver
   ends before the request reaches the device, so no test kills a driver with a write in flight on the device; the

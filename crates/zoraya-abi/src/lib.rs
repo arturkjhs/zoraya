@@ -1235,7 +1235,7 @@ syscalls! {
     44 StreamWrite stream_write(end: Handle, bytes: Bytes) false;
     #[personality_only]
     45 SnapshotProcess snapshot_process(args: SnapshotBuffer) false;
-    46 ImageCreate image_create(memory: Handle, length: Size) false;
+    46 ImageCreate image_create(memory: Handle, length: Size, job: Handle) false;
     47 JobSuspend job_suspend(job: Handle) false;
     48 JobResume job_resume(job: Handle) false;
     49 ObjectGetSignals object_get_signals(handle: Handle) false;

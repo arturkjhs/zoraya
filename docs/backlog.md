@@ -677,3 +677,9 @@ rooms' `+listen` words and the panel's pills for a listen rule are not built (on
 merge test, `TASK-34-report.md`). Keep helping while the reaper holds frames, with a step point between rounds, or free the queue in whole objects:
 a proposed ADR under ADR-0270 and INV-0270-1.
 
+## Socket files in a program's own directory (the architect, 2026-11-17)
+
+Allowed now (ADR-0412): `bind` of a Unix socket in a program's own directory, not only in the line's `/tmp` (ADR-0439 item 1). It needs a kind for
+"own directory" in the bootstrap record and a transient node in `fsd`. Unlinking a listening node follows the ordinary rules (write on its directory).
+tmux's default place is an own directory.
+
