@@ -1362,3 +1362,29 @@ fn no_words_and_no_listen_word_give_no_listen_right() {
     assert_eq!(Scope::decode(&bytes).unwrap().listen_count(), 0);
     assert_eq!(go_all(CAT, &[], &[], &[], false).unwrap(), None);
 }
+
+/// The loopback is the room's own (ADR-0442): a line may reach it in any room, words or none.
+#[test]
+fn the_loopback_asks_nothing_of_a_rooms_words() {
+    let none = Some(("ra", &[][..]));
+    let got = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("127.0.0.1", true)],
+        &[],
+        none,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert!(
+        Scope::decode(&got.1)
+            .unwrap()
+            .names_address([127, 0, 0, 1], 22, Protocols::TCP)
+    );
+    let got = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("10.0.2.50", true)],
+        &["127.0.0.1"],
+        none,
+    );
+    assert!(got.is_err(), "the other address still is");
+}

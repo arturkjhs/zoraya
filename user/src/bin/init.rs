@@ -439,12 +439,15 @@ fn root_connection(n: &Network) -> Option<Handle> {
 }
 
 /// The panel's root network connection (ADR-0462): the root scope, but only
-/// `REACH` and `NARROW`, the rights it uses to narrow each room's terminal's
-/// connection; no status and no listen.
+/// `REACH`, `NARROW` and `ROOM` (to key each terminal's connection by its room,
+/// ADR-0442), the rights it uses to narrow each room's terminal's connection; no
+/// status and no listen.
 fn panel_connection(n: &Network) -> Option<Handle> {
     zoraya_user::netclient::narrow(
         n.control,
-        zoraya_abi::net::rights::REACH | zoraya_abi::net::rights::NARROW,
+        zoraya_abi::net::rights::REACH
+            | zoraya_abi::net::rights::NARROW
+            | zoraya_abi::net::rights::ROOM,
         &zoraya_user::netclient::root_scope(),
     )
     .ok()

@@ -525,10 +525,13 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 let (rights, scope) = net_scope.as_ref()?;
                 // REACH to the room's words, and `NARROW` so that the shell can carve each
                 // program's own connection from it (an account), as from `init`'s.
-                zoraya_user::netclient::narrow(
+                // Keyed by the room (ADR-0442): only the panel's connection has `ROOM`.
+                zoraya_user::netclient::narrow_room(
                     net_root?,
                     *rights | zoraya_abi::net::rights::NARROW,
+                    0,
                     scope,
+                    l.room.as_ref().map_or("", |r| r.name.as_str()),
                 )
                 .ok()
             }

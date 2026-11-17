@@ -789,6 +789,10 @@ struct Z {
     /// ADR-0462): what the network connection at slot 9 reaches. A shell that
     /// enters a room by `room NAME` takes the table's.
     launch_nets: Vec<String>,
+    /// The shell was started by the panel in a room (`--room`): its network
+    /// connection (slot 9) is already keyed by that room, and has no `ROOM` right
+    /// to name one (ADR-0442, ADR-0462).
+    net_keyed: bool,
 }
 
 impl Z {
@@ -1065,6 +1069,9 @@ impl Z {
     /// The room a connection made now belongs to (proposed ADR-0442): the
     /// shell's current room, empty for `home`.
     fn net_room(&self) -> String {
+        if self.net_keyed {
+            return String::new();
+        }
         self.room
             .as_ref()
             .map_or_else(String::new, |r| r.name.clone())
@@ -5979,6 +5986,7 @@ fn main() -> i32 {
         refused_seen: (0, 0),
         usage_tracker: zoraya_rooms::Tracker::new(),
         launch_nets: Vec::new(),
+        net_keyed: false,
     };
     // The broker tells the host of the terminal of its lines' groups
     // (proposed ADR-0388).
@@ -6027,6 +6035,7 @@ fn main() -> i32 {
         editor.set_history(text.lines().map(|l| l.replace(ENTRY_BREAK, "\n")).collect());
     }
     // The panel's launch in a room (ADR-0172 point 4).
+    z.net_keyed = c.parse().value(&c.d, "room").is_some();
     z.launch_nets = c
         .parse()
         .value(&c.d, "net")

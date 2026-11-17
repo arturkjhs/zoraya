@@ -277,6 +277,11 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     // (ADR-0224 item 2, ADR-0462): refused before anything runs, naming them.
     if let Some(room) = line.room {
         for w in &words {
+            // The loopback is the room's own (`netd` keys it by room, ADR-0442): a
+            // rule on 127.0.0.0/8 asks nothing of the room's words.
+            if is_loopback(w) {
+                continue;
+            }
             if !room_words.iter().any(|r| w.rule().within(&r.rule())) {
                 let held = if room.words.is_empty() {
                     alloc::format!("room {} has no +net words", room.name)
@@ -353,6 +358,15 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
         out.truncate(n);
         (granted, out)
     }))
+}
+
+/// Whether a word names the loopback only (an address or a prefix inside 127.0.0.0/8).
+fn is_loopback(w: &NetWord) -> bool {
+    match w.target {
+        Named::Address(a) => a[0] == 127,
+        Named::Prefix(a, l) => a[0] == 127 && l >= 8,
+        _ => false,
+    }
 }
 
 /// What a refused connection of a line is told (ADR-0462, the carved-account
