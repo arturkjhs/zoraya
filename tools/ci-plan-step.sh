@@ -12,7 +12,7 @@
 # - a push to main: the document checks only (PUSH_MAIN=1);
 # - a scheduled run: the full set; the nightly (its cron is NIGHTLY_CRON below,
 #   which `make check-ci-jobs` compares with the workflow's first cron) always
-#   with its own jobs; the 4-hourly run only if the lookup does not say that the
+#   with its own jobs; the 2-hourly run only if the lookup does not say that the
 #   latest full run was on this very commit (an answer it cannot give is no
 #   answer: the full set runs). If it skips and that latest run was red, it
 #   exits 1 (the run is red, with the reason in the summary), so that a skipping

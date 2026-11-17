@@ -1,6 +1,6 @@
 # ADR-0432: Memory descriptors as built (plan part F3): the wire form, seals as handle rights, `fork`, `spawn`, the mapping rules and the names
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0051, ADR-0100, ADR-0102, ADR-0103, ADR-0107, ADR-0261, ADR-0342, ADR-0412, ADR-0413, ADR-0430, ADR-0431
 - **Evidence:** CP-01, CP-14, CP-16, DM-031, DM-032
@@ -144,6 +144,11 @@ giving less. A receiver can never write what it was handed read-only, and a writ
   lock (every call holds it); a mapping made by `mmap` of the old object stays on the old object (a descriptor fixed by a shared
   map is never replaced).
 
+- **Closed by plan part F4 (2026-11-15).** Item 5's deferral: a memory descriptor now crosses `spawn` and `exec` (ADR-0433 item 6,
+  proposed), with its size and seals in the third bootstrap message, and the in-QEMU "in another process" half of INV-0413-2
+  runs (`t_spawn memfd`: the plan's 4 MiB descriptor read by a spawned child, a read-only one read-only there). INV-0432-2's
+  test, `a_memory_descriptor_does_not_cross_a_spawn_yet`, was replaced by `tests/spawn.rs`.
+
 ## Revisit triggers
 
 - A port that needs `MAP_SHARED` of a file, `msync`, `mremap` or a growing shared buffer (ADR-0413's triggers).
@@ -151,4 +156,6 @@ giving less. A receiver can never write what it was handed read-only, and a writ
 
 ## Architect's decision
 
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-16. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built.

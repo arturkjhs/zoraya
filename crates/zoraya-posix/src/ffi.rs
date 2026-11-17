@@ -38,6 +38,7 @@ use zoraya_heap::{Backing, Heap, PAGE_SIZE};
 
 use crate::errno::{self, *};
 use crate::lock::{Lock, Wait};
+use crate::maptab::{self, MapTable};
 use crate::path::PATH_MAX;
 use crate::process::{self, AT_EMPTY_PATH, AT_FDCWD, Desc, Posix, Target, o};
 use crate::stat;
@@ -627,19 +628,18 @@ unsafe fn put(out: *mut u8, bytes: &[u8]) -> Result<(), i32> {
 struct Objects;
 
 // SAFETY: a mapping of a new memory object is page-aligned, readable,
-// writable and this process's own; the handle and mapping stay for the
-// process's life, and the kernel picks addresses that do not overlap.
+// writable and this process's own; the mapping stays for the process's life
+// (it holds the object, ADR-0051, so the handle is not needed and is closed
+// at once: a heap step costs one of the kernel's mapping slots and none of
+// the 1024 handles, ADR-0415 item 1), and the kernel picks addresses that do
+// not overlap.
 unsafe impl Backing for Objects {
     fn grow(&mut self, pages: usize) -> Option<usize> {
         let size = (pages * PAGE_SIZE) as u64;
         let object = zoraya_rt::memory_create(size, MemoryFlags::NONE).ok()?;
-        match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
-            Ok(address) => Some(address as usize),
-            Err(_) => {
-                let _ = zoraya_rt::handle_close(object);
-                None
-            }
-        }
+        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        let _ = zoraya_rt::handle_close(object);
+        mapped.ok().map(|address| address as usize)
     }
 }
 
@@ -829,23 +829,44 @@ extern "C" fn __libc_free(p: *mut u8) {
 }
 
 /// Private anonymous mappings (ADR-0103 item 12), for `__init_tls` and
-/// whatever else maps: a memory object each, recorded for `munmap`.
-/// One for each of the kernel's 256 mappings of a process, so that 128 thread
-/// stacks fit with the image and the heap (ADR-0300).
-const MAPPING_SLOTS: usize = 256;
+/// whatever else maps: a memory object each, recorded for `munmap`, its handle
+/// closed once it is mapped (a mapping holds its object, ADR-0415 item 1).
+/// One slot for each of the kernel's 4096 mappings of a process
+/// (`MAPPING_SLOTS`, INV-0415-1), so that 128 thread stacks fit with the
+/// image and the heap (ADR-0300) and CPython's arenas do not end at 256.
+const MAPPING_SLOTS: usize = zoraya_abi::MAPPING_SLOTS;
 
-struct Mappings(UnsafeCell<[(u64, u64, u64); MAPPING_SLOTS]>);
+/// The table's memory is one object of its own, mapped the first time a
+/// private mapping is made, so that a program that never maps pays nothing for
+/// 64 KiB of slots (and a `fork` child copies it with the rest of its memory).
+struct Mappings(UnsafeCell<Option<MapTable<'static>>>);
 
 // SAFETY: every access is under `MEM`.
 unsafe impl Sync for Mappings {}
 
-static MAPPINGS: Mappings = Mappings(UnsafeCell::new([(0, 0, 0); MAPPING_SLOTS]));
+static MAPPINGS: Mappings = Mappings(UnsafeCell::new(None));
 
-/// The table. The caller holds `MEM` and does not keep the reference across
-/// releasing it.
-fn mappings() -> &'static mut [(u64, u64, u64); MAPPING_SLOTS] {
+/// The table, made on first use. The caller holds `MEM` and does not keep the
+/// reference across releasing it. `ENOMEM` if its memory cannot be had.
+fn mappings() -> Result<&'static mut MapTable<'static>, i32> {
     // SAFETY: the caller holds `MEM` (see above).
-    unsafe { &mut *MAPPINGS.0.get() }
+    let table = unsafe { &mut *MAPPINGS.0.get() };
+    if table.is_none() {
+        let size = maptab::TABLE_BYTES as u64;
+        let object = zoraya_rt::memory_create(size, MemoryFlags::NONE)
+            .map_err(|s| rt_errno(s, Call::Memory))?;
+        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        let _ = zoraya_rt::handle_close(object);
+        let address = mapped.map_err(|s| rt_errno(s, Call::Memory))?;
+        // SAFETY: a new mapping of `TABLE_BYTES`, page-aligned (so aligned for
+        // a slot), writable, zero-filled, this process's own and never
+        // unmapped (`munmap` ends only what the table lists, and the table
+        // does not list itself); nothing else points into it.
+        let slots =
+            unsafe { core::slice::from_raw_parts_mut(address as *mut maptab::Slot, MAPPING_SLOTS) };
+        *table = Some(MapTable::new(slots));
+    }
+    Ok(table.as_mut().expect("made above"))
 }
 
 const MAP_SHARED: i64 = 0x01;
@@ -888,18 +909,21 @@ fn map(length: i64, prot: i64, flags: i64, fd: i64, off: i64) -> Result<i64, i32
     let size = (length as u64).next_multiple_of(PAGE_SIZE as u64);
     // The table is `MEM`'s; the calls inside allocate nothing.
     locked(&MEM, || {
-        let free = mappings().iter().position(|m| m.1 == 0).ok_or(ENOMEM)?;
+        let table = mappings()?;
+        let free = table.free_slot().ok_or(ENOMEM)?;
         let object = zoraya_rt::memory_create(size, MemoryFlags::NONE)
             .map_err(|s| rt_errno(s, Call::Memory))?;
-        match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
+        // The mapping holds the object: the handle is not kept (ADR-0415
+        // item 1), whether the map worked or not.
+        let mapped = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE);
+        let _ = zoraya_rt::handle_close(object);
+        match mapped {
             Ok(address) => {
-                mappings()[free] = (address, size, object.raw());
+                let recorded = table.set(free, address, size);
+                debug_assert!(recorded, "the slot was free");
                 Ok(address as i64)
             }
-            Err(s) => {
-                let _ = zoraya_rt::handle_close(object);
-                Err(rt_errno(s, Call::Memory))
-            }
+            Err(s) => Err(rt_errno(s, Call::Memory)),
         }
     })
 }
@@ -911,16 +935,14 @@ fn unmap(address: u64, length: u64) -> Result<(), i32> {
     }
     let size = length.next_multiple_of(PAGE_SIZE as u64);
     locked(&MEM, || {
-        // The kernel ends whole mappings only: a part of one is refused.
-        let m = mappings()
-            .iter_mut()
-            .find(|m| m.1 != 0 && m.0 == address && m.1 == size)
-            .ok_or(EINVAL)?;
-        zoraya_rt::memory_unmap(m.0, m.1).map_err(|s| rt_errno(s, Call::Memory))?;
-        if let Some(h) = Handle::new(m.2) {
-            let _ = zoraya_rt::handle_close(h);
+        // The kernel ends whole mappings only: a part of one is refused, and
+        // so is what the table does not list (the heap, a window).
+        let table = mappings()?;
+        if !table.contains(address, size) {
+            return Err(EINVAL);
         }
-        *m = (0, 0, 0);
+        zoraya_rt::memory_unmap(address, size).map_err(|s| rt_errno(s, Call::Memory))?;
+        table.remove(address, size);
         Ok(())
     })
 }
@@ -1051,9 +1073,34 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     };
     let decoded = Bootstrap::decode(&record[..n], handles.len());
     // The second message: SELF, which a fork child gets otherwise.
-    let mut second = [0u8; 16];
+    // Before it, if the spawn gave Unix sockets or memory descriptors, `ZPBF`
+    // (ADR-0433): the spawner sends it first so that a refusal of it leaves the
+    // connections of `ZPBX` unsent. A child that finds one it cannot read ends,
+    // as one with no record does.
+    let mut third = Vec::new();
+    let mut big = vec![0u8; 4096];
     let mut self_handle = Vec::new();
-    let (kept, net, random, window) = match read(sys, &mut second, &mut self_handle) {
+    let mut got = read(sys, &mut big, &mut self_handle);
+    if got.is_some_and(|n| big[..n].starts_with(&crate::unix::PASSED_MAGIC)) {
+        let n = got.unwrap_or(0);
+        match crate::unix::decode_passed(&big[..n], self_handle.len(), abi::OPEN_MAX) {
+            Some((fds, records)) => {
+                third = vec![(fds, records, core::mem::take(&mut self_handle))];
+            }
+            None => {
+                for h in self_handle {
+                    let _ = zoraya_rt::handle_close(h);
+                }
+                zoraya_rt::process_exit(127);
+            }
+        }
+        got = read(sys, &mut big, &mut self_handle);
+    }
+    let mut second = [0u8; 16];
+    let got = got.filter(|&n| n <= second.len()).inspect(|&n| {
+        second[..n].copy_from_slice(&big[..n]);
+    });
+    let (kept, net, random, window) = match got {
         Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => {
             (self_handle.pop(), None, None, None)
         }
@@ -1120,6 +1167,9 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
             p.net = net.filter(|h| channel(*h));
             p.random = random.filter(|h| channel(*h));
             p.window = window.filter(|h| channel(*h));
+            for (fds, records, handles) in third {
+                p.install_passed(&fds, records, handles);
+            }
             p
         }
         None => {
@@ -1129,6 +1179,7 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
                 .chain(net)
                 .chain(random)
                 .chain(window)
+                .chain(third.into_iter().flat_map(|t| t.2))
             {
                 let _ = zoraya_rt::handle_close(h);
             }
@@ -1449,26 +1500,15 @@ extern "C" fn zoraya_posix_thread_exit(_code: i64) -> ! {
     zoraya_rt::thread_exit(CLEAR_ON_EXIT.load(Ordering::Relaxed), 0, 0)
 }
 
-/// musl's `__unmapself`: a detached thread's last act. Gives the mapping's
-/// object handle back (the library's table forgets the mapping), then the
-/// kernel unmaps `[base, base + size)` and ends the thread, without touching
-/// the stack that goes (ADR-0300 item 3).
+/// musl's `__unmapself`: a detached thread's last act. The library's table
+/// forgets the mapping, then the kernel unmaps `[base, base + size)` and ends
+/// the thread, without touching the stack that goes (ADR-0300 item 3).
 #[unsafe(no_mangle)]
 extern "C" fn __unmapself(base: u64, size: u64) -> ! {
     forget_thread();
-    let handle = locked(&MEM, || {
-        mappings()
-            .iter_mut()
-            .find(|m| m.1 != 0 && m.0 == base && m.1 == size)
-            .map(|m| core::mem::take(&mut m.2))
-    });
-    if let Some(h) = handle.and_then(Handle::new) {
-        let _ = zoraya_rt::handle_close(h);
-    }
-    // The table entry is cleared by `take` only for the handle: free it too.
     locked(&MEM, || {
-        if let Some(m) = mappings().iter_mut().find(|m| m.0 == base && m.1 == size) {
-            *m = (0, 0, 0);
+        if let Ok(table) = mappings() {
+            table.remove(base, size);
         }
     });
     zoraya_rt::thread_exit(CLEAR_ON_EXIT.load(Ordering::Relaxed), base, size)
@@ -1894,8 +1934,7 @@ extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
 extern "C" fn pread(fd: i32, buf: *mut u8, n: usize, offset: i64) -> isize {
     size(user(buf, n).and_then(|u| {
         testcancel();
-        procs::poll();
-        procs::restartable(|p| p.pread(fd, u, offset))
+        procs::waiting(|p| p.pread(fd, u, offset))
     }))
 }
 
@@ -1903,8 +1942,7 @@ extern "C" fn pread(fd: i32, buf: *mut u8, n: usize, offset: i64) -> isize {
 extern "C" fn pwrite(fd: i32, buf: *const u8, n: usize, offset: i64) -> isize {
     size(user(buf, n).and_then(|u| {
         testcancel();
-        procs::poll();
-        procs::after_write(procs::restartable(|p| p.pwrite(fd, u, offset)))
+        procs::after_write(procs::waiting(|p| p.pwrite(fd, u, offset)))
     }))
 }
 

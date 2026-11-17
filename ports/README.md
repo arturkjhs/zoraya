@@ -57,7 +57,7 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | OpenSSH portable | 10.6p2 | BSD and ISC (`LICENCE`; a few files public domain) | `patches/openssh/0001-fake-rfc2553-stdio.patch`, `0002-no-configuration-files-no-options-after-host.patch`, `0003-no-askpass.patch`, `0004-no-host-key-dns.patch` (ADR-0340 items 3 to 5, ADR-0346); the client `ssh` and `ssh-keygen` only |
 | git | 2.56.1 | GPL-2.0-only (`COPYING`); statically linked with Apache-2.0 OpenSSL through libcurl, which GPL-2.0-only does not allow: an open question (ADR-0347), git is not in the image (ADR-0339 item 1 said "a separate program like wget") | `patches/git/0001-configuration-paths-and-variables.patch`, `0002-no-askpass-no-credential-helper.patch`, `0003-no-tls-or-proxy-configuration.patch`, `0004-variables-not-read.patch` (ADR-0339 items 4, 8 and 9, ADR-0347); `git/ar.sh` (an archiver wrapper) and `git/gitconfig` (the system configuration) are the repository's own; `git` and `git-remote-http` only |
 
-`make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
+`make apps` (TASK-27 9a, ADR-0310; and, since TASK-31 10g, OpenSSH's `ssh` and `ssh-keygen` with the image's `/etc/passwd` and `group`) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
 `build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and
 `run-gui`. `ports/apps/zshim.c` is the small archive of names those two programs need and `libc.a` does not export.
 

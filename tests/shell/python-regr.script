@@ -8,7 +8,7 @@
 < Type help to begin, or help tour.
 < \r\n~>
 > python3 regr.py @REGRLIST@ @REGRARGS@\r
-< Result: SUCCESS
+limit 900 < Result: SUCCESS
 < \r\n~>
 # Plan part F2: CPython's test_socket over a Unix pair: unixpair.py loads
 # BasicSocketPairTest (socketpair, send, recv; no sendmsg). CPython's own

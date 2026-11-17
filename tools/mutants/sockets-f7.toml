@@ -1,0 +1,268 @@
+# Plan part F7 (INV-0412-3, INV-0439-1 to -3): socket files. The service's rights, bounds and handle
+# accounting (`crates/zoraya-fs-service/tests/socket.rs`) and the library's path rule, record decoder and
+# calls over the real service (`crates/zoraya-posix/tests/socketfile.rs` and the unit tests of `unix`).
+# Host tests only. `make mutants` runs each against the committed tree.
+#
+# Not listed, equivalent: `!r.shared` in `decode_connect`'s stream clause (`Record::decode` already refuses a
+# shared record that has its ancillary channel, which `has_anc` requires here); `NO_FOLLOW` in `unix_bind` (the
+# exclusive create of an existing name, a link included, is `EXISTS` before any link is followed: defence in depth,
+# with the check of the entry the node landed in); the library's own check that the object it opened is `S_IFSOCK`
+# (`unix_connect`): the service answers a connect to anything else with `NOT_FOUND`, which is the same
+# `ECONNREFUSED`; the check is defence in depth against a service that would not.
+tests = ["cargo test -q -p zoraya-fs-service --test socket", "cargo test -q -p zoraya-posix --test socketfile --lib"]
+timeout = 900
+
+[[mutant]]
+id = "F7-listen-without-write"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if !self.has(i, proto::rights::WRITE) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        if !matches!(sock_type, 1 | 5)'''
+replace = '''        if !matches!(sock_type, 1 | 5)'''
+note = "INV-0439-1: a read-only connection may not listen"
+
+[[mutant]]
+id = "F7-connect-without-write"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        // Connecting is talking to the listener: the right to write.
+        if !self.has(i, proto::rights::WRITE) {'''
+replace = '''        // Connecting is talking to the listener: the right to write.
+        if false {'''
+note = "INV-0439-1: a read-only connection may not connect"
+
+[[mutant]]
+id = "F7-connect-any-type"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if listener.sock_type != sock_type {'''
+replace = '''        if false {'''
+note = "INV-0439-1: a stream connect into a packet listener is refused"
+
+[[mutant]]
+id = "F7-two-listeners"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if node.listener.is_some() {
+            return self.done(i, t, status::EXISTS, 0);
+        }'''
+replace = '''        if false {
+            return self.done(i, t, status::EXISTS, 0);
+        }'''
+note = "one listener a node"
+
+[[mutant]]
+id = "F7-listener-bound"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if listening >= MAX_LISTENERS || !self.room(i) {'''
+replace = '''        if !self.room(i) {'''
+note = "INV-0439-2: 64 listeners"
+
+[[mutant]]
+id = "F7-node-bound"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''                        .is_some_and(|x| x.len() >= MAX_SOCKET_NODES)'''
+replace = '''                        .is_some_and(|x| x.len() > MAX_SOCKET_NODES * 100)'''
+note = "INV-0439-2: 256 nodes"
+
+[[mutant]]
+id = "F7-unlink-keeps-the-entry"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''            && let Some(id) = socket
+        {
+            self.socket_unnamed(id);
+        }'''
+replace = '''            && let Some(id) = socket
+        {
+            let _ = id;
+        }'''
+note = "INV-0439-2: a loop of bind and unlink must not fill the table"
+
+[[mutant]]
+id = "F7-rename-over-keeps-the-entry"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if r.is_ok()
+            && let Some(id) = replaced
+        {
+            self.socket_unnamed(id);
+        }
+        self.done_result(i, t, r.map(|()| 0));
+    }
+
+    fn publish'''
+replace = '''        let _ = replaced;
+        self.done_result(i, t, r.map(|()| 0));
+    }
+
+    fn publish'''
+note = "INV-0439-2"
+
+[[mutant]]
+id = "F7-rename-onto-itself"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''            self.socket_id_at(target, m.new.0)
+                .filter(|id| Some(*id) != same)'''
+replace = '''            let _ = same;
+            self.socket_id_at(target, m.new.0)'''
+note = "a rename of a name onto itself leaves the node's listener its name"
+
+[[mutant]]
+id = "F7-listener-not-released"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''            self.release(l.account, 1);'''
+replace = '''            let _ = l.account;'''
+note = "INV-0439-2: the listener's handle is released with its connection"
+
+[[mutant]]
+id = "F7-listener-not-closed"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''            self.transport.close(l.end);
+            self.release(l.account, 1);'''
+replace = '''            self.release(l.account, 1);'''
+note = "INV-0439-2: the service's end of the listener channel is closed with the listener"
+
+[[mutant]]
+id = "F7-refused-connect-keeps-handles"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''            Outgoing::Full | Outgoing::NoMemory => self.done(i, t, status::LIMIT_REACHED, 0),'''
+replace = '''            Outgoing::Full | Outgoing::NoMemory => {
+                handles.clear();
+                self.done(i, t, status::LIMIT_REACHED, 0)
+            }'''
+note = "INV-0439-1: a refused connect leaves its handles to the loop, which closes them"
+
+[[mutant]]
+id = "F7-forwarded-handles-closed"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''            Outgoing::Sent => {
+                handles.clear();
+                self.done(i, t, status::OK, 0);
+            }'''
+replace = '''            Outgoing::Sent => {
+                self.done(i, t, status::OK, 0);
+            }'''
+note = "INV-0439-1: a forwarded handle is the listener's, the loop must not close it"
+
+[[mutant]]
+id = "F7-bind-anywhere"
+file = "crates/zoraya-posix/src/unix.rs"
+find = '''    if entry != zoraya_abi::posix::EntryKind::Tmp {
+        return Err(EACCES);
+    }'''
+replace = '''    if false {
+        return Err(EACCES);
+    }'''
+note = "INV-0412-3: bind outside the line's /tmp is EACCES"
+
+[[mutant]]
+id = "F7-bind-the-entry-itself"
+file = "crates/zoraya-posix/src/unix.rs"
+find = '''    if rest.is_empty() || directory {'''
+replace = '''    if directory {'''
+note = "INV-0412-3: the entry's root is no name"
+
+[[mutant]]
+id = "F7-decode-any-packet-type"
+file = "crates/zoraya-posix/src/unix.rs"
+find = '''        Kind::Packet => sock_type == SOCK_SEQPACKET && i32::from(r.sock_type) == sock_type,'''
+replace = '''        Kind::Packet => true,'''
+note = "INV-0439-3"
+
+[[mutant]]
+id = "F7-decode-any-handle-count"
+file = "crates/zoraya-posix/src/unix.rs"
+find = '''    (ok && handles == r.handles()).then_some(r)'''
+replace = '''    ok.then_some(r)'''
+note = "INV-0439-3"
+
+[[mutant]]
+id = "F7-bind-not-exclusive"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''        let wire = open_flags::CREATE | open_flags::EXCLUSIVE | open_flags::NO_FOLLOW;'''
+replace = '''        let wire = open_flags::CREATE | open_flags::NO_FOLLOW;'''
+note = "a name is taken once (EADDRINUSE)"
+
+[[mutant]]
+id = "F7-connect-asks-read"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''        let (_, opened) = self.open_resolved(r, 0, rights::WRITE, 0, 0, Access::Write)?;'''
+replace = '''        let (_, opened) = self.open_resolved(r, 0, rights::READ, 0, 0, Access::Write)?;'''
+note = "connecting needs WRITE on the node: with READ the service refuses"
+
+[[mutant]]
+id = "F7-accept-without-room"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''        if (zoraya_abi::posix::OPEN_MAX as usize).saturating_sub(self.fds.count()) == 0 {'''
+replace = '''        if false {'''
+note = "a connection taken with no fd to hold it is lost: EMFILE leaves it queued"
+
+[[mutant]]
+id = "F7-listen-forgets"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''            u.listening = true;'''
+replace = '''            u.listening = false;'''
+note = "accept needs a listener"
+
+[[mutant]]
+id = "F7-accepted-is-nonblocking-always"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''                        sk.nonblock = nonblock;'''
+replace = '''                        sk.nonblock = true;'''
+note = "accept4's flags are the new socket's alone"
+
+[[mutant]]
+id = "F7-listener-readiness"
+file = "crates/zoraya-posix/src/socket.rs"
+find = '''                    self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
+                };
+            }
+            if self.state != State::Connected {'''
+replace = '''                    None
+                };
+            }
+            if self.state != State::Connected {'''
+note = "poll: a listener is readable when a connection waits"
+
+[[mutant]]
+id = "F7-dead-listener-keeps-its-owner"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''                    if c.listening == Some(id) {'''
+replace = '''                    if c.listening != Some(id) {'''
+note = "a connection whose listener died listens again"
+
+[[mutant]]
+id = "F7-publish-over-keeps-the-entry"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        let replaced = if mode == PublishMode::Replace {'''
+replace = '''        let replaced = if false {'''
+note = "INV-0439-2: a name taken by publish frees the node's entry"
+
+[[mutant]]
+id = "F7-anyone-may-listen"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        if owner != Some(Some(i)) {'''
+replace = '''        if false {'''
+note = "INV-0439-1: only the connection that made the node listens on it"
+
+[[mutant]]
+id = "F7-overquota-kills-listener"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        Status::NoMemory | Status::OverQuota => Outgoing::NoMemory,'''
+replace = '''        Status::NoMemory => Outgoing::NoMemory,'''
+note = "fsd's kernel error mapping: the service's own job over its limit is not the listener's death"
+
+[[mutant]]
+id = "F7-refused-is-closed"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''        Status::AccessDenied | Status::BadState | Status::BadHandle => Outgoing::Refused,'''
+replace = '''        Status::AccessDenied | Status::BadState => Outgoing::Refused,'''
+note = "fsd's kernel error mapping: a handle the kernel will not move is the connector's fault"
+
+[[mutant]]
+id = "F7-aborted-listener-keeps-listening"
+file = "crates/zoraya-posix/src/unix_file.rs"
+find = '''                        if let Some(u) = sock.unix.as_mut() {
+                            u.listening = false;
+                        }'''
+replace = '''                        if let Some(u) = sock.unix.as_mut() {
+                            let _ = u;
+                        }'''
+note = "ECONNABORTED comes once: a server that retries must not spin on it"

@@ -19,6 +19,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::hint::black_box;
@@ -55,7 +56,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 9;
+const EXPECTED_FAILURES: usize = 10;
 
 static TESTS: &[Test] = &[
     Test {
@@ -129,6 +130,10 @@ static TESTS: &[Test] = &[
     Test {
         name: "frames_the_reaper_holds_are_available_and_counted",
         run: frames_the_reaper_holds_are_available_and_counted,
+    },
+    Test {
+        name: "the_worst_single_allocation_is_bounded_by_the_machines_ram",
+        run: the_worst_single_allocation_is_bounded_by_the_machines_ram,
     },
     Test {
         name: "a_run_short_of_frames_waits_for_the_reaper_in_steps",
@@ -311,6 +316,10 @@ static TESTS: &[Test] = &[
         run: a_run_freed_behind_the_scan_is_found_by_a_second_pass,
     },
     Test {
+        name: "a_space_holds_4096_mappings_and_pays_for_the_list",
+        run: a_space_holds_4096_mappings_and_pays_for_the_list,
+    },
+    Test {
         name: "a_space_list_growth_is_counted_and_prepared",
         run: a_space_list_growth_is_counted_and_prepared,
     },
@@ -355,6 +364,14 @@ static TESTS: &[Test] = &[
     Test {
         name: "harness_reports_panic_as_failure",
         run: harness_reports_panic_as_failure,
+    },
+    Test {
+        name: "harness_fails_with_a_process_left",
+        run: harness_fails_with_a_process_left,
+    },
+    Test {
+        name: "nothing_is_live_after_a_failed_test",
+        run: nothing_is_live_after_a_failed_test,
     },
     Test {
         name: "harness_reports_exception_as_failure",
@@ -542,6 +559,34 @@ static TESTS: &[Test] = &[
         run: images_from_a_process,
     },
     Test {
+        name: "images_share_their_read_only_pages",
+        run: images_share_their_read_only_pages,
+    },
+    Test {
+        name: "an_images_pages_outlive_its_handle_and_go_with_its_last_process",
+        run: an_images_pages_outlive_its_handle_and_go_with_its_last_process,
+    },
+    Test {
+        name: "an_images_pages_are_paid_by_its_creator_alone",
+        run: an_images_pages_are_paid_by_its_creator_alone,
+    },
+    Test {
+        name: "a_fork_child_of_an_image_process_maps_the_images_frames",
+        run: a_fork_child_of_an_image_process_maps_the_images_frames,
+    },
+    Test {
+        name: "a_fork_child_of_an_image_process_ending_first_frees_with_the_last",
+        run: a_fork_child_of_an_image_process_ending_first_frees_with_the_last,
+    },
+    Test {
+        name: "an_images_pages_hold_the_files_bytes_piece_by_piece",
+        run: an_images_pages_hold_the_files_bytes_piece_by_piece,
+    },
+    Test {
+        name: "an_image_of_a_large_program_is_bounded",
+        run: an_image_of_a_large_program_is_bounded,
+    },
+    Test {
         name: "job_suspend_from_a_process",
         run: job_suspend_from_a_process,
     },
@@ -556,6 +601,14 @@ static TESTS: &[Test] = &[
     Test {
         name: "cpu_ceiling_from_a_process",
         run: cpu_ceiling_from_a_process,
+    },
+    Test {
+        name: "a_killed_room_ends_in_the_period_after_the_kill",
+        run: a_killed_room_ends_in_the_period_after_the_kill,
+    },
+    Test {
+        name: "a_start_and_end_loop_keeps_its_ceiling",
+        run: a_start_and_end_loop_keeps_its_ceiling,
     },
     Test {
         name: "room_keeper_from_a_process",
@@ -585,26 +638,94 @@ static REARM_CANARY: AtomicBool = AtomicBool::new(false);
 static CURRENT: AtomicUsize = AtomicUsize::new(NONE);
 static PASSED: AtomicUsize = AtomicUsize::new(0);
 static FAILED: AtomicUsize = AtomicUsize::new(0);
+/// Live processes when the current test began (`run`).
+static LIVE_BEFORE: AtomicUsize = AtomicUsize::new(0);
+/// Processes the current test lost for good: their thread was abandoned on a
+/// panic (`sched::adopt_boot_thread`), as `fault_report_for_stack_overflow_from_el0`
+/// leaves `koverflow`. Those of earlier tests are in `LIVE_BEFORE`.
+static LOST: AtomicUsize = AtomicUsize::new(0);
 
 fn bump(counter: &AtomicUsize) {
     counter.store(counter.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
 }
 
-/// Runs the tests from index `start` on, then powers off.
+/// The first test of shard 2 of 2 (`--shard 2/2` of tools/run-qemu.sh). Shard
+/// 1 runs the tests before it, shard 2 this one and those after it, in the
+/// registered order, so each test runs in exactly one shard
+/// (`tools/check-test-shards.sh`). Everything the runner expects of a
+/// deliberate failure (`EXPECT` in the Makefile) comes before it, so shard 1
+/// holds the fault tests and `harness_resumes_after_panic`.
+const SHARD_2_FIRST: &str = "job_suspend_from_a_process";
+
+/// One past the last test of this run (`TESTS.len()` unless sharded).
+static END: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// The `zoraya.shard=N/M` word of `/chosen/bootargs`, if any.
+fn shard_argument() -> Option<(usize, usize)> {
+    let (fdt, _) = platform();
+    let args = fdt.find_node("/chosen")?.property("bootargs")?.as_str()?;
+    let spec = args
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("zoraya.shard="))?;
+    // A word that is present and malformed is an error, not "no shard": the
+    // run would otherwise cover every test without a word.
+    let parsed = spec
+        .split_once('/')
+        .and_then(|(n, m)| Some((n.parse().ok()?, m.parse().ok()?)));
+    Some(parsed.unwrap_or_else(|| panic!("malformed zoraya.shard={spec}")))
+}
+
+/// The tests this run covers, `lo..hi` (the whole list without a shard).
+fn shard_range() -> (usize, usize) {
+    let Some((n, m)) = shard_argument() else {
+        return (0, TESTS.len());
+    };
+    assert!(m == 2 && (n == 1 || n == 2), "bad shard {n}/{m}");
+    let split = TESTS
+        .iter()
+        .position(|t| t.name == SHARD_2_FIRST)
+        .expect("SHARD_2_FIRST is a registered test");
+    let (lo, hi) = if n == 1 {
+        (0, split)
+    } else {
+        (split, TESTS.len())
+    };
+    println!("shard: {n}/{m} runs tests {lo}..{hi} of {}", TESTS.len());
+    (lo, hi)
+}
+
+/// Runs the tests from index `start` on, then powers off. The first call
+/// (`start` 0) picks the shard's range.
 pub fn run(start: usize) -> ! {
+    let mut start = start;
     if start == 0 {
-        println!("ZORAYA-TEST begin {}", TESTS.len());
+        let (lo, hi) = shard_range();
+        END.store(hi, Ordering::Relaxed);
+        start = lo;
+        println!("ZORAYA-TEST begin {}", hi - lo);
     }
-    for (i, t) in TESTS.iter().enumerate().skip(start) {
+    let end = END.load(Ordering::Relaxed);
+    for (i, t) in TESTS.iter().enumerate().take(end).skip(start) {
         println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
+        LIVE_BEFORE.store(live_processes(), Ordering::Relaxed);
+        LOST.store(0, Ordering::Relaxed);
         sched::set_test_slice(0);
         crate::cpu::set_test_period(0);
+        sched::ending_watch::watch(None);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
         bump(&PASSED);
         println!("ZORAYA-TEST ok {}", t.name);
     }
+    // Outside any test, so that every run, sharded or not, ends with it: the
+    // overflow test (`fault_report_for_stack_overflow`, shard 1) re-arms the
+    // canary in `resume`, and `stack_canary_intact` (shard 2) alone would not
+    // see it. A failure panics with no test running, which fails the run.
+    assert!(
+        arch::stack_canary_intact(),
+        "boot stack overflowed into its canary (end of the run)"
+    );
     println!(
         "ZORAYA-TEST end pass={} fail={}",
         PASSED.load(Ordering::Relaxed),
@@ -618,7 +739,49 @@ extern "C" fn resume(next: usize) -> ! {
     if REARM_CANARY.swap(false, Ordering::Relaxed) {
         arch::stack_canary_set();
     }
+    end_what_a_failed_test_left();
     run(next)
+}
+
+fn live_processes() -> usize {
+    Job::root().map_or(0, |root| root.live())
+}
+
+/// A failed test may leave processes running: a user program that panics
+/// leaves the children it started (`t_cpu`'s 41 spinners, in a room at 25%
+/// and outside it, made `t_rooms` 35 times slower and `t_snapshot` and the
+/// big-space spawn fail after them, in a TCG run of `tcg-smp4-gicv2`). They
+/// are ended here, and the next test starts once the live count is back at
+/// what it was before the test, plus the processes it lost for good, and the
+/// reaper has given their frames back. The tree is walked again every 100 ms,
+/// for a process that started a child between a walk and its own end. A
+/// wait that runs out panics outside any test, which fails the run.
+fn end_what_a_failed_test_left() {
+    let Ok(root) = Job::root() else { return };
+    let target = LIVE_BEFORE.load(Ordering::Relaxed) + LOST.load(Ordering::Relaxed);
+    if root.live() <= target {
+        return;
+    }
+    let start = timer::now();
+    let mut walked = None;
+    while root.live() > target {
+        let now = timer::now();
+        assert!(
+            now.nanos_since(start) <= PATIENCE_NS,
+            "harness: {} processes the failed test left are still live after 10 s",
+            root.live() - target
+        );
+        if walked.is_none_or(|at: Instant| now.nanos_since(at) >= 100_000_000) {
+            root.end_every_process();
+            walked = Some(now);
+        }
+        sched::yield_now();
+    }
+    frames::settled_stats();
+    println!(
+        "harness: ended what the failed test left in {} ms",
+        timer::now().nanos_since(start) / 1_000_000
+    );
 }
 
 /// Called by the panic handler. Returns only if no test is running.
@@ -632,7 +795,11 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     let _ = write!(console::OneLine, "{}", crate::panic::Report(info));
     println!();
     crate::panic::clear();
-    crate::sched::adopt_boot_thread();
+    if crate::sched::adopt_boot_thread() {
+        // That process never ends now (the next test's LIVE_BEFORE
+        // includes it).
+        LOST.fetch_add(1, Ordering::Relaxed);
+    }
     // SAFETY: the panicking test's frames and the panic machinery's frames
     // are on the boot stack, a thread's stack, or the emergency stack after a
     // stack overflow, and none holds anything still referenced: tests keep no state outside
@@ -735,6 +902,28 @@ fn psci_system_off_available() {
 
 fn harness_reports_panic_as_failure() {
     panic!("deliberate panic to test the harness");
+}
+
+/// Fails with a process of its own still live: suspended, so it would stay
+/// so for ever if the harness did not end it (`end_what_a_failed_test_left`).
+fn harness_fails_with_a_process_left() {
+    LIVE_AT_THE_FAILURE.store(live_processes(), Ordering::Relaxed);
+    let left = process::spawn_suspended("busy").expect("busy");
+    drop(left);
+    assert!(live_processes() > LIVE_AT_THE_FAILURE.load(Ordering::Relaxed));
+    panic!("deliberate panic with a process left live");
+}
+
+/// The live processes before `harness_fails_with_a_process_left` spawned.
+static LIVE_AT_THE_FAILURE: AtomicUsize = AtomicUsize::new(0);
+
+/// After the failure above, nothing it started is live.
+fn nothing_is_live_after_a_failed_test() {
+    assert_eq!(
+        live_processes(),
+        LIVE_AT_THE_FAILURE.load(Ordering::Relaxed),
+        "a failed test's process outlived it"
+    );
 }
 
 fn harness_reports_exception_as_failure() {
@@ -1342,6 +1531,570 @@ fn images_from_a_process() {
     });
 }
 
+/// An object holding `file`, for `process::image_from`.
+fn file_object(file: &[u8]) -> Arc<memory::object::MemoryObject> {
+    let size = (file.len() as u64).next_multiple_of(PAGE_SIZE);
+    let object = memory::object::MemoryObject::new(size, false, None).expect("memory");
+    assert!(object.write(0, file));
+    object
+}
+
+/// A process of `image`, suspended, in a job of its own made by `job`.
+fn from_image(
+    image: &Arc<object::MemoryImage>,
+    job: Arc<Job>,
+) -> Result<Arc<process::Process>, SpawnError> {
+    process::create(process::Start {
+        name: "hello",
+        image: process::Loadable::from_image(image),
+        job,
+        handles: HandleTable::new(),
+        argv: Strings::empty(),
+        envp: Strings::empty(),
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended: true,
+    })
+}
+
+/// Every page a process maps: address to frame and attributes.
+fn pages_of(process: &process::Process) -> BTreeMap<u64, (u64, zoraya_pagetable::Attributes)> {
+    let mut pages = BTreeMap::new();
+    process.for_each_mapping(&mut |m| {
+        for offset in (0..m.size).step_by(PAGE_SIZE as usize) {
+            pages.insert(m.va + offset, (m.pa + offset, m.attributes));
+        }
+    });
+    pages
+}
+
+/// Ends a process that never ran.
+fn end_suspended(process: &Arc<process::Process>) {
+    let _ = process.signal(RequestKind::Terminate, 0);
+    let _ = process.resume();
+    process.wait();
+}
+
+/// Lets a suspended process run to its end and gives its record.
+fn run_to_the_end(process: &Arc<process::Process>) -> ExitRecord {
+    process.resume().expect("resume");
+    process.wait()
+}
+
+/// INV-0415-2 (ADR-0415 item 2, proposed ADR-0438): two processes of one
+/// image map the same frames for the segments that are not writable, never
+/// writable, and each has frames of its own for the rest; the creator's job
+/// pays for the shared frames once and the two children's jobs for their own
+/// pages alone; both run what the image holds.
+fn images_share_their_read_only_pages() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let image = process::image_from(&file_object(file), file.len() as u64, &creator)
+        .expect("an image of hello");
+    let kept = image.program.kept();
+    let shared: u64 = image
+        .program
+        .segments()
+        .iter()
+        .filter(|s| s.is_shared())
+        .map(|s| (s.pages().1 - s.pages().0) / PAGE_SIZE)
+        .sum();
+    let writable: u64 = image
+        .program
+        .segments()
+        .iter()
+        .filter(|s| !s.is_shared())
+        .map(|s| s.kept_pages())
+        .sum();
+    assert!(shared > 0, "hello has a text");
+    assert_eq!(
+        shared + writable,
+        kept.pages(),
+        "every kept page is one or the other"
+    );
+    let paid = creator.usage(false);
+    assert_eq!(paid.user, kept.bytes(), "the creator pays for the pages");
+
+    let (job1, job2, job0) = (
+        Job::create(&root(), false).expect("job"),
+        Job::create(&root(), false).expect("job"),
+        Job::create(&root(), false).expect("job"),
+    );
+    let p1 = from_image(&image, job1.clone()).expect("first");
+    let p2 = from_image(&image, job2.clone()).expect("second");
+    // The same program from the ramdisk copies every page: the control.
+    let p0 = start("hello", job0.clone(), true);
+    let (m1, m2, m0) = (pages_of(&p1), pages_of(&p2), pages_of(&p0));
+    assert_eq!(m1.len(), m0.len(), "the same pages");
+    for (index, s) in image.program.segments().iter().enumerate() {
+        let (start, end) = s.pages();
+        let first = kept.first_page(index) * PAGE_SIZE;
+        for va in (start..end).step_by(PAGE_SIZE as usize) {
+            let (pa1, a1) = m1[&va];
+            let (pa2, a2) = m2[&va];
+            let (pa0, _) = m0[&va];
+            assert!(a1.user && a2.user);
+            assert!(!(a1.write && a1.execute), "W+X at {va:#x}");
+            assert_eq!((a1.write, a1.execute), (s.write, s.execute));
+            assert_eq!((a2.write, a2.execute), (s.write, s.execute));
+            if s.is_shared() {
+                // The frames of the image's object, in both, writable in
+                // neither.
+                assert!(!a1.write && !a2.write, "a shared page writable at {va:#x}");
+                assert_eq!(pa1, image.kept.page(first + (va - start)));
+                assert_eq!(pa1, pa2, "one frame for {va:#x}");
+                assert_ne!(pa1, pa0, "the control has a copy of its own");
+            } else {
+                assert_ne!(pa1, pa2, "two frames for the writable {va:#x}");
+                let n = (va - start) / PAGE_SIZE;
+                if n < s.kept_pages() {
+                    assert_ne!(pa1, image.kept.page(first + n * PAGE_SIZE));
+                }
+            }
+        }
+    }
+    // The text is what the file says, through both processes' pages.
+    let text = image
+        .program
+        .segments()
+        .iter()
+        .find(|s| s.execute)
+        .expect("a text");
+    let at = text.vaddr.next_multiple_of(8);
+    let from = (text.offset + (at - text.vaddr)) as usize;
+    let word = u64::from_le_bytes(file[from..from + 8].try_into().expect("8"));
+    assert_eq!(p1.peek(at), Some(word));
+    assert_eq!(p2.peek(at), Some(word));
+    // Who pays: the creator's job is as it was and each child's holds its
+    // own pages only: the control's user bytes are the child's plus the
+    // shared pages.
+    assert_eq!(creator.usage(false), paid, "spawning charged the creator");
+    let (u1, u2, u0) = (job1.usage(false), job2.usage(false), job0.usage(false));
+    assert_eq!(u1.user, u2.user, "two children, one cost");
+    assert_eq!(
+        u1.user + shared * PAGE_SIZE,
+        u0.user,
+        "the copy pays for the pages the shared child does not"
+    );
+    // Both run the image, and the control as before.
+    assert_eq!(run_to_the_end(&p1), exited(7));
+    assert_eq!(run_to_the_end(&p2), exited(7));
+    assert_eq!(run_to_the_end(&p0), exited(7));
+    drop((p0, p1, p2));
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before, "every frame went back");
+    assert_eq!(creator.usage(false).user, 0, "and the creator's charge");
+}
+
+/// INV-0415-2: the pages live while any holder does. The image's handle may
+/// go while a process of it runs, and the process's pages stay valid; the
+/// frames go with the last of them, no sooner and no later.
+fn an_images_pages_outlive_its_handle_and_go_with_its_last_process() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let image = process::image_from(&file_object(file), file.len() as u64, &creator)
+        .expect("an image of hello");
+    let kept = image.program.kept().bytes();
+    let alive = frames_accounted();
+    assert!(
+        alive + kept / PAGE_SIZE <= before + 8,
+        "the pages are taken"
+    );
+    let p1 = from_image(&image, Job::create(&root(), false).expect("job")).expect("first");
+    let p2 = from_image(&image, Job::create(&root(), false).expect("job")).expect("second");
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, kept, "held by the processes");
+    // The first ends: the second's text is still there and runs.
+    assert_eq!(run_to_the_end(&p1), exited(7));
+    drop(p1);
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, kept, "one process is left");
+    assert_eq!(run_to_the_end(&p2), exited(7), "and its text is intact");
+    drop(p2);
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, 0, "the last holder frees them");
+    assert_eq!(frames_accounted(), before);
+}
+
+/// ADR-0438 item 2 and driver 3: a `fork` child (a snapshot of the space) of a
+/// process of an image maps the image's frames read-only for its read-only
+/// segments, takes no frame and no charge for them, and the creator's use does
+/// not move; the frames go with the last holder, whichever ends first.
+fn a_fork_child_of_an_image_process_maps_the_images_frames() {
+    a_fork_child_of_an_image_process(false);
+}
+
+/// The same, with the child ending first.
+fn a_fork_child_of_an_image_process_ending_first_frees_with_the_last() {
+    a_fork_child_of_an_image_process(true);
+}
+
+fn a_fork_child_of_an_image_process(child_first: bool) {
+    use crate::memory::user::{Copied, PlanItem, SnapshotBuild};
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let image = process::image_from(&file_object(file), file.len() as u64, &creator)
+        .expect("an image of hello");
+    let kept = image.program.kept();
+    let paid = creator.usage(false);
+    let (job1, job2) = (
+        Job::create(&root(), false).expect("job"),
+        Job::create(&root(), false).expect("job"),
+    );
+    let parent = from_image(&image, job1.clone()).expect("parent");
+    // The steps of `snapshot_process`, on the parent's space, into job 2.
+    let child = {
+        let guard = parent.space.lock();
+        let space = guard.as_ref().expect("a space");
+        let mut plan: Vec<PlanItem> = Vec::new();
+        plan.try_reserve_exact(space.mapping_count()).expect("room");
+        assert_eq!(space.snapshot_plan_step(&mut plan, 0), Ok(None));
+        let mut build = SnapshotBuild::new(plan, Some(&job2)).expect("a build");
+        let mut copied = Copied::default();
+        loop {
+            build.prepare_step();
+            if space
+                .snapshot_step(&mut build, &mut copied)
+                .expect("a step")
+            {
+                break;
+            }
+        }
+        build.finish().expect("a child")
+    };
+    let mut child_pages = BTreeMap::new();
+    child.for_each_mapping(&mut |m| {
+        for offset in (0..m.size).step_by(PAGE_SIZE as usize) {
+            child_pages.insert(m.va + offset, (m.pa + offset, m.attributes));
+        }
+    });
+    let parent_pages = pages_of(&parent);
+    assert_eq!(child_pages.len(), parent_pages.len(), "the same pages");
+    let mut shared = 0;
+    for (index, s) in image.program.segments().iter().enumerate() {
+        let (start, end) = s.pages();
+        let first = kept.first_page(index) * PAGE_SIZE;
+        for va in (start..end).step_by(PAGE_SIZE as usize) {
+            let (pa, a) = child_pages[&va];
+            assert_eq!((a.write, a.execute), (s.write, s.execute), "{va:#x}");
+            if s.is_shared() {
+                shared += 1;
+                assert!(!a.write, "a shared page writable in a fork child");
+                assert_eq!(pa, image.kept.page(first + (va - start)));
+                assert_eq!(pa, parent_pages[&va].0, "the parent's frame");
+            } else {
+                assert_ne!(pa, parent_pages[&va].0, "a writable page is copied");
+            }
+        }
+    }
+    assert!(shared > 0);
+    // The child pays for every page the parent does but the shared ones, which
+    // nobody but the creator pays; the creator's use is as it was.
+    assert_eq!(job2.usage(false).user, job1.usage(false).user);
+    assert_eq!(creator.usage(false), paid, "a fork charged the creator");
+    let held = kept.bytes();
+    if child_first {
+        // The child first: the image and the parent still hold the pages.
+        drop(child);
+        crate::reaper::drain();
+        assert_eq!(
+            creator.usage(false).user,
+            held,
+            "the parent holds the pages"
+        );
+        end_suspended(&parent);
+        drop(parent);
+        crate::reaper::drain();
+        assert_eq!(creator.usage(false).user, held, "the image holds the pages");
+        assert!(frames_accounted() < before);
+        drop(image);
+    } else {
+        // The creator's side first: the image, the parent, then the child last.
+        drop(image);
+        end_suspended(&parent);
+        drop(parent);
+        crate::reaper::drain();
+        assert_eq!(creator.usage(false).user, held, "the child holds the pages");
+        assert!(
+            frames_accounted() < before,
+            "and the frames are still there"
+        );
+        drop(child);
+    }
+    crate::reaper::drain();
+    assert_eq!(creator.usage(false).user, 0);
+    assert_eq!(frames_accounted(), before);
+}
+
+/// ADR-0261 point 8 and INV-0415-2: a creator that cannot pay for an image
+/// gets `OverQuota` and holds nothing; one that can pays once, and no number
+/// of processes in other jobs changes what it owes; a job that can pay for
+/// its own pages spawns the image whatever the creator's limit.
+fn an_images_pages_are_paid_by_its_creator_alone() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let limits = |memory| zoraya_abi::quota::JobLimits {
+        memory: Some(memory),
+        processes: None,
+        cpu: None,
+        threads: None,
+    };
+    let make = |job: &Arc<Job>| process::image_from(&file_object(file), file.len() as u64, job);
+    // A job with no limit makes the image and shows what the pages cost.
+    let probe = Job::create(&root(), false).expect("job");
+    let image = make(&probe).expect("image");
+    let (kept, cost) = (image.program.kept().bytes(), probe.usage(false).memory.used);
+    assert!(cost >= kept);
+    drop(image);
+    crate::reaper::drain();
+    // One byte short: refused, and nothing is held.
+    let poor = Job::create(&root(), false).expect("job");
+    // A job's own record is charged to it.
+    let record = poor.usage(false).memory.used;
+    poor.set_limits(limits(cost - 1)).expect("limits");
+    assert!(matches!(make(&poor), Err(zoraya_abi::Status::OverQuota)));
+    let seen = poor.usage(false);
+    assert_eq!(
+        (seen.memory.used, seen.user),
+        (record, 0),
+        "a refusal holds nothing"
+    );
+    assert_eq!(seen.memory.refused, 1);
+    assert_eq!(frames_accounted(), before, "no frame was kept");
+    // Exactly enough: made; the pages are the creator's.
+    let exact = Job::create(&root(), false).expect("job");
+    exact.set_limits(limits(cost)).expect("limits");
+    let image = make(&exact).expect("image");
+    assert_eq!(exact.usage(false).memory.used, cost);
+    // A child job sized to its own pages: the probe's first spawn shows them.
+    let first = Job::create(&root(), false).expect("job");
+    let p = from_image(&image, first.clone()).expect("spawn");
+    let own = first.usage(false).memory.peak;
+    end_suspended(&p);
+    drop(p);
+    crate::reaper::drain();
+    let tight = Job::create(&root(), false).expect("job");
+    tight.set_limits(limits(own - 1)).expect("limits");
+    assert!(matches!(
+        from_image(&image, tight.clone()),
+        Err(SpawnError::OverQuota)
+    ));
+    assert_eq!(
+        tight.usage(false).memory.used,
+        record,
+        "a refused spawn holds nothing"
+    );
+    let snug = Job::create(&root(), false).expect("job");
+    snug.set_limits(limits(own)).expect("limits");
+    // The creator is at its limit: the children do not need its room.
+    let kids: Vec<_> = (0..4).map(|_| from_image(&image, snug.clone())).collect();
+    // Four in one job of `own`: the first fits and each later one is refused
+    // for the job's own room, none of them charged to the creator.
+    assert!(kids[0].is_ok());
+    for kid in &kids[1..] {
+        assert!(
+            matches!(kid, Err(SpawnError::OverQuota)),
+            "a second process in a job with room for one"
+        );
+    }
+    assert_eq!(
+        exact.usage(false).memory.used,
+        cost,
+        "the creator owes the same"
+    );
+    for kid in kids.iter().flatten() {
+        end_suspended(kid);
+    }
+    drop(kids);
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(exact.usage(false).memory.used, record);
+    assert_eq!(frames_accounted(), before);
+}
+
+/// `file` with its last writable segment made read-only and `extra` bytes of
+/// zeroed memory after it: a large segment that is shared, to measure the
+/// image's call and the spawn with.
+fn with_shared_bss(file: &[u8], extra: u64) -> Vec<u8> {
+    let mut bytes = with_bss(file, extra);
+    let word = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().expect("8"));
+    let phoff = word(&bytes, 32) as usize;
+    let phnum = u16::from_le_bytes(bytes[56..58].try_into().expect("2")) as usize;
+    for i in 0..phnum {
+        let ph = phoff + i * 56;
+        let flags = u32::from_le_bytes(bytes[ph + 4..ph + 8].try_into().expect("4"));
+        if flags & 2 != 0 {
+            bytes[ph + 4..ph + 8].copy_from_slice(&(flags & !2).to_le_bytes());
+        }
+    }
+    bytes
+}
+
+/// An ELF with one text segment of `pages` pages of a known pattern, for
+/// `image_from` (the pattern byte of offset `i` is `i % 251`).
+fn patterned_elf(pages: u64) -> Vec<u8> {
+    let size = (pages + 1) * PAGE_SIZE;
+    let mut f = vec![0u8; size as usize];
+    f[..4].copy_from_slice(b"\x7fELF");
+    f[4] = 2;
+    f[5] = 1;
+    f[6] = 1;
+    f[16..18].copy_from_slice(&2u16.to_le_bytes());
+    f[18..20].copy_from_slice(&183u16.to_le_bytes());
+    f[24..32].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    f[32..40].copy_from_slice(&64u64.to_le_bytes());
+    f[54..56].copy_from_slice(&56u16.to_le_bytes());
+    f[56..58].copy_from_slice(&1u16.to_le_bytes());
+    let ph = 64;
+    f[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+    f[ph + 4..ph + 8].copy_from_slice(&5u32.to_le_bytes()); // R X
+    f[ph + 8..ph + 16].copy_from_slice(&PAGE_SIZE.to_le_bytes());
+    f[ph + 16..ph + 24].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    f[ph + 32..ph + 40].copy_from_slice(&(pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 40..ph + 48].copy_from_slice(&(pages * PAGE_SIZE).to_le_bytes());
+    for (i, b) in f[PAGE_SIZE as usize..].iter_mut().enumerate() {
+        *b = (i % 251) as u8;
+    }
+    f
+}
+
+/// As [`patterned_elf`], with an RW segment of `data_pages` pages of file bytes
+/// after the text, as a real program is laid out.
+fn patterned_elf_with_data(text_pages: u64, data_pages: u64) -> Vec<u8> {
+    let mut f = patterned_elf(text_pages + data_pages);
+    f[56..58].copy_from_slice(&2u16.to_le_bytes());
+    // The text: the first `text_pages`.
+    f[64 + 32..64 + 40].copy_from_slice(&(text_pages * PAGE_SIZE).to_le_bytes());
+    f[64 + 40..64 + 48].copy_from_slice(&(text_pages * PAGE_SIZE).to_le_bytes());
+    let ph = 64 + 56;
+    f[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+    f[ph + 4..ph + 8].copy_from_slice(&6u32.to_le_bytes()); // R W
+    f[ph + 8..ph + 16].copy_from_slice(&((1 + text_pages) * PAGE_SIZE).to_le_bytes());
+    f[ph + 16..ph + 24].copy_from_slice(&(0x40_0000 + text_pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 32..ph + 40].copy_from_slice(&(data_pages * PAGE_SIZE).to_le_bytes());
+    f[ph + 40..ph + 48].copy_from_slice(&(data_pages * PAGE_SIZE).to_le_bytes());
+    f
+}
+
+/// INV-0438-1: a segment of many steps (200 pages, four pieces) is in the
+/// image byte for byte, where the file had it, and nothing else is.
+fn an_images_pages_hold_the_files_bytes_piece_by_piece() {
+    let file = patterned_elf(200);
+    let job = Job::create(&root(), false).expect("job");
+    let before = frames_accounted();
+    let image = process::image_from(&file_object(&file), file.len() as u64, &job).expect("image");
+    assert_eq!(image.program.kept().pages(), 200);
+    let mut seen = vec![0u8; 200 * PAGE_SIZE as usize];
+    assert!(image.kept.read(0, &mut seen));
+    assert!(
+        seen.iter().enumerate().all(|(i, b)| *b == (i % 251) as u8),
+        "the kept pages differ from the file"
+    );
+    drop(image);
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: `image_create` of a program whose read-only segments are
+/// large, and a spawn from it, hold no more than a step of work in an
+/// interval; a spawn of the same image maps what it shares in steps too.
+fn an_image_of_a_large_program_is_bounded() {
+    const PAGES: u64 = 2048;
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let big = with_shared_bss(file, PAGES * PAGE_SIZE);
+    let before = frames_accounted();
+    let creator = Job::create(&root(), false).expect("job");
+    let object = file_object(&big);
+    let measured = |work: &mut dyn FnMut()| {
+        crate::steps::set_kernel_steps(true);
+        let daif = arch::save_and_mask_interrupts();
+        let _ = test_step_point();
+        crate::steps::masked_max_units(true);
+        work();
+        let _ = test_step_point();
+        arch::restore_interrupts(daif);
+        crate::steps::set_kernel_steps(false);
+        let units = crate::steps::masked_max_units(true);
+        if units > crate::steps::STEP as u64 + 16 {
+            crate::steps::diagnose_units();
+        }
+        units
+    };
+    // The copy and the instruction-cache loops of `image_create` (INV-0438-4): a
+    // text of 2048 pages of file bytes, executable, so that both run over it.
+    let text = patterned_elf(PAGES);
+    let text_object = file_object(&text);
+    let mut made_text = None;
+    let units = measured(&mut || {
+        made_text = Some(process::image_from(
+            &text_object,
+            text.len() as u64,
+            &creator,
+        ));
+    });
+    let text_image = made_text.expect("ran").expect("an image of 8 MiB of text");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create of {PAGES} pages of text (INV-0270-1)"
+    );
+    drop((text_image, text_object));
+    crate::reaper::drain();
+    // A real program is laid out text then data: the last cleans of the text
+    // and the first piece of the data copy must not share an interval.
+    let both = patterned_elf_with_data(PAGES, 128);
+    let both_object = file_object(&both);
+    let mut made_both = None;
+    let units = measured(&mut || {
+        made_both = Some(process::image_from(
+            &both_object,
+            both.len() as u64,
+            &creator,
+        ));
+    });
+    let both_image = made_both.expect("ran").expect("an image of text and data");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create of text then data (INV-0270-1)"
+    );
+    assert_eq!(both_image.program.segments().len(), 2);
+    drop((both_image, both_object));
+    crate::reaper::drain();
+    let mut made = None;
+    let units = measured(&mut || {
+        made = Some(process::image_from(&object, big.len() as u64, &creator));
+    });
+    let image = made
+        .expect("ran")
+        .expect("an image of 8 MiB of shared pages");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of image_create (INV-0270-1)"
+    );
+    assert!(image.program.kept().pages() >= PAGES);
+    let mut spawned = None;
+    let units = measured(&mut || {
+        spawned = Some(from_image(
+            &image,
+            Job::create(&root(), false).expect("job"),
+        ));
+    });
+    let process = spawned.expect("ran").expect("a spawn of the large image");
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of a spawn of shared pages (INV-0270-1)"
+    );
+    let _ = process.signal(RequestKind::Terminate, 0);
+    let _ = process.resume();
+    process.wait();
+    drop((process, image, object));
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
+}
+
 /// ADR-0105 item 8 (INV-0105-5) and the latency of suspending 16 processes.
 fn job_suspend_from_a_process() {
     assert_eq!(run_program("t_suspend"), exited(0));
@@ -1362,6 +2115,272 @@ fn quotas_from_a_process() {
 /// rooms (INV-0264-1, -2, -4 and the kernel half of -3).
 fn cpu_ceiling_from_a_process() {
     assert_eq!(run_program("t_cpu"), exited(0));
+}
+
+/// ADR-0285 item 7 with ADR-0460: a room at a ceiling of one thousandth
+/// (100 us of a 100 ms period) is killed with its 16 spinners parked. They
+/// come back at the next boundary and, their processes ending, are not
+/// parked again: the room has no process left before the end of the period
+/// after the kill's (INV-0460-1). Their 16 ways out take several times the
+/// room's budget, so without the exception each period's budget ends a few
+/// of them and the room takes a period for each few (TASK-31 4.3: up to nine
+/// periods for 20 at 10%).
+///
+/// The bound assumes the 16 ways out fit in one period. Where in its period
+/// the kill lands does not matter: the parked threads wait for the next
+/// boundary whatever the phase, and those released at a boundary are parked
+/// again within microseconds, so the ways out always have exactly the period
+/// after the kill's. Under TCG 40 ways out ran 58 to 71 ms; 16 take some 25
+/// ms, a quarter of the period.
+///
+/// The way out is charged to the room at least for the time the scheduler
+/// saw the room's ending threads run (`sched::ending_watch`, counted apart
+/// from the charge), and to its parent, which holds nothing else
+/// (INV-0460-2).
+fn a_killed_room_ends_in_the_period_after_the_kill() {
+    const PERIOD: u64 = 100_000_000;
+    const SPINNERS: usize = 16;
+    let began = timer::now();
+    crate::cpu::set_test_period(PERIOD);
+    let parent = Job::create(&root(), false).expect("parent");
+    let room = Job::create(&parent, false).expect("room");
+    crate::cpu::set_limit(&room, Some(1)).expect("limit");
+    let budget = zoraya_cpu::budget_ns(1, PERIOD);
+    sched::ending_watch::watch(Some(&room));
+    let spinners: Vec<_> = (0..SPINNERS)
+        .map(|_| process::spawn_in(&room, "spin", false).expect("spin"))
+        .collect();
+    let nap = || {
+        sched::sleep_until(Deadline::At(timer::now().plus_nanos(1_000_000))).expect("queue");
+    };
+    let start = timer::now();
+    loop {
+        let u = crate::cpu::usage(&room);
+        if u.parked > 0 && u.period_used >= budget {
+            break;
+        }
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "the room never spent its budget"
+        );
+        nap();
+    }
+    drop(spinners);
+    let parked_before = crate::cpu::usage(&room).parked;
+    let used_before = (
+        crate::cpu::usage(&room).used_ns,
+        crate::cpu::usage(&parent).used_ns,
+    );
+    crate::steps::masked_max_ns(true);
+    room.kill();
+    let killed = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let start = timer::now();
+    while room.live() > 0 {
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "the killed room still has {} processes after 10 s",
+            room.live()
+        );
+        nap();
+    }
+    let died = zoraya_cpu::period_of(timer::now().as_nanos(), PERIOD);
+    let masked = crate::steps::masked_max_ns(true);
+    let ran = sched::ending_watch::ran_ns();
+    sched::ending_watch::watch(None);
+    let parks = crate::cpu::usage(&room).parked - parked_before;
+    let charged = crate::cpu::usage(&room).used_ns - used_before.0;
+    let parent_charged = crate::cpu::usage(&parent).used_ns - used_before.1;
+    println!(
+        "a killed room ended {} periods after the kill's period ({} ms), {parks} parks after the kill, {charged} ns charged after it, {ran} ns run by its ending threads, {masked} ns longest masked; {} ms in all",
+        died - killed,
+        timer::now().nanos_since(start) / 1_000_000,
+        timer::now().nanos_since(began) / 1_000_000
+    );
+    // Every one of the ways out ran after the kill (the spinners were
+    // parked or spinning), so the room is charged for them, and the parent
+    // as much: each charge walks up (ADR-0264 point 3).
+    assert!(ran > 0, "no ending thread of the room ran");
+    assert!(
+        charged >= ran,
+        "the room was charged {charged} ns, its ending threads ran {ran} ns"
+    );
+    assert!(
+        parent_charged >= charged,
+        "the parent was charged {parent_charged} ns, the room {charged} ns"
+    );
+    // INV-0460-1 holds while the ways out fit in one period. The wall time
+    // the room's ending threads ran is what the test can read (`ran`): the
+    // 16 ways out took some 25 ms where this was written and 102 ms on CI's
+    // TCG (scheduled run 43843667050), more than the period. What never
+    // depends on the speed is that no ending thread is parked again, and
+    // that the room goes in the period after the kill's plus one for each
+    // whole period the ways out ran.
+    assert!(
+        parks == 0,
+        "{parks} parks after the kill: an ending thread was parked again"
+    );
+    assert!(
+        died <= killed + 1 + ran / PERIOD,
+        "the killed room ended {} periods after the kill's period, {parks} parks after the kill, its ending threads ran {ran} ns",
+        died - killed
+    );
+}
+
+/// ADR-0460, the architect's decision on its open question 2 (INV-0460-4):
+/// a room whose processes end one after the other, each with a way out far
+/// longer than the room's budget, gains nothing from them beyond their own
+/// work. Each process is `spin`, started suspended with 900 one-page
+/// objects the test puts in its table (free to the room), so that its way
+/// out, closing them, takes many budgets. The test ends it (as `job_kill`
+/// does, `request_exit`) as soon as it has run, that is, as soon as the room
+/// had budget for it, and starts the next when the room is empty. So with
+/// the debt the loop waits while the room pays; without it a new way out
+/// began about every period. (A process that ends itself by a fault, as
+/// `f_null` did, overran the budget by the kernel's fault report, a console
+/// line written before the process is ending, 2.2 ms under slowed TCG: the
+/// overrun to the next return to EL0 that ADR-0264 point 4 allows, not this
+/// test's subject.)
+///
+/// Over the 11 periods after the one in which the first way out began, both
+/// measured in this boot:
+/// - the room's charge is at most 11 budgets, a floor slice a period and
+///   one more budget, plus what its ending threads ran in the window (read
+///   from the clock at each switch apart from the charge,
+///   `sched::ending_watch`): the room's own code keeps the ceiling, however
+///   long a way out takes on this machine;
+/// - no way out begins in the window: the first way out's debt (its run
+///   past the budget, some 500 us on the fastest host for 900 objects
+///   against 20 us a period, capped at 2 ms) parks the room for longer than
+///   the window, on any host slower than that. (With 300 objects a way out
+///   cost 170 us under HVF on the Mac mini, 8 periods' budgets, so the second
+///   began inside the window: the number of objects, now 900 (a table holds 1024 handles), is what sets
+///   the debt, not the host's speed.)
+fn a_start_and_end_loop_keeps_its_ceiling() {
+    use crate::memory::object::MemoryObject;
+    const LIMIT: u32 = 1; // 20 us of the 20 ms period.
+    const OBJECTS: usize = 900;
+    let began = timer::now();
+    let period_ns = crate::cpu::period_ns();
+    let parent = Job::create(&root(), false).expect("parent");
+    let room = Job::create(&parent, false).expect("room");
+    crate::cpu::set_limit(&room, Some(LIMIT)).expect("limit");
+    let budget = zoraya_cpu::budget_ns(LIMIT, period_ns);
+    sched::ending_watch::watch(Some(&room));
+    let period_of = |t: u64| zoraya_cpu::period_of(t, period_ns);
+    let now_period = || period_of(timer::now().as_nanos());
+    // (charge, all turns, ending turns, period)
+    let sample = || {
+        (
+            crate::cpu::usage(&room).used_ns,
+            sched::ending_watch::all_ns(),
+            sched::ending_watch::ran_ns(),
+            now_period(),
+        )
+    };
+    let start = now_period();
+    // The window: the 11 periods after the one in which the first way out
+    // began, so that the first process's own turn (which may run late past
+    // the budget on a slow host, ADR-0264 point 4) is not in it.
+    let mut window: Option<(u64, u64)> = None;
+    let mut at_first = None;
+    let mut at_last = None;
+    let mut ends: Vec<(u64, bool)> = Vec::new(); // (period its end was seen, inside the window)
+    let rights = <zoraya_abi::MemoryObject as zoraya_abi::ObjectType>::RIGHTS;
+    while at_last.is_none() {
+        let child = process::spawn_in(&room, "spin", true).expect("spin");
+        {
+            let mut table = child.handles.lock();
+            for _ in 0..OBJECTS {
+                let object = MemoryObject::new(PAGE_SIZE, false, None).expect("memory");
+                table
+                    .insert(object::Object::Memory(object), rights, object::next_id())
+                    .expect("a handle");
+            }
+        }
+        let charged_before = crate::cpu::usage(&room).used_ns;
+        child.resume().expect("resume");
+        let mut seen = false;
+        loop {
+            if !child.exit_requested() && crate::cpu::usage(&room).used_ns > charged_before {
+                // It ran: end it, without closing the room.
+                child.request_exit(ExitRecord {
+                    code: 0,
+                    reason: ExitReason::Killed,
+                    detail: 0,
+                    request_kind: None,
+                });
+            }
+            if let Some((first, _)) = window
+                && at_first.is_none()
+                && now_period() >= first
+            {
+                at_first = Some(sample());
+            }
+            if let Some((_, last)) = window
+                && now_period() >= last
+            {
+                at_last = Some(sample());
+                break;
+            }
+            if !seen && child.is_ending() {
+                seen = true;
+                let p = now_period();
+                ends.push((p, at_first.is_some()));
+                window.get_or_insert((p + 1, p + 11));
+            }
+            if child.exit_record().is_some() {
+                break;
+            }
+            sched::sleep_until(Deadline::At(timer::now().plus_nanos(200_000))).expect("queue");
+        }
+        if child.exit_record().is_none() {
+            // The window is over with this one not yet gone.
+            room.kill();
+        }
+        drop(child);
+        // Napping, not yielding: a yield loop would take a turn between every
+        // two of the way out's floor slices.
+        let waited = timer::now();
+        while room.live() > 0 {
+            assert!(
+                timer::now().nanos_since(waited) < PATIENCE_NS,
+                "the room did not empty"
+            );
+            sched::sleep_until(Deadline::At(timer::now().plus_nanos(200_000))).expect("queue");
+        }
+    }
+    let (used_first, all_first, ending_first, from) = at_first.expect("the window began");
+    let (used_last, all_last, ending_last, to) = at_last.expect("the window ended");
+    sched::ending_watch::watch(None);
+    let charged = used_last - used_first;
+    let ran = all_last - all_first;
+    let ending = ending_last - ending_first;
+    // The window runs from a moment in period `from` to one in period `to`:
+    // at most `to - from + 1` periods' budgets.
+    let periods = to - from + 1;
+    let allowance = periods * budget + budget + periods * zoraya_cpu::MIN_SLICE_NS;
+    let bound = allowance + ending;
+    let begun = ends.iter().filter(|(_, inside)| *inside).count();
+    println!(
+        "a start-and-end loop: ways out begun in periods {:?} (window {} to {}), {begun} in the window; charged {charged} ns, ran {ran} ns by the clock, of it {ending} ns by ending threads; bound {bound} ns; debt left {} ns; {} ms",
+        ends.iter().map(|(p, _)| p - start).collect::<Vec<_>>(),
+        from - start,
+        to - start,
+        crate::cpu::debt(&room),
+        timer::now().nanos_since(began) / 1_000_000
+    );
+    assert!(
+        charged <= bound,
+        "charged {charged} ns over {periods} periods, bound {bound} ns ({ending} ns of ways out)"
+    );
+    assert!(
+        ran <= bound,
+        "ran {ran} ns by the clock over {periods} periods, bound {bound} ns"
+    );
+    assert!(
+        begun == 0,
+        "{begun} ways out began in the window: the debt did not park the room"
+    );
 }
 
 /// ADR-0269, ADR-0266 and ADR-0261 point 10 (INV-0269-1 to -3, INV-0266-1,
@@ -2400,6 +3419,106 @@ fn frames_the_reaper_holds_are_available_and_counted() {
     assert_eq!(frames_accounted(), before);
 }
 
+/// The most words of frame map a machine may have for the single-frame scan
+/// (`FrameAllocator::alloc`) to be bounded as ADR-0436 says: 8192 words are
+/// 2 GiB (ADR-0415 item 5); 16384 are 4 GiB. A machine with more RAM fails
+/// this test, which says that the scan needs a level above the map (a summary
+/// of full words) before it can be used there (INV-0436-1).
+const MAX_SCAN_WORDS: u64 = 16384;
+
+/// INV-0270-1's bound under HVF, in nanoseconds.
+const MASKED_BOUND_NS: u64 = 2_000_000;
+/// ADR-0270 Q6's limit where the host is not HVF-speed (CI's TCG runs 20 to 40
+/// times slower than a green run and the guest's clock keeps running while the
+/// host stalls a CPU): only that nothing ran masked for a second.
+const SLOW_HOST_BOUND_NS: u64 = 1_000_000_000;
+/// A host reads a word of a plain array in at most this many nanoseconds if it
+/// is HVF-speed (about 11 ns in the debug test kernel under HVF, 150 ns under
+/// TCG: measured with the scan itself, ADR-0436).
+const HVF_NS_PER_WORD: u64 = 50;
+
+/// Nanoseconds between two readings of the virtual counter of this CPU.
+fn ticks_to_ns(ticks: u64) -> u64 {
+    (u128::from(ticks) * 1_000_000_000 / u128::from(arch::timer::frequency().max(1))) as u64
+}
+
+/// The best of five reads of 8192 words of a plain array, per word, in
+/// nanoseconds: the speed of this host for the work of a scan, which is what
+/// tells an HVF-speed host from one that is not.
+fn nanoseconds_to_read_a_word() -> u64 {
+    const WORDS: usize = 8192;
+    let buffer = alloc::vec![0u64; WORDS];
+    let mut best = u64::MAX;
+    for _ in 0..5 {
+        let began = arch::timer::counter();
+        let mut full = 0u64;
+        for word in &buffer {
+            // SAFETY: a valid, aligned reference to a word of the buffer.
+            full += u64::from(unsafe { read_volatile(word) } == u64::MAX);
+        }
+        black_box(full);
+        best = best.min(ticks_to_ns(arch::timer::counter() - began));
+    }
+    (best / WORDS as u64).max(1)
+}
+
+/// INV-0436-1, INV-0270-1: the allocation that has to read the whole frame
+/// map (every frame taken but one, and that one just behind the search) reads
+/// at most `alloc_scan_bound` words and nearly all of them, which is checked
+/// on every host; its masked time, read on this CPU's counter around the
+/// call, is held to INV-0270-1's 2 ms where the host reads words at HVF's
+/// speed (94 us at 2 GiB, measured), and to ADR-0270 Q6's second elsewhere
+/// (TCG: 1.2 ms at 2 GiB, measured once). It runs at the machine's RAM
+/// (128 MiB or 2 GiB: `make test-qemu` runs both).
+fn the_worst_single_allocation_is_bounded_by_the_machines_ram() {
+    let before = frames_accounted();
+    let bound = frames::alloc_scan_bound();
+    assert!(
+        bound <= MAX_SCAN_WORDS,
+        "{bound} words of frame map: more RAM than the single-frame scan is bounded for"
+    );
+    let per_word = nanoseconds_to_read_a_word();
+    let head = hoard_frames();
+    // The search stands where the last frame of the map was taken, which is
+    // the head of the list. The frames before it in the list are the frames
+    // just below it, so the 131st is two words behind it: given back, the one
+    // free frame is found only after the search went all the way round.
+    let mut node = head;
+    for _ in 0..130 {
+        let (_, next) = unhoard_one(node).expect("a machine of more than 130 frames");
+        node = next;
+    }
+    let (frame, next) = unhoard_one(node).expect("a frame");
+    frames::free(frame);
+    let daif = arch::save_and_mask_interrupts();
+    let began = arch::timer::counter();
+    let (got, read) = frames::alloc_counted();
+    let ns = ticks_to_ns(arch::timer::counter() - began);
+    arch::restore_interrupts(daif);
+    assert_eq!(got, Ok(frame), "the one free frame");
+    // SAFETY: the frame is allocated again, so this code owns it, and the
+    // direct map holds it read-write. The list's link is put back.
+    unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(next) };
+    unhoard(head);
+    let slow = per_word > HVF_NS_PER_WORD;
+    println!(
+        "frames: the worst single allocation read {read} of {bound} words in {ns} ns masked (a word of an array: {per_word} ns, {})",
+        if slow { "not HVF-speed" } else { "HVF-speed" }
+    );
+    assert!(read <= bound, "{read} words read, bound {bound}");
+    assert!(
+        read + 4 >= bound,
+        "{read} words read: the case did not reach the worst case ({bound})"
+    );
+    let limit = if slow {
+        SLOW_HOST_BOUND_NS
+    } else {
+        MASKED_BOUND_NS
+    };
+    assert!(ns <= limit, "{ns} ns masked, limit {limit} (INV-0270-1)");
+    assert_eq!(frames_accounted(), before);
+}
+
 /// INV-0270-1: a contiguous run that has to wait for the reaper to free
 /// frames makes a step point after each round of help, so that no interval
 /// holds more than one round (64 frames) of the reaper's work.
@@ -2587,6 +3706,218 @@ const USER_DATA: zoraya_pagetable::Attributes = zoraya_pagetable::Attributes {
     execute: false,
     user: true,
 };
+
+/// INV-0415-1, kernel half: a space holds `MAX_MAPPINGS` (4096) mappings and
+/// refuses the next with `Limit`, nothing changed; what the heap holds for the
+/// list is charged to the space's job as kernel bytes, exactly, at every size
+/// and after every removal, and a limit that cannot take the list's next
+/// growth refuses the mapping with `Quota`, nothing changed (ADR-0415 item 1,
+/// ADR-0261 point 6). The walks over the 4096 records (the search for a place,
+/// the plan of a snapshot, the removal) hold no more than a step's work
+/// between two step points (INV-0270-1). Prints the bytes per mapping.
+fn a_space_holds_4096_mappings_and_pays_for_the_list() {
+    use crate::charge;
+    use crate::memory::object::MemoryObject;
+    use crate::memory::user::{AddressSpace, Holder, MAX_MAPPINGS, MappingError, PLAN_STEP};
+    use zoraya_charge::Field;
+
+    assert_eq!(MAX_MAPPINGS, 4096, "ADR-0415 item 1");
+    let job = Job::create(&root(), false).expect("job");
+    let job_base = charge::counters(&job).get(Field::Memory).used;
+    // The object is the kernel's own: only the space and its list are paid by
+    // the job under test.
+    let object = MemoryObject::new(PAGE_SIZE, false, None).expect("object");
+    let kernel_bytes = || {
+        let c = charge::counters(&job);
+        c.get(Field::Memory).used - c.get(Field::User).used
+    };
+    let attributes = zoraya_pagetable::Attributes {
+        memory: MemoryType::Normal,
+        write: false,
+        execute: false,
+        user: true,
+    };
+    // Runs `f` as one interval between two step points, with the units of
+    // work it counted.
+    fn interval<R>(f: impl FnOnce() -> R) -> (R, u64) {
+        let daif = arch::save_and_mask_interrupts();
+        let _ = test_step_point();
+        crate::steps::masked_max_units(true);
+        let r = f();
+        let _ = test_step_point();
+        arch::restore_interrupts(daif);
+        (r, crate::steps::masked_max_units(true))
+    }
+    let step_limit = crate::steps::STEP as u64 + 16;
+
+    let mut space = AddressSpace::new(Some(&job)).expect("a space");
+    let base = kernel_bytes();
+    let mut places = Vec::new();
+    let mut worst_map = 0;
+    for n in 0..MAX_MAPPINGS {
+        let (va, units) = interval(|| {
+            space
+                .map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+                    object.page(o)
+                })
+                .expect("a mapping below the limit")
+        });
+        worst_map = worst_map.max(units);
+        places.push(va);
+        if n % 509 == 0 || n == MAX_MAPPINGS - 1 {
+            let (tables, _) = space.list_state();
+            // The root table is in the base; each table after it, and the
+            // list, are charged: nothing more, nothing less.
+            let expected = base + (tables as u64 - 1) * PAGE_SIZE + space.mapping_bytes_held();
+            assert_eq!(
+                kernel_bytes(),
+                expected,
+                "charge exact at {} mappings",
+                n + 1
+            );
+        }
+    }
+    assert_eq!(space.mapping_count(), MAX_MAPPINGS);
+    assert!(worst_map <= step_limit, "{worst_map} units for one mapping");
+    let held = space.mapping_bytes_held();
+    println!(
+        "kernel mappings test: 4096 mappings, list {} bytes ({} per mapping), worst map {} units",
+        held,
+        held / MAX_MAPPINGS as u64,
+        worst_map
+    );
+
+    // The 4097th: the limit, nothing changed.
+    let (charged, tables) = (kernel_bytes(), space.list_state().0);
+    let r = space.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(r.err(), Some(MappingError::Limit));
+    assert_eq!(
+        space.map_reserve(PAGE_SIZE).err(),
+        Some(MappingError::Limit)
+    );
+    assert_eq!(space.mapping_count(), MAX_MAPPINGS);
+    assert_eq!((kernel_bytes(), space.list_state().0), (charged, tables));
+
+    // The plan of a snapshot, in steps of PLAN_STEP records.
+    let mut plan = Vec::new();
+    plan.try_reserve_exact(MAX_MAPPINGS).expect("room");
+    let (mut from, mut worst_plan, mut steps_taken) = (0, 0, 0);
+    loop {
+        let (next, units) = interval(|| space.snapshot_plan_step(&mut plan, from).expect("plan"));
+        worst_plan = worst_plan.max(units);
+        steps_taken += 1;
+        match next {
+            Some(at) => from = at,
+            None => break,
+        }
+    }
+    assert_eq!(plan.len(), MAX_MAPPINGS);
+    assert_eq!(steps_taken, MAX_MAPPINGS.div_ceil(PLAN_STEP));
+    assert!(
+        worst_plan <= step_limit,
+        "{worst_plan} units in a plan step"
+    );
+    drop(plan);
+
+    // Unmapping the last, then every second one: each removal moves at most a
+    // chunk, and the charge follows the list down.
+    let mut worst_unmap = 0;
+    let last = places.pop().expect("a mapping");
+    let (removed, units) = interval(|| {
+        space.unmap_range(last, 0, PAGE_SIZE);
+        space.unmap_commit(last, PAGE_SIZE)
+    });
+    assert!(removed.is_ok());
+    worst_unmap = worst_unmap.max(units);
+    assert!(space.unmap_commit(last, PAGE_SIZE).is_err(), "once");
+    assert!(
+        space.unmap_commit(places[0], PAGE_SIZE + 1).is_err(),
+        "a mapping is ended whole"
+    );
+    // The top chunk holds 31 now: unmapping them all empties it, and the
+    // list, the charge and the job's bytes fall by exactly one chunk (the
+    // release on removal, INV-0437-1; `F5-removal-keeps-the-charge`).
+    let (held, charged) = (space.mapping_bytes_held(), kernel_bytes());
+    for va in places.split_off(places.len() - 31) {
+        space.unmap_range(va, 0, PAGE_SIZE);
+        space
+            .unmap_commit(va, PAGE_SIZE)
+            .expect("one of the top chunk");
+    }
+    assert_eq!(
+        held - space.mapping_bytes_held(),
+        AddressSpace::mapping_chunk_bytes(),
+        "an emptied chunk goes back"
+    );
+    assert_eq!(
+        charged - kernel_bytes(),
+        AddressSpace::mapping_chunk_bytes(),
+        "and its charge with it"
+    );
+    for (n, va) in places.iter().enumerate().filter(|(n, _)| n % 2 == 0) {
+        let (removed, units) = interval(|| {
+            space.unmap_range(*va, 0, PAGE_SIZE);
+            space.unmap_commit(*va, PAGE_SIZE)
+        });
+        assert!(removed.is_ok(), "mapping {n}");
+        worst_unmap = worst_unmap.max(units);
+    }
+    assert!(
+        worst_unmap <= step_limit,
+        "{worst_unmap} units to unmap one"
+    );
+    let (tables, _) = space.list_state();
+    assert_eq!(
+        kernel_bytes(),
+        base + (tables as u64 - 1) * PAGE_SIZE + space.mapping_bytes_held(),
+        "the charge follows the list down"
+    );
+
+    // A job that cannot take the list's next growth refuses the mapping.
+    let poor = Job::create(&root(), false).expect("job");
+    // The job's own record is charged to it: "nothing left" is this much.
+    let poor_base = charge::counters(&poor).get(Field::Memory).used;
+    let mut small = AddressSpace::new(Some(&poor)).expect("a space");
+    let used = charge::counters(&poor).get(Field::Memory).used;
+    charge::set_limits(&poor, Some(used + 64), None, None).expect("limit");
+    let refused = small.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(refused.err(), Some(MappingError::Quota));
+    assert_eq!(small.mapping_count(), 0);
+    assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
+    // Room for the chunk but not for the page tables: the chunk is charged,
+    // the first table refused, and `map_abort` gives the chunk back, with its
+    // charge (the path of `memory_map` when a table frame is refused).
+    charge::set_limits(
+        &poor,
+        Some(used + AddressSpace::mapping_chunk_bytes() + 100),
+        None,
+        None,
+    )
+    .expect("limit");
+    let refused = small.map_object(PAGE_SIZE, attributes, Holder::Memory(object.clone()), |o| {
+        object.page(o)
+    });
+    assert_eq!(refused.err(), Some(MappingError::Quota), "a table frame");
+    assert_eq!(small.mapping_count(), 0);
+    assert_eq!(small.mapping_bytes_held(), 0, "the chunk went back");
+    assert_eq!(charge::counters(&poor).get(Field::Memory).used, used);
+    drop(small);
+    // The table's frames go back through the reaper.
+    yield_until(|| charge::counters(&poor).get(Field::Memory).used == poor_base);
+
+    // Dropping the space gives every record's charge back, and does it in
+    // steps (`AddressSpace::drop`).
+    // Step points count in this thread as in a process's call.
+    crate::steps::set_kernel_steps(true);
+    let (_, units) = interval(|| drop(space));
+    crate::steps::set_kernel_steps(false);
+    assert!(units <= step_limit, "{units} units to drop a space");
+    yield_until(|| charge::counters(&job).get(Field::Memory).used == job_base);
+}
 
 /// INV-0270-1: the list of frames of a space grows by a copy
 /// (`GlobalAlloc::realloc`: allocate, copy, free) that is work in the

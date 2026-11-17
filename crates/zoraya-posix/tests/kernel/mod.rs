@@ -67,6 +67,8 @@ pub struct Net {
     /// The live mappings made by `memory_map_at`: address, length, writable,
     /// shared.
     mapped: Vec<(u64, u64, bool, bool)>,
+    /// A service's `interest` answers false while set: it cannot watch a new connection.
+    pub interest_fails: bool,
     /// Numbers the mappings (bits 24 to 31 of an address).
     map_serial: u64,
 }
@@ -342,6 +344,11 @@ impl Transport for Wire {
         };
         match n.objects.get_mut(&peer) {
             Some(Obj::End { queue, .. }) => {
+                // A channel queues `CHANNEL_QUEUE` messages and then its
+                // writer waits (ADR-0050): the service's reply is `Full`.
+                if queue.len() >= CHANNEL_QUEUE {
+                    return Outgoing::Full;
+                }
                 queue.push_back((bytes.to_vec(), handles.to_vec()));
                 Outgoing::Sent
             }
@@ -350,6 +357,9 @@ impl Transport for Wire {
     }
 
     fn interest(&mut self, end: H, key: u64, interest: Interest) -> bool {
+        if self.0.borrow().interest_fails {
+            return false;
+        }
         let id = self.1;
         self.0
             .borrow_mut()
@@ -503,6 +513,8 @@ pub struct Fake {
     pub interrupts: Vec<(H, Option<H>)>,
     /// The process's request queue (`process_take_request`).
     pub requests: VecDeque<(zoraya_abi::RequestKind, u32)>,
+    /// Every `process_set_disposition`, in order.
+    pub dispositions: Vec<(zoraya_abi::RequestKind, zoraya_abi::Disposition)>,
 }
 
 impl Fake {
@@ -519,6 +531,7 @@ impl Fake {
             signal_after_waits: None,
             interrupts: Vec::new(),
             requests: VecDeque::new(),
+            dispositions: Vec::new(),
         }
     }
 }
@@ -606,6 +619,15 @@ impl Sys for Fake {
 
     fn take_request(&mut self) -> Option<(zoraya_abi::RequestKind, u32)> {
         self.requests.pop_front()
+    }
+
+    fn set_disposition(
+        &mut self,
+        kind: zoraya_abi::RequestKind,
+        d: zoraya_abi::Disposition,
+    ) -> Result<(), Status> {
+        self.dispositions.push((kind, d));
+        Ok(())
     }
 
     fn close(&mut self, h: H) {
@@ -929,6 +951,24 @@ pub const NOW: Timestamp = Timestamp {
 /// `blocks` of 4 KiB: every test of a binary holds its rigs at once, under
 /// one 512 MiB cap.
 pub fn volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
+    volume_with(net, blocks, false)
+}
+
+/// The temporary directory service, `fsd --memory`: FIFO nodes and socket
+/// nodes (proposed ADR-0439).
+pub fn tmp_volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
+    volume_with(net, blocks, true)
+}
+
+/// Another root connection to `service`, as a second process would be given.
+pub fn another_root(net: &Rc<RefCell<Net>>, service: &Rc<RefCell<Svc>>) -> H {
+    let mut fake = Fake::new(net.clone(), vec![]);
+    let (client, server) = fake.channel_create().unwrap();
+    assert!(service.borrow_mut().add_root(server));
+    client
+}
+
+fn volume_with(net: &Rc<RefCell<Net>>, blocks: u64, tmp: bool) -> (Rc<RefCell<Svc>>, H) {
     let mut device = MemDevice::new(blocks);
     mkfs(
         &mut device,
@@ -950,7 +990,12 @@ pub fn volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
         n.services += 1;
         n.services
     };
-    let service = Rc::new(RefCell::new(Service::new(volume, Wire(net.clone(), id))));
+    let mut svc = Service::new(volume, Wire(net.clone(), id));
+    if tmp {
+        svc.enable_fifos();
+        svc.enable_sockets();
+    }
+    let service = Rc::new(RefCell::new(svc));
     let mut fake = Fake::new(net.clone(), vec![]);
     let (client, server) = fake.channel_create().unwrap();
     assert!(service.borrow_mut().add_root(server));

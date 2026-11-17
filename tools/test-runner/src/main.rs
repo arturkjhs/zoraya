@@ -28,6 +28,7 @@ mod gui;
 mod output;
 mod protocol;
 mod script;
+mod timing;
 
 use std::io::BufReader;
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -172,6 +173,7 @@ fn main() -> ExitCode {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(args.timeout);
     let mut ended_at: Option<Instant> = None;
+    let mut timings = timing::Timings::default();
     let exit = loop {
         let limit = match ended_at {
             Some(t) => (t + POWER_OFF_GRACE).min(deadline),
@@ -187,6 +189,7 @@ fn main() -> ExitCode {
                     say!("[{label}]   {flood}");
                     return ExitCode::FAILURE;
                 }
+                timings.line(&line, Instant::now());
                 match checker.feed(&line) {
                     Flow::Continue => {}
                     Flow::Ended => ended_at = Some(Instant::now()),
@@ -204,6 +207,9 @@ fn main() -> ExitCode {
                     args.timeout,
                     checker.progress()
                 );
+                if let Some(running) = timings.running(Instant::now()) {
+                    say!("[{label}] the running test: {running}");
+                }
                 break if ended_at.is_some() {
                     Exit::NoPowerOff
                 } else {
@@ -220,6 +226,9 @@ fn main() -> ExitCode {
 
     out.finish();
     let report = checker.finish(exit, args.timeout);
+    if let Some(slowest) = timings.slowest() {
+        say!("[{label}] slowest tests: {slowest}");
+    }
     for k in &report.known {
         say!("[{label}] {k}");
     }

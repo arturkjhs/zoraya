@@ -216,6 +216,16 @@ TTBR0 is disabled (`TCR_EL1.EPD0`) and holds 0. The layout is stated only in `ke
   Reserved: the image with stacks and boot tables, the blob, `/memreserve/` entries, `/reserved-memory` children,
   the metadata, and frame 0. A device tree with more reservations than `zoraya-dtb` records stops the boot.
   Exhaustion is a return value. A bad free panics in the kernel (the crate returns an error).
+  **Sizes (F8, proposed ADR-0436).** Nothing in the kernel states a RAM size: the boot tables map the first 4 GiB in 1 GiB
+  blocks, the direct map is built from blocks, the heap grows on demand. Tested up to 2 GiB (`tests/two_gib.rs` on the host,
+  the 2 GiB steps in QEMU). F8 bounded one loop: `FrameAllocator::alloc` reads at most one word of the map per 256 KiB (8192 at
+  2 GiB) with the lock held and IRQ masked; 94 us under HVF, 1.2 ms under TCG at 2 GiB (once); a machine above 4 GiB (16384
+  words) fails `the_worst_single_allocation_is_bounded_by_the_machines_ram` and needs a second level of the map.
+  Known limitations at 2 GiB, not bounded by F8: `memory_map`'s and `adopt`'s copy of a space's whole frame list (a room of
+  1200M is about 300,000 frames, 2.4 MB in one interval, not measured), and a heap growth of up to 256 allocations in one
+  interval. `top --session` is not built; `top`'s `session` row shows the use and `room set --mem` refuses above the session's
+  ceiling (1452930K on a 2 GiB guest). `make run-browser` is `run-gui`'s command at `--mem $(BROWSER_MEM)` (2G), booted by no
+  step; there is no browser yet.
 - **Heap.** `zoraya-heap` behind `GlobalAlloc`: power-of-two classes from 16 bytes to 2 KiB, carved from 64 KiB
   chunks, and a coalescing span list above that. It grows by at least 1 MiB, mapping one frame per page in the heap
   window, and never shrinks. `Box::new` and `Vec::push` panic on exhaustion, so they are allowed only at boot and at
@@ -311,7 +321,7 @@ The code is `kernel/src/thread.rs`, the thread list and wait list in `crates/zor
   `crates/zoraya-posix/src/ffi.rs`) makes the thread with `thread_create`, `SYS_futex` is `futex_wait`/`futex_wake`
   (`zoraya_posix_futex`), `SYS_exit` is `thread_exit` and `__unmapself` gives a detached thread's stack and object back. Two
   futex locks (`crates/zoraya-posix/src/lock.rs`): the library lock around `Posix`, the memory lock around the heap and the
-  mapping table (256 entries). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
+  mapping table (4096 entries, one memory object mapped on the first private `mmap`). `make test-posix-threads` runs `tests/posix-core/t_threads.c` (create, join, detach, mutexes,
   condition variables, once, keys and `_Thread_local`, rwlocks, barriers, spin locks, semaphores, stdio).
 - **`libposix`, waits, signals, cancellation, `fork` (ADR-0315).** A call that waits long returns `PENDING` inside the library
   and waits on a port of its own with the library lock free, then runs again with the outcome. A thread table
@@ -1121,13 +1131,25 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 | auto-smp4-2g | HVF on a Mac, else TCG | 4 CPUs, 2 GiB | `cpus: 4`, 2048 MiB region |
 | auto-el2 | HVF on a Mac, else TCG | `virtualization=on` | entry at EL2; skipped where HVF has no EL2 (Known limitations) |
 | tcg-default | TCG | default | GICv2 |
-| tcg-smp4-gicv2 | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
-| tcg-el2 | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
-| tcg-smp4-gicv3 | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
+| tcg-smp4-gicv2-a, -b | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
+| tcg-el2-a, -b | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
+| tcg-smp4-gicv3-a, -b | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
 
 On a Mac the three `auto` lines run under HVF, so they cover GICv3 only. GICv2 under HVF is not run, because QEMU
 cannot start it. Where `auto` is TCG (CI's runners), `auto-default` and `auto-el2` are the machines of `tcg-default`
-and `tcg-el2`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
+and `tcg-el2-a`/`-b`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
+
+The three TCG suites that are not `tcg-default` run in two shards (`-a`, `-b`), each a job with its own 420 s limit
+(architect, 2026-11-16: one boot of the list took about 300 s on a fast runner and passed 420 s on a slow one). The test
+kernel reads `zoraya.shard=N/2` from `/chosen/bootargs` (`tools/run-qemu.sh --shard N/2`); shard 1 is the registered
+tests before `SHARD_2_FIRST` (`kernel/src/testing.rs`), shard 2 the rest, in the registered order, so each test runs
+in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that ran after earlier ones
+and needs what they left (`memory_objects_from_a_process` needs the heap grown by the earlier tests) must stay after them:
+the cut is not moved before it. The `auto-*` suites stay whole (HVF runs one in under two minutes). Known limits:
+`tools/check-test-shards.sh` sees only the multi-line `name: "..."` entries of rustfmt's layout (a one-line `Test {..}`
+would escape its uniqueness check); shard 2 holds `kernel_work_is_bounded`, the most variable test (29 to 117 s in CI),
+so a shard-2 job near its limit will be that test. Each run ends with a boot-stack canary check outside any test, since
+the overflow test (shard 1) and `stack_canary_intact` (shard 2) are in different shards.
 
 How the in-QEMU tests run and report:
 - The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A
@@ -1207,6 +1229,16 @@ deterministic random mutations.
 - **Memory objects (`kernel/src/memory/object.rs`, ADR-0051).** Frames committed and zeroed at creation, contiguous on
   request, held by handles, mappings and pins. The kernel chooses addresses in a window of the user range, with an
   unmapped page between mappings. `memory_unmap` ends one whole mapping: the range must be exactly that mapping's.
+  **Mappings per process (F5, ADR-0415 item 1, proposed ADR-0437).** A process holds 4096 mappings (`zoraya_abi::MAPPING_SLOTS`,
+  the kernel's limit and `libposix`'s table). The list is `zoraya-mappings`: sorted chunks of 32 records, room made before
+  a change (`reserve_for`), each chunk charged whole to the space's job as kernel memory (1816 bytes a chunk; 56.75 bytes a
+  mapping at 4096). The search for a place visits every record below it (one unit of work for 128);
+  a snapshot's plan is made in steps of 1024 records, the objects of its copy with step points between them, its steps
+  count the child's page-table frames (a sparse space makes one for each page), and its walk of the page tables reads at most
+  1024 descriptors a step, empty tables included. A space dropped with mappings drops them in
+  steps. `libposix` closes a private mapping's and a heap step's object handle once it is mapped: a mapping costs one slot of
+  the kernel's and no handle. Known limitations: the search for a place is linear in the records below it; `memory_map`'s copy of the frame list
+  (ADR-0436) is as before.
 - **Channels (`crates/zoraya-channel`, `kernel/src/channel.rs`, ADR-0050).** Two ends with bounded queues, all or
   nothing on write, a message left in place on any refused read. An end has one handle. Closing runs a work list
   through the messages, so a deep chain takes no stack.
@@ -1246,10 +1278,21 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   the caller's exception frame with x0 `Ok` and x1 0, and its `TPIDR_EL0`; dispositions are copied, the request queue
   is empty. Only after the child exists do the moved handles leave the caller. A mapping made `SHARED` (ADR-0431) is not copied:
   the child maps the same frames with the same attributes.
-- **`image_create` (ADR-0108).** `zoraya-elf` parses an ELF in a memory object in two steps (header, then table)
-  with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table and the object.
-  `spawn` copies each segment's bytes from the object then. Rewriting the object after the call harms only the
-  children spawned from it afterwards.
+- **`image_create` (ADR-0108, ADR-0415 item 2, F6, proposed ADR-0438).** `zoraya-elf` parses an ELF in a memory object in two
+  steps (header, then table) with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table
+  and **its own copy of the program's pages** (`Program::kept`: one object of the job the creator names, no handle names it; every page
+  of a segment that is not writable, its zero tail included, and the pages with file bytes of a writable one), made in steps of
+  64 pages. `spawn` maps the frames of each read-only segment as one `SHARED` mapping record (never writable, executable for
+  text; a `fork` child maps the same frames) and copies the pages of the writable ones, so the processes of one image hold its
+  text once. Since F10 (proposed ADR-0443) `image_create(memory, length, job)` names the job that pays, after the kernel checks
+  `CREATE_PROCESS` on it: the shell names the room's launch job (its own job outside a room), the broker the job of the child it loads for,
+  `posixrun` and `libposix` their own. That job pays the kept object while the image or any process of it lives; each child's job its own pages
+  and tables. A room at its memory limit cannot start a program whose image does not fit (`tests/posix-core/room-image.script`, `tools/check-room-image.py`). Rewriting the object or the file after the call changes nothing. `libposix`'s `posix_spawn` and `execve` of
+  `/proc/self/exe` use a duplicate of the bootstrap's `Image` handle (`Posix::own_image`); any other path reads its file and
+  makes an image of its own. `zoraya_child_memory(pid, &used)` reads a child's job's memory through the parent's handle
+  (`t_shared`; `top.script` and `tools/check-top-image.py` read `top` in a room around it). Known limitations: `image_create` holds the file's object and the copy at once; two images of one file share
+  nothing (the key is the image); programs started from the ramdisk (the first processes) still copy every page; `top` has no
+  line per image; the shell's staging object (the program's bytes before the image exists) is charged to the shell's own job.
 - **Startup block (ADR-0109 item 5).** `argc`, `envc`, a header size of 16 and the number of program headers, the
   strings, zeros to a multiple of 8, then the ELF's whole program header table, for `AT_PHDR`.
 - **`job_suspend`, `job_resume`.** Need `KILL`. A flag on every job of the tree and `SUSPENDED` on each; every
@@ -1446,7 +1489,8 @@ fork; the broker's round trips are the library's count around each call (`POSIX-
 | An `exec` (fork, exec and wait, less fork and wait) | 25 ms | 195 ms |
 
 An `exec` or a spawn is dominated by loading the image: the 1.4 MiB program read through the file protocol into a
-memory object, `image_create`, and `spawn`'s copy of its segments; nothing is cached between spawns of one program.
+memory object, `image_create` (which since F6 copies the pages once), and `spawn`'s copy of its writable segments; nothing is
+cached between spawns of one program except through `/proc/self/exe`.
 A commit's time includes the child's first slice on the one CPU before the broker answers.
 
 ## Stage 6 acceptance: the toolchain inside Zoraya (as built)
@@ -1857,8 +1901,7 @@ second by every reader (`Throttle`, INV-0267-2); nothing is read on a calm deskt
   a limit and `(refused 3 mem)` at the end of a row; `top ROOM` adds the room's limits and the line that raises the limit
   that refused; `top --watch` prints again every second until Ctrl-C. A room's own shell sees that room alone; without a
   keeper it prints `top: no room keeper` and exits 1. DISK and CONNS show the limit only (no launcher forwards the
-  services' use yet); `top --session` and the job tree of `top ROOM` are not built (the keeper has no session ceiling to
-  give, and no kernel call lists a job's children).
+  services' use yet); `top --session` and the job tree of `top ROOM` are not built (no kernel call lists a job's children; the keeper's ceiling shows only as the refusal of a limit above it).
 - **The panel** reads `Usage` from the keeper on its once-a-second tick and sends the compositor `SetUsage` (request 44 of
   the client manager's channel) when the text changed. The compositor checks every line again, takes all or none, and
   draws from it and from nothing a client sends (INV-0172-1): a **pill** `mem 99%` (`procs`, `cpu`) at 90% of a limit in the
@@ -2162,7 +2205,7 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   16 MiB 1,305 ms (1,299 to 1,354) against 1,380 ms (1,338 to 1,397); one byte 23.1 ms (6.6 to 32.3) against 20.5 ms (1.9 to
   29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
   and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
-- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, TCP datagram sockets (`AF_UNIX` pairs: next bullets), `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a socket does not cross `spawn` (`EBADF`) or
+- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, TCP datagram sockets (`AF_UNIX` pairs: next bullets), `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex` (`getrandom` since 9a); a TCP socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
   curl and wget (W11, W13) were built in stage 9 (see "TLS for C programs, curl and wget"), which needed `select` and TLS.
 - **`poll` and `ppoll`** (ADR-0398, proposed; ADR-0342 item 5, ADR-0414 item 1): `Posix::poll_once` (`crates/zoraya-posix/src/poll.rs`) reports
@@ -2183,11 +2226,62 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   `/dev/null` are `EINVAL`; an end with handles queued is `EBUSY`; a refused send changes nothing (`Sys::channel_send` is the kernel's
   all-or-nothing write). A full fd table leaves the message queued (`EMFILE`). After `fork` a stream socket's byte streams are in two
   processes and `SCM_RIGHTS` on it is `EOPNOTSUPP` in both; a packet socket does not fork (`ENOTSUP`). **Limits** (recorded, not
-  hidden): a Unix socket does not cross `spawn` or `exec` (`EBADF` without `SOCK_CLOEXEC`, as a TCP socket) until plan part F4 changes
-  the bootstrap record, so the two-process half of INV-0412-1 is the host tests' over a fake kernel; no `bind`, `listen`, `accept` or
-  socket file (plan part F7); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
+  hidden): (a Unix socket did not cross `spawn` or `exec` until plan part F4, the next bullets: now it does, a TCP socket still does not, `EBADF`); no `bind`, `listen`, `accept` or
+  socket file until plan part F7 (the next but one bullet: now `bind`, `listen`, `accept` and a path for `connect` work in the line's `/tmp`); no `SCM_CREDENTIALS`, `SO_PEERCRED` or abstract names; a packet socket cannot be half closed. The same
   part built `pread`, `pwrite` and `usleep` and admitted `mkdtemp` (musl's own) to the surface. Tests: `crates/zoraya-posix/tests/unix.rs` (INV-0412-1 and -2, including random
   splits), `tests/posix-core/t_unix.c` (`make test-libposix`, `block` in `make test-posix-threads`).
+- **Socket files** (plan part F7, ADR-0412 item 5, INV-0412-3; ADR-0439, proposed, records what the code decided):
+  `bind`, `listen`, `accept`, `accept4` and `connect` of a path for `SOCK_STREAM` and `SOCK_SEQPACKET` Unix sockets, in
+  `crates/zoraya-posix/src/unix_file.rs` and, in the temporary directory service (`fsd --memory`, `crates/zoraya-fs-service`), a table of
+  socket nodes with `socket_listen` (message 41) and `socket_connect` (42 for a packet socket's one channel end, 43 for a stream
+  socket's three handles) in `zoraya-proto-file`. `bind` is an exclusive create with `S_IFSOCK` and works only in the table entry of
+  kind `Tmp` (the line's `/tmp`; `EACCES` in any other entry, so INV-0412-3 holds with the narrower place: a program's own directory
+  is not built, ADR-0439 item 1); `listen` sends the service one end of a channel, held for the connection `bind` made, so closing
+  the socket ends the listener; `connect` resolves the path in the connecting program's own table (a program with no `/tmp` entry, or
+  with it read-only, cannot connect), opens the node with `WRITE` and sends the far end of a new pair with a 24-byte record, which the
+  service writes, unread, to the listener's channel and the listener checks (`unix::decode_connect`). 256 nodes and 64 listeners in
+  a service; the accept queue is the channel's 64 messages (`backlog` is a hint; a full queue is `EAGAIN`). A node stays, inert, after
+  its listener goes, until `unlink` (as on Linux); `stat` says socket, `open` is `ENXIO`. A listening socket is not sent (`EINVAL`), spawned or exec'd (`EBADF`) or forked (`ENOTSUP`); only the connection that made a node may
+  make it listen. **Limits:** no datagram `bind`; `readdir` shows a socket file as a plain name; TCP is the next entry.
+  Tests: `crates/zoraya-fs-service/tests/socket.rs`, `crates/zoraya-posix/tests/socketfile.rs`, `tests/posix-core/t_unix.c` (`file`, run
+  by zosh in `make test-libposix`).
+- **TCP listeners and the loopback** (plan part F7b, ADR-0225 item 5, ADR-0224 item 1; ADR-0441, proposed, records what the code
+  decided and ADR-0440 is its design): `bind`, `listen`, `accept`, `accept4`, `getsockname` and `SO_ACCEPTCONN` of an `AF_INET`
+  stream socket (`crates/zoraya-posix/src/net.rs`), and in `netd` (`crates/zoraya-net/src/service.rs`, `user/src/bin/netd.rs`) a
+  `listen` request (5, with the server end of the listener channel) answered `Listening { status, port }`. A program listens only
+  if its connection has the right `LISTEN` and a listen rule that covers the port (`+listen PORT` or `+listen LOW-HIGH` on the
+  line, built in the shell: `zoraya_shell::netgrant::parse_listen`; `grants` prints it); port 0 is a port above 49151 that a rule
+  covers. **The loopback is not on smoltcp:** a `connect` by address to 127.0.0.0/8 that a reach rule *naming* the address allows
+  (`+net 127.0.0.1[:PORT]`, a literal `http://127.0.0.1:PORT/` URL operand; `web` never covers it) is handed to the listener on that
+  port, whoever's account, as `Accepted` (19) with the client's own two stream ends (the read end of the stream it writes, the write
+  end of the stream it reads); the client is told `Connected` and `netd` keeps nothing (no slot, no charge, no socket). No listener,
+  a full queue or a gone listener is `Failed { REFUSED }` with every handle closed. A name that resolves to 127.0.0.0/8 is
+  `UNREACHABLE` (nothing for the loopback leaves by the NIC). Bounds: 8 listeners in `netd`, one per carved account whose rights
+  have `listen` (the shell carves one per POSIX program), 64 pending connections per listener (the channel's queue; `backlog` is a
+  hint). An accepted socket is a connected `Socket` with two handles and no connection channel (no `Reset`: a dead peer is the
+  end of the stream or `EPIPE`); its peer is 127.0.0.1 and a made-up port above 49151. `poll` on a listener is `POLLIN` while a
+  connection waits. A TCP socket does not cross `fork` or `spawn` (`ENOTSUP`). **Limits (ADR-0441):** only the loopback is
+  served: no connection from the NIC reaches a listener (a second smoltcp interface with a listening socket would, ADR-0440
+  item 5, read in smoltcp's source and not measured); the loopback is per room, not per account (part F9, below); no `localhost`; no per-connection `ECONNRESET`; `getsockname` of a socket `connect` made is the wildcard and 0;
+  `bind` takes only the wildcard and 127.0.0.0/8; `bind(0)` then `getsockname` before `listen` reads port 0 (netd picks at `listen`: `socketserver`'s `server_port` is 0, backlog); if the session account holds all 8 listeners a `+listen` line gets no `netd` connection at all (the carve fails whole); `SO_REUSEADDR` is ignored; CPython's `test_socket` server classes were not
+  run (`tests/python/regr-ignore.txt` still lists the asyncio cases F2 and F7a ignored). Tests: `cargo test -p zoraya-net`
+  (`service_tests.rs`: the grant, the bounds at exactly the bound, the loopback's rules), `crates/zoraya-posix/tests/tcplisten.rs`
+  (a fake `netd`), `cargo test -p zoraya-shell netgrant`, `tests/posix-net/tcptest.c` (in `make test-net-posix`: the refusals, the 65th
+  connection, a closed listener with 64 queued) and `make test-python-serve` (`python3 -m http.server` serves a file to `curl`).
+- **Each room has its own loopback** (plan part F9, the architect's decision of 2026-11-16 on ADR-0441; ADR-0442, proposed, records the build):
+  a connect to 127.0.0.1:PORT reaches only the listeners of the connecting program's room, and `bind`/`listen` find a port in use only in
+  their own room (the same port in two rooms is no `EADDRINUSE`). `netd` keeps a room name (at most 24 bytes, empty for `home`) per
+  connection, set by `NarrowRoom` (request 9: `Narrow` with a budget of 0 or `NarrowAccount`, plus the room), which is answered
+  `NOT_GRANTED` unless the asker holds the new right `ROOM` (16, in `rights::ALL`: `init`'s connection and the shell's root have it, no
+  program does); every connection made from one (`Narrow`, `NarrowAccount`, `Duplicate`) keeps its room, so `python3` and `curl` of one
+  line (two accounts) are in one room. The shell narrows each program's connection with its current room's name
+  (`zosh.rs`, `net_room`). The machine-wide bounds are not room-blind (eight `+listen` programs in one room leave another room's `+listen` line with no `netd` connection: a one-bit channel, an open question of ADR-0442). A refusal across rooms is the answer of no listener (`Failed { REFUSED }`, the same first made-up port), and the
+  made-up client port is a counter per listener. Bounds are as before and machine-wide (8 listeners, 64 pending). Limits: a shell names its
+  room, so the shell is trusted for it (an untrusted room's launcher, ADR-0269, must get a connection with its room fixed and no `ROOM`: not
+  built, net grants in an untrusted room are refused today); one room can use the machine's listener budget and leave another's `listen`
+  `OVER_QUOTA`; a grant to reach another room's loopback is not built. Tests: `cargo test -p zoraya-net` (`service_tests.rs`, the
+  `a_connect_reaches_only_the_listeners_of_its_own_room` group) and `make test-net-posix` (`tcptest --serve`/`--probe` in rooms `ra`,
+  `rb`, `rc` and `home`).
 - **Memory descriptors** (plan part F3, ADR-0413; ADR-0431 and ADR-0432, proposed, record what the code decided):
   `memfd_create` and `shm_open(SHM_ANON)` make a descriptor of size 0 (`crates/zoraya-posix/src/memfd.rs`, the state in the
   description entry); its first `ftruncate` makes the memory object, committed at once and paid by the creator's job for its life.
@@ -2201,15 +2295,36 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   size, `EFBIG` for a write past the end); before that an `ftruncate` or a `write` past the end replaces the object, in doubling
   steps. A descriptor travels in `SCM_RIGHTS` as a copy of the object handle with its size and seals (a record of kind 7). `shm_open`
   of any name is `EACCES`, `shm_unlink` `ENOENT`; `SHM_ANON` is `((char *)1)` in `<zoraya/shm.h>`, which musl's `<sys/mman.h>`
-  includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): a memory descriptor does not cross `spawn`
-  or `exec` (`EBADF` without `O_CLOEXEC`) until plan part F4 changes the bootstrap record, so the plan's "a child reads what the
-  parent wrote" is checked with a `fork` child and in one process over a socketpair, and the two-process half over a fake kernel;
-  seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
+  includes (`ports/musl/zoraya/0004-shm-anon.patch`). **Limits** (recorded, not hidden): (a memory descriptor did not cross `spawn` or `exec` until
+  plan part F4, the next bullet: now it does); seals are the holder's own, not shared as Linux's are, and a receiver is told only the seals it can check (`SHRINK`, `GROW`, `SEAL`, and `FUTURE_WRITE` over its own read-only handle), never `F_SEAL_WRITE`; a descriptor of size 0 cannot be sent; no `msync`, `mremap`, `madvise` or
   `mlock`; `MAP_SHARED` of a regular file and `MAP_SHARED|MAP_ANONYMOUS` stay `ENODEV`; `memfd_create` no longer survives `exec` or
   backs a tmpd file. CPython's `_posixshmem` stays unbuilt (`ports/Makefile`'s `PYTHON_ABSENT`). Tests:
   `crates/zoraya-posix/tests/memfd.rs` (INV-0413-1 over every order of four of nine steps, -2, -3, -5), `tests/posix/t_memfd.c`
   (`make test-posix`: the 4 MiB memfd and the fork child, the seal and the read-only child's `SIGSEGV`), `tests/posix-core/t_unix.c`
   (`memfd`, `make test-libposix`), `t_snapshot` and `t_quota` (`make test-qemu`: INV-0431-1 to -3 and INV-0413-4).
+
+- **`posix_spawn` and what each child is given** (plan part F4, ADR-0411 item 1; ADR-0433, ADR-0434 and ADR-0435, proposed, record what the
+  code decided): the logic is `crates/zoraya-posix/src/spawn.rs` (the shape of a spawn, the entries, the grants; host tested over the fake
+  kernel) with `jobs.rs` (the fds, `inherit_shaped`) and `unix_io.rs` (the descriptors that cross); the C boundary is
+  `ffi/procs.rs`. `POSIX_SPAWN_EMPTY_NAMESPACE` (0x2000), `posix_spawnattr_setnamespace_np` (a NULL-terminated list of `PATH` and
+  `PATH:ro`) and `posix_spawnattr_setgrants_np` (`POSIX_SPAWN_GRANT_NET`, `_RANDOM`, `_WINDOW`, `POSIX_SPAWN_MOVE_NET`) are declared in
+  musl's `<spawn.h>` (`ports/musl/zoraya/0005-spawn-zoraya.patch`) and stored in the padding of `posix_spawnattr_t`. A child with the
+  flag has exactly the listed entries, each opened through the parent's own table as a directory (the file service refuses a right the
+  parent's connection lacks: tested at the service, not in the library), exactly the fds of the file actions (`adddup2`, `addclose`,
+  `addopen`, `addclosefrom_np`; `addopen` is the parent's open), no working directory unless a listed directory covers the parent's (the
+  record's cwd entry may be `NO_ENTRY`), and the connections of the mask: `GRANT_NET` asks `netd` for a connection of the parent's own
+  rights and scope (`Duplicate`, message 8), `GRANT_RANDOM` the random service for one (a program's connection may make eight, ADR-0435),
+  `GRANT_WINDOW` and `MOVE_NET` hand over the parent's own, which it then lacks; a connection the parent lacks is `EACCES`. A refused
+  spawn leaves no handle made and changes nothing of the parent's. A Unix socket or memory descriptor in the child's fds goes in an
+  extra bootstrap message (`ZPBF`, sent before `SELF`) in the records of `SCM_RIGHTS`: a socket listed in the file actions moves whole (the
+  parent's is dead until closed; a stream socket too, which differs from ADR-0412 item 6's "byte streams duplicated", and one only inherited stays with the parent: the spawn is `EBADF`), a memory object is copied (read-only
+  stays read-only at the kernel) and its size is fixed; `exec` carries them the same way. `posix_spawnp` searches the caller's `$PATH`;
+  the scheduling attributes are `ENOSYS`. Without an attribute a spawn gives what it gave before (INV-0411-4). **Limits** (recorded,
+  not hidden): the positive network grant is tested over a fake `netd` and in `zoraya-net`, not in QEMU (no test program holds a
+  network connection); a child with no working directory reads a relative path as one from `/`; a failure of the descriptors message after the
+  child exists ends the child (status 127); CPython's `subprocess` uses `posix_spawn` for a program named with a directory
+  (`ports/patches/python/0007-subprocess-posix-spawn.patch`; the port's tests were not run by this part). Tests:
+  `crates/zoraya-posix/tests/spawn.rs`, `tests/posix-core/t_spawn.c` (`make test-libposix`), `zoraya-net` (`Duplicate`), `zoraya-rng`.
 
 ## The clock, the random service and HTTPS (stage 8, N5)
 
@@ -2322,6 +2437,50 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
+## A program's own directory, and ssh (stage 10, 10g)
+
+- **The `data` key** (ADR-0341, ADR-0156): a system-image description may say `data NAME as ~/PATH [read]`. The shell
+  makes `/data/ROOM/NAME` (`/data/home/NAME` outside a room) when the program first runs and puts it in the program's
+  table as an `EntryKind::Own` entry at the path the program sees under the user database's home (`/home`); `HOME` is
+  `/home` for it, a line that sets `HOME` or names that path in `+r`/`+w` is refused (also a room's grant on it).
+  `user/describe/data-names.txt` lists the names with their programs; `cargo test -p zoraya-describe --test
+  data_names` keeps the descriptions and the panel's applications to it. `grants` shows both paths. A child of such a
+  program gets the directory to read only (`libposix` `clone_read_only`, spawn and fork), and a link outside it is not
+  followed into it. Proposed ADR-0393 holds the shapes.
+- **Room terminals' services** (proposed ADR-0462, the architect's decision of 2026-11-16). A room's line may carry
+  `+net WORD` words (`room new NAME +w ~/x +net HOST:PORT`, at most eight; none in an untrusted room). The panel gives
+  every terminal's shell, in a room or at home, a random connection of its own (slot 10), and in a room with words a
+  network connection narrowed to `REACH | NARROW` and exactly those words (slot 9, from the root connection `init` gives the
+  panel at slot 12; random at slot 11), plus `/system/tls` to read; the words BOUND a line and give it nothing (the architect's rule of 2026-11-16: a
+  line gets a connection only when its own words or its description ask for it, inside them; a value host designates
+  inside them; a rule outside them is refused naming them; no status in a room; at `netd`'s carved-account limit
+  the line is refused with a hint) and the frame shows them as pills. A room without words has no network.
+  Not given: status, listen, the services channel (a restart of the network is not followed), and no network at home's
+  second terminals. `tests/gui/ssh-room.script` logs in from a room's window with a word, is refused another port and a
+  room with none, and makes a key.
+- **The shell's own hold.** A terminal's shell holds `/data/home` (first terminal) or `/data/ROOM` (a room's) to change
+  anything in, as its own entry: not a room grant, not in `/config/rooms`, not a pill, not listed by `room`. A room's
+  shell makes its own directories below that hold only. The first terminal's shell, after `room r`, holds nothing of
+  `/data/r`: ssh there says so and names the way (a terminal in the room).
+- **The current directory** at `/`, `/data`, `/data/ROOM` or inside a listed own directory gives every described
+  command no current-directory entry (ADR-0341 item 8): a bare `ls` or `find` there is refused with the hint, and a
+  named directory is given as always.
+- **`reach` and `rest`** (ADR-0340): `ssh`'s HOST operand reaches that host on port 22 or the first `-p`, over TCP, a name
+  with its public answers only (`+net HOST:PORT` for another); every word after the host is the far side's and the shell
+  writes `--` before the host; `ssh://` and the long forms of the options are usage mistakes (the program reads short
+  options only).
+- **ssh** is OpenSSH portable 10.6p2's client and `ssh-keygen`, in the apps' `/bin` with `/etc/passwd` and `group`
+  (`make apps`; patches `ports/patches/openssh/`, no configuration file, askpass, agent, DNS key check or hard link,
+  only the options of `ssh.cmd`; `ports/apps/sshshim.c` for names `libc.a` lacks). No server, `scp` or `sftp`. Tests:
+  `tools/test-sshd.sh` starts two sshd of the host on the loopback with throwaway keys, forwarding off and a forced
+  command that only prints what was asked; `tools/test-apps-ssh.sh` (in `make test-apps`) runs
+  `tests/shell/apps-ssh.script` on the console and `tests/gui/ssh-room.script` in a room's terminal window.
+- **Known limits.** *Storage:* `--disk` limits a room's `+w` grants only; `/data/ROOM` is not limited (ADR-0341 item 6 is
+  not built), so a line in a limited room can write there beyond the limit; the room's panel applications' directories
+  (`/data/ROOM/APP`) are reachable by its shell. *Open files:* a file inside the own directory that the program has open
+  for writing stays writable in a child that inherits the descriptor (not reachable with ssh; to be closed before 10h's
+  git hooks). *Tests:* the INV-0340-2/-0341-4 lints run in `make test-unit`, not `make check`; no askpass prompt is run.
+
 ## CPython (stage 9, 9c)
 
 `python3` runs inside Zoraya (proposed ADR-0320): CPython 3.15.2 cross-built static with `zcc`, as a POSIX program from the
@@ -2372,7 +2531,7 @@ volume's `/bin/python3`, with its standard library in `/usr/lib/python3.15`.
   CI job that wanted a cached `-ext` build would add DIR's hash to its key; a library built from an `ar` that stamps times changes
   the hash at each rebuild; modules are built in, never shared (no `dlopen`), and C++ modules need their runtime library named in
   the `Setup` line.
-- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ends a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
+- **Known limits.** `test_threading` (CPython's own) first failed with `OSError: Out of memory`: that was `os.fork` (no copy-on-write: a child copies the whole writable space, and each `python3` stack is committed in full: 11 children at once on 512 MiB with an 8 MiB stack, 15 with 2 MiB), not thread creation; it passes since the stack is 2 MiB, with the cases that start another interpreter left out, in the long list run by hand (ADR-0320 open questions; `test_thread` and `test_threading_local` in the CI subset, `test_queue` in the long list). The libposix table of 256 mappings (shared with the kernel's limit) ended a recursion deeper than about 33,000 frames with `MemoryError`, and, since each 1 MiB obmalloc arena is one mapping, a program holding about 250 MiB of small objects too (from the count; not measured); since F5 (ADR-0415 item 1, ADR-0437) the limit is 4096 and a mapping holds no handle (`make test-python-mem`, a 2 GiB guest, runs the plan's `python3 -c "x=[bytearray(100) for _ in range(5_000_000)]"` to its end and repeats ADR-0320's measurement: the free mappings are 4086 before and after 4000 threads and 30 forks, a recursion of 200,000 frames runs; `t_maps` is its C counterpart); threads do not use it up (4000 threads, flat). A program that Python starts (`subprocess`, `os.system`) has no connection to the random service: another
   `python3` fails at start ("failed to get random numbers"), as for a program started by `dash` (9a). `socketpair` and `sendmsg`/`recvmsg` work (plan part F2); no
   `bind`/`listen`/`accept` (a client only), `posix_spawn`, and a Unix socket does not cross `spawn` (ADR-0430); the interpreter's process has 2 MiB of stack, committed in full (no demand paging), and a `fork` child copies it. The shell prints a `hint` about `/dev/urandom` and `/system/tls/roots` after a script that touches them
   without the grants (harmless). Python's `ssl` defaults refuse a certificate without an Authority Key Identifier
@@ -2757,7 +2916,7 @@ ADR-0221 items 5, 6 and 8).
   `tools/run-qemu.sh --probe-el2` creates the VM with `--dumpdtb`, once without and once with `virtualization=on`.
   If only the second fails under HVF, the configuration prints `[LABEL] skipped: HVF on this Mac has no EL2 (needs M3
   or later)` and does not run. `make test` counts this as a skip, not a failure, and lists it in its summary. On such
-  a Mac EL2 entry is covered only by TCG (`tcg-el2`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
+  a Mac EL2 entry is covered only by TCG (`tcg-el2-a`/`-b`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
   probed. The probe tests the host, not the kernel: if HVF creates the EL2 VM, a kernel failure at EL2 still fails.
 - **Storage stack.** `t_storage` kills the driver "during a commit" and "during a read", but on one CPU the driver
   ends before the request reaches the device, so no test kills a driver with a write in flight on the device; the
@@ -2819,7 +2978,13 @@ ADR-0221 items 5, 6 and 8).
   `EFAULT`); listings have no `.` or `..` (`d_ino` is the object's id, as `st_ino`); `O_TRUNC` of an existing non-empty file is a
   second request; `st_blocks` comes from the size; times before 1970 cannot be set (ADR-0180).
 - **Processes and the terminal (stage 6d).** A blocked signal whose default terminates still ends the process
-  (ADR-0106 item 2); the mask itself is carried across `exec` and `posix_spawn` (ADR-0190's Decision). A stopped
+  (ADR-0106 item 2); the mask itself is carried across `exec` and `posix_spawn` (ADR-0190's Decision), and so are
+  the signals the old image was sent and had not acted on, held during the spawn and sent to the new image just after
+  it; a handler without `SA_RESTART` run at a call's entry makes that call's wait `EINTR`, and `nanosleep` `EINTR`
+  after any handler (proposed ADR-0392). The new image gets a carried signal a moment after it starts, so one that
+  installs a handler at once may handle it (twice, for a signal sent between the spawn and the carry); a carried
+  blocked signal ends it at once. A `fork` or `posix_spawn` child made during a job signal's walk misses it (ADR-0004 rule 3;
+  ADR-0392's follow-up, a kernel question). A stopped
   child sends no `SIGCHLD` (ADR-0190 item 19). `pselect` reports a terminal ready at once (`poll_readable` is deferred, ADR-0105). Non-canonical
   mode exists but nothing sets it; no `TOSTOP`, no `SIGTTOU`. The shell's fds 0 to 2 are three descriptions (ADR-0190
   item 7). A FIFO fd passed by `spawn` is not counted as a side by `tmpd` (item 12), and a FIFO opened after its
@@ -2898,6 +3063,7 @@ crates/                   no_std, host-tested
   zoraya-pmm/             physical frame allocator and range sets
   zoraya-heap/            kernel heap logic
   zoraya-pagetable/       translation table building and editing
+  zoraya-mappings/        a process's list of mappings: sorted chunks, room made ahead
   zoraya-time/            clock arithmetic and the deadline queue
   zoraya-abi/             the native ABI, with its checks
   zoraya-elf/, zoraya-ramdisk/  total parsers for programs and the ramdisk

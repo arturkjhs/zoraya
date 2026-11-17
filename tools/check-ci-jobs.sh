@@ -155,14 +155,15 @@ if [ -r "$nightly_list" ]; then
 		echo " $TEST_STEPS " | grep -q " $s " && need "$s not in TEST_STEPS (a nightly-only job is not a step of make test)"
 	done
 fi
-# ADR-0348, the CI policy: the schedule job exists (the nightly and the 4-hourly cron), a
+# ADR-0348, the CI policy: the schedule job exists (the nightly and the 2-hourly cron), a
 # push to main plans the document checks only, the concurrency group differs by kind of
 # event (and by cron) and a run of main is never cancelled, and the scheduled run asks the
 # API for the last full run and lists the merges since the last green one.
 grep -q -F "cron: '17 2 * * *'" "$workflow" || need "the nightly schedule (cron '17 2 * * *')"
-grep -q -F "cron: '23 */4 * * *'" "$workflow" || need "the schedule every 4 hours (cron '23 */4 * * *', an off minute)"
-# The nightly is told from the 4-hourly run by its cron string, kept in tools/ci-plan-step.sh:
-# the two must not drift (a nightly planned as a 4-hourly run would skip and never run its own jobs).
+grep -q -F "cron: '23 */2 * * *'" "$workflow" || need "the schedule every 2 hours (cron '23 */2 * * *', an off minute; ADR-0463)"
+grep -q -F "cron: '23 */4 * * *'" "$workflow" && need "no schedule every 4 hours (ADR-0463 made it every 2 hours)"
+# The nightly is told from the 2-hourly run by its cron string, kept in tools/ci-plan-step.sh:
+# the two must not drift (a nightly planned as a 2-hourly run would skip and never run its own jobs).
 wf_nightly=$(sed -n "s/^[[:space:]]*- cron: '\(.*\)'\$/\1/p" "$workflow" | head -1)
 step_nightly=$(sed -n "s/^NIGHTLY_CRON='\(.*\)'\$/\1/p" tools/ci-plan-step.sh)
 [ -n "$wf_nightly" ] && [ "$wf_nightly" = "$step_nightly" ] ||

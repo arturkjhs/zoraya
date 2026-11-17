@@ -1,0 +1,6 @@
+# ADR-0341 item 5: every NAME of a `data` line of user/describe/, with exactly the programs that carry it.
+# The directory a program gets is /data/ROOM/NAME (/data/home/NAME outside a room). A panel application may not
+# have one of these names. `cargo test -p zoraya-describe --test data_names` keeps the descriptions to this list.
+#
+# NAME  program...
+ssh  ssh ssh-keygen

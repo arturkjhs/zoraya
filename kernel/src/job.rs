@@ -322,6 +322,12 @@ impl Job {
         }
     }
 
+    /// Whether the job was killed: it takes no new member, child job or
+    /// charge (proposed ADR-0443 item 1).
+    pub fn is_closed(&self) -> bool {
+        self.state.lock().closed
+    }
+
     /// Makes `process` a member. `BadState` once the job was killed.
     pub fn admit(&self, process: &Arc<Process>) -> Result<(), Status> {
         let _tree = TREE.lock();
@@ -522,6 +528,28 @@ impl Job {
             },
         );
     }
+
+    /// Live processes in the tree.
+    #[cfg(feature = "qemu-test")]
+    pub fn live(&self) -> usize {
+        self.state.lock().live
+    }
+
+    /// Ends every process of the tree and leaves its jobs open: the test
+    /// harness, after a failed test, so that what it left running does not
+    /// run on into the tests after it.
+    #[cfg(feature = "qemu-test")]
+    pub fn end_every_process(self: &Arc<Self>) {
+        // No turn (see [`Exclusive`]), as in `kill`.
+        Job::walk(self, &mut |_| {}, &mut |process| {
+            process.request_exit(ExitRecord {
+                code: 0,
+                reason: ExitReason::Killed,
+                detail: 0,
+                request_kind: None,
+            });
+        });
+    }
 }
 
 impl Drop for Job {
@@ -530,6 +558,9 @@ impl Drop for Job {
         if record != 0 {
             charge::refund_memory(self, record, Kind::Kernel);
         }
+        // A room that ends for good keeps no debt; what it still owes goes
+        // to the nearest ancestor with a ceiling (ADR-0460).
+        crate::cpu::pass_debt(self);
         if let Some(parent) = &self.parent {
             // `swap_remove`, as for processes: a walk counts down from the
             // end of the list and copes with it (`walk`). Dead slots are not

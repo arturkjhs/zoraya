@@ -43,8 +43,8 @@ note = "INV-0431-1: the child's pages are those of the parent's offset"
 [[mutant]]
 id = "F3-shared-pages-still-copied"
 file = "kernel/src/memory/user.rs"
-find = 'Some(m) if m.va <= va && build.plan[i].share.is_some() => {'
-replace = 'Some(m) if false && m.va <= va && build.plan[i].share.is_some() => {'
+find = 'Some(m) if m.va <= va && m.share.is_some() => {'
+replace = 'Some(m) if false && m.va <= va && m.share.is_some() => {'
 note = "not equivalent: the step would copy the parent's page into the object at an offset in the mapping, not in the object, which overwrites the first pages of a partial shared mapping's object (t_snapshot sees it)"
 
 [[mutant]]

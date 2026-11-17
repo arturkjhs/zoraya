@@ -16,6 +16,7 @@ pub mod conn;
 pub mod connection;
 pub mod dns;
 pub mod link;
+pub mod loopback;
 pub mod nic;
 pub mod service;
 pub mod stack;

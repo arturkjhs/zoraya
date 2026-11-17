@@ -150,7 +150,20 @@ fn is_option_word(d: &Description, arg: &str) -> bool {
 /// Sorts `args` (without the command's name) by `d`.
 pub fn parse<'a>(d: &Description, args: &[&'a str]) -> Result<Outcome<'a>, UsageError> {
     let end = args.iter().position(|a| *a == "--").unwrap_or(args.len());
-    if args[..end].contains(&"--help") {
+    // A `rest` operand (ADR-0340 item 4) is the last one: once the operands
+    // before it are in, every word is positional and nothing is read for
+    // options, `--help` included; it belongs to the far side's command.
+    let rest_from = d
+        .operands
+        .iter()
+        .position(|o| o.kind == Kind::Rest)
+        .map(|r| {
+            d.operands[..r]
+                .iter()
+                .filter(|o| o.arity.required())
+                .count()
+        });
+    if rest_from.is_none() && args[..end].contains(&"--help") {
         return Ok(Outcome::Help);
     }
     let mut parsed = Parsed::default();
@@ -159,6 +172,14 @@ pub fn parse<'a>(d: &Description, args: &[&'a str]) -> Result<Outcome<'a>, Usage
     while i < args.len() {
         let (at, arg) = (i, args[i]);
         i += 1;
+        if rest_from.is_some_and(|r| positional.len() >= r) {
+            // After the host, `--` is the far side's word too.
+            positional.push(arg);
+            continue;
+        }
+        if rest_from.is_some() && at < end && arg == "--help" {
+            return Ok(Outcome::Help);
+        }
         // Everything after `--` is an operand; `--` itself is not.
         if at >= end {
             if at > end {

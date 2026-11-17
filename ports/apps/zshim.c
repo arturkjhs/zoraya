@@ -6,6 +6,8 @@
  * (ADR-0287 item 9): fails with an errno and changes nothing, so that a
  * caller that tries one reports an error instead of crashing.
  *
+ * `bind`, `listen` and `accept` were here until plan part F7: libc.a exports them now
+ * (ADR-0439 Unix socket files; ADR-0441 TCP listeners over netd).
  * `select` and `tcsetattr` were here until stage 10 part 10c: libc.a
  * exports both now (ADR-0342 item 3, ADR-0389), and curl's password prompt
  * has a real terminal to turn echo off on.
@@ -13,27 +15,6 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <time.h>
-
-int bind(int fd, const struct sockaddr *a, socklen_t len)
-{
-	(void)fd; (void)a; (void)len;
-	errno = ENOSYS;
-	return -1;
-}
-
-int listen(int fd, int backlog)
-{
-	(void)fd; (void)backlog;
-	errno = ENOSYS;
-	return -1;
-}
-
-int accept(int fd, struct sockaddr *a, socklen_t *len)
-{
-	(void)fd; (void)a; (void)len;
-	errno = ENOSYS;
-	return -1;
-}
 
 #include <unistd.h>
 

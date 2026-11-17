@@ -696,13 +696,20 @@ mod delivery_tests {
         let entries = vec![
             ("/home/u/proj", Directory, true),
             ("/home/u/.ssh", Directory, true),
+            ("/home/u/.config/ssh", Own, true),
             ("/etc", Directory, true),
             ("/home/u/placeholder", Directory, false),
             ("/tmp", Tmp, true),
             ("/dev/null", Other, false),
         ];
         let mut h = Held::from_table(entries.into_iter(), &merged);
-        assert_eq!(h.fixed, vec!["/home/u/.ssh".to_string()]);
+        assert_eq!(
+            h.fixed,
+            vec![
+                "/home/u/.ssh".to_string(),
+                "/home/u/.config/ssh".to_string()
+            ]
+        );
         assert!(h.wholes.contains(&("/etc".to_string(), READ)));
         assert!(h.wholes.contains(&("/tmp".to_string(), TREE)));
         for w in [
@@ -712,6 +719,12 @@ mod delivery_tests {
                 write: true,
             },
             file("/home/u/.ssh/id", true),
+            Wanted {
+                path: "/home/u/.config/ssh".into(),
+                dir: true,
+                write: true,
+            },
+            file("/home/u/.config/ssh/known_hosts", false),
             Wanted {
                 path: "/home/u".into(),
                 dir: true,

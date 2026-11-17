@@ -42,7 +42,9 @@ test_print_exception_stderr_is_none_2
 test_recursion_limit
 test_keyboard_interrupt_during_threading_shutdown
 # test_asyncio.test_base_events (plan part F2): the cases that make an AF_INET datagram
-# socket, a server socket (bind, listen: plan part F7) or a loopback connection for sendfile.
+# socket, a server socket or a loopback connection for sendfile. Plan part F7b built TCP bind and listen, so the
+# server-socket reason is stale for test_create_server_*: not re-run (see make test-python-regr, F7b review); the
+# datagram and sendfile cases stay unsupported.
 test_create_connection_wrong_sock
 test_create_datagram_endpoint_allow_broadcast
 test_create_datagram_endpoint_sock
@@ -54,3 +56,6 @@ test_nonstream_socket
 test_sock_sendfile_fallback
 test_sock_sendfile_fallback_offset_and_count
 test_sock_sendfile_no_fallback
+# test_asyncio.test_base_events (plan part F7, ADR-0439): `skip_unless_bind_unix_socket` probes with a stream socket, which binds now,
+# and the case then binds a datagram socket, which is not built (`EOPNOTSUPP`).
+test_create_datagram_endpoint_existing_sock_unix

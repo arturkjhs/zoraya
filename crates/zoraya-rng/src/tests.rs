@@ -260,7 +260,7 @@ fn from_seed_refuses_short_and_zero_seeds() {
 }
 
 #[test]
-fn only_the_first_two_levels_share_and_children_are_counted() {
+fn only_the_first_three_levels_share_and_children_are_counted() {
     let mut s = Service::new(Generator::new(b"share"), 1000);
     let mut message = [0u8; 64];
     let n = encode(&Share {}, 3, &mut message).unwrap();
@@ -283,13 +283,21 @@ fn only_the_first_two_levels_share_and_children_are_counted() {
         s.handle(&mut root, &message[..n], 1, &mut out),
         Action::Share { attach: true, .. }
     ));
-    // The shell's connection (depth 1) shares; a program's (depth 2) never.
+    // The shell's connection (depth 1) shares; a program's (depth 2) only
+    // `PROGRAM_CHILDREN` at a time (ADR-0435), and the ones it made (depth 3)
+    // never.
     let mut shell = Conn::root().child();
     assert!(matches!(
         s.handle(&mut shell, &message[..n], 1, &mut out),
         Action::Share { attach: true, .. }
     ));
     let mut program = shell.child();
+    for _ in 0..PROGRAM_CHILDREN {
+        assert!(matches!(
+            s.handle(&mut program, &message[..n], 1, &mut out),
+            Action::Share { attach: true, .. }
+        ));
+    }
     for _ in 0..300 {
         let Action::Share { reply, attach } = s.handle(&mut program, &message[..n], 1, &mut out)
         else {
@@ -301,9 +309,86 @@ fn only_the_first_two_levels_share_and_children_are_counted() {
             status::NO_SPACE
         );
     }
-    assert_eq!(program.children(), 0);
+    assert_eq!(program.children(), PROGRAM_CHILDREN);
+    // One of them closing frees one.
+    program.released();
+    assert!(matches!(
+        s.handle(&mut program, &message[..n], 1, &mut out),
+        Action::Share { attach: true, .. }
+    ));
+    let mut leaf = program.child();
+    for _ in 0..300 {
+        let Action::Share { attach, .. } = s.handle(&mut leaf, &message[..n], 1, &mut out) else {
+            panic!()
+        };
+        assert!(!attach);
+    }
+    assert_eq!(leaf.children(), 0);
     // A refused share did not count a connection.
     let before = s.connections();
-    let _ = s.handle(&mut program, &message[..n], 1, &mut out);
+    let _ = s.handle(&mut leaf, &message[..n], 1, &mut out);
     assert_eq!(s.connections(), before);
+}
+
+/// ADR-0462: a launcher's connection (the panel's, made by `init`'s) is at
+/// `init`'s depth, so the shells it makes are shells: they make programs up to
+/// the cap and a program may `Share`, as under `init`'s own shell. Only
+/// `init`'s own connection may make a launcher, and a launcher cannot.
+#[test]
+fn a_launchers_shells_are_shells_not_programs() {
+    let mut s = Service::new(Generator::new(b"launcher"), 100_000);
+    let mut share = [0u8; 64];
+    let n = encode(&Share {}, 3, &mut share).unwrap();
+    let mut launch = [0u8; 64];
+    let l = encode(&ShareLauncher {}, 4, &mut launch).unwrap();
+    let mut out = std::vec![0u8; OUT_SIZE];
+    let mut root = Conn::root();
+    // `init` makes the panel's connection.
+    assert!(matches!(
+        s.handle(&mut root, &launch[..l], 1, &mut out),
+        Action::ShareLauncher { attach: true, .. }
+    ));
+    let mut panel = Conn::launcher();
+    // It cannot make another launcher; a shell, a program and a leaf cannot either.
+    for c in [&mut panel, &mut root.child(), &mut root.child().child()] {
+        let Action::ShareLauncher { reply, attach } = s.handle(c, &launch[..l], 1, &mut out) else {
+            panic!()
+        };
+        assert!(!attach);
+        assert_eq!(
+            decode::<ShareReply>(&out[..reply], 0).unwrap().1.status.0,
+            status::NO_SPACE
+        );
+    }
+    // Its shares are shells: as many programs as a shell makes (not eight), and
+    // a program of that shell may itself share.
+    assert!(matches!(
+        s.handle(&mut panel, &share[..n], 1, &mut out),
+        Action::Share { attach: true, .. }
+    ));
+    let mut shell = panel.child();
+    let mut program = shell.child();
+    for _ in 0..PROGRAM_CHILDREN + 1 {
+        assert!(matches!(
+            s.handle(&mut shell, &share[..n], 1, &mut out),
+            Action::Share { attach: true, .. }
+        ));
+    }
+    assert!(matches!(
+        s.handle(&mut program, &share[..n], 1, &mut out),
+        Action::Share { attach: true, .. }
+    ));
+    // The case the reviewer found: a share of a depth-1 connection (the old
+    // way) makes a shell at depth 2, which is a program for the service.
+    let mut old_shell = Conn::root().child().child();
+    for _ in 0..PROGRAM_CHILDREN {
+        assert!(matches!(
+            s.handle(&mut old_shell, &share[..n], 1, &mut out),
+            Action::Share { attach: true, .. }
+        ));
+    }
+    assert!(matches!(
+        s.handle(&mut old_shell, &share[..n], 1, &mut out),
+        Action::Share { attach: false, .. }
+    ));
 }

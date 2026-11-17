@@ -54,10 +54,16 @@ protocol! {
     message ShareReply = 2, handles 0 {
         status: Code,
     }
+
+    /// Carries the server end of a new *launcher* connection (ADR-0462): one
+    /// that makes shells, as `init`'s does. Only `init`'s own connection may
+    /// ask, and a launcher cannot make another.
+    message ShareLauncher = 3, handles 1 {}
 }
 
 const BYTES: u32 = 1;
 const SHARE: u32 = 2;
+const SHARE_LAUNCHER: u32 = 3;
 
 // ---- ChaCha20 -------------------------------------------------------------
 
@@ -226,22 +232,34 @@ pub enum Action {
     /// Write `out[..n]` to the connection and keep the handle as a new
     /// connection; if `attach` is false close it (the table is full).
     Share { reply: usize, attach: bool },
+    /// As `Share`, and the new connection is a launcher's (`Conn::launcher`).
+    ShareLauncher { reply: usize, attach: bool },
     /// The message was not one: end this connection.
     Close,
 }
 
-/// Connections that may make others: `init`'s (depth 0) and the shell's
-/// (depth 1). A program's own connection (depth 2) may not, so a program
-/// cannot use up the table (review finding 3).
+/// Connections that may make many others: `init`'s (depth 0) and the shell's
+/// (depth 1). A program's own connection (depth 2) may make
+/// [`PROGRAM_CHILDREN`] and one of those (depth 3) none, so a program cannot
+/// use up the table (review finding 3; ADR-0435, plan part F4).
 pub const SHARE_DEPTH: u8 = 2;
 /// Live connections one connection may have made.
 pub const MAX_CHILDREN: u16 = 64;
+/// Live connections a program's own connection (depth 2) may have made: the
+/// ones `posix_spawn` with `POSIX_SPAWN_GRANT_RANDOM` gives its children.
+pub const PROGRAM_CHILDREN: u16 = 8;
+/// Depths from which a connection makes none.
+pub const LEAF_DEPTH: u8 = 3;
 
 /// What the service keeps per connection, owned by the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Conn {
     depth: u8,
     children: u16,
+    /// A launcher's connection (ADR-0462): at `init`'s depth, so that the
+    /// shells it makes are shells (depth 1: 64 programs each, and a program
+    /// may `Share`), not programs; it cannot make another launcher.
+    launcher: bool,
 }
 
 impl Conn {
@@ -250,6 +268,7 @@ impl Conn {
         Conn {
             depth: 0,
             children: 0,
+            launcher: false,
         }
     }
 
@@ -258,6 +277,17 @@ impl Conn {
         Conn {
             depth: self.depth.saturating_add(1),
             children: 0,
+            launcher: false,
+        }
+    }
+
+    /// The record of a launcher's connection `init`'s made (ADR-0462): the
+    /// depth of `init`'s own, so its children are shells.
+    pub const fn launcher() -> Conn {
+        Conn {
+            depth: 0,
+            children: 0,
+            launcher: true,
         }
     }
 
@@ -270,8 +300,17 @@ impl Conn {
         self.children
     }
 
+    /// Whether this connection may make a launcher: `init`'s own only.
+    fn may_share_launcher(&self) -> bool {
+        self.depth == 0 && !self.launcher && self.children < MAX_CHILDREN
+    }
+
     fn may_share(&self) -> bool {
-        self.depth < SHARE_DEPTH && self.children < MAX_CHILDREN
+        match self.depth {
+            d if d < SHARE_DEPTH => self.children < MAX_CHILDREN,
+            d if d < LEAF_DEPTH => self.children < PROGRAM_CHILDREN,
+            _ => false,
+        }
     }
 }
 
@@ -377,6 +416,26 @@ impl Service {
                     out,
                 ) {
                     Ok(n) => Action::Share { reply: n, attach },
+                    Err(_) => Action::Close,
+                }
+            }
+            SHARE_LAUNCHER => {
+                let Ok((h, _)) = decode::<ShareLauncher>(message, handles) else {
+                    return Action::Close;
+                };
+                let attach = conn.may_share_launcher() && self.attached();
+                if attach {
+                    conn.children += 1;
+                }
+                let code = if attach { status::OK } else { status::NO_SPACE };
+                match encode(
+                    &ShareReply {
+                        status: Below(code),
+                    },
+                    h.transaction,
+                    out,
+                ) {
+                    Ok(n) => Action::ShareLauncher { reply: n, attach },
                     Err(_) => Action::Close,
                 }
             }

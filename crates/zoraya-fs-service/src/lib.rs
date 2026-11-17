@@ -109,6 +109,26 @@ pub enum Outgoing {
     Full,
     NoMemory,
     Closed,
+    /// Refused for a reason other than the peer going: a handle with fewer
+    /// rights than the entry names, one that cannot travel. The peer is
+    /// there; a reply that gets this is lost as `Closed` loses it.
+    Refused,
+}
+
+/// What a failed `channel_write` of the service is, as the loop sees it
+/// (`user/src/bin/fsd.rs` maps its kernel call's error with this). Only a
+/// closed peer is `Closed`: a full queue is `Full`; the service's own job
+/// being over its limit (`NoMemory`, `OverQuota`) is not the listener's
+/// fault; a handle the kernel will not move (rights it lacks, a channel with
+/// handles queued, a bad handle) is the sender's, and the peer is there.
+pub fn outgoing_for(error: zoraya_abi::Status) -> Outgoing {
+    use zoraya_abi::Status;
+    match error {
+        Status::WouldBlock => Outgoing::Full,
+        Status::NoMemory | Status::OverQuota => Outgoing::NoMemory,
+        Status::AccessDenied | Status::BadState | Status::BadHandle => Outgoing::Refused,
+        _ => Outgoing::Closed,
+    }
 }
 
 /// What a handle is.
@@ -194,6 +214,38 @@ struct Fifo<E> {
     readers: u32,
     writers: u32,
 }
+
+/// A socket node's listener (proposed ADR-0439): the service's end of the
+/// channel the listening program reads new connections from, held for the
+/// account of the connection that listens, which the listener lives and dies
+/// with.
+struct Listener<E> {
+    end: E,
+    account: usize,
+    sock_type: u32,
+}
+
+/// A socket node of a temporary directory service (ADR-0412 item 5): made by
+/// `open_with_mode` with `S_IFSOCK`, it has a listener once a connection to
+/// it says `socket_listen`. `unlinked` is a node whose name is gone while its
+/// listener lives.
+struct SocketNode<E> {
+    listener: Option<Listener<E>>,
+    unlinked: bool,
+    /// The connection `bind` made the node on: the only one that may make it
+    /// listen. It is `None` once that connection closes, and the node is
+    /// then inert until unlinked (another program with `WRITE` on the file
+    /// cannot take the name over).
+    owner: Option<usize>,
+}
+
+/// The most socket nodes a service tracks at once: a bind past it is
+/// refused (`LIMIT_REACHED`), so a program that binds and unlinks in a loop
+/// cannot grow the table (unlinking frees the entry).
+pub const MAX_SOCKET_NODES: usize = 256;
+/// The most listeners at once, a handle each of the listening connection's
+/// account (`TOO_MANY_OPEN` past it or the account's bound).
+pub const MAX_LISTENERS: usize = 64;
 
 /// Where a record lies in relation to the sealed directory (ADR-0289 item 8).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -356,6 +408,9 @@ struct Connection<E> {
     fifo: Option<(u64, u32)>,
     /// A `fifo_open` held until the other side comes (its transaction).
     opening: Option<u32>,
+    /// The socket node this connection listens on (`socket_listen`): the
+    /// listener lives as long as the connection does.
+    listening: Option<u64>,
 }
 
 pub struct Service<D: Device, C: Clock, T: Transport> {
@@ -370,6 +425,11 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     fifo_nodes: BTreeSet<u64>,
     /// The `open_with_mode` being served makes a FIFO if it creates.
     fifo_create: bool,
+    /// The socket nodes of a temporary directory service, by object id;
+    /// `None` on a service with none (proposed ADR-0439).
+    sockets: Option<BTreeMap<u64, SocketNode<T::End>>>,
+    /// The `open_with_mode` being served makes a socket node if it creates.
+    socket_create: bool,
     /// What `time_base` answers (ADR-0191).
     time_base: u64,
     /// The name of the root's entry that is read-only for everyone, with all
@@ -483,6 +543,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             fifos: None,
             fifo_nodes: BTreeSet::new(),
             fifo_create: false,
+            sockets: None,
+            socket_create: false,
             time_base: 0,
             sealed: None,
             connections: Vec::new(),
@@ -532,6 +594,20 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.fifos = Some(BTreeMap::new());
     }
 
+    /// Gives `S_IFSOCK` its meaning: socket nodes with `socket_listen` and
+    /// `socket_connect` (the temporary directory service, proposed
+    /// ADR-0439, ADR-0412 item 5).
+    pub fn enable_sockets(&mut self) {
+        self.sockets = Some(BTreeMap::new());
+    }
+
+    /// The socket nodes and the listeners among them, for tests.
+    pub fn socket_nodes(&self) -> (usize, usize) {
+        self.sockets.as_ref().map_or((0, 0), |m| {
+            (m.len(), m.values().filter(|n| n.listener.is_some()).count())
+        })
+    }
+
     /// The FIFO nodes with an open side, for tests.
     pub fn open_fifos(&self) -> usize {
         self.fifos.as_ref().map_or(0, BTreeMap::len)
@@ -541,6 +617,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     fn reported_mode(&self, a: &Attr) -> u32 {
         let fifo = if self.fifo_nodes.contains(&a.id) {
             proto::S_IFIFO
+        } else if self.sockets.as_ref().is_some_and(|m| m.contains_key(&a.id)) {
+            proto::S_IFSOCK
         } else {
             0
         };
@@ -807,6 +885,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             only: None,
             fifo: None,
             opening: None,
+            listening: None,
         };
         if let Some(r) = self.records[record].as_mut() {
             r.connections += 1;
@@ -936,6 +1015,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         if let Some((id, side)) = c.fifo.take() {
             self.fifo_closed(id, side);
+        }
+        if let Some(id) = c.listening.take() {
+            self.socket_listener_gone(id);
+        }
+        if let Some(nodes) = self.sockets.as_mut() {
+            for n in nodes.values_mut().filter(|n| n.owner == Some(index)) {
+                n.owner = None;
+            }
         }
         let last = match self.records.get_mut(c.record).and_then(Option::as_mut) {
             Some(r) => {
@@ -1172,7 +1259,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.transport.interest(end, index as u64, Interest::Closed);
                 self.retry_at = Some(self.transport.now() + RETRY_NS);
             }
-            Outgoing::Closed => self.close_connection(index),
+            Outgoing::Closed | Outgoing::Refused => self.close_connection(index),
         }
     }
 
@@ -1188,7 +1275,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.release(account, handles.len());
                 return;
             }
-            Outgoing::Closed => {
+            Outgoing::Closed | Outgoing::Refused => {
                 self.drop_handles(account, handles);
                 self.close_connection(index);
                 return;
@@ -1374,7 +1461,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 let one = alloc::vec![(String::from(name), m.rights.0)];
                 self.clone_connection(i, t, m.rights.0, Some(one), None, handles);
             }
-            41 => {
+            44 => {
                 let (_, m) = decode::<proto::NarrowNames<'_>>(bytes, n)?;
                 let Some(list) = proto::narrow_names::decode(m.names.0) else {
                     self.done(i, t, status::INVALID_ARGUMENT, 0);
@@ -1548,11 +1635,23 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 // A FIFO's type bits are the temporary service's to keep;
                 // every other type bit is refused, as before.
                 let fifo = self.fifos.is_some() && m.mode & proto::S_IFMT == proto::S_IFIFO;
-                let bits = if fifo {
+                let socket = self.sockets.is_some() && m.mode & proto::S_IFMT == proto::S_IFSOCK;
+                let bits = if fifo || socket {
                     m.mode & !proto::S_IFMT
                 } else {
                     m.mode
                 };
+                // A bind past the table's bound is refused before anything
+                // is made (the entry is added once the create succeeds).
+                if socket
+                    && self
+                        .sockets
+                        .as_ref()
+                        .is_some_and(|x| x.len() >= MAX_SOCKET_NODES)
+                {
+                    self.open_answer(i, t, true, status::LIMIT_REACHED, ("", ""), None);
+                    return Ok(());
+                }
                 let Ok(mode) = u16::try_from(bits) else {
                     let s = status::INVALID_ARGUMENT;
                     self.open_answer(i, t, true, s, ("", ""), None);
@@ -1564,8 +1663,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                     path: m.path,
                 };
                 self.fifo_create = fifo;
+                self.socket_create = socket;
                 self.open_as(i, t, &open, mode, m.description.0, true, handles);
                 self.fifo_create = false;
+                self.socket_create = false;
             }
             28 => {
                 let (_, m) = decode::<proto::ReadCurrent>(bytes, n)?;
@@ -1594,6 +1695,18 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             34 => {
                 let (_, m) = decode::<proto::FifoOpen>(bytes, n)?;
                 self.fifo_open(i, t, m.side.0, m.nonblock.0 == 1);
+            }
+            41 => {
+                let (_, m) = decode::<proto::SocketListen>(bytes, n)?;
+                self.socket_listen(i, t, m.sock_type.0, handles);
+            }
+            42 => {
+                let (_, m) = decode::<proto::SocketConnect<'_>>(bytes, n)?;
+                self.socket_connect(i, t, m.sock_type.0, m.record.0, handles);
+            }
+            43 => {
+                let (_, m) = decode::<proto::SocketConnectStream<'_>>(bytes, n)?;
+                self.socket_connect(i, t, m.sock_type.0, m.record.0, handles);
             }
             38 => {
                 let (_, m) = decode::<proto::SetLimit<'_>>(bytes, n)?;
@@ -1629,6 +1742,189 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     fn error_reply(&mut self, i: usize, t: u32, s: u32) {
         self.reply(i, t, &ErrorReply { status: s });
+    }
+
+    /// The socket node connection `i` is on: its object id, if it is one.
+    fn socket_node_of(&mut self, i: usize) -> Option<u64> {
+        let handle = self.handle_of(i)?;
+        let attr = self.volume.stat(handle);
+        self.after_engine();
+        let id = attr.ok()?.id;
+        self.sockets.as_ref()?.contains_key(&id).then_some(id)
+    }
+
+    /// `socket_listen` (proposed ADR-0439): the node gets a listener, which
+    /// lives as long as this connection.
+    fn socket_listen(&mut self, i: usize, t: u32, sock_type: u32, handles: &mut Vec<T::End>) {
+        // SOCK_STREAM and SOCK_SEQPACKET: a datagram socket has no peer to
+        // hand a connection to.
+        if self.sockets.is_none() {
+            return self.error_reply(i, t, status::UNSUPPORTED);
+        }
+        if !self.has(i, proto::rights::WRITE) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        if !matches!(sock_type, 1 | 5)
+            || self.connections[i]
+                .as_ref()
+                .is_none_or(|c| c.listening.is_some())
+        {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        }
+        let Some(id) = self.socket_node_of(i) else {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        };
+        let Some(end) = handles.first().copied() else {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        };
+        if self.transport.kind(end) != HandleKind::Channel {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        }
+        let owner = self
+            .sockets
+            .as_ref()
+            .and_then(|m| m.get(&id))
+            .map(|n| n.owner);
+        if owner != Some(Some(i)) {
+            let s = if owner.is_none() {
+                status::INVALID_ARGUMENT
+            } else {
+                status::ACCESS_DENIED
+            };
+            return self.done(i, t, s, 0);
+        }
+        let listening = self
+            .sockets
+            .as_ref()
+            .map_or(0, |m| m.values().filter(|n| n.listener.is_some()).count());
+        if listening >= MAX_LISTENERS || !self.room(i) {
+            let a = self.account_of(i);
+            self.refused_by(a);
+            return self.done(i, t, status::TOO_MANY_OPEN, 0);
+        }
+        let account = self.account_of(i);
+        let Some(node) = self.sockets.as_mut().and_then(|m| m.get_mut(&id)) else {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        };
+        if node.listener.is_some() {
+            return self.done(i, t, status::EXISTS, 0);
+        }
+        handles.clear();
+        node.listener = Some(Listener {
+            end,
+            account,
+            sock_type,
+        });
+        self.charge(account, 1);
+        if let Some(c) = self.connections[i].as_mut() {
+            c.listening = Some(id);
+        }
+        self.done(i, t, status::OK, 0);
+    }
+
+    /// `socket_connect`: forwards the connector's far end to the listener.
+    /// The service reads none of `record`; the listener checks it (it comes
+    /// from any program with `WRITE` on the node).
+    fn socket_connect(
+        &mut self,
+        i: usize,
+        t: u32,
+        sock_type: u32,
+        record: &[u8],
+        handles: &mut Vec<T::End>,
+    ) {
+        if self.sockets.is_none() {
+            return self.error_reply(i, t, status::UNSUPPORTED);
+        }
+        // Connecting is talking to the listener: the right to write.
+        if !self.has(i, proto::rights::WRITE) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        let Some(id) = self.socket_node_of(i) else {
+            return self.done(i, t, status::NOT_FOUND, 0);
+        };
+        let Some(listener) = self
+            .sockets
+            .as_ref()
+            .and_then(|m| m.get(&id))
+            .and_then(|n| n.listener.as_ref())
+        else {
+            return self.done(i, t, status::NOT_FOUND, 0);
+        };
+        if listener.sock_type != sock_type {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        }
+        let end = listener.end;
+        // The handles go through the listener's channel in one write; what
+        // stays in `handles` after a failure `ready` closes.
+        match self.transport.write(end, record, handles) {
+            Outgoing::Sent => {
+                handles.clear();
+                self.done(i, t, status::OK, 0);
+            }
+            Outgoing::Full | Outgoing::NoMemory => self.done(i, t, status::LIMIT_REACHED, 0),
+            // A far end the kernel would not move (rights the connector's
+            // handles lack, a channel with handles queued in it): the
+            // connector's fault, and the listener is alive.
+            Outgoing::Refused => self.done(i, t, status::INVALID_ARGUMENT, 0),
+            Outgoing::Closed => {
+                // The listening program is gone without its connection
+                // saying so: the listener is dead.
+                self.socket_listener_gone(id);
+                for c in self.connections.iter_mut().flatten() {
+                    if c.listening == Some(id) {
+                        c.listening = None;
+                    }
+                }
+                self.done(i, t, status::NOT_FOUND, 0);
+            }
+        }
+    }
+
+    /// The listener of node `id` is gone (its connection closed, or its
+    /// channel did): closes the service's end; a node whose name is gone goes
+    /// with it.
+    fn socket_listener_gone(&mut self, id: u64) {
+        let Some(nodes) = self.sockets.as_mut() else {
+            return;
+        };
+        let Some(node) = nodes.get_mut(&id) else {
+            return;
+        };
+        let listener = node.listener.take();
+        if node.unlinked {
+            nodes.remove(&id);
+        }
+        if let Some(l) = listener {
+            self.transport.close(l.end);
+            self.release(l.account, 1);
+        }
+    }
+
+    /// The name of socket node `id` is gone (`unlink`, or a rename over it):
+    /// a node with no listener goes, one with a listener stays until the
+    /// listener does, as on Linux the listening socket outlives its name.
+    fn socket_unnamed(&mut self, id: u64) {
+        let Some(nodes) = self.sockets.as_mut() else {
+            return;
+        };
+        match nodes.get_mut(&id) {
+            Some(node) if node.listener.is_some() => node.unlinked = true,
+            Some(_) => {
+                nodes.remove(&id);
+            }
+            None => {}
+        }
+    }
+
+    /// The id of what `name` names in the directory of connection `i`, if it
+    /// is a socket node.
+    fn socket_id_at(&mut self, directory: Handle, name: &str) -> Option<u64> {
+        if self.sockets.as_ref().is_none_or(BTreeMap::is_empty) {
+            return None;
+        }
+        let id = self.volume.stat_at(directory, name).ok()?.id;
+        self.sockets.as_ref()?.contains_key(&id).then_some(id)
     }
 
     /// `fifo_open` (ADR-0107 item 14, INV-0006-9).
@@ -2008,14 +2304,30 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             None
         };
         let account = self.account_of(i);
-        let s = match self.add_connection(end, record, m.rights.0, account) {
-            Some(_) => status::OK,
-            None => status::LIMIT_REACHED,
+        let added = self.add_connection(end, record, m.rights.0, account);
+        let s = if added.is_some() {
+            status::OK
+        } else {
+            status::LIMIT_REACHED
         };
         if self.fifo_create
             && let Some(a) = attr.filter(|a| a.id >= first_new)
         {
             self.fifo_nodes.insert(a.id);
+        }
+        if self.socket_create
+            && added.is_some()
+            && let Some(a) = attr.filter(|a| a.id >= first_new)
+            && let Some(nodes) = self.sockets.as_mut()
+        {
+            nodes.insert(
+                a.id,
+                SocketNode {
+                    listener: None,
+                    unlinked: false,
+                    owner: added,
+                },
+            );
         }
         let made = attr.map(|a| (a.id >= first_new, a));
         self.open_answer(i, t, full, s, ("", ""), made.filter(|_| s == status::OK));
@@ -2614,8 +2926,23 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             modes::EXCHANGE => RenameMode::Exchange,
             _ => RenameMode::Replace,
         };
+        // A rename over a socket node takes its name away (not an exchange:
+        // both names stay).
+        let replaced = if mode == RenameMode::Replace {
+            // Renaming a name onto itself changes nothing.
+            let same = self.socket_id_at(source, m.old.0);
+            self.socket_id_at(target, m.new.0)
+                .filter(|id| Some(*id) != same)
+        } else {
+            None
+        };
         let r = self.volume.rename(source, m.old.0, target, m.new.0, mode);
         self.after_engine();
+        if r.is_ok()
+            && let Some(id) = replaced
+        {
+            self.socket_unnamed(id);
+        }
         self.done_result(i, t, r.map(|()| 0));
     }
 
@@ -2642,8 +2969,18 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         } else {
             PublishMode::NoReplace
         };
+        let replaced = if mode == PublishMode::Replace {
+            self.socket_id_at(directory, m.name.0)
+        } else {
+            None
+        };
         let r = self.volume.publish(file, directory, m.name.0, mode);
         self.after_engine();
+        if r.is_ok()
+            && let Some(id) = replaced
+        {
+            self.socket_unnamed(id);
+        }
         self.done_result(i, t, r.map(|()| 0));
     }
 
@@ -2654,11 +2991,17 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(directory) = self.handle_of(i) else {
             return self.done(i, t, status::STORAGE_FAILED, 0);
         };
+        let socket = self.socket_id_at(directory, name);
         let r = match self.volume.unlink(directory, name) {
             Err(FsError::IsDir) => self.volume.rmdir(directory, name),
             r => r,
         };
         self.after_engine();
+        if r.is_ok()
+            && let Some(id) = socket
+        {
+            self.socket_unnamed(id);
+        }
         self.done_result(i, t, r.map(|()| 0));
     }
 

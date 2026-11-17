@@ -1,0 +1,28 @@
+# Plan part F10 (proposed ADR-0443, INV-0443-5): the shell half. `room-image.script` starts a
+# 1.1 MiB program in a room at 1M and `tools/check-room-image.py` reads the log; `top.script` and
+# `tools/check-top-image.py` read the room holding the program's own image.
+tests = ["make -s test-libposix POSIX_CORE_MAPS_SCRIPT=tools/mutants/empty.script"]
+timeout = 3000
+
+[[mutant]]
+id = "F10-the-shell-names-its-own-job"
+file = "user/src/bin/zosh.rs"
+find = '''        self.room_job.unwrap_or(JOB)
+    }
+
+    /// A program of the volume'''
+replace = '''        JOB
+    }
+
+    /// A program of the volume'''
+note = "INV-0443-5: the shell charges the room's programs to itself: no refusal in a room at its limit"
+
+[[mutant]]
+id = "F10-libposix-names-slot-2"
+file = "crates/zoraya-posix/src/ffi/procs.rs"
+find = '''        let job = p.process_job.unwrap_or(zoraya_abi::JOB);'''
+replace = '''        let job = zoraya_abi::JOB;'''
+note = "INV-0443-2: a POSIX process holds its job at PROCESS_JOB and nothing at slot 2: every program a libposix process loads fails (ENOEXEC)"
+
+# Not listed, because no test can see it: the broker's `first.job` replaced by `JOB`. The
+# broker's own job and the first child's lie in one session job with no limit between them.

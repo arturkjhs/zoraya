@@ -10,14 +10,15 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, MAX_PINGS_USIZE, Narrow, NarrowAccount,
-    Narrowed, Ping, PingReply, Resolve, Resolved, Rtt, StatusReply, source, status as code,
+    Address, Connect, Connecting, Duplicate, Duplicated, EPHEMERAL_FIRST, GetStatus, Listen,
+    Listening, MAX_ADDRESSES, MAX_PINGS_USIZE, Narrow, NarrowAccount, NarrowRoom, Narrowed, Ping,
+    PingReply, Resolve, Resolved, Rtt, StatusReply, source, status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
 use crate::accounts::{Accounts, CarveError, Kind};
 use crate::conn::{LOOKUP_BASE, Target, is_local};
-use crate::connection::{ConnectTarget, Connection, Request, Verdict};
+use crate::connection::{ConnectTarget, Connection, Request, Room, Verdict};
 use crate::dns::{Found, Owner, ResolveFail, Resolved as Answer, Start};
 use crate::link::Link;
 use crate::stack::{PingError, PingResult, Source, Stack};
@@ -55,9 +56,45 @@ pub enum Action {
         /// OVER_QUOTA }` after `reply`, and open nothing.
         over_quota: bool,
     },
+    /// A `listen` was allowed: attach the handle that came with the request
+    /// as listener `id` (its channel's end), then write `reply`. If the
+    /// handle cannot be served, give it up with [`Service::listener_closed`]
+    /// and answer `UNAVAILABLE` instead.
+    Listen { id: usize, reply: Vec<u8> },
+    /// A `connect` to 127.0.0.0/8 that its scope allows (proposed ADR-0441):
+    /// the loopback. `netd` does not open a socket; it hands the client's two
+    /// stream ends to listener `listener` (if some listens on `port`) as an
+    /// `Accepted` from `peer_port`, and tells the client `Connected`, or
+    /// `Failed` when nothing listens (`REFUSED`) or the listener's queue is
+    /// full or gone (`REFUSED`). `reply` is written first. Nothing is charged:
+    /// the connection holds none of `netd`'s.
+    Loopback {
+        listener: Option<usize>,
+        address: [u8; 4],
+        port: u16,
+        peer_port: u16,
+        reply: Vec<u8>,
+    },
     /// The request was malformed: close this connection.
     Close,
 }
+
+/// A TCP listener (proposed ADR-0441, ADR-0442): the room it listens in, the
+/// port (a port is in use per room) and the account that pays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Listener {
+    room: Room,
+    port: u16,
+    account: usize,
+    /// The counter of the made-up ports of this listener's clients. One per
+    /// listener, so that a listener sees nothing of other rooms' connections.
+    peers: u32,
+}
+
+/// The search for a port starts at the range's start every time: a cursor shared by rooms would show one
+/// room another's `listen`s (ADR-0442 driver 3). Ports `netd` picks from for a `listen` of port 0 and for the made-up port
+/// of a loopback client: 49152 to 65535.
+const EPHEMERAL_SPAN: u32 = 65536 - EPHEMERAL_FIRST;
 
 /// A `resolve` whose answer the resolver has not given yet.
 struct Lookup {
@@ -81,8 +118,20 @@ struct PingStart {
     timeout_us: i64,
 }
 
+/// The live connections one connection (with the ones made from it) may have
+/// made with `Duplicate` (ADR-0434): what a program's `posix_spawn` needs for
+/// its helpers, and small enough that no program fills the table.
+pub const MAX_DUPLICATES: usize = 8;
+
 pub struct Service {
     connections: Vec<Option<Connection>>,
+    /// Each connection's family token (never a slot id, so a closed slot's reuse
+    /// joins nothing) and whether `Duplicate` made it. A connection `add`ed from
+    /// outside starts a family; its duplicates, and theirs, share the token for
+    /// as long as they live, whatever closes, so the family's duplicates are
+    /// counted against [`MAX_DUPLICATES`] however the asker comes and goes.
+    families: Vec<(u64, bool)>,
+    next_family: u64,
     accounts: Accounts,
     lookups: Vec<Lookup>,
     next_token: u32,
@@ -91,6 +140,9 @@ pub struct Service {
     /// not over, so the slot stays taken until it is (nobody else gets its
     /// result).
     ping: Option<(Option<usize>, u32)>,
+    /// The listeners, by id; a slot is free when `None` (the account's bound
+    /// of listeners keeps the table at most `accounts::GLOBAL` long).
+    listeners: Vec<Option<Listener>>,
 }
 
 impl Default for Service {
@@ -128,11 +180,65 @@ impl Service {
     pub fn new() -> Service {
         Service {
             connections: Vec::new(),
+            families: Vec::new(),
+            next_family: 0,
             accounts: Accounts::new(),
             lookups: Vec::new(),
             next_token: 0,
             ping: None,
+            listeners: Vec::new(),
         }
+    }
+
+    /// Listeners alive.
+    pub fn listeners(&self) -> usize {
+        self.listeners.iter().flatten().count()
+    }
+
+    /// The port of listener `id`.
+    pub fn listener_port(&self, id: usize) -> Option<u16> {
+        self.listeners.get(id)?.map(|l| l.port)
+    }
+
+    /// Listener `id` is over (its channel closed, or `netd` could not serve
+    /// it): the port and the account's charge go back.
+    pub fn listener_closed(&mut self, id: usize) {
+        if let Some(slot) = self.listeners.get_mut(id)
+            && let Some(l) = slot.take()
+        {
+            self.accounts.release(l.account, Kind::Listeners);
+        }
+    }
+
+    /// The listener of `room` on `port`: another room's is never seen
+    /// (proposed ADR-0442), so it is no more answered than no listener.
+    fn listener_on(&self, room: Room, port: u16) -> Option<usize> {
+        self.listeners
+            .iter()
+            .position(|l| l.is_some_and(|l| l.port == port && l.room == room))
+    }
+
+    /// A port above 49151 that nobody listens on and `connection`'s listen
+    /// rules cover; at most `EPHEMERAL_SPAN` are looked at. `Err` says why
+    /// none: not granted (no rule covers any), or all in use.
+    fn pick_port(&self, connection: &Connection) -> Result<u16, u32> {
+        let scope = connection.scope();
+        let mut covered = false;
+        for i in 0..EPHEMERAL_SPAN {
+            let port = (EPHEMERAL_FIRST + i) as u16;
+            if !scope.allows_listen(port, zoraya_abi::net::Protocols::TCP) {
+                continue;
+            }
+            covered = true;
+            if self.listener_on(connection.room(), port).is_none() {
+                return Ok(port);
+            }
+        }
+        Err(if covered {
+            code::BUSY
+        } else {
+            code::NOT_GRANTED
+        })
     }
 
     /// Adds a connection; its id, or `None` at the bound.
@@ -148,6 +254,11 @@ impl Service {
             self.connections.len() - 1
         };
         self.accounts.join(account);
+        if self.families.len() <= id {
+            self.families.resize(id + 1, (0, false));
+        }
+        self.next_family += 1;
+        self.families[id] = (self.next_family, false);
         Some(id)
     }
 
@@ -168,6 +279,9 @@ impl Service {
             && let Some(c) = slot.take()
         {
             self.accounts.leave(c.account());
+        }
+        if let Some(f) = self.families.get_mut(id) {
+            *f = (0, false);
         }
         // A lookup of this connection still runs; its charge goes with its
         // answer.
@@ -344,6 +458,34 @@ impl Service {
                 }
                 let account = connection.account();
                 match verdict {
+                    // The loopback (proposed ADR-0441): the scope named the
+                    // address (`names_address`, above: 127.0.0.0/8 is local,
+                    // and no web rule covers it).
+                    Verdict::Allowed if matches!(target.0, ConnectTarget::Address(a) if a[0] == 127) =>
+                    {
+                        let ConnectTarget::Address(address) = target.0 else {
+                            return Action::Close;
+                        };
+                        // Only a listener of this connection's room (ADR-0442).
+                        let listener = self.listener_on(connection.room(), port);
+                        let mut peer = 0;
+                        if let Some(Some(l)) = listener.and_then(|i| self.listeners.get_mut(i)) {
+                            l.peers = (l.peers + 1) % EPHEMERAL_SPAN;
+                            peer = l.peers;
+                        }
+                        Action::Loopback {
+                            listener,
+                            address,
+                            port,
+                            peer_port: (EPHEMERAL_FIRST + peer) as u16,
+                            reply: reply(
+                                &Connecting {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            ),
+                        }
+                    }
                     Verdict::Allowed => {
                         let scope = connection.scope_bytes().to_vec();
                         let over_quota = self.accounts.charge(account, Kind::Connections).is_err();
@@ -416,55 +558,138 @@ impl Service {
                     }
                 }
             }
-            6 => {
-                let Ok((_, m)) = decode::<Narrow>(message, handles) else {
+            5 => {
+                let Ok((_, m)) = decode::<Listen>(message, handles) else {
                     return Action::Close;
                 };
-                let verdict = connection.decide(Request::Narrow {
-                    rights: m.rights,
-                    scope: m.scope.0,
-                });
-                let answer = |c| Action::Reply(reply(&Narrowed { status: Below(c) }, t));
-                match verdict {
-                    Verdict::NotGranted => answer(code::NOT_GRANTED),
-                    Verdict::Invalid => answer(code::INVALID),
-                    Verdict::Allowed => {
-                        let Some(child) = connection.narrowed(m.rights, m.scope.0) else {
-                            return answer(code::INVALID);
-                        };
-                        match self.add(child) {
-                            Some(new) => Action::Narrowed {
-                                id: new,
-                                reply: reply(
-                                    &Narrowed {
-                                        status: Below(code::OK),
-                                    },
-                                    t,
-                                ),
-                            },
-                            None => answer(code::BUSY),
-                        }
+                let answer = |c, p| {
+                    Action::Reply(reply(
+                        &Listening {
+                            status: Below(c),
+                            port: Below(p),
+                        },
+                        t,
+                    ))
+                };
+                let asked = m.port.0 as u16;
+                // The grant is checked before anything about the port is
+                // said: a program without it learns nothing of who listens.
+                if asked != 0 {
+                    if connection.decide(Request::Listen { port: asked }) != Verdict::Allowed {
+                        return answer(code::NOT_GRANTED, 0);
                     }
+                    if self.listener_on(connection.room(), asked).is_some() {
+                        return answer(code::BUSY, 0);
+                    }
+                } else if connection.rights() & zoraya_abi::net::rights::LISTEN == 0 {
+                    return answer(code::NOT_GRANTED, 0);
+                }
+                let account = connection.account();
+                let connection = connection.clone();
+                let port = if asked != 0 {
+                    asked
+                } else {
+                    match self.pick_port(&connection) {
+                        Ok(p) => p,
+                        Err(c) => return answer(c, 0),
+                    }
+                };
+                if self.accounts.charge(account, Kind::Listeners).is_err() {
+                    return answer(code::OVER_QUOTA, 0);
+                }
+                let listener = Some(Listener {
+                    room: connection.room(),
+                    port,
+                    account,
+                    peers: 0,
+                });
+                let id = match self.listeners.iter().position(Option::is_none) {
+                    Some(i) => {
+                        self.listeners[i] = listener;
+                        i
+                    }
+                    None => {
+                        self.listeners.push(listener);
+                        self.listeners.len() - 1
+                    }
+                };
+                Action::Listen {
+                    id,
+                    reply: reply(
+                        &Listening {
+                            status: Below(code::OK),
+                            port: Below(u32::from(port)),
+                        },
+                        t,
+                    ),
                 }
             }
-            7 => {
-                let Ok((_, m)) = decode::<NarrowAccount>(message, handles) else {
-                    return Action::Close;
-                };
-                let verdict = connection.decide(Request::Narrow {
-                    rights: m.rights,
-                    scope: m.scope.0,
-                });
+            6 | 7 | 9 => {
+                // `Narrow` joins the caller's account; `NarrowAccount` carves
+                // one; `NarrowRoom` (proposed ADR-0442) does either and may
+                // name the room.
+                let (rights, scope, carve, room): (u32, &[u8], Option<u32>, &[u8]) =
+                    match header.ordinal {
+                        6 => match decode::<Narrow>(message, handles) {
+                            Ok((_, m)) => (m.rights, m.scope.0, None, &[]),
+                            Err(_) => return Action::Close,
+                        },
+                        7 => match decode::<NarrowAccount>(message, handles) {
+                            Ok((_, m)) => (m.rights, m.scope.0, Some(m.budget.0), &[]),
+                            Err(_) => return Action::Close,
+                        },
+                        _ => match decode::<NarrowRoom>(message, handles) {
+                            Ok((_, m)) => (
+                                m.rights,
+                                m.scope.0,
+                                (m.budget.0 != 0).then_some(m.budget.0),
+                                m.room.0,
+                            ),
+                            Err(_) => return Action::Close,
+                        },
+                    };
                 let answer = |c| Action::Reply(reply(&Narrowed { status: Below(c) }, t));
-                match verdict {
+                // A room is named only by a connection that holds `ROOM`: the
+                // connection a program has never does, so it cannot move into
+                // another room's loopback (INV-0442-2).
+                if !room.is_empty() && connection.rights() & zoraya_abi::net::rights::ROOM == 0 {
+                    return answer(code::NOT_GRANTED);
+                }
+                let Some(room) = (if room.is_empty() {
+                    Some(connection.room())
+                } else {
+                    Room::new(room)
+                }) else {
+                    return answer(code::INVALID);
+                };
+                match connection.decide(Request::Narrow { rights, scope }) {
                     Verdict::NotGranted => answer(code::NOT_GRANTED),
                     Verdict::Invalid => answer(code::INVALID),
                     Verdict::Allowed => {
-                        let Some(child) = connection.narrowed(m.rights, m.scope.0) else {
+                        let Some(child) = connection.narrowed(rights, scope) else {
                             return answer(code::INVALID);
                         };
+                        let child = child.in_room(room);
+                        let ok = || {
+                            reply(
+                                &Narrowed {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            )
+                        };
+                        let Some(budget) = carve else {
+                            return match self.add(child) {
+                                Some(new) => Action::Narrowed {
+                                    id: new,
+                                    reply: ok(),
+                                },
+                                None => answer(code::BUSY),
+                            };
+                        };
                         let parent = connection.account();
-                        let carved = match self.accounts.carve(parent, m.budget.0) {
+                        let listeners = u32::from(rights & zoraya_abi::net::rights::LISTEN != 0);
+                        let carved = match self.accounts.carve_with(parent, budget, listeners) {
                             Ok(a) => a,
                             Err(CarveError::Invalid) => return answer(code::INVALID),
                             Err(CarveError::OverQuota) => return answer(code::OVER_QUOTA),
@@ -472,12 +697,7 @@ impl Service {
                         match self.add(child.in_account(carved)) {
                             Some(new) => Action::Narrowed {
                                 id: new,
-                                reply: reply(
-                                    &Narrowed {
-                                        status: Below(code::OK),
-                                    },
-                                    t,
-                                ),
+                                reply: ok(),
                             },
                             None => {
                                 // Nothing joined it: it ends with no hold.
@@ -487,6 +707,39 @@ impl Service {
                             }
                         }
                     }
+                }
+            }
+            8 => {
+                // Another connection of this one's own rights and scope
+                // (ADR-0434): never wider, so no right is asked for.
+                let Ok((_, _)) = decode::<Duplicate>(message, handles) else {
+                    return Action::Close;
+                };
+                let answer = |c| Action::Reply(reply(&Duplicated { status: Below(c) }, t));
+                let family = self.families.get(id).map_or(0, |f| f.0);
+                let live = self
+                    .connections
+                    .iter()
+                    .zip(&self.families)
+                    .filter(|(c, f)| c.is_some() && f.1 && f.0 == family)
+                    .count();
+                if live >= MAX_DUPLICATES {
+                    return answer(code::BUSY);
+                }
+                match self.add(connection.clone()) {
+                    Some(new) => {
+                        self.families[new] = (family, true);
+                        Action::Narrowed {
+                            id: new,
+                            reply: reply(
+                                &Duplicated {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            ),
+                        }
+                    }
+                    None => answer(code::BUSY),
                 }
             }
             _ => Action::Reply(reply(
@@ -804,3 +1057,5 @@ fn status_reply<L: Link>(stack: &Stack<L>, now_us: i64, allowed: bool, t: u32) -
     };
     reply(&body, t)
 }
+
+const _: () = assert!(zoraya_proto_net::MAX_ROOM == zoraya_settings::rooms::MAX_NAME);

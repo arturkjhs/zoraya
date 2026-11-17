@@ -369,6 +369,161 @@ impl<S: Sys> Posix<S> {
         Ok(())
     }
 
+    // ------------------------------------------------------------ a spawn's descriptors
+
+    /// Makes ready the descriptor the child gets as fd `child` from this
+    /// process's `parent`, a Unix socket or a memory descriptor (ADR-0433,
+    /// ADR-0412 item 6, ADR-0432 item 5). Nothing is changed here: the
+    /// handles a stream's byte streams and a memory object bring are copied
+    /// by the message that carries them, the ancillary channel of a stream
+    /// socket and the channel of a packet socket move, and
+    /// [`Posix::finish_passed`] tells the parent so once the child holds
+    /// them. A description given twice, an unconnected socket and a socket
+    /// that holds bytes or a message back are refused (`EINVAL`, `EBADF`,
+    /// `EBUSY`), as a send of it would be.
+    pub(crate) fn pass_to_child(
+        &mut self,
+        child: u32,
+        parent: i32,
+        out: &mut crate::jobs::Passed<S::H>,
+    ) -> Result<(), i32> {
+        if out.sources.iter().any(|&s| self.fds.same(s, parent)) {
+            return Err(EINVAL);
+        }
+        let mut handles: Vec<(S::H, bool)> = Vec::new();
+        let mut read_only: Option<S::H> = None;
+        let record = match self.fds.get(parent) {
+            Some(Desc::Memory(m)) => {
+                // A descriptor with no object yet has nothing to give.
+                let Some(h) = m.object() else {
+                    return Err(EINVAL);
+                };
+                let (access, size, flags) = m.wire();
+                handles.push((h, true));
+                if access == 0 {
+                    read_only = Some(h);
+                }
+                let mut r = Record::one(Kind::Memory, access, false);
+                r.read_off = size;
+                r.write_off = flags;
+                out.sent_memory.push(parent);
+                r
+            }
+            Some(Desc::Socket(s)) => {
+                let Some(u) = s.unix.as_ref() else {
+                    return Err(EBADF);
+                };
+                if s.state != State::Connected {
+                    return Err(EBADF);
+                }
+                if u.held.is_some() {
+                    return Err(EBUSY);
+                }
+                if s.kind == SOCK_STREAM {
+                    if u.book.has_pending() {
+                        return Err(EBUSY);
+                    }
+                    let mut r = Record::one(Kind::Stream, 0, s.nonblock);
+                    r.sock_type = SOCK_STREAM as u8;
+                    r.read_off = u.book.read_off;
+                    r.write_off = u.book.write_off;
+                    // The whole socket moves, as a packet socket does: its
+                    // byte streams and its ancillary channel, so that one
+                    // process holds the stream's counts of bytes and
+                    // descriptors. The parent's descriptor is dead until it is
+                    // closed (ADR-0433 item 6, the architect's to accept).
+                    for (h, flag) in [(s.read, &mut r.has_read), (s.write, &mut r.has_write)] {
+                        if let Some(h) = h {
+                            *flag = true;
+                            handles.push((h, false));
+                        }
+                    }
+                    match s.ctl {
+                        Some(c) if !u.shared => {
+                            r.has_anc = true;
+                            handles.push((c, false));
+                        }
+                        // Shared by a `fork` already: the channel stays where
+                        // `fork` left it and is closed once the child has the
+                        // streams, which it holds as shared.
+                        Some(c) => {
+                            r.shared = true;
+                            out.close_after.push(c);
+                        }
+                        None => r.shared = true,
+                    }
+                    out.moved_packets.push(parent);
+                    if r.handles() == 0 {
+                        return Err(EBADF);
+                    }
+                    r
+                } else {
+                    let Some(c) = s.ctl else {
+                        return Err(EBADF);
+                    };
+                    let mut r = Record::one(Kind::Packet, 0, s.nonblock);
+                    r.sock_type = s.kind as u8;
+                    handles.push((c, false));
+                    out.moved_packets.push(parent);
+                    r
+                }
+            }
+            _ => return Err(EBADF),
+        };
+        if out.handles.len() + handles.len() > MAX_HANDLES {
+            // The whole `Inherit` is dropped on this error: nothing to roll back.
+            return Err(crate::errno::E2BIG);
+        }
+        out.fds.push(child);
+        out.records.push(record);
+        out.handles.extend(handles);
+        out.read_only.extend(read_only);
+        out.sources.push(parent);
+        Ok(())
+    }
+
+    /// The spawn happened: the sockets that moved are dead here, a stream
+    /// socket's ancillary channel is the child's and the socket is shared,
+    /// and a memory descriptor's size is fixed.
+    pub(crate) fn finish_passed(&mut self, passed: &crate::jobs::Passed<S::H>) {
+        for &fd in &passed.moved_packets {
+            if let Some(Desc::Socket(s)) = self.fds.get_mut(fd) {
+                s.read = None;
+                s.write = None;
+                s.ctl = None;
+                s.state = State::Dead;
+            }
+        }
+        for &h in &passed.close_after {
+            self.sys.close(h);
+        }
+        self.memory_sent(&passed.sent_memory);
+    }
+
+    /// The child's half, at start-up: the descriptors of the `ZPBF` bootstrap
+    /// message installed at their fds. A fd already taken, or a record that
+    /// does not fit its handles, closes what came; the caller has checked
+    /// the message with `unix::decode_passed`.
+    pub fn install_passed(&mut self, fds: &[u32], records: Vec<Record>, handles: Vec<S::H>) {
+        let mut it = handles.into_iter();
+        for (&fd, record) in fds.iter().zip(records) {
+            let mine: Vec<S::H> = it.by_ref().take(record.handles()).collect();
+            if mine.len() != record.handles() {
+                for h in mine {
+                    self.sys.close(h);
+                }
+                continue;
+            }
+            let desc = self.desc_from(record, mine);
+            if let Err(d) = self.fds.install_at(fd, desc) {
+                let _ = self.release(d);
+            }
+        }
+        for h in it {
+            self.sys.close(h);
+        }
+    }
+
     /// The send happened: the sockets that moved are gone from this process.
     fn finish_moves(&mut self, moved: &[i32], close_after: Vec<S::H>) {
         for h in close_after {
@@ -814,7 +969,7 @@ impl<S: Sys> Posix<S> {
     }
 
     /// The description a record and its handles make in the receiver.
-    fn desc_from(&mut self, r: Record, handles: Vec<S::H>) -> Desc<S::H> {
+    pub(crate) fn desc_from(&mut self, r: Record, handles: Vec<S::H>) -> Desc<S::H> {
         // Every kind but a stream socket has one handle, and a stream socket
         // at least one (`unix::Record::decode` and the handle count).
         let first = handles[0];

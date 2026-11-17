@@ -6,9 +6,9 @@
 #
 #   tools/ci-last-full.rb           environment below; prints
 #       skip=1        the latest such run, green or red, was on this very commit:
-#                     nothing new on main, the 4-hourly run need not run again
+#                     nothing new on main, the 2-hourly run need not run again
 #       skip=0
-#       last_conclusion=success|failure   how the latest such run ended (a skipping 4-hourly run
+#       last_conclusion=success|failure   how the latest such run ended (a skipping 2-hourly run
 #                     fails when this is `failure`, so that it carries the red forward)
 #       last_run=ID last_sha=SHA        the latest such run (if any)
 #       green_run=ID green_sha=SHA      the latest such run that went green (if any)

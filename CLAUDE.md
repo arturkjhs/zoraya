@@ -43,7 +43,7 @@ Read `docs/design.md` first. It says what exists and where it lives.
   `git merge --no-ff origin/BRANCH`; `make check`; `git rev-parse HEAD` (the commit checked); `git push origin
   HEAD:main`. If the push is refused because `main` moved, start again from `git fetch`. Then `git tag NAME`,
   `git push origin refs/tags/NAME`, remove the part's worktree. Do not wait for `main`'s CI run after the merge.
-- A stage's tag goes on `main` only after a scheduled or nightly full run of `main` that includes the tagged commit
+- A stage's tag goes on `main` only after a scheduled, nightly or `candidate-full/` full run that includes the tagged commit
   (its head is that commit or a descendant of it) is green (ADR-0348); `tools/ci-last-full.rb --green-for SHA` (with
   `GITHUB_REPOSITORY` set and `gh` logged in) names that run, or exits 1: a run that skipped or a red one never counts. A published tag is moved only with the
   architect's permission.
@@ -91,29 +91,31 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
     watchdog). `make test`: every step, one after another. These are for the architect and for CI's own checks;
     an agent session does not run them, nor a full GUI run (`FULL=1`, every `GUI_RUNS`).
   - Locally the TCG runs, the tour's second run and crash rounds past 2 are skipped; CI runs them all.
-- Locally run only `make check` and `make test-changed`; CI does the rest. CI policy (ADR-0348). Accepted 2026-11-15. Decided by
-  the architect; recorded by an agent at the architect's request. CI is the brake on the work, so it runs less.
+- Locally run only `make check` and `make test-changed`; CI does the rest. CI policy (ADR-0348, amended by ADR-0463).
+  Accepted 2026-11-15 and 2026-11-16. Decided by the architect; recorded by an agent at the architect's request. CI is
+  the brake on the work, so it runs less.
+  - A part merges after `make check`, `make test-changed` under HVF and its independent Opus review pass locally. No
+    candidate run in CI, and no waiting for `main`'s run after the merge.
   - A push to a `work/*` branch (or any branch but `main`) runs `make check` only, no QEMU. Do not dispatch a full run
     (`workflow_dispatch` with `full=true`) except to chase a flake.
-  - A merge candidate (the tag `candidate/BRANCH` on the branch's head, a pull request, or
-    `gh workflow run test.yml --ref BRANCH`) runs the steps `tools/ci-plan.sh` selects for its change (the map of
-    `make test-changed`, `tools/test-map.txt`) and a smoke set (boot, the shell's files script, one GUI run, the POSIX
-    hello script), not the full set. The full set (`tools/ci-tests.txt`, what `make test` runs) runs for a candidate
-    only when the change touches the kernel (`kernel/`), libposix (`crates/zoraya-posix*`, `ports/musl/`) or
-    `tools/test-runner/`. A `Makefile` change maps to the steps whose recipes or variables the diff changes
-    (`tools/ci-makefile-steps.rb`), not to every step; a change it cannot attribute (`.PHONY`, an include) runs the
-    full set.
-  - `main`'s full set runs on a schedule: every 4 hours if `main` changed since the last full run, and nightly (a 4-hourly run that skips fails if the last
-    full run was red). A
-    push to `main` runs the document checks only, whatever changed, and does not cancel a scheduled or manual full
-    run in progress.
-- Before a merge, the candidate run on the branch must be green; merge only when it is. After a merge do not wait for
-  `main`'s run: the next part merges as soon as its own candidate is green. A red scheduled or nightly run is fixed
-  first, before the next merge; its summary lists the merges since the last green full run. Run the candidate; do not
-  infer it.
-- A stage is not done until a scheduled or nightly full run that includes its last commit is green (a tag
-  `candidate-full/NAME` or a `full=true` run is not needed, and is for chasing a flake). A stage tag needs that green
-  run: `tools/ci-last-full.rb --green-for SHA` finds it (its head is the tagged commit or a descendant of it on `main`).
+  - A candidate run (the tag `candidate/BRANCH` on the branch's head, a pull request, or
+    `gh workflow run test.yml --ref BRANCH`; it runs the steps `tools/ci-plan.sh` selects and a smoke set) is made only
+    when a part changes `.github/workflows`, `tools/ci-plan.sh` or what it reads (`tools/ci-tests.txt`,
+    `tools/test-map.txt`, `tools/plan-lib.sh`, `tools/ci-plan-step.sh`, `tools/ci-makefile-steps.rb`,
+    `tools/ci-last-full.rb`), or `tools/test-runner/`; when a failure shows only under TCG; and as `candidate-full/NAME`
+    before a stage tag where no green scheduled or nightly run already includes the commit. The architect tags a
+    candidate; an agent that changes those files reports its head and does not tag it.
+  - `main`'s full set runs on a schedule: every 2 hours if `main` changed since the last full run, and nightly (a
+    2-hourly run that skips fails if the last full run was red). A push to `main` runs the document checks only,
+    whatever changed, and does not cancel a scheduled or manual full run in progress. GitHub's cron is not reliable
+    (on 2026-11-16 the runs of 10:23 to 14:23 UTC never started): when `main` changed and no full run has started for
+    2.5 hours, an agent starts one on `main`'s head (`gh workflow run test.yml --ref main -f full=true`; check
+    `gh run list --workflow test.yml` first, a run already queued or running counts). Architect's rule of 2026-11-17.
+- A red scheduled or nightly run is fixed first, before any merge; its summary lists the merges since the last green
+  full run. If it is not fixed within an hour, revert the merge that broke it and fix it on its branch.
+- A stage is not done until a scheduled, nightly or `candidate-full/` full run that includes its last commit is green.
+  A stage tag needs that green run: `tools/ci-last-full.rb --green-for SHA` finds it (its head is the tagged commit or
+  a descendant of it on `main`).
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this
   session.
 - Logic that does not need hardware lives in a separate `no_std` crate under `crates/`, with host tests

@@ -13,7 +13,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use zoraya_abi::Status;
-use zoraya_proto_net::{Connect, Connected, Connecting, Failed, Reset, Resolve, Resolved, status};
+use zoraya_proto_net::{
+    Accepted, Connect, Connected, Connecting, Failed, Listen, Listening, Reset, Resolve, Resolved,
+    status,
+};
 use zoraya_protocol::{Below, Data, Header, decode, encode};
 
 use crate::errno::{
@@ -176,16 +179,14 @@ impl<S: Sys> Posix<S> {
     /// `Connected` or `Failed` (ADR-0225 items 3 and 11).
     pub fn connect(&mut self, fd: i32, addr: &[u8]) -> Result<(), i32> {
         if self.is_unix(fd) {
-            // Socket files are plan part F7's: a path names nothing yet
-            // (ADR-0412 item 5), and a connected pair is already connected.
-            return Err(if self.socket_of(fd)?.state == State::Connected {
-                EISCONN
-            } else {
-                crate::errno::ENOENT
-            });
+            // A socket file (ADR-0412 item 5; `unix_file.rs`).
+            return self.unix_connect(fd, addr);
         }
         let (state, nonblock) = {
             let s = self.socket_of(fd)?;
+            if s.listening {
+                return Err(EISCONN);
+            }
             (s.state, s.nonblock)
         };
         match state {
@@ -539,16 +540,171 @@ impl<S: Sys> Posix<S> {
             return Ok(if e != 0 { e } else { pending });
         }
         let s = self.socket_of(fd)?;
+        if s.unix.is_none() && (level, name) == (sock::SOL_SOCKET, sock::SO_ACCEPTCONN) {
+            return Ok(i32::from(s.listening));
+        }
         if s.unix.is_some() {
             return match (level, name) {
                 (sock::SOL_SOCKET, sock::SO_DOMAIN) => Ok(crate::unix::AF_UNIX),
                 (sock::SOL_SOCKET, sock::SO_PROTOCOL) => Ok(0),
-                (sock::SOL_SOCKET, sock::SO_ACCEPTCONN) => Ok(0),
+                (sock::SOL_SOCKET, sock::SO_ACCEPTCONN) => {
+                    Ok(i32::from(s.unix.as_ref().is_some_and(|u| u.listening)))
+                }
                 (sock::IPPROTO_TCP, _) => Err(crate::errno::ENOPROTOOPT),
                 _ => sock::get_option(&s.options, s.kind, false, level, name),
             };
         }
         sock::get_option(&s.options, s.kind, false, level, name)
+    }
+
+    /// `bind`: a socket file for a Unix socket; for a TCP socket the address
+    /// is recorded and `netd` hears of it at `listen` (ADR-0225 item 5). Port
+    /// 0 asks for one at `listen`. An address that is not the wildcard or
+    /// 127.0.0.0/8 is `EADDRNOTAVAIL`; a second `bind`, or one after
+    /// `connect` or `listen`, is `EINVAL`.
+    pub fn bind(&mut self, fd: i32, addr: &[u8]) -> Result<(), i32> {
+        if self.is_unix(fd) {
+            return self.unix_bind(fd, addr);
+        }
+        let s = self.socket_of(fd)?;
+        if s.state != State::Fresh || s.listening || s.local.is_some() {
+            return Err(EINVAL);
+        }
+        let (address, port) = sock::parse_sockaddr_in(addr)?;
+        if !sock::bindable(address) {
+            return Err(EADDRNOTAVAIL);
+        }
+        self.socket_mut(fd)?.local = Some((address, port));
+        Ok(())
+    }
+
+    /// `listen`: a Unix socket's file is the service's; a TCP socket asks
+    /// `netd` for a listener on its bound port (a socket not bound listens on
+    /// a port `netd` picks, as Linux does). The `backlog` is a hint: the
+    /// queue is the listener channel's 64 messages. Listening twice is `Ok`.
+    pub fn listen(&mut self, fd: i32, backlog: i32) -> Result<(), i32> {
+        if self.is_unix(fd) {
+            return self.unix_listen(fd, backlog);
+        }
+        let s = self.socket_of(fd)?;
+        if s.listening {
+            return Ok(());
+        }
+        if s.state != State::Fresh || s.kind != sock::SOCK_STREAM {
+            return Err(EINVAL);
+        }
+        let (address, port) = s.local.unwrap_or(([0; 4], 0));
+        // No grant, no `netd`: the first call that names a port fails
+        // (ADR-0225 item 2).
+        let Some(net) = self.net else {
+            return Err(EACCES);
+        };
+        let (mine, theirs) = self
+            .sys
+            .channel_create()
+            .map_err(|s| native(s, Call::Descriptor))?;
+        let reply = self.net_call(
+            net,
+            &Listen {
+                port: Below(u32::from(port)),
+            },
+            &[theirs],
+        );
+        let answer = match reply {
+            Ok(size) => decode::<Listening>(&self.input[..size], 0)
+                .map(|(_, l)| (l.status.0, l.port.0 as u16)),
+            Err(e) => {
+                self.sys.close(mine);
+                return Err(e);
+            }
+        };
+        match answer {
+            Ok((status::OK, picked)) => {
+                let s = self.socket_mut(fd)?;
+                s.ctl = Some(mine);
+                s.listening = true;
+                s.local = Some((address, picked));
+                Ok(())
+            }
+            Ok((other, _)) => {
+                self.sys.close(mine);
+                Err(sock::listen_status(other))
+            }
+            Err(_) => {
+                self.sys.close(mine);
+                Err(EIO)
+            }
+        }
+    }
+
+    /// `accept4`: the new socket's fd; for a TCP socket its peer is
+    /// `getpeername`'s, for a Unix socket the peer has no name. Waits unless
+    /// the socket or the call is non-blocking (`EAGAIN`).
+    pub fn accept(&mut self, fd: i32, nonblock: bool, cloexec: bool) -> Result<i32, i32> {
+        if self.is_unix(fd) {
+            return self.unix_accept(fd, nonblock, cloexec);
+        }
+        let s = self.socket_of(fd)?;
+        let (Some(ctl), true) = (s.ctl, s.listening) else {
+            return Err(EINVAL);
+        };
+        let (kind, wait, local) = (s.kind, !s.nonblock, s.local);
+        // Room first: a connection taken with no fd to hold it would be lost.
+        if (zoraya_abi::posix::OPEN_MAX as usize).saturating_sub(self.fds.count()) == 0 {
+            return Err(crate::errno::EMFILE);
+        }
+        loop {
+            match self
+                .sys
+                .channel_read(ctl, &mut self.input, &mut self.handles)
+            {
+                Ok(size) => {
+                    let handles: Vec<S::H> = core::mem::take(&mut self.handles);
+                    // What `netd` sends: `Accepted` and the two stream ends.
+                    // Anything else is not a connection: closed and skipped.
+                    let accepted = match decode::<Accepted>(&self.input[..size], handles.len()) {
+                        Ok((_, a)) if handles.len() == 2 => {
+                            Some((a.address.to_be_bytes(), a.port.0 as u16))
+                        }
+                        _ => None,
+                    };
+                    let Some(peer) = accepted else {
+                        for h in handles {
+                            self.sys.close(h);
+                        }
+                        continue;
+                    };
+                    let mut sock = Socket::fresh(kind, nonblock);
+                    sock.state = State::Connected;
+                    sock.read = Some(handles[0]);
+                    sock.write = Some(handles[1]);
+                    sock.peer = Some(peer);
+                    // The address it was reached at: the listener's port, on
+                    // the loopback (a wildcard bind is reached there).
+                    sock.local =
+                        local.map(|(a, p)| (if a == [0; 4] { [127, 0, 0, 1] } else { a }, p));
+                    return self.install_desc(Desc::Socket(Box::new(sock)), cloexec);
+                }
+                Err(Status::WouldBlock) => {
+                    if !wait {
+                        return Err(EAGAIN);
+                    }
+                    self.wait_point(ctl, signals::READABLE | signals::PEER_CLOSED)?;
+                }
+                // `netd` is gone: no connection will come. Said once; the
+                // socket is a dead listener after it.
+                Err(Status::PeerClosed) => {
+                    if let Ok(sock) = self.socket_mut(fd) {
+                        sock.ctl = None;
+                        sock.listening = false;
+                        sock.state = State::Dead;
+                    }
+                    self.sys.close(ctl);
+                    return Err(ECONNABORTED);
+                }
+                Err(s) => return Err(native(s, Call::Other)),
+            }
+        }
     }
 
     /// `getpeername`.
@@ -560,11 +716,11 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    /// `getsockname`: `netd` has no `local()` yet, so an unbound socket is
-    /// the wildcard address and port 0 (open item of N4).
+    /// `getsockname`: what `bind` recorded and `listen` made of it, an
+    /// accepted socket's listener address; else (a socket `connect` made)
+    /// the wildcard and port 0, for `netd` has no `local()` (open item of N4).
     pub fn getsockname(&self, fd: i32) -> Result<([u8; 4], u16), i32> {
-        self.socket_of(fd)?;
-        Ok(([0; 4], 0))
+        Ok(self.socket_of(fd)?.local.unwrap_or(([0; 4], 0)))
     }
 
     /// `MSG_PEEK` and `MSG_OOB` are not offered (ADR-0225 item 4).

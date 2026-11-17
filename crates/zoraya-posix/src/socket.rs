@@ -226,6 +226,26 @@ pub fn connect_status(code: u32) -> i32 {
     }
 }
 
+/// `errno` for the status of a refused `listen` (`Listening`; proposed
+/// ADR-0441).
+pub fn listen_status(code: u32) -> i32 {
+    match code {
+        status::NOT_GRANTED => EACCES,
+        status::INVALID => EINVAL,
+        status::UNAVAILABLE => ENETDOWN,
+        status::BUSY => crate::errno::EADDRINUSE,
+        status::OVER_QUOTA => ENOBUFS,
+        _ => crate::errno::EIO,
+    }
+}
+
+/// Whether `bind` takes `address`: the wildcard or an address of the
+/// loopback, 127.0.0.0/8. The library does not know the interface's address,
+/// and `netd` listens on no other (proposed ADR-0441 item 2).
+pub fn bindable(address: [u8; 4]) -> bool {
+    address == [0; 4] || address[0] == 127
+}
+
 /// `errno` for a `Failed` reason (ADR-0225 item 3, ADR-0263 item 4).
 pub fn failed_reason(why: u32) -> i32 {
     match why {
@@ -544,6 +564,14 @@ pub struct Socket<H> {
     /// A pending `SO_ERROR`, from a failed connect or a reset.
     pub error: i32,
     pub peer: Option<([u8; 4], u16)>,
+    /// The address `bind` recorded, or `listen` made (port 0 becomes the
+    /// port `netd` picked); an accepted socket has its listener's
+    /// (`getsockname`). TCP only.
+    pub local: Option<([u8; 4], u16)>,
+    /// `listen` was answered (proposed ADR-0441): `ctl` is the listener
+    /// channel `Accepted` arrives on. The state stays `Fresh`, so that every
+    /// call that needs a connection says `ENOTCONN`. TCP only.
+    pub listening: bool,
     pub options: Options,
     /// What an `AF_UNIX` socket adds (ADR-0412); `None` for TCP. A Unix
     /// stream socket keeps its byte streams in `read` and `write` and its
@@ -564,6 +592,17 @@ pub struct UnixPart<H> {
     pub held: Option<Held<H>>,
     pub shut_rd: bool,
     pub shut_wr: bool,
+    /// The path `bind` made this socket's file at, as the program gave it
+    /// (`getsockname`).
+    pub name: Option<Vec<u8>>,
+    /// The path `connect` went to (`getpeername`); an accepted socket has none.
+    pub peer_name: Option<Vec<u8>>,
+    /// The connection to the socket's file that `bind` made: `listen` asks
+    /// the service over it, and its closing ends the listener (proposed
+    /// ADR-0439).
+    pub node: Option<H>,
+    /// `listen` was answered: `ctl` is the channel new connections arrive on.
+    pub listening: bool,
 }
 
 /// A packet message waiting for room in the fd table.
@@ -584,6 +623,10 @@ impl<H> Socket<H> {
             held: None,
             shut_rd: false,
             shut_wr: false,
+            name: None,
+            peer_name: None,
+            node: None,
+            listening: false,
         }));
         s
     }
@@ -598,6 +641,8 @@ impl<H> Socket<H> {
             ctl: None,
             error: 0,
             peer: None,
+            local: None,
+            listening: false,
             options: Options::default(),
             unix: None,
         }
@@ -615,6 +660,15 @@ impl<H: Copy> Socket<H> {
         if let Some(u) = &self.unix {
             // A Unix socket: a packet one is one channel, a stream one the
             // two byte streams; what the library already holds is ready.
+            if u.listening {
+                // Readable: a connection waits to be accepted. `None` for writing
+                // is not "writable": `poll` skips a listener's write side.
+                return if writing {
+                    None
+                } else {
+                    self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
+                };
+            }
             if self.state != State::Connected {
                 return None;
             }
@@ -635,6 +689,15 @@ impl<H: Copy> Socket<H> {
                     self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
                 };
             }
+        }
+        if self.listening {
+            // Readable: a connection waits to be accepted. `None` for writing
+            // is not "writable": `poll` skips a listener's write side.
+            return if writing {
+                None
+            } else {
+                self.ctl.map(|c| (c, READABLE | PEER_CLOSED))
+            };
         }
         match self.state {
             State::Fresh | State::Dead => None,
@@ -952,5 +1015,36 @@ mod tests {
         assert_eq!(s.wait_source(false), None);
         s.state = State::Dead;
         assert_eq!(s.wait_source(true), None);
+    }
+
+    #[test]
+    fn a_listener_is_waited_on_by_its_channel_for_reading() {
+        use crate::sys::signals::{PEER_CLOSED, READABLE};
+        let mut s: Socket<u8> = Socket::fresh(SOCK_STREAM, false);
+        s.ctl = Some(9);
+        s.read = Some(2);
+        s.write = Some(3);
+        // A socket that is not listening has no source for a fresh state.
+        assert_eq!(s.wait_source(false), None);
+        s.listening = true;
+        assert_eq!(s.wait_source(false), Some((9, READABLE | PEER_CLOSED)));
+        // Writing has no source here; `poll` does not report a listener as
+        // writable (tests/tcplisten.rs).
+        assert_eq!(s.wait_source(true), None);
+    }
+
+    #[test]
+    fn listen_statuses_have_their_errno_and_bind_takes_the_loopback_only() {
+        use crate::errno::{EADDRINUSE, EIO};
+        assert_eq!(listen_status(status::NOT_GRANTED), EACCES);
+        assert_eq!(listen_status(status::BUSY), EADDRINUSE);
+        assert_eq!(listen_status(status::OVER_QUOTA), ENOBUFS);
+        assert_eq!(listen_status(status::INVALID), EINVAL);
+        assert_eq!(listen_status(status::UNAVAILABLE), ENETDOWN);
+        assert_eq!(listen_status(status::LOCAL), EIO);
+        assert!(bindable([0; 4]) && bindable([127, 0, 0, 1]) && bindable([127, 255, 0, 3]));
+        for a in [[10, 0, 2, 15], [126, 0, 0, 1], [128, 0, 0, 1], [255; 4]] {
+            assert!(!bindable(a), "{a:?}");
+        }
     }
 }

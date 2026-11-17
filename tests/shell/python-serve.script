@@ -1,0 +1,35 @@
+# Plan part F7b (proposed ADR-0441; `make test-python-serve`), the plan's "done when": `python3 -m http.server`
+# serves a file to `curl` in the same room. The server is a background job of the line with a `+listen 8000` word;
+# curl is a foreground command whose literal URL gives it the reach rule for 127.0.0.1:8000 (an address keeps its
+# own rule). No host server: the exchange is netd's loopback.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+# The server. -u: its start line reaches the terminal at once, which is what the next line waits for.
+> +listen 8000 python3 -u -m http.server 8000 --bind 127.0.0.1 &\r
+< Serving HTTP on 127.0.0.1 port 8000
+# The file of the current directory, over HTTP, by a second program.
+> curl http://127.0.0.1:8000/served.txt\r
+< served by python3 -m http.server over the loopback of netd
+< \r\n~>
+> curl -i http://127.0.0.1:8000/served.txt\r
+< HTTP/1.0 200 OK
+< \r\n~>
+# A file that is not there: the server's answer.
+> curl -i http://127.0.0.1:8000/nothing.txt\r
+< HTTP/1.0 404
+< \r\n~>
+# Nobody listens on 8001: refused, and curl says it could not connect (exit 7).
+> curl http://127.0.0.1:8001/\r
+< curl: (7)
+< \r\n~>
+> status\r
+< \r\nexit status 7
+< \r\n~>
+# Without a +listen word the same server cannot listen: netd refuses (INV-0440-1).
+> python3 -m http.server 8002 --bind 127.0.0.1\r
+< PermissionError
+< \r\n~>
+x power off
+> poweroff\r

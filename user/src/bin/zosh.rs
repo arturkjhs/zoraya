@@ -488,6 +488,9 @@ enum Ready {
         /// The client end of the window's channel to the compositor, for a
         /// description with `window` (ADR-0317), made by the panel.
         window: Option<Handle>,
+        /// The program has an own directory (ADR-0341): its `HOME` is the
+        /// user database's home, which that directory sits under.
+        own_home: bool,
     },
 }
 
@@ -872,6 +875,14 @@ struct Z {
     refused_seen: (u64, u64),
     /// The CPU share of each room since this shell last asked (`top`).
     usage_tracker: zoraya_rooms::Tracker,
+    /// The `+net` words the panel started this shell's room with (`--net`,
+    /// ADR-0462): what the network connection at slot 9 reaches. A shell that
+    /// enters a room by `room NAME` takes the table's.
+    launch_nets: Vec<String>,
+    /// The shell was started by the panel in a room (`--room`): its network
+    /// connection (slot 9) is already keyed by that room, and has no `ROOM` right
+    /// to name one (ADR-0442, ADR-0462).
+    net_keyed: bool,
 }
 
 impl Z {
@@ -1090,7 +1101,7 @@ impl Z {
         };
         // untrusted-gate: web-refusal-call (the POSIX path below has its own)
         self.refuse_web_in_untrusted_room(&d)?;
-        let net = Self::net_grant_with(exec, &d, base, &self.cwd)?;
+        let net = Self::net_grant_with(exec, &d, base, &self.cwd, self.room.as_ref())?;
         if net.is_some() {
             // untrusted-gate: net-refusal-call (the POSIX path below has its own)
             self.refuse_net_in_untrusted_room(exec.name)?;
@@ -1145,6 +1156,17 @@ impl Z {
             .map_err(|why| zoraya_command::error("zosh", Some(name), why, &[]))
     }
 
+    /// The room a connection made now belongs to (proposed ADR-0442): the
+    /// shell's current room, empty for `home`.
+    fn net_room(&self) -> String {
+        if self.net_keyed {
+            return String::new();
+        }
+        self.room
+            .as_ref()
+            .map_or_else(String::new, |r| r.name.clone())
+    }
+
     /// `net_grant` for a description given: the image's POSIX programs'
     /// as well (N4).
     fn net_grant_with(
@@ -1152,12 +1174,15 @@ impl Z {
         d: &Description,
         base: bool,
         cwd: &str,
+        room: Option<&zoraya_settings::rooms::Room>,
     ) -> Result<Option<(u32, Vec<u8>)>, String> {
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
         let parsed = match zoraya_command::parse(d, &texts) {
             Ok(zoraya_command::Outcome::Run(p)) => p,
             _ => zoraya_command::Parsed::default(),
         };
+        // The room's `+net` words bound the line and let a value designate
+        // inside them; they give it no network (ADR-0224 item 2, ADR-0462).
         let line = grants::Line {
             description: d,
             parsed: &parsed,
@@ -1165,7 +1190,12 @@ impl Z {
             cwd,
             grants: exec.grants,
             nets: exec.nets,
+            listens: exec.listens,
             base_system: base,
+            room: room.map(|r| grants::RoomBound {
+                name: &r.name,
+                words: &r.nets,
+            }),
         };
         zoraya_shell::netgrant::net_for(&line).map_err(|r| {
             let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
@@ -1190,7 +1220,7 @@ impl Z {
         };
         // untrusted-gate: web-refusal-call (the native path above has its own)
         self.refuse_web_in_untrusted_room(d)?;
-        Self::net_grant_with(exec, d, true, &self.cwd)
+        Self::net_grant_with(exec, d, true, &self.cwd, self.room.as_ref())
     }
 
     /// ADR-0324 item 7: a description's `net web` is never honoured in an
@@ -1228,9 +1258,24 @@ impl Z {
         // Each POSIX program counts against an account of its own, carved
         // from the shell's (ADR-0262 item 2; Q3): what it opens does not use
         // up the shell's, or another program's, connections.
-        Ok(self.net.and_then(|root| {
-            zoraya_user::netclient::narrow_account(root, rights, POSIX_NET_BUDGET, &scope).ok()
-        }))
+        // The connection is in the shell's current room, which `netd` keys the
+        // loopback by (proposed ADR-0442); the program cannot name another.
+        let room = self.net_room();
+        let Some(root) = self.net else {
+            return Ok(None);
+        };
+        // At the limit (the network service carves a few accounts at once,
+        // session-wide) or when the room's connection refuses a wider scope, the
+        // line is refused with the reason, not run without a connection
+        // (review of 10g, finding 2).
+        zoraya_user::netclient::narrow_room(root, rights, POSIX_NET_BUDGET, &scope, &room)
+            .map(Some)
+            .map_err(|status| {
+                let (problem, hint) = zoraya_shell::netgrant::connection_refusal(
+                    status == zoraya_proto_net::status::OVER_QUOTA,
+                );
+                zoraya_command::error("zosh", Some(exec.name), problem, &[hint])
+            })
     }
 
     /// The plan of a line running `exec` under description `d` (rules 1
@@ -1256,7 +1301,9 @@ impl Z {
             cwd: &self.cwd,
             grants: exec.grants,
             nets: exec.nets,
+            listens: exec.listens,
             base_system: base,
+            room: None,
         };
         let planned = grants::plan(&line).and_then(|p| {
             // Rule 5: designated paths through link objects.
@@ -1383,7 +1430,8 @@ impl Z {
         // `netd` refuses, the command gets none and says so.
         if let Some((rights, scope)) = net
             && let Some(root) = self.net
-            && let Ok(connection) = zoraya_user::netclient::narrow(root, rights, &scope)
+            && let Ok(connection) =
+                zoraya_user::netclient::narrow_room(root, rights, 0, &scope, &self.net_room())
         {
             handles.push(ChannelEntry {
                 handle: connection,
@@ -1621,6 +1669,13 @@ impl Z {
         }
     }
 
+    /// The job an image of a program started here is charged to: the room's
+    /// launch job when the shell holds one, else the shell's own (proposed
+    /// ADR-0443, ADR-0262: what is made for a client is paid by the client).
+    fn image_job(&self) -> Handle {
+        self.room_job.unwrap_or(JOB)
+    }
+
     /// A program of the volume: native when it carries the mark (rule 9),
     /// with the current directory only, since no description of the
     /// image's names it; else a POSIX program through the broker.
@@ -1641,8 +1696,8 @@ impl Z {
                 file_rights::READ | file_rights::CLONE,
             )
             .map_err(|s| fail(&problem(s)))?;
-        let (image, native) =
-            posix_child::load(&file).map_err(|s| fail(&zoraya_command::status_problem(s)))?;
+        let (image, native) = posix_child::load(&file, self.image_job())
+            .map_err(|s| fail(&zoraya_command::status_problem(s)))?;
         drop(file);
         let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes()).map_err(|_| fail("?"))?;
         if native {
@@ -1693,6 +1748,18 @@ impl Z {
         let with_roots = net.is_some() && self.posix_reaches(exec, path);
         // The system's fonts come with a window, read only (ADR-0326 item 4).
         let fonts = Self::posix_fonts(path);
+        // ADR-0341: the program's own directory, from its description.
+        let own = match self.posix_own(exec, path) {
+            Ok(o) => o,
+            Err(e) => {
+                let _ = handle_close(image);
+                if let Some(h) = net {
+                    let _ = handle_close(h);
+                }
+                return Err(e);
+            }
+        };
+        let own_home = own.is_some();
         let planned = self
             .posix_plan(exec, path)
             .map(|mut plan| {
@@ -1706,7 +1773,10 @@ impl Z {
                 }
                 plan
             })
-            .and_then(|plan| self.posix_entries(exec, image, &plan).map(|t| (t, plan)));
+            .and_then(|plan| {
+                self.posix_entries(exec, image, &plan, own.as_ref())
+                    .map(|t| (t, plan))
+            });
         let ((entries, cwd_entry, cwd), plan) = match planned {
             Ok(x) => x,
             Err(e) => {
@@ -1769,6 +1839,7 @@ impl Z {
                 held,
                 net,
                 window,
+                own_home,
             },
             given,
         ))
@@ -1787,6 +1858,7 @@ impl Z {
         let kind = |k: P| match k {
             P::Directory => TableKind::Directory,
             P::Tmp => TableKind::Tmp,
+            P::Own => TableKind::Own,
             _ => TableKind::Other,
         };
         zoraya_shell::delivery::Held::from_table(
@@ -1890,6 +1962,112 @@ impl Z {
             .map_err(|why| zoraya_command::error("zosh", Some(exec.name), &why, &[]))
     }
 
+    /// The own directory the line gives a POSIX program (ADR-0341): from the
+    /// image's description that names `path` and no other, in the room the
+    /// line runs in. A line that sets `HOME`, or names the directory in a
+    /// `+r` or `+w`, is refused.
+    fn posix_own(&self, exec: &Exec<'_>, path: &str) -> Result<Option<grants::Own>, String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let Some(d) = grants::trusted_description(&trusted, path) else {
+            return Ok(None);
+        };
+        let room = self.room.as_ref().map(|r| r.name.as_str());
+        let Some(own) = grants::own_directory(d, true, room) else {
+            return Ok(None);
+        };
+        let refuse = |subject: &str, problem: &str, hints: &[&str]| {
+            zoraya_command::error("zosh", Some(subject), problem, hints)
+        };
+        if exec.env.iter().any(|v| v.starts_with("HOME=")) {
+            return Err(refuse(
+                "HOME",
+                &format!(
+                    "{} finds its files through HOME, which is its own directory's home",
+                    exec.name
+                ),
+                &["write the line without HOME="],
+            ));
+        }
+        let room_paths: Vec<(bool, String)> = self
+            .room
+            .as_ref()
+            .map(|r| {
+                r.grants
+                    .iter()
+                    .map(|g| (g.write, self.room_path(&g.path)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        grants::own_conflict(&own, &self.cwd, exec.grants, &room_paths).map_err(|r| {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            refuse(&r.subject, &r.problem, &hints)
+        })?;
+        Ok(Some(own))
+    }
+
+    /// Where `--` goes in the arguments of a POSIX program of the image whose
+    /// description has a `rest` operand (ADR-0340 item 4).
+    fn end_of_options(exec: &Exec<'_>, path: &str) -> Option<usize> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let d = grants::trusted_description(&trusted, path)?;
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        grants::end_of_options_at(d, &texts)
+    }
+
+    /// A connection to the own directory `own`, made when the program first
+    /// runs (ADR-0341 item 2): to change anything in, or with `read` to read
+    /// only. Each missing level is made, which the shell may do under
+    /// `/data/home` or `/data/ROOM` only.
+    fn own_connection(&self, who: &str, own: &grants::Own) -> Result<File, String> {
+        let fail = |s: u32| zoraya_command::error("zosh", Some(&own.real), &problem(s), &[]);
+        let wanted = if own.read {
+            file_rights::READ | file_rights::CLONE
+        } else {
+            file_rights::ALL & !file_rights::PUBLISH
+        };
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| fail(zoraya_command::FILE_GONE))?;
+        // A shell that holds `/data/home` and entered a room holds nothing
+        // of `/data/ROOM`: the hint says what would work (ADR-0341 item 2:
+        // the directory is given by whoever starts the shell).
+        if self.not_given(who, &own.real, true, None).is_some() {
+            let room = self.room.as_ref().map_or("home", |r| r.name.as_str());
+            return Err(format!(
+                "zosh: {}: not given to this shell\n  hint: {who} keeps its files there, and this shell does not hold it\n  to use {who} in room {room}: open a terminal in the room (its shell holds the room's directory)\n",
+                own.real
+            ));
+        }
+        let rel = own.real.trim_start_matches('/');
+        let all = file_rights::ALL & !file_rights::PUBLISH;
+        // Only the levels below the entry that covers the path are made: a
+        // room's shell holds `/data/ROOM` and nothing above it, and must not
+        // touch `/data` (review of 10g, finding 1). The first level that
+        // opens, from the deepest, is where making starts.
+        let parts: Vec<&str> = rel.split('/').collect();
+        let mut have = parts.len();
+        while have > 0
+            && root
+                .open(&parts[..have].join("/"), OPEN_DIRECTORY, all)
+                .is_err()
+        {
+            have -= 1;
+        }
+        for i in have..parts.len() {
+            let parent = parts[..i].join("/");
+            let dir = root.open(&parent, OPEN_DIRECTORY, all).map_err(fail)?;
+            dir.make_directory(parts[i]).map_err(fail)?;
+        }
+        root.open(rel, OPEN_DIRECTORY, wanted).map_err(fail)
+    }
+
     /// A POSIX program's plan: by the description of the system image's
     /// that names `path` (INV-0153-6), or the current directory and the
     /// line's grants alone.
@@ -1924,11 +2102,43 @@ impl Z {
     /// through: the line runs with no designations, so it is no widening,
     /// though its other words are not checked (N4).
     fn userland_options(exec: &Exec<'_>, d: &Description) -> Result<(), String> {
-        if !descriptions::USERLAND.contains(&d.name.as_str()) {
+        // A program with an own directory or a `reach` (ssh, ssh-keygen) is
+        // held to its options the same way (ADR-0340 item 4): `-J`,
+        // `-o` and the rest are a usage mistake the shell refuses, not words
+        // the program reads.
+        let userland = descriptions::USERLAND.contains(&d.name.as_str());
+        if !userland && d.reach.is_none() && d.data.is_none() {
             return Ok(());
         }
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        let Err(why) = zoraya_command::parse(d, &texts) else {
+        // The program reads short options only: a long form is refused with
+        // the short one named, so `grants` never states what the program
+        // would not do (review of 10g, finding 7).
+        if !userland && let Some((word, short)) = grants::long_option_used(d, &texts) {
+            let hint = if short.is_empty() {
+                format!("help {} lists what its description lets through", d.name)
+            } else {
+                format!("write {short}")
+            };
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                &format!("{word}: the program reads short options only"),
+                &[hint.as_str()],
+            ));
+        }
+        let parsed = zoraya_command::parse(d, &texts);
+        // `--help` with other words reaches the program, whose own option
+        // reading refuses them: not the shell's refusal (finding 13).
+        if !userland && matches!(parsed, Ok(zoraya_command::Outcome::Help)) && texts.len() > 1 {
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                "--help takes no other words",
+                &["write --help alone"],
+            ));
+        }
+        let Err(why) = parsed else {
             return Ok(());
         };
         if !why.is_option_error() {
@@ -1956,7 +2166,7 @@ impl Z {
             d.name
         );
         let mut hints = alloc::vec![help.as_str()];
-        if d.name != "awk" {
+        if userland && d.name != "awk" {
             hints.push(toybox.as_str());
         }
         Err(zoraya_command::error(
@@ -1978,6 +2188,7 @@ impl Z {
         exec: &Exec<'_>,
         image: Handle,
         plan: &[grants::Planned],
+        own: Option<&grants::Own>,
     ) -> Result<(Vec<posix_child::Entry>, u32, String), String> {
         use zoraya_abi::posix::EntryKind as P;
         let merged = grants::merge(plan);
@@ -2003,6 +2214,25 @@ impl Z {
                 Ok(Some((_, _))) => files.push(m.path.clone()),
                 // Missing: the program finds it missing.
                 Ok(None) => {}
+                Err(e) => {
+                    close(&entries);
+                    return Err(e);
+                }
+            }
+        }
+        // ADR-0341 item 3: the program's own directory, at the path it
+        // looks at, marked so that its children get it to read only. Never
+        // merged with an entry of the line (`own_conflict` refused those).
+        if let Some(own) = own {
+            match self.own_connection(exec.name, own) {
+                Ok(dir) => {
+                    entries.push(posix_child::Entry {
+                        prefix: own.view.clone(),
+                        kind: P::Own,
+                        handle: Some(dir.end),
+                    });
+                    core::mem::forget(dir);
+                }
                 Err(e) => {
                     close(&entries);
                     return Err(e);
@@ -4337,8 +4567,12 @@ impl Z {
                     untrusted: false,
                     colour: 0,
                     limits: zoraya_settings::rooms::Limits::default(),
+                    nets: self.launch_nets.clone(),
+                    // Not the shell's own `/data/ROOM` (ADR-0341 item 2): it is
+                    // no grant of the room.
                     grants: entries
                         .iter()
+                        .filter(|e| e.path != format!("/data/{name}"))
                         .map(|e| zoraya_settings::rooms::Grant {
                             write: e.rights & file_rights::WRITE != 0,
                             path: grants::shown(&e.path, &home),
@@ -4367,6 +4601,22 @@ impl Z {
                     "ADR-0056: until a room's memory and processes can be limited, no program runs untrusted",
                 ],
             ));
+        }
+        // A `+net` word of the room's line that is no word (a hand edit of
+        // /config/rooms) is said once and dropped: it must not make every
+        // command of the room fail (review of 10g, finding 9).
+        let mut room = room;
+        let mut dropped = String::new();
+        room.nets
+            .retain(|w| match zoraya_shell::netgrant::parse_word(w) {
+                Ok(_) => true,
+                Err(why) => {
+                    dropped.push_str(&format!("room {name}: +net {w}: {why}: ignored\n"));
+                    false
+                }
+            });
+        if !dropped.is_empty() {
+            show(&dropped);
         }
         // The room's one job (ADR-0269 point 4): asked for before anything
         // else changes, so that a refusal leaves the shell where it was.
@@ -4807,6 +5057,10 @@ impl Z {
                         line.push_str("  ");
                         line.push_str(&g.words());
                     }
+                    for n in &r.nets {
+                        line.push_str("  +net ");
+                        line.push_str(n);
+                    }
                     io.out.push_str(&line);
                     io.out.push('\n');
                 }
@@ -4840,16 +5094,48 @@ impl Z {
                     return fail(
                         io,
                         Some(name),
-                        "give the grants as +r PATH or +w PATH",
+                        "give the grants as +r PATH, +w PATH or +net WORD",
                         &["room new project +w ~/project +r ~/include"],
                     );
                 }
                 let mut given = Vec::new();
+                let mut nets: Vec<String> = Vec::new();
                 for pair in rest.chunks(2) {
+                    if pair[0] == "+net" {
+                        // ADR-0462: the room's terminals get the network narrowed to
+                        // these words. A room holds only what its creator holds: a
+                        // shell with no network root has none to give, and a room's
+                        // shell gives no word its own room lacks.
+                        if let Err(why) = zoraya_shell::netgrant::parse_word(pair[1]) {
+                            return fail(
+                                io,
+                                Some(pair[1]),
+                                &why,
+                                &["write a host, *.suffix, an address or ADDRESS/BITS, with :PORT"],
+                            );
+                        }
+                        if self.net.is_none() {
+                            return fail(io, Some(pair[1]), "this shell holds no network", &[]);
+                        }
+                        if self
+                            .room
+                            .as_ref()
+                            .is_some_and(|r| !zoraya_shell::netgrant::word_within(pair[1], &r.nets))
+                        {
+                            return fail(
+                                io,
+                                Some(pair[1]),
+                                "outside what this room holds",
+                                &["room --leave first to give more"],
+                            );
+                        }
+                        nets.push(pair[1].into());
+                        continue;
+                    }
                     let write = match pair[0] {
                         "+w" => true,
                         "+r" => false,
-                        other => return fail(io, Some(other), "not +r or +w", &[]),
+                        other => return fail(io, Some(other), "not +r, +w or +net", &[]),
                     };
                     // The shell has read `~` already (ADR-0150 rule 8): a path
                     // under home is written back with it, as the mockups and
@@ -4908,6 +5194,7 @@ impl Z {
                     colour: table.free_colour(),
                     limits,
                     grants: given,
+                    nets,
                 };
                 match rooms::add(&bytes, &room) {
                     Ok(out) => match self.publish_file(ROOMS, &out) {
@@ -5033,10 +5320,14 @@ impl Z {
         if self.lookup(name) == Found::Program
             && let Some(path) = self.on_volume.get(name).cloned()
         {
+            // The probe makes a whole image to read its mark and drops it: the
+            // shell's own job, so that `grants` in a room at its limit neither
+            // fails nor counts a refusal for a command that runs nothing.
+            let job = JOB;
             let native = self.root.as_ref().is_some_and(|r| {
                 r.open_followed(path.trim_start_matches('/'), 0, file_rights::READ)
                     .ok()
-                    .and_then(|f| posix_child::load(&f).ok())
+                    .and_then(|f| posix_child::load(&f, job).ok())
                     .is_some_and(|(image, native)| {
                         let _ = handle_close(image);
                         native
@@ -5088,13 +5379,25 @@ impl Z {
                     } else {
                         zoraya_shell::terminal::streams_words(tty)
                     };
-                    io.out.push_str(&grants::report(
+                    let own = if native {
+                        None
+                    } else {
+                        match self.posix_own(exec, &path) {
+                            Ok(o) => o,
+                            Err(e) => {
+                                io.err.push_str(&e);
+                                return 1;
+                            }
+                        }
+                    };
+                    io.out.push_str(&grants::report_with(
                         name,
                         &plan,
                         &home,
                         &words,
                         !native,
                         !native && tty.contains(&true),
+                        own.as_ref(),
                     ));
                     0
                 }
@@ -5195,7 +5498,9 @@ impl Host for Z {
             // untrusted-gate: web-refusal-call (`grants`, a native command)
             self.refuse_web_in_untrusted_room(&d)
                 .ok()
-                .and_then(|()| Self::net_grant_with(exec, &d, base, &self.cwd).ok())
+                .and_then(|()| {
+                    Self::net_grant_with(exec, &d, base, &self.cwd, self.room.as_ref()).ok()
+                })
                 .flatten()
         } else if self.lookup(exec.name) == Found::Program
             && let Some(path) = self.on_volume.get(exec.name).cloned()
@@ -5653,6 +5958,7 @@ impl Host for Z {
                         held,
                         net,
                         window,
+                        own_home,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
@@ -5673,14 +5979,29 @@ impl Host for Z {
                         }
                         let mut args: Vec<&[u8]> = alloc::vec![exec.name.as_bytes()];
                         args.extend(exec.args.iter().map(|a| a.text.as_bytes()));
+                        // A description with a `rest` operand (ssh): `--`
+                        // before the host, so that the program reads no
+                        // option after it (ADR-0340 item 4).
+                        if let Some(at) = Self::end_of_options(exec, &exe) {
+                            args.insert(1 + at, b"--");
+                        }
                         // PATH and HOME for a POSIX program unless the line
                         // gives them (ADR-0104 item 12 gives a session's).
                         // TERM too for a program with the terminal on any of
                         // its fds (ADR-0333 item 1; `console.term` on the
                         // serial console, item 5).
+                        // A program with an own directory has the user
+                        // database's home as `HOME`, whatever `shell.home`
+                        // is: OpenSSH and git find their files under it
+                        // (ADR-0341 item 3).
+                        let home = if own_home {
+                            String::from(grants::USER_HOME)
+                        } else {
+                            self.home()
+                        };
                         let env = zoraya_shell::terminal::posix_env(
                             exec.env,
-                            &self.home(),
+                            &home,
                             tty.contains(&true),
                             crate::terminal().is_some(),
                             &self.setting("console.term"),
@@ -6276,6 +6597,8 @@ fn main() -> i32 {
         room_job: None,
         refused_seen: (0, 0),
         usage_tracker: zoraya_rooms::Tracker::new(),
+        launch_nets: Vec::new(),
+        net_keyed: false,
     };
     // The broker tells the host of the terminal of its lines' groups
     // (proposed ADR-0388).
@@ -6324,6 +6647,12 @@ fn main() -> i32 {
         editor.set_history(text.lines().map(|l| l.replace(ENTRY_BREAK, "\n")).collect());
     }
     // The panel's launch in a room (ADR-0172 point 4).
+    z.net_keyed = c.parse().value(&c.d, "room").is_some();
+    z.launch_nets = c
+        .parse()
+        .value(&c.d, "net")
+        .map(|w| w.split_whitespace().map(String::from).collect())
+        .unwrap_or_default();
     if let Some(room) = c.parse().value(&c.d, "room")
         && let Err(e) = z.enter_room(room)
     {

@@ -21,11 +21,11 @@
 # - A push to main runs the document checks only (the plan's doc_checks;
 #   build and tests are skipped, so the run is green), whatever changed, and
 #   cancels nothing that runs.
-# - The full set of main runs on a schedule: every 4 hours (cron 23 */4 * * *, an off minute)
+# - The full set of main runs on a schedule: every 2 hours (cron 23 */2 * * *, an off minute)
 #   if main changed since the last full run (tools/ci-last-full.rb reads that
 #   from the API; unknown means run), and nightly (17 2 * * *, always, with the
 #   nightly's own jobs). The summary of a scheduled run lists the merges since
-#   the last green full run. A skipping 4-hourly run fails if the last full run was red
+#   the last green full run. A skipping 2-hourly run fails if the last full run was red
 #   (it must not read as green over it). A stage tag needs a green scheduled or nightly
 #   run that includes the tagged commit (tools/ci-last-full.rb --green-for SHA).
 # - On demand (a manual run with full=true, to chase a flake) and on a tag
@@ -57,10 +57,10 @@ on:
   schedule:
     # Nightly, on main: always the full set and the nightly's own jobs.
     - cron: '17 2 * * *'
-    # Every 4 hours, on main: the full set if main changed since the last full run.
+    # Every 2 hours, on main: the full set if main changed since the last full run.
     # A red scheduled run is fixed first, before the next merge (CLAUDE.md):
     # gh run list --workflow 'make test' --event schedule (a skipping run fails if the last full run was red)
-    - cron: '23 */4 * * *'
+    - cron: '23 */2 * * *'
 
 concurrency:
   # One group per kind of event, ref and (for a schedule) cron: a push to main
@@ -322,6 +322,7 @@ jobs:
           - make check-test-caps
           - make check-tokens
           - make check-fetch-ports
+          - make check-port-logs
           - make check-ci-jobs
           - make check-workflow-syntax
           - make check-python-cache
@@ -335,6 +336,7 @@ jobs:
           - make check-netsurf-refusal
           - make check-run-disk
           - make check-ci-plan
+          - make check-test-shards
           - make check-test-lanes
           - make check-mutant-lists
     name: ${{ matrix.cmd }}
@@ -383,7 +385,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install QEMU, clang and zstd
         if: ${{ needs.image.outputs.ref == '' }}
-        run: tools/ci-apt-install.sh qemu-system-arm clang zstd
+        run: tools/ci-apt-install.sh qemu-system-arm clang zstd openssh-server
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
@@ -406,3 +408,20 @@ jobs:
         run: |
           shopt -s nullglob
           for f in target/test-logs/*.log build/ports/logs/*.log; do echo "== $f"; tail -n 150 "$f"; done
+      # The whole of each log of a red step (the console shows the last 150
+      # lines; the runner caps a log at 64 MiB), also when the job's own
+      # timeout cancelled it. Named by the job's index, since a step's command
+      # has characters an artifact name may not; step.txt names the command.
+      - name: Name the step in its logs
+        if: failure() || cancelled()
+        env:
+          CMD: ${{ matrix.cmd }}
+        run: mkdir -p target/test-logs && printf '%s\n' "$CMD" > target/test-logs/step.txt
+      - name: Keep the test logs of a failed step
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}
+          path: target/test-logs/
+          if-no-files-found: ignore
+          retention-days: 7

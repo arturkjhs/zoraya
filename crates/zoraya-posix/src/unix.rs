@@ -273,6 +273,52 @@ pub fn decode_packet(bytes: &[u8], handles: usize) -> Option<(Vec<Record>, usize
     (handle_count(&records) == handles).then_some((records, end))
 }
 
+// ------------------------------------------------------------ a spawn's descriptors
+
+/// The bootstrap message that precedes `SELF` when a spawn gives sockets or memory (ADR-0433): the
+/// descriptors a spawn gives a child that a record's fd list cannot hold, a
+/// Unix socket and a memory descriptor. The magic, then [`encode_packet`]'s
+/// records without a payload, then each descriptor's fd number as a `u32`.
+pub const PASSED_MAGIC: [u8; 4] = *b"ZPBF";
+
+/// The message for `records`, given to the fds `fds` (one each).
+pub fn encode_passed(fds: &[u32], records: &[Record]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 1 + RECORD * records.len() + 4 * fds.len());
+    out.extend_from_slice(&PASSED_MAGIC);
+    out.extend_from_slice(&encode_packet(records, &[]));
+    for fd in fds {
+        out.extend_from_slice(&fd.to_le_bytes());
+    }
+    out
+}
+
+/// The inverse: the fds in increasing order and below `limit`, the records
+/// (a Unix socket or a memory descriptor each) and nothing else, whose
+/// handles number `handles`. `None` for anything else, whoever sent it.
+pub fn decode_passed(bytes: &[u8], handles: usize, limit: u32) -> Option<(Vec<u32>, Vec<Record>)> {
+    if bytes.get(..4)? != PASSED_MAGIC {
+        return None;
+    }
+    let body = &bytes[4..];
+    let (records, end) = decode_packet(body, handles)?;
+    let tail = &body[end..];
+    if tail.len() != 4 * records.len() {
+        return None;
+    }
+    let mut fds: Vec<u32> = Vec::with_capacity(records.len());
+    for raw in tail.as_chunks::<4>().0 {
+        let fd = u32::from_le_bytes(*raw);
+        if fd >= limit || fds.last().is_some_and(|&l| fd <= l) {
+            return None;
+        }
+        fds.push(fd);
+    }
+    records
+        .iter()
+        .all(|r| matches!(r.kind, Kind::Stream | Kind::Packet | Kind::Memory))
+        .then_some((fds, records))
+}
+
 // ------------------------------------------------------------ the stream's tags
 
 /// An ancillary message for a stream: the offset of the first byte its
@@ -425,6 +471,118 @@ impl<H> StreamBook<H> {
     }
 }
 
+// ------------------------------------------------------------ socket files
+
+/// The longest `sun_path` (`struct sockaddr_un`).
+pub const SUN_PATH: usize = 108;
+/// Backlog is a hint: a listener's queue is the channel's, 64 messages
+/// (ADR-0050; proposed ADR-0439).
+pub const LISTEN_QUEUE: usize = 64;
+
+/// The path of a `struct sockaddr_un` of `addr` (INV-0412-3's input): the
+/// bytes up to the first NUL or the end. `EINVAL` if the structure is
+/// shorter than its family or longer than `sockaddr_un`, `EAFNOSUPPORT` for
+/// another family or for the abstract namespace (no path, or one that starts
+/// with NUL: ADR-0412 item 4).
+pub fn parse_sockaddr_un(addr: &[u8]) -> Result<&[u8], i32> {
+    use crate::errno::{EAFNOSUPPORT, EINVAL};
+    if addr.len() < 2 || addr.len() > 2 + SUN_PATH {
+        return Err(EINVAL);
+    }
+    if i32::from(u16::from_ne_bytes([addr[0], addr[1]])) != AF_UNIX {
+        return Err(EAFNOSUPPORT);
+    }
+    let body = &addr[2..];
+    if body.first().is_none_or(|&b| b == 0) {
+        return Err(EAFNOSUPPORT);
+    }
+    let n = body.iter().position(|&b| b == 0).unwrap_or(body.len());
+    Ok(&body[..n])
+}
+
+/// The `struct sockaddr_un` of a bound `path`: the family, the path and a
+/// NUL, as Linux's `getsockname` gives it (length `2 + path + 1`).
+pub fn sockaddr_un(path: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(3 + path.len());
+    out.extend_from_slice(&(AF_UNIX as u16).to_ne_bytes());
+    out.extend_from_slice(path);
+    out.push(0);
+    out
+}
+
+/// INV-0412-3: where `bind` may make a socket file. The resolved path of the
+/// call is `rest` inside table entry `entry`; only the line's `/tmp`, the
+/// `Tmp` entry, with a name inside it, qualifies (proposed ADR-0439: a
+/// program's own directory is not built). `EACCES` anywhere else; `EINVAL`
+/// for the entry's root itself or a path that names a directory.
+pub fn bind_place(
+    entry: zoraya_abi::posix::EntryKind,
+    rest: &str,
+    directory: bool,
+) -> Result<(), i32> {
+    use crate::errno::{EACCES, EINVAL};
+    if entry != zoraya_abi::posix::EntryKind::Tmp {
+        return Err(EACCES);
+    }
+    if rest.is_empty() || directory {
+        return Err(EINVAL);
+    }
+    Ok(())
+}
+
+/// The far end of a new connected pair, as the connector describes it to
+/// the listener: one record (`unix_file.rs` builds the handles).
+pub fn connect_record(sock_type: i32) -> Record {
+    if sock_type == SOCK_STREAM {
+        Record {
+            sock_type: SOCK_STREAM as u8,
+            has_read: true,
+            has_write: true,
+            has_anc: true,
+            ..Record::one(Kind::Stream, 0, false)
+        }
+    } else {
+        Record {
+            sock_type: sock_type as u8,
+            ..Record::one(Kind::Packet, 0, false)
+        }
+    }
+}
+
+/// The bytes of a connection record.
+pub fn encode_connect(r: &Record) -> Vec<u8> {
+    let mut out = Vec::with_capacity(RECORD);
+    r.encode(&mut out);
+    out
+}
+
+/// What a listener accepts from its channel: exactly one record of its own
+/// socket type, whole (a stream's three handles, a packet socket's one),
+/// with the offsets and flags of a new pair and the handle count it says.
+/// Anything else, whoever sent it (the sender is any program that could
+/// open the socket file for writing), is `None` and the caller closes the
+/// handles.
+pub fn decode_connect(bytes: &[u8], handles: usize, sock_type: i32) -> Option<Record> {
+    if bytes.len() != RECORD {
+        return None;
+    }
+    let r = Record::decode(bytes)?;
+    let ok = match r.kind {
+        Kind::Stream => {
+            sock_type == SOCK_STREAM
+                && r.has_read
+                && r.has_write
+                && r.has_anc
+                && !r.shared
+                && r.read_off == 0
+                && r.write_off == 0
+        }
+        Kind::Packet => sock_type == SOCK_SEQPACKET && i32::from(r.sock_type) == sock_type,
+        _ => false,
+    };
+    (ok && handles == r.handles()).then_some(r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +605,147 @@ mod tests {
         Record {
             sock_type: SOCK_SEQPACKET as u8,
             ..Record::one(Kind::Packet, 0, false)
+        }
+    }
+
+    fn un(path: &[u8]) -> Vec<u8> {
+        let mut a = (AF_UNIX as u16).to_ne_bytes().to_vec();
+        a.extend_from_slice(path);
+        a
+    }
+
+    #[test]
+    fn a_socket_address_is_a_path_or_a_refusal() {
+        use crate::errno::{EAFNOSUPPORT, EINVAL};
+        assert_eq!(parse_sockaddr_un(&un(b"/tmp/s\0")), Ok(&b"/tmp/s"[..]));
+        assert_eq!(
+            parse_sockaddr_un(&un(b"/tmp/s")),
+            Ok(&b"/tmp/s"[..]),
+            "no NUL"
+        );
+        assert_eq!(parse_sockaddr_un(&un(b"/tmp/s\0junk")), Ok(&b"/tmp/s"[..]));
+        // Exactly `sun_path` long with no NUL is a path; one more is not.
+        let full = [b'a'; SUN_PATH];
+        assert_eq!(parse_sockaddr_un(&un(&full)), Ok(&full[..]));
+        assert_eq!(parse_sockaddr_un(&un(&[b'a'; SUN_PATH + 1])), Err(EINVAL));
+        // The abstract namespace and the unnamed socket are not offered.
+        assert_eq!(parse_sockaddr_un(&un(b"\0abstract")), Err(EAFNOSUPPORT));
+        assert_eq!(parse_sockaddr_un(&un(b"")), Err(EAFNOSUPPORT));
+        assert_eq!(parse_sockaddr_un(&un(b"\0")), Err(EAFNOSUPPORT));
+        assert_eq!(parse_sockaddr_un(&[1]), Err(EINVAL));
+        assert_eq!(parse_sockaddr_un(&[]), Err(EINVAL));
+        let mut inet = un(b"/x");
+        inet[0] = 2;
+        assert_eq!(parse_sockaddr_un(&inet), Err(EAFNOSUPPORT));
+        // The address `getsockname` gives parses back to the path.
+        assert_eq!(
+            parse_sockaddr_un(&sockaddr_un(b"/tmp/s")),
+            Ok(&b"/tmp/s"[..])
+        );
+        assert_eq!(sockaddr_un(b"/tmp/s").len(), 2 + 6 + 1);
+        // Total on any bytes.
+        for len in 0..=(SUN_PATH + 4) {
+            for fill in [0u8, 1, b'/', 255] {
+                let mut b = alloc::vec![fill; len];
+                if len >= 2 {
+                    b[..2].copy_from_slice(&(AF_UNIX as u16).to_ne_bytes());
+                }
+                let _ = parse_sockaddr_un(&b);
+            }
+        }
+    }
+
+    /// INV-0412-3's path rule: only the `Tmp` entry, with a name inside it.
+    #[test]
+    fn bind_is_allowed_only_in_the_tmp_entry() {
+        use crate::errno::{EACCES, EINVAL};
+        use zoraya_abi::posix::EntryKind::*;
+        assert_eq!(bind_place(Tmp, "sock", false), Ok(()));
+        assert_eq!(bind_place(Tmp, "a/b/sock", false), Ok(()));
+        for kind in [Directory, Null, Terminal, Image] {
+            assert_eq!(bind_place(kind, "sock", false), Err(EACCES), "{kind:?}");
+            assert_eq!(bind_place(kind, "", false), Err(EACCES), "{kind:?}");
+        }
+        assert_eq!(bind_place(Tmp, "", false), Err(EINVAL), "the entry itself");
+        assert_eq!(bind_place(Tmp, "d", true), Err(EINVAL), "a trailing slash");
+    }
+
+    #[test]
+    fn a_connection_record_decodes_only_in_the_form_its_listener_takes() {
+        let stream = encode_connect(&connect_record(SOCK_STREAM));
+        let packet = encode_connect(&connect_record(SOCK_SEQPACKET));
+        assert_eq!(stream.len(), RECORD);
+        assert!(decode_connect(&stream, 3, SOCK_STREAM).is_some());
+        assert!(decode_connect(&packet, 1, SOCK_SEQPACKET).is_some());
+        // The wrong type, the wrong handle count, a datagram record.
+        assert!(decode_connect(&stream, 3, SOCK_SEQPACKET).is_none());
+        assert!(decode_connect(&packet, 1, SOCK_STREAM).is_none());
+        assert!(decode_connect(&stream, 2, SOCK_STREAM).is_none());
+        assert!(decode_connect(&packet, 0, SOCK_SEQPACKET).is_none());
+        // A datagram socket has no listener: not taken whatever the type says.
+        assert!(
+            decode_connect(&encode_connect(&connect_record(SOCK_DGRAM)), 1, SOCK_DGRAM).is_none()
+        );
+        // A record that says more than a fresh pair is: shared, with offsets,
+        // a file, a memory descriptor, a stream with a handle left out.
+        let mut shared = connect_record(SOCK_STREAM);
+        shared.shared = true;
+        shared.has_anc = false;
+        assert!(decode_connect(&encode_connect(&shared), 2, SOCK_STREAM).is_none());
+        let mut moved = connect_record(SOCK_STREAM);
+        moved.read_off = 5;
+        assert!(decode_connect(&encode_connect(&moved), 3, SOCK_STREAM).is_none());
+        let mut half = connect_record(SOCK_STREAM);
+        half.has_write = false;
+        assert!(decode_connect(&encode_connect(&half), 2, SOCK_STREAM).is_none());
+        let file = encode_connect(&Record::one(Kind::File, 2, false));
+        assert!(decode_connect(&file, 1, SOCK_STREAM).is_none());
+        assert!(decode_connect(&file, 1, SOCK_SEQPACKET).is_none());
+        // Longer or shorter bytes, whatever they hold.
+        let mut long = stream.clone();
+        long.push(0);
+        assert!(decode_connect(&long, 3, SOCK_STREAM).is_none());
+        assert!(decode_connect(&stream[..23], 3, SOCK_STREAM).is_none());
+    }
+
+    #[test]
+    fn a_spawns_descriptors_round_trip_and_nothing_else_decodes() {
+        let rs = [
+            stream_record(false),
+            packet_record(),
+            Record::one(Kind::Memory, 2, false),
+        ];
+        let bytes = encode_passed(&[3, 9, 40], &rs);
+        let (fds, back) = decode_passed(&bytes, 5, 512).unwrap();
+        assert_eq!((fds, back), (vec![3, 9, 40], rs.to_vec()));
+        // The handles must number what the records say.
+        assert!(decode_passed(&bytes, 4, 512).is_none());
+        assert!(decode_passed(&bytes, 6, 512).is_none());
+        // Fds out of order, repeated, or past the table.
+        for bad in [[9, 3, 40], [3, 3, 40], [3, 9, 512]] {
+            assert!(decode_passed(&encode_passed(&bad, &rs), 5, 512).is_none());
+        }
+        // A file or a pipe has a record, and no place in this message.
+        let file = [Record::one(Kind::File, 0, false)];
+        assert!(decode_passed(&encode_passed(&[3], &file), 1, 512).is_none());
+        // Wrong magic, a short fd list, bytes after it.
+        let mut wrong = bytes.clone();
+        wrong[0] ^= 1;
+        assert!(decode_passed(&wrong, 5, 512).is_none());
+        assert!(decode_passed(&bytes[..bytes.len() - 1], 5, 512).is_none());
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(decode_passed(&longer, 5, 512).is_none());
+        // Total on any bytes.
+        for n in 0..bytes.len() {
+            let _ = decode_passed(&bytes[..n], 5, 512);
+        }
+        for i in 0..bytes.len() {
+            for bit in 0..8 {
+                let mut m = bytes.clone();
+                m[i] ^= 1 << bit;
+                let _ = decode_passed(&m, 5, 512);
+            }
         }
     }
 

@@ -1,12 +1,23 @@
 # TASK-34 report: foundations for big programs (F2 to F8)
 
+## Handoff (2026-11-17, the machine went offline; read this first)
+
+**State of `main`:** F2 to F8, F9 (per-room loopback, ADR-0442), F10 (room charging of an image, ADR-0443) and the TCG split are merged. The scheduled full run 43951262290 on `37aefd1f` was green and covers them; `stage-f2` to `stage-f8` are tagged. ADR-0442 and ADR-0443 are accepted (2026-11-17). Nothing is running; all my subagents and background jobs are stopped; the F2 to F10 worktrees and the split's worktree are removed.
+
+**F11 (ADR-0442's two changes, the architect's decision of 2026-11-17) is NOT STARTED in code.** The subagent was stopped about three minutes after it began; `work/f11` had no commits and no changes, so nothing was pushed (the local branch and worktree were deleted). Nothing is half-built. The two gate conditions (ADR-0268) that F11 must close:
+1. **Bounds per room** (listeners, pending connections and the like), so one room cannot use up another's: today the bounds are machine-wide (8 listeners, 1 per carved account with `listen`, 64 pending per listener) and a count leaks across rooms: eight `+listen` programs in room A leave room B's `+listen` line with no netd connection at all, because `carve_with` fails as a whole (`crates/zoraya-net` `service.rs`, `accounts.rs`; `zosh.rs` `.ok()`).
+2. **A room id that is never reused**, not the name: today netd keys listeners by (room name, port) (`NarrowRoom` carries a name of at most 24 bytes), so a removed room that keeps running shares its loopback with a new room of the same name; the room keeper (`crates/zoraya-rooms`, near `lib.rs:750`) also finds rooms by name, so the new room joins the old room's job. The keeper must assign ids from a monotonic counter; the shell and init pass the id to netd with `NarrowRoom`; only init's control connection and the console shell hold `ROOM`.
+The brief I gave the subagent (scope, tests, mutants, ADR 0444 for the id scheme, the wire change and the per-room bounds table, the invariants INV-0444-n, the queue line) is the plan to follow: one build and one QEMU guest at a time, `make check`, `make test-changed` under HVF, an independent Opus review, no candidate run (ADR-0463), merge with `--no-ff` from a detached HEAD at `origin/main`. **The gate is not closed by F11 alone**: ADR-0269's untrusted-room launcher (a connection with its room fixed by init and no `ROOM`) is not built.
+
+**Also open:** the proposed ADR-0444 does not exist yet (numbers 0444 to 0449 are free). Backlog, from the architect: socket files in a program's own directory (ADR-0412, allowed now), NIC-reachable listeners and the rooms' `+listen` words, the contiguous-create race with the reaper (high priority; proposal: drop the 17-round cap of `alloc_contig_in_steps` with a step point between rounds). Known limits of ADR-0443 (a trusted room without limits, the shell's staging object and `grants` probe, ramdisk programs). On this MacBook Air `kernel_work_is_bounded` fails on `main` too (the reaper race and `t_bound` masked time under load); the architect says it does not block merges here.
+
 ## Status for the architect
 
-Updated 2026-11-16.
+Updated 2026-11-17. **F2 to F8 and the architect's follow-ups F9 and F10 are merged**, and the TCG kernel suites are split in two.
 
-- Merged and tagged: F2 (`stage-f2`, merge b2fb7c55). F3 merged (db938461) and **not tagged yet**: CLAUDE.md now needs a green scheduled full run of `main` that includes the commit before a stage tag (`tools/ci-last-full.rb --green-for SHA`); I tag `stage-f3` when it names one. `stage-f2` was tagged before that rule and has no such run yet. F1 (`poll`) was merged before this task.
-- In progress: F4 (`posix_spawn` with what each child is given).
-- Proposed ADRs: ADR-0430, Unix sockets as built; recommended as written. **Needs your decision:** item 7 defers ADR-0412 item 6 (a Unix socket crossing `spawn`) to F4, which deviates from the task's assignment of item 6 to F2; INV-0412-1 is `not yet applicable (until F4)` for its two-process in-QEMU half. ADR-0431 (a `SHARED` mapping stays shared across `snapshot_process`, kernel ABI) and ADR-0432 (memory descriptors as built), both proposed, recommended as written (F3). Numbers 0433 to 0449 are free.
+- Merged and tagged: F2 (`stage-f2`), F3 (`stage-f3`), F4 (`stage-f4`), F5 (`stage-f5`), F6 (`stage-f6`) and F8 (`stage-f8`), each on a green scheduled full run of `main` that includes it (`tools/ci-last-full.rb --green-for`: runs 43749759496 and 43819664106). **F7 is merged, not tagged**: F7a (5a3372c7) and F7b (7f0c66df); no green scheduled full run includes them yet, and `stage-f7` goes on when the script names one. F1 (`poll`) was merged before this task.
+- In progress: nothing. Open for the stage tags: `stage-f7` (F7a 5a3372c7, F7b 7f0c66df) and the F9 (f9afccd1) and F10 (275774a6) merges have no green scheduled full run that includes them yet (`tools/ci-last-full.rb --green-for SHA`, or the API answered 502); tag `stage-f7` when it names one.
+- ADRs accepted by the architect and recorded (2026-11-16: ADR-0431, 0432, 0434, 0436, 0437, 0439, 0440; ADR-0441 with a per-room loopback; earlier: ADR-0430, 0433, 0435, 0438). **Proposed by F9, F10 and the split for the architect:** ADR-0442 (each room has its own loopback; open: the machine-wide bounds leak a count across rooms, a removed room that keeps running shares its loopback with a new room of the same name, the untrusted launcher must get a fixed room and no `ROOM`), ADR-0443 (`image_create` names the job to charge; open: a killed job is now refused; the honest remainder of the gate: a trusted room without limits, the shell's staging object and `grants` probe, ramdisk programs, ADR-0269's launcher). Older text follows, partly superseded: ADR-0430 (2026-11-15), ADR-0433, ADR-0435 (2026-11-15), ADR-0438 (2026-11-16). **Proposed, each recommended as written, for the architect to accept or change:** ADR-0431 (a `SHARED` bit in `memory_map`, a kernel ABI change: look first), ADR-0432 (memory descriptors as built), ADR-0434 (netd `Duplicate`), ADR-0436 (the 2 GiB guest), ADR-0437 (the mapping list), ADR-0439 (Unix socket files), ADR-0440 (TCP listen, the design, superseded in part by ADR-0441), ADR-0441 (TCP listening as built: a loopback of stream pairs, no second smoltcp interface). **Decisions the architect must make:** (1) ADR-0441 first: the loopback is the machine's, not a room's (any program with a rule naming 127.0.0.1 reaches any account's listener; a condition of the untrusted-room gate, ADR-0268, in `docs/architect-queue.md`); (2) F8: accept `top`'s session row plus the ceiling refusal as the plan's `top --session`, or have it built (ADR-0436); (3) F6: charge a program image to the room that starts it (the gate condition in `docs/architect-queue.md`); (4) TCP listen only through the loopback: a second smoltcp interface for the NIC, and the rooms' `+listen` words; (5) the TCG kernel suites sit near the 420 s limit on slow runners; (6) a kernel weakness found in F7b's merge test: a contiguous create is refused while the reaper holds the dead objects' frames (race between `t_bound` and the reaper; `alloc_contig_in_steps` helps at most 17 rounds of 64 frames), under ADR-0270. Numbers 0442 to 0449 are free.
 - Machine: MacBook Air M1, 8 GB, so `CARGO_BUILD_JOBS=2`, one part with builds and one QEMU guest at a time.
 
 ## Parts
@@ -15,17 +26,17 @@ Updated 2026-11-16.
 |------|-------|-----|------|-------|
 | F2 | merged | stage-f2 | about 3 sessions | Sonnet implementation; Opus review (1 error, 2 warnings, all fixed) and re-check; candidate run 43681721034 green (75 jobs) |
 | F3 | merged | stage-f3 pending a green full run | about 3 sessions | Sonnet implementation; Opus review (1 error, 3 warnings, all fixed) and re-check; candidate run 43700119735 green after one rerun of the `w9-term` TCG job |
-| F4 | not started | | | |
-| F8 | not started | | | |
-| F5 | not started | | | |
-| F6 | not started | | | |
-| F7 | not started | | | |
+| F4 | merged | stage-f4 pending a green full run | about 4 sessions | Sonnet implementation; Opus review (3 errors, 4 warnings), re-check (2 errors) and re-check 2, all fixed; candidate run 43732969721 green on the 3rd candidate after one rerun of the `test-tour-terminal` TCG job |
+| F8 | merged | stage-f8 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error, 5 warnings) and re-check; candidate run 43751085581 green after one fix (the keeper script pinned a session size that varies with boot) and one rerun of the `test-tour-terminal` TCG job |
+| F5 | merged | stage-f5 pending a green full run | about 2 sessions | Sonnet implementation; Opus review (1 error: the plan's CPython command was never run; 5 warnings), re-check (1 warning) and a test-only follow-up; candidate run 43770158088 green, 79 of 79 jobs, including the new `test-python-mem` (python at 2 GiB, 5,000,000 `bytearray(100)`, 2 m 51 s under TCG) |
+| F6 | merged | stage-f6 pending a green full run | about 3 sessions | Sonnet implementation; Opus review (1 error: the plan's `top` check never ran; 3 warnings), two re-checks and the architect's decisions on ADR-0438 (accepted 2026-11-16); candidate run 43789776708 green on attempt 2 (the first attempt timed out in `test-qemu-tcg-smp4-gicv3` at 420 s on a slow runner) |
+| F7 | F7a merged (Unix socket files); F7b (TCP listen) in progress | stage-f7 after F7b | about 4 sessions so far | Sonnet implementation; independent Opus review (1 error: the shim's `ENOSYS` `bind`/`listen`/`accept` stubs hid the new calls from every ported program; warnings) and a re-check; candidate run 43816764155 green after fixes (the python smoke line was slow, not hung: the shell's line editor redrew a 270-character line) |
 
 ## F2 notes
 
 - Review: `docs/tasks/TASK-34-review-f2.md`. The error (a shared stream socket sent from a fork parent was lost) and the fork-child handle leak are fixed with host tests.
 - CI found one more effect: `usleep` in libposix made wget's configure use `sleep`, which libc lacks. wget is configured with `ac_cv_func_usleep=no` and curl with `--disable-socketpair`, in `ports/Makefile`.
-- Known limitations are in ADR-0430: no `bind`/`listen`/`accept` (F7); a packet socket cannot be half-closed; the send-then-peer-closes window can lose a moved socket. Guest console output stalled with `-v` or `-W` in regrtest; not diagnosed.
+- Known limitations are in ADR-0430: `bind`/`listen`/`accept` came with F7 (Unix socket files only); a packet socket cannot be half-closed; the send-then-peer-closes window can lose a moved socket. Guest console output stalled with `-v` or `-W` in regrtest; not diagnosed.
 - I tagged `candidate/work-f2-b` on the same commit as the green run; its duplicate run is not needed.
 - Files outside the task's scope: `ports/` (wget, curl, the CPython port), `tools/libposix-widths.txt`, ADR-0225 and ADR-0342 notes.
 
@@ -45,3 +56,122 @@ Updated 2026-11-16.
 - CI: `quotas_from_a_process` failed under TCG/EL2/SMP4 because F3's own new `t_quota` case was too tight for slow machines (fixed). The `w9-term` TCG job timed out in two F3 runs and also in `main`'s scheduled run 43699859694 (without F3); its step time moves between 262 s and 589 s against a 600 s runner limit. **For the architect:** raise the limit, shrink the build tree in `w9-term`, or poll less often than every 0.1 s (each poll forks `ls` under one-CPU TCG). I changed no timeout.
 - Mutation: host run cut at 30 minutes (about 60 of 388 mutants never run; later re-check: 14 of the 20 misses in new code are equivalent or untestable); 7 kernel hand mutants all caught. The never-run host mutants were not run afterwards (about 35 minutes).
 - The merge into `main` had conflicts in `Makefile`, `ports/Makefile` and `invariants.md` (Total 820 recomputed from rows); the combined `t_tty` plus `t_memfd` lines were not run in CI before the merge.
+
+## F4 notes
+
+- Review: `docs/tasks/TASK-34-review-f4.md`. Errors found and fixed: `addopen` gave the child the wrong file (parent fd read as a child fd); a spawn with no attributes moved inherited Unix sockets (now only a socket the file actions list moves, and a stream socket moves whole); netd `Duplicate` had no bound, and the first bound reset when the asker closed (now a family token, 8 live per family); a refused spawn leaked entry handles (one `abandon()` closes them on every refusal path).
+- Closes what F2 and F3 left: a Unix socket and a memory descriptor now cross `spawn` (`t_spawn`, `t_memfd` as real two-process tests); INV-0412-1, INV-0413-2 and INV-0432-2 are `checked`.
+- CI effects found: `nvi`'s compile log lost a line to interleaved `sh -x` traces (one whole log line per compile now); `posix_spawn_file_actions_addclose` was outside the tier list, so CPython's `posixmodule.c` failed to link (it joins ADR-0433's surface block). The python lanes (`test-python`, `-ext`, `-regr`) pass with the new `subprocess` path.
+- The `test-tour-terminal` TCG job (`posix-curses.script`, new on `main`, one earlier TCG pass) hung at step 55 in the first run and passed on rerun; the slow runner (about 2x the frame time of the one earlier pass) and the script's fixed pauses before typing into `vi` are the likely cause, not F4. **Follow-up for stage 10:** wait for `vi`'s screen with a `screen` step after `vi notes.txt` instead of fixed pauses.
+- Known limitations (ADR-0433): a child with no cwd reads relative paths from `/`; `GRANT_WINDOW` moves, it does not share; the positive network grants are tested only over a fake netd on the host (no in-QEMU program holds a connection); a connection that holds the `narrow` right can still make connections without limit through `Narrow` (older than F4, program connections lack the right); `execve` with a Unix socket open is `EBADF`.
+- Mutation: `make mutants-host CRATE=zoraya-posix --in-diff` 160 mutants, 26 missed in the first run; the holes were closed with tests, the equivalent ones (disjoint-bit `|` to `^`) remain.
+- Process note: the F4 implementer's final reports were refused by the harness three times; I read its work from the branch and commits, and I made the ADR-0433/0435 decision transcription myself.
+
+## F8 notes
+
+- Built: `FrameAllocator::alloc_counted` and `alloc_scan_bound` (a single-frame scan reads at most one word per 256 KiB, 8192 at 2 GiB; the wrap-around no longer rereads the start region whole); `crates/zoraya-pmm/tests/two_gib.rs` (counts, a full drain, exact worst case, run search in bounded steps, 128 MiB to 4 GiB in one and two regions above 4 GiB); the test kernel's `the_worst_single_allocation_is_bounded_by_the_machines_ram`; `make run-browser` (`run-gui` at `--mem $(BROWSER_MEM)`, 2G; `make run` unchanged); `tests/shell/browser-guest.script` run by `make test-keeper` at `--mem 2G` (HVF, TCG on the full set). Proposed ADR-0436 (recommended as written; **deviation for the architect:** `top --session` is not built, `top`'s session row is the check, and `room set --mem 1800M` is refused above the session's 1452930K). Nothing in the kernel assumed a RAM size (boot tables map 4 GiB, direct map from blocks, heap on demand); the 2 GiB steps already ran.
+- Measured (MacBook Air M1, 4 CPUs, debug test kernel): worst single allocation 512 words / 6.5 us at 128 MiB; 8192 words / 94 us under HVF and 1.2 ms under TCG at 2 GiB (ADR-0270's bound 2 ms). Boot to the shell script's end: 0.26 s HVF and 0.73 to 0.80 s TCG, the same at 128M and 2G. Kernel reserved: 30000 KiB at 128 MiB, 30120 KiB at 2 GiB (frame map 8 KiB against 128 KiB). Free after boot 2066388 KiB; session ceiling 1452930K.
+- Run: `cargo test -p zoraya-pmm` (17 + 5 passed); `make test-qemu-one` and `make test-qemu-auto-smp4-2g` (120 passed, 9 expected failures each); `make test-qemu-tcg-smp4-gicv3` (same, before the per-word limit replaced a fixed one; not rerun); `make test-keeper` (HVF, passed, 29 steps); `make check` (passed). Not run: the TCG keeper run (full set only), `make test-changed`.
+- Mutation: host `--in-diff` on `zoraya-pmm` 15 mutants: 10 caught, 3 unviable, 1 timeout, 1 missed (the wrap-around's end bound, equivalent while a frame is free); kernel list `tools/mutants/frames-f8.toml` 2 of 2 caught.
+- Limitations: a guest above 4 GiB needs a second level of the frame map (the test says so); the 1 us a word limit is generous under TCG (150 ns a word).
+
+## F8 notes
+
+- Review: `docs/tasks/TASK-34-review-f8.md`. Error: the first in-guest limit (1 us per word plus 200 us) allowed 8.4 ms at 2 GiB against the accepted 2 ms of INV-0270-1; now the words read are checked against `alloc_scan_bound` on every host and 2 ms only at HVF speed (1 s otherwise, ADR-0270 Q6).
+- Measured (M1 Air, debug test kernel): worst single allocation 8192 words at 2 GiB, 94 to 104 us under HVF and 1.33 ms under TCG; boot 0.26 s (HVF) and 0.73 to 0.80 s (TCG) at 128 MiB and at 2 GiB; frame map 128 KiB at 2 GiB against 8 KiB at 128 MiB.
+- **For the architect (ADR-0436, proposed):** `top --session` is not built (ADR-0267 gives `top` services' accounts); the plan's "done when" was read as `top`'s session row plus the keeper's session-ceiling refusal. Accept that, or build `top --session` now. ADR-0436 also records that ADR-0415 says there is no `make run-browser` default of 2 GiB while `BROWSER_MEM ?= 2G`.
+- Known limitations: a guest above 4 GiB needs a second level of the frame map; the `memory_map`/`adopt` frame-list copy and the heap's growth (up to 256 allocations per interval) stay unbounded; the HVF time check is a single measurement (a vCPU stall can fail it); `make run-browser` is only the machine (no browser exists before plan E2).
+
+## F5 notes
+
+- Built: `zoraya-mappings`, a chunked sorted list (32 records per chunk, at most 2*len/32+2 chunks, merge and spill on removal), 4096 slots (`MAPPING_SLOTS`), charged to the job by whole chunks (worst case 468,528 bytes per process against 232,448 for a list filled upward); every walk over the list counted or taken in steps (INV-0270-1); `libposix` keeps no handle for a private mapping and `Objects::grow` no longer leaks a handle per MiB.
+- Review: `docs/tasks/TASK-34-review-f5.md`. The error was the plan's own acceptance (`python3 -c "x=[bytearray(100) for _ in range(5_000_000)]"` at 2 GiB) not being run anywhere; `make test-python-mem` now runs it, and repeats ADR-0320's mapping measurement (free one-page mappings 4086 before and after 4000 threads and 30 forks, against 248 and 247 of 256; a recursion of 200,000 frames ran, it ended near 33,000 before).
+- Also found and fixed: after unmapping 40 mappings of 24 MiB a process left about 1000 empty page tables and the next snapshot read them all in one 5.8 ms masked interval (now 127 us).
+- Measured (HVF): at 4032 mappings the longest masked interval is 133 us for `memory_map`, 169 us for `snapshot_process` and 322 us for the exit of a process with 4000 mappings.
+- Known limitations: `F5-snapshot-step-ignores-tables` is unkillable at this test size (a sparse image layout is unverified); the three equivalent survivors (reaper refunds the charge anyway; growth estimate exact; the unmap step point); fork at 4096 mappings is covered by `t_bound` and not by a C `fork` test; `find_gap` is linear in the records below the place.
+
+## Curses tour flake count
+
+`test-tour-terminal` (TCG, `posix-curses.script`, step 55) hung once in the F4 candidate run and once in the first F8 candidate run (both passed on rerun, and it passed in the F5 run). Follow-up for stage 10: wait for `vi`'s screen with a `screen` step instead of fixed pauses.
+
+## F6 notes
+
+- Built: `image_create` copies the program's pages once into an object of the creator's job (`Program::kept`, `zoraya-elf`); `spawn` maps each read-only segment as a `SHARED` record over those frames and copies the writable ones; `posix_spawn` and `execve` of `/proc/self/exe` use the bootstrap's `Image` handle; `zoraya_child_memory`; `t_shared` and `top.script` (a room, `top`, `tools/check-top-image.py`) in `make test-libposix`. ADR-0438 (proposed; the architect's answers are relayed in it, not recorded). INV-0415-2 and INV-0438-1 to -4 checked (Total 854).
+- `top` in a room, twice around `t_shared keep` (`tests/posix-core/top.script`): `tab 4259K` (launcher alone), `9302K` (+ three children of its own image, 1681K each, no image), `11946K` (+ one child of the file: +2644K, 956K more than a child of the image, the image's pages), `1K` at the end (the empty room's reading); the second run reads the same. **`top` cannot show the program's own image:** the shell makes it, in no room (job-level proxy, accepted by the architect per the dispatcher; a per-image line is in `docs/backlog.md`).
+- `t_shared` (HVF): image keeps 978944 bytes (from the program headers); L's job 2776256, +1125504 for a spawn of the file, +139264 +139264 for two of its image; children's own jobs 1582144 each.
+- Found by tests: `Mappings::find_gap` let a record below the mmap window pull the search below it (every C program aborted at start); the 2048-page text case found 128 units in one interval (a step point before the first piece), and the text-then-data case another (a step point after the clean loop).
+- Review (`docs/tasks/TASK-34-review-f6.md`): findings 1 to 7 and R1, R2, R4 to R6 fixed. Finding 8: the ADR-0108 note removed. R3 and the room-limit charge: **not built**; `image_create` naming the room's job is in `docs/architect-queue.md` as a condition of the untrusted-room gate, with the estimate.
+- Run: `cargo test -p zoraya-elf -p zoraya-mappings -p zoraya-posix`, `make test-qemu-one` (128 passed), `make test-libposix` (164, 17 and 66 steps), `make test-posix-threads` (104) earlier on this branch.
+- Mutation: host `--in-diff` zoraya-elf 32 of 34 caught (2 unviable), zoraya-mappings 10 of 10; kernel `tools/mutants/images-f6.toml` 10 of 10 non-equivalent caught (the copy, the charge, the piece, three step points in `keep_program` and one in the spawn, a writable record; the equivalent one is marked, not run); `images-f6-libposix.toml` 2 of 2 caught (no image charge: `t_shared` fails; image never freed: `check-top-image` fails, 961K then 1921K at the end).
+- Limitations: `image_create` holds the file's object and the copy at once; two images of one file share nothing; programs started from the ramdisk still copy; instruction-cache maintenance across step points is correct on one CPU only (ADR-0438); no TCG run.
+
+## F7 notes
+
+- Built (ADR-0439, proposed): `bind`, `listen`, `accept`, `accept4` and `connect` of a path for `SOCK_STREAM` and `SOCK_SEQPACKET` Unix
+  sockets. The node is a file of the `/tmp` service (`fsd --memory`) with `S_IFSOCK` kept in the service; `listen` sends the
+  service the listener channel's end; `connect` opens the node with `WRITE` through the connecting program's own table and sends the far end of a
+  new pair, which the service forwards unread and the listener validates. `crates/zoraya-posix/src/unix_file.rs`, the socket nodes of
+  `crates/zoraya-fs-service` (messages 41 to 43), `fsd`'s transport (three handles in a write; `Outgoing::Refused`).
+- **Not built, and the "done when" is not met:** TCP `bind`/`listen`/`accept` (`EOPNOTSUPP`), so `python3 -m http.server` does not serve a
+  file to `curl`. Reading the code: the scope already has `ListenRule` (so the listener grant is a rule that exists, ADR-0440 item 1), but `netd` has no
+  `listen` request and its stack has no loopback interface, so a connection to `127.0.0.1` leaves through the NIC and does not return.
+  Both are new network code with a QEMU network step to prove it, which I judged out of reach on this machine alongside the Unix half; ADR-0440 records the design
+  and the first spike (smoltcp's two-interface dispatch). No Python step was added for the same reason.
+- Not built: sockets in a program's own directory (no kind in the bootstrap record, and `fsd` has no transient nodes; ADR-0439 item 1, the
+  architect's question), datagram `bind`.
+- Checked: INV-0412-3 (`unix::tests::bind_is_allowed_only_in_the_tmp_entry`, `tests/socketfile.rs`, `t_unix file`) and INV-0439-1 to -3
+  (`docs/adr/invariants.md`; Total 859).
+- Run: `cargo test -p zoraya-fs-service -p zoraya-posix -p zoraya-proto-file` (all pass), `make check` (passes), `make test-libposix`
+  (exit 0: `t_unix file` through zosh, `t_spawn` and the other cases, `t_shared`, the `top` check, `zoraya-fsck` clean).
+- Found by the in-QEMU test, not the host's: a socket made without `SOCK_CLOEXEC` makes `posix_spawn` fail with `EBADF` (ADR-0433 item 6), so `t_unix file`
+  makes its sockets close-on-exec, as a program that spawns a second one does. Found by thinking about the kernel's rule for moved handles:
+  the service forwards a far end with the type's full rights, and the kernel refuses a handle that has fewer; the first version read that
+  refusal as a dead listener, so any connector could have ended a listener. `Outgoing::Refused` separates them (test and mutant).
+- Mutation: `tools/mutants/sockets-f7.toml`, 28 hand mutants of the service and the library, all caught after survivors got tests; `make mutants-host --in-diff`: zoraya-posix cut at 20 minutes (114 of 147 run caught, 12 missed: equivalent disjoint-bit `|`/`^`, defence-in-depth checks, and the fork guard, since tested in `t_unix file`), zoraya-fs-service 52 of 60 caught (misses closed with tests).
+- Review: `docs/tasks/TASK-34-review-f7.md` (no errors, five warnings): fixed the listener takeover (only the binder listens), a quota refusal killing a live listener (`OverQuota` is not `Closed`), and the wrong `spawn` errno in ADR-0439; the rest in the ADR and backlog.
+- Limits (ADR-0439): the 256 nodes of the service are shared by the line; a node stays after its listener goes until `unlink`; the queue is the channel's 64
+  messages and a blocking `connect` into a full queue is `EAGAIN`; `readdir` shows a socket file as a plain name; CPython's `test_socket`
+  server classes and the asyncio cases that said "bind (plan part F7)" in `tests/python/regr-ignore.txt` were not run (no Python rootfs
+  was built here): `test-python-regr` must show whether an `AF_UNIX` server now passes or hangs a case.
+
+## F7b notes
+
+- Built (proposed ADR-0441): TCP `bind`, `listen`, `accept`, `accept4`, `getsockname`, `SO_ACCEPTCONN` and `poll` of a listener; `netd`'s `listen`
+  request (5) and `Accepted` (19); `+listen PORT` in the shell; the loopback as `netd` handing the client's stream ends to the listener
+  (no second smoltcp interface: read, not measured). Plan part F7's "done when" is met: `make test-python-serve`.
+- Not built: listening on the NIC, `localhost`, per-connection `ECONNRESET`, rooms' words for `+listen`. Limits in `docs/design.md` and ADR-0441.
+
+## F10 notes
+
+- Built (proposed ADR-0443, added by the architect on 2026-11-16): `image_create(memory, length, job)` charges the named job after
+  the kernel checks `CREATE_PROCESS` on it (a refusal holds nothing). The shell names the room's launch job (`room_job`, its own job
+  outside a room), the broker the child's job, `posixrun` and `libposix` their own. A room at its memory limit cannot start a program
+  whose image does not fit: `tests/posix-core/room-image.script` and `tools/check-room-image.py` (in `make test-libposix`): the shell
+  says `over quota`, the room's row is unchanged and its own refusal count goes 1, 2; the same program starts in a roomy room.
+- Kernel and user tests: `t_image`'s `an_image_is_charged_to_the_job_it_names` (charge on the named job and not a sibling, refusal
+  without `CREATE_PROCESS`, refusal at the limit with nothing kept, the payer job killed or its handle closed while the image lives).
+- This meets one condition of the untrusted-room gate (ADR-0268): what a room starts is paid by the room. Others remain: ADR-0269's
+  untrusted launcher is not built.
+- Known limitations: the shell's staging object (the program's bytes before the image exists) is charged to the shell's job; a POSIX
+  process with no `PROCESS_JOB` handle names `JOB` and its program loads fail with `ENOEXEC` if that is not a spawner's handle (none
+  exists today).
+- Hand mutants run (make test-qemu-one, and test-libposix for the shell one): charge the creator, skip the `CREATE_PROCESS` check, keep the
+  table room on a refusal, the shell names its own job: all killed (the third only after `t_image` refused more often than the table has
+  slots). Not covered: the broker's `first.job` and libposix's `process_job` (no test sees them). The shell mutant is killed by
+  `room-image.script` but the script cannot tell the image from the child's own pages alone in a 1M room; the room's row in `top.script`
+  reads 987K higher with F10 than with the shell naming its own job (about the 984K image), recorded here, not asserted.
+- Open for the architect: `image_create` still charges a killed job (`spawn` refuses one); see ADR-0443 open questions.
+- Correction (review of F10, finding 1): the failure of `test-qemu-auto-smp4-2g` in `make test-changed` is not the contiguous-create
+  race. It is `t_bound` going over its 2 ms masked limit on process exits (`run 2` and `run 3` over the limit, exit code 3). Measured on
+  this host with `make test-qemu-auto-smp4-2g` alone, three runs each: this branch failed 2 of 3, `origin/main` failed 3 of 3. Largest
+  masked time of the exit steps, in microseconds (branch / main): 400 objects of 256 KiB 4864 / 6847; a process holding 24 MiB 3241 / 4454;
+  256 mappings and 1024 handles 4747 / 4950; 4000 mappings of 4000 objects 2044 / 4440; 16 full ports 1195 / 1157. F10 adds nothing on
+  the exit path, and the failure is on `main` too; it is a backlog item of its own (`t_bound`'s exit paths under 4 CPUs and 2 GiB).
+
+## F9, F10 and the TCG split (added by the architect on 2026-11-16)
+
+- **F9 (merged f9afccd1, ADR-0442 proposed):** `rights::ROOM` and the request `NarrowRoom`; netd keys listeners by (room, port); a connect from another room gets the answer of no listener. Tests: `cargo test -p zoraya-net` 131, `make test-net-posix` 124 steps (a program of room rb never reaches ra's listener, a positive control proves ra's listener was alive), `make test-python-serve`. Review: `docs/tasks/TASK-34-review-f9.md` (no errors; a count leaks across rooms through the machine-wide bounds; the native path of INV-0442-4 is untested, the status is qualified to the POSIX path).
+- **F10 (merged 275774a6, ADR-0443 proposed):** `image_create(memory, length, job)`; the shell passes the room's job; a room at `--mem 1M` cannot start `/bin/t_unix pair` (`room-image.script`), and `check-top-image.py` has a positive control (the room reads 5246K with F10 and 4259K with the old charge). Review: `docs/tasks/TASK-34-review-f10.md`.
+- **The TCG kernel suites split (merged efe4005c):** `test-qemu-tcg-{smp4-gicv2,smp4-gicv3,el2}-{a,b}` with `run-qemu.sh --shard N/2`; shard 1 = tests 0..131, shard 2 = 131..141; `make check-test-shards`; the 420 s limit is not raised. The candidate run 43935062009 was green on 84 of 84 jobs; job times (the slowest) 353 s gicv3-a (test step about 234 s), 248 s gicv3-b, 245 s el2-a, 215 s gicv2-a, 204 s gicv2-b, 179 s el2-b.
+- **Local findings for the architect:** on this MacBook Air `make test-qemu-auto-default` and `auto-smp4-2g` fail in `kernel_work_is_bounded` on `origin/main` too, in two ways: (1) the reaper race `t_bound.rs:338 contiguous create: NoMemory` (backlog, high priority; a proposal: drop the 17-round cap in `alloc_contig_in_steps` with a step point between rounds), and (2) `t_bound` masked time over INV-0270-1's 2 ms on process exits and channel close (up to 36 ms measured under the parallel load of `make test-changed`, 2 to 7 ms alone). Both pass on CI's scheduled runs, so they are host-load effects here, but they make this machine's local gate red.
+

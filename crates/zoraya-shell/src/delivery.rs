@@ -74,6 +74,8 @@ pub enum TableKind {
     Directory,
     /// The temporary directory.
     Tmp,
+    /// A program's own directory (ADR-0341 item 3): never touched.
+    Own,
     /// Anything else (`/dev/null`, the image).
     Other,
 }
@@ -106,7 +108,9 @@ impl Held {
                 (TableKind::Directory, None) if SYSTEM.contains(&prefix) => {
                     held.wholes.push((prefix.into(), READ));
                 }
-                (TableKind::Directory, None) => held.fixed.push(prefix.into()),
+                (TableKind::Directory, None) | (TableKind::Own, _) => {
+                    held.fixed.push(prefix.into())
+                }
                 (TableKind::Tmp, _) => held.wholes.push((prefix.into(), TREE)),
                 (TableKind::Other, _) => {}
             }

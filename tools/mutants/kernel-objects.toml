@@ -459,3 +459,10 @@ find = '                self.end_hold_if_unwritable(&entry.object);'
 occurrence = 2
 replace = ''
 note = "INV-0295-3 (re-review N6 finding 1): a Move over a channel of the last handle that can write a transport ends the hold"
+
+[[mutant]]
+id = "K-harness-keeps-a-failed-tests-processes"
+file = "kernel/src/testing.rs"
+find = '    end_what_a_failed_test_left();'
+replace = ''
+note = "work/smp-tcg: a failed test's processes ran on into the next tests (nothing_is_live_after_a_failed_test)"

@@ -63,7 +63,7 @@ item 9 are gaps in the build, not deviations.
 2. A message is `ZGR1` (`zoraya_abi::posix::Grants`), a count of at most 4, and that many directory entries (kind, handle
    index, prefix) with their connections. An entry for a prefix the table has replaces it; the shell keeps the union per
    directory (`zoraya_shell::delivery::Held`) and sends the whole entry, a file as its directory narrowed to a list of
-   names (`NarrowNames`, file ordinal 41, each name with its rights) and a directory whole. The decoder refuses `/`,
+   names (`NarrowNames`, file ordinal 44, each name with its rights) and a directory whole. The decoder refuses `/`,
    `/dev`, `/proc`, `/tmp` and below. A grant never shadows what the program holds whole (item 9 of the decisions below).
 3. `libposix` reads the channel only when a path was refused, either outside the table or by the service (`EACCES`),
    installs what came (the table is bounded at 64 entries), and resolves the path once more.

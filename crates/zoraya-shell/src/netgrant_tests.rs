@@ -27,6 +27,23 @@ fn go_nets(
     nets: &[&str],
     base: bool,
 ) -> Result<Option<(u32, Vec<u8>)>, Refused> {
+    go_all(text, args, nets, &[], base)
+}
+
+fn go_all(
+    text: &str,
+    args: &[(&str, bool)],
+    nets: &[&str],
+    listens: &[&str],
+    base: bool,
+) -> Result<Option<(u32, Vec<u8>)>, Refused> {
+    let listens: Vec<Value> = listens
+        .iter()
+        .map(|a| Value {
+            text: String::from(*a),
+            literal: true,
+        })
+        .collect();
     let d: Description = zoraya_describe::parse(text.as_bytes()).unwrap();
     let values: Vec<Value> = args
         .iter()
@@ -54,7 +71,9 @@ fn go_nets(
         cwd: "/",
         grants: &[],
         nets: &nets,
+        listens: &listens,
         base_system: base,
+        room: None,
     })
 }
 
@@ -881,4 +900,491 @@ fn curl_and_wget_take_a_url_name_with_public_answers_only() {
         // From a value: refused without a word.
         assert!(go(d, &[("http://test.zoraya/", false)], true).is_err());
     }
+}
+
+const SSH: &str = include_str!("../../../user/describe/posix/ssh.cmd");
+
+/// ADR-0340 item 4, INV-0340-1: ssh's network scope is the host its operand
+/// names, on port 22 or the port `-p` gives, and nothing else.
+#[test]
+fn ssh_reaches_the_host_it_names_on_port_22_or_the_ports_option() {
+    use zoraya_abi::net::Target;
+    // An address keeps its own rule; the word after HOST is the far side's.
+    let ok = go(
+        SSH,
+        &[
+            ("-l", true),
+            ("ada", true),
+            ("10.0.2.50", true),
+            ("ls", true),
+        ],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert_eq!(ok.0, rights::REACH);
+    let s = Scope::decode(&ok.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 23, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::UDP));
+    assert!(!s.names_address([10, 0, 2, 51], 22, Protocols::TCP));
+    assert!(!s.allows_echo_address([10, 0, 2, 50]));
+    // The first -p is the port, as OpenSSH reads it (review of 10g, finding 6).
+    let first = go(
+        SSH,
+        &[
+            ("-p", true),
+            ("2222", true),
+            ("-p", true),
+            ("22", true),
+            ("10.0.2.50", true),
+        ],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    let s = Scope::decode(&first.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 2222, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    // -p replaces the port.
+    let ok = go(
+        SSH,
+        &[("-p", true), ("2222", true), ("ada@10.0.2.50", true)],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    let s = Scope::decode(&ok.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 2222, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    // A name: public answers only, as for curl; USER@ is not part of it.
+    let ok = go(
+        SSH,
+        &[(concat!("ada", "@", "Build.Example.ORG"), true)],
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let s = Scope::decode(&ok.1).unwrap();
+    let rules: Vec<_> = s.reach_rules().collect();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].target, Target::PublicName("build.example.org"));
+    assert_eq!(rules[0].ports.list(), &[(22, 22)]);
+    assert_eq!(rules[0].protocols, Protocols::TCP);
+    // Words after the host never add a host: `-J` and `-o` are the far
+    // side's words, and the host stays the one typed.
+    let ok = go(
+        SSH,
+        &[
+            ("10.0.2.50", true),
+            ("-J", true),
+            ("evil.example.org", true),
+            ("-o", true),
+            ("x", true),
+        ],
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let s = Scope::decode(&ok.1).unwrap();
+    assert_eq!(s.reach_rules().count(), 1);
+    assert!(!s.allows_name("evil.example.org", 22, Protocols::TCP));
+}
+
+#[test]
+fn ssh_from_a_value_needs_a_net_word_and_a_bad_port_gives_nothing() {
+    let r = go(
+        SSH,
+        &[("-l", true), ("ada", true), ("other.example.org", false)],
+        true,
+    )
+    .unwrap_err();
+    assert!(r.problem.contains("from a value"), "{}", r.problem);
+    assert_eq!(
+        r.hint.as_deref(),
+        Some("if that is meant: +net other.example.org:22 COMMAND")
+    );
+    // A `+net HOST:22` word covers it; one for another port does not.
+    let covered = go_nets(
+        SSH,
+        &[("other.example.org", false)],
+        &["other.example.org:22"],
+        true,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert!(Scope::decode(&covered.1).unwrap().allows_name(
+        "other.example.org",
+        22,
+        Protocols::TCP
+    ));
+    assert!(
+        go_nets(
+            SSH,
+            &[("other.example.org", false)],
+            &["other.example.org:80"],
+            true
+        )
+        .is_err()
+    );
+    // A port that is no number: no grant, ssh says so itself.
+    for bad in ["0", "65536", "x", "-1"] {
+        let r = go(SSH, &[("-p", true), (bad, true), ("10.0.2.50", true)], true);
+        assert!(matches!(r, Ok(None)), "-p {bad}: {r:?}");
+    }
+    // `ssh://` names user and port by itself: a usage mistake (finding 14).
+    let r = go(SSH, &[("ssh://ada@10.0.2.50:2222", true)], true).unwrap_err();
+    assert!(r.problem.contains("not a host"), "{}", r.problem);
+    // Only the system image's description reaches (INV-0224-1).
+    assert!(go(SSH, &[("10.0.2.50", true)], false).unwrap().is_none());
+    // A name that is no host.
+    assert!(go(SSH, &[("a b", true)], true).unwrap().is_none());
+}
+
+/// ADR-0462: a room's words make the scope its terminals' connection has.
+#[test]
+fn a_rooms_net_words_make_the_scope_of_its_terminals() {
+    use crate::netgrant::words_scope;
+    assert!(words_scope(&[]).unwrap().is_none());
+    let words = [
+        String::from("10.0.2.50:22"),
+        String::from("build.example.org:2222"),
+    ];
+    let (r, bytes) = words_scope(&words).unwrap().expect("a scope");
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 50], 23, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 51], 22, Protocols::TCP));
+    assert!(s.allows_name("build.example.org", 2222, Protocols::TCP));
+    assert!(!s.allows_name("build.example.org", 22, Protocols::TCP));
+    assert!(words_scope(&[String::from("a b")]).is_err());
+}
+
+fn go_room(
+    text: &str,
+    args: &[(&str, bool)],
+    nets: &[&str],
+    room: Option<(&str, &[&str])>,
+) -> Result<Option<(u32, Vec<u8>)>, Refused> {
+    let d: Description = zoraya_describe::parse(text.as_bytes()).unwrap();
+    let values: Vec<Value> = args
+        .iter()
+        .map(|(a, literal)| Value {
+            text: String::from(*a),
+            literal: *literal,
+        })
+        .collect();
+    let nets: Vec<Value> = nets.iter().map(|a| Value::literal(a)).collect();
+    let words: Vec<String> = room
+        .map(|(_, w)| w.iter().map(|w| String::from(*w)).collect())
+        .unwrap_or_default();
+    let texts: Vec<&str> = values.iter().map(|v| v.text.as_str()).collect();
+    let parsed: Parsed<'_> = match zoraya_command::parse(&d, &texts) {
+        Ok(Outcome::Run(p)) => p,
+        _ => Parsed::default(),
+    };
+    net_for(&Line {
+        description: &d,
+        parsed: &parsed,
+        args: &values,
+        cwd: "/",
+        grants: &[],
+        nets: &nets,
+        listens: &[],
+        base_system: true,
+        room: room.map(|(name, _)| crate::grants::RoomBound {
+            name,
+            words: &words,
+        }),
+    })
+}
+
+/// ADR-0462, the decision of the fix pass: a room's words BOUND a line and
+/// give it nothing. A line with no designation and no `+net` gets no network
+/// (so no carved account), whatever the room holds.
+#[test]
+fn a_rooms_words_bound_a_line_and_give_it_nothing() {
+    const CAT: &str = include_str!("../../../user/describe/commands/cat.cmd");
+    let room = Some(("ops", &["10.0.2.50:22", "build.example.org:22"][..]));
+    // `cat x` and `ssh --help` ask for nothing: no connection.
+    assert!(go_room(CAT, &[("x", true)], &[], room).unwrap().is_none());
+    assert!(
+        go_room(SSH, &[("--help", true)], &[], room)
+            .unwrap()
+            .is_none()
+    );
+    // ssh's own designation, inside the words: the operand's rule only.
+    let (r, bytes) = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("10.0.2.50", true)],
+        &[],
+        room,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert_eq!(
+        s.reach_rules().count(),
+        1,
+        "the room's other word is not given"
+    );
+    assert!(!s.allows_name("build.example.org", 22, Protocols::TCP));
+    // A name inside a word: its public answers only, as everywhere.
+    let ok = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("build.example.org", true)],
+        &[],
+        room,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert_eq!(Scope::decode(&ok.1).unwrap().reach_rules().count(), 1);
+    // A value inside the words designates (it is in the room's words, not the line's).
+    assert!(
+        go_room(
+            SSH,
+            &[("-l", true), ("u", true), ("10.0.2.50", false)],
+            &[],
+            room
+        )
+        .unwrap()
+        .is_some()
+    );
+    // Outside the words: refused, naming them.
+    for args in [
+        &[("-l", true), ("u", true), ("10.0.2.51", true)][..],
+        &[("-p", true), ("2222", true), ("10.0.2.50", true)][..],
+        &[("-l", true), ("u", true), ("other.example.org", true)][..],
+        &[("-l", true), ("u", true), ("10.0.2.51", false)][..],
+    ] {
+        let r = go_room(SSH, args, &[], room).unwrap_err();
+        assert!(
+            r.problem.contains("outside the network words of room ops")
+                || r.problem.contains("from a value"),
+            "{}",
+            r.problem
+        );
+        if r.problem.contains("outside the network words") {
+            let hint = r.hint.unwrap();
+            assert!(
+                hint.contains("+net 10.0.2.50:22") && hint.contains("+net build.example.org:22"),
+                "{hint}"
+            );
+        }
+    }
+    // A `+net` word of the line must lie inside the room's too.
+    assert!(
+        go_room(CAT, &[("x", true)], &["10.0.2.50:22"], room)
+            .unwrap()
+            .is_some()
+    );
+    let r = go_room(CAT, &[("x", true)], &["any"], room).unwrap_err();
+    assert!(
+        r.problem.contains("outside the network words"),
+        "{}",
+        r.problem
+    );
+    // A room with no words: nothing is given, and a designation is refused with that said.
+    let none = Some(("plain", &[][..]));
+    assert!(go_room(CAT, &[("x", true)], &[], none).unwrap().is_none());
+    let r = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("10.0.2.50", true)],
+        &[],
+        none,
+    )
+    .unwrap_err();
+    assert_eq!(r.hint.as_deref(), Some("room plain has no +net words"));
+    // A word of the room that is no word (a hand edit) bounds nothing and spoils nothing: the
+    // other words stand and a line that asks for no network is unaffected (finding 9).
+    let bad = Some(("ops", &["h:0", "10.0.2.50:22"][..]));
+    assert!(go_room(CAT, &[("x", true)], &[], bad).unwrap().is_none());
+    assert!(
+        go_room(
+            SSH,
+            &[("-l", true), ("u", true), ("10.0.2.50", true)],
+            &[],
+            bad
+        )
+        .unwrap()
+        .is_some()
+    );
+    // At home (no room) nothing changes.
+    assert!(
+        go_room(
+            SSH,
+            &[("-l", true), ("u", true), ("10.0.2.51", true)],
+            &[],
+            None
+        )
+        .unwrap()
+        .is_some()
+    );
+}
+
+/// A room made inside a room holds no more than the room (INV-0172-4), by the rules.
+#[test]
+fn a_word_is_inside_a_room_by_the_rules_not_the_text() {
+    use crate::netgrant::word_within;
+    let room = [
+        String::from("*.example.org:22"),
+        String::from("10.0.2.0/24"),
+    ];
+    assert!(word_within("api.example.org:22", &room));
+    assert!(word_within("API.example.org:22", &room));
+    assert!(word_within("10.0.2.50:2222", &room));
+    assert!(!word_within("api.example.org:23", &room));
+    assert!(!word_within("example.org:22", &room));
+    assert!(!word_within("any", &room));
+    assert!(!word_within("a b", &room));
+    assert!(!word_within("10.0.2.50", &[]));
+}
+
+/// ADR-0462 item 5: no status in a room, with a hint; at home it is given.
+#[test]
+fn net_status_is_refused_in_a_room() {
+    const NETCMD: &str = include_str!("../../../user/describe/commands/net.cmd");
+    let room = Some(("ops", &["10.0.2.50:22"][..]));
+    let r = go_room(NETCMD, &[("status", true)], &[], room).unwrap_err();
+    assert_eq!(r.problem, "the network's status is not given in a room");
+    assert!(r.hint.unwrap().contains("room --leave"));
+    let none = Some(("plain", &[][..]));
+    assert!(go_room(NETCMD, &[("status", true)], &[], none).is_err());
+    let (rights_given, _) = go_room(NETCMD, &[("status", true)], &[], None)
+        .unwrap()
+        .expect("at home");
+    assert_eq!(rights_given, rights::STATUS);
+}
+
+/// ADR-0462 item 4: what the line is told at `netd`'s account limit, and for another refusal.
+#[test]
+fn the_account_limit_has_its_own_refusal_and_hint() {
+    use crate::netgrant::connection_refusal;
+    let (problem, hint) = connection_refusal(true);
+    assert_eq!(
+        problem,
+        "the network has no room for another program's connection"
+    );
+    assert!(hint.contains("wait for one to end"));
+    let (problem, hint) = connection_refusal(false);
+    assert!(problem.contains("refused"));
+    assert!(hint.contains("+net words"));
+}
+
+/// The panel's scope for a room: the words that parse; a bad word spoils no other (finding 9).
+#[test]
+fn a_rooms_scope_skips_a_bad_word_and_keeps_the_good() {
+    use crate::netgrant::room_scope;
+    let words = |w: &[&str]| w.iter().map(|w| String::from(*w)).collect::<Vec<_>>();
+    assert!(room_scope(&[]).is_none());
+    assert!(room_scope(&words(&["h:0", "a b"])).is_none());
+    let (r, bytes) = room_scope(&words(&["h:0", "10.0.2.50:22"])).expect("the good word");
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.names_address([10, 0, 2, 50], 22, Protocols::TCP));
+    assert_eq!(s.reach_rules().count(), 1);
+}
+
+#[test]
+fn a_listen_word_gives_the_listen_right_and_a_listen_rule_and_no_reach() {
+    use crate::netgrant::{describe, parse_listen};
+    let (r, bytes) = scope_of(go_all(CAT, &[], &[], &["8000"], false).unwrap());
+    assert_eq!(r, rights::LISTEN);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_listen(8000, Protocols::TCP) && s.allows_listen(8000, Protocols::UDP));
+    assert!(!s.allows_listen(8001, Protocols::TCP) && !s.allows_listen(7999, Protocols::TCP));
+    assert_eq!(s.reach_rules().count(), 0, "a listener reaches nothing");
+    assert_eq!(
+        describe(&bytes),
+        vec![String::from(
+            "net: port 8000               listen (grant +listen)"
+        )]
+    );
+    // With a `+net` word: both rights, the reach rules first in `grants`.
+    let (r, bytes) =
+        scope_of(go_all(CAT, &[], &["127.0.0.1:8000"], &["8000-8002", "9000"], false).unwrap());
+    assert_eq!(r, rights::REACH | rights::LISTEN);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_listen(8002, Protocols::TCP) && s.allows_listen(9000, Protocols::TCP));
+    assert!(!s.allows_listen(8003, Protocols::TCP));
+    let lines = describe(&bytes);
+    assert_eq!(lines.len(), 3);
+    assert!(
+        lines[0].contains("127.0.0.1:8000") && lines[0].contains("reach"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].contains("ports 8000-8002") && lines[2].contains("port 9000"),
+        "{lines:?}"
+    );
+    // The pills of the reach rules still pair with their own lines.
+    assert_eq!(
+        crate::netgrant::pills(&bytes),
+        vec![String::from("+net 127.0.0.1:8000")]
+    );
+    // The word is a port or a range, 1 to 65535, and nothing else.
+    for bad in [
+        "",
+        "0",
+        "65536",
+        "-1",
+        "80-",
+        "-80",
+        "90-80",
+        "a",
+        "80,81",
+        "any",
+        "80-90-100",
+        " 80",
+    ] {
+        assert!(parse_listen(bad).is_err(), "{bad:?}");
+        let e = go_all(CAT, &[], &[], &[bad], false).unwrap_err();
+        assert_eq!(e.subject, format!("+listen {bad}"));
+    }
+    assert!(
+        parse_listen("65535").is_ok()
+            && parse_listen("1").is_ok()
+            && parse_listen("1-65535").is_ok()
+    );
+    // Total on any text.
+    for text in ["\u{0}", "9999999999999999999", "1-2-3", "\u{10ffff}"] {
+        let _ = parse_listen(text);
+    }
+}
+
+#[test]
+fn no_words_and_no_listen_word_give_no_listen_right() {
+    let (r, bytes) = scope_of(go_all(CAT, &[], &["example.org:443"], &[], false).unwrap());
+    assert_eq!(r, rights::REACH);
+    assert_eq!(Scope::decode(&bytes).unwrap().listen_count(), 0);
+    assert_eq!(go_all(CAT, &[], &[], &[], false).unwrap(), None);
+}
+
+/// The loopback is the room's own (ADR-0442): a line may reach it in any room, words or none.
+#[test]
+fn the_loopback_asks_nothing_of_a_rooms_words() {
+    let none = Some(("ra", &[][..]));
+    let got = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("127.0.0.1", true)],
+        &[],
+        none,
+    )
+    .unwrap()
+    .expect("a scope");
+    assert!(
+        Scope::decode(&got.1)
+            .unwrap()
+            .names_address([127, 0, 0, 1], 22, Protocols::TCP)
+    );
+    let got = go_room(
+        SSH,
+        &[("-l", true), ("u", true), ("10.0.2.50", true)],
+        &["127.0.0.1"],
+        none,
+    );
+    assert!(got.is_err(), "the other address still is");
 }

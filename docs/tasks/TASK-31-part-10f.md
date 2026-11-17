@@ -16,7 +16,7 @@ plays ADR-0337's scenario in a window at four sizes. A `+net` word and a native 
    `GRANTS` channel, the entries opened from the shell's own root and sent.
 4. **`libposix`:** `slot::GRANTS` (1006) read on a refusal (outside the table or `EACCES` from the service), one retry; a refusal reported
    once per path and access; a `NotGranted` connect or resolve reported as a `NetReport` (ADR-0224 item 5).
-5. **`narrow` with a list of names** (file ordinal 41; `zoraya-proto-file`, `zoraya-fs-service`, `zoraya-fsclient`): each name with its rights.
+5. **`narrow` with a list of names** (file ordinal 44; `zoraya-proto-file`, `zoraya-fs-service`, `zoraya-fsclient`): each name with its rights.
 6. **The runner:** a `status TEXT` step that finds the status row by its ground (the window may be shorter than `grid_for` assumes: at
    1920x1200 the grid has 21 rows, vi's message line is on row 20).
 7. **Docs, tests, mutations:** proposed **ADR-0395** (INV-0395-1 to -6; Total 839), the Status of INV-0337-1 to -7 (checked; the gaps are named in
@@ -63,5 +63,5 @@ Start the desktop (`make run-gui`) and open a terminal (System+Enter), then:
 
 ## For the architect
 
-Proposed **ADR-0395** (Option A as built). Recommend Option A. It adds a file-protocol message (`NarrowNames`, ordinal 41), a slot (`GRANTS`, 1006)
+Proposed **ADR-0395** (Option A as built). Recommend Option A. It adds a file-protocol message (`NarrowNames`, ordinal 44), a slot (`GRANTS`, 1006)
 and two report messages; none changes an accepted decision.

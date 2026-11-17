@@ -253,11 +253,18 @@ pub fn pack_calls(called: &[u8]) -> Vec<u8> {
 }
 
 /// An object opened, and what the open told of it.
-struct Opened<H> {
-    conn: H,
-    kind: Kind,
+pub(crate) struct Opened<H> {
+    pub(crate) conn: H,
+    pub(crate) kind: Kind,
     created: bool,
     meta: Meta,
+}
+
+impl<H> Opened<H> {
+    /// What the service said of the object when it opened it.
+    pub(crate) fn meta(&self) -> &Meta {
+        &self.meta
+    }
 }
 
 enum Outcome<H> {
@@ -332,6 +339,11 @@ pub struct Posix<S: Sys> {
     pub(crate) pending: Option<crate::jobs::PendingWait<S::H>>,
     /// The outcome of that wait, for the method's second run.
     pub(crate) resume: Option<crate::jobs::Resume<S::H>>,
+    /// A handler without `SA_RESTART` ran at this call's entry: its next
+    /// wait point is `EINTR` instead of a wait (`Posix::wait_for`). Set and
+    /// cleared by the C boundary inside one run of the call (`pub` for the
+    /// host tests).
+    pub interrupt_wait: bool,
     /// What `Read` a terminal connection has outstanding, by connection
     /// (`pub`, like `tty_rest`, for the host tests).
     pub tty_reads: Vec<(S::H, u32)>,
@@ -417,6 +429,7 @@ impl<S: Sys> Posix<S> {
             threads: Default::default(),
             pending: None,
             resume: None,
+            interrupt_wait: false,
             tty_reads: Vec::new(),
             tty_stash: Vec::new(),
             tty_rest: Vec::new(),
@@ -452,8 +465,14 @@ impl<S: Sys> Posix<S> {
                 handle: message.get(e.handle as usize).copied(),
             });
         }
+        // No cwd (ADR-0433) is an entry no table has: a relative path is
+        // taken from `/`, which only a table with a `/` covers.
         p.cwd = Place {
-            entry: record.cwd_entry as usize,
+            entry: if record.cwd_entry == zoraya_abi::posix::NO_ENTRY {
+                usize::MAX
+            } else {
+                record.cwd_entry as usize
+            },
             path: record.cwd.to_string(),
         };
         for fd in record.fds() {
@@ -814,6 +833,15 @@ impl<S: Sys> Posix<S> {
         if let Some(g) = abi::Grants::decode(bytes, handles.len()) {
             for e in g.entries() {
                 let h = handles[usize::from(e.handle)];
+                // A program's own directory (ADR-0341 item 3) is never replaced:
+                // a grant at its prefix is dropped, whoever sent it.
+                if self
+                    .entries
+                    .iter()
+                    .any(|x| x.prefix == e.prefix && x.kind == EntryKind::Own)
+                {
+                    continue;
+                }
                 let same = self
                     .entries
                     .iter()
@@ -989,7 +1017,7 @@ impl<S: Sys> Posix<S> {
     }
 
     /// Resolves and opens, following links (ADR-0107 item 7).
-    fn open_resolved(
+    pub(crate) fn open_resolved(
         &mut self,
         mut r: Resolved,
         flags: u32,
@@ -1022,7 +1050,17 @@ impl<S: Sys> Posix<S> {
                         &target,
                         r.directory,
                     );
-                    r = next.map_err(|e| self.refused(e, access))?;
+                    let next = next.map_err(|e| self.refused(e, access))?;
+                    // ADR-0341 item 7: a link found outside a program's own
+                    // directory is not followed into it, so a repository
+                    // cannot make a write land there through a planted link.
+                    if next.place.entry != r.place.entry
+                        && self.entries.get(next.place.entry).map(|e| e.kind)
+                            == Some(EntryKind::Own)
+                    {
+                        return Err(EACCES);
+                    }
+                    r = next;
                 }
             }
         }
@@ -1059,9 +1097,27 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// The handle of this process's own image, if `path` names it
+    /// (`/proc/self/exe`, ADR-0107 item 4): a spawn or an `exec` of that path
+    /// uses the image the process was started from instead of reading a file
+    /// (ADR-0415 item 2 (a), proposed ADR-0438), so every process of the
+    /// program shares its read-only pages and the spawner needs no grant for
+    /// a file. Only a path that resolves to the image entry itself, whatever
+    /// the cwd and `..`: the executable's own path as a file name is
+    /// loaded as before, since the file may have changed since. `None`
+    /// without the entry's handle (a table that listed the entry without the
+    /// handle).
+    pub fn own_image(&mut self, path: &[u8]) -> Option<S::H> {
+        let r = self.resolve(AT_FDCWD, path, Access::Read).ok()?;
+        let entry = self.entries.get(r.place.entry)?;
+        (entry.kind == EntryKind::Image && r.place.path.is_empty())
+            .then_some(entry.handle)
+            .flatten()
+    }
+
     /// The entry `r` lands in, if it is not a directory: those are answered
     /// here (`/dev/null`, `/proc/self/exe`, `/dev/tty`).
-    fn special(&self, r: &Resolved) -> Option<EntryKind> {
+    pub(crate) fn special(&self, r: &Resolved) -> Option<EntryKind> {
         let e = self.entries.get(r.place.entry)?;
         (!e.kind.is_directory()).then_some(e.kind)
     }
@@ -1147,6 +1203,10 @@ impl<S: Sys> Posix<S> {
         }
         if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFIFO {
             return self.open_fifo(conn, flags);
+        }
+        // A socket file is connected to, not opened (POSIX: `ENXIO`).
+        if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFSOCK {
+            return fail(self, ENXIO);
         }
         // ADR-0014 rule 6: as for a file's owner who is not root; an object
         // this open made is its creator's whatever its mode.
@@ -1355,6 +1415,9 @@ impl<S: Sys> Posix<S> {
                     if let Some(h) = u.held.take() {
                         more.extend(h.handles);
                     }
+                    // The connection to a bound socket's file: its closing
+                    // ends the listener (proposed ADR-0439).
+                    more.extend(u.node.take());
                     for h in more {
                         self.sys.close(h);
                     }

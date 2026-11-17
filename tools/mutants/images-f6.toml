@@ -1,0 +1,99 @@
+# Plan part F6 (ADR-0438, INV-0415-2, INV-0438-1 to -4): the kernel's shared image
+# pages. The host halves are `make mutants-host CRATE=zoraya-elf` and
+# `CRATE=zoraya-mappings`; this list is the kernel half: the test kernel's
+# `images_share_their_read_only_pages` and the cases after it, and `libposix`'s
+# `t_shared` for the last.
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "F6-copy-the-read-only-pages"
+file = "kernel/src/process.rs"
+find = '''    if s.is_shared() {
+        // The record is made'''
+replace = '''    if false {
+        // The record is made'''
+note = "INV-0415-2: every spawn then copies the text, and two processes no longer map one frame"
+
+[[mutant]]
+id = "F6-creator-does-not-pay"
+file = "kernel/src/process.rs"
+find = '''    let object = MemoryObject::new(kept.bytes(), false, Some(job))?;'''
+replace = '''    let object = MemoryObject::new(kept.bytes(), false, None)?;'''
+note = "INV-0438-2: the creator's job is charged nothing for the pages"
+
+[[mutant]]
+id = "F6-fill-ignores-the-piece"
+file = "kernel/src/process.rs"
+find = '''            if !object.copy_from(copy.to + done, memory, copy.from + done, n) {'''
+replace = '''            if !object.copy_from(copy.to, memory, copy.from, n) {'''
+note = "a segment longer than a step is filled with its first piece again and again: the text read through the child is wrong"
+
+[[mutant]]
+id = "F6-no-step-in-the-shared-loop"
+file = "kernel/src/process.rs"
+find = '''        for page in (start..end).step_by(PAGE_SIZE as usize) {
+            tick(space, pages)?;
+            space.map_kept_page('''
+replace = '''        for page in (start..end).step_by(PAGE_SIZE as usize) {
+            space.map_kept_page('''
+note = "INV-0438-4: 2048 shared pages mapped in one interval"
+
+[[mutant]]
+id = "F6-shared-record-writable"
+file = "kernel/src/process.rs"
+find = '''    let attributes = attributes(s);
+    let (start, end) = s.pages();
+    let first = kept.first_page(index) * PAGE_SIZE;'''
+replace = '''    let mut attributes = attributes(s);
+    attributes.write = s.is_shared() || attributes.write;
+    let (start, end) = s.pages();
+    let first = kept.first_page(index) * PAGE_SIZE;'''
+note = "INV-0415-2: a writable shared page; map_kept refuses it, so the spawn fails"
+
+[[mutant]]
+id = "F6-the-image-keeps-the-source"
+file = "kernel/src/memory/object.rs"
+find = '''        if core::ptr::eq(self, source) || !inside(to, self) || !inside(from, source) {'''
+replace = '''        if !inside(to, self) || !inside(from, source) {'''
+note = "equivalent, survives: the kept object is always new, so it is never the source; the guard is for a caller's bug (review 7). Not run by hand."
+
+[[mutant]]
+id = "F6-no-step-in-the-copy"
+file = "kernel/src/process.rs"
+find = '''            steps::count(n.div_ceil(PAGE_SIZE) as usize);
+            done += n;
+            steps::between()?;'''
+replace = '''            steps::count(n.div_ceil(PAGE_SIZE) as usize);
+            done += n;'''
+note = "INV-0438-4: image_create of 2048 pages of text copies them in one interval (an_image_of_a_large_program_is_bounded)"
+
+[[mutant]]
+id = "F6-no-step-in-the-cache-loop"
+file = "kernel/src/process.rs"
+find = '''                if n > 0 && n.is_multiple_of(steps::STEP as u64) {
+                    steps::between()?;
+                }
+                // A page cleaned is a unit of the step (INV-0270-1).
+                steps::count(1);'''
+replace = '''                // A page cleaned is a unit of the step (INV-0270-1).
+                steps::count(1);'''
+note = "INV-0438-4: the clean of 2048 text pages in one interval (the copy's step points leave them alone)"
+
+[[mutant]]
+id = "F6-no-step-before-the-first-piece"
+file = "kernel/src/process.rs"
+find = '''    // point before the first piece, so that they are not added to it.
+    steps::between()?;'''
+replace = '''    // point before the first piece, so that they are not added to it.'''
+note = "INV-0438-4: the object's last frames and the first piece in one interval (128 units, found by the test)"
+
+[[mutant]]
+id = "F6-no-step-after-the-cache-loop"
+file = "kernel/src/process.rs"
+find = '''            text = true;
+            // The last cleans must not share an interval with the next
+            // segment's first piece (up to 2 * STEP units otherwise).
+            steps::between()?;'''
+replace = '''            text = true;'''
+note = "INV-0438-4: the text's last 64 cleans and the data's first 64-page piece in one interval (128 units; re-check R1)"

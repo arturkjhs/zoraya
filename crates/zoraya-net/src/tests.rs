@@ -1017,3 +1017,14 @@ fn the_ports_wrap_from_the_top_back_into_range() {
     assert_eq!(stack.ephemeral_port(), 49152);
     assert_eq!(stack.ephemeral_port(), 49153);
 }
+
+#[test]
+fn narrowed_keeps_the_room() {
+    // INV-0442-2: a connection made by `narrow` is in its parent's room.
+    let parent = Connection::root().in_room(crate::connection::Room::new(b"a").unwrap());
+    let scope = zoraya_abi::net::Scope::EMPTY;
+    let child = parent
+        .narrowed(zoraya_abi::net::rights::STATUS, scope.as_bytes())
+        .unwrap();
+    assert_eq!(child.room().as_bytes(), b"a");
+}

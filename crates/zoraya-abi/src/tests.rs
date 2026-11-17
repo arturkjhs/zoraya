@@ -428,7 +428,7 @@ echo! {
     stream_read(end: Handle, bytes: Bytes);
     stream_write(end: Handle, bytes: Bytes);
     snapshot_process(args: SnapshotBuffer);
-    image_create(memory: Handle, length: Size);
+    image_create(memory: Handle, length: Size, job: Handle);
     job_suspend(job: Handle);
     job_resume(job: Handle);
     object_get_signals(handle: Handle);
@@ -1123,6 +1123,28 @@ mod bootstrap {
         assert!(with(&[root]));
     }
 
+    /// ADR-0433: a record may have no cwd; one with no entry must not have one.
+    #[test]
+    fn a_record_may_have_no_cwd() {
+        use crate::posix::NO_ENTRY;
+        let mut b = [0; 512];
+        let root = Entry {
+            prefix: "/",
+            kind: EntryKind::Directory,
+            handle: 0,
+        };
+        // No entries: only `NO_ENTRY` and an empty cwd.
+        let n = encode(&FACTS, 0, "/bin/x", NO_ENTRY, "", &[], &[], 4, &mut b).unwrap();
+        let r = Bootstrap::decode(&b[..n], 4).unwrap();
+        assert_eq!((r.entry_count(), r.cwd_entry, r.cwd), (0, NO_ENTRY, ""));
+        assert!(encode(&FACTS, 0, "/bin/x", 0, "", &[], &[], 4, &mut b).is_none());
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "a", &[], &[], 4, &mut b).is_none());
+        // Entries: `NO_ENTRY` is no cwd, with an empty path.
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "", &[], &[root], 4, &mut b).is_some());
+        assert!(encode(&FACTS, 0, "/bin/x", NO_ENTRY, "a", &[], &[root], 4, &mut b).is_none());
+        assert!(encode(&FACTS, 0, "/bin/x", 0, "", &[], &[root], 4, &mut b).is_some());
+    }
+
     #[test]
     fn a_record_round_trips() {
         let mut b = [0; 1024];
@@ -1376,8 +1398,8 @@ mod bootstrap {
         let entry = fd_kind - 4 + 4 * 8;
         assert_eq!(b[entry], EntryKind::Image as u8);
         let mut m = b;
-        m[entry] = 5;
-        assert!(Bootstrap::decode(&m[..n], 4).is_none(), "entry kind 5");
+        m[entry] = 6;
+        assert!(Bootstrap::decode(&m[..n], 4).is_none(), "entry kind 6");
         let mut m = b;
         m[entry + 2] = 1;
         assert!(
@@ -1430,10 +1452,12 @@ mod bootstrap {
             assert_eq!(kind.has_slot(), kind != FdKind::Null);
         }
         assert_eq!(FdKind::from_raw(6), None);
-        for k in 0..=4u8 {
+        for k in 0..=5u8 {
             assert_eq!(EntryKind::from_raw(k).unwrap() as u8, k);
         }
-        assert_eq!(EntryKind::from_raw(5), None);
+        assert_eq!(EntryKind::from_raw(6), None);
+        // ADR-0341: the own directory is a directory entry.
+        assert!(EntryKind::Own.is_directory());
         let mut out = std::vec![0; 3 * MAX_PATH];
         let root = [Entry {
             prefix: "/",

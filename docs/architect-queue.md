@@ -8,19 +8,19 @@ adds, remove what the architect has decided (the decision itself is recorded in 
 **Both dispatchers** (TASK-31 on the Mac mini, TASK-34 on the MacBook Air) keep this file. TASK-34's dispatcher: add your
 items here too, under the same headings, with the part's name in front.
 
-Last updated: 2026-11-15 (the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
+Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; before that 2026-11-15, the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
 `test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass on `work/10c`).
 
 ## A. Proposed ADRs, with the agent's one-line recommendation
 
 | ADR | What | Recommendation | From |
 |---|---|---|---|
-| ADR-0392 | libposix: a signal sent during `execve` follows the new image (`exec_carry`); a handler that ran at a call's entry ends its first wait with `EINTR`; `exec_hold` marks default-terminating signals `Deliver` during the spawn | **Tension with accepted ADR-0106** (INV-0106-2: a take in every handler-less `execve`; item 2's mapping during the spawn). Recommend Option A (library route); the fallback A' is a kernel change. Yours to accept or to choose A' | sigint-exec |
-| ADR-0390, ADR-0391 | 10d: surface for curses, less and vi; the layout, descriptions and refusals of 10d | Option A both. ADR-0391 item 8 (two files of one directory) is now a refusal and an open question: should `narrow` take a list? | 10d |
-| ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 41), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
+| ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
+| ADR-0462 | 10g: a room's terminals get the random service (a launcher's connection, at `init`'s depth) and, in a room with `+net` words, a network connection narrowed to them; the words BOUND a line and give it nothing (a line that asks for no network gets none and takes no carved account) | Option A | 10g |
+| ADR-0393 | 10g: what 10g decided where ADR-0340 and ADR-0341 are silent (`EntryKind::Own`, the names list, `/home` as the view, the shell's `/data/ROOM` hold, ssh on ADR-0346's port plus patches 0005 to 0008, short options only, the host's sshd as a confined test server) | Option A | 10g |
+| ADR-0461 | git's licence: `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS (its GPL-2.0-or-later option), for git only. Decided by the architect 2026-11-16; it must be accepted before 10h wires git in | Option A (decided) | ports-early, TASK-31 |
+| ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 44), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
-| ADR-0386 | 10c: the shell's host of the discipline (`Restore` and `Reinstate` as messages, 2004 read from the output and believed only out of canonical mode, the held paste's question in the title, nobody reads with no line in front) | Option A | 10c |
-| ADR-0387 | 10c: `zosh`'s lines on the discipline (which fds are the terminal, the whole line reads until `tcsetpgrp`, a native line's `Restore` before the next prompt) | Option A. Item 4 (no kill offer for a line with the terminal) **decided** 2026-11-15: accepted with the System+K escape, built in 10f (recorded in the ADR's open questions) | 10c |
 | ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
 | ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
 
@@ -51,6 +51,13 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 - **Test infrastructure:** the semaphore, barrier and latch groups of libc++'s tests run only in the nightly (TCG);
   INV-0042-1 stays `not yet applicable`. INV-0172-4's narrowing of `room new` inside a room is built and checked in 10c.
 
+- **10g, ADR-0288/0435:** a launcher's connection to the random service (`ShareLauncher`, only `init`'s may ask) so that
+  the shells the panel starts are shells, not programs, for `rngd`.
+- **10g, ADR-0340 INV-0340-4:** its half "`libc.a` exports no `listen` or `accept`" is false since the Unix sockets
+  (ADR-0430, ADR-0439); the row says "checked: ... (partly ...)"; the new text of the invariant is yours.
+- **10g, not built:** the `/data/ROOM` storage limit (ADR-0341 item 6), `scp` and `sftp`; a file held open for writing in an
+  own directory stays writable in a child that inherits it (ADR-0393 item 13, before 10h's git hooks).
+
 ## C. Hand checks (exact commands)
 
 1. **10a, xterm comparison** (ADR-0332 item 10): in an 80x24 xterm run `TERM=xterm-256color cat crates/zoraya-term/recordings/vi-edit.rec`
@@ -63,11 +70,23 @@ Last updated: 2026-11-15 (the architect's decisions of the day recorded; after s
 
 ## D. Open questions
 
-- **git's licence in a static program (ADR-0347, ports-early):** git is GPL-2.0-only and `git-remote-http` links libcurl with Apache-2.0 OpenSSL statically; GPL-2.0-only and Apache-2.0 are not combinable, so `git-remote-http` cannot be shipped as built (GNU wget is GPL-3.0-or-later, which is compatible). Options: git over a GPL-compatible TLS library, `git-remote-http` as a program not linked to OpenSSL (a helper process), an OpenSSL exception, or no HTTPS transport. Decide before 10h wires git into the image.
-- **DB 1 for nvi (ADR-0390):** 1.85 under the 4-clause UC licence; a maintained copy is an open question.
 
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
 
+
+
+## E. Decided 2026-11-16 (removed from the lists above)
+
+- ADR-0462's rule for a room's network (recorded in the ADR): a room's `+net` words bound what a line may be given; a line gets a connection only when its own words or its description ask for it and the room allows it; a line with no network request gets none and no carved account; at the carved-account limit the line is refused with a hint. Every line getting the room's connection is refused.
+- ADR-0392 Option A accepted (a signal sent during `execve` follows the new image; a handler run at a call's entry ends its first wait with `EINTR`); the amendments of ADR-0106 accepted (INV-0106-2 gains `execve`, item 2's mapping holds during the spawn as amended).
+- ADR-0386, ADR-0387, ADR-0390, ADR-0391 Option A accepted. ADR-0391 item 8: `narrow` takes a list of names (ADR-0337 item 8), to be built (10f built `narrow` with a list at run time; 10j or 10f for the rest).
+- DB 1.85's licence accepted for nvi (ADR-0390, ADR-0347): the University of California rescinded the advertising clause of the 4-clause BSD licence in 1999, so it reads as 3-clause BSD.
+- git's licence (ADR-0347): `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS, its GPL-2.0-or-later option, for git only (ADR-0461, proposed; before 10h).
+- A killed room's threads: charged but not parked while they end (Option A of ADR-0460, accepted 2026-11-16 with the overdraft as built; ADR-0285's note resolved).
+- ADR-0460 open question 2: the overdraft, not acceptance. The overrun of an ending process is debt that the room and its parents pay back in the following periods (cap 100 budgets; a dead room's debt goes to its nearest ancestor with a ceiling); built on `work/park-ending`, INV-0460-4.
+
+- `curses-flake`: the GUI runner's per-step limit stays 120 s with the factor 4 under TCG (480 s); extended to the serial-line scripts (`limit SECONDS STEP`, explicit limits for the steps that wait long).
+- `curses-flake`: zosh's prompt clears the rest of its row (Option A: `\r` and `ESC [ K` before the prompt); built in `editor.start`.
 
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 
@@ -76,12 +95,59 @@ System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint i
 `tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
 the runner itself in a job of their own; `vttest` pinned and built with 10d.
 
+## Decided 2026-11-16 (TASK-34, plan parts F2 to F8; removed from the lists above)
+
+- ADR-0431, 0432, 0434, 0436, 0437, 0439 and 0440 accepted as built. F8: `top`'s session row plus the keeper's ceiling refusal are the plan's `top --session`.
+- ADR-0441 accepted with a change: each room has its own loopback (a connect to `127.0.0.1:PORT` reaches only listeners of the connecting program's
+  room; reaching another room is a later, explicit grant). Built as **part F9**, with a test that a program in room B cannot reach a listener in room A
+  with `+net 127.0.0.1:PORT`. A gate condition (ADR-0268).
+  **F9 built** (branch `work/f9`, ADR-0442 proposed): the loopback is per room and the loopback condition of ADR-0268's gate is met, resting on: only the trusted console shell and init's control connection hold `ROOM`; the untrusted-room launcher (ADR-0269, not built) must get a connection with its room fixed by init and no `ROOM`; a room's own desktop shell builds its room from any typed name (`zosh.rs` enter_room), harmless today (no network slot) but it must never hold `ROOM`. INV-0442-4 is checked on the POSIX path only. **Decisions for the architect (ADR-0442 open questions):** (a) per-room bounds, or accept the one-bit channel of the machine-wide listener/account bounds; (b) a removed room that still runs shares its loopback and the keeper's job with a new room of the same name: `room new` refuses a name that still runs, or a generation number. Head: see `git log work/f9`.
+- F6: the room charging of a program image is built now as **part F10** (`image_create` takes the job to charge; the shell passes the room's job; a test
+  that a room at its memory limit cannot start a new program through the shell). A gate condition too (ADR-0262: what is made for a client is paid by the client).
+  **F10 built** (branch `work/f10`, ADR-0443 proposed; head: see `git log work/f10`): `image_create` takes the job to charge (needs `CREATE_PROCESS` on it), the shell names the room's, and a room at its limit cannot start a program whose image does not fit (`room-image.script`). This closes this one condition of the gate only: others remain (ADR-0269's untrusted launcher is not built).
+- Backlog (next stage): listeners reachable from the NIC (ADR-0440 Option B, a second smoltcp interface) and the rooms' `+listen` words and pills.
+- The TCG kernel suites near 420 s: split into two jobs; the limit is not raised.
+- The contiguous-create race with the reaper (ADR-0270; `t_bound`'s flake source): backlog, high priority.
+- Decided 2026-11-17: ADR-0442 accepted with two changes (bounds per room, so one room cannot use up another's; a room's loopback keyed by a room id that is never reused, not by its name), built as **part F11**; ADR-0443 accepted (its remainders are known limits in the report); socket files in a program's own directory are allowed (ADR-0412; to be built, `docs/backlog.md`); unlinking a listening node follows the ordinary rules (write on its directory); the local `kernel_work_is_bounded` failures on the MacBook Air (the reaper race and load timing) do not block merges.
+
 ## For the TASK-34 dispatcher (MacBook Air)
 
-The CI policy of ADR-0348 (the architect, 2026-11-15) applies to this dispatcher as it does to the Mac mini's: a push to
-`work/*` runs `make check` only (no full `workflow_dispatch` runs, except to chase a flake); a candidate runs the steps
-`tools/ci-plan.sh` selects (the full set only for `kernel/`, libposix or `tools/test-runner/`; a `Makefile` change maps to the
-steps whose recipes or variables it changes); do not wait for `main`'s run after a merge, the next part merges as soon as its
-own candidate is green; `main`'s full set runs every 4 hours if `main` changed, and nightly; a red scheduled run
-(`gh run list --workflow 'make test' --event schedule`; a skipping 4-hourly run fails if the last full run was red) is fixed first, before the next merge, and its summary lists the merges
-since the last green one; a stage tag needs a green scheduled or nightly run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
+The CI policy of ADR-0463 (the architect, 2026-11-16; it replaces the candidate rules of ADR-0348) applies to this dispatcher as
+it does to the Mac mini's: a part merges after `make check`, `make test-changed` under HVF and its independent Opus review pass
+locally, with no candidate run in CI, so F7b may merge on its local tests and review; a candidate run is needed only if F7b changes
+`.github/workflows`, `tools/ci-plan.sh` (or what it reads) or `tools/test-runner/`, or for a failure that shows only under TCG. A push to
+`work/*` runs `make check` only. `main`'s full set runs every 2 hours if `main` changed, and nightly. A red scheduled run
+(`gh run list --workflow 'make test' --event schedule`) is fixed first, before any merge; if it is not fixed within an hour, revert the
+merge that broke it and fix it on its branch (the red run of 2026-11-16, libc++ `mutex_try_to_lock`, is the first case). A stage tag
+needs a green scheduled, nightly or `candidate-full/` run that includes the tagged commit (`tools/ci-last-full.rb --green-for SHA`).
+
+**2026-11-15, for the TASK-34 dispatcher:** the scheduled full run 43749759496 (head `9b78d380`) is green, 78 of 78 jobs,
+including the TCG `w9-term` job and all five `test-qemu-*` jobs. `main`'s red scheduled run (`w9-term`, run 43699859694) was
+fixed first (`work/w9-fix`, merged as `0693daf`; the cause was the test's own poll loop starving `make -j4` under TCG).
+That run includes F3's merge (`db938461`) and F2's, so `stage-f3` can be tagged and `stage-f2`'s tag confirmed
+(`tools/ci-last-full.rb --green-for SHA` names that run for each). The Mac mini tagged `stage-10c` and `stage-10d` on it.
+
+**2026-11-16, from plan part F7 (ADR-0439 and ADR-0440, proposed):** (1) The Unix half of F7 is built for the line's `/tmp` only; a socket file in a
+program's own directory needs a kind for "own directory" in the bootstrap record and a transient node in `fsd`: say whether it is wanted
+before tmux (ADR-0439 item 1, open question). (2) TCP `bind`/`listen`/`accept` is not built, so `python3 -m http.server` does not serve to `curl`: decide
+whether it becomes its own plan part with a network step (ADR-0440: the listen rule the scope already has, a `listen` request, a loopback
+interface in `netd` after a smoltcp spike), and the word a person types for a listen rule (ADR-0225 item 5).
+
+**2026-11-16, F7 review:** a socket name authenticates nothing: any program of the line that can write `/tmp` can unlink or rename a live
+server's name and bind its own. Should `unlink` and `rename` of a node with a listener be restricted to the connection that made it
+(ADR-0439)?
+
+**2026-11-16, for the TASK-34 dispatcher (and the architect):** main's red scheduled run 43778039826 (head `e7c34c69`, job
+`make test-cxx-libcxx`: `forbidden output: posixrun: ended`) was one libc++ test aborting on its own timing assertion:
+`thread.lock.shared.cons/mutex_try_to_lock.pass.cpp` (`Assertion failed: d < Tolerance`, 200 ms; five threads wait on a
+mutex that main holds for 250 ms). No kernel panic, fault or exit record is in the log. The same job passed in 11 of 11 later
+runs on commits that contain `e7c34c69` (park-ending, kwb-time, f5, f7, curses-flake candidates and scheduled run
+43819664106), and in 12 local runs (6 HVF, 6 TCG, 1303 to 1357 steps each); the test alone 40 of 40 under TCG, with the
+largest measured `d` 4 to 7 ms. Nothing between `9b78d380` and `e7c34c69` touches the paths the measured interval uses. So
+no Zoraya change explains it; the likely cause is one stall of the QEMU process on the runner of more than about 195 ms,
+but that is not proven (the CI log has no per-test times). F4 (spawn) and F5 (4096 mappings) are not implicated. The
+scheduled run 43819664106 (head `4e86f859`) is green: F5, F8, F6 and F7a (and `stage-f3`) can be tagged on it
+(`tools/ci-last-full.rb --green-for SHA`). Open for the architect: exclude this test and its `unique_lock` twin, and other
+wall-clock tests, from the TCG libc++ run (`tests/cxx/libcxx-tcg-excluded.txt`, HVF only, as for LWG3343), or keep them and
+re-run a failed job once; the new `RUNNER-STEP` lines in the serial runner will show per-step times in the next full run.
+

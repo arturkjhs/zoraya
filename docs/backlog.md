@@ -171,7 +171,7 @@ now fails when a mutant's `find` is gone, which a committed `replace` causes. It
 - The wheel in the native applications beyond the terminal (9e, proposed ADR-0322): `zoraya-app` drops `Wheel` (ordinal 46), so the file manager's list, the editor and the settings window do not scroll with it; `zoraya-ui`'s `ScrollView` and the list need a wheel event of their own. NetSurf takes no horizontal turn (libnsfb has no button for it).
 - The `make test-boot` leg `boot-tcg-smp4-gicv3` timed out once on CI (run 43437795275, 936db09: `timed out waiting for "bytes dropped]"` after the `spin` command, the shell echoing slowly under TCG with four CPUs); the re-run of the job passed. A timing flake of the flood check; make the wait independent of wall-clock speed if it recurs. **Cause found (TASK-29, F5, `docs/research/test-audit/report.md` section 3): not slow echo but the script's order.** The shell reports the count at its next prompt; the step passed only when the burst reached the shell before it had read `spin`, and timed out when the job was already in front. `tests/shell/console.script` now starts the job first and expects the count after it ends (branch `work/test-audit`).
 - `tools/test-runner/tests/flood.rs`: two of its four tests missed their 60 s bound (69.7 s) when `cargo test -p zoraya-test-runner` ran beside other work on an M1 (TASK-29's review, R13); all four pass alone. A wall-clock bound on the host; make it scale or drop it if it recurs.
-- **Ctrl-C does not end a continued POSIX job once it runs a later child (found by TASK-29, candidate run 43575482537, job `posix-scenarios-tcg`).** In the POSIX session: `sh -c 'printf "in\146g\n"; sleep 5; echo first; sleep 1; echo second; sleep 30'`, Ctrl-Z at `infg`, `fg`, wait for the job's own `first` and `second`, then Ctrl-C. Seen: `^C` is echoed, the job runs on for the 30 s of `sleep 30` and `echo after=$?` prints `after=0`. Expected: the job ends at once with 130, as it does when Ctrl-C comes half a second after `fg` (during the continued `sleep 5`), which is what `tests/posix/scenarios.script` checks and has always checked: its `< first` and `< second` matched the line `fg` echoes. One run, under TCG; not looked into (ttyd's foreground handle, the broker's group and the job signal after `job_resume` are where to look). No test covers it: the corrected step was put back to the early Ctrl-C so that CI stays green, and says so.
+- **Ctrl-C does not end a continued POSIX job once it runs a later child (found by TASK-29, candidate run 43575482537, job `posix-scenarios-tcg`).** In the POSIX session: `sh -c 'printf "in\146g\n"; sleep 5; echo first; sleep 1; echo second; sleep 30'`, Ctrl-Z at `infg`, `fg`, wait for the job's own `first` and `second`, then Ctrl-C. Seen: `^C` is echoed, the job runs on for the 30 s of `sleep 30` and `echo after=$?` prints `after=0`. Expected: the job ends at once with 130, as it does when Ctrl-C comes half a second after `fg` (during the continued `sleep 5`), which is what `tests/posix/scenarios.script` checks and has always checked: its `< first` and `< second` matched the line `fg` echoes. One run, under TCG; not looked into (ttyd's foreground handle, the broker's group and the job signal after `job_resume` are where to look). No test covers it: the corrected step was put back to the early Ctrl-C so that CI stays green, and says so. Probably the `exec` window that `work/sigint-exec` fixed (ADR-0392): dash execs the last command `sleep 30` right after `second`; see the entry of part 10c's leftovers below. Not rerun with the late Ctrl-C.
 
 
 ## CI downloads: a flaky upstream server makes CI red (2026-11-13, `main` at `7adf938`) - done (9f-ci, 2026-11-14)
@@ -266,6 +266,9 @@ states, to be taken up later:
   parallel load on the Mac (work/test-fixes, 2026-11-14): a timing-sensitive CPU-ceiling check when three QEMU guests and host jobs
   share the machine. Not a regression of that part. Decide whether the check needs a deterministic form like `t_cpu`'s `MAX_UNITS`
   fix (ADR-0270), or a lane of its own that does not share the machine.
+- Run 43717763197 (candidate `-c` of `work/sigint-exec`): `make test-qemu-tcg-smp4-gicv2` failed once (timeout at 420 s in
+  `kernel_work_is_bounded`, 113 of 128 passed, 9 failed, `t_thread` `stream_create` and `channel_create` 8 of 8 failed) and
+  passed on re-run; cause unknown, being investigated.
 
 ## Left by part 10e and its reviews (TASK-31)
 
@@ -331,20 +334,26 @@ states, to be taken up later:
     terminal on fd 2 could start no child. The per-line limit (64, `zoraya_tty::MAX_LINE_CONNECTIONS`) bounds what a background
     line can take; refusing it outright waits for a fork that can go on without the terminal.
   - **A Ctrl-C typed just after a job's first output is not acted on** (`work/tcg-slow`, found from the `ports-early`
-    candidate's TCG `zosh.script` failure, run 43701741943). In `sh` in `zosh`, `/bin/sh -c 'echo go; exec /bin/sleep 20'`
-    and Ctrl-C at once after `go`: `zosh` has taken the job's `tcsetpgrp` (its notice came before the output), sends
-    `kill(-group, SIGINT)` to the job's group through the broker, and the broker's `job_signal(Interrupt)` on the group's
-    job returns `Ok` (traced), yet the job runs on: the sleep its full 20 s (HVF too, when the key lands during the job's
-    `exec` or its spawn of the sleep); under TCG, `sh -c 'echo go; read x'` is never ended. The same Ctrl-C 4 s later
-    ends the job at once, and `kill -INT %1` from `sh` on a running job works. So the request reaches the job's tree
-    and is lost by the process during or just after `exec`/`fork` (its disposition then, or `libposix` taking the request
-    and not acting on it at its wait). Not fixed: it is in `libposix`'s signal entry around `exec` and `fork` (ADR-0106,
-    ADR-0315), not in the routing of 10c. `zosh.script`'s Ctrl-C steps pass anyway, because they wait for the prompt
-    the job's end gives (30 s each under TCG, which with a slow loop overran the run's 180 s). A check: a `%` mark
-    around the Ctrl-C of `zosh.script` and a limit of a few seconds, once the cause is fixed.
+    candidate's TCG `zosh.script` failure, run 43701741943) - fixed by `work/sigint-exec` (`eddfd477` and the fix pass
+    of its review, `docs/tasks/TASK-31-review-sigint-exec.md`; proposed ADR-0392). In `sh` in `zosh`,
+    `/bin/sh -c 'echo go; exec /bin/sleep 20'` with Ctrl-C at once after `go` ran its 20 s, and under TCG
+    `sh -c 'echo go; read x'` never ended. Two causes in `libposix`: `sh -c` catches `SIGINT`, so a job signal during
+    the job's `exec` was queued on the old image, which ended without looking (now carried to the new image, and held
+    during the spawn for a program without a handler); and a request taken by the poll at `read`'s entry ran dash's
+    handler, which only notes it under `INTOFF`, and the read then waited (now the call's wait is `EINTR`).
+    `zosh.script`'s Ctrl-C steps are now the check this entry asked for: `x ended-a`, `x ended-r`, `x ended-c` fail when
+    the job runs on (a 10 s sleep, and the run's limit for the read); `t_posix entryintr` forces the entry case. Left
+    open: a `fork` child made during a job signal's walk misses it (ADR-0004 rule 3; a kernel question, ADR-0392's
+    follow-up; `zosh.script` has no forked step for it), and no test forces the handler-less `exec` window. TASK-29's
+    step V6 above (a Ctrl-C after `second`, while dash execs the last command `sleep 30`) is probably the same `exec`
+    window; its late Ctrl-C was not put back into `scenarios.script` here.
   - **`w9-term.script` timed out once under TCG** (candidate `work-10c-c`, run 43686441057): nothing after the `until` line
-    for 10 minutes. Four local TCG runs pass in about 200 s; with QEMU on the efficiency cores the loop runs but too slowly
-    for the step's 600 s. If it recurs, the guest's whole log is needed: CI prints only its last 150 lines.
+    for 10 minutes. It recurred in the scheduled run 43699859694 on `main`. **Fixed (branch `work/w9-fix`):** the
+    script's `until ls ... || ! kill -0 $(cat ...); do sleep 0.1; done` polled from the start of the build, three
+    processes ten times a second, and under TCG on one CPU starved the build. With QEMU under `taskpolicy -b` and make's
+    output on the terminal, the four `tcc -o mktab` compiles started 63 to 76 s into the run and none ended by the
+    timeout at 626 s; without the loop the same compiles ended at 301 to 307 s. The script now waits for make's own
+    `./mktab 2 > t2.h` on the terminal and only then types the kill line, whose loop ends at its first turn.
   - **No kill offer for a line with the terminal** (proposed ADR-0387 item 4, against accepted ADR-0158 rule 3): accepted
     by the architect (2026-11-15) with the System+K escape: a chord no client receives shows `kill <program>?` on the
     terminal's status row and Enter kills the line's group. **Part 10f** builds it with the status row and System+G.
@@ -547,3 +556,142 @@ For `work/rust-std` (details in `docs/tasks/TASK-31-review-syscall-long.md`, fin
 `crates/zoraya-events/tests/no_allocation.rs` counted allocations in one process-wide counter, so allocations by the
 harness's own threads could add to it: run 43696414920 (candidate `work-10c-d`, a part that does not touch the crate) saw
 226 against 222, and its re-run passed. The counter is now per thread (`work/alloc-flake`).
+
+## Kernel tests under TCG with four CPUs (2026-11-15, `docs/tasks/TASK-31-smp-tcg.md`, branch `work/smp-tcg`)
+
+- Run 43717763197 (attempt 1, `tcg-smp4-gicv2`): **no test failed**. The suite hit the 420 s limit in test 123 of 128
+  (`kernel_work_is_bounded`). The runner's "9 failed" are the 9 `--expect-panic` tests, and t_thread's "`8 of 8 failed`"
+  is its pass line. That runner's memory calls showed masked maxima 20 to 100 times the green re-run's (host stalls of
+  tens of ms); user code ran only 2 times slower. Green TCG kernel-test jobs take up to 375 s of the 420 s. Open: raise
+  the limit or shorten the longest tests under TCG.
+- The kernel runs on one CPU in the smp4 configurations; the earlier smp4 failures were a script order (TASK-29 F5) and a
+  `t_quota` sample taken while the reaper was still working (3d48c87f).
+- **Found and fixed in the test:** `t_cpu`'s share check failed in 2 of 20 local `tcg-smp4-gicv2` runs, and in 6 of 40
+  rounds of t_cpu alone. The kernel had charged the uncapped spinner its full time, but under TCG it counted at a
+  quarter to two thirds of its usual rate: each process executes at its own speed. Now a room of clock spinners
+  measures its own run time, which must be at most 5/4 of its charge and at most `upper`. The halved-charges mutant
+  fails it under TCG and HVF. After: 0 of 40.
+- **Fixed in the test:** t_thread's `creating_calls_leave_no_handles` assumed the sibling unmaps within one switch.
+  A success before the unmap is now a miss and is repeated; a success after it fails; one forced miss a run.
+- **Open, cause proven:** a killed room's dying threads are parked (the teardown runs on them, charged to the room), so it
+  dies in as many periods as its parks need (55 parks, nine periods; up to 12). That breaks ADR-0285 item 7. The ADR has
+  the open-question note, and the architect queue (D) a row. A proposed ADR needs a number from the architect.
+- **Done:** a red or cancelled QEMU step uploads `target/test-logs/`; the runner prints the slowest tests and the
+  running test's time at a timeout.
+- **Fixed on `work/smp-tcg`:** a failed test left its program's processes running (t_cpu's 41 spinners made `t_rooms` 35
+  times slower and failed `t_snapshot` and the big-space spawn). The harness now ends them after a failure, back to the
+  live count before the test plus the processes the panic lost for good, and fails the run if it cannot within 10 s.
+## Sockets that survive `exec` (the architect, 2026-11-15)
+
+`execve` with a Unix socket open returns `EBADF` (an interim limit, ADR-0430 item 7 and ADR-0433). Programs that keep sockets
+across `exec` need it: `tmux`, `ssh-agent` and daemons. Design how a socket (its streams and ancillary channel) crosses
+`exec`, and lift the limit.
+
+## `kernel_work_is_bounded`'s time under TCG (2026-11-16, branch `work/kwb-time`)
+
+- **Cause of the 5x spread** (CI: 12.5 to 48 s in the 128 MiB configurations, 66 to 122.5 s in the 2 GiB ones): the
+  test's time was mostly setup, not measured work. `t_bound`'s far-pages child (2 GiB guests only) mapped and unmapped
+  352 spacers of 64 MiB, 5.8 million page-table entries, only to place 22 pages 1 GiB apart; `spread_mappings` did a
+  million more for 2 MiB spacing; every `best_snapshot` took three snapshots; `teardown` slept 600 ms for each of its
+  four cases. Locally under TCG `-smp 4` the test took 54.3 to 54.8 s at 2 GiB (10 idle rounds), 31 s of it in the far
+  pages, and 101 to 107 s with 10 CPU hogs: proportional to the CPU share QEMU gets, so a slower or loaded runner
+  multiplies a large constant. `-smp 1` took 51.7 s, so the cross-vCPU TLB flushes add about 5%.
+- **Done:** a test-kernel call `SET_MAP_FLOOR` places a mapping at or above an address, so the sparse layouts are
+  made without spacers (`zoraya-mappings::find_gap` keeps a search at or above `low`, as its doc says). The layouts are
+  not the same: the old spacers left 11 264 empty L3 tables (5.8 million descriptors for the snapshot's walk). Now the
+  far-pages child leaves 512 empty L3 tables under a valid table descriptor (a page in each 2 MiB of a gigabyte,
+  mapped and unmapped), so the counted walk of empty tables is still covered, at a 22nd of the size; the far-pages
+  case runs in every guest. `best_snapshot` takes more than one only if the first is over the bound; the long teardown
+  children say on a channel when they hold what they build, and the parent kills only then (their charge came before
+  their frames).
+- **Done after the review** (`docs/tasks/TASK-31-review-kwb-time.md`): the page-table entries `memory_map` and
+  `memory_unmap` write count as units (one per 64), so a `memory_map` with no step points fails on every host (hand
+  break: "111 units of work between two step points, limit 80" under HVF and TCG; before, it passed at 1.3 ms under
+  HVF). The 2 ms bound follows the accelerator (`MIDR_EL1`: `tools/run-qemu.sh` gives TCG a Cortex-A72), not the fill
+  (a busy HVF host gave factor 2, which turned 2 ms into 1 s). Under TCG a masked time over 1 s is noted and the run
+  repeated, up to three runs; the units are checked in every run. Under 10 CPU hogs 6 of 10 rounds had gone over 1 s at
+  different sites with their units in bound (stalls of the vCPU thread).
+- **Fixed (second check, C1):** the undo of a cancelled or failed `memory_map` cleared all it had mapped in one interval
+  (about 110 ms for a room's 2 GiB under HVF); it now goes in steps (`Calls::undo_map`), and `t_bound`'s `map-loop`
+  kills a process in the middle of a 24 MiB map (87 units against 80 with the old undo). A run over the time bound is
+  now repeated under HVF too.
+
+## A line per image in `top` (F6, ADR-0438; relayed from the architect, 2026-11-16)
+
+`top` lists rooms. The image of a program is charged to the job that made it (ADR-0438), which for a program the shell starts is the
+shell's, in no room, so `top` shows it nowhere. The job-level proxy (`tools/check-top-image.py`) is accepted as F6's "done when"; a line
+per image (the image's pages once, however many processes run from it, as ADR-0415 item 6's example shows) is asked for here.
+
+
+## `posix-curses-tcg-1` stuck at `~> other` (2026-11-16, run 43802095122, branch `work/curses-flake`)
+
+- **Cause, reproduced:** the script typed `:w other.txt` 1.5 s after `vi notes.txt` on a loaded TCG runner (the guest's
+  panel measure 8224 us, 1600 to 2500 us in passing runs), before nvi's `raw()`; the discipline, still canonical, echoed
+  `:w other` on the primary screen, vi read every key and quit, and the next prompt overwrote only `:w ` of the echo.
+  Typing `:w other` ahead of vi's start shows the same screen. **Fixed in the script:** both vi starts wait for a row of
+  vi's own screen (`~`, `hello vi`), which nvi draws only after `raw()`.
+- **Audit of the scripts for a pause before keys to a program in raw mode** (`tests/gui/*.script`, `tests/posix/*.script`,
+  `tests/shell/*.script`; the 44 places where a `pause` comes right before a key): no other one types to a program that
+  switches the terminal to raw mode. Left as they are: `posix-curses.script`'s `\e`, `pause 300`, `:wq` (vi is already
+  in raw mode: its screen was waited for); `posix-terminal.script`'s `/bin/sleep` then Ctrl-C or Ctrl-Z after
+  `pause 1200`, and `kill -9 %1` then `jobs` (the canonical discipline and `sh`, no raw mode; the Ctrl-C lost around
+  `exec` is the entry of `work/tcg-slow` above); its `t_tty box` and `fg` pauses are followed by a wait on the box's own
+  output before any key; `tour-gui.script`'s `spin` and `sleep 5` with Ctrl-C and Ctrl-Z after `pause 1000` (native
+  programs; the script is generated from `docs/tour.md`); `net status` and the NetSurf, windows, wheel, selection, files and settings
+  pauses (a window, the pointer or the clipboard, not a terminal's mode). The serial scripts have no pause; each start
+  of `sh`, `dash`, `t_tty`, `t_curses`, `vi`, `less` or `view` there is followed by a `<` wait before the next keys.
+- **A stuck GUI step cost the whole run (1200 to 1800 s):** each GUI step now has a limit of its own (120 s, x4 under
+  TCG, a `pause`'s time on top; `limit SECONDS STEP` for more). The serial scripts have the same (architect's decision of
+  2026-11-16, `tools/test-runner/src/script.rs`); a step of 5 s or more prints `RUNNER-STEP N SECONDS STEP`, so that the
+  next full run gives each step's time. No per-step times existed in the CI logs (run 43749759496 has each run's total
+  only), so the explicit limits (`w2j`, `w3j`, `w4`, `w8` and its single builds, `python-regr`, `python-mem`, the slow
+  libc++ groups) are set from the run's `--timeout` (a quarter of it, as TCG multiplies by 4) and the run totals of
+  that run, with a wide margin; shorten them from the `RUNNER-STEP` lines.
+
+## Socket files and TCP listening: what F7 left (plan part F7, ADR-0439 and ADR-0440, proposed)
+
+- **TCP `bind`, `listen`, `accept`** (ADR-0440): `EOPNOTSUPP` today, so `python3 -m http.server` does not serve and the plan's "done when"
+  is not met. Needs a `listen` request in `netd`'s protocol, `Accepted` on a listener channel, a loopback interface in `netd`'s
+  stack (a spike on smoltcp's two-interface dispatch first) and a network step in QEMU; the architect writes the word a person types
+  for a listen rule (ADR-0225 item 5).
+- **A socket file in a program's own directory** (ADR-0412 item 5; ADR-0439 item 1): only the line's `/tmp` is built. Needs a kind in
+  the bootstrap record for "own directory" (stage 10's planner) and a transient node in `fsd`'s volume service. tmux's default place
+  is an own directory.
+- **A datagram socket with a name** (`bind` of `SOCK_DGRAM`): `EOPNOTSUPP`.
+- `readdir` of `/tmp` shows a socket file as a plain name (`DT_REG`); the service's listing does not carry the kind.
+- The `/tmp` service's 256 socket nodes are shared by the whole line: one program can fill them (it can also fill the volume, which has
+  its own limit, ADR-0265). A per-connection count is the next step if a port needs it.
+- CPython's `test_socket` server classes (`AF_UNIX` servers now bind) are not in `tests/python/regr-modules.txt` beyond
+  `BasicSocketPairTest`; `regr-ignore.txt` names the asyncio cases that said "bind (plan part F7)": review them once TCP listens.
+- F7 errno differences from Linux (review of plan part F7): `listen` after the name was unlinked is `EPROTOTYPE`; `listen` of an unbound
+  `SOCK_DGRAM` socket is `EINVAL` (Linux `EOPNOTSUPP`); a far end the kernel refuses is `EPROTOTYPE` to the connector.
+- The service's 64 listeners, 256 nodes and queued connections (paid by `tmp_job`, no limit of its own) are the line's: a per-account bound
+  would stop one program from filling them (ADR-0439 effect of the vision).
+- `ports/apps/sshshim.c` replaces libc's `socketpair` with an `ENOSYS` stub for ssh: drop it so ssh (ControlMaster, proxy commands) can use Unix socket pairs (F7 review, R4).
+
+## TCP bind of port 0 before listen (plan part F7b)
+
+`bind(0)` then `getsockname` before `listen` gives port 0: netd picks the port at `listen` (ADR-0441). CPython's
+`socketserver` reads `getsockname()` straight after `bind` (`server_port` is 0, `wsgiref` gives `SERVER_PORT=0`; `http.server` prints
+the right port only because it reads again after `listen`), and `find_unused_port` and xmlrpc read it before too. Needs a port reserved with `netd`
+at `bind` (a request, a bound on reservations) or a library-side pick that `listen` asks for exactly.
+
+## Listeners reachable from the NIC; the rooms' `+listen` words and pills (the architect, 2026-11-16: next stage)
+
+ADR-0441 listens through a loopback of stream pairs, so a listener is not reachable from the NIC or the QEMU host. A second smoltcp
+interface (ADR-0440 Option B, after a real spike, not a reading of `socket_egress`) would let a program listen for outside connections. The
+rooms' `+listen` words and the panel's pills for a listen rule are not built (only the shell's `+listen PORT` is).
+
+## The contiguous create refused while the reaper holds the frames (ADR-0270; HIGH PRIORITY; the architect, 2026-11-16)
+
+`alloc_contig_in_steps` helps the reaper at most `CONTIG_HELP_ROUNDS = 17` times of 64 scattered frames, so `memory_create(CONTIGUOUS)` can return
+`NoMemory` while about 15,000 frames sit in the reaper's queue (`t_bound` `contiguous create: NoMemory`, the source of its flake; found in F7b's
+merge test, `TASK-34-report.md`). Keep helping while the reaper holds frames, with a step point between rounds, or free the queue in whole objects:
+a proposed ADR under ADR-0270 and INV-0270-1.
+
+## Socket files in a program's own directory (the architect, 2026-11-17)
+
+Allowed now (ADR-0412): `bind` of a Unix socket in a program's own directory, not only in the line's `/tmp` (ADR-0439 item 1). It needs a kind for
+"own directory" in the bootstrap record and a transient node in `fsd`. Unlinking a listening node follows the ordinary rules (write on its directory).
+tmux's default place is an own directory.
+

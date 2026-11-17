@@ -37,7 +37,14 @@ chord ctrl l
 top ~> _
 type echo secret > other.txt\r
 type vi notes.txt\r
-pause 1500
+# Keys typed before vi has the terminal in raw mode go through the discipline in canonical mode, which
+# echoes them on the primary screen; vi still reads them, but the echo is there again when it leaves the
+# alternate screen, under the next prompt (`~> other` for `:w other`, which the prompt does not erase).
+# nvi draws only after its raw(), so a row of its screen (`~` here, `hello vi` in part 3) says the keys are
+# its: the steps wait for one instead of a pause (a CI run under TCG on a loaded runner, 2026-11-16, echoed
+# `:w other` and timed out at the prompt).
+window
+screen ~
 shot vi-new-file
 type ihello vix
 key backspace
@@ -55,7 +62,8 @@ screen ~> _
 chord ctrl l
 top ~> _
 type vi notes.txt\r
-pause 1500
+window
+screen hello vi
 # The buffer holds `hello vi`; :w to the sibling would replace `secret` with it if the grant gave the directory.
 type :w other.txt\r
 pause 1000

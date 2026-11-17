@@ -1,0 +1,117 @@
+# TASK-31 part 10g: a program's own directory, and ssh (report)
+
+Branch `work/10g`, from `main` at `47f59d26`. Written by an agent (Sonnet). ADR numbers used: 0393 (proposed; it was 0390 until the review, the number is 10d's); ADR-0346 (ports-early's surface for ssh)
+is used as it stands.
+
+## Done
+
+1. **The description keys.** `zoraya-describe`: `data NAME as PATH [read]`, `reach OPERAND tcp PORT [OPTION]` and the
+   operand kind `rest`. `zoraya-command`: a `rest` operand ends option reading (also `--help` and `--`) after the
+   operands before it.
+2. **Own directory in the planner** (`crates/zoraya-shell/src/grants.rs`): `own_directory` (image description, listed
+   program only), `cwd_reaches_data` (ADR-0341 item 8), `own_conflict`, `report_with` (both paths in `grants`),
+   `end_of_options_at` (`--` before the host). `netgrant.rs`: `reach` gives TCP to the typed host on 22 or `-p`'s port.
+3. **`zosh`**: makes `/data/ROOM/NAME`, gives it as `EntryKind::Own` at `/home/...`, sets `HOME=/home`, refuses a line
+   that sets `HOME`, writes `--`, holds a program with `data` or `reach` to its description's options. The panel gives
+   a terminal's shell `/data/home` or `/data/ROOM` to change, not shown as a pill; `namespace::record` makes missing
+   levels. `ports/apps/etc/passwd` and `group` go into the apps root with ssh (ssh needs a user-database entry; only the test rootfs had them).
+4. **`libposix`**: a child gets the own directory read-only (`clone_read_only`, spawn and fork), and a link outside it
+   is not followed into it. `zoraya-abi`: `EntryKind::Own = 5`.
+5. **The port**: OpenSSH 10.6p2 (`ports/sources.lock`, hash from the https download; no `.sha256` published, `.asc` not
+   verified), four patches under `__zoraya__`, `ports/apps/sshshim.c` (19 names), `ssh.cmd`, `ssh-keygen.cmd`,
+   `user/describe/data-names.txt`. `make apps` puts `ssh` and `ssh-keygen` in `/bin` and checks that no server or tool
+   comes with them.
+6. **Tests**: `tools/test-sshd.sh` (the host's sshd, two servers, throwaway keys), `tools/test-apps-ssh.sh`,
+   `tests/shell/apps-ssh.script`, run by `make test-apps`. CI image and fallback step install `openssh-server`.
+7. **Docs**: ADR-0393 (proposed), invariants rows and statuses (Total 816), ports README, dependencies.
+
+## What was run
+
+- `cargo test -p zoraya-describe -p zoraya-command -p zoraya-shell -p zoraya-panel -p zoraya-abi -p zoraya-posix`: pass.
+- `make check`: exit 0 (the commit before the last; rerun at the head below).
+- `make -f ports/Makefile apps`: builds both programs; `tools/test-apps-ssh.sh` by hand against the built image:
+  `PASS: 102 steps` and both server-log checks ok (first connection with the question and `SSH_ASKPASS` on the line;
+  second connection without it; words after the host sent to the far side; `-J`, `-F`, `-o` before the host refused;
+  no user name refused; value host refused; changed key refused with status 255 and no authentication seen by the
+  server; `ssh-keygen` in a room into `/data/keys/ssh`; `ssh-keygen -R`; `cat` of a named file in the own directory).
+- `make test-changed` (twice; ports fetched with `tools/fetch-ports.sh`): every step ran green (boot, qemu, libposix,
+  posix, posix-gui, tour-gui, tour-terminal, gui, net, apps with the ssh script, netsurf, cxx, fuzz and the rest) except
+  `test-files` in the first runs, which failed on ADR-0341 item 8 and then passed on its own re-run: `files-write.script`
+  and `storage-down.script` worked at `/` with the implicit current directory; they now name `/` (`ls /`) or give
+  `+r /` (`find`, `ls | search`), and `grants cp` no longer lists the current directory. `test-python*` are skipped
+  locally (too long). Not run: `FULL=1`, `test-par`, `make mutants`.
+
+## Gaps and known limits
+
+- The storage limit on `/data/ROOM` (ADR-0341 item 6) is **not built**: the creating shell holds no connection to
+  `/data`. Needs the keeper or a `/data` hold (ADR-0393 item 10).
+- `scp` and `sftp` (the follow-up) are not built.
+- The INV-0340-1 test with a configuration file in `~/.ssh` and `/etc/ssh` is not run in QEMU; the patch removes the
+  reader. INV-0341-5 is not run with another `shell.home`. INV-0341-6's git-hook script waits for 10h.
+- The lint is a host test (`make test-unit`), not a `make check` step (a new step needs lane and CI files).
+- `grants` words the network row of ssh as `(operand URL)`: `netgrant::describe` sees only the scope bytes.
+- `/etc/passwd`'s only name is `user`; ssh needs `-l USER` or `USER@HOST` anyway.
+- 10f will also change `zoraya-describe` and the planner: this part's change there is the keys above, the
+  `Kind::Rest` arm, and `plan`'s `into_data` lines; rebase on whichever merges first.
+- No `.asc` check of the OpenSSH archive; the hash is trust on first use (ADR-0109).
+
+## Hand checks for the architect (a login to a real host; nothing here connected to one)
+
+On the Mac mini, in a terminal window of `make run-gui` (or `make run-net` console) with a host you own, replacing
+`ada` and `build.example.org`:
+
+```
+~> ssh-keygen -t ed25519
+(press Enter for the file; type a passphrase twice or Enter twice)
+~> ls /data/home/ssh
+~> cat /data/home/ssh/id_ed25519.pub
+(add that line to ~/.ssh/authorized_keys on the host)
+~> grants ssh -l ada build.example.org
+~> ssh -l ada build.example.org
+(compare the fingerprint with the host's: ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub there; answer yes)
+ada@build:~$ vi notes.txt          (full-screen, drawn in the window)
+ada@build:~$ exit
+~> ssh -l ada build.example.org echo second    (no question)
+```
+Then on the host change its host key (or edit `/data/home/ssh/known_hosts` here) and run the login again: it is
+refused with status 255 and nothing is sent; `ssh-keygen -R build.example.org` and connect again: it asks as for a new
+host. In a room (`room new r +net build.example.org:22`): the same line, an empty directory `/data/r/ssh`.
+
+## Proposed ADRs
+
+- ADR-0393 (what 10g decided): recommends Option A (as built).
+
+## Fix pass after the review (docs/tasks/TASK-31-review-10g.md, "Dispositions")
+
+`origin/work/10d` (with ports-early) is merged: one OpenSSH port. The review's must-fix and should-fix findings are
+fixed or recorded; the room-terminal test (`tests/gui/ssh-room.script`, run by `tools/test-apps-ssh.sh` in
+`make test-apps`) fails with the old `own_connection` and passes with the fix. (That gap, found there, was closed by the architect's decision of 2026-11-16: proposed ADR-0462, below.)
+Run: `make check`, `make test-changed` (all steps green but the skipped `test-python*`), `make test-apps`'s ssh steps
+(console 102 steps, room window 20 steps). Not run: CI, `FULL=1`, mutation runs, a root sshd (`/run/sshd`).
+
+## Room terminals' random service and network (the architect's decision of 2026-11-16; proposed ADR-0462)
+
+Rooms carry `+net` words; the panel gives each terminal's shell its own random connection and, in a room with words, a
+network connection narrowed to them (plus `/system/tls` to read). `tests/gui/ssh-room.script` (in `make test-apps`):
+a room with `+net HOST:PB` logs in to the confined test sshd from its window, is refused another port, a room with
+no words is refused, and ssh-keygen makes a key there. Also fixed here: the CI failure of `candidate-full/10g-b`
+(`closefrom` needed `dirfd` when configure finds `/proc/PID/fd` on a Linux host: patch `0008`).
+
+## Hand checks, as the second review corrects them
+
+- `ssh` and `ssh-keygen` are in `build/rootfs-apps`, which `tools/run-disk.sh` uses only if it exists: run `make fetch-ports`
+  and `make apps` first.
+- At home `ssh -l ada build.example.org` takes the name's *public* answers only: a host on the LAN (a private address)
+  needs `+net build.example.org:22 ssh -l ada build.example.org`, or its address.
+- The room part is typed in a window opened in the room (the chip, then System+Enter), not in the first terminal after
+  `room r` (ADR-0393 item 11): the room must be made `room new r +w ~/r +net build.example.org:22`; its directory is
+  empty, so run `ssh-keygen -t ed25519` there and put that key in the host's `authorized_keys`.
+- `make run-gui` has the Internet through SLIRP; nothing listens in the guest and the key is the person's.
+
+## Second fix pass (docs/tasks/TASK-31-review-10g-2.md)
+
+ADR-0462 now says: the panel's connection to the random service is a launcher's (`ShareLauncher`), the panel's root
+network connection is `REACH | NARROW`, and a room's words BOUND a line and give it nothing. Also: `own_conflict` refuses
+a `+w` that covers the own directory; a bad `+net` word is said once and ignored; `room new` compares words by the rules;
+`tools/test-map.txt` sends the room script, the panel, `init` and the rest to `test-apps`; the shim no longer shadows
+`libc.a`'s `socketpair`; every citation of the number 0394 is 0462.

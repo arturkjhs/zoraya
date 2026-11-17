@@ -484,6 +484,28 @@ fn the_limit_of_sixteen_reports_restarts_after_a_grant() {
     assert_eq!(got[0].2, "/outside/again");
 }
 
+/// ADR-0341 item 3 with ADR-0337 item 7: a program's own directory is never
+/// replaced by a grant, whoever sends it.
+#[test]
+fn a_grant_never_replaces_the_programs_own_directory() {
+    let mut r = rig_without_root();
+    let net = r.net.clone();
+    let (service, own) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    let own_entry = r.p.add_entry("/home/.ssh", EntryKind::Own, Some(own));
+    let (service2, other) = volume(&net, 1024);
+    r.p.sys.services.push(service2);
+    let (end, far) = r.p.sys.channel_create().unwrap();
+    r.p.set_grants(Some(end));
+    give(&mut r, far, &[("/home/.ssh", 0)], &[other]);
+    let _ = open(&mut r, "/outside/x", o::RDONLY, 0);
+    assert_eq!(r.p.entry_count(), 3, "work, /dev/null, own: nothing added");
+    let _ = own_entry;
+    // The file made through the own directory is still on the first volume.
+    let fd = open(&mut r, "/home/.ssh/known", o::RDWR | o::CREAT, 0o644).unwrap();
+    assert_eq!(r.write(fd, b"mine"), Ok(4));
+}
+
 /// At most 16 reports a process; past that they are dropped and counted.
 #[test]
 fn reports_stop_at_sixteen() {
@@ -2065,4 +2087,122 @@ fn pread_and_pwrite_take_an_offset_and_leave_the_position() {
     assert_eq!(r.p.pread(f2, back, 100), Ok(big.len()));
     assert_eq!(r.peek(ARENA / 2, big.len()), big);
     assert_eq!(r.p.lseek(f2, 0, 1), Ok(0));
+}
+
+/// ADR-0341 item 7, INV-0341-6: a child of a program with an own directory
+/// holds a connection to it that reads and cannot write, whatever it asks.
+#[test]
+fn a_child_gets_the_own_directory_to_read_and_never_to_write() {
+    use proto::rights::*;
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"own", 0o755).unwrap();
+    let full = narrowed(&mut r, ALL);
+    r.p.add_entry("/own", EntryKind::Own, Some(full));
+    // The program itself writes its directory.
+    let fd = open(&mut r, "/own/config", RW_CREATE, 0o600).unwrap();
+    assert_eq!(r.write(fd, b"keep"), Ok(4));
+    r.p.close(fd).unwrap();
+    let got = r.p.inherit(&[], 1).unwrap();
+    let (prefix, kind, at) = got
+        .entries
+        .iter()
+        .find(|e| e.1 == EntryKind::Own)
+        .cloned()
+        .expect("the own entry is inherited");
+    assert_ne!(at, zoraya_abi::posix::NO_HANDLE);
+    assert_eq!(kind, EntryKind::Own, "and stays marked for the grandchild");
+    assert_eq!(prefix, "/own");
+    let theirs = got.message[at as usize];
+    assert_ne!(theirs, full, "a second connection, not the parent's");
+    // The child's table: the same directory through the handle it was given.
+    r.p.add_entry("/child", EntryKind::Directory, Some(theirs));
+    let fd = open(&mut r, "/child/config", o::RDONLY, 0).unwrap();
+    assert_eq!(r.read(fd, 16).unwrap(), b"keep");
+    r.p.close(fd).unwrap();
+    assert_eq!(open(&mut r, "/child/config", o::WRONLY, 0), Err(EACCES));
+    assert_eq!(open(&mut r, "/child/config", o::RDWR, 0), Err(EACCES));
+    assert_eq!(open(&mut r, "/child/new", RW_CREATE, 0o600), Err(EACCES));
+    assert_eq!(r.p.mkdir_at(AT_FDCWD, b"/child/d", 0o755), Err(EACCES));
+    assert_eq!(r.p.unlink_at(AT_FDCWD, b"/child/config", 0), Err(EACCES));
+    // The parent can still write.
+    assert!(open(&mut r, "/own/config", o::WRONLY, 0).is_ok());
+    // A child of an ordinary directory entry keeps what it had.
+    let plain = narrowed(&mut r, ALL);
+    r.p.add_entry("/plain", EntryKind::Directory, Some(plain));
+    let got = r.p.inherit(&[], 1).unwrap();
+    let (_, _, at) = got
+        .entries
+        .iter()
+        .find(|e| e.0 == "/plain")
+        .cloned()
+        .unwrap();
+    r.p.add_entry("/c2", EntryKind::Directory, Some(got.message[at as usize]));
+    assert!(open(&mut r, "/c2/x", RW_CREATE, 0o600).is_ok());
+}
+
+/// ADR-0341 item 7: a link outside the own directory is not followed into
+/// it; one inside it, and a path typed outright, are.
+#[test]
+fn a_link_from_outside_does_not_lead_into_the_own_directory() {
+    use proto::rights::*;
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"own", 0o755).unwrap();
+    let full = narrowed(&mut r, ALL);
+    r.p.add_entry("/own", EntryKind::Own, Some(full));
+    let fd = open(&mut r, "/own/key", RW_CREATE, 0o600).unwrap();
+    r.p.close(fd).unwrap();
+    r.p.symlink_at(b"/own/key", AT_FDCWD, b"outside").unwrap();
+    r.p.symlink_at(b"key", AT_FDCWD, b"/own/inside").unwrap();
+    assert_eq!(open(&mut r, "outside", o::RDONLY, 0), Err(EACCES));
+    assert_eq!(open(&mut r, "outside", o::WRONLY, 0), Err(EACCES));
+    assert!(open(&mut r, "/own/inside", o::RDONLY, 0).is_ok());
+    assert!(open(&mut r, "/own/key", o::RDONLY, 0).is_ok());
+}
+
+/// ADR-0341 item 7, INV-0341-6 for `fork`: the connection a fork gives the
+/// child for the own directory reads and cannot write; an ordinary directory
+/// keeps what it had (review of 10g, finding 4).
+#[test]
+fn a_fork_gives_the_child_the_own_directory_to_read_only() {
+    use proto::rights::*;
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"own", 0o755).unwrap();
+    let full = narrowed(&mut r, ALL);
+    r.p.add_entry("/own", EntryKind::Own, Some(full));
+    let fd = open(&mut r, "/own/config", RW_CREATE, 0o600).unwrap();
+    assert_eq!(r.write(fd, b"keep"), Ok(4));
+    r.p.close(fd).unwrap();
+    let plain = narrowed(&mut r, ALL);
+    r.p.add_entry("/plain", EntryKind::Directory, Some(plain));
+    let (broker, _b) = r.p.sys.channel_create().unwrap();
+    let (job, _j) = r.p.sys.channel_create().unwrap();
+    let (cj, _c) = r.p.sys.channel_create().unwrap();
+    let (be, _e) = r.p.sys.channel_create().unwrap();
+    let (pj, _p) = r.p.sys.channel_create().unwrap();
+    r.p.broker = Some(broker);
+    r.p.process_job = Some(job);
+    let prepared = zoraya_posix::jobs::Prepared {
+        pid: 2,
+        pgid: 2,
+        sid: 1,
+        parent_job: pj,
+        child_job: cj,
+        broker_end: be,
+    };
+    let moves = r.p.fork_moves(1, &prepared).unwrap();
+    // The fake's `slot_of` is 0 for every handle, so the moves are read in
+    // the order of the table: `/`, `/own`, `/plain`, then the broker
+    // and the job.
+    assert_eq!(moves.len(), 5);
+    let theirs = |at: usize| moves[at].1;
+    let own_child = theirs(1);
+    r.p.add_entry("/child", EntryKind::Directory, Some(own_child));
+    let fd = open(&mut r, "/child/config", o::RDONLY, 0).unwrap();
+    assert_eq!(r.read(fd, 16).unwrap(), b"keep");
+    r.p.close(fd).unwrap();
+    assert_eq!(open(&mut r, "/child/config", o::WRONLY, 0), Err(EACCES));
+    assert_eq!(open(&mut r, "/child/new", RW_CREATE, 0o600), Err(EACCES));
+    let plain_child = theirs(2);
+    r.p.add_entry("/c2", EntryKind::Directory, Some(plain_child));
+    assert!(open(&mut r, "/c2/x", RW_CREATE, 0o600).is_ok());
 }

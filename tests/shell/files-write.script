@@ -13,7 +13,13 @@
 < \r\n~> 
 > cd /\r
 < \r\n/> 
+# ADR-0341 item 8: at `/` the current directory gives nothing: a bare `ls`
+# is refused with the hint, and the directory is named instead.
 > ls\r
+< ls: .: not granted
+< to allow it: +r / ls
+< \r\n/> 
+> ls /\r
 < README\r\nconfig/\r\ndocs/\r\nhello.txt\r\nhome/
 < \r\n/> 
 > cat hello.txt\r
@@ -112,7 +118,7 @@
 < \r\n/> 
 > head --lines 1 notes.txt\r
 < \r\nfirst line\r\n/> 
-> find '*.txt'\r
+> +r / find '*.txt'\r
 < copy.txt\r\ndocs/about.txt\r\nhello.txt\r\nnotes.txt
 < \r\n/> 
 > search second notes.txt\r
@@ -123,7 +129,7 @@
 < \r\n/> 
 # Byte streams (TASK-18 step 8, ADR-0152): pipelines, $(...) and
 # redirection of programs.
-> ls | search .txt\r
+> +r / ls | search .txt\r
 < copy.txt\r\nhello.txt\r\nnotes.txt
 < \r\n/> 
 > cat notes.txt | head --lines 1\r
@@ -132,10 +138,10 @@
 # cat's line, not the echo of the command (TASK-29, V8).
 < \r\nhi there
 < \r\n/> 
-> set n $(ls | search .txt); count $n\r
+> set n $(+r / ls | search .txt); count $n\r
 < \r\n3
 < \r\n/> 
-> ls | search zzz; echo $status\r
+> +r / ls | search zzz; echo $status\r
 < \r\n1
 < \r\n/> 
 > cat notes.txt > copied.txt; cat copied.txt\r
@@ -180,7 +186,7 @@
 < \r\n/> 
 # What a program is given (ADR-0153): grants shows it and runs nothing.
 > grants cp hello.txt work/copy.txt\r
-< cp gets:\r\n  in, out, err         the terminal\r\n  /                    read (current directory)\r\n  /hello.txt           read (operand FROM)\r\n  /work                create or replace copy.txt (operand TO)
+< cp gets:\r\n  in, out, err         the terminal\r\n  /hello.txt           read (operand FROM)\r\n  /work                create or replace copy.txt (operand TO)
 < \r\n/> 
 > cat work/copy.txt\r
 < cat: work/copy.txt: not found

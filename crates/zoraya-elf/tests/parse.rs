@@ -1,6 +1,6 @@
 //! Files are built by hand, so each field under test is explicit.
 
-use zoraya_elf::{EHDR_SIZE, Error, Header, PAGE_SIZE, Program};
+use zoraya_elf::{EHDR_SIZE, Error, Header, MAX_SEGMENTS, PAGE_SIZE, Program};
 
 const LOW: u64 = 0x40_0000;
 const HIGH: u64 = 1 << 47;
@@ -355,5 +355,89 @@ fn the_native_mark_is_found_and_nothing_else_counts() {
         let mut bad = native.clone();
         bad[n] ^= 0xff;
         let _ = zoraya_elf::section(&bad, ".zoraya.native");
+    }
+}
+
+// ADR-0438: what an image keeps of a program.
+
+#[test]
+fn a_shared_segment_keeps_every_page_and_a_writable_one_the_pages_with_file_bytes() {
+    let p = parse(&good()).unwrap();
+    let [text, data] = p.segments() else {
+        panic!("two segments")
+    };
+    assert!(text.is_shared() && !data.is_shared());
+    // 0x800 bytes of text in one page.
+    assert_eq!(text.kept_pages(), 1);
+    // 0x100 file bytes of 0x3000: one page kept, the zero tail made afresh.
+    assert_eq!(data.kept_pages(), 1);
+    let kept = p.kept();
+    assert_eq!((kept.first_page(0), kept.first_page(1)), (0, 1));
+    assert_eq!((kept.pages(), kept.bytes()), (2, 2 * PAGE_SIZE));
+}
+
+#[test]
+fn a_shared_segments_zero_tail_is_kept_and_a_writable_ones_is_not() {
+    let f = elf(
+        LOW,
+        &[
+            // Read-only data with a zero tail past the file's bytes.
+            load(R | X, 0x1000, LOW, 0x10, 0x2800),
+            // Writable, with no file bytes at all: bss only.
+            load(R | W, 0x1000, LOW + 0x3000, 0, 0x2000),
+            // Writable, its file bytes end exactly at a page's end.
+            load(R | W, 0x1000, LOW + 0x5000, 0x1000, 0x3000),
+            // Read-only, unaligned start: pages count from the page of vaddr.
+            load(R, 0x1ff0, LOW + 0x9000 + 0xff0, 0x20, 0x20),
+        ],
+        TOTAL,
+    );
+    let p = parse(&f).unwrap();
+    let pages: Vec<u64> = p.segments().iter().map(|s| s.kept_pages()).collect();
+    assert_eq!(pages, [3, 0, 1, 2]);
+    let kept = p.kept();
+    let firsts: Vec<u64> = (0..4).map(|i| kept.first_page(i)).collect();
+    assert_eq!(firsts, [0, 3, 3, 4]);
+    assert_eq!(kept.pages(), 6);
+    // The file bytes go at the segment's address within its first page.
+    let copy = kept.copy_of(3, &p.segments()[3]);
+    assert_eq!(
+        (copy.from, copy.to, copy.length),
+        (0x1ff0, 4 * PAGE_SIZE + 0xff0, 0x20)
+    );
+    // An index past the segments has no page: the object's start, not a
+    // panic.
+    assert_eq!(kept.first_page(MAX_SEGMENTS), 0);
+}
+
+#[test]
+fn the_kept_layout_has_no_gap_and_no_overlap_whatever_the_segments() {
+    // Every accepted file of the mutation test keeps the layout's sum.
+    let base = good();
+    for at in 0..base.len().min(400) {
+        for v in [0u8, 1, 0x7f, 0xff] {
+            let mut f = base.clone();
+            f[at] = v;
+            let Ok(p) = Program::parse(&f, LOW, HIGH) else {
+                continue;
+            };
+            let kept = p.kept();
+            let mut next = 0;
+            for (i, s) in p.segments().iter().enumerate() {
+                assert_eq!(kept.first_page(i), next, "segment {i} follows the last");
+                next += s.kept_pages();
+                // Kept pages never reach past the segment's own.
+                let (start, end) = s.pages();
+                assert!(s.kept_pages() <= (end - start) / PAGE_SIZE);
+                // The file bytes fit the kept pages.
+                let copy = kept.copy_of(i, s);
+                assert!(
+                    copy.length == 0
+                        || copy.to + copy.length
+                            <= (kept.first_page(i) + s.kept_pages()) * PAGE_SIZE
+                );
+            }
+            assert_eq!(next, kept.pages());
+        }
     }
 }

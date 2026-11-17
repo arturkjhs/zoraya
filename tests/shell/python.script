@@ -41,6 +41,11 @@
 < b'ping'
 < 1 1
 < \r\n~>
+# Plan part F7 (ADR-0439): a Unix socket file in the program's own /tmp, in one process (unixsock.py; a script, because a
+# long line typed into the shell's editor takes minutes to echo under TCG), and the refusal of an AF_INET listen with no +listen word.
+> python3 unixsock.py\r
+< unixsock: ok
+< \r\n~>
 # The environment decides nothing, no bytecode is written, no user site.
 > python3 smoke.py\r
 < ok flags 1 True 1

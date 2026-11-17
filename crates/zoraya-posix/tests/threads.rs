@@ -414,3 +414,107 @@ fn a_sigwait_that_ends_leaves_no_request_queued_for_the_kernel() {
     assert!(r.p.sys.requests.is_empty());
     assert_eq!(r.p.signals.pending & bit(2), bit(2));
 }
+
+#[test]
+fn an_exec_hands_on_the_signals_this_image_took_in_and_did_not_act_on() {
+    // `sh -c 'echo go; exec sleep 20'` with Ctrl-C during the exec: dash
+    // catches SIGINT, so the request waits in the old image's queue, which
+    // ends with it; the new image, made after the job signal, has none.
+    use zoraya_abi::RequestKind;
+    const INT: u32 = 2;
+    const HUP: u32 = 1;
+    const CHLD: u32 = 17;
+    let mut r = three();
+    r.p.signals.set(INT, Some(HANDLER)).unwrap();
+    r.p.sys.requests.push_back((RequestKind::Interrupt, 0));
+    // A child's end: SIGCHLD is ignored by default in the new image.
+    r.p.sys
+        .requests
+        .push_back((RequestKind::Custom(CHLD), CHLD));
+    // Ignored on entry to the new image (`SIG_IGN` is kept across exec).
+    r.p.sys.requests.push_back((RequestKind::Hangup, 0));
+    // Blocked when they came: this thread's and the process's sets.
+    r.p.signals.pending |= bit(TERM);
+    r.p.signals.shared |= bit(USR1);
+    let takes = r.p.stats.takes;
+    let carried = r.p.exec_carry(1 << HUP, 0);
+    assert!(r.p.sys.requests.is_empty(), "the whole queue is taken");
+    assert_eq!(r.p.stats.takes - takes, 4, "each take is counted");
+    assert_eq!(carried, bit(INT) | bit(TERM) | bit(USR1));
+    // Nothing taken, nothing pending: nothing to hand on.
+    let mut r = three();
+    assert_eq!(r.p.exec_carry(0, 0), 0);
+}
+
+#[test]
+fn an_exec_without_handler_or_hold_takes_nothing() {
+    // INV-0106-2: a handler-less process makes no `process_take_request`;
+    // its queue is empty anyway (no disposition is `Deliver`).
+    use zoraya_abi::RequestKind;
+    let mut r = rig();
+    r.p.signals.pending |= bit(TERM);
+    r.p.sys.requests.push_back((RequestKind::Interrupt, 0));
+    assert_eq!(
+        r.p.exec_carry(0, 0),
+        bit(TERM),
+        "the pending set still goes"
+    );
+    assert_eq!(r.p.stats.takes, 0);
+    assert_eq!(r.p.sys.requests.len(), 1, "the queue was not looked at");
+    // After a hold it is: the held requests wait there.
+    assert_eq!(r.p.exec_carry(0, bit(2)), bit(TERM) | bit(2));
+    assert!(r.p.sys.requests.is_empty());
+}
+
+#[test]
+fn an_exec_holds_what_would_end_the_old_image_while_the_new_one_is_made() {
+    // A program without a handler for SIGINT execs; a Ctrl-C during the spawn
+    // must not end the old image before the new one, made after the job
+    // signal's walk, has it: it is held as `Deliver`, then carried.
+    use zoraya_abi::{Disposition, RequestKind};
+    const HUP: u32 = 1;
+    const INT: u32 = 2;
+    const CHLD: u32 = 17;
+    let mut r = rig();
+    r.p.signals.set(USR1, Some(HANDLER)).unwrap();
+    let held = r.p.exec_hold(1 << HUP);
+    // Every default-terminating signal not ignored and not already `Deliver`.
+    assert_ne!(held & bit(INT), 0);
+    assert_ne!(held & bit(TERM), 0);
+    assert_eq!(held & bit(HUP), 0, "ignored in the new image");
+    assert_eq!(held & bit(USR1), 0, "already Deliver: a handler");
+    assert_eq!(held & bit(CHLD), 0, "its default ignores");
+    assert_eq!(held & bit(9), 0, "SIGKILL is not a request");
+    let set: Vec<_> = r.p.sys.dispositions.clone();
+    assert!(set.contains(&(RequestKind::Interrupt, Disposition::Deliver)));
+    assert!(set.iter().all(|&(_, d)| d == Disposition::Deliver));
+    assert_eq!(set.len() as u32, held.count_ones());
+    // A failed spawn puts each one back.
+    r.p.sys.dispositions.clear();
+    r.p.exec_release(held);
+    assert!(
+        r.p.sys
+            .dispositions
+            .contains(&(RequestKind::Interrupt, Disposition::Terminate))
+    );
+    assert_eq!(r.p.sys.dispositions.len() as u32, held.count_ones());
+}
+
+#[test]
+fn a_handler_run_at_a_calls_entry_interrupts_its_wait_and_nothing_else() {
+    // dash reads under INTOFF: a SIGINT whose handler ran at `read`'s entry
+    // poll is acted on only when the read returns, so the read must not wait
+    // (the C boundary's `waiting` sets the flag for one run of the call).
+    let mut r = rig();
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    // No flag: the read waits (the fake kernel ends a wait nothing could end
+    // with EBUSY).
+    assert_eq!(r.read(rd, 10), Err(EBUSY), "a wait was made");
+    r.p.interrupt_wait = true;
+    assert_eq!(r.read(rd, 10), Err(EINTR), "no wait");
+    assert!(!r.p.interrupt_wait, "taken by the wait it ended");
+    // A read that does not wait is not interrupted: the data comes.
+    assert_eq!(r.write(wr, b"x"), Ok(1));
+    r.p.interrupt_wait = true;
+    assert_eq!(r.read(rd, 10).unwrap(), b"x");
+}

@@ -734,6 +734,32 @@ fn an_answer_that_is_local_is_refused_unless_an_address_rule_covers_it() {
     assert_eq!(w.client.tcp_count(), 1);
 }
 
+/// Proposed ADR-0441: a name that resolves to loopback and is covered by a
+/// rule that names the address is not sent out of the NIC (the loopback is
+/// served from the address of a `connect`, not from a socket).
+#[test]
+fn a_name_that_resolves_to_loopback_never_opens_a_socket() {
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, [127, 0, 0, 1], 60)]);
+    w.scope = scope_with(&[
+        ReachRule {
+            target: zoraya_abi::net::Target::Name("loop.zoraya"),
+            ports: Ports::ANY,
+            protocols: Protocols::BOTH,
+        },
+        ReachRule {
+            target: zoraya_abi::net::Target::Address([127, 0, 0, 1]),
+            ports: Ports::ANY,
+            protocols: Protocols::BOTH,
+        },
+    ]);
+    let fake = Fake::new(1024);
+    w.connect(&fake, Target::Name("loop.zoraya".into()), 80);
+    assert!(w.run_until(5_000_000, |_| fake.failed().is_some()));
+    assert_eq!(fake.failed(), Some(reason::UNREACHABLE));
+    assert_eq!(w.client.tcp_count(), 0);
+}
+
 #[test]
 fn a_name_that_does_not_exist_is_unresolvable_and_one_not_answered_times_out() {
     let mut w = World::new(Script::Sink, &[]);

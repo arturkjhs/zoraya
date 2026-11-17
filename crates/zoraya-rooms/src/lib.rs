@@ -482,6 +482,7 @@ impl<E: Env> Keeper<E> {
                 untrusted: false,
                 colour: 0,
                 limits: Limits::default(),
+                nets: Vec::new(),
                 grants: Vec::new(),
             }));
         }

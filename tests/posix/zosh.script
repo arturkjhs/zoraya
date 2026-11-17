@@ -225,10 +225,21 @@ w notstp: ready
 > echo in sh\r
 < in sh
 < $ 
-> /bin/sh -c 'echo g""o-a; exec /bin/sleep 30'\r
+# The Ctrl-C comes at once after the job's first line, and must end it: a
+# job that runs on prints its `ended-` line when its sleep is over (10 s),
+# and its `read` never ends (the run's limit). A Ctrl-C during the job's exec
+# was lost in the old image (`sh -c` catches SIGINT), and one taken at the
+# entry of dash's read ran the handler and then waited (ADR-0392).
+> /bin/sh -c 'echo g""o-a; exec /bin/sleep 10'; echo end""ed-a=$?\r
 < go-a
 > \x03
 < $ 
+x ended-a
+> /bin/sh -c 'echo g""o-r; read x'; echo end""ed-r=$?\r
+< go-r
+> \x03
+< $ 
+x ended-r
 > /bin/sh -c 'echo g""o-b; exec /bin/sleep 31'\r
 < go-b
 > \x1a
@@ -252,10 +263,11 @@ w notstp: ready
 # runner's share of the run's 180 s; 70 subshells take about 2.5 s).
 > /bin/sleep 60 &\r
 < $ 
-> /bin/sh -c 'echo g""o-c; exec /bin/sleep 30'\r
+> /bin/sh -c 'echo g""o-c; exec /bin/sleep 10'; echo end""ed-c=$?\r
 < go-c
 > \x03
 < $ 
+x ended-c
 > jobs\r
 < Running
 < $ 

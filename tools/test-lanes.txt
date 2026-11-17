@@ -36,5 +36,5 @@ lane test-fuzz test-fuzz-net
 lane test-posix-suites test-posix-threadtest3
 lane test-apps test-netsurf
 lane test-cxx test-cxx-libcxx test-cxx-gtest
-lane test-python test-python-ext test-python-regr
-optin PAR_LONG test-python test-python-ext test-python-regr -- 15, 15 and 25 minutes of QEMU time (PYTHON_TIMEOUT 900 s, PYTHON_REGR_TIMEOUT 1500 s), too long for an agent session: PAR_LONG=1 runs them
+lane test-python test-python-ext test-python-regr test-python-mem test-python-serve
+optin PAR_LONG test-python test-python-ext test-python-regr test-python-mem -- 15, 15 and 25 minutes of QEMU time (PYTHON_TIMEOUT 900 s, PYTHON_REGR_TIMEOUT 1500 s), too long for an agent session: PAR_LONG=1 runs them

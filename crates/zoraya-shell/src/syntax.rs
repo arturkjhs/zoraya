@@ -91,6 +91,8 @@ pub struct Redirect {
 pub struct Grant {
     /// `+net HOST` (ADR-0224 item 1): `path` is the target word, `write` false.
     pub net: bool,
+    /// `+listen PORTS` (ADR-0224 item 1): `path` is the ports word.
+    pub listen: bool,
     pub write: bool,
     pub path: Word,
     pub span: Span,
@@ -714,10 +716,15 @@ impl<'a> Parser<'a> {
             }
             let start = self.at;
             let prefix = s.words.is_empty();
-            if prefix && let Some(marker @ ("+r" | "+w" | "+net")) = self.peek_literal() {
+            if prefix && let Some(marker @ ("+r" | "+w" | "+net" | "+listen")) = self.peek_literal()
+            {
                 self.at += marker.len();
                 self.blanks();
-                let needs = if marker == "+net" { "a host" } else { "a path" };
+                let needs = match marker {
+                    "+net" => "a host",
+                    "+listen" => "a port",
+                    _ => "a path",
+                };
                 match self.peek() {
                     None => return invalid(self.at, &alloc::format!("{marker} needs {needs}")),
                     Some(c) if is_break(c) => {
@@ -728,6 +735,7 @@ impl<'a> Parser<'a> {
                 let path = self.word()?;
                 s.grants.push(Grant {
                     net: marker == "+net",
+                    listen: marker == "+listen",
                     write: marker == "+w",
                     path,
                     span: Span {

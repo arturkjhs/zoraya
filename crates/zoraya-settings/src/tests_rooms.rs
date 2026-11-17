@@ -104,6 +104,7 @@ fn the_writer_keeps_every_other_byte() {
         untrusted: false,
         colour: 2,
         limits: Limits::default(),
+        nets: Vec::new(),
         grants: vec![Grant {
             write: true,
             path: "~/notes".into(),
@@ -123,6 +124,7 @@ fn the_writer_keeps_every_other_byte() {
     };
     assert_eq!(add(b"", &bad), Err(RoomRefusal::BadName));
     let bad = Room {
+        nets: Vec::new(),
         grants: vec![Grant {
             write: true,
             path: "x".into(),
@@ -184,9 +186,9 @@ fn every_bound_is_where_it_says() {
     let grants = (0..MAX_GRANTS)
         .map(|i| format!(" +r /g{i}"))
         .collect::<String>();
-    // 4 + 2 * (MAX_GRANTS + the six limit words) words is still a line; one
+    // 4 + 2 * (MAX_GRANTS + MAX_NETS + the six limit words) words is still a line; one
     // more is not.
-    let pad = " x".repeat(2 * LIMIT_WORDS.len());
+    let pad = " x".repeat(2 * (LIMIT_WORDS.len() + MAX_NETS));
     let at = format!("full --colour 1{grants}{pad} x\n");
     let past = format!("full --colour 1{grants}{pad} x y\n");
     let p = |t: &str| read(t.as_bytes()).problems[0].problem.clone();
@@ -208,6 +210,7 @@ fn every_bound_is_where_it_says() {
         untrusted: false,
         colour: 1,
         limits: Limits::default(),
+        nets: Vec::new(),
         grants: (0..n)
             .map(|i| Grant {
                 write: false,
@@ -455,6 +458,7 @@ fn every_untrusted_line_is_complete_after_fill_and_survives_the_reader() {
             untrusted: true,
             colour: 0,
             limits: l,
+            nets: Vec::new(),
             grants: vec![],
         };
         assert_eq!(read(room.line().as_bytes()).rooms, vec![room]);
@@ -539,4 +543,28 @@ fn limits_are_complete_with_six_words_and_take_the_missing_from_another() {
         (l.cpu, l.procs, l.disk, l.conns, l.tmp),
         (Some(25), Some(32), Some(7), Some(16), Some(3))
     );
+}
+
+/// ADR-0462: a trusted room's line carries `+net` words, written back as read; an
+/// untrusted room's line with one is a problem (the gate).
+#[test]
+fn net_words_are_read_written_and_bounded() {
+    let r = read(b"ops --colour 1 +w ~/ops +net build.example.org:22 +net 10.0.2.50:22\n");
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+    let room = &r.rooms[0];
+    assert_eq!(room.nets, ["build.example.org:22", "10.0.2.50:22"]);
+    assert_eq!(
+        room.line(),
+        "ops --colour 1 +w ~/ops +net build.example.org:22 +net 10.0.2.50:22"
+    );
+    assert!(read(room.line().as_bytes()).rooms[0] == *room);
+    let p = |t: &str| read(t.as_bytes()).problems[0].problem.clone();
+    assert!(p("a --colour 1 +net\n").contains("+net needs"));
+    assert!(p("a --colour 1 +net 'x y'\n").contains("not a word after +net"));
+    assert!(p("a --untrusted +net h\n").contains("no +net word yet"));
+    let many = (0..=MAX_NETS)
+        .map(|i| format!(" +net h{i}"))
+        .collect::<String>();
+    assert!(p(&format!("a --colour 1{many}\n")).contains("more than"));
+    assert!(is_net_word("*.example.org:443") && !is_net_word("") && !is_net_word("a b"));
 }

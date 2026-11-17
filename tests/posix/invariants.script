@@ -52,6 +52,14 @@
 > t_posix eintr\r
 < t_posix: eintr passed
 < PSURF>
+# INV-0392-2: a handler run at a call's entry interrupts the call's wait.
+> t_posix entryintr\r
+< t_posix: entryintr passed
+< PSURF>
+# INV-0392-1: a failed execve puts its held dispositions back.
+> t_posix execfail\r
+< t_posix: execfail passed
+< PSURF>
 > t_posix sleepintr\r
 < t_posix: sleepintr passed
 < PSURF>
