@@ -1398,8 +1398,8 @@ mod bootstrap {
         let entry = fd_kind - 4 + 4 * 8;
         assert_eq!(b[entry], EntryKind::Image as u8);
         let mut m = b;
-        m[entry] = 5;
-        assert!(Bootstrap::decode(&m[..n], 4).is_none(), "entry kind 5");
+        m[entry] = 6;
+        assert!(Bootstrap::decode(&m[..n], 4).is_none(), "entry kind 6");
         let mut m = b;
         m[entry + 2] = 1;
         assert!(
@@ -1452,10 +1452,12 @@ mod bootstrap {
             assert_eq!(kind.has_slot(), kind != FdKind::Null);
         }
         assert_eq!(FdKind::from_raw(6), None);
-        for k in 0..=4u8 {
+        for k in 0..=5u8 {
             assert_eq!(EntryKind::from_raw(k).unwrap() as u8, k);
         }
-        assert_eq!(EntryKind::from_raw(5), None);
+        assert_eq!(EntryKind::from_raw(6), None);
+        // ADR-0341: the own directory is a directory entry.
+        assert!(EntryKind::Own.is_directory());
         let mut out = std::vec![0; 3 * MAX_PATH];
         let root = [Entry {
             prefix: "/",

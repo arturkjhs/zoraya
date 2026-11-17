@@ -442,9 +442,19 @@ impl Gui {
         chooser: Option<Handle>,
         keeper: Option<(Handle, Handle)>,
         window: Option<Handle>,
+        services: (Option<Handle>, Option<Handle>),
     ) -> Option<Running> {
+        // The random service (slot 11) and the root network connection
+        // (slot 12) of the shells the panel starts (ADR-0462): moved in with
+        // the spawn, closed here when the panel does not start.
+        let close_services = || {
+            for h in [services.0, services.1].into_iter().flatten() {
+                let _ = handle_close(h);
+            }
+        };
         let (ours, theirs) = channel_create().ok()?;
         if !attached(self.manager, &gui::AttachClientManager {}, theirs) {
+            close_services();
             if let Some(w) = window {
                 let _ = handle_close(w);
             }
@@ -452,6 +462,7 @@ impl Gui {
             return None;
         }
         let Ok(root) = root.clone_as(crate::files::ALL) else {
+            close_services();
             let _ = handle_close(ours);
             if let Some(w) = window {
                 let _ = handle_close(w);
@@ -497,6 +508,12 @@ impl Gui {
             if let Some(w) = window {
                 e.handle(moved(10, w));
             }
+            if let Some(r) = services.0 {
+                e.handle(moved(11, r));
+            }
+            if let Some(n) = services.1 {
+                e.handle(moved(12, n));
+            }
             let process = e
                 .finish()
                 .and_then(|length| zoraya_rt::spawn(&buffer[..length]).ok());
@@ -515,6 +532,7 @@ impl Gui {
             }
             None => {
                 // Not taken: closed here (the root with its drop).
+                close_services();
                 let _ = handle_close(ours);
                 if let Some((manage, reconnect)) = keeper {
                     let _ = handle_close(manage);

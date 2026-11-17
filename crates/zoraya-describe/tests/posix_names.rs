@@ -19,7 +19,19 @@ zoraya_test_alloc::cap_memory!();
 
 /// The programs `ports/Makefile` puts in `/bin` besides the toybox commands.
 const BIN_PROGRAMS: &[&str] = &[
-    "dash", "sh", "make", "pdpmake", "tcc", "cc", "awk", "less", "vi", "ex", "view",
+    "dash",
+    "sh",
+    "make",
+    "pdpmake",
+    "tcc",
+    "cc",
+    "awk",
+    "less",
+    "vi",
+    "ex",
+    "view",
+    "ssh",
+    "ssh-keygen",
 ];
 
 fn root() -> PathBuf {

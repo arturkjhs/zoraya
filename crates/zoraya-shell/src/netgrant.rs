@@ -6,9 +6,10 @@
 //! Only a *literal* `url` operand designates, as only a literal path does
 //! (ADR-0153 rule 4): one that came from a variable, a substitution or a
 //! glob would let data choose what the command reaches. Such an operand
-//! designates only inside a `+net` rule on the line (N6; the room's rules
-//! come with the rooms' words, which are not built) and is refused before
-//! the line runs otherwise. A `+net` word is the person's, typed literally
+//! designates only inside a `+net` rule on the line or inside the words of
+//! the room it runs in (ADR-0462), and is refused before the line runs
+//! otherwise. A room's words only bound a line: it gets a connection when its
+//! own words or its description ask for one, inside them, and no status. A `+net` word is the person's, typed literally
 //! (the token; its one argument may be expanded, ADR-0153 rule 3).
 
 use alloc::vec::Vec;
@@ -161,6 +162,13 @@ pub fn parse_listen(text: &str) -> Result<Ports, String> {
 pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     let d = line.description;
     let mut words: Vec<NetWord> = Vec::new();
+    // The room's words (ADR-0462): the bound, never a grant of their own. A
+    // word of the room that does not parse is the room's line's to report
+    // (the reader checks the form); it bounds nothing here.
+    let room_words: Vec<NetWord> = line
+        .room
+        .map(|r| r.words.iter().filter_map(|w| parse_word(w).ok()).collect())
+        .unwrap_or_default();
     for v in line.nets {
         match parse_word(&v.text) {
             Ok(w) => words.push(w),
@@ -185,7 +193,13 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
         None
     };
     if let Some((Kind::Host, text)) = operand {
-        host_operand(line, text, &mut words)?;
+        // `reach` (ADR-0340 item 4): TCP to the host on the description's
+        // port or the one its option gives, instead of an echo.
+        let tcp = d
+            .reach
+            .filter(|_| line.base_system)
+            .map(|r| reach_port(line, &r));
+        host_operand(line, text, &mut words, tcp, &room_words)?;
     }
     let operand = operand
         .filter(|(kind, _)| *kind == Kind::Url)
@@ -204,9 +218,12 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
                 protocols: Protocols::TCP,
             };
             let covered = words.iter().any(|outer| word.rule().within(&outer.rule()));
-            // A value designates only inside a `+net` rule of the line
-            // (ADR-0224 item 2); a literal one adds its own.
-            if !literal && !covered {
+            let in_room = room_words
+                .iter()
+                .any(|outer| word.rule().within(&outer.rule()));
+            // A value designates only inside a `+net` rule of the line or of
+            // its room (ADR-0224 item 2); a literal one adds its own.
+            if !literal && !covered && !in_room {
                 return Err(Refused {
                     subject: (*text).into(),
                     problem: "from a value, outside the line's network grants".into(),
@@ -216,7 +233,7 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
                     )),
                 });
             }
-            if literal && !covered {
+            if !covered {
                 let web = d.net_web && line.base_system;
                 // A POSIX program of the image (curl, wget, NetSurf, the
                 // test programs) takes a URL's name with its public answers
@@ -256,6 +273,37 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
             protocols: Protocols::TCP,
         });
     }
+    // In a room every rule the line asks for lies inside the room's words
+    // (ADR-0224 item 2, ADR-0462): refused before anything runs, naming them.
+    if let Some(room) = line.room {
+        for w in &words {
+            // The loopback is the room's own (`netd` keys it by room, ADR-0442): a
+            // rule on 127.0.0.0/8 asks nothing of the room's words.
+            if is_loopback(w) {
+                continue;
+            }
+            if !room_words.iter().any(|r| w.rule().within(&r.rule())) {
+                let held = if room.words.is_empty() {
+                    alloc::format!("room {} has no +net words", room.name)
+                } else {
+                    alloc::format!(
+                        "room {} holds {}",
+                        room.name,
+                        room.words
+                            .iter()
+                            .map(|w| alloc::format!("+net {w}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                return Err(Refused {
+                    subject: describe_word(w),
+                    problem: alloc::format!("outside the network words of room {}", room.name),
+                    hint: Some(held),
+                });
+            }
+        }
+    }
     let rules: Vec<ReachRule<'_>> = words.iter().map(NetWord::rule).collect();
     // `+listen` words (ADR-0224 item 1): the person's own, a literal token and
     // its one word; they make listen rules and the `listen` right, and
@@ -278,6 +326,16 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     }
     if rules.is_empty() && listens.is_empty() {
         if d.needs_net_status && line.base_system {
+            // ADR-0462 item 5: no status in a room's terminal (a window's
+            // connection has none, and the first terminal's would be
+            // `init`'s): refused, not run with the wrong network.
+            if line.room.is_some() {
+                return Err(Refused {
+                    subject: d.name.clone(),
+                    problem: "the network's status is not given in a room".into(),
+                    hint: Some("room --leave first, or use the first terminal at home".into()),
+                });
+            }
             return Ok(Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec())));
         }
         return Ok(None);
@@ -302,39 +360,213 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     }))
 }
 
+/// Whether a word names the loopback only (an address or a prefix inside 127.0.0.0/8).
+fn is_loopback(w: &NetWord) -> bool {
+    match w.target {
+        Named::Address(a) => a[0] == 127,
+        Named::Prefix(a, l) => a[0] == 127 && l >= 8,
+        _ => false,
+    }
+}
+
+/// What a refused connection of a line is told (ADR-0462, the carved-account
+/// limit): the problem and the hint, for `netd`'s `OVER_QUOTA` or another
+/// refusal (a scope wider than the room's connection).
+pub fn connection_refusal(over_quota: bool) -> (&'static str, &'static str) {
+    if over_quota {
+        (
+            "the network has no room for another program's connection",
+            "programs that use the network hold one each, a few at once: wait for one to end (jobs)",
+        )
+    } else {
+        (
+            "the network service refused this program's connection",
+            "the room's +net words (room) bound what a line may reach",
+        )
+    }
+}
+
+/// The scope a room's terminal is given: the words that parse, none of the
+/// others (a hand edit of `/config/rooms` is said once by the shell and does
+/// not take the good words with it). `None` for no good word.
+pub fn room_scope(words: &[String]) -> Option<(u32, Vec<u8>)> {
+    let good: Vec<String> = words
+        .iter()
+        .filter(|w| parse_word(w).is_ok())
+        .cloned()
+        .collect();
+    words_scope(&good).ok().flatten()
+}
+
+/// Whether `word` (a `+net` argument) lies inside one of `outer`: what a room
+/// made from a room may be given (INV-0172-4), by the rules' `within`, not by
+/// the text (a room with `*.example.org` gives `api.example.org:22`). A word
+/// that does not parse is inside nothing.
+pub fn word_within(word: &str, outer: &[String]) -> bool {
+    let Ok(w) = parse_word(word) else {
+        return false;
+    };
+    outer
+        .iter()
+        .filter_map(|o| parse_word(o).ok())
+        .any(|o| w.rule().within(&o.rule()))
+}
+
+/// A word as the person writes it, for a refusal: `HOST:PORT`, `any`, a prefix.
+fn describe_word(w: &NetWord) -> String {
+    let host = match &w.target {
+        Named::Name(n) | Named::PublicName(n) => n.clone(),
+        Named::Wildcard(n) => alloc::format!("*.{n}"),
+        Named::Address(a) => alloc::format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
+        Named::Prefix(a, l) => alloc::format!("{}.{}.{}.{}/{l}", a[0], a[1], a[2], a[3]),
+        Named::Any => String::from("any"),
+        Named::Public => String::from("web"),
+    };
+    if w.ports.is_any() {
+        return host;
+    }
+    let ports: Vec<String> = w
+        .ports
+        .list()
+        .iter()
+        .map(|&(l, h)| {
+            if l == h {
+                alloc::format!("{l}")
+            } else {
+                alloc::format!("{l}-{h}")
+            }
+        })
+        .collect();
+    alloc::format!("{host}:{}", ports.join(","))
+}
+
+/// The rights and scope of a room's `+net` words (ADR-0462): what the network
+/// connection of the room's terminals reaches, for `narrow` from the root.
+/// `None` for no word; an `Err` names the first word that is no `+net`
+/// argument. Names have local answers too, as a `+net` word's do on a line
+/// (ADR-0223: the person named the host).
+pub fn words_scope(words: &[String]) -> Result<Option<(u32, Vec<u8>)>, String> {
+    let mut parsed: Vec<NetWord> = Vec::new();
+    for w in words {
+        parsed.push(parse_word(w).map_err(|why| alloc::format!("+net {w}: {why}"))?);
+    }
+    let rules: Vec<ReachRule<'_>> = parsed.iter().map(NetWord::rule).collect();
+    if rules.is_empty() {
+        return Ok(None);
+    }
+    if rules.len() > MAX_RULES {
+        return Err(String::from("too many network rules"));
+    }
+    let mut out = alloc::vec![0u8; 512 + 128 * rules.len()];
+    Ok(encode(&rules, &[], &mut out).map(|n| {
+        out.truncate(n);
+        (rights::REACH, out)
+    }))
+}
+
 /// The rule a `host` operand adds (ADR-0330): the host, a name or a dotted
 /// address, for ICMP echo requests and nothing else: no TCP, no UDP, no
 /// port. Designation as for a `url`: a literal operand adds its own rule, one
 /// that came from a value only designates inside a `+net` word of the line.
 /// A `+net HOST:PORT` word does not cover this rule (it has a port, the echo
 /// none): the person writes `+net HOST` (ADR-0330, known limits).
-fn host_operand(line: &Line<'_>, text: &str, words: &mut Vec<NetWord>) -> Result<(), Refused> {
+fn host_operand(
+    line: &Line<'_>,
+    text: &str,
+    words: &mut Vec<NetWord>,
+    tcp: Option<Option<u16>>,
+    room_words: &[NetWord],
+) -> Result<(), Refused> {
     let literal = value_of(line.args, text).is_some_and(|v| v.literal);
-    let host = text.to_ascii_lowercase();
+    // OpenSSH also reads `ssh://[USER@]HOST[:PORT]`, a form that takes user
+    // and port from the word itself; the grant is made from what is written
+    // as a host, so the form is a usage mistake (ADR-0340 item 4).
+    if tcp.is_some() && text.starts_with("ssh://") {
+        return Err(Refused {
+            subject: text.into(),
+            problem: "a URI is not a host: ssh takes HOST or USER@HOST".into(),
+            hint: Some("write the host, with -l USER and -p PORT".into()),
+        });
+    }
+    // `USER@HOST`: the host is what follows the last `@` (ADR-0340 item 5).
+    let host = if tcp.is_some() {
+        text.rsplit_once('@').map_or(text, |(_, h)| h)
+    } else {
+        text
+    }
+    .to_ascii_lowercase();
+    // A port that is no number from 1 to 65535 gives nothing: the program
+    // says what is wrong with it.
+    let port = match tcp {
+        Some(None) => return Ok(()),
+        other => other.flatten(),
+    };
     let target = match zoraya_http::parse_ipv4(&host) {
         Some(a) => Named::Address(a),
         None if valid_name(&host) => Named::Name(host.clone()),
         // The command says what is wrong with it.
         None => return Ok(()),
     };
-    let word = NetWord {
-        target,
-        ports: Ports::ANY,
-        protocols: Protocols::ECHO,
+    let word = match port {
+        Some(port) => NetWord {
+            target,
+            ports: Ports::one(port),
+            protocols: Protocols::TCP,
+        },
+        None => NetWord {
+            target,
+            ports: Ports::ANY,
+            protocols: Protocols::ECHO,
+        },
     };
     let covered = words.iter().any(|outer| word.rule().within(&outer.rule()));
     if covered {
         return Ok(());
     }
-    if !literal {
+    let in_room = room_words
+        .iter()
+        .any(|outer| word.rule().within(&outer.rule()));
+    if !literal && !in_room {
+        let hint = match port {
+            Some(port) => alloc::format!("if that is meant: +net {host}:{port} COMMAND"),
+            None => alloc::format!("if that is meant: +net {host} COMMAND"),
+        };
         return Err(Refused {
             subject: text.into(),
             problem: "from a value, outside the line's network grants".into(),
-            hint: Some(alloc::format!("if that is meant: +net {host} COMMAND")),
+            hint: Some(hint),
         });
     }
+    // A program of the image takes a name with its public answers only, as
+    // for a URL (the architect's decision of 2026-11-14); an address keeps
+    // its own rule.
+    let word = match word.target {
+        Named::Name(name) if port.is_some() && line.description.program.is_some() => NetWord {
+            target: Named::PublicName(name),
+            ..word
+        },
+        _ => word,
+    };
     words.push(word);
     Ok(())
+}
+
+/// The port a `reach` line gives this line: the option's value when the line
+/// has the option, else the description's. `None` when the option's value is
+/// no number from 1 to 65535 (the command refuses it itself).
+fn reach_port(line: &Line<'_>, reach: &zoraya_describe::Reach) -> Option<u16> {
+    let given = reach.option.and_then(|o| {
+        line.parsed
+            .options
+            .iter()
+            // The first, as OpenSSH's own option reading takes it.
+            .find(|(i, _)| *i == o)
+            .and_then(|(_, v)| *v)
+    });
+    match given {
+        None => Some(reach.port),
+        Some(v) => v.parse::<u16>().ok().filter(|p| *p != 0),
+    }
 }
 
 /// Whether a line for a POSIX program may run (ADR-0317 item 6, INV-0312-1).

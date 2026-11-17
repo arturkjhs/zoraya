@@ -61,6 +61,7 @@ fn go(
         nets: &[],
         listens: &[],
         base_system: base,
+        room: None,
     })
 }
 
@@ -1021,6 +1022,222 @@ fn the_keys_line_is_there_exactly_when_a_stream_is_the_terminal() {
     );
 }
 
+// ------------------------------------------------------------ ADR-0341
+
+const SSH_CMD: &str = include_str!("../../../user/describe/posix/ssh.cmd");
+const KEYGEN_CMD: &str = include_str!("../../../user/describe/posix/ssh-keygen.cmd");
+const CAT_CMD: &str = include_str!("../../../user/describe/commands/cat.cmd");
+const LS_CMD: &str = include_str!("../../../user/describe/commands/ls.cmd");
+
+/// INV-0341-1: only an image description's `data` line, for a program the
+/// list gives that name, makes an entry.
+#[test]
+fn only_an_image_description_with_a_listed_program_has_an_own_directory() {
+    use crate::grants::own_directory;
+    let ssh = d(SSH_CMD);
+    let own = own_directory(&ssh, true, None).expect("an own directory");
+    assert_eq!(own.real, "/data/home/ssh");
+    assert_eq!(own.view, "/home/.ssh");
+    assert!(!own.read);
+    // A description from a volume (not the image's): none.
+    assert!(own_directory(&ssh, false, None).is_none());
+    // A copy of the program under another name: the description names a
+    // path, and `trusted_description` gives none for another one.
+    let trusted = [ssh.clone()];
+    assert!(trusted_description(&trusted, "/u/ssh").is_none());
+    assert!(trusted_description(&trusted, "/bin/ssh").is_some());
+    // A description that claims the name but whose program the list does
+    // not give it to: none.
+    let thief = d("name evil\nsummary s\nusage evil\nprogram /bin/evil\ndata ssh as ~/.ssh\n");
+    assert!(own_directory(&thief, true, None).is_none());
+    let unlisted = d("name ssh\nsummary s\nusage ssh\nprogram /bin/ssh\ndata other as ~/.other\n");
+    assert!(own_directory(&unlisted, true, None).is_none());
+    // No data line, none.
+    assert!(own_directory(&d(CAT_CMD), true, None).is_none());
+}
+
+/// INV-0341-2: the directory is `/data/ROOM/NAME` of the line's room and the
+/// description's name, and the same name in two rooms gives two directories.
+#[test]
+fn the_own_directory_is_per_room_and_name() {
+    use crate::grants::own_directory;
+    let ssh = d(SSH_CMD);
+    let keygen = d(KEYGEN_CMD);
+    let mut seen = Vec::new();
+    for room in [None, Some("proj"), Some("ops"), Some("home2")] {
+        let a = own_directory(&ssh, true, room).unwrap();
+        let b = own_directory(&keygen, true, room).unwrap();
+        // ssh and ssh-keygen share a directory in a room, by name.
+        assert_eq!(a.real, b.real);
+        assert_eq!(
+            a.real,
+            alloc::format!("/data/{}/ssh", room.unwrap_or("home"))
+        );
+        assert_eq!(a.view, "/home/.ssh");
+        assert!(!seen.contains(&a.real), "{} twice", a.real);
+        seen.push(a.real);
+    }
+    // `read` is the description's.
+    let reader = d("name scp\nsummary s\nusage scp\nprogram /bin/scp\ndata ssh as ~/.ssh read\n");
+    assert!(reader.data.as_ref().unwrap().read);
+}
+
+/// INV-0341-7: with the current directory at `/`, `/data`, a room's
+/// directory or inside a program's own directory, no current-directory entry
+/// is given, with or without an operand; a literal operand still designates.
+#[test]
+fn the_current_directory_does_not_reach_into_data() {
+    use crate::grants::cwd_reaches_data;
+    let cat = |cwd: &str, args: &[&str]| go(CAT_CMD, args, &[], &[], true, cwd).unwrap();
+    for cwd in [
+        "/",
+        "/data",
+        "/data/home",
+        "/data/proj",
+        "/data/home/ssh",
+        "/data/home/ssh/sub",
+        "/data/proj/ssh/x/y",
+    ] {
+        assert!(cwd_reaches_data(cwd), "{cwd}");
+        assert!(cat(cwd, &[]).is_empty(), "{cwd}: no operand");
+        assert!(
+            cat(cwd, &["x"])
+                .iter()
+                .all(|e| e.reason != "current directory"),
+            "{cwd}: an operand"
+        );
+        let ls = go(LS_CMD, &[], &[], &[], true, cwd).unwrap();
+        assert!(ls.iter().all(|e| e.reason != "current directory"), "{cwd}");
+    }
+    // Anywhere else it is given, as before.
+    for cwd in [
+        "/u",
+        "/home",
+        "/data2",
+        "/database",
+        "/data/home/other",
+        "/tmp/data",
+    ] {
+        assert!(!cwd_reaches_data(cwd), "{cwd}");
+        let p = cat(cwd, &[]);
+        assert_eq!(p.len(), 1, "{cwd}");
+        assert_eq!(p[0].reason, "current directory");
+    }
+    // A literal operand names it: the one way in.
+    let p = cat("/data/home/ssh", &["/data/home/ssh/known_hosts"]);
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].path, "/data/home/ssh/known_hosts");
+    assert_eq!(p[0].access, Access::Read);
+    // ... but a value inside the current directory is not covered by it.
+    let r = go(
+        CAT_CMD,
+        &["known_hosts"],
+        &["known_hosts"],
+        &[],
+        true,
+        "/data/home/ssh",
+    );
+    assert!(r.unwrap_err().problem.contains("from a value"));
+    // A `+r` word names it too.
+    let p = go(
+        CAT_CMD,
+        &["known_hosts"],
+        &["known_hosts"],
+        &[(false, "/data/home/ssh")],
+        true,
+        "/data/home/ssh",
+    )
+    .unwrap();
+    assert!(
+        p.iter()
+            .any(|e| e.reason == "+r" && e.path == "/data/home/ssh")
+    );
+    // An undescribed program (`cwd read`, not the image's): none either.
+    let p = go(ECHO, &[], &[], &[], false, "/data/home/ssh").unwrap();
+    assert!(p.is_empty());
+}
+
+/// ADR-0341 item 3: a grant on the program's own directory is refused.
+#[test]
+fn a_grant_cannot_name_the_own_directory() {
+    use crate::grants::{own_conflict, own_directory};
+    let own = own_directory(&d(SSH_CMD), true, None).unwrap();
+    let w = |p: &str| vec![(true, Value::literal(p))];
+    assert!(own_conflict(&own, "/u", &w("/u/other"), &[]).is_ok());
+    assert!(own_conflict(&own, "/u", &w("/home"), &[]).is_ok());
+    for p in [
+        "/home/.ssh",
+        "/home/.ssh/known_hosts",
+        "../home/.ssh",
+        ".ssh/x",
+    ] {
+        let cwd = if p.starts_with("..") {
+            "/u"
+        } else if p.starts_with(".ssh") {
+            "/home"
+        } else {
+            "/u"
+        };
+        let r = own_conflict(&own, cwd, &w(p), &[]).unwrap_err();
+        assert!(r.problem.contains("own directory"), "{p}: {}", r.problem);
+    }
+}
+
+/// INV-0341-3: `grants` prints the entry with the real path and the path
+/// the program sees, in the line's order before the toolchain set.
+#[test]
+fn grants_shows_the_own_directory_in_both_names() {
+    use crate::grants::{own_directory, report_with};
+    let own = own_directory(&d(SSH_CMD), true, Some("proj")).unwrap();
+    let p = go(SSH_CMD, &["10.0.2.50"], &[], &[], true, "/u").unwrap();
+    let text = report_with("ssh", &p, "/u", "the terminal", true, true, Some(&own));
+    assert!(
+        text.contains("  /data/proj/ssh       its own files (it sees them as ~/.ssh)\n"),
+        "{text}"
+    );
+    let own_at = text.find("/data/proj/ssh").unwrap();
+    assert!(own_at < text.find("/bin /usr /etc").unwrap(), "{text}");
+    // Without one, as before.
+    let plain = report_with("ssh", &p, "/u", "the terminal", true, true, None);
+    assert!(!plain.contains("its own files"));
+    assert_eq!(plain, report("ssh", &p, "/u", "the terminal", true, true));
+    let read = d("name scp\nsummary s\nusage scp\nprogram /bin/scp\ndata ssh as ~/.ssh read\n");
+    let mut own = own;
+    own.read = read.data.unwrap().read;
+    assert!(crate::grants::own_words(&own).contains("to read"));
+}
+
+/// ADR-0340 item 4: `--` goes before HOST, whatever options come first, so
+/// that ssh's own option reading ends there; the far side's words follow.
+#[test]
+fn the_shell_ends_ssh_s_options_before_the_host() {
+    use crate::grants::end_of_options_at;
+    let ssh = d(SSH_CMD);
+    let at = |args: &[&str]| end_of_options_at(&ssh, args);
+    assert_eq!(at(&["host"]), Some(0));
+    assert_eq!(at(&["host", "ls", "-l"]), Some(0));
+    assert_eq!(at(&["-l", "ada", "host", "-o", "x"]), Some(2));
+    assert_eq!(
+        at(&["-p", "22", "-l", "ada", "-v", "host", "-J", "x"]),
+        Some(5)
+    );
+    assert_eq!(at(&["-vl", "ada", "ada@host", "id"]), Some(2));
+    // Already there: not doubled.
+    assert_eq!(at(&["-l", "ada", "--", "host", "ls"]), None);
+    // A line that does not parse, or has no host, or another description.
+    assert_eq!(at(&["-J", "x", "host"]), None);
+    assert_eq!(at(&[]), None);
+    assert_eq!(end_of_options_at(&d(CAT_CMD), &["x"]), None);
+    // A same-looking word elsewhere is not the host: the host is the first
+    // operand, by position.
+    let words: Vec<String> = ["-l", "host", "host", "host"]
+        .iter()
+        .map(|w| String::from(*w))
+        .collect();
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    assert_eq!(at(&refs), Some(2));
+}
+
 // INV-0335-1 (the plan's half) and INV-0335-4: the real descriptions of the pager and the editor, ADR-0335 item 3.
 const VI: &str = include_str!("../../../user/describe/posix/vi.cmd");
 const EX: &str = include_str!("../../../user/describe/posix/ex.cmd");
@@ -1137,4 +1354,64 @@ fn a_cluster_with_r_still_reads_only() {
     let m = merge(&p);
     assert_eq!(m.len(), 1, "{m:?}");
     assert_eq!(m[0].rights & (rights::WRITE | rights::CREATE), 0, "{m:?}");
+}
+
+/// A room's grant on the view path is refused as a line's is (review of 10g,
+/// finding 20).
+#[test]
+fn a_room_grant_cannot_name_the_own_directory_either() {
+    use crate::grants::{own_conflict, own_directory};
+    let own = own_directory(&d(SSH_CMD), true, Some("r")).unwrap();
+    let room = |p: &str| vec![(true, String::from(p))];
+    assert!(own_conflict(&own, "/u", &[], &room("/u/work")).is_ok());
+    for p in ["/home/.ssh", "/home/.ssh/keys"] {
+        assert!(own_conflict(&own, "/u", &[], &room(p)).is_err(), "{p}");
+    }
+    // A write that covers the real directory (`/data/r/ssh` here) is refused too (finding 5);
+    // a read is not.
+    for p in ["/data", "/data/r", "/"] {
+        let r = own_conflict(&own, "/u", &[], &room(p)).unwrap_err();
+        assert!(r.problem.contains("write handle"), "{p}: {}", r.problem);
+        assert!(
+            own_conflict(&own, "/u", &[(true, Value::literal(p))], &[]).is_err(),
+            "{p}"
+        );
+        assert!(
+            own_conflict(&own, "/u", &[(false, Value::literal(p))], &[]).is_ok(),
+            "{p} read"
+        );
+    }
+    assert!(own_conflict(&own, "/u", &[(true, Value::literal("/data/other"))], &[]).is_ok());
+}
+
+/// The program reads short options only: the shell names the short form
+/// (review of 10g, finding 7).
+#[test]
+fn a_long_option_of_ssh_is_a_usage_mistake_with_the_short_form_named() {
+    use crate::grants::long_option_used;
+    let ssh = d(SSH_CMD);
+    let keygen = d(KEYGEN_CMD);
+    let used = |d: &zoraya_describe::Description, a: &[&str]| long_option_used(d, a);
+    assert_eq!(
+        used(&ssh, &["--port", "2222", "host"]),
+        Some(("--port".into(), "-p".into()))
+    );
+    assert_eq!(
+        used(&ssh, &["-l", "ada", "--login=ada", "host"]),
+        Some(("--login=ada".into(), "-l".into()))
+    );
+    assert_eq!(
+        used(&keygen, &["--type", "ed25519"]),
+        Some(("--type".into(), "-t".into()))
+    );
+    // Short forms, `--help`, and words after the host (the far side's) pass.
+    assert_eq!(used(&ssh, &["-p", "22", "host", "--port", "x"]), None);
+    assert_eq!(used(&ssh, &["--help"]), None);
+    assert_eq!(used(&ssh, &["-l", "ada", "host", "ls", "--color"]), None);
+    assert_eq!(used(&keygen, &["-t", "ed25519", "--", "--x"]), None);
+    // An unknown long option has no short form to name.
+    assert_eq!(
+        used(&ssh, &["--nope", "host"]),
+        Some(("--nope".into(), String::new()))
+    );
 }

@@ -100,13 +100,13 @@ user/describe/posix/netsurf.cmd  test-netsurf test-files
 tests/gui/netsurf.script      test-netsurf
 tests/gui/netsurf-text.script test-netsurf
 user/src/windowclient.rs      test-netsurf
-user/src/bin/panel.rs         test-gui test-netsurf
+user/src/bin/panel.rs         test-gui test-netsurf test-apps
 crates/zoraya-text/           test-gui test-qemu
 crates/zoraya-tokens/         test-gui
 crates/zoraya-fonts/          test-gui
 crates/zoraya-paint/          test-gui
 crates/zoraya-keymap/         test-gui
-crates/zoraya-panel/          test-gui test-netsurf
+crates/zoraya-panel/          test-gui test-netsurf test-apps
 crates/zoraya-proto-gui/      test-gui test-qemu
 crates/zoraya-proto-display/  test-gui test-qemu
 crates/zoraya-virtio-gpu/    test-gui test-qemu
@@ -119,11 +119,12 @@ crates/zoraya-files/          test-gui
 crates/zoraya-editor/         test-gui
 crates/zoraya-settings-window/ test-gui
 tests/gui/                    test-gui
+tests/gui/ssh-room.script     test-apps
 user/src/bin/compd.rs         test-gui
 user/src/bin/term.rs          test-gui test-tour-gui test-tour-terminal
 user/src/bin/gpud.rs          test-gui
 user/src/bin/inputd.rs        test-gui
-user/src/bin/panel.rs         test-gui
+user/src/bin/panel.rs         test-gui test-apps
 user/src/bin/chooser.rs       test-gui
 user/src/bin/files.rs         test-gui
 user/src/bin/t_open.rs        test-gui
@@ -142,7 +143,7 @@ user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
 user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
-user/src/gui.rs               test-gui test-qemu test-net test-netsurf
+user/src/gui.rs               test-gui test-qemu test-net test-netsurf test-apps
 user/src/mmio.rs              test-gui test-qemu test-net test-files
 user/src/bin/t_devices.rs     test-qemu
 user/src/app.rs               test-gui
@@ -173,6 +174,13 @@ tests/apps/                  test-apps
 tests/shell/apps.script       test-apps
 tests/shell/apps-launches.script test-apps
 tests/shell/apps-refusals.script test-apps
+tests/shell/apps-ssh.script   test-apps
+tools/test-apps-ssh.sh        test-apps
+tools/test-sshd.sh            test-apps
+ports/patches/openssh/        test-apps test-hand-run
+user/describe/posix/ssh.cmd   test-apps test-files
+user/describe/posix/ssh-keygen.cmd test-apps test-files
+user/describe/data-names.txt  test-apps test-files
 ports/apps/                   test-apps test-hand-run
 ports/patches/openssl/        test-apps test-hand-run
 ports/patches/wget/           test-apps test-hand-run
@@ -230,12 +238,12 @@ tests/posix-core/             test-libposix test-posix-threads test-posix-suites
 tests/libc-test/             test-posix-suites test-posix-threadtest3
 
 # The shell and its crates.
-user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf
+user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf test-apps
 user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-tour-terminal test-net test-keeper test-hand-run test-apps test-netsurf test-posix test-gui test-python-serve
 crates/zoraya-shell/          test-boot test-files test-tour-gui test-tour-terminal test-apps test-python test-python-ext test-python-regr test-python-mem test-posix test-gui test-python-serve
 crates/zoraya-command/        test-boot test-files test-tour-gui test-tour-terminal
 crates/zoraya-describe/       test-files test-tour-gui test-tour-terminal test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve
-crates/zoraya-settings/       test-files test-tour-gui test-tour-terminal test-gui
+crates/zoraya-settings/       test-files test-tour-gui test-tour-terminal test-gui test-apps
 user/describe/                test-files test-tour-gui test-tour-terminal
 docs/tour.md                  test-tour-gui test-tour-terminal
 tests/shell/                  test-boot test-files
@@ -269,7 +277,7 @@ tests/shell/net-dns.script   test-net
 # its capture check, and the script.
 tools/test-dns/              test-net
 tests/shell/net-lookup.script test-net
-crates/zoraya-shell/src/netgrant.rs test-net test-python-serve
+crates/zoraya-shell/src/netgrant.rs test-net test-python-serve test-apps
 
 # HTTPS and the random service (N5): the TLS crate, ring, the generator, rngd
 # and the test PKI. The files script holds `random`, the net script `fetch https`.
@@ -279,7 +287,8 @@ vendor/                       test-net
 vendor/ring.sha256            check
 tools/check-vendor-ring.sh    check
 tests/net/tls/                test-net test-apps
-user/src/bin/rngd.rs          test-files test-net
+user/src/random.rs           test-files test-net test-apps
+user/src/bin/rngd.rs          test-files test-net test-apps
 
 # The room keeper and the room line (Q6a, ADR-0269): the keeper's decisions and
 # protocol, its process and QEMU test, the launchers' client, memhog and the

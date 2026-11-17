@@ -879,7 +879,17 @@ impl<S: Sys> Posix<S> {
                         &target,
                         r.directory,
                     );
-                    r = next.map_err(|e| self.refused(e, access))?;
+                    let next = next.map_err(|e| self.refused(e, access))?;
+                    // ADR-0341 item 7: a link found outside a program's own
+                    // directory is not followed into it, so a repository
+                    // cannot make a write land there through a planted link.
+                    if next.place.entry != r.place.entry
+                        && self.entries.get(next.place.entry).map(|e| e.kind)
+                            == Some(EntryKind::Own)
+                    {
+                        return Err(EACCES);
+                    }
+                    r = next;
                 }
             }
         }

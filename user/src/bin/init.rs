@@ -438,6 +438,21 @@ fn root_connection(n: &Network) -> Option<Handle> {
     .ok()
 }
 
+/// The panel's root network connection (ADR-0462): the root scope, but only
+/// `REACH`, `NARROW` and `ROOM` (to key each terminal's connection by its room,
+/// ADR-0442), the rights it uses to narrow each room's terminal's connection; no
+/// status and no listen.
+fn panel_connection(n: &Network) -> Option<Handle> {
+    zoraya_user::netclient::narrow(
+        n.control,
+        zoraya_abi::net::rights::REACH
+            | zoraya_abi::net::rights::NARROW
+            | zoraya_abi::net::rights::ROOM,
+        &zoraya_user::netclient::root_scope(),
+    )
+    .ok()
+}
+
 /// Whether the volume holds `/etc/zoraya/net-crash`: the test of the
 /// network's restart then starts `netd` so that it ends on request
 /// (proposed ADR-0296). Only the test image (feature `net-test`) looks;
@@ -772,11 +787,20 @@ fn main() -> i32 {
                 Some((manage, theirs, ours))
             });
             let window = channel_create().ok();
+            // The terminals it starts get their own random connection and, in a room
+            // with `+net` words, the network narrowed to them (ADR-0462).
+            // A launcher's connection (ADR-0462), at init's depth: the shells the
+            // panel starts are shells, not programs, for the service.
+            let panel_random = rng
+                .as_ref()
+                .and_then(|(_, conn)| zoraya_user::random::share_launcher(*conn));
+            let panel_net = network.as_ref().and_then(panel_connection);
             panel = g.start_panel(
                 &s.root,
                 registration,
                 keeper.map(|k| (k.0, k.1)),
                 window.map(|w| w.1),
+                (panel_random, panel_net),
             );
             if panel.is_some() {
                 shell_window = window.map(|w| w.0);

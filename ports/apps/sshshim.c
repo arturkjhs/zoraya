@@ -7,8 +7,10 @@
  * error. None is reached on the paths a Zoraya ssh takes: each belongs to a
  * feature the description does not offer (a proxy command or jump host, an
  * interface to bind, a security-key or PKCS#11 helper, a privilege change).
- * Part 10g decides, name by name, whether to export it or to patch the use out,
- * and deletes this file.
+ * Part 10g (ADR-0393) keeps it: ssh and ssh-keygen are in the apps' /bin since
+ * then, so the file carries no marker (ports/check-early.sh looks for one only
+ * in what must not reach an image). The link probe of 10g
+ * (build/ports/logs/openssh.log) finds no other name undefined.
  */
 #include <errno.h>
 #include <netdb.h>
@@ -22,14 +24,6 @@ struct servent *getservbyname(const char *name, const char *proto)
 {
 	(void)name; (void)proto;
 	return NULL;
-}
-
-/* sshconnect.c: ProxyCommand, ProxyJump. */
-int socketpair(int domain, int type, int protocol, int sv[2])
-{
-	(void)domain; (void)type; (void)protocol; (void)sv;
-	errno = ENOSYS;
-	return -1;
 }
 
 /* sshconnect.c: BindInterface. */
@@ -78,6 +72,3 @@ int initgroups(const char *user, gid_t group)
 	errno = EPERM;
 	return -1;
 }
-
-/* Marker: ports/check-early.sh looks for it to prove that no image binary links this shim. */
-__attribute__((used)) const char zoraya_early_shim_sshshim[] = "ZORAYA-EARLY-SHIM-sshshim";

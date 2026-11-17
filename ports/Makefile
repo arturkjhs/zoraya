@@ -514,6 +514,8 @@ $(NVI_BIN): $(NVI) ports/nvi/build.sh ports/nvi/config.h ports/nvi/pathnames.h p
 # ac_cv_func_statvfs and fstatvfs: libc.a has neither (ADR-0343: statfs is out),
 # and OpenSSH's own `struct statvfs` then clashes with musl's header; only
 # sftp-server and the sftp client call them, and neither is built.
+# IP_TOS_IS_BROKEN: libposix has no IP_TOS socket option, and OpenSSH's own setsockopt of it
+# would print `setsockopt ... IP_TOS: Protocol not available` on every connection (10g).
 OPENSSH := $(WORK)/openssh-$(call lock_ver,openssh)
 OPENSSH_BINS := $(OPENSSH)/ssh $(OPENSSH)/ssh-keygen
 OPENSSH_OPTS := --sysconfdir=/etc/ssh --with-ssl-dir=$(PORTS)/deps --with-zlib=$(PORTS)/deps \
@@ -534,8 +536,8 @@ $(OPENSSH): $(LOCK) $(wildcard ports/patches/openssh/*.patch)
 $(OPENSSH_BINS): $(OPENSSH) $(SYSROOT_STAMP) $(SSHSHIM) $(PORTS)/deps/lib/libssl.a $(PORTS)/deps/lib/libzshim.a ports/config.site
 	@cd $(OPENSSH) && $(call logged,$(CROSS_ENV) ac_cv_func_statvfs=yes ac_cv_func_fstatvfs=yes $(OPENSSH_HAVE) \
 	  ./configure --host=aarch64-unknown-linux-musl $(OPENSSH_OPTS) \
-	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include" \
-	  LDFLAGS="-L$(PORTS)/deps/lib -Wl$(comma)--error-limit=0" LIBS="-lzshim -lsshshim",openssh-configure)
+	  $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(PORTS)/deps/include -DIP_TOS_IS_BROKEN" \
+	  LDFLAGS="-L$(PORTS)/deps/lib -L$(PORTS)/ttyshim -Wl$(comma)--error-limit=0" LIBS="-lzshim -lsshshim",openssh-configure)
 	rm -f $(OPENSSH_BINS)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -k -C $(OPENSSH) ssh ssh-keygen V=1,openssh)
 	@touch $(OPENSSH_BINS)
@@ -916,11 +918,20 @@ $(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libss
 # (tools/run-disk.sh) is how an image takes them; their descriptions are
 # user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
 apps: $(APPS_STAMP)
-$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
+$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) ports/apps/etc/passwd ports/apps/etc/group
 	mkdir -p $(APPS_ROOT)/bin
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
+	cp $(OPENSSH)/ssh $(APPS_ROOT)/bin/ssh
+	cp $(OPENSSH)/ssh-keygen $(APPS_ROOT)/bin/ssh-keygen
+	@# OpenSSH's client needs a user-database entry (ADR-0342 item 7, ADR-0340 item 5): the image's one identity.
+	mkdir -p $(APPS_ROOT)/etc && cp ports/apps/etc/passwd ports/apps/etc/group $(APPS_ROOT)/etc/
 	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no ssh server, agent or other OpenSSH tool in the image, (INV-0340-4)"
+	@for b in sshd sshd-session sshd-auth ssh-agent ssh-add ssh-keyscan ssh-keysign sftp scp sftp-server; do \
+	  if [ -e $(APPS_ROOT)/bin/$$b ]; then echo "$$b is in the image"; exit 1; fi; done
+	@# libc.a exports listen and accept since the Unix sockets (ADR-0430, ADR-0439): they listen on a path in the
+	@# program's /tmp, never on a TCP port (netd has no listener). INV-0340-4 is about sshd: none is in the image.
 	@echo "== no entropy source but getrandom, and no TLS before 1.2 (INV-0310-5)"
 	@for b in curl wget; do \
 	  if LC_ALL=C grep -a -q -e '/dev/urandom' -e '/dev/random' $(APPS_ROOT)/bin/$$b; then \
@@ -930,7 +941,7 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
 	  if grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method' $(APPS_ROOT)/$$b.nm; then \
 	    echo "$$b links a TLS method before 1.2"; exit 1; fi; rm -f $(APPS_ROOT)/$$b.nm; done
 	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
-	@for l in zlib openssl curl wget; do \
+	@for l in zlib openssl curl wget openssh; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"

@@ -24,7 +24,7 @@
 //! Keys: `name` or `topic`, `summary`, `usage` (one or more), `operand NAME
 //! KIND TEXT`, `option [SHORT] LONG [ARG KIND] TEXT` (an upper-case word is
 //! the argument only when a kind follows it), `when OPTION OPERAND
-//! KIND`, `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311), `cwd read|none`, `question`, `program PATH`, `needs net-status`, `net web` (ADR-0324), `exit
+//! KIND`, `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311), `reach OPERAND tcp PORT [OPTION]` (ADR-0340), `data NAME as PATH [read]` (ADR-0341), `cwd read|none`, `question`, `program PATH`, `needs net-status`, `net web` (ADR-0324), `exit
 //! CODE TEXT` and `setting NAME TYPE DEFAULT TEXT`.
 //!
 //! An operand's NAME says how many arguments it takes, as the usage line
@@ -82,10 +82,14 @@ pub enum Kind {
     /// given a network connection whose scope is that host, any port
     /// (`ping`, proposed ADR-0330).
     Host,
+    /// Every word from here on belongs to the program's own far side and is
+    /// not read for options (`ssh HOST COMMAND...`, ADR-0340 item 4). Not a
+    /// path; only the last operand, which takes several.
+    Rest,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 11] = [
         Kind::Read,
         Kind::Write,
         Kind::Create,
@@ -96,6 +100,7 @@ impl Kind {
         Kind::Text,
         Kind::Url,
         Kind::Host,
+        Kind::Rest,
     ];
 
     pub fn parse(word: &str) -> Option<Kind> {
@@ -115,6 +120,7 @@ impl Kind {
             Kind::Text => "text",
             Kind::Url => "url",
             Kind::Host => "host",
+            Kind::Rest => "rest",
         }
     }
 
@@ -131,11 +137,12 @@ impl Kind {
             Kind::Text => "text",
             Kind::Url => "host and port reached",
             Kind::Host => "host reached",
+            Kind::Rest => "taken as it is",
         }
     }
 
     pub fn is_path(self) -> bool {
-        !matches!(self, Kind::Text | Kind::Url | Kind::Host)
+        !matches!(self, Kind::Text | Kind::Url | Kind::Host | Kind::Rest)
     }
 }
 
@@ -249,6 +256,50 @@ pub fn url_file_name(url: &str) -> Option<&str> {
         return None;
     }
     name.chars().all(plain).then_some(name)
+}
+
+/// `reach OPERAND tcp PORT [OPTION]` (ADR-0340 item 4): a literal `host`
+/// operand designates TCP to that host on `PORT`, or on the port the option
+/// gives on the line. The shell honours it for the system image's
+/// descriptions only, under ADR-0224 item 2's rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reach {
+    /// Index into [`Description::operands`]: a `host` operand.
+    pub operand: usize,
+    pub port: u16,
+    /// Index into [`Description::options`]: an option with a number as its
+    /// argument that replaces `port`.
+    pub option: Option<usize>,
+}
+
+/// `data NAME as PATH [read]` (ADR-0341 item 1): the program's own directory
+/// `/data/ROOM/NAME`, which it sees at `PATH` (`~/` and a relative path), to
+/// change or, with `read`, to read only. The shell honours it for the system
+/// image's descriptions only (INV-0341-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Data {
+    pub name: String,
+    /// Begins with `~/`; no empty, `.` or `..` segment.
+    pub path: String,
+    pub read: bool,
+}
+
+/// Whether `path` is what a `data` line may name: `~/` and one or more plain
+/// segments (letters, digits and `. _ -`, none `.` or `..`).
+pub fn is_data_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("~/") else {
+        return false;
+    };
+    path.len() <= 128
+        && !rest.is_empty()
+        && rest.split('/').all(|seg| {
+            !seg.is_empty()
+                && seg != "."
+                && seg != ".."
+                && seg
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,6 +551,10 @@ pub struct Description {
     /// and 443, with names resolved for it. The shell honours it for the
     /// system image's descriptions only, and never in an untrusted room.
     pub net_web: bool,
+    /// `reach` (see [`Reach`]).
+    pub reach: Option<Reach>,
+    /// `data` (see [`Data`]).
+    pub data: Option<Data>,
     /// `window TITLE` (ADR-0317): a POSIX program that opens one window; the
     /// title is what the compositor shows until the program sets its own. The
     /// shell honours it for a trusted room only.
@@ -527,6 +582,8 @@ impl Description {
             program: None,
             needs_net_status: false,
             net_web: false,
+            reach: None,
+            data: None,
             window: None,
             exits: Vec::new(),
             settings: Vec::new(),
@@ -945,6 +1002,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
     let mut seen_cwd = false;
     let mut seen_question = false;
     let mut seen_program = false;
+    let mut reach_raw: Option<(usize, String, u16, Option<String>)> = None;
     let mut whens_raw: Vec<(usize, String, String, Kind)> = Vec::new();
     let mut names_raw: Vec<(usize, String, String)> = Vec::new();
     let mut lines = text.split('\n').enumerate().map(|(i, l)| (i + 1, l));
@@ -1009,6 +1067,9 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 };
                 if d.operand_by_name(&name).is_some() {
                     return err(number, "two operands have this name");
+                }
+                if kind == Kind::Rest && !arity.several() {
+                    return err(number, "a rest operand takes several: NAME... or [NAME...]");
                 }
                 if let Some(last) = d.operands.last() {
                     if last.arity.several() {
@@ -1096,6 +1157,62 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 }
                 d.program = Some(path.into());
             }
+            "reach" => {
+                if reach_raw.is_some() {
+                    return err(number, "reach is given once");
+                }
+                let usage = "reach needs OPERAND tcp PORT [OPTION]";
+                let Some((operand, r1)) = next_word(rest) else {
+                    return err(number, usage);
+                };
+                let Some(("tcp", r2)) = next_word(r1) else {
+                    return err(number, usage);
+                };
+                let Some((port, r3)) = next_word(r2) else {
+                    return err(number, usage);
+                };
+                let port = match parse_number(port) {
+                    Some(p @ 1..=65535) if !port.starts_with('-') => p as u16,
+                    _ => return err(number, "a port is 1 to 65535"),
+                };
+                let option = match next_word(r3) {
+                    None => None,
+                    Some((o, "")) => Some(String::from(o)),
+                    Some(_) => return err(number, usage),
+                };
+                reach_raw = Some((number, operand.into(), port, option));
+            }
+            "data" => {
+                if d.data.is_some() {
+                    return err(number, "data is given once");
+                }
+                let usage = "data needs NAME as PATH [read]";
+                let Some((name, r1)) = next_word(rest) else {
+                    return err(number, usage);
+                };
+                let Some(("as", r2)) = next_word(r1) else {
+                    return err(number, usage);
+                };
+                let Some((path, r3)) = next_word(r2) else {
+                    return err(number, usage);
+                };
+                let read = match next_word(r3) {
+                    None => false,
+                    Some(("read", "")) => true,
+                    Some(_) => return err(number, usage),
+                };
+                if !is_command_name(name) {
+                    return err(number, "a data name is lower-case letters, digits and -");
+                }
+                if !is_data_path(path) {
+                    return err(number, "a data path is ~/ and plain names");
+                }
+                d.data = Some(Data {
+                    name: name.into(),
+                    path: path.into(),
+                    read,
+                });
+            }
             "window" => {
                 if d.window.is_some() {
                     return err(number, "window is given once");
@@ -1168,6 +1285,8 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             || seen_program
             || d.needs_net_status
             || d.net_web
+            || reach_raw.is_some()
+            || d.data.is_some()
             || d.window.is_some()
             || !d.exits.is_empty()
             || !d.settings.is_empty();
@@ -1176,6 +1295,38 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
         }
     } else if d.usage.is_empty() {
         return err(0, "a command needs a usage line");
+    }
+    if let Some((number, operand, port, option)) = reach_raw {
+        let Some(p) = d.operand_by_name(&operand) else {
+            return err(number, "reach names an operand the description lacks");
+        };
+        if d.operands[p].kind != Kind::Host || d.operands[p].arity != Arity::One {
+            return err(number, "reach needs a host operand that takes one word");
+        }
+        let option = match option {
+            None => None,
+            Some(o) => {
+                let found = match (o.strip_prefix("--"), o.strip_prefix('-')) {
+                    (Some(long), _) => d.option_by_long(long),
+                    (None, Some(sh)) if sh.chars().count() == 1 => {
+                        d.option_by_short(sh.chars().next().unwrap_or(' '))
+                    }
+                    _ => None,
+                };
+                let Some(found) = found else {
+                    return err(number, "reach names an option the description lacks");
+                };
+                if d.options[found].argument.is_none() {
+                    return err(number, "reach needs an option that takes a value");
+                }
+                Some(found)
+            }
+        };
+        d.reach = Some(Reach {
+            operand: p,
+            port,
+            option,
+        });
     }
     for (number, option, operand, kind) in whens_raw {
         let o = match (option.strip_prefix("--"), option.strip_prefix('-')) {

@@ -54,10 +54,16 @@ protocol! {
     message ShareReply = 2, handles 0 {
         status: Code,
     }
+
+    /// Carries the server end of a new *launcher* connection (ADR-0462): one
+    /// that makes shells, as `init`'s does. Only `init`'s own connection may
+    /// ask, and a launcher cannot make another.
+    message ShareLauncher = 3, handles 1 {}
 }
 
 const BYTES: u32 = 1;
 const SHARE: u32 = 2;
+const SHARE_LAUNCHER: u32 = 3;
 
 // ---- ChaCha20 -------------------------------------------------------------
 
@@ -226,6 +232,8 @@ pub enum Action {
     /// Write `out[..n]` to the connection and keep the handle as a new
     /// connection; if `attach` is false close it (the table is full).
     Share { reply: usize, attach: bool },
+    /// As `Share`, and the new connection is a launcher's (`Conn::launcher`).
+    ShareLauncher { reply: usize, attach: bool },
     /// The message was not one: end this connection.
     Close,
 }
@@ -248,6 +256,10 @@ pub const LEAF_DEPTH: u8 = 3;
 pub struct Conn {
     depth: u8,
     children: u16,
+    /// A launcher's connection (ADR-0462): at `init`'s depth, so that the
+    /// shells it makes are shells (depth 1: 64 programs each, and a program
+    /// may `Share`), not programs; it cannot make another launcher.
+    launcher: bool,
 }
 
 impl Conn {
@@ -256,6 +268,7 @@ impl Conn {
         Conn {
             depth: 0,
             children: 0,
+            launcher: false,
         }
     }
 
@@ -264,6 +277,17 @@ impl Conn {
         Conn {
             depth: self.depth.saturating_add(1),
             children: 0,
+            launcher: false,
+        }
+    }
+
+    /// The record of a launcher's connection `init`'s made (ADR-0462): the
+    /// depth of `init`'s own, so its children are shells.
+    pub const fn launcher() -> Conn {
+        Conn {
+            depth: 0,
+            children: 0,
+            launcher: true,
         }
     }
 
@@ -274,6 +298,11 @@ impl Conn {
 
     pub fn children(&self) -> u16 {
         self.children
+    }
+
+    /// Whether this connection may make a launcher: `init`'s own only.
+    fn may_share_launcher(&self) -> bool {
+        self.depth == 0 && !self.launcher && self.children < MAX_CHILDREN
     }
 
     fn may_share(&self) -> bool {
@@ -387,6 +416,26 @@ impl Service {
                     out,
                 ) {
                     Ok(n) => Action::Share { reply: n, attach },
+                    Err(_) => Action::Close,
+                }
+            }
+            SHARE_LAUNCHER => {
+                let Ok((h, _)) = decode::<ShareLauncher>(message, handles) else {
+                    return Action::Close;
+                };
+                let attach = conn.may_share_launcher() && self.attached();
+                if attach {
+                    conn.children += 1;
+                }
+                let code = if attach { status::OK } else { status::NO_SPACE };
+                match encode(
+                    &ShareReply {
+                        status: Below(code),
+                    },
+                    h.transaction,
+                    out,
+                ) {
+                    Ok(n) => Action::ShareLauncher { reply: n, attach },
                     Err(_) => Action::Close,
                 }
             }

@@ -274,6 +274,12 @@ shell. Networking: where ssh's and git's trust state lives (ADR-0339, ADR-0340).
 - A command that shows or edits a program's own files by name (`settings`-like), so that `/data` need not be
   typed.
 - Whether a graphical and a terminal program of one name should share a directory.
+- (10g) `--disk` limits a room's `+w` grants only: `/data/ROOM` is not limited (item 6 is not built), so a line in a
+  limited room can write there beyond the limit; building it needs the keeper or a hold on `/data` for the creating
+  shell. `/data/ROOM` also holds the applications' directories, which the room's shell can now name.
+- (10g, rule 6) A file the program holds open for writing in its own directory stays writable in a child that inherits
+  the descriptor (INV-0341-6); the git hook script waits for part 10h; INV-0341-4's lint runs in `make test-unit`, not
+  `make check`.
 
 - **Amended by ADR-0411 (accepted 2026-11-14), recorded by plan part F4 (as built: ADR-0433, proposed).** Item 7's "children get a program's
   own directory read-only" becomes: read-only unless the parent lists a subtree of it without `:ro` in the namespace list of a spawn
