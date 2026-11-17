@@ -1,5 +1,16 @@
 # TASK-34 report: foundations for big programs (F2 to F8)
 
+## Handoff (2026-11-17, the machine went offline; read this first)
+
+**State of `main`:** F2 to F8, F9 (per-room loopback, ADR-0442), F10 (room charging of an image, ADR-0443) and the TCG split are merged. The scheduled full run 43951262290 on `37aefd1f` was green and covers them; `stage-f2` to `stage-f8` are tagged. ADR-0442 and ADR-0443 are accepted (2026-11-17). Nothing is running; all my subagents and background jobs are stopped; the F2 to F10 worktrees and the split's worktree are removed.
+
+**F11 (ADR-0442's two changes, the architect's decision of 2026-11-17) is NOT STARTED in code.** The subagent was stopped about three minutes after it began; `work/f11` had no commits and no changes, so nothing was pushed (the local branch and worktree were deleted). Nothing is half-built. The two gate conditions (ADR-0268) that F11 must close:
+1. **Bounds per room** (listeners, pending connections and the like), so one room cannot use up another's: today the bounds are machine-wide (8 listeners, 1 per carved account with `listen`, 64 pending per listener) and a count leaks across rooms: eight `+listen` programs in room A leave room B's `+listen` line with no netd connection at all, because `carve_with` fails as a whole (`crates/zoraya-net` `service.rs`, `accounts.rs`; `zosh.rs` `.ok()`).
+2. **A room id that is never reused**, not the name: today netd keys listeners by (room name, port) (`NarrowRoom` carries a name of at most 24 bytes), so a removed room that keeps running shares its loopback with a new room of the same name; the room keeper (`crates/zoraya-rooms`, near `lib.rs:750`) also finds rooms by name, so the new room joins the old room's job. The keeper must assign ids from a monotonic counter; the shell and init pass the id to netd with `NarrowRoom`; only init's control connection and the console shell hold `ROOM`.
+The brief I gave the subagent (scope, tests, mutants, ADR 0444 for the id scheme, the wire change and the per-room bounds table, the invariants INV-0444-n, the queue line) is the plan to follow: one build and one QEMU guest at a time, `make check`, `make test-changed` under HVF, an independent Opus review, no candidate run (ADR-0463), merge with `--no-ff` from a detached HEAD at `origin/main`. **The gate is not closed by F11 alone**: ADR-0269's untrusted-room launcher (a connection with its room fixed by init and no `ROOM`) is not built.
+
+**Also open:** the proposed ADR-0444 does not exist yet (numbers 0444 to 0449 are free). Backlog, from the architect: socket files in a program's own directory (ADR-0412, allowed now), NIC-reachable listeners and the rooms' `+listen` words, the contiguous-create race with the reaper (high priority; proposal: drop the 17-round cap of `alloc_contig_in_steps` with a step point between rounds). Known limits of ADR-0443 (a trusted room without limits, the shell's staging object and `grants` probe, ramdisk programs). On this MacBook Air `kernel_work_is_bounded` fails on `main` too (the reaper race and `t_bound` masked time under load); the architect says it does not block merges here.
+
 ## Status for the architect
 
 Updated 2026-11-17. **F2 to F8 and the architect's follow-ups F9 and F10 are merged**, and the TCG kernel suites are split in two.
