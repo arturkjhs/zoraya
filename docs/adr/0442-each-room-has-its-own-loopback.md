@@ -1,6 +1,6 @@
 # ADR-0442: Each room has its own loopback (plan part F9): `netd` keys listeners and loopback connects by a room name that only a launcher's connection can give
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0172, ADR-0220, ADR-0262, ADR-0268, ADR-0434, ADR-0440, ADR-0441
 - **Evidence:** CP-01, GR-008
@@ -64,6 +64,10 @@ per pair, more state in `netd`, and it is not what the architect decided.
 The three leaks above; replaced by the architect's decision.
 
 ## Recommendation
+
+### Decision
+
+Accepted 2026-11-17. Decided by the architect; recorded by an agent at the architect's request. Accepted with two changes, both gate conditions (ADR-0268): (1) bounds per room (listeners, pending connections and the like), so one room cannot use up another's; (2) a room's loopback is keyed by a room id that is never reused, not by its name. Both are built as part F11. Where the text below says the bounds are machine-wide or that a room is known by its name, this decision replaces it.
 
 **Recommendation (not a decision): Option A, as built.**
 
@@ -140,4 +144,6 @@ a room's `+net 127.0.0.1` reaches that room's own listeners only.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-17. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted with two changes, both gate conditions (ADR-0268): (1) bounds per room (listeners, pending connections and the like), so one room cannot use up another's; (2) a room's loopback is keyed by a room id that is never reused, not by its name. Both are built as part F11.

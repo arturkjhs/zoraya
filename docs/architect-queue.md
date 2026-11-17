@@ -96,7 +96,7 @@ the runner itself in a job of their own; `vttest` pinned and built with 10d.
 - Backlog (next stage): listeners reachable from the NIC (ADR-0440 Option B, a second smoltcp interface) and the rooms' `+listen` words and pills.
 - The TCG kernel suites near 420 s: split into two jobs; the limit is not raised.
 - The contiguous-create race with the reaper (ADR-0270; `t_bound`'s flake source): backlog, high priority.
-- Still open: sockets in a program's own directory before tmux (ADR-0439 item 1), and restricting `unlink` and `rename` of a node with a listener to the connection that made it (ADR-0439).
+- Decided 2026-11-17: ADR-0442 accepted with two changes (bounds per room, so one room cannot use up another's; a room's loopback keyed by a room id that is never reused, not by its name), built as **part F11**; ADR-0443 accepted (its remainders are known limits in the report); socket files in a program's own directory are allowed (ADR-0412; to be built, `docs/backlog.md`); unlinking a listening node follows the ordinary rules (write on its directory); the local `kernel_work_is_bounded` failures on the MacBook Air (the reaper race and load timing) do not block merges.
 
 ## For the TASK-34 dispatcher (MacBook Air)
 

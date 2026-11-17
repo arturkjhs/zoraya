@@ -1,6 +1,6 @@
 # ADR-0443: An image's pages are charged to the job its creator names (plan part F10): `image_create` takes the job, the shell names the room's
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0003, ADR-0108, ADR-0172, ADR-0261, ADR-0262, ADR-0268, ADR-0438
 - **Amends (if accepted):** ADR-0438 item 2 and INV-0438-2 ("the job that made an image pays" becomes "the job the creator names pays"); ADR-0108 item 1's signature `image_create(memory, length)`.
@@ -134,4 +134,6 @@ transient file object during its first read is as large as an image.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-17. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as built. Its remainders (a trusted room without limits, the shell's staging object and `grants` probe, ramdisk programs) are known limits, recorded in `docs/tasks/TASK-34-report.md`.
