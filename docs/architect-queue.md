@@ -8,7 +8,7 @@ adds, remove what the architect has decided (the decision itself is recorded in 
 **Both dispatchers** (TASK-31 on the Mac mini, TASK-34 on the MacBook Air) keep this file. TASK-34's dispatcher: add your
 items here too, under the same headings, with the part's name in front.
 
-Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; before that 2026-11-15, the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
+Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; before that those of 2026-11-16; before that 2026-11-15, the architect's decisions of the day recorded; after stage 10a, 10b, 10e, `poll`, `py-hook`,
 `test-fixes-2`, `ci-expr`; 10c reviewed, its fix pass on `work/10c`).
 
 ## A. Proposed ADRs, with the agent's one-line recommendation
@@ -16,13 +16,8 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 | ADR | What | Recommendation | From |
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
-| ADR-0462 | 10g: a room's terminals get the random service (a launcher's connection, at `init`'s depth) and, in a room with `+net` words, a network connection narrowed to them; the words BOUND a line and give it nothing (a line that asks for no network gets none and takes no carved account) | Option A | 10g |
-| ADR-0393 | 10g: what 10g decided where ADR-0340 and ADR-0341 are silent (`EntryKind::Own`, the names list, `/home` as the view, the shell's `/data/ROOM` hold, ssh on ADR-0346's port plus patches 0005 to 0008, short options only, the host's sshd as a confined test server) | Option A | 10g |
-| ADR-0461 | git's licence: `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS (its GPL-2.0-or-later option), for git only. Decided by the architect 2026-11-16; it must be accepted before 10h wires git in | Option A (decided) | ports-early, TASK-31 |
 | ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 44), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
-| ADR-0388 | 10c: the broker's notices to `zosh` (`ForegroundAsked` names the line by its root; `Background` makes a `tcsetpgrp` of a line not in front `EPERM` at once, as decided 2026-11-15; a signal to a group reaches no group made inside it) | Option A as amended | 10c |
-| ADR-0389 | 10c: the terminal calls of `libposix` (the readiness request, `tcsetattr`'s actions, `tcflush`, `tcdrain`, `/dev/tty`, `ttyname`, `TIOCSTI` `ENOTTY`, `TIOCSWINSZ` `EPERM`) | Option A | 10c |
 
 ## B. Decisions taken to continue (the architect may overrule)
 
@@ -74,6 +69,13 @@ Last updated: 2026-11-16 (the architect's decisions of 2026-11-16 recorded; befo
 - **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
 
 
+
+## E. Decided 2026-11-18 (removed from the lists above)
+
+- ADR-0461 accepted, Option A: `git-remote-http` links a libcurl built with mbedTLS 3.6 LTS (its GPL-2.0-or-later option), for git only; part 10h may wire git in.
+- ADR-0462 accepted, Option A (a room's terminals get the random service and a network connection bounded by the room's words).
+- ADR-0393 accepted, Option A (what 10g decided where ADR-0340 and ADR-0341 are silent).
+- ADR-0388 accepted, Option A as amended; ADR-0389 accepted, Option A (the 10c broker notices and terminal calls).
 
 ## E. Decided 2026-11-16 (removed from the lists above)
 

@@ -1,6 +1,6 @@
 # ADR-0462: The terminals a room's panel starts get the random service and a network bounded by their room's words
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0172, ADR-0221, ADR-0224, ADR-0227, ADR-0242, ADR-0262, ADR-0288, ADR-0340, ADR-0393, ADR-0435, ADR-0453
 - **Evidence:** CP-01, CP-28
@@ -128,3 +128,7 @@ Option B) is refused. This records that decision only; the ADR's status is the a
 - Rooms' words for listening (`+listen`), or a rooms overview form; a second consumer of the launcher's connection.
 
 ## Architect's decision
+
+Accepted 2026-11-18. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.

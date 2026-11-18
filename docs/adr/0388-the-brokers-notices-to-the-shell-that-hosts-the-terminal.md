@@ -1,6 +1,6 @@
 # ADR-0388: The broker's notices to the shell that hosts the terminal
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0052, ADR-0104, ADR-0105, ADR-0153, ADR-0331, ADR-0387
 - **Evidence:** CP-07, stage-10/survey.md#the-terminal-as-built
@@ -116,4 +116,7 @@ decides what reads the keys. Target 3: nothing here is per-machine.
 - A POSIX shell is found that misbehaves when its `tcsetpgrp` succeeds but its group cannot read.
 
 ## Architect's decision
-(Left empty for the architect.)
+
+Accepted 2026-11-18. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A as amended.
