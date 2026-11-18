@@ -4,3 +4,4 @@
 #
 # NAME  program...
 ssh  ssh ssh-keygen
+git  git git-clone git-init git-ls-remote

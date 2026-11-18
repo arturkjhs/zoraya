@@ -897,7 +897,9 @@ $(MBED_DEPS)/lib/libmbedtls.a: $(MBEDTLS) $(MBEDTLS_STAMP) $(SYSROOT_STAMP)
 	@cd $(MBEDTLS) && for n in $(MBEDTLS_UNSET); do \
 	  python3 scripts/config.py unset $$n || exit 1; done
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(MBEDTLS)/library clean,mbedtls-clean)
-	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(MBEDTLS)/library -j3 CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	@# mbedTLS's makefile is silent (.SILENT): a wrapper puts each compile line, which names zcc, in the log (INV-0143-1's check).
+	printf '#!/bin/sh\necho "$(ZCC) $$*"\nexec $(ZCC) "$$@"\n' > $(PORTS)/mbedtls-cc && chmod +x $(PORTS)/mbedtls-cc
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(MBEDTLS)/library -j3 CC=$(PORTS)/mbedtls-cc AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
 	  CFLAGS="$(APPS_CFLAGS) -U__ARM_NEON -D__unix__" WARNING_CFLAGS= static,mbedtls)
 	rm -rf $(MBED_DEPS)/include/mbedtls $(MBED_DEPS)/include/psa
 	cp -R $(MBEDTLS)/include/mbedtls $(MBEDTLS)/include/psa $(MBED_DEPS)/include/
@@ -964,15 +966,24 @@ $(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libzs
 # (tools/run-disk.sh) is how an image takes them; their descriptions are
 # user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
 apps: $(APPS_STAMP)
-$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) ports/apps/etc/passwd ports/apps/etc/group
+$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) $(GIT_BINS) ports/git/gitconfig ports/apps/etc/passwd ports/apps/etc/group
 	mkdir -p $(APPS_ROOT)/bin
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
 	cp $(OPENSSH)/ssh $(APPS_ROOT)/bin/ssh
 	cp $(OPENSSH)/ssh-keygen $(APPS_ROOT)/bin/ssh-keygen
+	@# git (ADR-0339 item 1): /bin/git, and git-remote-http and -https where git looks for its helpers (its compiled-in exec
+	@# path, /usr/libexec/git-core: GIT_EXEC_PATH is not read, ADR-0347 item 3); no other command of git's is a file.
+	cp $(GIT)/git $(APPS_ROOT)/bin/git
+	mkdir -p $(APPS_ROOT)/usr/libexec/git-core
+	cp $(GIT)/git-remote-http $(APPS_ROOT)/usr/libexec/git-core/git-remote-http
+	cp $(GIT)/git-remote-http $(APPS_ROOT)/usr/libexec/git-core/git-remote-https
+	rm -rf $(APPS_ROOT)/usr/share/git-core/templates && mkdir -p $(APPS_ROOT)/usr/share/git-core
+	cp -R ports/git/templates $(APPS_ROOT)/usr/share/git-core/templates
 	@# OpenSSH's client needs a user-database entry (ADR-0342 item 7, ADR-0340 item 5): the image's one identity.
 	mkdir -p $(APPS_ROOT)/etc && cp ports/apps/etc/passwd ports/apps/etc/group $(APPS_ROOT)/etc/
-	$(ELF_CHECK) $(APPS_ROOT)/bin
+	cp ports/git/gitconfig $(APPS_ROOT)/etc/gitconfig
+	$(ELF_CHECK) $(APPS_ROOT)/bin $(APPS_ROOT)/usr/libexec/git-core
 	@echo "== no ssh server, agent or other OpenSSH tool in the image, (INV-0340-4)"
 	@for b in sshd sshd-session sshd-auth ssh-agent ssh-add ssh-keyscan ssh-keysign sftp scp sftp-server; do \
 	  if [ -e $(APPS_ROOT)/bin/$$b ]; then echo "$$b is in the image"; exit 1; fi; done
@@ -987,7 +998,7 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) ports/apps/etc/passwd por
 	  if grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method' $(APPS_ROOT)/$$b.nm; then \
 	    echo "$$b links a TLS method before 1.2"; exit 1; fi; rm -f $(APPS_ROOT)/$$b.nm; done
 	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
-	@for l in zlib openssl curl wget openssh; do \
+	@for l in zlib openssl mbedtls curl curl-mbedtls wget openssh git; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"

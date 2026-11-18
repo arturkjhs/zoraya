@@ -40,6 +40,9 @@ pub enum Access {
     /// `write` operand of a `cwd none` description: the parent, narrowed to
     /// the name, to change the existing file (no create, no remove).
     ChangeName(String),
+    /// `create-tree` (ADR-0339 item 3): the parent narrowed to the name,
+    /// where a directory of that name may be created, and everything in it.
+    CreateTree(String),
 }
 
 impl Access {
@@ -58,6 +61,7 @@ impl Access {
             Access::Tree => rights::ALL & !rights::PUBLISH,
             Access::ReadName(_) => rights::READ | rights::CLONE,
             Access::ChangeName(_) => rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
+            Access::CreateTree(_) => rights::ALL & !rights::PUBLISH,
         }
     }
 
@@ -68,7 +72,8 @@ impl Access {
             | Access::Remove(n)
             | Access::Rename(n)
             | Access::ReadName(n)
-            | Access::ChangeName(n) => Some(n),
+            | Access::ChangeName(n)
+            | Access::CreateTree(n) => Some(n),
             _ => None,
         }
     }
@@ -82,6 +87,7 @@ impl Access {
             Access::Rename(_) => Access::Rename(name),
             Access::ReadName(_) => Access::ReadName(name),
             Access::ChangeName(_) => Access::ChangeName(name),
+            Access::CreateTree(_) => Access::CreateTree(name),
             other => other.clone(),
         }
     }
@@ -98,6 +104,7 @@ impl Access {
             Access::Tree => "change anything in".into(),
             Access::ReadName(n) => format!("read {n}"),
             Access::ChangeName(n) => format!("change {n}"),
+            Access::CreateTree(n) => format!("create {n}, and change anything in it"),
         }
     }
 }
@@ -181,6 +188,7 @@ fn entries_for(kind: Kind, abs: &str, reason: &str, out: &mut Vec<Planned>) {
         Kind::Read => push(out, abs.into(), Access::Read),
         Kind::Write => push(out, abs.into(), Access::Change),
         Kind::Create => narrowed(out, Access::Create),
+        Kind::CreateTree => narrowed(out, Access::CreateTree),
         Kind::Remove => narrowed(out, Access::Remove),
         Kind::RemoveTree => {
             narrowed(out, Access::Remove);
@@ -258,7 +266,7 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             // description narrows the parent too (below).
             let narrows = matches!(
                 kind,
-                Kind::Create | Kind::Remove | Kind::RemoveTree | Kind::Rename
+                Kind::Create | Kind::CreateTree | Kind::Remove | Kind::RemoveTree | Kind::Rename
             ) || (d.cwd == Cwd::None && matches!(kind, Kind::Read | Kind::Write));
             let within = |base: &str| covers(base, &abs) && !(narrows && abs == base);
             // A value inside a current directory that gives nothing is not
@@ -324,6 +332,31 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             });
         }
         designate(kind, text, reason, &mut out)?;
+    }
+    // `derive` (ADR-0464): `git clone URL` with no directory makes the one the URL's name gives; the shell
+    // works that name out itself and designates it, or refuses the line (ADR-0339 item 3).
+    if let Some(dv) = &d.derive
+        && !p.operands.iter().any(|(i, _)| *i == dv.target)
+        && let Some((_, url)) = p.operands.iter().find(|(i, _)| *i == dv.from)
+    {
+        let Some(name) = zoraya_describe::url_dir_name(url, &dv.cut) else {
+            return Err(Refused {
+                subject: (*url).into(),
+                problem: format!(
+                    "{} would make a directory under a name the shell cannot be sure of",
+                    d.name
+                ),
+                hint: Some(format!(
+                    "to say where it goes, write a directory after {url}"
+                )),
+            });
+        };
+        designate(
+            Kind::CreateTree,
+            name,
+            format!("operand {}", d.operands[dv.target].name),
+            &mut out,
+        )?;
     }
     // ADR-0335 item 3: the editor and the pager are given the names the line writes. A narrowed
     // connection takes one name until `narrow` takes a list, so two names of one directory would
@@ -784,7 +817,38 @@ pub fn report_with(
 /// other way (`./tcc`, a copy, one the person built) gets none, and nothing
 /// on a volume is ever read for one.
 pub fn trusted_description<'a>(trusted: &'a [Description], path: &str) -> Option<&'a Description> {
-    trusted.iter().find(|d| d.program.as_deref() == Some(path))
+    trusted
+        .iter()
+        .find(|d| d.program.as_deref() == Some(path) && d.sub.is_none())
+}
+
+/// As [`trusted_description`], for a line with `words` (ADR-0464): the image's
+/// description of `path` whose `sub` is the line's first word (`git clone`),
+/// or the program's own when none is. A word the line may not have written
+/// as its first (a `-C` before the command) selects the program's own.
+pub fn trusted_description_args<'a>(
+    trusted: &'a [Description],
+    path: &str,
+    words: &[&str],
+) -> Option<&'a Description> {
+    if let Some(first) = words.first()
+        && let Some(d) = trusted
+            .iter()
+            .find(|d| d.program.as_deref() == Some(path) && d.sub.as_deref() == Some(*first))
+    {
+        return Some(d);
+    }
+    trusted_description(trusted, path)
+}
+
+/// The words a description parses: all of them, or for a `sub` description
+/// the words after the command word.
+pub fn words_of<'t, 'a>(d: &Description, words: &'t [&'a str]) -> &'t [&'a str] {
+    if d.sub.is_some() {
+        words.get(1..).unwrap_or(&[])
+    } else {
+        words
+    }
 }
 
 /// The home directory of the image's user database, which `~` in a `data`
