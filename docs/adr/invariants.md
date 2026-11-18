@@ -1164,4 +1164,4 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0460](0460-charge-but-do-not-park-the-thread-of-a-process-that-is-ending.md) Charge but do not park the thread of a process that is ending | 4 |
 | [ADR-0461](0461-gits-licence-git-remote-http-links-a-libcurl-built-with-mbedtls.md) git's licence: git-remote-http links a libcurl built with mbedTLS | 3 |
 | [ADR-0463](0463-ci-parts-merge-on-local-tests-and-review-mains-full-set-runs-every-two-hours.md) CI: parts merge on local tests and review; main's full set runs every two hours | 3 |
-| **Total** | **886** |
+| **Total** | **887** |
