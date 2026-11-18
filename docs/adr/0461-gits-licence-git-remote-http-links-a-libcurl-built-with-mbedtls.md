@@ -1,6 +1,6 @@
 # ADR-0461: git's licence: git-remote-http links a libcurl built with mbedTLS
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-16
 - **Depends on:** ADR-0228, ADR-0310, ADR-0312, ADR-0339, ADR-0347
 - **Evidence:** CP-27, alternatives-postmortem.md#plan-9--inferno, stage-10/survey.md#git-licence-and-alternatives
@@ -122,5 +122,6 @@ the program and the transport, and the licences are compatible. This is a propos
 
 ## Architect's decision
 
-(Left empty for the architect. The architect decided Option A on 2026-11-16; the status is set to accepted by the
-architect.)
+Accepted 2026-11-18. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.
