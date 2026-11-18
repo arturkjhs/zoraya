@@ -13,6 +13,9 @@
 # INV-0390-3: the curses archives name the terminfo directory; the programs load.
 # INV-0346-2: ssh and ssh-keygen name no askpass variable or configuration file.
 # INV-0347-2: no object of git imports getenv but wrapper.o (and compat/regex's locale lookups).
+# INV-0461-1: git-remote-http links mbedTLS and not OpenSSL, and no other program of the ports does (by symbol).
+# INV-0461-2 (the part that no option turns verification off): git-remote-http names neither the options nor the
+# files that would (by string); the behaviour is tested by `make test-apps` (tests/shell/apps-git.script).
 # Also: libc.a defines every name of the three blocks, and no binary of the images holds an early shim's marker.
 set -eu
 logs=$1 zcc=$2 surface=$3 elfcheck=$4 build=$5 libc=${6:-}
@@ -121,6 +124,33 @@ if [ -n "$git" ]; then
     "$elfcheck" "$d" || fail=1
     rm -rf "$d"
     block_in_libc docs/adr/0347-surface-for-git.md
+    # INV-0461-1, by symbol. The control first: the helper defines mbedTLS's client (a check that finds nothing
+    # because nothing was linked would pass for the wrong reason). Then: no OpenSSL in it, no mbedTLS in `git`
+    # and in no other program of the ports.
+    "$nm_tool" --defined-only "$git/git-remote-http" 2>/dev/null | grep -qw mbedtls_ssl_handshake \
+      || say "git-remote-http defines no mbedtls_ssl_handshake (control)"
+    if "$nm_tool" --defined-only "$git/git-remote-http" 2>/dev/null | grep -q -w -e SSL_new -e SSL_CTX_new -e EVP_CIPHER_CTX_new -e OPENSSL_init_ssl; then
+      say "git-remote-http links OpenSSL (INV-0461-1)"
+    fi
+    for other in "$git/git" "$build/rootfs-apps/bin/curl" "$build/rootfs-apps/bin/wget" "$build/rootfs-apps/bin/ssh" \
+      "$build/rootfs-apps/bin/ssh-keygen" "$build/ports/work/curl-"[0-9]*/src/curl "$build/ports/work/wget-"[0-9]*/src/wget \
+      "$build/ports/work/openssh-"[0-9]*/ssh; do
+      [ -f "$other" ] || continue
+      if "$nm_tool" --defined-only "$other" 2>/dev/null | grep -q -w mbedtls_ssl_handshake; then
+        say "$other links mbedTLS (INV-0461-1)"
+      fi
+    done
+    # The helper trusts the system's roots and reads no device file for entropy. The variables git itself names
+    # (GIT_SSL_NO_VERIFY and the rest) are read through zoraya_getenv, which answers "not set" (INV-0347-2); that
+    # they decide nothing is the test of INV-0461-2 (tests/shell/apps-git.script), not a string check.
+    if ! LC_ALL=C grep -a -q '/system/tls/roots' "$git/git-remote-http"; then
+      say "git-remote-http does not name /system/tls/roots"
+    fi
+    for word in /dev/urandom /dev/random; do
+      if LC_ALL=C grep -a -q -e "$word" "$git/git-remote-http"; then
+        say "git-remote-http names $word (INV-0310-5)"
+      fi
+    done
   else
     say "git has a tree and no git or git-remote-http"
   fi

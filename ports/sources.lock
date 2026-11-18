@@ -31,6 +31,9 @@
 # OpenSSH portable 10.6p2 from the OpenBSD mirror (ADR-0340); git 2.56.1 from kernel.org (GPL-2.0-only, a separate
 # program like wget, ADR-0339). The SHA-256 of each is the one of the first download (trust on first use, as for
 # ncurses above: none of the signatures these projects publish is verified here).
+# mbedtls (TASK-31 10h, ADR-0461): 3.6.8, the newest release of the 3.6 LTS line on 2026-11-19; the SHA-256 is the one
+# its release lists in mbedtls-3.6.8-sha256sum.txt (checked against it). Dual-licensed Apache-2.0 OR GPL-2.0-or-later: the
+# GPL option is used. It is the TLS backend of the second libcurl, which git-remote-http links, and of nothing else.
 # vttest (TASK-31 10d, ADR-0332 item 10, ADR-0391 item 10): the terminal test program, release 20251205 (the newest
 # on the author's site on 2026-11-15; a MIT-style notice, Thomas E. Dickey), the same bytes from both of his hosts. It
 # is built for the host by tools/term-record/build-vttest.sh to record sessions; it is not built for the target and
@@ -68,3 +71,4 @@ db1       1.85                                       4220d4ddeb77fb57ba2f37c1aa1
 openssh   10.6p2                                     9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b  openssh-10.6p2.tar.gz                                  https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz
 git       2.56.1                                     f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f  git-2.56.1.tar.xz                                      https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz
 vttest    20251205                                   cd6886f9aefe6a3f6c566fa61271a55710901a71849c630bf5376aa984bf77cc  vttest-20251205.tgz                                    https://invisible-mirror.net/archives/vttest/vttest-20251205.tgz https://invisible-island.net/archives/vttest/vttest-20251205.tgz
+mbedtls   3.6.8                                      bc54b818e87f49c0b3281dd85d24adaede0e63b4e822e3fbd49c005a38b9595b  mbedtls-3.6.8.tar.bz2                                  https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.8/mbedtls-3.6.8.tar.bz2

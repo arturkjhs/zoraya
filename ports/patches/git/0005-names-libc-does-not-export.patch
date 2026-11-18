@@ -1,0 +1,71 @@
+diff -ruN a/builtin/help.c b/builtin/help.c
+--- a/builtin/help.c
++++ b/builtin/help.c
+@@ -18,6 +18,15 @@
+ #include "alias.h"
+ #include "setup.h"
+ 
++#ifdef __zoraya__
++/*
++ * Zoraya (ADR-0347): libc.a has no execlp, and no manual viewer or info
++ * reader is in the image (ADR-0339 item 1); starting one fails as an
++ * unoffered call does, and `git help` says no viewer handled the request.
++ */
++#define execlp(file, ...) (errno = ENOSYS, -1)
++#endif
++
+ #ifndef DEFAULT_HELP_FORMAT
+ #define DEFAULT_HELP_FORMAT "man"
+ #endif
+diff -ruN a/compat/disk.h b/compat/disk.h
+--- a/compat/disk.h
++++ b/compat/disk.h
+@@ -33,6 +33,14 @@
+ 	strbuf_addf(out, "Available space on '%s': ", buf.buf);
+ 	strbuf_humanise_bytes(out, avail2caller.QuadPart);
+ 	strbuf_addch(out, '\n');
++#elif defined(__zoraya__)
++	/*
++	 * Zoraya (ADR-0347, ADR-0461's part 10h): libc.a has no statvfs; `git diagnose`
++	 * says the figure is not available instead of calling it.
++	 */
++	error(_("free disk size is not available on this system"));
++	res = -1;
++	goto cleanup;
+ #else
+ 	struct statvfs stat;
+ 
+diff -ruN a/connect.c b/connect.c
+--- a/connect.c
++++ b/connect.c
+@@ -828,9 +828,14 @@
+ static const char *ai_name(const struct addrinfo *ai)
+ {
+ 	static char addr[NI_MAXHOST];
++#ifdef __zoraya__
++	/* Zoraya (ADR-0347): libc.a has no getnameinfo; the address is not printed. */
++	xsnprintf(addr, sizeof(addr), "(unknown)");
++#else
+ 	if (getnameinfo(ai->ai_addr, ai->ai_addrlen, addr, sizeof(addr), NULL, 0,
+ 			NI_NUMERICHOST) != 0)
+ 		xsnprintf(addr, sizeof(addr), "(unknown)");
++#endif
+ 
+ 	return addr;
+ }
+diff -ruN a/upload-pack.c b/upload-pack.c
+--- a/upload-pack.c
++++ b/upload-pack.c
+@@ -176,7 +176,12 @@
+ 
+ static void reset_timeout(unsigned int timeout)
+ {
++#ifndef __zoraya__
+ 	alarm(timeout);
++#else
++	/* Zoraya (ADR-0347): libc.a has no alarm (ADR-0342 item 6); a served fetch has no timeout. */
++	(void)timeout;
++#endif
+ }
+ 
+ static void send_client_data(int fd, const char *data, ssize_t sz,

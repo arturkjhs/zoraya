@@ -1729,6 +1729,8 @@ check-term-width:
 check-fetch-ports:
 	ports/test-fetch.sh
 	tools/check-fetch-cache.sh
+	@# INV-0461-3: every pin has a row in docs/dependencies.md, with the licence option of mbedTLS.
+	tools/check-dependencies.sh
 
 # INV-0390-2: nvi's build log has one zcc line per object under dash's `sh -x` (check-early.sh counts them).
 check-port-logs:
