@@ -311,7 +311,7 @@ states, to be taken up later:
     grant line, and a native program (a `Startup` index and `zoraya-rt`'s read); the planner's use of the list at start (10d's second-file refusal).
   - **A write refused inside a read-only entry** is reported only on the service's `EACCES`; `user/src/namespace.rs` reports per path, not per path and
     access; datagram and listen refusals are not reported.
-  - **`/data` in `Grants`' prefix check** (ADR-0341 item 3, ADR-0393): add when 10f rebases on 10g.
+  - **`/data` in `Grants`' prefix check** (ADR-0341 item 3, ADR-0393): not added in the merge of 10f and 10g: the own directory is protected by `Held::fixed` (`TableKind::Own`); a `/data` rule in `grantable()` would also refuse a valid `/data/x` entry the abi tests use, so it needs the architect's reading of ADR-0341 item 3.
   - **Not tested:** the write end closing with the job (`Job`'s `Drop`), a pipeline of two programs with a grant to one, a fuzz target of `term`'s input
     with the row compared before and after; no mutation run (`tools/mutants/shell-10f.toml` is written).
   - **From the review of 10f (notes, not fixed):** an Escape followed by a key in one read is taken as Alt+key and skipped by the field; only `open` and

@@ -250,3 +250,21 @@ Hand mutations, each applied alone and reverted (a `python3 -I` script outside t
 ## Counts
 
 3 errors (findings 1 to 3), 7 warnings (4 to 10), 3 notes (11 to 13).
+
+## Dispositions (the implementation agent, 2026-11-19)
+
+Each finding was checked against `work/10f` after the merge of `origin/main` (which carries part 10g).
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | `+r DIR` widens to write over the tree | Fixed in `178e00de`: `Held::give` refuses when names the program holds there have rights the typed word lacks (`delivery.rs`, test in `status_tests.rs`). |
+| 2 | A narrowed list's per-name rights hold for `open` only | Fixed in `95d6ee8e`: `Remove`, `MakeDirectory`, `MakeLink`, `Rename` and `Publish` check `has_on` / `token_has_on` (`zoraya-fs-service`, tests in `tests/service.rs`). |
+| 3 | The own directory of ADR-0341 can be replaced after 10g | Fixed: `TableKind::Own` and `Held::fixed` (an entry the plan does not list is never assumed `READ`; nothing is given at, above or below it), in `c242a041`; `grantable()` does not refuse `/data` (a grant of `/data/x` is a valid entry in the `zoraya-abi` test and ADR-0341 item 3 does not say `Grants` refuses it): the own directory is protected by `Held::fixed`, not by that list. Recorded as not done in `docs/backlog.md`. |
+| 4 | Report channels unbounded per wake | Fixed in `178e00de` (bound per wake). |
+| 5 | A delivery of several messages partly made | Fixed in `178e00de` (encode all first; all or nothing). |
+| 6 | A whole directory above a narrower entry | Fixed in `178e00de` (refused with the "narrower place" text). |
+| 7 | The runner's `status -` | Fixed in `178e00de` (`gui.rs`). |
+| 8 | The lookup opens the reported path | Fixed in `178e00de`. |
+| 9 | Three claimed checks untested | Mutations killed in `178e00de`; the `zoraya-shell` mutation run is reported in the part report. |
+| 10 | Documents say the delivery is not built | Corrected in `178e00de` and `945c088b`. |
+| 11 to 13 | Notes | Recorded in `docs/backlog.md` (the part 10f leftovers), not fixed. |
