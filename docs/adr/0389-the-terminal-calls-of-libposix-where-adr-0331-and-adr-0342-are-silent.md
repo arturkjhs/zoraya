@@ -1,6 +1,6 @@
 # ADR-0389: The terminal calls of `libposix` where ADR-0331 and ADR-0342 are silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-15
 - **Depends on:** ADR-0105, ADR-0302, ADR-0331, ADR-0333, ADR-0338, ADR-0342, ADR-0386, ADR-0387, ADR-0388, ADR-0398
 - **Evidence:** CP-27, stage-10/survey.md#the-name-devtty, stage-10/survey.md#what-ncurses-needs-from-libc, stage-10/survey.md#the-tty-service-as-built
@@ -180,4 +180,7 @@ connection, shared by the process's threads under the library's lock.
   `Read` of another thread.
 
 ## Architect's decision
-(Left empty for the architect.)
+
+Accepted 2026-11-18. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A.
