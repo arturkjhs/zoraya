@@ -1,0 +1,33 @@
+diff -ruN a/wrapper.c b/wrapper.c
+--- a/wrapper.c
++++ b/wrapper.c
+@@ -544,8 +544,29 @@
+ 	for (count = 0; count < TMP_MAX; ++count) {
+ 		int i;
+ 		uint64_t v;
++#ifdef __zoraya__
++		if (csprng_bytes(&v, sizeof(v), 0) < 0) {
++			/*
++			 * Zoraya (ADR-0464 item 3): a child of git's transport helper (index-pack under
++			 * fetch-pack) has no random service: the service shares one level below a
++			 * program's own connection only (ADR-0435). The name of a temporary file need
++			 * only be new, and O_CREAT | O_EXCL below decides that, so it is made of the
++			 * clock, the process and a counter.
++			 */
++			static uint64_t counter;
++			struct timespec ts;
++
++			clock_gettime(CLOCK_MONOTONIC, &ts);
++			v = (uint64_t)ts.tv_nsec * 6364136223846793005ULL +
++			    (uint64_t)ts.tv_sec * 1442695040888963407ULL +
++			    (uint64_t)getpid() * 2862933555777941757ULL +
++			    ++counter * 0x9e3779b97f4a7c15ULL;
++			v ^= v >> 29;
++		}
++#else
+ 		if (csprng_bytes(&v, sizeof(v), 0) < 0)
+ 			return error_errno("unable to get random bytes for temporary file");
++#endif
+ 
+ 		/* Fill in the random bits. */
+ 		for (i = 0; i < num_x; i++) {

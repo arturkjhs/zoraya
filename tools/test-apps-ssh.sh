@@ -64,8 +64,8 @@ chmod 600 "$root_gui/data/netroom/ssh/id_ed25519"
 # program's HOME do not follow it.
 mkdir -p "$root/u"
 printf 'shell.home = /u\n' >> "$root/config/settings"
-target/debug/zoraya-mkfs --size 64M --from "$root" "$disk"
-target/debug/zoraya-mkfs --size 64M --from "$root_gui" "$disk_gui"
+target/debug/zoraya-mkfs --size 128M --from "$root" "$disk"
+target/debug/zoraya-mkfs --size 128M --from "$root_gui" "$disk_gui"
 sed -e "s/@HOST@/$NET_HOST/g" -e "s/@PA@/$pa/g" -e "s/@PB@/$pb/g" -e "s/@USER@/$user/g" -e "s|@FPB@|$fpb|g" \
 	"$template" > "$script"
 

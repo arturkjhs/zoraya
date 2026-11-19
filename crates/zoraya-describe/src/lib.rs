@@ -86,10 +86,14 @@ pub enum Kind {
     /// not read for options (`ssh HOST COMMAND...`, ADR-0340 item 4). Not a
     /// path; only the last operand, which takes several.
     Rest,
+    /// A directory to make, with everything in it (`git init DIR`, `git
+    /// clone URL DIR`; ADR-0339 item 3): the parent narrowed to the name,
+    /// where a directory of that name may be created, and all inside it.
+    CreateTree,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Read,
         Kind::Write,
         Kind::Create,
@@ -101,6 +105,7 @@ impl Kind {
         Kind::Url,
         Kind::Host,
         Kind::Rest,
+        Kind::CreateTree,
     ];
 
     pub fn parse(word: &str) -> Option<Kind> {
@@ -121,6 +126,7 @@ impl Kind {
             Kind::Url => "url",
             Kind::Host => "host",
             Kind::Rest => "rest",
+            Kind::CreateTree => "create-tree",
         }
     }
 
@@ -138,6 +144,7 @@ impl Kind {
             Kind::Url => "host and port reached",
             Kind::Host => "host reached",
             Kind::Rest => "taken as it is",
+            Kind::CreateTree => "created, with all in it",
         }
     }
 
@@ -234,6 +241,29 @@ pub struct Names {
     pub option: usize,
     /// Index into [`Description::operands`]: the URL operand.
     pub operand: usize,
+}
+
+/// `derive TARGET FROM CUT` (ADR-0464): when the optional operand TARGET is
+/// not written, the command makes a directory named after the URL operand
+/// FROM, as `git clone URL` does: the last segment ([`url_file_name`]) with
+/// a final CUT removed. The shell works the name out itself and designates it
+/// (ADR-0339 item 3); a name it cannot be sure of refuses the line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Derive {
+    /// Index into [`Description::operands`]: the operand left out.
+    pub target: usize,
+    /// Index into [`Description::operands`]: the URL operand.
+    pub from: usize,
+    /// The suffix cut from the name (`.git`).
+    pub cut: String,
+}
+
+/// The directory name `git clone URL` makes, by [`Derive`]'s rule: `None`
+/// when the name is not plain or is empty or hidden after the cut.
+pub fn url_dir_name<'a>(url: &'a str, cut: &str) -> Option<&'a str> {
+    let name = url_file_name(url)?;
+    let name = name.strip_suffix(cut).unwrap_or(name);
+    (!name.is_empty() && !name.starts_with('.')).then_some(name)
 }
 
 /// The file name a command that saves "under the remote name" would use for
@@ -555,6 +585,15 @@ pub struct Description {
     pub reach: Option<Reach>,
     /// `data` (see [`Data`]).
     pub data: Option<Data>,
+    /// `derive` (see [`Derive`]).
+    pub derive: Option<Derive>,
+    /// `repository` (ADR-0339 item 2): the shell looks for the repository of
+    /// the current directory (or of `-C DIR`) in its own table and gives it.
+    /// Honoured for the system image's descriptions only.
+    pub repository: bool,
+    /// `sub WORD` (ADR-0464): this description is the form of `program`'s
+    /// first word `WORD` (`git clone`); the shell parses the words after it.
+    pub sub: Option<String>,
     /// `window TITLE` (ADR-0317): a POSIX program that opens one window; the
     /// title is what the compositor shows until the program sets its own. The
     /// shell honours it for a trusted room only.
@@ -584,6 +623,9 @@ impl Description {
             net_web: false,
             reach: None,
             data: None,
+            derive: None,
+            repository: false,
+            sub: None,
             window: None,
             exits: Vec::new(),
             settings: Vec::new(),
@@ -1003,6 +1045,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
     let mut seen_question = false;
     let mut seen_program = false;
     let mut reach_raw: Option<(usize, String, u16, Option<String>)> = None;
+    let mut derive_raw: Option<(usize, String, String, String)> = None;
     let mut whens_raw: Vec<(usize, String, String, Kind)> = Vec::new();
     let mut names_raw: Vec<(usize, String, String)> = Vec::new();
     let mut lines = text.split('\n').enumerate().map(|(i, l)| (i + 1, l));
@@ -1213,6 +1256,43 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                     read,
                 });
             }
+            "derive" => {
+                if derive_raw.is_some() {
+                    return err(number, "derive is given once");
+                }
+                let usage = "derive needs TARGET FROM CUT";
+                let Some((target, r1)) = next_word(rest) else {
+                    return err(number, usage);
+                };
+                let Some((from, r2)) = next_word(r1) else {
+                    return err(number, usage);
+                };
+                let Some((cut, "")) = next_word(r2) else {
+                    return err(number, usage);
+                };
+                derive_raw = Some((number, target.into(), from.into(), cut.into()));
+            }
+            "repository" => {
+                if !rest.is_empty() {
+                    return err(number, "repository takes no words");
+                }
+                if d.repository {
+                    return err(number, "repository is given once");
+                }
+                d.repository = true;
+            }
+            "sub" => {
+                if d.sub.is_some() {
+                    return err(number, "sub is given once");
+                }
+                let Some((word, "")) = next_word(rest) else {
+                    return err(number, "sub needs one word");
+                };
+                if !is_command_name(word) {
+                    return err(number, "a sub word is lower-case letters, digits and -");
+                }
+                d.sub = Some(word.into());
+            }
             "window" => {
                 if d.window.is_some() {
                     return err(number, "window is given once");
@@ -1286,7 +1366,10 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             || d.needs_net_status
             || d.net_web
             || reach_raw.is_some()
+            || derive_raw.is_some()
             || d.data.is_some()
+            || d.repository
+            || d.sub.is_some()
             || d.window.is_some()
             || !d.exits.is_empty()
             || !d.settings.is_empty();
@@ -1295,6 +1378,25 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
         }
     } else if d.usage.is_empty() {
         return err(0, "a command needs a usage line");
+    }
+    if let Some((number, target, from, cut)) = derive_raw {
+        let (Some(t), Some(f)) = (d.operand_by_name(&target), d.operand_by_name(&from)) else {
+            return err(number, "derive names an operand the description lacks");
+        };
+        if d.operands[t].arity != Arity::Optional || d.operands[t].kind != Kind::CreateTree {
+            return err(
+                number,
+                "derive needs an optional create-tree operand to leave out",
+            );
+        }
+        if d.operands[f].kind != Kind::Url || d.operands[f].arity != Arity::One {
+            return err(number, "derive needs a url operand that takes one word");
+        }
+        d.derive = Some(Derive {
+            target: t,
+            from: f,
+            cut,
+        });
     }
     if let Some((number, operand, port, option)) = reach_raw {
         let Some(p) = d.operand_by_name(&operand) else {

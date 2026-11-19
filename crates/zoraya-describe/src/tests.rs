@@ -986,3 +986,58 @@ fn for_volume_makes_every_kind_text_and_drops_authority() {
     assert!(d.data.is_none() && !d.net_web && !d.needs_net_status);
     assert_eq!(d.name, "ed");
 }
+
+/// ADR-0339 and ADR-0464: `repository`, `sub`, `derive` and the `create-tree` kind.
+#[test]
+fn the_git_keys_parse_and_refuse() {
+    let d = header(
+        "repository\nsub clone\noperand U url u\noperand [D] create-tree d\nderive D U .git\n---\n",
+    );
+    assert!(d.repository);
+    assert_eq!(d.sub.as_deref(), Some("clone"));
+    let dv = d.derive.as_ref().unwrap();
+    assert_eq!((dv.target, dv.from, dv.cut.as_str()), (1, 0, ".git"));
+    assert_eq!(d.operands[1].kind, Kind::CreateTree);
+    assert_eq!(Kind::parse("create-tree"), Some(Kind::CreateTree));
+    assert!(Kind::CreateTree.is_path());
+    assert!(!header("---\n").repository);
+    assert_eq!(
+        problem("repository now\n---\n"),
+        "repository takes no words"
+    );
+    assert_eq!(
+        problem("repository\nrepository\n---\n"),
+        "repository is given once"
+    );
+    assert_eq!(problem("sub\n---\n"), "sub needs one word");
+    assert_eq!(problem("sub A B\n---\n"), "sub needs one word");
+    assert_eq!(
+        problem("sub Clone\n---\n"),
+        "a sub word is lower-case letters, digits and -"
+    );
+    assert_eq!(problem("sub a\nsub b\n---\n"), "sub is given once");
+    assert_eq!(problem("derive D U\n---\n"), "derive needs TARGET FROM CUT");
+    assert_eq!(
+        problem("operand U url u\nderive D U .git\n---\n"),
+        "derive names an operand the description lacks"
+    );
+    assert_eq!(
+        problem("operand U url u\noperand D create-tree d\nderive D U .git\n---\n"),
+        "derive needs an optional create-tree operand to leave out"
+    );
+    assert_eq!(
+        problem("operand U read u\noperand [D] create-tree d\nderive D U .git\n---\n"),
+        "derive needs a url operand that takes one word"
+    );
+    for key in ["repository", "sub clone", "derive D U .git"] {
+        let t = refused(&format!("topic t\nsummary s\n{key}\n---\n"));
+        assert_eq!(t.problem, "a topic has only a summary and a body", "{key}");
+    }
+    // The name the shell makes for `git clone URL`.
+    assert_eq!(url_dir_name("https://h.org/a/p.git", ".git"), Some("p"));
+    assert_eq!(url_dir_name("https://h.org/a/p", ".git"), Some("p"));
+    assert_eq!(url_dir_name("https://h.org/a/p.git?x=1", ".git"), Some("p"));
+    assert_eq!(url_dir_name("https://h.org/a/.git", ".git"), None);
+    assert_eq!(url_dir_name("https://h.org/a/", ".git"), None);
+    assert_eq!(url_dir_name("https://h.org/a/.x", ".git"), None);
+}

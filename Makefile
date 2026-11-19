@@ -702,6 +702,9 @@ APPS_RUN = $(RUNNER) --timeout $(1) --script $(4) --label $(2) -- $(RUN_QEMU) --
 # ssh and ssh-keygen against two servers of the host (TASK-31 10g; ADR-0340 item 10): tools/test-apps-ssh.sh.
 APPS_SSH_RUN = RUNNER="$(RUNNER)" RUN_QEMU="$(RUN_QEMU)" HTTPD="$(HTTPD)" KERNEL="$(KERNEL)" NET_HOST=$(NET_HOST) \
 	ROOT_FROM=$(APPS_TEST_ROOT) TIMEOUT=$(QEMU_SLOW_TIMEOUT) BUILD=$(BUILD) ACCEL=auto tools/test-apps-ssh.sh
+# git over https against the host's `git http-backend` behind the test server (TASK-31 10h; ADR-0339, ADR-0461): tools/test-apps-git.sh.
+APPS_GIT_RUN = RUNNER="$(RUNNER)" RUN_QEMU="$(RUN_QEMU)" HTTPD="$(HTTPD)" KERNEL="$(KERNEL)" NET_HOST=$(NET_HOST) \
+	ROOT_FROM=$(APPS_TEST_ROOT) TIMEOUT=$(QEMU_SLOW_TIMEOUT) BUILD=$(BUILD) ACCEL=auto tools/test-apps-git.sh
 APPS_LAUNCHES := tests/shell/apps-launches.script
 APPS_LAUNCHES_RUN = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(APPS_LAUNCHES) --label apps-launches -- $(RUN_QEMU) --test --keys --disk $(APPS_DISK) --mem 128M --accel auto $(KERNEL)
 
@@ -714,7 +717,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	mkdir -p $(APPS_TEST_ROOT)/etc/test-pki/hashed && cp tests/net/tls/other-root.pem $(APPS_TEST_ROOT)/etc/test-pki/ && \
 	cp tests/net/tls/hashed/24824ecf.0 $(APPS_TEST_ROOT)/etc/test-pki/hashed/ && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(APPS_TEST_ROOT)/bin && \
-	target/debug/zoraya-mkfs --size 64M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
+	target/debug/zoraya-mkfs --size 128M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
 	: > $(APPS_HTTP_READY) && : > $(APPS_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime $(APPS_LIFETIME) --ready-file $(APPS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(APPS_TLS_READY) > target/test-logs/test-httpd-apps.log 2>&1 & echo $$! > $(BUILD)/apps-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/apps-httpd.pid); \
@@ -734,6 +737,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then $(APPS_LAUNCHES_RUN); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then $(APPS_SSH_RUN); rc=$$?; fi; \
+	if [ $$rc = 0 ]; then $(APPS_GIT_RUN); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \
 		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd-apps.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-apps.log \
 		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-apps.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-apps.log \
@@ -1729,6 +1733,8 @@ check-term-width:
 check-fetch-ports:
 	ports/test-fetch.sh
 	tools/check-fetch-cache.sh
+	@# INV-0461-3: every pin has a row in docs/dependencies.md, with the licence option of mbedTLS.
+	tools/check-dependencies.sh
 
 # INV-0390-2: nvi's build log has one zcc line per object under dash's `sh -x` (check-early.sh counts them).
 check-port-logs:

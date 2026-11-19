@@ -17,6 +17,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
 | ADR-0394 | 10j: what the installed-program part decided where ADR-0396, 0397 and 0399 are silent (the record's date, the name's form, the copy, a typed word, what a hand-edited record may do, `--kill`), and what it did not build: the Programs page of `settings` (INV-0399-4) and INV-0397-6's grant-line script | Option A now; the page as Option C, a part of its own (the panel writes the record through `zoraya_settings::apps`) | 10j |
+| ADR-0464 | What 10h decided: forms of `git` (`sub`), the clone directory (`derive`), only the transport helper has a connection, the ceiling, ancestors of an entry not reported, a child keeps the write of a `+w` entry | Option A (as built); NOT MERGED: see `docs/tasks/TASK-31-review-10h.md` | `work/10h`, TASK-31 |
 | ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 44), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 
@@ -68,6 +69,9 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 4. **10f's row, grant line and kill offer:** the commands are in `docs/tasks/TASK-31-part-10f.md`, "Hand checks", for a first terminal, a room's own terminal and a shell that entered a room.
 5. **Later parts:** 10g's `ssh -l NAME HOST`
    to a real host, 10h's `git clone` and `git push`: commands will be listed with the part.
+
+- **10h, open decisions (ADR-0464):** the ancestor rule applies to every POSIX program (INV-0153-7 narrowed); hooks of git have no network (narrower than ADR-0339 item 5); a proposed text for ADR-0461 about the git test root.
+- **10h (git), not merged:** hand-check commands are in `docs/tasks/TASK-31-part-10h.md` (a clone and a push against a real host). Open review findings there.
 
 ## D. Open questions
 

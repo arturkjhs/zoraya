@@ -76,6 +76,9 @@ zoraya_user::describe!("system", "zosh");
 
 /// The connections a POSIX program may hold open at once (ADR-0262 item 2).
 const POSIX_NET_BUDGET: u32 = 2;
+/// git's account: git and the transport helper it starts hold one connection each (ADR-0339 item 7 assumed two
+/// were enough: they are), and one more is slack for a second helper (a redirect that restarts it).
+const GIT_NET_BUDGET: u32 = 3;
 
 /// The roots every native program with a network grant may read (ADR-0228
 /// item 3; the `tls.roots` setting of ADR-0229 is not built, so the path is
@@ -507,6 +510,11 @@ enum Ready {
         /// The program has an own directory (ADR-0341): its `HOME` is the
         /// user database's home, which that directory sits under.
         own_home: bool,
+        /// `GIT_CEILING_DIRECTORIES` for a description with `repository`
+        /// (ADR-0339 item 2): where git's own search for `.git` ends.
+        // Boxed so that this variant stays within clippy's large-variant bound; a `Box<str>` is not small enough.
+        #[allow(clippy::box_collection)]
+        ceiling: Option<Box<String>>,
     },
 }
 
@@ -805,6 +813,9 @@ struct Z {
     /// The jobs, and the notices waiting for the next prompt (ADR-0158).
     jobs: Jobs<Job>,
     descriptions: BTreeMap<String, Rc<Description>>,
+    /// `GIT_CEILING_DIRECTORIES` for the line being planned, when its
+    /// description has `repository` (ADR-0339 item 2): set by `posix_plan`.
+    git_ceiling: Option<String>,
     found: BTreeMap<String, Found>,
     outputs: BTreeMap<u32, Output>,
     next_output: u32,
@@ -1196,7 +1207,7 @@ impl Z {
         room: Option<&zoraya_settings::rooms::Room>,
     ) -> Result<Option<(u32, Vec<u8>)>, String> {
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        let parsed = match zoraya_command::parse(d, &texts) {
+        let parsed = match zoraya_command::parse(d, grants::words_of(d, &texts)) {
             Ok(zoraya_command::Outcome::Run(p)) => p,
             _ => zoraya_command::Parsed::default(),
         };
@@ -1239,7 +1250,8 @@ impl Z {
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
             .collect();
-        let Some(d) = grants::trusted_description(&trusted, path) else {
+        let words: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let Some(d) = grants::trusted_description_args(&trusted, path, &words) else {
             return Ok(None);
         };
         // untrusted-gate: web-refusal-call (the native path above has its own)
@@ -1288,11 +1300,20 @@ impl Z {
         let Some(root) = self.net else {
             return Ok(None);
         };
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let words: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let budget = match grants::trusted_description_args(&trusted, path, &words) {
+            Some(d) if grants::reads_its_own_words(d) => GIT_NET_BUDGET,
+            _ => POSIX_NET_BUDGET,
+        };
         // At the limit (the network service carves a few accounts at once,
         // session-wide) or when the room's connection refuses a wider scope, the
         // line is refused with the reason, not run without a connection
         // (review of 10g, finding 2).
-        zoraya_user::netclient::narrow_room(root, rights, POSIX_NET_BUDGET, &scope, &room)
+        zoraya_user::netclient::narrow_room(root, rights, budget, &scope, &room)
             .map(Some)
             .map_err(|status| {
                 let (problem, hint) = zoraya_shell::netgrant::connection_refusal(
@@ -1311,7 +1332,7 @@ impl Z {
         base: bool,
     ) -> Result<Vec<grants::Planned>, String> {
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        let parsed = match zoraya_command::parse(d, &texts) {
+        let parsed = match zoraya_command::parse(d, grants::words_of(d, &texts)) {
             Ok(zoraya_command::Outcome::Run(p)) => p,
             // `--help` or a usage mistake: the program says so; it needs
             // nothing but the current directory.
@@ -1922,6 +1943,7 @@ impl Z {
             }
         };
         let given = grants::summary(&plan, &self.home());
+        let ceiling = self.git_ceiling.take().map(Box::new);
         Ok((
             Ready::Posix {
                 image,
@@ -1935,6 +1957,7 @@ impl Z {
                 net,
                 window,
                 own_home,
+                ceiling,
             },
             given,
         ))
@@ -1972,11 +1995,11 @@ impl Z {
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
             .collect();
-        let Some(d) = grants::trusted_description(&trusted, path) else {
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let Some(d) = grants::trusted_description_args(&trusted, path, &texts) else {
             return Ok(());
         };
-        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        if zoraya_shell::netgrant::line_may_run(d, &texts) {
+        if zoraya_shell::netgrant::line_may_run(d, grants::words_of(d, &texts)) {
             return Ok(());
         }
         Err(zoraya_command::error(
@@ -2071,7 +2094,8 @@ impl Z {
         let own = if let Some(saved) = self.saved(exec.name) {
             saved.own
         } else {
-            let Some(d) = grants::trusted_description(&trusted, path) else {
+            let words: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+            let Some(d) = grants::trusted_description_args(&trusted, path, &words) else {
                 return Ok(None);
             };
             let room = self.room.as_ref().map(|r| r.name.as_str());
@@ -2117,9 +2141,9 @@ impl Z {
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
             .collect();
-        let d = grants::trusted_description(&trusted, path)?;
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        grants::end_of_options_at(d, &texts)
+        let d = grants::trusted_description_args(&trusted, path, &texts)?;
+        grants::end_of_options_at(d, grants::words_of(d, &texts))
     }
 
     /// A connection to the own directory `own`, made when the program first
@@ -2164,7 +2188,15 @@ impl Z {
         }
         for i in have..parts.len() {
             let parent = parts[..i].join("/");
-            let dir = root.open(&parent, OPEN_DIRECTORY, all).map_err(fail)?;
+            // The first level is made in `/` itself, which no path names (`open("")` is not a
+            // directory name): a volume that has no `/data` yet gets it from the first program
+            // with an own directory (TASK-31 10h; 10g's test made the levels beforehand).
+            let dir = if parent.is_empty() {
+                root.clone_as(all)
+            } else {
+                root.open(&parent, OPEN_DIRECTORY, all)
+            }
+            .map_err(fail)?;
             dir.make_directory(parts[i]).map_err(fail)?;
         }
         root.open(rel, OPEN_DIRECTORY, wanted).map_err(fail)
@@ -2178,11 +2210,22 @@ impl Z {
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
             .collect();
-        match grants::trusted_description(&trusted, path) {
+        let words: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        self.git_ceiling = None;
+        match grants::trusted_description_args(&trusted, path, &words) {
             Some(d) => {
                 let d = d.clone();
                 Self::userland_options(exec, &d)?;
-                self.plan_with(exec, &d, true)
+                let mut plan = self.plan_with(exec, &d, true)?;
+                let home = self.home();
+                zoraya_shell::repository::create_tree_target(&plan, &home).map_err(|r| {
+                    let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+                    zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
+                })?;
+                if d.repository {
+                    self.add_repository(exec, &d, &mut plan)?;
+                }
+                Ok(plan)
             }
             None => {
                 let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes())
@@ -2194,6 +2237,78 @@ impl Z {
                 Ok(plan)
             }
         }
+    }
+
+    /// The repository of the line (ADR-0339 item 2, `zoraya_shell::repository`):
+    /// looked for from the current directory, or from `-C DIR`, inside the shell's
+    /// own table, and given with the rights the shell holds there. A refusal
+    /// stops the line before the program starts. Sets `git_ceiling`.
+    fn add_repository(
+        &mut self,
+        exec: &Exec<'_>,
+        d: &Description,
+        plan: &mut Vec<grants::Planned>,
+    ) -> Result<(), String> {
+        use zoraya_shell::repository::{Held as Rights, Probe};
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        // git applies each -C in turn; the shell searches from one directory (review of 10h, finding 4).
+        if let Ok(zoraya_command::Outcome::Run(p)) =
+            zoraya_command::parse(d, grants::words_of(d, &texts))
+            && let Some(c) = d.option_by_short('C')
+        {
+            let count = p.options.iter().filter(|(o, _)| *o == c).count();
+            zoraya_shell::repository::one_directory(count).map_err(|r| {
+                let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+                zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
+            })?;
+        }
+        let start = match zoraya_command::parse(d, grants::words_of(d, &texts)) {
+            Ok(zoraya_command::Outcome::Run(p)) => d
+                .option_by_short('C')
+                .and_then(|c| p.options.iter().rev().find(|(o, _)| *o == c))
+                .and_then(|(_, v)| *v)
+                .map(|dir| zoraya_resolve::join(&self.cwd, 0, dir))
+                .unwrap_or_else(|| self.cwd.clone()),
+            _ => self.cwd.clone(),
+        };
+        let home = Z::home(self);
+        let Some(root) = self.root.as_ref() else {
+            return Ok(());
+        };
+        let probe = |dir: &str| {
+            let git = format!("{}/.git", dir.trim_end_matches('/'));
+            match root.open(
+                git.trim_start_matches('/'),
+                0,
+                file_rights::READ | file_rights::CLONE,
+            ) {
+                Ok(f) => match f.stat() {
+                    Ok(s) if s.kind == proto_kind::DIRECTORY => Probe::Directory,
+                    Ok(_) => Probe::File,
+                    Err(_) => Probe::Nothing,
+                },
+                Err(zoraya_proto_file::status::IS_LINK) => Probe::File,
+                Err(_) => Probe::Nothing,
+            }
+        };
+        let held = |dir: &str| {
+            if root.covers(dir, true) {
+                Rights::Write
+            } else if root.covers(dir, false) {
+                Rights::Read
+            } else {
+                Rights::No
+            }
+        };
+        let found = zoraya_shell::repository::find(&start, &home, &probe, &held).map_err(|r| {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
+        })?;
+        if let Some(entry) = found.entry {
+            plan.push(entry);
+        }
+        self.git_ceiling = Some(found.ceiling);
+        Ok(())
     }
 
     /// ADR-0336 item 5: the options a userland command's description lists
@@ -2216,11 +2331,17 @@ impl Z {
         if !userland && d.reach.is_none() && d.data.is_none() {
             return Ok(());
         }
-        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let all: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let texts = grants::words_of(d, &all);
+        // git reads long options as well as short ones (ADR-0464): its descriptions list both.
+        let reads_long = grants::reads_its_own_words(d);
         // The program reads short options only: a long form is refused with
         // the short one named, so `grants` never states what the program
         // would not do (review of 10g, finding 7).
-        if !userland && let Some((word, short)) = grants::long_option_used(d, &texts) {
+        if !userland
+            && !reads_long
+            && let Some((word, short)) = grants::long_option_used(d, texts)
+        {
             let hint = if short.is_empty() {
                 format!("help {} lists what its description lets through", d.name)
             } else {
@@ -2233,7 +2354,7 @@ impl Z {
                 &[hint.as_str()],
             ));
         }
-        let parsed = zoraya_command::parse(d, &texts);
+        let parsed = zoraya_command::parse(d, texts);
         // `--help` with other words reaches the program, whose own option
         // reading refuses them: not the shell's refusal (finding 13).
         if !userland && matches!(parsed, Ok(zoraya_command::Outcome::Help)) && texts.len() > 1 {
@@ -4230,10 +4351,19 @@ impl Z {
         } else {
             format!("/bin/{name}")
         };
-        descriptions::POSIX
+        let all: Vec<Description> = descriptions::POSIX
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
-            .find(|d| d.program.as_deref() == Some(path.as_str()))
+            .collect();
+        // A form of a program (`help git-clone`, ADR-0464) is named by its own name; the program's page is the
+        // description that is not a form.
+        all.iter()
+            .find(|d| d.sub.is_some() && d.name == name)
+            .or_else(|| {
+                all.iter()
+                    .find(|d| d.sub.is_none() && d.program.as_deref() == Some(path.as_str()))
+            })
+            .cloned()
     }
 
     fn help(&mut self, state: &State, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
@@ -6108,6 +6238,7 @@ impl Host for Z {
                         net,
                         window,
                         own_home,
+                        ceiling,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
@@ -6155,6 +6286,13 @@ impl Host for Z {
                             crate::terminal().is_some(),
                             &self.setting("console.term"),
                         );
+                        // git's own search for `.git` ends where the shell's does
+                        // (ADR-0339 item 2): a line cannot choose another ceiling.
+                        let mut env = env;
+                        if let Some(ceiling) = &ceiling {
+                            env.retain(|v| !v.starts_with("GIT_CEILING_DIRECTORIES="));
+                            env.push(format!("GIT_CEILING_DIRECTORIES={ceiling}"));
+                        }
                         let env: Vec<&[u8]> = env.iter().map(|v| v.as_bytes()).collect();
                         let launch = posix_child::Launch {
                             line_job: job,
@@ -6693,6 +6831,7 @@ fn main() -> i32 {
         port,
         jobs: Jobs::default(),
         descriptions: BTreeMap::new(),
+        git_ceiling: None,
         found: BTreeMap::new(),
         outputs: BTreeMap::new(),
         next_output: 0,

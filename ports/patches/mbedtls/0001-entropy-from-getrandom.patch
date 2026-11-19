@@ -1,0 +1,28 @@
+--- a/library/entropy_poll.c
++++ b/library/entropy_poll.c
+@@ -68,6 +68,25 @@
+ 
+     return 0;
+ }
++#elif defined(__zoraya__)
++/* Zoraya (ADR-0461, ADR-0310 item 5): the only entropy source is getrandom.
++ * No device file is opened and none is named in the program. */
++#include <sys/random.h>
++
++int mbedtls_platform_entropy_poll(void *data,
++                                  unsigned char *output, size_t len, size_t *olen)
++{
++    ssize_t n;
++    ((void) data);
++
++    *olen = 0;
++    n = getrandom(output, len, 0);
++    if (n < 0) {
++        return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
++    }
++    *olen = (size_t) n;
++    return 0;
++}
+ #else /* _WIN32 && !EFIX64 && !EFI32 */
+ 
+ /*

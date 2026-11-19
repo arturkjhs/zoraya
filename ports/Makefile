@@ -66,7 +66,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl mbedtls curl-mbedtls curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	ncurses less db1 nvi openssh git dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -444,12 +444,8 @@ $(NCURSES_LIBS): $(NCURSES) $(SYSROOT_STAMP) ports/config.site
 # the patch's: no history file, no key files, no tags, no input preprocessor.
 # The terminal's names (tcsetattr, tcflush, cfgetospeed, select, ...) come
 # from libc.a since part 10c, and creat and sleep since part 10d (ADR-0391):
-# ports/apps/ttyshim.c, which stood in for them, is gone.
-GITSHIM := $(PORTS)/ttyshim/libgitshim.a
-$(GITSHIM): ports/apps/gitshim.c $(SYSROOT_STAMP)
-	@mkdir -p $(dir $@) $(OBJ)/apps
-	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/gitshim.o ports/apps/gitshim.c
-	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/gitshim.o
+# ports/apps/ttyshim.c, which stood in for them, is gone. git's four names (alarm, getnameinfo, statvfs, execlp)
+# are patched out (ports/patches/git/0005-*), so ports/apps/gitshim.c is gone too (part 10h, ADR-0347).
 
 SSHSHIM := $(PORTS)/ttyshim/libsshshim.a
 $(SSHSHIM): ports/apps/sshshim.c $(SYSROOT_STAMP)
@@ -872,13 +868,65 @@ $(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.si
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/src -j3 V=1,wget)
 	@touch $@
 
+# ---------------------------------------------------------------- mbedTLS and the libcurl behind git (TASK-31 10h, ADR-0461)
+
+# git is GPL-2.0-only and OpenSSL is Apache-2.0, which it cannot link (ADR-0461), so git-remote-http links a
+# second libcurl, built on mbedTLS 3.6 LTS under its GPL-2.0-or-later option, and nothing else does. Static,
+# TLS 1.2 and 1.3 as a client only (no server, no DTLS, no sockets of its own, no timing or self-test code, no
+# threading, no assembly or intrinsics: zcc has no arm_neon.h, so -U__ARM_NEON; -D__unix__ because the library tests it
+# for its Unix code, which Zoraya's libc offers: unistd.h, gmtime_r), the entropy is getrandom alone (ports/patches/mbedtls/0001-*). The libraries and headers go into
+# $(MBED_DEPS), never beside OpenSSL's in $(DEPS). The roots are /system/tls/roots as for the curl port.
+MBEDTLS := $(WORK)/mbedtls-$(call lock_ver,mbedtls)
+MBED_DEPS := $(PORTS)/deps-mbedtls
+MBEDTLS_UNSET := MBEDTLS_NET_C MBEDTLS_TIMING_C MBEDTLS_SSL_SRV_C MBEDTLS_SSL_PROTO_DTLS MBEDTLS_SSL_DTLS_ANTI_REPLAY \
+	MBEDTLS_SSL_DTLS_HELLO_VERIFY MBEDTLS_SSL_DTLS_CLIENT_PORT_REUSE MBEDTLS_SSL_DTLS_CONNECTION_ID MBEDTLS_SSL_DTLS_SRTP \
+	MBEDTLS_SSL_COOKIE_C MBEDTLS_SSL_CACHE_C MBEDTLS_SSL_TICKET_C MBEDTLS_SELF_TEST MBEDTLS_PSA_ITS_FILE_C \
+	MBEDTLS_AESCE_C MBEDTLS_AESNI_C MBEDTLS_PADLOCK_C MBEDTLS_PSA_CRYPTO_STORAGE_C MBEDTLS_THREADING_C MBEDTLS_THREADING_PTHREAD MBEDTLS_DEBUG_C MBEDTLS_MEMORY_BUFFER_ALLOC_C
+mbedtls: $(MBED_DEPS)/lib/libmbedtls.a
+$(MBEDTLS): $(LOCK) $(wildcard ports/patches/mbedtls/*.patch)
+	$(call unpack,mbedtls,ports/patches/mbedtls)
+	@touch $@
+MBEDTLS_STAMP := $(WORK)/mbedtls-config.stamp
+MBEDTLS_CONFIG = $(MBEDTLS_UNSET) / $(APPS_CFLAGS) / $(shell cat $(sort $(wildcard ports/patches/mbedtls/*.patch)) | cksum)
+$(MBEDTLS_STAMP): FORCE
+	@mkdir -p $(WORK)
+	@printf '%s\n' '$(MBEDTLS_CONFIG)' > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+$(MBED_DEPS)/lib/libmbedtls.a: $(MBEDTLS) $(MBEDTLS_STAMP) $(SYSROOT_STAMP)
+	@mkdir -p $(MBED_DEPS)/lib $(MBED_DEPS)/include
+	@cd $(MBEDTLS) && for n in $(MBEDTLS_UNSET); do \
+	  python3 scripts/config.py unset $$n || exit 1; done
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(MBEDTLS)/library clean,mbedtls-clean)
+	@# mbedTLS's makefile is silent (.SILENT): a wrapper puts each compile line, which names zcc, in the log (INV-0143-1's check).
+	printf '#!/bin/sh\necho "$(ZCC) $$*"\nexec $(ZCC) "$$@"\n' > $(PORTS)/mbedtls-cc && chmod +x $(PORTS)/mbedtls-cc
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(MBEDTLS)/library -j3 CC=$(PORTS)/mbedtls-cc AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	  CFLAGS="$(APPS_CFLAGS) -U__ARM_NEON -D__unix__" WARNING_CFLAGS= static,mbedtls)
+	rm -rf $(MBED_DEPS)/include/mbedtls $(MBED_DEPS)/include/psa
+	cp -R $(MBEDTLS)/include/mbedtls $(MBEDTLS)/include/psa $(MBED_DEPS)/include/
+	cp $(MBEDTLS)/library/libmbedtls.a $(MBEDTLS)/library/libmbedx509.a $(MBEDTLS)/library/libmbedcrypto.a $(MBED_DEPS)/lib/
+	@touch $@
+
+# The second libcurl: the curl port's own options with mbedTLS in place of OpenSSL; only its library is built.
+CURL_MBED := $(WORK)/curl-mbedtls-$(call lock_ver,curl)
+CURL_MBED_OPTS := $(subst --with-openssl=$(DEPS),--with-mbedtls=$(MBED_DEPS),$(CURL_OPTS))
+curl-mbedtls: $(CURL_MBED)/lib/.libs/libcurl.a
+$(CURL_MBED): $(LOCK) $(wildcard ports/patches/curl/*.patch)
+	$(call unpack,curl,ports/patches/curl)
+	@touch $@
+$(CURL_MBED)/lib/.libs/libcurl.a: $(CURL_MBED) $(MBED_DEPS)/lib/libmbedtls.a $(DEPS)/lib/libzshim.a ports/config.site
+	@cd $(CURL_MBED) && $(call logged,$(CROSS_ENV) ac_cv_func_getpwuid=no ac_cv_func_getpwuid_r=no ./configure --host=aarch64-unknown-zoraya \
+	  --disable-socketpair $(CURL_MBED_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" LDFLAGS="-L$(MBED_DEPS)/lib -L$(DEPS)/lib" LIBS="-lzshim",curl-mbedtls-configure)
+	rm -f $@
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL_MBED)/lib -j3 V=1,curl-mbedtls)
+	@touch $@
+
 # ---------------------------------------------------------------- git (TASK-31 ports-early, ADR-0339)
 
 # git 2.56.1, GPL-2.0-only, a separate program in the image like wget. Built
 # with the switches of ADR-0339 item 1 (no Perl, Python, Tcl/Tk, gettext, iconv,
 # expat, mmap, Unix sockets or setitimer; NO_RUST: its Rust code is optional in
 # this release and the toolchain of a port is C), with zlib, the library of the
-# pinned curl (built above, ADR-0310) and the OpenSSL of ADR-0312 behind it.
+# second libcurl of ADR-0461 (built above, on mbedTLS: git is GPL-2.0-only and cannot link OpenSSL).
 # `git` and `git-remote-http` (which is also `git-remote-https`) only. git
 # builds in its source tree; its Makefile asks `uname` for the host, which is
 # the build host's, so the target's answers are given. Patches: ports/patches/git
@@ -897,19 +945,19 @@ $(GIT): $(LOCK) $(wildcard ports/patches/git/*.patch)
 	$(call unpack,git,ports/patches/git)
 	@touch $@
 # curl's headers and static library, where git's Makefile looks for them (CURLDIR).
-$(GIT_CURL)/lib/libcurl.a: $(CURL_BIN)
+$(GIT_CURL)/lib/libcurl.a: $(CURL_MBED)/lib/.libs/libcurl.a
 	rm -rf $(GIT_CURL) && mkdir -p $(GIT_CURL)/lib $(GIT_CURL)/include
-	cp $(CURL)/lib/.libs/libcurl.a $(GIT_CURL)/lib/
-	cp -R $(CURL)/include/curl $(GIT_CURL)/include/
-$(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a $(SSHSHIM) $(GITSHIM)
+	cp $(CURL_MBED)/lib/.libs/libcurl.a $(GIT_CURL)/lib/
+	cp -R $(CURL_MBED)/include/curl $(GIT_CURL)/include/
+$(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libzshim.a $(DEPS)/lib/libz.a
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) clean,git-clean)
 	@# git has two objects named fsck.o and two named tree.o in libgit.a, and zoraya-ar names a member by its base name: ports/git/ar.sh.
 	printf '#!/bin/sh\nexec sh $(ROOT)/ports/git/ar.sh $(TOOLBIN)/aarch64-unknown-zoraya-ar "$$@"\n' > $(PORTS)/git-ar && chmod +x $(PORTS)/git-ar
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GIT) -j3 V=1 CC=$(ZCC) AR=$(PORTS)/git-ar \
 	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib CFLAGS="$(APPS_CFLAGS)" $(GIT_OPTS) \
 	  CURLDIR=$(GIT_CURL) ZLIB_PATH=$(DEPS) \
-	  CURL_LIBCURL="-L$(GIT_CURL)/lib -lcurl -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim -lgitshim" \
-	  EXTLIBS="-L$(DEPS)/lib -lz -lzshim -lgitshim" \
+	  CURL_LIBCURL="-L$(GIT_CURL)/lib -lcurl -L$(MBED_DEPS)/lib -lmbedtls -lmbedx509 -lmbedcrypto -L$(DEPS)/lib -lz -lzshim" \
+	  EXTLIBS="-L$(DEPS)/lib -lz -lzshim" \
 	  LDFLAGS="-Wl$(comma)--error-limit=0" git git-remote-http,git)
 	@touch $(GIT_BINS)
 
@@ -918,15 +966,24 @@ $(GIT_BINS): $(GIT) $(SYSROOT_STAMP) $(GIT_CURL)/lib/libcurl.a $(DEPS)/lib/libss
 # (tools/run-disk.sh) is how an image takes them; their descriptions are
 # user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
 apps: $(APPS_STAMP)
-$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) ports/apps/etc/passwd ports/apps/etc/group
+$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) $(GIT_BINS) ports/git/gitconfig ports/apps/etc/passwd ports/apps/etc/group
 	mkdir -p $(APPS_ROOT)/bin
 	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
 	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
 	cp $(OPENSSH)/ssh $(APPS_ROOT)/bin/ssh
 	cp $(OPENSSH)/ssh-keygen $(APPS_ROOT)/bin/ssh-keygen
+	@# git (ADR-0339 item 1): /bin/git, and git-remote-http and -https where git looks for its helpers (its compiled-in exec
+	@# path, /usr/libexec/git-core: GIT_EXEC_PATH is not read, ADR-0347 item 3); no other command of git's is a file.
+	cp $(GIT)/git $(APPS_ROOT)/bin/git
+	mkdir -p $(APPS_ROOT)/usr/libexec/git-core
+	cp $(GIT)/git-remote-http $(APPS_ROOT)/usr/libexec/git-core/git-remote-http
+	cp $(GIT)/git-remote-http $(APPS_ROOT)/usr/libexec/git-core/git-remote-https
+	rm -rf $(APPS_ROOT)/usr/share/git-core/templates && mkdir -p $(APPS_ROOT)/usr/share/git-core
+	cp -R ports/git/templates $(APPS_ROOT)/usr/share/git-core/templates
 	@# OpenSSH's client needs a user-database entry (ADR-0342 item 7, ADR-0340 item 5): the image's one identity.
 	mkdir -p $(APPS_ROOT)/etc && cp ports/apps/etc/passwd ports/apps/etc/group $(APPS_ROOT)/etc/
-	$(ELF_CHECK) $(APPS_ROOT)/bin
+	cp ports/git/gitconfig $(APPS_ROOT)/etc/gitconfig
+	$(ELF_CHECK) $(APPS_ROOT)/bin $(APPS_ROOT)/usr/libexec/git-core
 	@echo "== no ssh server, agent or other OpenSSH tool in the image, (INV-0340-4)"
 	@for b in sshd sshd-session sshd-auth ssh-agent ssh-add ssh-keyscan ssh-keysign sftp scp sftp-server; do \
 	  if [ -e $(APPS_ROOT)/bin/$$b ]; then echo "$$b is in the image"; exit 1; fi; done
@@ -941,7 +998,7 @@ $(APPS_STAMP): $(CURL_BIN) $(WGET_BIN) $(OPENSSH_BINS) ports/apps/etc/passwd por
 	  if grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method' $(APPS_ROOT)/$$b.nm; then \
 	    echo "$$b links a TLS method before 1.2"; exit 1; fi; rm -f $(APPS_ROOT)/$$b.nm; done
 	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
-	@for l in zlib openssl curl wget openssh; do \
+	@for l in zlib openssl mbedtls curl curl-mbedtls wget openssh git; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"
