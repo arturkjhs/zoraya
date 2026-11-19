@@ -1,0 +1,100 @@
+# Part 10j's measurement (ADR-0396 item 8, ADR-0397's architect decision): the cost of
+# hashing the bytes the loader receives, for a program of 64.3 MB (61.3 MiB; the loader takes 64 MiB at
+# most), a tcc program with 63 MB of initialised data. Not a step of make test: `make test-posix POSIX_SCRIPTS=tests/posix/zosh-measure-install.script
+# POSIX_IMAGE_SIZE=640M`; the numbers are in the log (`uptime` lines) and in
+# docs/tasks/TASK-31-part-10j.md. The same file is started by its installed name (check, load,
+# run) and by its path (load, run), three times each; the difference is the hash.
+! panicked
+! ZORAYA-FAULT
+! -FAIL
+< Type help to begin
+< \r\n~>
+> mkdir pkg\r
+< \r\n~>
+> echo 'int puts(const char*); void *fopen(const char*,const char*); int fgetc(void*);' > tbx.c\r
+< \r\n~>
+> echo 'int putchar(int); int fputs(const char*,void*); int fclose(void*); unsigned sleep(unsigned);' >> tbx.c\r
+< \r\n~>
+> echo 'int main(int c,char**v){void*f; int h; if(c<3)return 2;' >> tbx.c\r
+< \r\n~>
+> echo 'if(*v[1]==115){sleep(30);return 0;}' >> tbx.c\r
+< \r\n~>
+> echo 'f=fopen(v[2],*v[1]==114?"r":"w"); if(!f){puts("no");return 1;}' >> tbx.c\r
+< \r\n~>
+> echo 'if(*v[1]==114){while((h=fgetc(f))>=0)putchar(h);}' >> tbx.c\r
+< \r\n~>
+> echo 'else{fputs("x",f);fclose(f);puts("wrote");} return 0;}' >> tbx.c\r
+< \r\n~>
+> echo 'char big[63000000] = {1};' >> tbx.c\r
+< \r\n~>
+> tcc tbx.c -o pkg/tbx\r
+< \r\n~>
+> echo 'name  tbx' > pkg/tbx.cmd\r
+< \r\n~>
+> echo 'summary  s' >> pkg/tbx.cmd\r
+< \r\n~>
+> echo 'usage  tbx r FILE' >> pkg/tbx.cmd\r
+< \r\n~>
+> echo hi > f.txt\r
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> stat pkg/tbx\r
+< file size 64
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> install pkg\r
+< tbx (sha256
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> tbx r f.txt\r
+< hi
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> ./pkg/tbx r f.txt\r
+< hi
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> tbx r f.txt\r
+< hi
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> ./pkg/tbx r f.txt\r
+< hi
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> tbx r f.txt\r
+< hi
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> ./pkg/tbx r f.txt\r
+< hi
+< \r\n~>
+> uptime\r
+< up
+< \r\n~>
+> poweroff\r

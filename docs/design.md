@@ -2437,6 +2437,37 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
   *Names:* `tls.roots` (ADR-0229) is not followed by C programs. *Protocols:* no HTTP/2, proxy, cookies, FTP or IPv6.
   *Threads:* OpenSSL is built with them (musl pthreads in libposix); curl and wget are single-threaded programs (synchronous resolver); `tests/apps/tlsthreads.c` runs handshakes from four threads.
 
+## Installed programs (stage 10, 10j)
+
+- **Installing (ADR-0396, proposed ADR-0394).** `install PACKAGE [WORD...]` is a `zosh` builtin, refused in an untrusted room and in
+  a shell that does not hold `/apps` and `/config`. A package is a directory with `NAME` (an ELF, or a script with `#!`),
+  `NAME.cmd` (a description), an optional `request` and the files the program reads. `install` lints it (`zoraya_settings::apps::check_package`:
+  the name's form, nothing of the image, a builtin, a function, a room, a help topic or a path program has it, the description parses and
+  has only `name`, `summary`, `usage`, `operand`, `option`, `exit` and `question`, its `name` is `NAME`), copies it to
+  `/apps/.new-NAME`, puts it in place (an upgrade keeps the old package if the copy fails) and writes one line of
+  `/config/apps`: `NAME sha256:HEX [--installed DATE] WORD...`. The hash is SHA-256 (`zoraya_settings::sha256`) of the program and
+  the description, each behind its 8-byte length. The request is shown and never applied. Upgrading drops the saved words unless `--keep`.
+- **Finding and starting it.** After builtins, functions, the image and `shell.path`, the installed names (`zoraya_shell::installed::pick`);
+  `help NAME` and `help` list them as installed programs, completion and usage read the description (every kind `text`,
+  `zoraya_describe::for_volume`) once it matched the record. At each start the loader's memory object is hashed before an image is
+  made of it (`posix_child::load_checked`): a program that differs by one byte does not start (`zosh: NAME: not what was installed
+  (install again)`), and a program started by a path has no record and no word. A typed `+w` over `/` or `/apps` is refused on every
+  line (`installed::refuse_apps_write`).
+- **Saved words (ADR-0397).** `+r DIR`, `+w DIR`, `+net HOST[:PORT]`, `+web`, `+own ~/PATH`, each typed on the `install` line or on
+  `programs grant NAME WORD...` (never from a variable, a substitution or a pipe), refused for `/`, `/config`, `/apps`, `/data`, a file and
+  `+net any`. At a start `zoraya_shell::installed::apply` adds them as if typed before the command, only those the shell holds (the rest
+  dropped with `zosh: NAME: saved WORD is not held here`), none in an untrusted room; `+own` is `/data/ROOM/NAME` seen at the path, `+net`
+  and `+web` a network scope bounded by the room's words. `grants` shows them with `(saved)` and the package read only.
+- **`programs` (ADR-0399).** `programs` lists (hash, date, saved, running, `changed`), `programs NAME` is the page, `grant`, `revoke
+  NAME WORD...|--all` (removes at once; says how many copies keep access; `--kill` ends the jobs of this shell that hold one), `remove
+  NAME [--data]`, `--log [NAME]` (`/config/apps.log`, one line a change, capped at 64 KiB). The record and the log are written only by
+  `install` and `programs`, through `zoraya_settings::apps`.
+- **Measured.** SHA-256 at a start, a 64.3 MB program, HVF on the M4: 0.15 s on top of a load of about 1 s (about 440 MB/s); the install
+  of it, copy and hash, 1.7 s (`tests/posix/zosh-measure-install.script`). *Known limits (ADR-0394):* the Programs page of `settings` is not
+  built (INV-0399-4); no hint line after a job that was given something while it ran; one command a package; a native program takes saved
+  `+r` and `+w` only; two shells running `programs` at once have no lock. Tests: `tests/posix/zosh-install.script` (`make test-posix`),
+  host tests in `zoraya-settings`, `zoraya-shell` (`installed_tests`) and `zoraya-describe`.
+
 ## A program's own directory, and ssh (stage 10, 10g)
 
 - **The `data` key** (ADR-0341, ADR-0156): a system-image description may say `data NAME as ~/PATH [read]`. The shell

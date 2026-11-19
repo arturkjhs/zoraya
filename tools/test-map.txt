@@ -253,6 +253,7 @@ tests/libc-test/             test-posix-suites test-posix-threadtest3
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run test-netsurf test-apps
 user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-tour-terminal test-net test-keeper test-hand-run test-apps test-netsurf test-posix test-gui test-python-serve
+user/src/bin/zosh/             test-boot test-files test-tour-gui test-tour-terminal test-net test-keeper test-hand-run test-apps test-netsurf test-posix test-gui test-python-serve
 crates/zoraya-shell/          test-boot test-files test-tour-gui test-tour-terminal test-apps test-python test-python-ext test-python-regr test-python-mem test-posix test-gui test-python-serve
 crates/zoraya-command/        test-boot test-files test-tour-gui test-tour-terminal
 crates/zoraya-describe/       test-files test-tour-gui test-tour-terminal test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve

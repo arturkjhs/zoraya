@@ -706,6 +706,22 @@ pub fn launch(
 /// The image is charged to `job` (proposed ADR-0443): the room's, for a program
 /// the shell starts in a room.
 pub fn load(file: &crate::files::File, job: Handle) -> Result<(Handle, bool), Status> {
+    load_checked(file, job, None)
+}
+
+/// A look at the bytes of a program as the loader receives them.
+pub type ByteCheck<'a> = &'a dyn Fn(&[u8]) -> bool;
+
+/// [`load`], with `check` looking at the bytes of the image object once they
+/// are read and before an image is made of them (ADR-0396 item 8): the check
+/// is on the bytes the loader receives, so a file changed after it is not
+/// what runs. A `check` that returns `false` ends the load with `BadState`
+/// (and the caller says which check it was).
+pub fn load_checked(
+    file: &crate::files::File,
+    job: Handle,
+    check: Option<ByteCheck<'_>>,
+) -> Result<(Handle, bool), Status> {
     let gone = |_| Status::BadState;
     let length = file.stat().map_err(gone)?.size;
     if length == 0 || length > LOAD_LIMIT {
@@ -742,6 +758,12 @@ pub fn load(file: &crate::files::File, job: Handle) -> Result<(Handle, bool), St
         // `read_buffer`, which has returned; a stray write would change the
         // bytes `is_native` reads, not their validity.
         let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, length as usize) };
+        if let Some(check) = check
+            && !check(bytes)
+        {
+            let _ = zoraya_rt::memory_unmap(base, size);
+            return Err(Status::BadState);
+        }
         native = zoraya_elf::is_native(bytes);
         let _ = zoraya_rt::memory_unmap(base, size);
         crate::image_create(object, length, job)

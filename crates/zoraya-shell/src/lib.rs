@@ -16,6 +16,7 @@ pub mod eval;
 pub mod glob;
 pub mod grantline;
 pub mod grants;
+pub mod installed;
 pub mod jobs;
 pub mod netgrant;
 pub mod paste;
@@ -30,6 +31,8 @@ pub mod tty_host;
 mod editor_tests;
 #[cfg(test)]
 mod grants_tests;
+#[cfg(test)]
+mod installed_tests;
 #[cfg(test)]
 mod jobs_tests;
 #[cfg(test)]

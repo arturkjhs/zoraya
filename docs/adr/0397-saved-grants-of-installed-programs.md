@@ -196,6 +196,8 @@ exactly that to a supervisor. An agent in an untrusted room never inherits them.
   compositor's card for typed grants exists (ADR-0167, ADR-0268).
 - A per-room saved list (the same program with different words in a room): rooms carry their own words today.
 
+- INV-0397-6's check (an in-QEMU script that gives a path on the grant line and compares `/config/apps`) is not built: the grant line is the compositor's and a serial script cannot type it, and the GUI tour has no installed program yet (part 10j, ADR-0394 item 11). The code path never calls `zoraya_settings::apps`: the delivery of a grant (`zoraya_shell::delivery`) knows no record.
+
 ## Revisit triggers
 
 - A second path for saving (Option C) once the compositor's card for typed grants exists.

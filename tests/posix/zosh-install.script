@@ -1,0 +1,227 @@
+# Installed programs (part 10j; ADR-0396, ADR-0397, ADR-0399): `install` copies
+# a package to /apps/NAME and binds its hash in /config/apps; the program is
+# found by its name, runs with the grants typed at install, and starts only
+# while its bytes are the installed ones. The package is a small C program `tbx`
+# built here with tcc: `tbx r FILE` prints a file, `tbx w FILE` writes `x` to it,
+# `tbx s X` sleeps; it says `no` when it cannot open the file.
+! panicked
+! ZORAYA-FAULT
+! -FAIL
+< Type help to begin
+< \r\n~>
+> mkdir pkg\r
+< \r\n~>
+> mkdir notes\r
+< \r\n~>
+> echo 'int puts(const char*); void *fopen(const char*,const char*); int fgetc(void*);' > tbx.c\r
+< \r\n~>
+> echo 'int putchar(int); int fputs(const char*,void*); int fclose(void*); unsigned sleep(unsigned);' >> tbx.c\r
+< \r\n~>
+> echo 'int main(int c,char**v){void*f; int h; if(c<3)return 2;' >> tbx.c\r
+< \r\n~>
+> echo 'if(*v[1]==115){sleep(30);return 0;}' >> tbx.c\r
+< \r\n~>
+> echo 'f=fopen(v[2],*v[1]==114?"r":"w"); if(!f){puts("no");return 1;}' >> tbx.c\r
+< \r\n~>
+> echo 'if(*v[1]==114){while((h=fgetc(f))>=0)putchar(h);}' >> tbx.c\r
+< \r\n~>
+> echo 'else{fputs("x",f);fclose(f);puts("wrote");} return 0;}' >> tbx.c\r
+< \r\n~>
+> tcc tbx.c -o pkg/tbx\r
+< \r\n~>
+> echo 'name  tbx' > pkg/tbx.cmd\r
+< \r\n~>
+> echo 'summary  prints or writes a file' >> pkg/tbx.cmd\r
+< \r\n~>
+> echo 'usage  tbx r|w|s FILE' >> pkg/tbx.cmd\r
+< \r\n~>
+> echo 'operand  [ARGS...]  create  what to do, and a file (the volume reads them as text)' >> pkg/tbx.cmd\r
+< \r\n~>
+> echo '+w ~/notes' > pkg/request\r
+< \r\n~>
+> echo hi > f.txt\r
+< \r\n~>
+# Not found before it is installed; nothing is recorded.
+> tbx r f.txt\r
+< tbx: no such command
+< \r\n~>
+> programs\r
+< no installed programs
+< \r\n~>
+# INV-0396-3: a package with a key outside the set is refused.
+> mkdir bad\r
+< \r\n~>
+> tcc tbx.c -o bad/tbx\r
+< \r\n~>
+> echo 'name  tbx' > bad/tbx.cmd\r
+< \r\n~>
+> echo 'summary  s' >> bad/tbx.cmd\r
+< \r\n~>
+> echo 'usage  tbx' >> bad/tbx.cmd\r
+< \r\n~>
+> echo 'data  tbx as ~/.tbx' >> bad/tbx.cmd\r
+< \r\n~>
+> install bad\r
+< install: tbx.cmd line 4: `data` is not allowed in an installed program's description
+< \r\n~>
+> programs\r
+< no installed programs
+< \r\n~>
+# INV-0397-1: a saved word from a variable is never saved.
+> set w '+w ~/notes'\r
+< \r\n~>
+> install pkg $w\r
+< from a variable, a substitution or a pipe
+< \r\n~>
+# INV-0397-4: a place that cannot be saved, and `any`.
+> install pkg +w /config\r
+< install: +w /config: the person's configuration cannot be saved
+< \r\n~>
+> install pkg +net any\r
+< install: +net any: any is not saved
+< \r\n~>
+> programs\r
+< no installed programs
+< \r\n~>
+# A good package, with no grant: it says what the request asked and installs with none.
+> install pkg\r
+< tbx (sha256
+< it asks for:   +w ~/notes
+< installed with no grants. to give what it asks:
+<   install pkg +w ~/notes
+< \r\n~>
+> programs\r
+< NAME
+< tbx
+< \r\n~>
+> help tbx\r
+< tbx is an installed program, /apps/tbx/tbx (sha256
+< prints or writes a file
+< \r\n~>
+# INV-0396-1, INV-0396-5: it runs with the current directory read only and
+# nothing else: it cannot change a file there, `/config/apps` and its own
+# package are not writable or not there.
+> tbx r f.txt\r
+< hi
+< \r\n~>
+> tbx w g.txt\r
+< no
+< \r\n~>
+> tbx r /config/apps\r
+< no
+< \r\n~>
+> tbx w /apps/tbx/x\r
+< no
+< \r\n~>
+> tbx w /apps/tbx/tbx.cmd\r
+< no
+< \r\n~>
+> tbx w /config/apps.log\r
+< no
+< \r\n~>
+> +w ~ tbx w /apps/tbx/x\r
+< no
+< \r\n~>
+> grants tbx r f.txt\r
+< tbx gets (a POSIX program):
+< /apps/tbx
+< read (its package)
+< \r\n~>
+# INV-0396-1: a +w over /apps or / is refused, whoever asks.
+> +w /apps tbx r f.txt\r
+< +w /apps: installed programs are changed with install
+< \r\n~>
+> +w / tbx r f.txt\r
+< +w /: installed programs are changed with install
+< \r\n~>
+# INV-0396-3: a name an image command has is not installed.
+> mkdir pkg2\r
+< \r\n~>
+> tcc tbx.c -o pkg2/ls\r
+< \r\n~>
+> echo 'name  ls' > pkg2/ls.cmd\r
+< \r\n~>
+> echo 'summary  s' >> pkg2/ls.cmd\r
+< \r\n~>
+> echo 'usage  ls' >> pkg2/ls.cmd\r
+< \r\n~>
+> install pkg2\r
+< install: ls: an image command has that name
+< \r\n~>
+# INV-0397-1, INV-0399-1: save a word by typing it, run with it, revoke it, run again.
+> programs grant tbx +w ~/notes\r
+< tbx gets, saved:
+< ~/notes
+< \r\n~>
+> grants tbx w notes/a\r
+< ~/notes
+< (saved)
+< \r\n~>
+> tbx w notes/a\r
+< wrote
+< \r\n~>
+> ls notes\r
+< a
+< \r\n~>
+> programs tbx\r
+< saved grants:
+< +w ~/notes
+< (saved)
+< \r\n~>
+> programs revoke tbx +w ~/notes\r
+< tbx: +w ~/notes removed; no copy running.
+< \r\n~>
+> tbx w notes/b\r
+< no
+< \r\n~>
+> programs --log tbx\r
+< install tbx
+< grant tbx +w ~/notes
+< revoke tbx +w ~/notes
+< \r\n~>
+# INV-0396-4, INV-0397-3: a copy changed by one byte does not start, and has no words.
+> echo x >> /apps/tbx/tbx.cmd\r
+< \r\n~>
+> tbx r f.txt\r
+< tbx: not what was installed (install again)
+< \r\n~>
+> programs\r
+< changed
+< \r\n~>
+> help tbx\r
+< changed since installed
+< \r\n~>
+# An upgrade drops the saved words unless --keep says otherwise.
+> programs grant tbx +r ~/notes\r
+< \r\n~>
+> install pkg\r
+< replaces tbx
+< dropped the saved grants of the old package: +r ~/notes
+< \r\n~>
+> tbx r f.txt\r
+< hi
+< \r\n~>
+# INV-0399-2: revoke says how many copies keep access; --kill ends them.
+> programs grant tbx +w ~/notes\r
+< \r\n~>
+> tbx s x &\r
+< \r\n~>
+> programs\r
+< tbx
+< \r\n~>
+> programs revoke tbx +w ~/notes\r
+< 1 running copy keeps access until it exits; programs revoke --kill tbx stops it.
+< \r\n~>
+> programs revoke --kill tbx\r
+< ending 1 running copy
+< \r\n~>
+> programs remove tbx\r
+< tbx removed
+< \r\n~>
+> programs\r
+< no installed programs
+< \r\n~>
+> tbx r f.txt\r
+< tbx: no such command
+< \r\n~>
+> poweroff\r

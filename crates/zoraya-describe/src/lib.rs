@@ -1528,6 +1528,65 @@ fn finish(sections: &mut Vec<Section>, mut s: Section, line: usize) -> Result<()
     push(sections, s, line)
 }
 
+/// The keys a description read from the volume may have (ADR-0396 item 5):
+/// help, completion and usage, and no authority. Every other key (`names`,
+/// `cwd`, `program`, `reach`, `data`, `window`, `net`, `needs`, `setting`,
+/// `when`, `topic`) is refused at install.
+pub const VOLUME_KEYS: [&str; 7] = [
+    "name", "summary", "usage", "operand", "option", "exit", "question",
+];
+
+/// The first header line of `bytes` whose key is outside [`VOLUME_KEYS`]:
+/// its number from 1 and the key. `None` when every key is allowed (or the
+/// header is empty). Reads only up to the `---` that begins the body, as
+/// [`parse`] does, so a body line that begins with a key's name is text.
+pub fn volume_key_problem(bytes: &[u8]) -> Option<(usize, String)> {
+    let text = core::str::from_utf8(bytes).ok()?;
+    for (i, line) in text.split('\n').enumerate() {
+        if line == "---" {
+            return None;
+        }
+        let Some((key, _)) = next_word(line) else {
+            continue;
+        };
+        if key.starts_with('#') {
+            continue;
+        }
+        if !VOLUME_KEYS.contains(&key) {
+            return Some((i + 1, key.to_string()));
+        }
+    }
+    None
+}
+
+/// What the shell reads of a description from the volume (ADR-0396 item 5,
+/// INV-0396-2): the name, the summary, the usage lines, the operands and
+/// options with every kind made `text` (nothing is designated), the exits,
+/// `question` and the body. Everything that could give authority is reset,
+/// whatever the parser read, so a description cannot widen its program.
+pub fn for_volume(mut d: Description) -> Description {
+    d.what = What::Command;
+    for o in &mut d.operands {
+        o.kind = Kind::Text;
+    }
+    for o in &mut d.options {
+        if let Some(a) = &mut o.argument {
+            a.kind = Kind::Text;
+        }
+    }
+    d.whens.clear();
+    d.names.clear();
+    d.cwd = Cwd::Read;
+    d.program = None;
+    d.needs_net_status = false;
+    d.net_web = false;
+    d.reach = None;
+    d.data = None;
+    d.window = None;
+    d.settings.clear();
+    d
+}
+
 #[cfg(test)]
 mod tests;
 
