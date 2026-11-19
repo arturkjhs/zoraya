@@ -140,6 +140,10 @@ static TESTS: &[Test] = &[
         run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
     },
     Test {
+        name: "a_run_queued_behind_many_frames_is_still_found_by_a_create",
+        run: a_run_queued_behind_many_frames_is_still_found_by_a_create,
+    },
+    Test {
         name: "a_run_search_over_a_fragmented_map_goes_in_steps",
         run: a_run_search_over_a_fragmented_map_goes_in_steps,
     },
@@ -3536,6 +3540,53 @@ fn a_run_short_of_frames_waits_for_the_reaper_in_steps() {
     let got = got.expect("the run back from the reaper");
     frames::free_contig(got, RUN);
     unhoard(head);
+    assert!(
+        units <= crate::steps::STEP as u64 + 1,
+        "{units} units in one interval of a run's search (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The backlog's "contiguous create refused while the reaper holds the
+/// frames" (ADR-0349): the reaper holds more scattered frames than the old
+/// 17 rounds of help could free (17 x 64 = 1088), and the run behind them
+/// is the only one that makes a run of 1024. The create must still get it,
+/// as the reaper would give it within a few turns, and with a step point
+/// between every round of help.
+fn a_run_queued_behind_many_frames_is_still_found_by_a_create() {
+    const RUN: u64 = 1024;
+    const SCATTERED: usize = 3000;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let mut scattered: Vec<Frame> = Vec::new();
+    scattered.try_reserve_exact(SCATTERED).expect("room");
+    let mut kept: Vec<Frame> = Vec::new();
+    kept.try_reserve_exact(SCATTERED).expect("room");
+    let head = hoard_frames();
+    // Every other frame of the list is queued, the rest stays taken: the
+    // queued frames are never adjacent, so only the run ends the wait.
+    let mut at = head;
+    while scattered.len() < SCATTERED {
+        let (frame, next) = unhoard_one(at).expect("enough frames");
+        let (other, next) = unhoard_one(next).expect("enough frames");
+        scattered.push(frame);
+        kept.push(other);
+        at = next;
+    }
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    crate::reaper::release(scattered, crate::charge::Paid::new(None));
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    let got = frames::alloc_contig_in_steps(RUN, test_step_point);
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    // What is hoarded and not queued: the kept frames and the rest of the list.
+    for frame in kept {
+        frames::free(frame);
+    }
+    unhoard(at);
+    let got = got.expect("the run the reaper held (ADR-0349)");
+    frames::free_contig(got, RUN);
     assert!(
         units <= crate::steps::STEP as u64 + 1,
         "{units} units in one interval of a run's search (INV-0270-1)"
