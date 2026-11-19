@@ -31,6 +31,9 @@ use alloc::vec::Vec;
 use zoraya_tty::{Action, Id, Terminal, Termios};
 
 use crate::crlf::Crlf;
+use crate::grantline::{GrantLine, Mode, Step};
+use crate::refusal::given_notice;
+use zoraya_proto_term::{STATUS_FIELD, STATUS_NOTICE, STATUS_PLAIN};
 
 /// What the shell must do after a call.
 #[derive(Debug, PartialEq, Eq)]
@@ -51,6 +54,37 @@ pub enum Effect<H> {
     /// (`back`) or in front, so that its `tcsetpgrp` is refused with `EPERM`
     /// at once while it is not in front (the architect, 2026-11-15).
     Background { roots: Vec<u32>, back: bool },
+    /// The status row's text, out of band (ADR-0337 items 3 and 5): `kind`
+    /// is `STATUS_NOTICE`, `STATUS_PLAIN` or `STATUS_FIELD`; empty text clears
+    /// the row.
+    Status { kind: u32, text: String },
+    /// Enter on a grant line, after the guard: `text` is what the person
+    /// typed for element `element` of `line`. The shell parses it with
+    /// `grantline::parse_give` against its own table and answers with
+    /// [`Host::gave`].
+    Give {
+        line: u32,
+        element: usize,
+        text: String,
+    },
+    /// Enter on the kill offer, after the guard: end `line`'s group
+    /// (ADR-0387 item 4, ADR-0158 rule 3).
+    Kill { line: u32 },
+    /// Tab on a non-empty grant line: the shell lists the names of its own
+    /// table that begin with `word` and answers with [`Host::completed`].
+    Complete { word: String },
+}
+
+/// Where the shell runs, for the attention key (ADR-0337 item 10, INV-0337-7).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The first terminal, a room's own terminal, a shell that entered a room.
+    #[default]
+    Normal,
+    /// A program of an untrusted room: the grant line gives nothing.
+    Untrusted,
+    /// The serial console: no status row and no reserved chord.
+    Console,
 }
 
 /// `SIGINT`, `SIGQUIT` and `SIGWINCH` (ADR-0106's numbers).
@@ -159,6 +193,16 @@ struct Line<H> {
     /// A stopped line's attributes, for `fg`.
     saved: Option<Termios>,
     bracket: Bracket,
+    /// The names of the line's elements, for the grant line.
+    elements: Vec<String>,
+    /// The element the status row's refusal came from.
+    refused: Option<usize>,
+}
+
+/// The grant line or the kill offer, open on one line.
+struct Open {
+    line: u32,
+    gl: GrantLine,
 }
 
 /// A paste held until the person's Enter or Escape.
@@ -173,6 +217,12 @@ pub struct Host<H> {
     front: Option<u32>,
     held: Option<Held>,
     swallow: Swallow,
+    grant: Option<Open>,
+    /// What the status row shows when no field is open.
+    notice: Option<(u32, String)>,
+    scope: Scope,
+    /// The clock, in milliseconds, for the guard.
+    now: u64,
 }
 
 impl<H: Copy + Eq + core::fmt::Debug> Default for Host<H> {
@@ -202,6 +252,10 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             front: None,
             held: None,
             swallow: Swallow::No,
+            grant: None,
+            notice: None,
+            scope: Scope::Normal,
+            now: 0,
         }
     }
 
@@ -236,6 +290,8 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             chosen: None,
             saved: None,
             bracket: Bracket::default(),
+            elements: Vec::new(),
+            refused: None,
         });
     }
 
@@ -301,6 +357,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         }
         self.swallow = Swallow::No;
         self.drop_held(&mut out);
+        self.clear_row(&mut out);
         self.tty.discipline.flush();
         self.front = Some(id);
         effects(self.tty.set_front_line(Some(id)), &mut out);
@@ -382,6 +439,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
             return out;
         };
         self.drop_held(&mut out);
+        self.clear_row(&mut out);
         let (was, actions) = self.tty.end_line();
         effects(actions, &mut out);
         self.leave(&mut out);
@@ -405,6 +463,7 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         if self.front == Some(id) {
             self.front = None;
             self.drop_held(&mut out);
+            self.clear_row(&mut out);
             let (_, actions) = self.tty.end_line();
             effects(actions, &mut out);
             self.leave(&mut out);
@@ -446,6 +505,9 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
     /// confirmation takes the first key (Enter sends it, anything else drops
     /// it, ADR-0386 item 4) and nothing else does anything meanwhile.
     pub fn keys(&mut self, bytes: &[u8]) -> Vec<Effect<H>> {
+        if self.grant.is_some() {
+            return self.grant_keys(bytes);
+        }
         let mut out = Vec::new();
         if !self.takes_keys() {
             return out;
@@ -508,6 +570,10 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
     /// Returns false when no program with a terminal is in front: the paste
     /// is not for it.
     pub fn paste(&mut self, text: &str, out: &mut Vec<Effect<H>>) -> bool {
+        if self.grant.is_some() {
+            out.extend(self.grant_paste(text));
+            return true;
+        }
         if !self.takes_keys() {
             return false;
         }
@@ -556,6 +622,208 @@ impl<H: Copy + Eq + core::fmt::Debug> Host<H> {
         crlf.convert(bytes, onlcr, out);
         if let Some(l) = self.line_mut(line) {
             l.bracket.scan(bytes);
+        }
+    }
+
+    // --- The status row, the grant line and the kill offer (ADR-0337) ---
+
+    /// The clock, for the guard of the grant line; `zosh` sets it where it
+    /// sets the discipline's.
+    pub fn set_clock(&mut self, now_ms: u64) {
+        self.now = now_ms;
+    }
+
+    /// Where this shell runs (INV-0337-7).
+    pub fn set_scope(&mut self, scope: Scope) {
+        self.scope = scope;
+    }
+
+    /// The names of the elements of line `id`, in the line's order.
+    pub fn set_elements(&mut self, id: u32, names: Vec<String>) {
+        if let Some(l) = self.line_mut(id) {
+            l.elements = names;
+        }
+    }
+
+    /// Whether a grant line or kill offer is open: then every key and paste
+    /// is its, none the program's (INV-0337-2).
+    pub fn grant_open(&self) -> bool {
+        self.grant.is_some()
+    }
+
+    /// The text of the open field, for tests and the shell's completion.
+    pub fn grant_text(&self) -> Option<&str> {
+        self.grant.as_ref().map(|o| o.gl.text())
+    }
+
+    fn status(kind: u32, text: &str) -> Effect<H> {
+        Effect::Status {
+            kind,
+            text: String::from(text),
+        }
+    }
+
+    /// The row as it is when no field is open.
+    fn rest_row(&self) -> Effect<H> {
+        match &self.notice {
+            Some((kind, text)) => Self::status(*kind, text),
+            None => Self::status(STATUS_PLAIN, ""),
+        }
+    }
+
+    /// A refusal of element `element` of the line in front (the shell wrote
+    /// the words with `refusal::notice`): shown at once unless a field is
+    /// open, and remembered as the element a grant line names (ADR-0337 items
+    /// 3 and 5). Nothing a program writes comes here but through the shell's
+    /// own reading of its report channel (INV-0337-5). Not for a line that is
+    /// not in front, nor on the console.
+    pub fn refusal(&mut self, line: u32, element: usize, text: &str) -> Vec<Effect<H>> {
+        let mut out = Vec::new();
+        if self.front != Some(line) || self.scope == Scope::Console {
+            return out;
+        }
+        if let Some(l) = self.line_mut(line) {
+            l.refused = Some(element);
+        }
+        self.notice = Some((STATUS_NOTICE, String::from(text)));
+        if self.grant.is_none() {
+            out.push(self.rest_row());
+        }
+        out
+    }
+
+    /// The attention message of the terminal: System+G (`give`) or System+K
+    /// (`kill`). Opens the field for the line in front; the key again closes
+    /// it. With no line in front, on the console, or (for a grant) in an
+    /// untrusted room it gives nothing (ADR-0337 items 4, 5 and 10).
+    pub fn attention(&mut self, give: bool) -> Vec<Effect<H>> {
+        let mut out = Vec::new();
+        let Some(front) = self.front else {
+            return out;
+        };
+        if self.scope == Scope::Console {
+            return out;
+        }
+        let mode = if give { Mode::Give } else { Mode::Kill };
+        if let Some(open) = self.grant.take() {
+            let same = open.gl.mode() == mode;
+            out.push(self.rest_row());
+            if same {
+                return out;
+            }
+        }
+        if give && self.scope == Scope::Untrusted {
+            out.push(Self::status(STATUS_PLAIN, "not for an untrusted room"));
+            return out;
+        }
+        let Some(l) = self.line(front) else {
+            return out;
+        };
+        let mut names = l.elements.clone();
+        if names.is_empty() {
+            names.push(String::new());
+        }
+        let gl = GrantLine::open(mode, names, l.refused, self.now);
+        out.push(Self::status(STATUS_FIELD, &gl.field()));
+        self.grant = Some(Open { line: front, gl });
+        out
+    }
+
+    fn steps(&mut self, steps: Vec<Step>, out: &mut Vec<Effect<H>>) {
+        for step in steps {
+            let Some(open) = self.grant.as_ref() else {
+                return;
+            };
+            let line = open.line;
+            match step {
+                Step::Redraw => out.push(Self::status(STATUS_FIELD, &open.gl.field())),
+                Step::Close => {
+                    self.grant = None;
+                    out.push(self.rest_row());
+                }
+                Step::Give(text) => out.push(Effect::Give {
+                    line,
+                    element: open.gl.element(),
+                    text,
+                }),
+                Step::Kill => {
+                    self.grant = None;
+                    out.push(self.rest_row());
+                    out.push(Effect::Kill { line });
+                }
+                Step::Complete(word) => out.push(Effect::Complete { word }),
+            }
+        }
+    }
+
+    /// Keys while a field is open: its alone (INV-0337-2).
+    pub fn grant_keys(&mut self, bytes: &[u8]) -> Vec<Effect<H>> {
+        let mut out = Vec::new();
+        let now = self.now;
+        if let Some(open) = self.grant.as_mut() {
+            let steps = open.gl.keys(bytes, now);
+            self.steps(steps, &mut out);
+        }
+        out
+    }
+
+    /// Pasted text while a field is open: into it, never to a program, its
+    /// newlines not Enter (ADR-0332 item 8).
+    pub fn grant_paste(&mut self, text: &str) -> Vec<Effect<H>> {
+        let mut out = Vec::new();
+        if let Some(open) = self.grant.as_mut() {
+            let steps = open.gl.paste(text);
+            self.steps(steps, &mut out);
+        }
+        out
+    }
+
+    /// The shell's candidates for the word [`Effect::Complete`] named.
+    pub fn completed(&mut self, candidates: &[String]) -> Vec<Effect<H>> {
+        let mut out = Vec::new();
+        if let Some(open) = self.grant.as_mut() {
+            let steps = open.gl.complete(candidates);
+            self.steps(steps, &mut out);
+        }
+        out
+    }
+
+    /// The shell's answer to [`Effect::Give`]: `Ok(words)` closes the field
+    /// and says what is given until the program ends and its refusals start
+    /// to be counted again (ADR-0337 items 1 and 6); `Err(why)` closes it and
+    /// says why nothing was given.
+    pub fn gave(&mut self, result: Result<&str, &str>) -> Vec<Effect<H>> {
+        let mut out = Vec::new();
+        let Some(open) = self.grant.take() else {
+            return out;
+        };
+        match result {
+            Ok(words) => {
+                let text = given_notice(&open.gl.program(), words);
+                if let Some(l) = self.line_mut(open.line) {
+                    l.refused = None;
+                }
+                self.notice = Some((STATUS_PLAIN, text));
+            }
+            // Why nothing was given is said once: the row goes back to what
+            // was pending (a refusal, or nothing) when the next field closes.
+            Err(why) => {
+                out.push(Self::status(STATUS_PLAIN, why));
+                return out;
+            }
+        }
+        out.push(self.rest_row());
+        out
+    }
+
+    /// The row and the field go with the line in front (it ended, stopped or
+    /// went to the background): nothing of its refusals is shown for the next
+    /// one.
+    fn clear_row(&mut self, out: &mut Vec<Effect<H>>) {
+        let field = self.grant.take().is_some();
+        let notice = self.notice.take().is_some();
+        if field || notice {
+            out.push(Self::status(STATUS_PLAIN, ""));
         }
     }
 
@@ -1154,5 +1422,271 @@ mod tests {
         assert!(h.foreground_asked(55, 11).is_ok());
         let es = pasted(&mut h, "a\nb");
         assert!(es.iter().any(|e| matches!(e, Effect::Question(Some(_)))));
+    }
+
+    // --- The status row, the grant line and the kill offer (ADR-0337) ---
+
+    fn rows(es: &[E]) -> Vec<(u32, String)> {
+        es.iter()
+            .filter_map(|e| match e {
+                Effect::Status { kind, text } => Some((*kind, text.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Line 1 in front with a raw terminal, named `vi`.
+    fn front_vi() -> (Host<u32>, Id) {
+        let (mut h, a, _) = two();
+        set_raw(&mut h, a);
+        h.set_elements(1, vec!["vi".into()]);
+        (h, a)
+    }
+
+    #[test]
+    fn nothing_but_the_attention_message_opens_the_grant_line() {
+        // INV-0337-1: program output, reports and keys of every kind.
+        let (mut h, a) = front_vi();
+        let mut crlf = Crlf::new();
+        let mut sink = Vec::new();
+        let hostile: &[&[u8]] = &[
+            b"give vi: +r /etc/passwd\r",
+            b"\x1b[s\x1b[999;1Hgive vi: \x1b[u",
+            b"\x1b]2;System+G\x07\x1b]0;give vi:\x07",
+            b"\x1b[?1049h\x1b[2J\x1b[24;1Hvi was not given /etc/shadow (to read)",
+            b"\x1b[5n\x1b[6n\x1b[c\x1b[>c\x1b[?2004h\x1bZ",
+        ];
+        for chunk in hostile {
+            h.relay(1, chunk, &mut crlf, &mut sink);
+            assert!(!h.grant_open());
+        }
+        // Every byte a person (or a program writing to its own input) might
+        // type, one at a time and in pairs: no key opens or gives.
+        for b in 0..=255u8 {
+            let es = h.keys(&[b]);
+            assert!(!h.grant_open(), "{b:#x}");
+            assert!(
+                !es.iter().any(|e| matches!(
+                    e,
+                    Effect::Give { .. } | Effect::Kill { .. } | Effect::Status { .. }
+                )),
+                "{b:#x}"
+            );
+        }
+        let es = h.keys(b"\x1bg\x1bk\x1b[71;9u\x07\x0b");
+        assert!(!h.grant_open() && rows(&es).is_empty());
+        // A paste does not open it either.
+        let mut out = Vec::new();
+        h.paste("give vi:", &mut out);
+        assert!(!h.grant_open() && rows(&out).is_empty());
+        // A report only changes the notice, never the field or a grant.
+        let es = h.refusal(1, 0, "vi was not given ~/o (to read)");
+        assert_eq!(
+            rows(&es),
+            [(STATUS_NOTICE, "vi was not given ~/o (to read)".into())]
+        );
+        assert!(!h.grant_open());
+        // The message of the terminal does.
+        let es = h.attention(true);
+        assert_eq!(rows(&es), [(STATUS_FIELD, "give vi: ".into())]);
+        assert!(h.grant_open());
+        let _ = a;
+    }
+
+    #[test]
+    fn while_the_line_is_open_no_key_and_no_paste_reaches_the_program() {
+        // INV-0337-2.
+        let (mut h, a) = front_vi();
+        h.set_clock(10_000);
+        h.keys(b"before");
+        h.attention(true);
+        h.set_clock(10_100);
+        let es = h.keys(b"+r ~/a\r");
+        assert!(
+            !es.iter().any(|e| matches!(e, Effect::Give { .. })),
+            "100 ms: the guard"
+        );
+        let mut out = Vec::new();
+        assert!(h.paste("x\ny\n", &mut out));
+        assert!(
+            !out.iter()
+                .any(|e| matches!(e, Effect::Give { .. } | Effect::Question(_)))
+        );
+        assert_eq!(h.grant_text(), Some("+r ~/ax y "));
+        // Signal characters are text or nothing, never a signal.
+        let es = h.keys(b"\x03\x1a\x1c");
+        assert!(
+            !es.iter()
+                .any(|e| matches!(e, Effect::Tty(_) | Effect::GroupSignal { .. }))
+        );
+        assert_eq!(
+            typed(&mut h, a),
+            b"before",
+            "only what came before the line"
+        );
+        // The guard over, Enter gives the typed text for element 0.
+        h.set_clock(10_600);
+        let es = h.keys(b"\r");
+        assert!(es.contains(&Effect::Give {
+            line: 1,
+            element: 0,
+            text: "+r ~/ax y ".into()
+        }));
+        // The answer closes the field and says what was given.
+        let es = h.gave(Ok("+r ~/a"));
+        assert_eq!(
+            rows(&es),
+            [(STATUS_PLAIN, "given until vi ends: +r ~/a".into())]
+        );
+        assert!(!h.grant_open());
+        // After it the keys are the program's again.
+        h.keys(b"after");
+        assert_eq!(typed(&mut h, a), b"after");
+        // Nothing of it ever reached the program.
+        h.attention(true);
+        h.set_clock(20_000);
+        h.keys(b"+r /x\x1b");
+        assert!(!h.grant_open(), "a lone Escape closes");
+        assert!(typed(&mut h, a).is_empty());
+    }
+
+    #[test]
+    fn the_key_again_closes_and_the_other_key_changes_the_field() {
+        let (mut h, _) = front_vi();
+        h.attention(true);
+        let es = h.attention(true);
+        assert_eq!(rows(&es), [(STATUS_PLAIN, String::new())]);
+        assert!(!h.grant_open());
+        h.attention(true);
+        let es = h.attention(false);
+        assert_eq!(
+            rows(&es),
+            [
+                (STATUS_PLAIN, String::new()),
+                (STATUS_FIELD, "kill vi? Enter kills, Escape keeps".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn with_no_line_in_front_on_the_console_or_in_an_untrusted_room_the_key_gives_nothing() {
+        // INV-0337-7 and ADR-0337 items 5 and 10.
+        let mut h: Host<u32> = Host::new();
+        assert!(h.attention(true).is_empty() && !h.grant_open());
+        let (mut h, _) = front_vi();
+        h.set_scope(Scope::Console);
+        assert!(h.attention(true).is_empty() && h.attention(false).is_empty());
+        assert!(
+            h.refusal(1, 0, "x").is_empty(),
+            "no status row on the console"
+        );
+        assert!(!h.grant_open());
+        h.set_scope(Scope::Untrusted);
+        let es = h.attention(true);
+        assert_eq!(
+            rows(&es),
+            [(STATUS_PLAIN, "not for an untrusted room".into())]
+        );
+        assert!(!h.grant_open());
+        // The kill offer is not a grant: it is there in every room.
+        assert!(h.attention(false).iter().any(|e| {
+            rows(core::slice::from_ref(e))
+                .iter()
+                .any(|(k, _)| *k == STATUS_FIELD)
+        }));
+    }
+
+    #[test]
+    fn a_refusal_of_a_line_not_in_front_is_not_shown() {
+        let (mut h, _) = front_vi();
+        assert!(h.refusal(2, 0, "vi2 was not given /x (to read)").is_empty());
+        assert!(h.attention(true).iter().any(|e| matches!(
+            e,
+            Effect::Status { text, .. } if text == "give vi: "
+        )));
+    }
+
+    #[test]
+    fn the_grant_goes_to_the_element_the_row_named_and_the_field_does_not_move() {
+        // ADR-0337 item 5, INV-0337-4: a report written by the other element
+        // while the line is open changes the notice, not the element.
+        let (mut h, _) = front_vi();
+        h.set_elements(1, vec!["cat".into(), "vi".into(), "wc".into()]);
+        h.refusal(1, 1, "vi was not given ~/o (to read)");
+        h.attention(true);
+        h.refusal(1, 2, "wc was not given ~/p (to read)");
+        h.set_clock(1_000);
+        h.keys(b"+r ~/o");
+        let es = h.keys(b"\r");
+        assert!(es.contains(&Effect::Give {
+            line: 1,
+            element: 1,
+            text: "+r ~/o".into()
+        }));
+    }
+
+    #[test]
+    fn the_kill_offer_kills_the_line_on_enter_after_the_guard() {
+        // ADR-0387 item 4, ADR-0158 rule 3.
+        let (mut h, a) = front_vi();
+        h.set_clock(5_000);
+        let es = h.attention(false);
+        assert_eq!(
+            rows(&es),
+            [(STATUS_FIELD, "kill vi? Enter kills, Escape keeps".into())]
+        );
+        h.set_clock(5_200);
+        assert!(
+            !h.keys(b"\r")
+                .iter()
+                .any(|e| matches!(e, Effect::Kill { .. }))
+        );
+        h.set_clock(5_600);
+        let es = h.keys(b"\r");
+        assert!(es.contains(&Effect::Kill { line: 1 }));
+        assert!(!h.grant_open());
+        assert!(typed(&mut h, a).is_empty());
+        // Escape keeps.
+        h.attention(false);
+        let es = h.keys(b"\x1b");
+        assert!(!es.iter().any(|e| matches!(e, Effect::Kill { .. })));
+        assert!(!h.grant_open());
+    }
+
+    #[test]
+    fn the_row_and_the_field_go_with_the_line() {
+        // INV-0337-4: nothing is kept past the line.
+        let (mut h, _) = front_vi();
+        h.refusal(1, 0, "vi was not given ~/o (to read)");
+        h.attention(true);
+        let es = h.end_line(1);
+        assert_eq!(rows(&es), [(STATUS_PLAIN, String::new())]);
+        assert!(!h.grant_open());
+        // The next line starts with a clear row and no remembered element.
+        h.set_elements(2, vec!["less".into()]);
+        let es = h.bring_front(2);
+        assert!(rows(&es).is_empty());
+        let es = h.attention(true);
+        assert_eq!(rows(&es), [(STATUS_FIELD, "give less: ".into())]);
+        // A stop clears too.
+        let es = h.stop_front();
+        assert_eq!(rows(&es), [(STATUS_PLAIN, String::new())]);
+    }
+
+    #[test]
+    fn a_refused_give_closes_the_field_and_says_why() {
+        let (mut h, _) = front_vi();
+        h.attention(true);
+        h.set_clock(1_000);
+        h.keys(b"+r /etc");
+        h.keys(b"\r");
+        let es = h.gave(Err("/etc: this shell does not hold it"));
+        assert_eq!(
+            rows(&es),
+            [(STATUS_PLAIN, "/etc: this shell does not hold it".into())]
+        );
+        assert!(!h.grant_open());
+        // An answer with no field open does nothing.
+        assert!(h.gave(Ok("+r /x")).is_empty());
     }
 }

@@ -264,6 +264,20 @@ impl<S: Sys> Posix<S> {
                 for h in ours {
                     self.sys.close(h);
                 }
+                if other == status::NOT_GRANTED {
+                    let target = if name.is_empty() {
+                        alloc::format!(
+                            "{}.{}.{}.{}",
+                            address[0],
+                            address[1],
+                            address[2],
+                            address[3]
+                        )
+                    } else {
+                        name.clone()
+                    };
+                    self.report_net(&target, port, zoraya_abi::posix::NetAccess::Reach);
+                }
                 return Err(sock::connect_status(other));
             }
             Err(_) => {
@@ -745,6 +759,9 @@ impl<S: Sys> Posix<S> {
         let (_, r) = answer;
         if r.status.0 != status::OK {
             let (eai, errno) = sock::resolve_status(r.status.0);
+            if r.status.0 == status::NOT_GRANTED {
+                self.report_net(name, 0, zoraya_abi::posix::NetAccess::Reach);
+            }
             return Err(ResolveError { eai, errno });
         }
         let found: Vec<[u8; 4]> = r

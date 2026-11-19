@@ -218,6 +218,23 @@ impl<L: Link> Client<L> {
         self.connect(dir, &m)
     }
 
+    /// A connection to `dir` through which only `names` can be used, each
+    /// with its rights, and with `rights` overall, which must cover them
+    /// (ADR-0337 item 8).
+    pub fn narrow_names(
+        &mut self,
+        dir: L::Handle,
+        names: &[(&str, u32)],
+        rights: u32,
+    ) -> Result<L::Handle, Status> {
+        let bytes = proto::narrow_names::encode(names).ok_or(status::INVALID_NAME)?;
+        let m = proto::NarrowNames {
+            rights: Flags(rights),
+            names: zoraya_protocol::Data(&bytes),
+        };
+        self.connect(dir, &m)
+    }
+
     /// Every name in the directory, in the service's order.
     pub fn list(&mut self, dir: L::Handle) -> Result<Vec<Listed>, Status> {
         let mut out = Vec::new();

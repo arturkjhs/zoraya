@@ -23,9 +23,14 @@ use zoraya_abi::{
     channel_signals,
 };
 use zoraya_proto_gui as gui;
-use zoraya_proto_term::{Input, Output, Paste, Reinstate, Restore, Scrollback, Size, Title};
+use zoraya_proto_term::{
+    ATTENTION_GIVE, ATTENTION_KILL, Attention as TermAttention, Input, Output, Paste, Reinstate,
+    Restore, Scrollback, Size, Status as TermStatus, Title,
+};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{Look, Next, Restored, SendQueue, Session, Term, Waited, await_reply, sync_hold};
+use zoraya_term::{
+    Look, Next, Restored, SendQueue, Session, StatusRow, Term, Waited, await_reply, sync_hold,
+};
 use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, memory_create,
@@ -70,6 +75,9 @@ struct Window {
     sync_since: Option<u64>,
     /// When to wake to draw a held update anyway.
     sync_deadline: Option<u64>,
+    /// The status row below the grid (ADR-0337): the shell's text, outside
+    /// the grid the parser writes.
+    status: StatusRow,
 }
 
 fn slot(n: u64) -> Handle {
@@ -212,11 +220,15 @@ impl Window {
         let cw = self.look.cell_width();
         let ch = self.look.cell_height();
         let columns = pw.saturating_sub(2 * self.look.pad) / cw;
-        let rows = ph.saturating_sub(2 * self.look.pad) / ch;
+        // The last row that fits is the status row's (ADR-0337 item 3).
+        let rows = (ph.saturating_sub(2 * self.look.pad) / ch)
+            .saturating_sub(1)
+            .max(1);
         self.session.term.resize(columns, rows);
         let (columns, rows) = self.session.term.size();
         self.look.clear(self.pixels);
         self.session.term.redraw();
+        self.status.redraw();
         let size = Size {
             columns: columns as u32,
             rows: rows as u32,
@@ -229,7 +241,24 @@ impl Window {
         self.session
             .term
             .render(&mut self.look, self.pixels, self.stride, true);
+        self.draw_status();
         self.commit(0, self.height);
+    }
+
+    /// Whether the window has a row below the grid for the status.
+    fn status_fits(&self) -> bool {
+        let (_, rows) = self.session.term.size();
+        self.look.pad + (rows + 1) * self.look.cell_height() <= self.height
+    }
+
+    /// Draws the status row if it changed and fits.
+    fn draw_status(&mut self) -> bool {
+        if !self.status_fits() {
+            return false;
+        }
+        let (columns, rows) = self.session.term.size();
+        self.status
+            .render(&mut self.look, self.pixels, self.stride, columns, rows)
     }
 
     fn show(&mut self) {
@@ -247,11 +276,18 @@ impl Window {
         if !h.draw {
             return;
         }
-        if let Some((first, last)) =
-            self.session
-                .term
-                .render(&mut self.look, self.pixels, self.stride, true)
-        {
+        let grid = self
+            .session
+            .term
+            .render(&mut self.look, self.pixels, self.stride, true);
+        let rows = self.session.term.size().1;
+        let status = self.draw_status();
+        let drawn = match (grid, status) {
+            (Some((first, _)), true) => Some((first, rows)),
+            (None, true) => Some((rows, rows)),
+            (grid, false) => grid,
+        };
+        if let Some((first, last)) = drawn {
             let cell = self.look.cell_height();
             let y = self.look.pad + first * cell;
             let h = (last - first + 1) * cell;
@@ -413,6 +449,26 @@ impl Window {
                         self.offer();
                     }
                 }
+                // System+G and System+K (ADR-0337 item 4): to the shell in a
+                // message of its own, never as input bytes. The person
+                // presses again if its queue is full.
+                47 => {
+                    if let Ok((_, a)) = decode::<gui::Attention>(bytes, 0)
+                        && a.window == self.id
+                    {
+                        let m = TermAttention {
+                            kind: zoraya_protocol::Below(if a.kind.0 == gui::ATTENTION_KILL {
+                                ATTENTION_KILL
+                            } else {
+                                ATTENTION_GIVE
+                            }),
+                        };
+                        let mut out = [0u8; 64];
+                        if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
+                            let _ = channel_write(self.shell, &out[..n], &[]);
+                        }
+                    }
+                }
                 // System+V: the clipboard's text, for the shell, as a paste.
                 28 => {
                     if let Ok((_, p)) = decode::<gui::Paste<'_>>(bytes, 0)
@@ -474,6 +530,10 @@ impl Window {
                     self.session.term.reinstate(was);
                     self.show();
                 }
+            } else if let Ok((_, st)) = decode::<TermStatus<'_>>(bytes, 0) {
+                // The status row (ADR-0337), from the shell alone.
+                self.status.set(st.kind.0, st.text.0);
+                self.show();
             } else if let Ok((_, t)) = decode::<Title<'_>>(bytes, 0) {
                 // `zosh — <directory>` (ADR-0168), never from output.
                 let mut title = alloc::vec::Vec::with_capacity(t.text.0.len() + 9);
@@ -515,7 +575,8 @@ fn main() -> i32 {
     let k = scale.factor() as usize;
     let look = Look::new(scale, Appearance::Light);
     let (columns, rows) = look.grid_for(display.width * k as u32, display.height * k as u32);
-    let (width, height) = look.surface_size(columns, rows);
+    // One row more than the grid: the status row (ADR-0337 item 3).
+    let (width, height) = look.surface_size(columns, rows + 1);
     // Whole logical pixels.
     let (width, height) = (width.next_multiple_of(k), height.next_multiple_of(k));
     let Some((pixels, mapped, entry)) = buffer(width, height) else {
@@ -574,6 +635,7 @@ fn main() -> i32 {
         waiting: false,
         sync_since: None,
         sync_deadline: None,
+        status: StatusRow::default(),
         // As large as any message: a `Paste` carries up to 32 KiB, and a
         // read into less is an error (review 7f's check).
         message: alloc::vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE],

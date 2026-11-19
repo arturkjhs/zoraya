@@ -18,6 +18,17 @@ use zoraya_proto_term::paste::{MAX_PASTE_BYTES, clean};
 /// The first of the eight bytes that stand for a paste in the key stream.
 pub const MARK_BASE: u8 = 0xF8;
 
+/// The two bytes that stand for the terminal's attention message (System+G,
+/// System+K) in the key stream, in order with the keys typed before and after
+/// it. 0xC0 and 0xC1 are never in UTF-8, so no key makes one (INV-0337-1).
+pub const ATTENTION_GIVE: u8 = 0xC0;
+pub const ATTENTION_KILL: u8 = 0xC1;
+
+/// Whether a byte of the key stream is an attention mark.
+pub const fn is_attention(byte: u8) -> bool {
+    byte == ATTENTION_GIVE || byte == ATTENTION_KILL
+}
+
 /// Whether a byte of the key stream is a paste's place, not a key.
 pub const fn is_mark(byte: u8) -> bool {
     byte >= MARK_BASE
@@ -102,6 +113,10 @@ pub enum Routed {
     Key(u8),
     /// A paste, to insert into the line or give to the program (cleaned).
     Insert(String),
+    /// The terminal's attention message, at its place among the keys:
+    /// `true` for System+G (the grant line), `false` for System+K (the kill
+    /// offer).
+    Attention(bool),
     /// A paste that is not used (it was read where it cannot be, or it is
     /// gone): the shell says so.
     Dropped,
@@ -121,7 +136,19 @@ impl Feed {
     /// The keys of an `Input` message, appended to `keys`: every byte but one
     /// that stands for a paste (a peer's, not a key's).
     pub fn input(&mut self, bytes: &[u8], keys: &mut Vec<u8>) {
-        keys.extend(bytes.iter().copied().filter(|b| !is_mark(*b)));
+        keys.extend(
+            bytes
+                .iter()
+                .copied()
+                .filter(|b| !is_mark(*b) && !is_attention(*b)),
+        );
+    }
+
+    /// The `Attention` message of the terminal (never `Input`): its mark
+    /// joins the keys at its place, so that a key typed before it is not
+    /// taken by the field and a key typed after it is.
+    pub fn attention(&mut self, give: bool, keys: &mut Vec<u8>) {
+        keys.push(if give { ATTENTION_GIVE } else { ATTENTION_KILL });
     }
 
     /// A `Paste` message: when it ends a paste, the paste's place is appended
@@ -143,6 +170,9 @@ impl Feed {
     /// What a byte of the stream is, read `at` the prompt or elsewhere. A
     /// paste is taken (once) whichever it is.
     pub fn route(&mut self, key: u8, at: Reading) -> Routed {
+        if is_attention(key) {
+            return Routed::Attention(key == ATTENTION_GIVE);
+        }
         if !is_mark(key) {
             return Routed::Key(key);
         }
@@ -239,7 +269,7 @@ mod tests {
         // Every byte a peer might send, the marks, bracket ends, ESC and C0 among them.
         let hostile: Vec<u8> = (0..=255u8).collect();
         f.input(&hostile, &mut keys);
-        assert_eq!(keys.len(), 256 - 8);
+        assert_eq!(keys.len(), 256 - 8 - 2);
         assert!(keys.iter().all(|k| !is_mark(*k)));
         for k in &keys {
             assert_eq!(f.route(*k, Reading::Prompt), Routed::Key(*k));
@@ -280,6 +310,36 @@ mod tests {
         // An empty paste leaves no place.
         let mut s3 = Vec::new();
         assert!(f.part(b"\x1b\x07", true, true, &mut s3) && s3.is_empty());
+    }
+
+    #[test]
+    fn the_attention_mark_is_the_terminals_alone_and_keeps_its_place() {
+        // INV-0337-1: no `Input` byte is one, and it stands between the keys
+        // typed before and after.
+        let mut f = Feed::default();
+        let mut keys = Vec::new();
+        f.input(b"ab\xc0\xc1c", &mut keys);
+        assert_eq!(keys, b"abc");
+        f.attention(true, &mut keys);
+        f.input(b"d", &mut keys);
+        f.attention(false, &mut keys);
+        assert_eq!(
+            keys.iter()
+                .map(|k| f.route(*k, Reading::Program))
+                .collect::<Vec<_>>(),
+            [
+                Routed::Key(b'a'),
+                Routed::Key(b'b'),
+                Routed::Key(b'c'),
+                Routed::Attention(true),
+                Routed::Key(b'd'),
+                Routed::Attention(false),
+            ]
+        );
+        for c in ['a', '\u{7ff}', '\u{ffff}', '\u{10ffff}'] {
+            let mut buf = [0u8; 4];
+            assert!(c.encode_utf8(&mut buf).bytes().all(|b| !is_attention(b)));
+        }
     }
 
     #[test]

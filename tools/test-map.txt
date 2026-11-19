@@ -233,6 +233,7 @@ tools/zcc                     test-libposix test-posix-threads test-posix-suites
 tools/zc++                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/gui/posix-terminal.script test-tour-terminal
 tests/gui/posix-curses.script test-tour-terminal
+tests/gui/posix-grant.script test-tour-terminal
 tests/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/cxx/libcxx-             test-cxx-libcxx
 tests/cxx/gtest               test-cxx-gtest

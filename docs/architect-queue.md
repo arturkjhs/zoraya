@@ -17,10 +17,12 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
 | ADR-0464 | What 10h decided: forms of `git` (`sub`), the clone directory (`derive`), only the transport helper has a connection, the ceiling, ancestors of an entry not reported, a child keeps the write of a `+w` entry | Option A (as built); NOT MERGED: see `docs/tasks/TASK-31-review-10h.md` | `work/10h`, TASK-31 |
+| ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 44), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 
 ## B. Decisions taken to continue (the architect may overrule)
 
+- **10f (2026-11-19):** `grantable()` does not refuse `/data` (ADR-0341 item 3 does not say `Grants` must, and the abi tests use a `/data/x` entry); a program's own directory is protected by `Held::fixed`. `tests/gui/spinners.script` reads the memhog refusal without its amount (it varies 8960 to 9088 KiB). Open: `cpu_ceiling_from_a_process` failed once under a parallel `test-changed` and passed alone.
 - **10e:** the ADR-0212 image cache was not built (a broker, `posix_child` and `libposix` change with its own security
   argument); the userland does not depend on it. The independent review of `tr`, `expr` and `diff` was done by an
   `opus-review` (decided 2026-11-15 that it counts).
@@ -59,7 +61,8 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
    and compare with the same recording in a Zoraya terminal (screenshots: `docs/tasks/TASK-31-part-10a-shots/`).
 2. **10a, `vttest`:** needs a pin in `ports/sources.lock` (not pinned, so not recorded).
    `python3 -c 'import sqlite3, ssl, asyncio'` and `ping google.com` in the guest.
-4. **Later parts:** 10f's grant line (first terminal, a room's terminal, a shell that entered a room), 10g's `ssh -l NAME HOST`
+4. **10f's row, grant line and kill offer:** the commands are in `docs/tasks/TASK-31-part-10f.md`, "Hand checks", for a first terminal, a room's own terminal and a shell that entered a room.
+5. **Later parts:** 10g's `ssh -l NAME HOST`
    to a real host, 10h's `git clone` and `git push`: commands will be listed with the part.
 
 - **10h, open decisions (ADR-0464):** the ancestor rule applies to every POSIX program (INV-0153-7 narrowed); hooks of git have no network (narrower than ADR-0339 item 5); a proposed text for ADR-0461 about the git test root.
@@ -95,7 +98,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 ## E. Decided 2026-11-15 and scheduled (removed from the lists above; see `docs/backlog.md`)
 
 ADR-0280, 0281, 0285, 0286, 0384, 0385, 0398 accepted; ADR-0383 Option C (`kbs=^?`, built in 10d); the kill offer's escape
-System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal; a refused
+System+K (10f); native `fetch` follows ADR-0328; ADR-0224 item 5's `+net` hint in curl's and wget's refusal (built in 10f for POSIX programs: connect and resolve); a refused
 `tcsetpgrp` returns `EPERM` (10c); INV-0324-2, INV-0326-1 and ADR-0366's count reworded; the confined network steps run on
 the runner itself in a job of their own; `vttest` pinned and built with 10d.
 

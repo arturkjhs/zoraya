@@ -386,27 +386,124 @@ fn refused_paths_are_reported_once_and_missing_ones_never() {
     );
 }
 
-/// ADR-0464: a directory above an entry is `ENOENT` and not reported (git stats every ancestor of its
-/// work tree); a sibling of an entry still is.
+/// ADR-0337 item 1: a refusal is reported once per path *and access*, so a
+/// read refused and then a write refused of the same path are two reports.
 #[test]
-fn the_ancestors_of_an_entry_are_not_reported() {
+fn a_path_is_reported_once_per_access() {
     let mut r = rig_without_root();
-    for path in ["/", "/dev", "/dev/", "/./dev"] {
-        assert_eq!(
-            r.p.stat_at(AT_FDCWD, path.as_bytes(), 0),
-            Err(ENOENT),
-            "{path}"
-        );
-    }
-    assert_eq!(r.p.stat_at(AT_FDCWD, b"/devices", 0), Err(ENOENT));
-    assert_eq!(r.p.stat_at(AT_FDCWD, b"/work2", 0), Err(ENOENT));
+    assert_eq!(open(&mut r, "/etc/x", o::RDONLY, 0), Err(ENOENT));
+    assert_eq!(open(&mut r, "/etc/x", o::RDONLY, 0), Err(ENOENT));
+    assert_eq!(
+        open(&mut r, "/etc/x", o::WRONLY | o::CREAT, 0o644),
+        Err(ENOENT)
+    );
+    assert_eq!(
+        open(&mut r, "/etc/x", o::WRONLY | o::CREAT, 0o644),
+        Err(ENOENT)
+    );
     assert_eq!(
         r.reports(),
         vec![
-            (Access::Read, 0, "/devices".to_string()),
-            (Access::Read, 0, "/work2".to_string()),
+            (Access::Read, 0, "/etc/x".to_string()),
+            (Access::Write, 0, "/etc/x".to_string()),
         ]
     );
+}
+
+/// A message of the `GRANTS` channel with `handles`, entries `(prefix, index)`.
+fn give(r: &mut Rig, far: H, entries: &[(&str, u8)], handles: &[H]) {
+    let mut out = [0u8; 512];
+    let n = zoraya_abi::posix::Grants::encode(entries, handles.len(), &mut out).unwrap();
+    r.p.sys.channel_write(far, &out[..n], handles).unwrap();
+}
+
+/// ADR-0337 item 7, INV-0337-4's library half: the `GRANTS` channel is read
+/// only when a path is refused, then the path is resolved once more; what it
+/// carries is added to the table (or replaces an entry of its prefix); a
+/// malformed message adds nothing; and the refusals start to be counted again.
+#[test]
+fn a_grant_is_read_on_a_refusal_and_the_path_resolved_again() {
+    let mut r = rig_without_root();
+    let net = r.net.clone();
+    let (service, other) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    let (end, far) = r.p.sys.channel_create().unwrap();
+    r.p.set_grants(Some(end));
+    give(&mut r, far, &[("/elsewhere", 0)], &[other]);
+    // A path the table covers does not read the channel.
+    assert_eq!(
+        open(&mut r, "/work/x", o::RDWR | o::CREAT, 0o644).map(|_| ()),
+        Ok(())
+    );
+    assert!(r.reports().is_empty());
+    // A refused path does: it is reported, the grant is taken, and the open
+    // that was refused succeeds.
+    let fd = open(&mut r, "/elsewhere/c", o::RDWR | o::CREAT, 0o644).unwrap();
+    assert_eq!(r.write(fd, b"given"), Ok(5));
+    assert_eq!(
+        r.reports(),
+        vec![(Access::Write, 0, "/elsewhere/c".to_string())]
+    );
+    // It stays given: the next open needs no read of the channel.
+    assert!(open(&mut r, "/elsewhere/d", o::RDONLY | o::CREAT, 0o644).is_ok());
+    // A message that is no grant adds nothing, and its handle is closed.
+    let (end2, far2) = r.p.sys.channel_create().unwrap();
+    r.p.sys.channel_write(far, b"garbage", &[end2]).unwrap();
+    let _ = far2;
+    assert_eq!(open(&mut r, "/nowhere/z", o::RDONLY, 0), Err(ENOENT));
+    // The table is bounded.
+    for i in 0..70 {
+        let (e, f) = r.p.sys.channel_create().unwrap();
+        let prefix = format!("/p{i}");
+        give(&mut r, far, &[(prefix.as_str(), 0)], &[e]);
+        let _ = f;
+        let _ = open(&mut r, "/nowhere/y", o::RDONLY, 0);
+    }
+    assert!(r.p.entry_count() <= zoraya_abi::posix::MAX_TABLE);
+}
+
+/// ADR-0337 item 1 (the review of 10f, finding 9): the limit of 16 counts the
+/// reports since the program last received a grant, so after one the next is sent.
+#[test]
+fn the_limit_of_sixteen_reports_restarts_after_a_grant() {
+    let mut r = rig_without_root();
+    let net = r.net.clone();
+    let (service, other) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    let (end, far) = r.p.sys.channel_create().unwrap();
+    r.p.set_grants(Some(end));
+    for i in 0..20 {
+        let _ = open(&mut r, &format!("/outside/{i}"), o::RDONLY, 0);
+    }
+    assert_eq!(r.reports().len(), 16, "the limit");
+    // A grant that arrives with the next refusal restarts the count.
+    give(&mut r, far, &[("/elsewhere", 0)], &[other]);
+    let _ = open(&mut r, "/outside/again", o::RDONLY, 0);
+    let got = r.reports();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].2, "/outside/again");
+}
+
+/// ADR-0341 item 3 with ADR-0337 item 7: a program's own directory is never
+/// replaced by a grant, whoever sends it.
+#[test]
+fn a_grant_never_replaces_the_programs_own_directory() {
+    let mut r = rig_without_root();
+    let net = r.net.clone();
+    let (service, own) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    let own_entry = r.p.add_entry("/home/.ssh", EntryKind::Own, Some(own));
+    let (service2, other) = volume(&net, 1024);
+    r.p.sys.services.push(service2);
+    let (end, far) = r.p.sys.channel_create().unwrap();
+    r.p.set_grants(Some(end));
+    give(&mut r, far, &[("/home/.ssh", 0)], &[other]);
+    let _ = open(&mut r, "/outside/x", o::RDONLY, 0);
+    assert_eq!(r.p.entry_count(), 3, "work, /dev/null, own: nothing added");
+    let _ = own_entry;
+    // The file made through the own directory is still on the first volume.
+    let fd = open(&mut r, "/home/.ssh/known", o::RDWR | o::CREAT, 0o644).unwrap();
+    assert_eq!(r.write(fd, b"mine"), Ok(4));
 }
 
 /// At most 16 reports a process; past that they are dropped and counted.
@@ -2142,4 +2239,27 @@ fn a_fork_gives_the_child_the_own_directory_to_read_only() {
     let plain_child = theirs(2);
     r.p.add_entry("/c2", EntryKind::Directory, Some(plain_child));
     assert!(open(&mut r, "/c2/x", RW_CREATE, 0o600).is_ok());
+}
+
+/// ADR-0464: a directory above an entry is `ENOENT` and not reported (git stats every ancestor of its
+/// work tree); a sibling of an entry still is.
+#[test]
+fn the_ancestors_of_an_entry_are_not_reported() {
+    let mut r = rig_without_root();
+    for path in ["/", "/dev", "/dev/", "/./dev"] {
+        assert_eq!(
+            r.p.stat_at(AT_FDCWD, path.as_bytes(), 0),
+            Err(ENOENT),
+            "{path}"
+        );
+    }
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"/devices", 0), Err(ENOENT));
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"/work2", 0), Err(ENOENT));
+    assert_eq!(
+        r.reports(),
+        vec![
+            (Access::Read, 0, "/devices".to_string()),
+            (Access::Read, 0, "/work2".to_string()),
+        ]
+    );
 }

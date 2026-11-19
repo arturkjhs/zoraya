@@ -306,6 +306,18 @@ states, to be taken up later:
     for a POSIX program (or `RLIMIT_STACK`) would end the class of fault.
   - **Not measured:** DB 1.85 on a 100 MB file (ADR-0390's open question), a second run of the GUI script under TCG, the `tools/`-level
     mutation run (not required for 10d).
+- Part 10f (TASK-31) leftovers (`docs/tasks/TASK-31-part-10f.md`, proposed ADR-0395):
+  - **Delivered for POSIX programs:** the `GRANTS` channel, `narrow` with a list of names, the network refusal report. **Not delivered:** `+net` on the
+    grant line, and a native program (a `Startup` index and `zoraya-rt`'s read); the planner's use of the list at start (10d's second-file refusal).
+  - **A write refused inside a read-only entry** is reported only on the service's `EACCES`; `user/src/namespace.rs` reports per path, not per path and
+    access; datagram and listen refusals are not reported.
+  - **`/data` in `Grants`' prefix check** (ADR-0341 item 3, ADR-0393): not added in the merge of 10f and 10g: the own directory is protected by `Held::fixed` (`TableKind::Own`); a `/data` rule in `grantable()` would also refuse a valid `/data/x` entry the abi tests use, so it needs the architect's reading of ADR-0341 item 3.
+  - **Not tested:** the write end closing with the job (`Job`'s `Drop`), a pipeline of two programs with a grant to one, a fuzz target of `term`'s input
+    with the row compared before and after; no mutation run (`tools/mutants/shell-10f.toml` is written).
+  - **From the review of 10f (notes, not fixed):** an Escape followed by a key in one read is taken as Alt+key and skipped by the field; only `open` and
+    `stat` retry after a grant (`access`, `chdir`, `opendir`, `rename`, `execve` fail once); the `GRANTS` end is two-way, so a program can queue messages
+    at the shell's end for the life of the job; a program can report a path it never opened and paint a look-alike row in its own last row.
+  - **At 1920x1200 the compositor fits a window above the dock:** the grid has one row fewer than `grid_for` says (21, not 22); the status row is the last.
 - Part 10c (TASK-31) leftovers, from its review (`docs/tasks/TASK-31-review-10c.md`, notes not fixed in the fix pass):
   - **INV-0386-1 and a program's own `c_cc`:** a program may make a printable byte a signal character (`VINTR` = `[`, `~` or a
     digit); then a paste, or the shell's own bracket marks, carry signal characters for it. Only its own line is affected; the

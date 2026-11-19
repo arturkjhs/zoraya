@@ -12,6 +12,7 @@ license.workspace = true
 zoraya-tokens = { path = "../../crates/zoraya-tokens" }
 zoraya-keymap = { path = "../../crates/zoraya-keymap" }
 zoraya-term = { path = "../../crates/zoraya-term" }
+zoraya-proto-term = { path = "../../crates/zoraya-proto-term" }
 zoraya-compositor = { path = "../../crates/zoraya-compositor" }
 
 [[bin]]

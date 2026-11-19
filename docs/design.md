@@ -1444,8 +1444,23 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `tests/gui/posix-curses.script` (`make test-tour-terminal`: the size at start and after each `KEY_RESIZE`, Backspace as
   `KEY_BACKSPACE`, F1, an edit and a save with `vi`, the refusal of a sibling, `tcc -v &| less`). *Known limits:* a native
   first element of a pipeline reads the keys (ADR-0387 item 2), so `ls | less` does not page (`/bin/cat f | less` and
-  `tcc -v &| less` do); `:e` of a name the grant does not give says "new file" (the refusal that says why is part 10f's);
+  `tcc -v &| less` do); `:e` of a name the grant does not give says "new file" (the status row says why, below);
   `view` is a read-only grant, narrower than ADR-0335 item 9; DB 1.85 and nvi's `lock` option are as ADR-0390 left them.
+- **The status row, System+G and System+K (part 10f, ADR-0337, proposed ADR-0395).** `term`'s window is one row taller than
+  its grid; that row holds the text of the shell's `Status` message and nothing a program writes (`zoraya_term::StatusRow`,
+  cleaned again: no control or bidirectional character). While a line runs, `zosh` reads each element's report channel,
+  words the latest refusal by its own lookup (`was not given`, `does not exist`, `which this shell does not hold`) after the
+  path filter of `zoraya_shell::refusal`, and shows it; the hint after a job prints a path only through the same filter. The
+  compositor sends the focused window `Attention` on System+G and System+K (never a key); `term` passes it on, `zosh` puts it
+  in the key stream as byte 0xC0 or 0xC1, and `tty_host::Host` opens the field: the grant line (`give vi: ...`, a literal-word
+  parse against what the shell holds, a 500 ms guard on Enter, one element of a pipeline) or the kill offer (`kill vi? ...`,
+  Enter ends the line's job). **Delivery:** on Enter the shell opens the entries from its own root and writes them to the `GRANTS` channel
+  (`slot::GRANTS`, `zoraya_abi::posix::Grants`) of the one element named: a file as its directory narrowed to a list of names
+  (`NarrowNames`, each with its rights), a directory whole, never shadowing what the program holds whole (`zoraya_shell::delivery`);
+  `libposix` reads the channel when a path is refused and resolves once more; the write end closes with the job. A refused network
+  request is reported (`NetReport`) and shown too. *Known limits:* a `+net` word and a native program are refused on the row; a write
+  refused inside a read-only entry is reported only on the service's `EACCES`; native programs still report once per path; the planner
+  still refuses two files of a directory at start. Tests: `tests/gui/posix-grant.script` (`make test-tour-terminal`, four sizes).
 - **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
   which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
   once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).

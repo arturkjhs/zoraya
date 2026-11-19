@@ -302,6 +302,47 @@ fn chord(s: &mut Setup, key: u32) {
     ]);
 }
 
+/// INV-0337-1 and INV-0160-3 with System+G and System+K (ADR-0337 item 4,
+/// ADR-0387 item 4): the chord is the focused window's `Attention` and
+/// never a key, and no other client learns of it.
+#[test]
+fn the_attention_chords_reach_only_the_focused_client_and_never_as_keys() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.a);
+    t.s.f().take(t.b);
+    for (key, kind) in [
+        (code::G, gui::ATTENTION_GIVE),
+        (code::K, gui::ATTENTION_KILL),
+    ] {
+        assert!(super::TAKEN_CHORDS.contains(&key));
+        chord(&mut t.s, key);
+        let got = t.s.f().take(t.b);
+        let (_, m) = got
+            .iter()
+            .find_map(|m| decode::<gui::Attention>(m, 0).ok())
+            .expect("Attention to the focused client");
+        assert_eq!(m.kind.0, kind);
+        assert_eq!(
+            ordinals(&got),
+            [47],
+            "nothing else, no key: {:?}",
+            ordinals(&got)
+        );
+        assert!(
+            t.s.f().take(t.a).is_empty(),
+            "the other client learns nothing"
+        );
+    }
+    // Without the system key, G and K are keys and no Attention.
+    t.s.keys(&[(code::G, 1), (code::G, 0), (code::K, 1), (code::K, 0)]);
+    let got = t.s.f().take(t.b);
+    assert!(!ordinals(&got).contains(&47));
+    assert!(t.s.f().take(t.a).is_empty());
+}
+
 /// INV-0170-1 and -2: the clipboard is set only by an `Offer` answering
 /// the `Copy` the compositor sent that client, within 500 ms, and given
 /// only in a `Paste` to the focused window on System+V; nothing else
