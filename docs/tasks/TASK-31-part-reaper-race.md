@@ -23,3 +23,10 @@ Branch `work/reaper-race`. The architect's decision of 2026-11-19 (backlog entry
 - A create that fails on a fragmented machine scans the map once per round: about `total/1024` scans (ADR-0349 follow-up).
 - Backlog N6 (`a_spawn_with_a_big_space_is_bounded`, intermittent `NoMemory` in the 128 MiB guest) may share the cause (the
   reaper's timing); not checked.
+
+## Second review fix pass
+- Refusal only when no frame was freed since the scan began (`generation() == began_at`), not since its last step; tests
+  `a_run_the_reaper_frees_during_a_later_scan_is_found` and `a_create_under_churn_is_refused_within_the_round_cap`;
+  mutant `K-contig-no-round-cap`.
+- The repro tests reproduce the old failure only on one CPU (`make test-qemu-one`, lanes `auto-default`, `tcg-default`); on
+  `--smp 4` the reaper may run on another CPU and free the queue first. Each asserts that `reaper::held()` grew.

@@ -151,7 +151,7 @@ pub(crate) fn alloc_contig_in_steps(
     for round in 0u64.. {
         let mut search = RunSearch::default();
         let mut began = None;
-        let (found, changed, scanned_at) = loop {
+        let (found, changed, began_at) = loop {
             let (step, generation) = {
                 let mut frames = FRAMES.lock();
                 let frames = frames.as_mut().ok_or(Status::NoMemory)?;
@@ -162,8 +162,8 @@ pub(crate) fn alloc_contig_in_steps(
             crate::steps::count(search.words_read() as usize);
             match step {
                 Ok(None) => step_point()?,
-                Ok(Some(first)) => break (Ok(first), false, generation),
-                Err(e) => break (Err(e), generation != began, generation),
+                Ok(Some(first)) => break (Ok(first), false, began),
+                Err(e) => break (Err(e), generation != began, began),
             }
         };
         match found {
@@ -186,10 +186,12 @@ pub(crate) fn alloc_contig_in_steps(
                     helped = true;
                     step_point()?;
                 }
-                // Nothing to help with: but the step point above may have
-                // let the reaper free its queue (a run with it), so the
-                // search ends only if no frame was freed since the scan.
-                if !helped && generation() == scanned_at {
+                // Nothing to help with: but a frame freed since the scan
+                // began (by the reaper's turn at a step point of the scan or
+                // before the help, a run with it) may be one the scan passed,
+                // so the search ends only if none was; each such pass is a
+                // round, which bounds them.
+                if !helped && generation() == began_at {
                     return Err(Status::NoMemory);
                 }
             }

@@ -410,9 +410,16 @@ note = "ADR-0349: a round of help frees up to a run's worth of the reaper's fram
 [[mutant]]
 id = "K-contig-no-rescan-after-empty-help"
 file = "kernel/src/memory/frames.rs"
-find = 'if !helped && generation() == scanned_at {'
+find = 'if !helped && generation() == began_at {'
 replace = 'if !helped {'
-note = "ADR-0349: frames the reaper freed at the step point before the help are scanned for (a_run_the_reaper_frees_at_the_step_before_its_help_is_found)"
+note = "ADR-0349: frames freed since the scan began, also at the step point before the help or at a later scan's last step point, are scanned for (a_run_the_reaper_frees_at_the_step_before_its_help_is_found, a_run_the_reaper_frees_during_a_later_scan_is_found)"
+
+[[mutant]]
+id = "K-contig-no-round-cap"
+file = "kernel/src/memory/frames.rs"
+find = 'Err(_) if round >= rounds => return Err(Status::NoMemory),'
+replace = 'Err(_) if false && round >= rounds => return Err(Status::NoMemory),'
+note = "ADR-0349 driver 2: the create is refused within the round cap under churn (a_create_under_churn_is_refused_within_the_round_cap; the step point's guard ends it with Cancelled, so the mutant fails and does not hang)"
 
 [[mutant]]
 id = "K-kernel-tables-not-in-backing"
