@@ -52,6 +52,20 @@ other QEMU runs on the machine:
 - After, second pair: both RC=0.
 - One `make test-net` alone, after: RC=0.
 
-## Verdicts run
+## State: UNFINISHED (paused by the architect, 2026-11-19)
 
-`make check` RC=0 (before the commit). `make test-changed`: see below.
+Done: the change above; `make check` RC=0 on 72a287ee's tree; the numbers above; the independent review
+(`docs/tasks/TASK-31-review-host-ports.md`, written by opus-review, 3 must-fix, 2 warnings, 3 notes).
+
+Not done:
+
+1. `make test-changed` did not finish (the Makefile change maps to every step; it was killed in `netsurf-auto`, no RC line;
+   `build/hp-test-changed.log` is partial). Not a verdict. Rerun it.
+2. The review's must-fix items are open: (a) reword the race limit ("a few milliseconds" was not measured) or remove it with a
+   retry on "Could not set up host forwarding rule" or hostfwd port 0 read over QMP; (b) the comment in `tools/run-qemu.sh` names a
+   non-existent `tools/check-host-ports.sh` (it is section 7 of `check-net-open.sh`) and says "never"; (c) `check-net-open.sh` leaves a
+   `check-net-open-fwd.PID` file in `$TMPDIR` per run (use `$tmp`). Warnings: `--net-forward auto` without `:FILE` writes a dot file
+   then dies; the check greps bad spellings only (misses `--net-forward "47016"`, `--port "8080"`) and should allow only the `auto:` and
+   `--port 0` forms; `tools/test-sshd.sh` `free_port` has the same pick-and-close race (listed as OS above, with that caveat).
+3. No candidate run needed (no workflow, ci-plan or test-runner file changed).
+4. Not pushed to main; the part is not merged.
