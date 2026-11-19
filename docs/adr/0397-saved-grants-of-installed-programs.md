@@ -191,6 +191,7 @@ exactly that to a supervisor. An agent in an untrusted room never inherits them.
 
 - Whether `+r` should be saved at all (a read of a directory is already the default for the current directory).
 - A saved word for a file, as a narrowed directory with one name; ADR-0337 item 8's list does the work for a line.
+- **A saved word for a file (2026-11-19).** The proposed ADR-0465 adds one: `+sock PATH`, a socket file in another program's own directory (connect only); the rest of item 1 stands.
 - Whether `+listen` should be saved (a server program); it needs ADR-0225's rules and is left out.
 - Whether a saved word should apply in an untrusted room when the room holds it; refused until the
   compositor's card for typed grants exists (ADR-0167, ADR-0268).

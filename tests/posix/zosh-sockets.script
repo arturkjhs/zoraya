@@ -1,0 +1,192 @@
+# Socket files in a program's own directory (part own-sockets; ADR-0465,
+# ADR-0412 item 5, ADR-0439, ADR-0397, ADR-0341). `sockd PATH` binds a socket
+# file at PATH, listens and answers `pong` to each connection until it gets a
+# word that starts with q; `sockc PATH WORD` connects to PATH, sends WORD and
+# prints the reply, or `refused` and the errno; with `u` or `r` as the word it
+# tries to unlink or rename PATH instead. Both are built here with tcc and
+# installed (ADR-0396): sockd with its own directory, sockc with a saved
+# `+sock` naming the server's file. A third copy, `sockn`, has no grant.
+! panicked
+! ZORAYA-FAULT
+< Type help to begin
+< \r\n~>
+> echo 'int socket(int,int,int); int bind(int,void*,unsigned); int listen(int,int); int accept(int,void*,void*);' > sockd.c\r
+< \r\n~>
+> echo 'long read(int,void*,unsigned long); long write(int,void*,unsigned long); int close(int);' >> sockd.c\r
+< \r\n~>
+> echo 'int puts(const char*); int unlink(const char*); unsigned long strlen(const char*); void *memcpy(void*,const void*,unsigned long);' >> sockd.c\r
+< \r\n~>
+> echo 'int main(int c,char**v){ char a[110]; char b[64]; int s,k; long n; unsigned long l;' >> sockd.c\r
+< \r\n~>
+> echo 'if(c<2)return 2; l=strlen(v[1]); if(l>100)return 2;' >> sockd.c\r
+< \r\n~>
+> echo 'for(k=0;k<110;k++)a[k]=0; a[0]=1; memcpy(a+2,v[1],l);' >> sockd.c\r
+< \r\n~>
+> echo 'unlink(v[1]); s=socket(1,1,0);' >> sockd.c\r
+< \r\n~>
+> echo 'if(bind(s,a,2+l+1)<0){puts("sockd: bind failed");return 1;}' >> sockd.c\r
+< \r\n~>
+> echo 'if(listen(s,4)<0){puts("sockd: listen failed");return 1;}' >> sockd.c\r
+< \r\n~>
+> echo 'puts("sockd: ready");' >> sockd.c\r
+< \r\n~>
+> echo 'for(;;){ k=accept(s,0,0); if(k<0)return 1; n=read(k,b,60); if(n>0){ b[n]=0; puts("sockd: got"); puts(b); write(k,"pong",4);}' >> sockd.c\r
+< \r\n~>
+> echo 'close(k); if(n==4&&b[0]==113)break; }' >> sockd.c\r
+< \r\n~>
+> echo 'return 0;}' >> sockd.c\r
+< \r\n~>
+> echo 'int socket(int,int,int); int connect(int,void*,unsigned); long read(int,void*,unsigned long); long write(int,void*,unsigned long);' > sockc.c\r
+< \r\n~>
+> echo 'int puts(const char*); int putchar(int); int unlink(const char*); int rename(const char*,const char*);' >> sockc.c\r
+< \r\n~>
+> echo 'unsigned long strlen(const char*); void *memcpy(void*,const void*,unsigned long); int *__errno_location(void);' >> sockc.c\r
+< \r\n~>
+> echo 'int main(int c,char**v){ char a[110]; char b[64]; int s,k,e; long n; unsigned long l;' >> sockc.c\r
+< \r\n~>
+> echo 'if(c<3)return 2; l=strlen(v[1]); if(l>100)return 2;' >> sockc.c\r
+< \r\n~>
+> echo 'if(*v[2]==117){ if(unlink(v[1])<0)puts("sockc: unlink refused"); else puts("sockc: unlinked"); return 0;}' >> sockc.c\r
+< \r\n~>
+> echo 'if(*v[2]==114){ if(rename(v[1],"/data/home/sockd/x")<0)puts("sockc: rename refused"); else puts("sockc: renamed"); return 0;}' >> sockc.c\r
+< \r\n~>
+> echo 'for(k=0;k<110;k++)a[k]=0; a[0]=1; memcpy(a+2,v[1],l);' >> sockc.c\r
+< \r\n~>
+> echo 's=socket(1,1,0);' >> sockc.c\r
+< \r\n~>
+> echo 'if(connect(s,a,2+l+1)<0){ e=*__errno_location(); puts("sockc: refused"); putchar(48+e/10); putchar(48+e%10); putchar(10); return 1;}' >> sockc.c\r
+< \r\n~>
+> echo 'write(s,v[2],strlen(v[2])); n=read(s,b,60); if(n<0)n=0; b[n]=0; puts("sockc: got"); puts(b); return 0;}' >> sockc.c\r
+< \r\n~>
+> mkdir psd\r
+< \r\n~>
+> echo 'name  sockd' > psd/sockd.cmd\r
+< \r\n~>
+> echo 'summary  serves one socket file' >> psd/sockd.cmd\r
+< \r\n~>
+> echo 'usage  sockd PATH WORD' >> psd/sockd.cmd\r
+< \r\n~>
+> echo 'operand  [ARGS...]  text  the socket file, and what to do' >> psd/sockd.cmd\r
+< \r\n~>
+> tcc sockd.c -o psd/sockd\r
+< \r\n~>
+> mkdir psc\r
+< \r\n~>
+> echo 'name  sockc' > psc/sockc.cmd\r
+< \r\n~>
+> echo 'summary  talks to one socket file' >> psc/sockc.cmd\r
+< \r\n~>
+> echo 'usage  sockc PATH WORD' >> psc/sockc.cmd\r
+< \r\n~>
+> echo 'operand  [ARGS...]  text  the socket file, and what to do' >> psc/sockc.cmd\r
+< \r\n~>
+> tcc sockc.c -o psc/sockc\r
+< \r\n~>
+> mkdir psn\r
+< \r\n~>
+> echo 'name  sockn' > psn/sockn.cmd\r
+< \r\n~>
+> echo 'summary  talks to one socket file, with no grant' >> psn/sockn.cmd\r
+< \r\n~>
+> echo 'usage  sockn PATH WORD' >> psn/sockn.cmd\r
+< \r\n~>
+> echo 'operand  [ARGS...]  text  the socket file, and what to do' >> psn/sockn.cmd\r
+< \r\n~>
+> tcc sockc.c -o psn/sockn\r
+< \r\n~>
+# Install: sockd with its own directory, sockc with the one socket it may reach.
+> install psd +own ~/.config/sockd\r
+< sockd (sha256
+< its own files
+< \r\n~>
+> install psc +sock /data/home/sockd/s\r
+< sockc (sha256
+< /data/home/sockd/s
+< \r\n~>
+> install psn\r
+< sockn (sha256
+< installed with no grants
+< \r\n~>
+> programs sockc\r
+< saved grants:
+< +sock /data/home/sockd/s
+< \r\n~>
+# Two servers, two files, in sockd's own directory; started by lines of their own.
+> sockd /home/.config/sockd/s &\r
+< [1] sockd
+< \r\n~>
+> sockd /home/.config/sockd/t &\r
+< [2] sockd
+< \r\n~>
+> sleep 3\r
+< \r\n~>
+# `grants` says what sockc gets: connect to one name, nothing else of the directory.
+> grants sockc /data/home/sockd/s ping\r
+< connect to s
+< (saved)
+< \r\n~>
+# Separately started programs meet over the file: the saved word is the only way in.
+> sockc /data/home/sockd/s ping\r
+< sockc: got
+< pong
+< \r\n~>
+# A grant to one socket does not reach its sibling, and gives no write on the directory.
+> sockc /data/home/sockd/t ping\r
+< sockc: refused
+< \r\n~>
+> sockc /data/home/sockd/s u\r
+< sockc: unlink refused
+< \r\n~>
+> sockc /data/home/sockd/s r\r
+< sockc: rename refused
+< \r\n~>
+> sockc /data/home/sockd/s ping\r
+< sockc: got
+< pong
+< \r\n~>
+# A program without the grant is refused, with the file there and listening.
+> sockn /data/home/sockd/s ping\r
+< sockc: refused
+< \r\n~>
+# The same word typed on the line gives it, and only for that line.
+> +sock /data/home/sockd/t sockn /data/home/sockd/t ping\r
+< sockc: got
+< pong
+< \r\n~>
+> sockn /data/home/sockd/t ping\r
+< sockc: refused
+< \r\n~>
+# The typed grant of s does not reach t either.
+> +sock /data/home/sockd/s sockn /data/home/sockd/t ping\r
+< sockc: refused
+< \r\n~>
+# A `+sock` on a plain file or a missing one fails at connect; a line may not name a directory's whole.
+> +sock /data/home/sockd/none sockn /data/home/sockd/none ping\r
+< sockc: refused
+< \r\n~>
+# Revoking the saved word takes the way in away.
+> programs revoke sockc +sock /data/home/sockd/s\r
+< removed
+< \r\n~>
+> sockc /data/home/sockd/s ping\r
+< sockc: refused
+< \r\n~>
+# The server ends on `q`; the next sockd binds the same name again (a stale node is unlinked first).
+> +sock /data/home/sockd/s sockn /data/home/sockd/s quit\r
+< sockc: got
+< \r\n~>
+> +sock /data/home/sockd/t sockn /data/home/sockd/t quit\r
+< sockc: got
+< \r\n~>
+> jobs\r
+< \r\n~>
+> sockd /home/.config/sockd/s &\r
+< [1] sockd
+< \r\n~>
+< sockd: ready
+> +sock /data/home/sockd/s sockn /data/home/sockd/s quit\r
+< sockc: got
+< \r\n~>
+> sleep 1\r
+< \r\n~>
+> poweroff\r

@@ -2236,13 +2236,23 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   socket nodes with `socket_listen` (message 41) and `socket_connect` (42 for a packet socket's one channel end, 43 for a stream
   socket's three handles) in `zoraya-proto-file`. `bind` is an exclusive create with `S_IFSOCK` and works only in the table entry of
   kind `Tmp` (the line's `/tmp`; `EACCES` in any other entry, so INV-0412-3 holds with the narrower place: a program's own directory
-  is not built, ADR-0439 item 1); `listen` sends the service one end of a channel, held for the connection `bind` made, so closing
+  is built by ADR-0465, below); `listen` sends the service one end of a channel, held for the connection `bind` made, so closing
   the socket ends the listener; `connect` resolves the path in the connecting program's own table (a program with no `/tmp` entry, or
   with it read-only, cannot connect), opens the node with `WRITE` and sends the far end of a new pair with a 24-byte record, which the
   service writes, unread, to the listener's channel and the listener checks (`unix::decode_connect`). 256 nodes and 64 listeners in
   a service; the accept queue is the channel's 64 messages (`backlog` is a hint; a full queue is `EAGAIN`). A node stays, inert, after
   its listener goes, until `unlink` (as on Linux); `stat` says socket, `open` is `ENXIO`. A listening socket is not sent (`EINVAL`), spawned or exec'd (`EBADF`) or forked (`ENOTSUP`); only the connection that made a node may
   make it listen. **Limits:** no datagram `bind`; `readdir` shows a socket file as a plain name; TCP is the next entry.
+  **In a program's own directory** (part own-sockets, ADR-0465 proposed, ADR-0412 item 5): `bind` also works in an `Own` entry
+  (`unix::bind_place`); `fsd` keeps socket nodes on every service it serves, so the volume's `/data/ROOM/NAME` holds a node (an
+  empty file on the volume, its type and listener in the service's memory: after a stop it is a stale empty file, `bind` of the
+  name is `EADDRINUSE` until unlinked). Another program reaches the file only through `+sock PATH`, a word of the line or saved on
+  its record (`install`, `programs grant`): the file's directory narrowed to one name (`Access::Connect`, rights of a change of one
+  name), so a sibling, `unlink`, `rename` and `bind` there are refused; `grants` says `connect to NAME`. Unlinking a listening node
+  needs write on the directory, as everywhere (only the owner has it). Tests: `tests/socketfile.rs` (host) and
+  `tests/posix/zosh-sockets.script` (QEMU: two installed programs started on separate lines). **Limits:** the server sees the file at
+  its view path (`~/.config/NAME/FILE`) and the client names the real one (`/data/ROOM/NAME/FILE`); the volume's 256 nodes and 64
+  listeners are shared by every room; a `+sock` is not given in a room (`room new` takes +r, +w and +net only).
   Tests: `crates/zoraya-fs-service/tests/socket.rs`, `crates/zoraya-posix/tests/socketfile.rs`, `tests/posix-core/t_unix.c` (`file`, run
   by zosh in `make test-libposix`).
 - **TCP listeners and the loopback** (plan part F7b, ADR-0225 item 5, ADR-0224 item 1; ADR-0441, proposed, records what the code
