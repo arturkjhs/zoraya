@@ -2430,6 +2430,16 @@ impl Z {
         own: Option<&grants::Own>,
     ) -> Result<(Vec<posix_child::Entry>, u32, String), String> {
         use zoraya_abi::posix::EntryKind as P;
+        // ADR-0465: a socket file's entry is never merged with another.
+        if let Err(r) = grants::connect_conflict(plan) {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(&r.subject),
+                &r.problem,
+                &hints,
+            ));
+        }
         let merged = grants::merge(plan);
         let mut entries: Vec<posix_child::Entry> = Vec::new();
         let close = |entries: &[posix_child::Entry]| {
