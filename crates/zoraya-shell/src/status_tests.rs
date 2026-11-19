@@ -133,6 +133,7 @@ fn the_three_cases_are_worded_by_the_shells_own_lookup() {
     let mut p = Pending::new();
     assert!(p.is_empty());
     assert!(p.note("/home/u/other.txt", false, 0));
+    assert!(!p.is_empty());
     let r = p.latest().unwrap().clone();
     let case = classify(&w, r.path.as_deref().unwrap());
     assert_eq!(case, Case::NotGiven);
@@ -350,6 +351,10 @@ fn enter_within_the_guard_gives_nothing() {
     let mut g = open(Mode::Give, &["vi"], None, 1_000);
     g.keys(b"+r ~/a", 1_050);
     assert!(g.keys(b"\r", 1_100).is_empty());
+    // A line of spaces gives nothing, even after the guard.
+    let mut blank = open(Mode::Give, &["vi"], None, 0);
+    blank.keys(b"  ", 1_000);
+    assert!(!blank.keys(b"\r", 1_500).contains(&Step::Give("  ".into())));
     assert!(g.guarded(1_499) && !g.guarded(1_500));
     assert_eq!(g.keys(b"\r", 1_500), vec![Step::Give("+r ~/a".into())]);
     // The kill offer has the same guard.
@@ -369,6 +374,15 @@ fn the_field_is_edited_by_the_person_only() {
     // Arrow keys and other escape sequences do nothing; a lone ESC closes.
     assert!(g.keys(b"\x1b[A\x1b[1;5C\x1bOP\x1bx", 10).is_empty());
     assert_eq!(g.text(), "+r ~");
+    // The same at the start of a read, and a multi-byte character after text.
+    let mut e = open(Mode::Give, &["vi"], None, 0);
+    assert!(e.keys(b"\x1b[A\x1bOP\x1bx", 10).is_empty());
+    assert_eq!(e.text(), "");
+    e.keys("ab\u{20ac}c".as_bytes(), 10);
+    assert_eq!(e.text(), "ab\u{20ac}c");
+    let mut e = open(Mode::Give, &["vi"], None, 0);
+    e.keys("\u{20ac}".as_bytes(), 10);
+    assert_eq!(e.text(), "\u{20ac}");
     assert_eq!(g.keys(b"\x1b", 10), vec![Step::Close]);
     // Control characters are not text.
     g.keys(b"\x01\x02\x03\x04\x0b\x0c\x1a", 10);
@@ -402,6 +416,8 @@ fn a_pipelines_field_names_the_refused_element_and_tab_moves_it() {
     let mut g = open(Mode::Give, &["cat", "vi", "wc"], Some(1), 0);
     assert_eq!(g.program(), "vi");
     assert_eq!(g.element(), 1);
+    // One element: Tab has nothing to move to.
+    assert!(open(Mode::Give, &["vi"], None, 0).keys(b"\t", 0).is_empty());
     // Tab on the empty field moves; on a typed field it completes instead.
     assert_eq!(g.keys(b"\t", 0), vec![Step::Redraw]);
     assert_eq!(g.program(), "wc");
@@ -437,6 +453,12 @@ fn the_kill_offer_asks_and_takes_only_enter_and_escape() {
     let mut k = open(Mode::Kill, &["vi"], None, 0);
     assert_eq!(k.field(), "kill vi? Enter kills, Escape keeps");
     assert!(k.keys(b"y\x7f\x15\tq", 9_999).is_empty());
+    let mut two = open(Mode::Kill, &["cat", "vi"], None, 0);
+    let before = two.element();
+    assert!(two.keys(b"\t", 9_999).is_empty());
+    assert_eq!(two.element(), before);
+    assert!(two.keys("\u{43f}".as_bytes(), 9_999).is_empty());
+    assert_eq!(two.text(), "");
     assert_eq!(k.keys(b"\x1b", 9_999), vec![Step::Close]);
     assert_eq!(k.keys(b"\r", 9_999), vec![Step::Kill]);
 }
@@ -745,6 +767,42 @@ mod delivery_tests {
         // Another directory is another list.
         assert!(h.give(&[file("/e/more", false)]).is_ok());
     }
+
+    #[test]
+    fn the_rights_are_the_bits_the_words_name() {
+        // Mutation review of 10f: the constants are compared bit by bit, not
+        // only to themselves.
+        use zoraya_proto_file::rights;
+        assert_eq!(TREE & rights::PUBLISH, 0);
+        assert_eq!(TREE & READ, READ);
+        assert_eq!(READ, rights::READ | rights::CLONE);
+        assert_eq!(READ & rights::WRITE, 0);
+        for r in [rights::READ, rights::WRITE, rights::SYNC, rights::CLONE] {
+            assert_eq!(CHANGE & r, r);
+        }
+    }
+
+    #[test]
+    fn a_grant_of_two_places_sends_an_entry_for_each() {
+        let mut h = Held::default();
+        let specs = h.give(&[file("/d/a", false), file("/e/b", false)]).unwrap();
+        assert_eq!(specs.len(), 2);
+        let mut h = Held::default();
+        let specs = h.give(&[file("/d/a", false), file("/d/b", false)]).unwrap();
+        assert_eq!(specs.len(), 1);
+    }
+
+    #[test]
+    fn a_directory_given_beside_what_the_program_holds_leaves_that_alone() {
+        let mut h = vi_notes();
+        h.give(&[Wanted {
+            path: "/home/u/proj".into(),
+            dir: true,
+            write: true,
+        }])
+        .unwrap();
+        assert_eq!(h.wholes[0], ("/etc".to_string(), READ));
+    }
 }
 
 #[test]
@@ -763,6 +821,7 @@ fn a_refused_network_request_is_worded_and_counted_like_a_path() {
         "\u{202e}x",
         "ex\u{e4}.org",
         "a;b",
+        &"a".repeat(55),
         &"a".repeat(80),
     ] {
         assert_eq!(shown_target(bad, 80), None, "{bad:?}");
