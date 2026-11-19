@@ -147,7 +147,7 @@ if [ -n "$git" ]; then
     [ "$grants" = "./run-command.c " ] || say "POSIX_SPAWN_GRANT_ is used in: ${grants:-nothing} (INV-0464-3: run-command.c only)"
     # Review of 10h, finding 1: only transport-helper.c marks a child as the helper, run-command.c refuses a shell command
     # and a path outside git's exec path, so a pager or editor setting that imitates the name gets no connection.
-    m=$(cd "$git" && grep -l 'zoraya_helper' ./*.c ./*.h | tr '\n' ' ')
+    m=$(cd "$git" && grep -l 'zoraya_helper' ./*.c ./*.h | sort | tr '\n' ' ')
     [ "$m" = "./run-command.c ./run-command.h ./transport-helper.c " ] || say "zoraya_helper is used in: ${m:-nothing} (INV-0464-3)"
     grep -q 'cmd->use_shell' "$git/run-command.c" && grep -q '/usr/libexec/git-core/git-remote-' "$git/run-command.c" \
       || say "run-command.c does not refuse a shell command or a path outside the exec path (INV-0464-3)"

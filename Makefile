@@ -717,7 +717,7 @@ test-apps: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage apps $(TLSTHREADS_BIN) $(C
 	mkdir -p $(APPS_TEST_ROOT)/etc/test-pki/hashed && cp tests/net/tls/other-root.pem $(APPS_TEST_ROOT)/etc/test-pki/ && \
 	cp tests/net/tls/hashed/24824ecf.0 $(APPS_TEST_ROOT)/etc/test-pki/hashed/ && \
 	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(APPS_TEST_ROOT)/bin && \
-	target/debug/zoraya-mkfs --size 64M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
+	target/debug/zoraya-mkfs --size 128M --from $(APPS_TEST_ROOT) $(APPS_DISK) && \
 	: > $(APPS_HTTP_READY) && : > $(APPS_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime $(APPS_LIFETIME) --ready-file $(APPS_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(APPS_TLS_READY) > target/test-logs/test-httpd-apps.log 2>&1 & echo $$! > $(BUILD)/apps-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/apps-httpd.pid); \

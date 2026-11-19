@@ -130,3 +130,65 @@ the cached `mbedtls-3.6.8.tar.bz2` (matches the pin `bc54b818...b595b`). No QEMU
 Not ready to merge. Findings 1-4 must be fixed first: the helper selection by name, the INV-0464-3 and INV-0464-4 checks that
 do not exist or cannot fail, and the second `-C`. Findings 5-8 should be fixed before INV-0461-2, INV-0339-x and INV-0464-x are
 set to checked.
+
+## Dispositions (changed-lines check of the fix pass)
+
+Checked: `git diff f1871d1a..HEAD` (HEAD `c5e856f9`) plus the uncommitted trap change in `tools/test-apps-git.sh`. Run here:
+the nine git patches applied in order to a fresh `git-2.56.1` from the cached tarball (`patch -p1`, all clean);
+`cargo test -p zoraya-shell` (251 passed, among them `a_second_c_and_a_create_tree_over_home_are_refused`). No QEMU and no port
+build were run, so no in-QEMU claim below is confirmed. The part report's `PASS: 139 steps` predates these fixes and the changed script.
+
+- **1 (error): fixed in the code, its check is broken.** `zoraya_helper` is set only in `transport-helper.c:get_helper`, zeroed by
+  `child_process_init`, and `zoraya_wants_services` requires it with `!use_shell && !git_cmd`. `zoraya_spawn` refuses an
+  `argv.v[1]` outside `/usr/libexec/git-core/git-remote-`; the `-2` return falls through to `fork()` (`failed_errno` is then
+  fork's), so the fallback fails closed. A helper name from `remote.X.vcs` with a `/` is not looked up in `PATH` and so cannot
+  match the prefix; one without a `/` resolves only to a file in the exec path, where the image installs only `git-remote-http`
+  and `-https`. Sound. The test the finding asked for (a pager string that imitates the name) was not added. New problems: R1, R2, R5.
+- **2 (error): reworded, not fixed.** INV-0464-3 now says "partly". Its status still says "the helper is chosen by name, to be
+  tightened", which is false after the fix (R5), and it cites `make check-ports`, which now fails (R1).
+- **3 (error): fixed in the script.** `GIT_CEILING_DIRECTORIES=/home/proj` from `/home/proj/sub` would stop git before
+  `/home/proj` if git honoured it. The status `checked` waits for a run, which has not happened since the change.
+- **4 (error): fixed.** `Parsed::options` keeps every occurrence in order, so the count sees `-C a -C b`, and `-Ca` too.
+  The host test covers only `one_directory(n)`, not zosh's counting, which no host test can reach.
+- **5 (should-fix): partly fixed.** The second server (`tests/net/tls`, whose root the git disk does not hold: line 68 of
+  `test-apps-git.sh` overwrites `/system/tls/roots`) is started, forwarded, substituted, and its log is checked. But
+  `GIT_SSL_CAINFO` and `http.sslCAInfo` point at `/etc/passwd`, not at that server's root, so the line cannot show that a named
+  root is ignored: the handshake fails whether libcurl reads `/etc/passwd` or not. No later https line succeeds while
+  `http.sslCAInfo` is set either. See R3.
+- **6: recorded, not changed.** It is in ADR-0464's open questions for the architect. Acceptable as a disposition.
+- **7 (should-fix): fixed, with a false hint.** `create_tree_target` rebuilds the absolute path (`join(parent, 0, name)`, where
+  `name` is one component of a normalised path), and `covers(target, home)` refuses home and every ancestor. `/` gives no entry
+  at all (`parent_and_name`). Only `git-clone.cmd` and `git-init.cmd` use `create-tree`, so no other program changes. See R4.
+- **8 (should-fix): mostly fixed.** (a), (b), (c), (e) and (f) are corrected. (d): the report exists now, but its lines 47-48 say "host
+  test still to add" and "findings 5 to 15 ... are **open**", which step 7 made false.
+
+New findings in the fix pass:
+
+- **R1 (error)** `ports/check-early.sh:79-80`. `grep -l zoraya_helper ./*.c ./*.h` lists the `.c` glob first and gives
+  `./run-command.c ./transport-helper.c ./run-command.h `. The check expects `./run-command.c ./run-command.h ./transport-helper.c `.
+  Measured on the patched tree, both on the fresh one and on `build/ports/work/git-2.56.1`. Scenario: every
+  `make check-ports`/`make apps` run reports INV-0464-3 broken and exits non-zero. Fix: compare a sorted list (`| sort | tr`),
+  or reorder the expected string to match. Then run `sh ports/check-early.sh`.
+- **R2 (warning)** `ports/check-early.sh:81`. `grep -q 'cmd->use_shell' run-command.c` holds for upstream git (2 hits in
+  `prepare_cmd` and elsewhere), so this half of the check cannot fail. Fix: grep for the patched condition itself
+  (`!cmd->zoraya_helper || cmd->use_shell || cmd->git_cmd`).
+- **R3 (warning)** `tests/shell/apps-git.script:141-147`. As in 5: put `tests/net/tls/root.pem` on the git disk at a readable
+  path, outside `/system/tls/roots`. Name it with `GIT_SSL_CAINFO` and `http.sslCAInfo` against `@TLSOTHER@`, and expect the
+  refusal. Or clone from `@TLSVALID@` successfully while `http.sslCAInfo=/etc/passwd` is set.
+- **R4 (warning)** `crates/zoraya-shell/src/repository.rs:153`. The hint `to allow it: +w {target} COMMAND` cannot be
+  followed: `+w` adds a `Tree` entry, and the `CreateTree` entry from the operand stays in the plan. The same line with `+w ~`
+  is refused again. Home as a repository is refused by ADR-0339 anyway. Fix: give no hint, or one that names a directory below
+  home.
+- **R5 (warning)** `docs/adr/invariants.md:892`. INV-0464-3's status still cites finding 1 as open ("chosen by name, to be
+  tightened"). Also `docs/tasks/TASK-31-part-10h.md:47-48`, as in 8(d). Fix: restate what is now checked.
+- **R6 (warning)** `tools/test-apps-git.sh:56`. In the committed step 7, the EXIT trap runs `wait $httpd` under `set -e` on a killed
+  server: its status 143 ends the trap, and the script exits 143 even after a pass. The `|| true` added afterwards (committed as
+  `05b90626` while this check ran) fixes that. `kill $httpd $httpd2` without `|| true` still ends the trap with status 1 if either server already exited (its
+  `--lifetime`, or a crash), which turns a pass into a failure. Fix: `kill ... 2>/dev/null || true`.
+- **R7 (note)** `ports/patches/git/0006`, the `run-command.h` hunk. The upstream comment `/* if this is to be git sub-command */`
+  moved from `git_cmd` to `zoraya_helper`. The comment on `zoraya_spawn` ("the pid, or -1 with errno") leaves out `-2`.
+- Still open from the review: INV-0339-4 is `checked` through `apps-git-hooks.script`, which CI skips (no `build/rootfs-posix`),
+  and notes 9-15.
+
+Verdict on the fix pass: findings 3, 4 and 7 are fixed in the code. Finding 1 is fixed in git, but its check (R1) fails on every
+ports build. Fix R1 and the `kill` of R6, then rerun `tools/test-apps-git.sh`, before merging.

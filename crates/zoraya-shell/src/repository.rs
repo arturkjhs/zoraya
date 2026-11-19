@@ -150,7 +150,7 @@ pub fn create_tree_target(plan: &[Planned], home: &str) -> Result<(), Refused> {
             return Err(Refused {
                 subject: name.clone(),
                 problem: "a directory that holds your home directory, or is it, is not made or entered this way".into(),
-                hint: Some(format!("to allow it: +w {target} COMMAND")),
+                hint: Some("make a directory below your home: git init ~/NAME".into()),
             });
         }
     }

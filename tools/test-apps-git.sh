@@ -53,7 +53,7 @@ log2=target/test-logs/test-httpd-git-untrusted.log
 $HTTPD --port 0 --lifetime $((TIMEOUT * 2 + 120)) --ready-file "$dir/httpd2.port" --tls-dir tests/net/tls --tls-ready-file "$tls2_ready" \
 	--git-root "$dir" > "$log2" 2>&1 &
 httpd2=$!
-trap 'status=$?; kill $httpd $httpd2 2>/dev/null; wait $httpd 2>/dev/null || true; wait $httpd2 2>/dev/null || true; exit $status' EXIT
+trap 'status=$?; kill $httpd $httpd2 2>/dev/null || true; wait $httpd 2>/dev/null || true; wait $httpd2 2>/dev/null || true; exit $status' EXIT
 for _ in $(seq 1 40); do [ -s "$tls2_ready" ] && break; perl -e 'select(undef,undef,undef,0.25)'; done
 tlsother=$(cut -d' ' -f1 "$tls2_ready")
 [ -n "$tlsother" ] || { cat "$log2"; fail "the second test server did not start"; }
@@ -66,7 +66,9 @@ if [ -z "$port" ] || [ -z "$tlswrong" ] || ! kill -0 $httpd 2>/dev/null; then ca
 cp -R "$ROOT_FROM"/. "$root"/
 # The git test's own root (tests/net/tls-git/README.md: mbedTLS cannot read the other one's critical name constraint).
 cp tests/net/tls-git/root.pem "$root/system/tls/roots"
-target/debug/zoraya-mkfs --size 64M --from "$root" "$disk"
+# The root of the untrusted-root server, as a file a line can name (GIT_SSL_CAINFO, http.sslCAInfo): it must change nothing.
+mkdir -p "$root/etc/test-pki" && cp tests/net/tls/root.pem "$root/etc/test-pki/other-root.pem"
+target/debug/zoraya-mkfs --size 128M --from "$root" "$disk"
 sed -e "s/@HOST@/$NET_HOST/g" -e "s/@TLSVALID@/$tlsvalid/g" -e "s/@TLSEXPIRED@/$tlsexpired/g" -e "s/@TLSWRONG@/$tlswrong/g" -e "s/@TLSOTHER@/$tlsother/g" \
 	"$template" > "$script"
 
@@ -86,7 +88,7 @@ set -e
 posix_root=${ROOTFS_POSIX:-build/rootfs-posix}
 if [ -x "$posix_root/bin/sh" ]; then
 	rm -rf "$root_hooks" && mkdir -p "$root_hooks" && cp -R "$posix_root"/. "$root_hooks"/ && cp -R "$ROOT_FROM"/. "$root_hooks"/
-	target/debug/zoraya-mkfs --size 96M --from "$root_hooks" "$disk_hooks"
+	target/debug/zoraya-mkfs --size 160M --from "$root_hooks" "$disk_hooks"
 	set +e
 	$RUNNER --timeout "$TIMEOUT" --script tests/shell/apps-git-hooks.script --label apps-git-hooks -- \
 		$RUN_QEMU --test --keys --net --disk "$disk_hooks" --mem 512M --accel "$ACCEL" "$KERNEL"

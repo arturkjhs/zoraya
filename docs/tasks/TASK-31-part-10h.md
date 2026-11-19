@@ -40,12 +40,11 @@ is implemented as decided; ADR-0339 and ADR-0347 are used as they stand, with th
 - `tools/test-apps-git.sh` by hand under HVF: `PASS: 139 steps` (apps-git) and `PASS: 43 steps` (apps-git-hooks, with `make -f ports/Makefile rootfs`
   done), then its host checks (`ok`). Run before the review's fixes below.
 - `make test-changed` with `PAR_QEMU=1` was started on `89df00e5` and **had not finished when this was written**: no verdict exists for it.
-- **Not done:** the merge. The independent review (`docs/tasks/TASK-31-review-10h.md`, `opus-review`) found four errors at `f1871d1a`:
-  (1) the helper is chosen by the basename of a command string, which a `core.pager`-like setting can imitate (fix: a flag set only in
-  `transport-helper.c`, `!use_shell`, a path under `/usr/libexec/git-core/`); (2) INV-0464-3 cited a hook script that does not exist (status
-  now says partly); (3) the ceiling test used the starting directory itself, which git ignores (script now uses `/home/proj`);
-  (4) only the last `-C` was used (a second `-C` is now refused, host test still to add). Findings 5 to 15 (an untrusted-root server for
-  INV-0461-2, the ancestor rule's reach, `create-tree` on `~`, doc mismatches, test-map candidate rule) are **open**.
+- **Fix pass (this report's last revision):** the review's errors are fixed (helper marked only by `transport-helper.c`, one `-C` refused with a host test of
+  `one_directory`, ceiling test, `create-tree` over home refused, INV-0464-3 status, an untrusted-root server whose root is named by `GIT_SSL_CAINFO` and
+  `http.sslCAInfo`); the apps disks are 128M (the apps root is 70 MB with git: a first `make test-changed` ended `NoSpace`). A pager string that imitates the
+  helper's name is covered by `ports/check-early.sh` (flag and path checks in the source), not by a QEMU test (a grant cannot be observed from a script).
+  The merge is not done.
 
 ## Measurements
 
