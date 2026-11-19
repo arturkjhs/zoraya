@@ -1,0 +1,157 @@
+# `git` (TASK-31 10h, ADR-0339, ADR-0347, ADR-0461; `make test-apps`, which turns @HOST@ and the TLS ports into
+# values). git 2.56.1 as a POSIX program of the image, in its own directory /data/home/git (seen as ~/.config/git),
+# with the repository of the current directory given by the shell, and its transport helper on libcurl and mbedTLS.
+# The server is the host's `git http-backend` behind the test server's TLS listeners (tools/test-httpd): the valid
+# certificate for test.zoraya, an expired one and one for another name. The disk's /system/tls/roots is the test PKI.
+! panicked
+! first process ended
+! git tried to
+! s3cret
+! fatal: Invalid path
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+> git --version\r
+< git version 2.56.1
+< \r\n~>
+# What the line gives git: its own directory, the toolchain set; no network, no repository yet.
+> grants git status\r
+< git gets (a POSIX program):
+< its own files (it sees them as ~/.config/git)
+< \r\n~>
+# Who is committing: the global configuration, in git's own directory.
+> git config --global user.name 'Ada Test'\r
+< \r\n~>
+> git config --global user.email ada@test\r
+< \r\n~>
+> cat /data/home/git/config\r
+< name = Ada Test
+< \r\n~>
+# A new repository in a directory the line names: create-tree, and nothing else of the current directory.
+> grants git init proj\r
+< create proj, and change anything in it
+< \r\n~>
+> git init proj\r
+< Initialized empty Git repository
+< \r\n~>
+> status\r
+< succeeded (exit status 0)
+< \r\n~>
+> cd proj\r
+< \r\n~/proj>
+> echo hello > notes.txt\r
+< \r\n~/proj>
+> grants git status\r
+< the repository of the current directory
+< \r\n~/proj>
+> git add notes.txt\r
+< \r\n~/proj>
+> git commit -m 'first notes'\r
+< first notes
+< \r\n~/proj>
+> git --no-pager log --oneline\r
+< first notes
+< \r\n~/proj>
+> git status\r
+< nothing to commit, working tree clean
+< \r\n~/proj>
+# From a subdirectory the repository is the same one, and a ceiling the line writes is not the shell's (INV-0464-4).
+> mkdir sub\r
+< \r\n~/proj>
+> cd sub\r
+< \r\n~/proj/sub>
+> git status\r
+< nothing to commit
+< \r\n~/proj/sub>
+> GIT_CEILING_DIRECTORIES=/home/proj/sub git status\r
+< nothing to commit
+< \r\n~/proj/sub>
+> cd ~\r
+< \r\n~>
+# Outside any repository: git says so, with no refused path (INV-0339-3).
+> git status\r
+< fatal: not a git repository
+< \r\n~>
+> git -C proj --no-pager log --oneline\r
+< first notes
+< \r\n~>
+# Clone over https: the URL on the line is the host the command reaches, with the system's roots, and a name that is no
+# public one needs the word (as for curl). The directory is the address's last part without `.git`.
+> +net test.zoraya:@TLSVALID@ git clone https://test.zoraya:@TLSVALID@/git/repo.git\r
+< Cloning into 'repo'
+< \r\n~>
+> status\r
+< succeeded (exit status 0)
+< \r\n~>
+> cat repo/README\r
+< seed line
+< \r\n~>
+> cd repo\r
+< \r\n~/repo>
+> git --no-pager log --oneline\r
+< the seed commit
+< \r\n~/repo>
+# A commit, and a push. With no word the host is not given (INV-0339-2): the helper has no connection and the server
+# sees nothing. With the word git asks for the user and the password on the terminal, and stores neither.
+> echo 'a change' > change.txt\r
+< \r\n~/repo>
+> git add change.txt\r
+< \r\n~/repo>
+> git commit -m 'a change typed in the guest'\r
+< a change typed in the guest
+< \r\n~/repo>
+> git push\r
+< fatal: unable to access
+< \r\n~/repo>
+> status\r
+< exit status 128
+< \r\n~/repo>
+> +net test.zoraya:@TLSVALID@ git push\r
+< Username for 'https://test.zoraya:@TLSVALID@'
+> ada\r
+< Password for 'https://ada@test.zoraya:@TLSVALID@'
+> s3cret\r
+< main -> main
+< \r\n~/repo>
+> status\r
+< succeeded (exit status 0)
+< \r\n~/repo>
+> search s3cret /data/home/git/config\r
+< \r\n~/repo>
+> status\r
+< exit status 1
+< \r\n~/repo>
+> cd ~\r
+< \r\n~>
+# A certificate that is expired, or for another name, is refused, and nothing a configuration or the line says changes that
+# (INV-0339-5, INV-0461-2): http.sslVerify, GIT_SSL_NO_VERIFY and a named root are not read.
+> git config --global http.sslVerify false\r
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ git clone https://expired.zoraya:@TLSEXPIRED@/git/repo.git bad1\r
+< certificate
+< \r\n~>
+> status\r
+< exit status 128
+< \r\n~>
+> GIT_SSL_NO_VERIFY=1 GIT_SSL_CAINFO=/etc/passwd +net expired.zoraya:@TLSEXPIRED@ git clone https://expired.zoraya:@TLSEXPIRED@/git/repo.git bad2\r
+< certificate
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ git clone https://wrong.zoraya:@TLSWRONG@/git/repo.git bad3\r
+< certificate
+< \r\n~>
+> ls\r
+< proj
+< repo
+< \r\n~>
+# What the line does not give: another form of address, and a value as the address.
+> git clone git://test.zoraya/repo.git\r
+< \r\n~>
+> set u https://test.zoraya:@TLSVALID@/git/repo.git\r
+< \r\n~>
+> git clone $u fromvalue\r
+< from a value, outside the line's network grants
+< \r\n~>
+x power off
+> poweroff\r

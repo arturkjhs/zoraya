@@ -1,0 +1,24 @@
+diff -ruN a/abspath.c b/abspath.c
+--- a/abspath.c
++++ b/abspath.c
+@@ -127,8 +127,20 @@
+ 
+ 		if (lstat(resolved->buf, &st)) {
+ 			/* error out unless this was the last component */
++#ifdef __zoraya__
++			/*
++			 * Zoraya (ADR-0464): a program's table has entries for the
++			 * directories it was given, and `/home` above `~/proj` has none
++			 * of its own, so lstat() of it is ENOENT. An ancestor that is
++			 * missing is taken as the plain directory it is above its entry;
++			 * the entries below it are resolved by the library as they are
++			 * opened (a link out of an entry is followed there, not here).
++			 */
++			if (errno != ENOENT) {
++#else
+ 			if (errno != ENOENT ||
+ 			   (!(flags & REALPATH_MANY_MISSING) && remaining.len)) {
++#endif
+ 				if (flags & REALPATH_DIE_ON_ERROR)
+ 					die_errno("Invalid path '%s'",
+ 						  resolved->buf);

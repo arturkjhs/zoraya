@@ -21,7 +21,7 @@ shell holds there). Nothing above it is given, a .git that is a file is refused,
 home directory is refused: for those write the grant yourself (+w ~ git status). git's own files are one directory,
 /data/home/git (in a room /data/ROOM/git), which it sees as ~/.config/git: its global configuration, nothing secret.
 The image's /etc/gitconfig sets no detached garbage collection and no guessed author: set yours once with
-`git config --global user.name 'Ada'` and `git config --global user.email ada@example.org`.
+`git config --global user.name 'Ada'` and `git config --global user.email YOUR-ADDRESS`.
 
 It starts with no network. `git clone` and `git ls-remote` take their URL from the line (see `help git-clone`); `fetch`,
 `pull` and `push` take their address from the repository's configuration, which is data and gives nothing: write the

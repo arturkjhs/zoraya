@@ -178,6 +178,15 @@ tests/shell/apps-ssh.script   test-apps
 tools/test-apps-ssh.sh        test-apps
 tools/test-sshd.sh            test-apps
 ports/patches/openssh/        test-apps test-hand-run
+ports/patches/git/            test-apps test-hand-run
+ports/patches/mbedtls/        test-apps test-hand-run
+ports/git/                    test-apps test-hand-run
+tests/shell/apps-git.script   test-apps
+tools/test-apps-git.sh        test-apps
+user/describe/posix/git.cmd   test-apps test-files
+user/describe/posix/git-clone.cmd test-apps test-files
+user/describe/posix/git-init.cmd test-apps test-files
+user/describe/posix/git-ls-remote.cmd test-apps test-files
 user/describe/posix/ssh.cmd   test-apps test-files
 user/describe/posix/ssh-keygen.cmd test-apps test-files
 user/describe/data-names.txt  test-apps test-files

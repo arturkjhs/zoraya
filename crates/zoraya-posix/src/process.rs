@@ -674,6 +674,16 @@ impl<S: Sys> Posix<S> {
         let Refusal::Outside(path) = refusal else {
             return refusal.errno();
         };
+        // A directory above an entry (`/home` above `~/proj`, `/` above all) is not a path the program was
+        // refused: it asked about where it stands, as git does for every ancestor of its work tree. It is
+        // `ENOENT` and no report, so that no hint names `+r /` for it (TASK-31 10h, ADR-0464).
+        if self
+            .entries
+            .iter()
+            .any(|e| zoraya_resolve::covers(&path, &e.prefix))
+        {
+            return ENOENT;
+        }
         if self.reported.contains(&path) {
             return ENOENT;
         }

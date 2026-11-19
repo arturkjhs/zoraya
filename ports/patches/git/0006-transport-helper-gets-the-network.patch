@@ -1,0 +1,149 @@
+diff -ruN a/run-command.c b/run-command.c
+--- a/run-command.c
++++ b/run-command.c
+@@ -17,6 +17,9 @@
+ #include "config.h"
+ #include "packfile.h"
+ #include "compat/nonblock.h"
++#ifdef __zoraya__
++#include <spawn.h>
++#endif
+ 
+ void child_process_init(struct child_process *child)
+ {
+@@ -674,6 +677,113 @@
+ 	strbuf_release(&buf);
+ }
+ 
++#ifdef __zoraya__
++/*
++ * Zoraya (ADR-0339 item 7, ADR-0464): a child of git has no network
++ * connection and no random service (a forked child cannot be given a channel
++ * end, ADR-0287 item 3), except the transport helper, which must connect.
++ * Only the helper is started with posix_spawn and POSIX_SPAWN_GRANT_NET and
++ * _RANDOM: a duplicate of git's own connection, with git's own scope
++ * (ADR-0433), so it can reach what git can and nothing more. Hooks, the
++ * editor, the pager and every other child are forked, as before, and have
++ * neither.
++ */
++static int zoraya_wants_services(const struct child_process *cmd)
++{
++	const char *name = cmd->args.nr ? cmd->args.v[0] : NULL;
++	const char *slash;
++
++	/* libc.a has no posix_spawn_file_actions_addchdir_np: a helper that runs elsewhere is forked. */
++	if (!name || cmd->dir)
++		return 0;
++	slash = strrchr(name, '/');
++	if (slash)
++		name = slash + 1;
++	return starts_with(name, "git-remote-") ||
++	       (cmd->git_cmd && starts_with(name, "remote-"));
++}
++
++/*
++ * Starts `argv` (argv.v[1] and on; argv.v[0] is the shell for a script) as
++ * the helper, with the same standard descriptors, directory and
++ * environment as the fork path gives. Gives the pid, or -1 with errno.
++ */
++static pid_t zoraya_spawn(const struct child_process *cmd, struct strvec *argv,
++			  char **childenv, int null_fd, const sigset_t *mask,
++			  int need_in, int *fdin, int need_out, int *fdout,
++			  int need_err, int *fderr, const int *notify)
++{
++	unsigned grants[2] = { POSIX_SPAWN_GRANT_NET | POSIX_SPAWN_GRANT_RANDOM, 0 };
++	int in = -1, out = -1, err = -1, i, rc = EINVAL;
++	pid_t pid = -1;
++
++	if (cmd->no_stdin)
++		in = null_fd;
++	else if (need_in)
++		in = fdin[0];
++	else if (cmd->in)
++		in = cmd->in;
++	if (cmd->no_stderr)
++		err = null_fd;
++	else if (need_err)
++		err = fderr[1];
++	else if (cmd->err > 1)
++		err = cmd->err;
++	if (cmd->no_stdout)
++		out = null_fd;
++	else if (cmd->stdout_to_stderr)
++		out = err >= 0 ? err : 2;
++	else if (need_out)
++		out = fdout[1];
++	else if (cmd->out > 1)
++		out = cmd->out;
++
++	/* The descriptors only this process uses are not the child's. */
++	if (need_in)
++		set_cloexec(fdin[1]);
++	if (need_out)
++		set_cloexec(fdout[0]);
++	if (need_err)
++		set_cloexec(fderr[0]);
++	set_cloexec(notify[0]);
++	set_cloexec(notify[1]);
++
++	for (i = 0; i < 2; i++) {
++		posix_spawnattr_t attr;
++		posix_spawn_file_actions_t actions;
++
++		posix_spawnattr_init(&attr);
++		posix_spawn_file_actions_init(&actions);
++		posix_spawnattr_setgrants_np(&attr, grants[i]);
++		posix_spawnattr_setsigmask(&attr, mask);
++		posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK);
++		if (in >= 0)
++			posix_spawn_file_actions_adddup2(&actions, in, 0);
++		if (err >= 0)
++			posix_spawn_file_actions_adddup2(&actions, err, 2);
++		if (out >= 0)
++			posix_spawn_file_actions_adddup2(&actions, out, 1);
++		rc = posix_spawn(&pid, argv->v[1], &actions, &attr,
++				 (char *const *) argv->v + 1,
++				 (char *const *) childenv);
++		posix_spawn_file_actions_destroy(&actions);
++		posix_spawnattr_destroy(&attr);
++		/*
++		 * Without a network connection of its own git cannot give one
++		 * (EACCES): the helper then starts without, and says so when
++		 * it fails to connect.
++		 */
++		if (!rc || rc != EACCES)
++			break;
++	}
++	if (rc) {
++		errno = rc;
++		return -1;
++	}
++	return pid;
++}
++#endif
++
+ int start_command(struct child_process *cmd)
+ {
+ 	int need_in, need_out, need_err;
+@@ -784,8 +894,19 @@
+ 	 * never be released in the child process.  This means only
+ 	 * Async-Signal-Safe functions are permitted in the child.
+ 	 */
+-	cmd->pid = fork();
+-	failed_errno = errno;
++	cmd->pid = -2;
++#ifdef __zoraya__
++	if (zoraya_wants_services(cmd)) {
++		cmd->pid = zoraya_spawn(cmd, &argv, childenv, null_fd, &as.old,
++					need_in, fdin, need_out, fdout,
++					need_err, fderr, notify_pipe);
++		failed_errno = errno;
++	}
++#endif
++	if (cmd->pid == -2) {
++		cmd->pid = fork();
++		failed_errno = errno;
++	}
+ 	if (!cmd->pid) {
+ 		int sig;
+ 		/*

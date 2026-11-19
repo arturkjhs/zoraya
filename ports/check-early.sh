@@ -13,6 +13,7 @@
 # INV-0390-3: the curses archives name the terminfo directory; the programs load.
 # INV-0346-2: ssh and ssh-keygen name no askpass variable or configuration file.
 # INV-0347-2: no object of git imports getenv but wrapper.o (and compat/regex's locale lookups).
+# INV-0464-3: only run-command.c asks for a child's network (the transport helper's spawn).
 # INV-0461-1: git-remote-http links mbedTLS and not OpenSSL, and no other program of the ports does (by symbol).
 # INV-0461-2 (the part that no option turns verification off): git-remote-http names neither the options nor the
 # files that would (by string); the behaviour is tested by `make test-apps` (tests/shell/apps-git.script).
@@ -140,6 +141,10 @@ if [ -n "$git" ]; then
         say "$other links mbedTLS (INV-0461-1)"
       fi
     done
+    # INV-0464-3: the only source file of git that asks for a connection or the random service for a child is
+    # run-command.c (the transport helper's spawn); no hook, editor or pager is started that way.
+    grants=$(cd "$git" && grep -l 'POSIX_SPAWN_GRANT_' ./*.c ./*/*.c ./*/*/*.c 2>/dev/null | tr '\n' ' ')
+    [ "$grants" = "./run-command.c " ] || say "POSIX_SPAWN_GRANT_ is used in: ${grants:-nothing} (INV-0464-3: run-command.c only)"
     # The helper trusts the system's roots and reads no device file for entropy. The variables git itself names
     # (GIT_SSL_NO_VERIFY and the rest) are read through zoraya_getenv, which answers "not set" (INV-0347-2); that
     # they decide nothing is the test of INV-0461-2 (tests/shell/apps-git.script), not a string check.

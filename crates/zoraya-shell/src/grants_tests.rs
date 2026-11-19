@@ -1621,3 +1621,19 @@ fn the_git_descriptions_carry_the_repository_key_and_the_own_directory() {
         assert_eq!(own.view, "/home/.config/git");
     }
 }
+
+#[test]
+fn git_gets_no_double_dash_before_its_command() {
+    use crate::grants::end_of_options_at;
+    // ssh has one before the host (ADR-0340 item 4); git would read it as an option before the command.
+    let git = d(GIT_CMD);
+    assert_eq!(end_of_options_at(&git, &["status"]), None);
+    assert_eq!(
+        end_of_options_at(&git, &["-C", "p", "log", "-n", "3"]),
+        None
+    );
+    assert_eq!(
+        end_of_options_at(&d(SSH_CMD), &["-l", "ada", "h", "ls"]),
+        Some(2)
+    );
+}

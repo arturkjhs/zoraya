@@ -386,6 +386,29 @@ fn refused_paths_are_reported_once_and_missing_ones_never() {
     );
 }
 
+/// ADR-0464: a directory above an entry is `ENOENT` and not reported (git stats every ancestor of its
+/// work tree); a sibling of an entry still is.
+#[test]
+fn the_ancestors_of_an_entry_are_not_reported() {
+    let mut r = rig_without_root();
+    for path in ["/", "/dev", "/dev/", "/./dev"] {
+        assert_eq!(
+            r.p.stat_at(AT_FDCWD, path.as_bytes(), 0),
+            Err(ENOENT),
+            "{path}"
+        );
+    }
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"/devices", 0), Err(ENOENT));
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"/work2", 0), Err(ENOENT));
+    assert_eq!(
+        r.reports(),
+        vec![
+            (Access::Read, 0, "/devices".to_string()),
+            (Access::Read, 0, "/work2".to_string()),
+        ]
+    );
+}
+
 /// At most 16 reports a process; past that they are dropped and counted.
 #[test]
 fn reports_stop_at_sixteen() {

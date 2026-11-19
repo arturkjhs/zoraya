@@ -74,6 +74,9 @@ zoraya_user::describe!("system", "zosh");
 
 /// The connections a POSIX program may hold open at once (ADR-0262 item 2).
 const POSIX_NET_BUDGET: u32 = 2;
+/// git's account: git and the transport helper it starts hold one connection each (ADR-0339 item 7 assumed two
+/// were enough: they are), and one more is slack for a second helper (a redirect that restarts it).
+const GIT_NET_BUDGET: u32 = 3;
 
 /// The roots every native program with a network grant may read (ADR-0228
 /// item 3; the `tls.roots` setting of ADR-0229 is not built, so the path is
@@ -1181,11 +1184,20 @@ impl Z {
         let Some(root) = self.net else {
             return Ok(None);
         };
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let words: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let budget = match grants::trusted_description_args(&trusted, path, &words) {
+            Some(d) if grants::reads_its_own_words(d) => GIT_NET_BUDGET,
+            _ => POSIX_NET_BUDGET,
+        };
         // At the limit (the network service carves a few accounts at once,
         // session-wide) or when the room's connection refuses a wider scope, the
         // line is refused with the reason, not run without a connection
         // (review of 10g, finding 2).
-        zoraya_user::netclient::narrow_room(root, rights, POSIX_NET_BUDGET, &scope, &room)
+        zoraya_user::netclient::narrow_room(root, rights, budget, &scope, &room)
             .map(Some)
             .map_err(|status| {
                 let (problem, hint) = zoraya_shell::netgrant::connection_refusal(
@@ -1901,7 +1913,15 @@ impl Z {
         }
         for i in have..parts.len() {
             let parent = parts[..i].join("/");
-            let dir = root.open(&parent, OPEN_DIRECTORY, all).map_err(fail)?;
+            // The first level is made in `/` itself, which no path names (`open("")` is not a
+            // directory name): a volume that has no `/data` yet gets it from the first program
+            // with an own directory (TASK-31 10h; 10g's test made the levels beforehand).
+            let dir = if parent.is_empty() {
+                root.clone_as(all)
+            } else {
+                root.open(&parent, OPEN_DIRECTORY, all)
+            }
+            .map_err(fail)?;
             dir.make_directory(parts[i]).map_err(fail)?;
         }
         root.open(rel, OPEN_DIRECTORY, wanted).map_err(fail)
@@ -2019,7 +2039,7 @@ impl Z {
         let all: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
         let texts = grants::words_of(d, &all);
         // git reads long options as well as short ones (ADR-0464): its descriptions list both.
-        let reads_long = d.repository || d.sub.is_some();
+        let reads_long = grants::reads_its_own_words(d);
         // The program reads short options only: a long form is refused with
         // the short one named, so `grants` never states what the program
         // would not do (review of 10g, finding 7).

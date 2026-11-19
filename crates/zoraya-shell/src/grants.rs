@@ -841,6 +841,12 @@ pub fn trusted_description_args<'a>(
     trusted_description(trusted, path)
 }
 
+/// Whether the program reads long options and its own subcommand words (git): its descriptions have `repository`
+/// or are forms (`sub`), ADR-0464 item 1.
+pub fn reads_its_own_words(d: &Description) -> bool {
+    d.repository || d.sub.is_some()
+}
+
 /// The words a description parses: all of them, or for a `sub` description
 /// the words after the command word.
 pub fn words_of<'t, 'a>(d: &Description, words: &'t [&'a str]) -> &'t [&'a str] {
@@ -993,6 +999,12 @@ pub fn own_words(own: &Own) -> String {
 /// `--` there. The index is into `args` (the words after the program's name).
 pub fn end_of_options_at(d: &Description, args: &[&str]) -> Option<usize> {
     d.operands.iter().find(|o| o.kind == Kind::Rest)?;
+    // git reads its own command word and options after it (`git -C DIR status -s`), and takes `--` for an
+    // option before the command: the shell has already refused every option before the command that the
+    // description does not list (ADR-0464 item 1).
+    if reads_its_own_words(d) {
+        return None;
+    }
     let Ok(zoraya_command::Outcome::Run(parsed)) = zoraya_command::parse(d, args) else {
         return None;
     };

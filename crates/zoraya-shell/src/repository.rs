@@ -41,7 +41,10 @@ pub struct Found {
     /// The entry for the repository's root, if one was found.
     pub entry: Option<Planned>,
     /// `GIT_CEILING_DIRECTORIES`: the parent of what was found, or of the
-    /// starting directory.
+    /// starting directory. git never goes up into a ceiling directory
+    /// (measured: the ceiling itself is not searched), so the parent is the
+    /// directory the search must not reach; it need not exist in the
+    /// program's table.
     pub ceiling: String,
 }
 
