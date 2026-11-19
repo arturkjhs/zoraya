@@ -254,7 +254,8 @@ fn spawn_first(
     for _ in 0..3 {
         handles.push(clone_tty(terminal, group)?);
     }
-    let tmp_root = tmp.clone_as(zoraya_proto_file::rights::ALL).ok()?;
+    // With `BIND` (ADR-0466): a program of the first line may bind in its `/tmp`.
+    let tmp_root = tmp.clone_as(zoraya_proto_file::rights::WITH_BIND).ok()?;
     handles.push(tmp_root.end);
     core::mem::forget(tmp_root);
     handles.push(clone_tty(terminal, group)?);
@@ -618,7 +619,7 @@ fn main() -> i32 {
             return 1;
         };
         server.act(&mut core, actions);
-        let tmp_root = tmp.clone_as(zoraya_proto_file::rights::ALL).ok();
+        let tmp_root = tmp.clone_as(zoraya_proto_file::rights::WITH_BIND).ok();
         let mut entries = vec![ChannelEntry {
             handle: client,
             rights: rights_of(client),

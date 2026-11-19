@@ -411,7 +411,7 @@ impl Gui {
             let _ = handle_close(ours);
             return None;
         };
-        let Ok(root) = root.clone_as(crate::files::ALL) else {
+        let Ok(root) = root.clone_as(crate::files::MASTER) else {
             let _ = handle_close(ours);
             let _ = handle_close(panel);
             let _ = handle_close(chooser);
@@ -461,7 +461,7 @@ impl Gui {
             let _ = handle_close(ours);
             return None;
         }
-        let Ok(root) = root.clone_as(crate::files::ALL) else {
+        let Ok(root) = root.clone_as(crate::files::MASTER) else {
             close_services();
             let _ = handle_close(ours);
             if let Some(w) = window {

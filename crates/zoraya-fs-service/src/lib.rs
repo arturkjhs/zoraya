@@ -646,7 +646,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             r.seal = Seal::Root;
         }
         let account = self.session_account();
-        self.add_connection(end, record, proto::rights::ALL, account)
+        // A root holds `BIND` too (ADR-0466): the supervisor derives from it
+        // the connections that may make a socket node, and no other.
+        self.add_connection(end, record, proto::rights::WITH_BIND, account)
             .is_some()
     }
 
@@ -1644,6 +1646,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 // A bind past the table's bound is refused before anything
                 // is made (the entry is added once the create succeeds).
                 if socket
+                    && self.has(i, proto::rights::BIND)
                     && self
                         .sockets
                         .as_ref()
@@ -1920,6 +1923,88 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// The id of what `name` names in the directory of connection `i`, if it
     /// is a socket node.
+    /// Whether `name` in `directory` is a socket node, or a directory that holds one at
+    /// any depth. The walk is bounded (depth 16, 4096 entries); past the bound the
+    /// answer is yes, the safe one.
+    fn carries_socket(&mut self, directory: Handle, name: &str) -> bool {
+        let Ok(a) = self.volume.stat_at(directory, name) else {
+            return false;
+        };
+        if self.sockets.as_ref().is_some_and(|x| x.contains_key(&a.id)) {
+            return true;
+        }
+        if !matches!(a.kind, ObjKind::Directory) {
+            return false;
+        }
+        let Ok(handle) = self.volume.open(
+            directory,
+            name,
+            OpenOptions {
+                create: None,
+                exclusive: false,
+                truncate: false,
+                link_itself: false,
+            },
+        ) else {
+            return true;
+        };
+        let mut budget = 4096usize;
+        let found = self.directory_holds_socket(handle, 16, &mut budget);
+        let _ = self.volume.close(handle);
+        found
+    }
+
+    fn directory_holds_socket(&mut self, handle: Handle, depth: u32, budget: &mut usize) -> bool {
+        let mut after: Option<String> = None;
+        loop {
+            let entry = match self.volume.readdir(handle, after.as_deref()) {
+                Ok(Some(e)) => e,
+                Ok(None) => return false,
+                Err(_) => return true,
+            };
+            if *budget == 0 || depth == 0 {
+                return true;
+            }
+            *budget -= 1;
+            if self
+                .sockets
+                .as_ref()
+                .is_some_and(|x| x.contains_key(&entry.id))
+            {
+                return true;
+            }
+            if matches!(entry.kind, ObjKind::Directory) {
+                let opened = self.volume.open(
+                    handle,
+                    &entry.name,
+                    OpenOptions {
+                        create: None,
+                        exclusive: false,
+                        truncate: false,
+                        link_itself: true,
+                    },
+                );
+                let Ok(sub) = opened else {
+                    return true;
+                };
+                let inner = self.directory_holds_socket(sub, depth - 1, budget);
+                let _ = self.volume.close(sub);
+                if inner {
+                    return true;
+                }
+            }
+            after = Some(entry.name);
+        }
+    }
+
+    /// Whether two directory handles are one directory.
+    fn same_directory(&mut self, a: Handle, b: Handle) -> bool {
+        match (self.volume.stat(a), self.volume.stat(b)) {
+            (Ok(x), Ok(y)) => x.id == y.id,
+            _ => false,
+        }
+    }
+
     fn socket_id_at(&mut self, directory: Handle, name: &str) -> Option<u64> {
         if self.sockets.as_ref().is_none_or(BTreeMap::is_empty) {
             return None;
@@ -2192,6 +2277,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         if flags & f::TRUNCATE != 0 {
             needed |= r::WRITE;
+        }
+        // A socket node is made only through a connection that holds `BIND`
+        // (ADR-0466): the own directory's and a line's `/tmp`, so a program
+        // that has write on any other directory cannot plant one there.
+        if self.socket_create && creates {
+            needed |= r::BIND;
         }
         let Some(dir) = self.handle_of(i) else {
             return self.open_answer(i, t, full, status::STORAGE_FAILED, ("", ""), None);
@@ -2927,6 +3018,20 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             modes::EXCHANGE => RenameMode::Exchange,
             _ => RenameMode::Replace,
         };
+        // A socket node (or a directory that may hold one) does not leave the
+        // place that made it for one that could not (ADR-0466 item 2): into
+        // another directory it needs `BIND` there, as a create does.
+        if self.sockets.as_ref().is_some_and(|x| !x.is_empty())
+            && !self.same_directory(source, target)
+        {
+            let into_target = self.carries_socket(source, m.old.0);
+            let into_source = mode == RenameMode::Exchange && self.carries_socket(target, m.new.0);
+            if (into_target && !self.token_has_on(token, m.new.0, proto::rights::BIND))
+                || (into_source && !self.has_on(i, m.old.0, proto::rights::BIND))
+            {
+                return self.done(i, t, status::ACCESS_DENIED, 0);
+            }
+        }
         // A rename over a socket node takes its name away (not an exchange:
         // both names stay).
         let replaced = if mode == RenameMode::Replace {
@@ -2965,6 +3070,15 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Ok(directory) => directory,
             Err(s) => return self.done(i, t, s, 0),
         };
+        // A published socket node (made unnamed) is a name made: it needs `BIND` there.
+        let is_node = self
+            .volume
+            .stat(file)
+            .ok()
+            .is_some_and(|a| self.sockets.as_ref().is_some_and(|x| x.contains_key(&a.id)));
+        if is_node && !self.token_has_on(token, m.name.0, proto::rights::BIND) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
         let mode = if m.mode.0 == proto::publish_mode::REPLACE {
             PublishMode::Replace
         } else {

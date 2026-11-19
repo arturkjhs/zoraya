@@ -34,7 +34,7 @@ use zoraya_abi::{
 };
 use zoraya_fs_service::Restarts;
 use zoraya_user::beside::{Beside, start_broker};
-use zoraya_user::files::{ALL, File};
+use zoraya_user::files::{ALL, File, MASTER};
 use zoraya_user::gui::{
     Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
 };
@@ -533,7 +533,7 @@ fn start_shell(
         if terminal.is_some() {
             let home = zoraya_user::namespace::shell_home(root);
             let holds = zoraya_panel::terminal(None).holds;
-            if let Some(r) = zoraya_user::namespace::record(root, &home, &home, &holds) {
+            if let Some(r) = zoraya_user::namespace::record(root, &home, &home, &holds, true) {
                 e.handle(moved(zoraya_panel::STARTUP_SLOT, r));
             }
         } else {
@@ -833,7 +833,7 @@ fn main() -> i32 {
             session.as_ref().map(|s| s.broker)
         } else {
             beside = stack.as_ref().and_then(|s| start_broker(&s.root));
-            let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
+            let root = stack.as_ref().and_then(|s| s.root.clone_as(MASTER).ok());
             // Its root network connection, made from `init`'s own (item 4).
             let root_network = network.as_ref().and_then(root_connection);
             let services = if network_allowed || network.is_some() {

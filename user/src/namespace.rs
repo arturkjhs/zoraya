@@ -300,7 +300,13 @@ pub fn expand(path: &str, home: &str) -> String {
 /// opened from `root` with ADR-0153's rights for `tree` (write) or `read`,
 /// starting in `cwd`; gives the end to put at its slot. What a terminal's
 /// shell holds instead of the volume's root (ADR-0242's condition).
-pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> Option<Handle> {
+pub fn record(
+    root: &File,
+    home: &str,
+    cwd: &str,
+    holds: &[(String, bool)],
+    bind: bool,
+) -> Option<Handle> {
     use zoraya_abi::native::{self, Slots};
     use zoraya_abi::spawn::Transfer;
     use zoraya_abi::{ChannelEntry, ChannelObject, ObjectType};
@@ -319,9 +325,25 @@ pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> O
         } else {
             rights::READ | rights::CLONE
         };
-        let open = |rel: &str| match rel {
+        // With `bind` (the record of a shell, never of an application such as
+        // `files`) a write entry also asks for `BIND` (ADR-0466), so that the shell
+        // can make its program's own directory below it with it; a root without it
+        // gives the entry without.
+        let asks_bind = *write && bind;
+        let open_with = |rel: &str, wanted: u32| match rel {
             "" => root.clone_as(wanted),
             rel => root.open(rel, 0, wanted),
+        };
+        let open = |rel: &str| match open_with(
+            rel,
+            if asks_bind {
+                wanted | rights::BIND
+            } else {
+                wanted
+            },
+        ) {
+            Err(status::ACCESS_DENIED) if asks_bind => open_with(rel, wanted),
+            other => other,
         };
         let rel = abs.trim_start_matches('/');
         // A folder the shell may change that is not there yet (`/config`

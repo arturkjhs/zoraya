@@ -72,7 +72,18 @@ pub mod rights {
     /// listener one end of a new pair, and nothing else of the file. A grant
     /// of one socket file (`+sock`) has this and `CLONE` alone.
     pub const CONNECT: u32 = 1 << 8;
+    /// Every right an ordinary connection can hold. It does not contain `BIND`:
+    /// a request for `ALL` never asks for it, so a grant built from `ALL`
+    /// (`+w`, a `Tree`) cannot carry it (ADR-0466).
     pub const ALL: u32 = (1 << 9) - 1;
+    /// Make a socket node in this directory (ADR-0466): a service refuses
+    /// `open_with_mode` of `S_IFSOCK` without it, in addition to `CREATE`. Only the
+    /// service's own root connections have it from the start, a request needs it
+    /// on the connection it is made through (rights only shrink), and the shell
+    /// asks for it for a program's own directory and its line's `/tmp` alone.
+    pub const BIND: u32 = 1 << 9;
+    /// What a root connection holds, and what a request may name: `ALL` and `BIND`.
+    pub const WITH_BIND: u32 = ALL | BIND;
 }
 
 /// `open`'s flags.
@@ -140,7 +151,7 @@ pub mod failure {
     pub const COUNT: u32 = 6;
 }
 
-pub type Rights = Flags<{ rights::ALL }>;
+pub type Rights = Flags<{ rights::WITH_BIND }>;
 
 protocol! {
     /// Opens `path` under this directory on the given end.
