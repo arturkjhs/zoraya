@@ -141,6 +141,11 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
   `build/logs/`) or the `test-runner` subagent, and mutation tests with `make mutants` (survivors in
   `build/mutants/report.md`) and the `mutant-triage` subagent (`.claude/agents/`). Open a log only when its step
   failed.
+- A dispatcher never waits without a wake-up (architect's rule of 2026-11-19; a dispatcher idled for hours on an agent
+  that had stopped). Before it waits on an agent or a run, it starts a background command `sleep 1800` (or a Monitor
+  with a 30-minute limit). When that ends, it checks every agent's branch on origin, its log (the `RC=` line, or the
+  last lines and their time) and its processes; acts on what ended (push, merge, start the next part); kills only the
+  processes of a run that hung; runs the test itself if the agent is gone; and starts the next wake-up.
 - A mutation found by hand goes into a list in `tools/mutants/`, so that the next run repeats it.
 
 ## Dependencies
