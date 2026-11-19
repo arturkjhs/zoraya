@@ -62,6 +62,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 4. **Later parts:** 10f's grant line (first terminal, a room's terminal, a shell that entered a room), 10g's `ssh -l NAME HOST`
    to a real host, 10h's `git clone` and `git push`: commands will be listed with the part.
 
+- **10h, open decisions (ADR-0464):** the ancestor rule applies to every POSIX program (INV-0153-7 narrowed); hooks of git have no network (narrower than ADR-0339 item 5); a proposed text for ADR-0461 about the git test root.
 - **10h (git), not merged:** hand-check commands are in `docs/tasks/TASK-31-part-10h.md` (a clone and a push against a real host). Open review findings there.
 
 ## D. Open questions

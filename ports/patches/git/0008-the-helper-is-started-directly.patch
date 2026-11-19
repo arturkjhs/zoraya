@@ -1,7 +1,6 @@
-diff -ruN a/transport-helper.c b/transport-helper.c
 --- a/transport-helper.c
 +++ b/transport-helper.c
-@@ -142,10 +142,22 @@
+@@ -142,11 +142,26 @@
  	helper->in = -1;
  	helper->out = -1;
  	helper->err = 0;
@@ -22,5 +21,9 @@ diff -ruN a/transport-helper.c b/transport-helper.c
  	helper->git_cmd = 1;
 +#endif
  	helper->silent_exec_failure = 1;
++#ifdef __zoraya__
++	helper->zoraya_helper = 1;
++#endif
  
  	if (have_git_dir())
+ 		strvec_pushf(&helper->env, "%s=%s",

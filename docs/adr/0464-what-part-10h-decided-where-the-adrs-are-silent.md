@@ -13,8 +13,8 @@ The code needed choices those ADRs leave open: how one description says that `gi
 operands and `git status` has none; how `git clone URL` names its directory; what a child of git gets of the network now that
 `libposix` has `posix_spawn` with grants (ADR-0411, ADR-0433) and a forked child still cannot be given a channel end (ADR-0287
 item 3); where git's own search for `.git` ends. This ADR records them, with the least committing choice in each case, and the
-two places where the build is narrower than ADR-0339. **Measured:** `git-remote-http` on mbedTLS 3.6.8 is 6,191,000 bytes
-(9,306,128 on OpenSSL, ADR-0347); `git` is 6,708,472 bytes. **Not measured:** a TLS handshake's time against OpenSSL's.
+two places where the build is narrower than ADR-0339. **Measured:** `git-remote-http` on mbedTLS 3.6.8 is 6,193,088 bytes
+(9,306,128 on OpenSSL, ADR-0347); `git` is 6,710,560 bytes. **Not measured:** a TLS handshake's time against OpenSSL's.
 
 ## Decision drivers
 
@@ -96,10 +96,14 @@ Against: ADR-0411 Option C (a request path from a running program to the shell) 
    The search stops at the first directory the shell holds nothing of. A `.git` that is a file or link, a repository that is the home
    directory (`/home` as the shell's `shell.home`) or `/` refuse the line with `to allow it: +w ~ git ...`.
 6. **Build choices.** The second libcurl is built from the curl port's pin and patches into its own tree, library only. mbedTLS 3.6.8
-   is configured for TLS 1.2 and 1.3 as a client (no server, DTLS, sockets, timing, self-test, threading, assembly or NEON: `zcc` has
-   no `arm_neon.h`), with `-D__unix__` so that its Unix code (`unistd.h`, `gmtime_r`) is used, and `getrandom` as the only entropy
+   is configured for TLS 1.2 and 1.3 as a client (no server, DTLS, sockets, timing, self-test or threading, and no NEON or crypto-extension code: `zcc` has
+   no `arm_neon.h`; `MBEDTLS_HAVE_ASM` stays defined and the library's portable C is what runs), with `-D__unix__` so that its Unix code (`unistd.h`, `gmtime_r`) is used, and `getrandom` as the only entropy
    source (a patch under `__zoraya__`; `/dev/random` is not in the program). `git` links no TLS library. `/etc/gitconfig` and an
    `info/exclude` template are the image's; `git-remote-https` is a copy of `git-remote-http` (no hard links).
+   **The test PKI.** mbedTLS 3.6 enforces no name constraint and cannot read a certificate with a critical one (`-0x2562`); the production
+   roots (108) all parse. The git test therefore has its own root (`tests/net/tls-git`) whose name constraint `permitted;DNS:.zoraya` is not critical:
+   OpenSSL, rustls and any RFC 5280 verifier still enforce it, mbedTLS ignores it. Proposed text for ADR-0461 (not edited here: the architect's
+   decision is accepted): "git's HTTPS test uses a test root with a non-critical name constraint, because mbedTLS cannot read a critical one".
 7. **The four names** (ADR-0347): `statvfs`, `alarm`, `getnameinfo`, `execlp` are patched out (`0005`), not exported; `ports/apps/gitshim.c`
    is deleted. `git help` therefore starts no viewer and a `git://` connection prints no address.
 8. **Not built in this part** (known limits, see the part's report): `git commit` with the message typed in `vi` has a script in the
@@ -127,6 +131,12 @@ Against: ADR-0411 Option C (a request path from a running program to the shell) 
   *Check:* `tests/shell/apps-git.script` (a line that sets it) and `cargo test -p zoraya-shell`.
 
 ## Open questions
+
+- **Decisions the architect may overrule (recorded by the fix pass of the review of 10h):** (a) `libposix` gives `ENOENT` with no report for
+  a path above an entry, for every POSIX program and every call, which narrows INV-0153-7 (`ls ..` fails with no `+r ..` hint); the
+  alternative is to limit it to stat, lstat and access. (b) A hook has no network and no random service, narrower than ADR-0339 item 5.
+- The helper is chosen by a flag that only `transport-helper.c` sets, never by a name (review finding 1); `GIT_NET_BUDGET` is 3 (git, its
+  helper, one spare).
 
 - Whether a hook may be given the line's hosts (ADR-0339 item 5 says it may; built: it may not).
 - `-C DIR clone` and the other commands that name something (`git remote add`, `git worktree add`, `git bundle`): forms for them when asked.

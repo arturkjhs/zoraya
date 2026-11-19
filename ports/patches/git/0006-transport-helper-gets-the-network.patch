@@ -1,4 +1,3 @@
-diff -ruN a/run-command.c b/run-command.c
 --- a/run-command.c
 +++ b/run-command.c
 @@ -17,6 +17,9 @@
@@ -11,10 +10,12 @@ diff -ruN a/run-command.c b/run-command.c
  
  void child_process_init(struct child_process *child)
  {
-@@ -674,6 +677,115 @@
- 	strbuf_release(&buf);
- }
+@@ -672,8 +675,121 @@
  
+ 	trace_printf("%s", buf.buf);
+ 	strbuf_release(&buf);
++}
++
 +#ifdef __zoraya__
 +/*
 + * Zoraya (ADR-0339 item 7, ADR-0464): a child of git has no network
@@ -32,15 +33,14 @@ diff -ruN a/run-command.c b/run-command.c
 +	const char *slash;
 +
 +	/* libc.a has no posix_spawn_file_actions_addchdir_np: a helper that runs elsewhere is forked. */
-+	if (!name || cmd->dir)
++	if (!name || cmd->dir || !cmd->zoraya_helper || cmd->use_shell || cmd->git_cmd)
 +		return 0;
 +	slash = strrchr(name, '/');
 +	if (slash)
 +		name = slash + 1;
-+	return starts_with(name, "git-remote-") ||
-+	       (cmd->git_cmd && starts_with(name, "remote-"));
-+}
-+
++	return starts_with(name, "git-remote-");
+ }
+ 
 +/*
 + * Starts `argv` (argv.v[1] and on; argv.v[0] is the shell for a script) as
 + * the helper, with the same standard descriptors, directory and
@@ -56,6 +56,11 @@ diff -ruN a/run-command.c b/run-command.c
 +	int in = -1, out = -1, err = -1, i, rc = EINVAL;
 +	pid_t pid = -1;
 +
++	/* The program must be the helper in git's own exec path, not a name a setting made up. */
++	if (!starts_with(argv->v[1], "/usr/libexec/git-core/git-remote-")) {
++		errno = EACCES;
++		return -2;
++	}
 +	if (cmd->no_stdin)
 +		in = null_fd;
 +	else if (need_in)
@@ -127,7 +132,7 @@ diff -ruN a/run-command.c b/run-command.c
  int start_command(struct child_process *cmd)
  {
  	int need_in, need_out, need_err;
-@@ -784,8 +896,19 @@
+@@ -784,8 +900,19 @@
  	 * never be released in the child process.  This means only
  	 * Async-Signal-Safe functions are permitted in the child.
  	 */
@@ -149,3 +154,18 @@ diff -ruN a/run-command.c b/run-command.c
  	if (!cmd->pid) {
  		int sig;
  		/*
+--- a/run-command.h
++++ b/run-command.h
+@@ -114,8 +114,11 @@
+ 	unsigned no_stdin:1;
+ 	unsigned no_stdout:1;
+ 	unsigned no_stderr:1;
+-	unsigned git_cmd:1; /* if this is to be git sub-command */
++	unsigned git_cmd:1;
+ 
++	/* Zoraya (ADR-0464 item 3): set by transport-helper.c alone; only such a child may be given the network. */
++	unsigned zoraya_helper:1; /* if this is to be git sub-command */
++
+ 	/**
+ 	 * If the program cannot be found, the functions return -1 and set
+ 	 * errno to ENOENT. Normally, an error message is printed, but if

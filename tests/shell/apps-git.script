@@ -138,6 +138,15 @@
 > GIT_SSL_NO_VERIFY=1 GIT_SSL_CAINFO=/etc/passwd +net expired.zoraya:@TLSEXPIRED@ git clone https://expired.zoraya:@TLSEXPIRED@/git/repo.git bad2\r
 < certificate
 < \r\n~>
+# A certificate made by a root the system does not hold (INV-0461-2), with a named root on the line and in the configuration.
+> git config --global http.sslCAInfo /etc/passwd\r
+< \r\n~>
+> GIT_SSL_CAINFO=/etc/passwd +net test.zoraya:@TLSOTHER@ git clone https://test.zoraya:@TLSOTHER@/git/repo.git bad4\r
+< certificate
+< \r\n~>
+> status\r
+< exit status 128
+< \r\n~>
 > +net wrong.zoraya:@TLSWRONG@ git clone https://wrong.zoraya:@TLSWRONG@/git/repo.git bad3\r
 < certificate
 < \r\n~>

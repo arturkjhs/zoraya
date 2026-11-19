@@ -1942,6 +1942,11 @@ impl Z {
                 let d = d.clone();
                 Self::userland_options(exec, &d)?;
                 let mut plan = self.plan_with(exec, &d, true)?;
+                let home = self.home();
+                zoraya_shell::repository::create_tree_target(&plan, &home).map_err(|r| {
+                    let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+                    zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
+                })?;
                 if d.repository {
                     self.add_repository(exec, &d, &mut plan)?;
                 }
@@ -1967,18 +1972,16 @@ impl Z {
     ) -> Result<(), String> {
         use zoraya_shell::repository::{Held as Rights, Probe};
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        // git applies each -C in turn; the shell searches from one directory, so a second is refused (review of 10h, finding 4).
+        // git applies each -C in turn; the shell searches from one directory (review of 10h, finding 4).
         if let Ok(zoraya_command::Outcome::Run(p)) =
             zoraya_command::parse(d, grants::words_of(d, &texts))
             && let Some(c) = d.option_by_short('C')
-            && p.options.iter().filter(|(o, _)| *o == c).count() > 1
         {
-            return Err(zoraya_command::error(
-                "zosh",
-                Some("-C"),
-                "git gets one -C: the shell looks for the repository from one directory",
-                &["write the directory once"],
-            ));
+            let count = p.options.iter().filter(|(o, _)| *o == c).count();
+            zoraya_shell::repository::one_directory(count).map_err(|r| {
+                let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+                zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
+            })?;
         }
         let start = match zoraya_command::parse(d, grants::words_of(d, &texts)) {
             Ok(zoraya_command::Outcome::Run(p)) => d

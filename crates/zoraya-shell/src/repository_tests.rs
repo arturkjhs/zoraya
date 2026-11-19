@@ -156,3 +156,22 @@ fn the_search_from_c_starts_there() {
         Some(("/home/user/proj".to_string(), Access::Tree))
     );
 }
+
+#[test]
+fn a_second_c_and_a_create_tree_over_home_are_refused() {
+    use crate::grants::Planned;
+    use crate::repository::{create_tree_target, one_directory};
+    assert!(one_directory(0).is_ok() && one_directory(1).is_ok());
+    assert_eq!(one_directory(2).unwrap_err().subject, "-C");
+    let tree = |path: &str, name: &str| {
+        Vec::from([Planned {
+            path: path.into(),
+            access: Access::CreateTree(name.into()),
+            reason: "operand DIR".into(),
+        }])
+    };
+    // `git init ~`, `git init /home`'s parent forms, and `/`'s: refused; a project below home is not.
+    assert!(create_tree_target(&tree("/home", "user"), "/home/user").is_err());
+    assert!(create_tree_target(&tree("/", "home"), "/home/user").is_err());
+    assert!(create_tree_target(&tree("/home/user", "proj"), "/home/user").is_ok());
+}

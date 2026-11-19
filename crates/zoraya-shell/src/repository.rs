@@ -123,3 +123,36 @@ pub fn find(
         ceiling: parent(start),
     })
 }
+
+/// git applies every `-C` in turn and the shell searches from one directory: a second is refused
+/// (review of 10h, finding 4: `git -C ~ -C sub` would start where the shell did not look).
+pub fn one_directory(count: usize) -> Result<(), Refused> {
+    if count <= 1 {
+        return Ok(());
+    }
+    Err(Refused {
+        subject: "-C".into(),
+        problem: "git gets one -C: the shell looks for the repository from one directory".into(),
+        hint: Some("write the directory once".into()),
+    })
+}
+
+/// A `create-tree` entry gives everything in the directory it makes, and on one that exists, everything in it: the home
+/// directory, `/` and the directories above the home are not made that way (`git init ~` would give the whole
+/// home without `+w`, which the repository rule refuses, review of 10h, finding 7).
+pub fn create_tree_target(plan: &[Planned], home: &str) -> Result<(), Refused> {
+    for e in plan {
+        let Access::CreateTree(name) = &e.access else {
+            continue;
+        };
+        let target = zoraya_resolve::join(&e.path, 0, name);
+        if zoraya_resolve::covers(&target, home) {
+            return Err(Refused {
+                subject: name.clone(),
+                problem: "a directory that holds your home directory, or is it, is not made or entered this way".into(),
+                hint: Some(format!("to allow it: +w {target} COMMAND")),
+            });
+        }
+    }
+    Ok(())
+}

@@ -145,6 +145,12 @@ if [ -n "$git" ]; then
     # run-command.c (the transport helper's spawn); no hook, editor or pager is started that way.
     grants=$(cd "$git" && grep -l 'POSIX_SPAWN_GRANT_' ./*.c ./*/*.c ./*/*/*.c 2>/dev/null | tr '\n' ' ')
     [ "$grants" = "./run-command.c " ] || say "POSIX_SPAWN_GRANT_ is used in: ${grants:-nothing} (INV-0464-3: run-command.c only)"
+    # Review of 10h, finding 1: only transport-helper.c marks a child as the helper, run-command.c refuses a shell command
+    # and a path outside git's exec path, so a pager or editor setting that imitates the name gets no connection.
+    m=$(cd "$git" && grep -l 'zoraya_helper' ./*.c ./*.h | tr '\n' ' ')
+    [ "$m" = "./run-command.c ./run-command.h ./transport-helper.c " ] || say "zoraya_helper is used in: ${m:-nothing} (INV-0464-3)"
+    grep -q 'cmd->use_shell' "$git/run-command.c" && grep -q '/usr/libexec/git-core/git-remote-' "$git/run-command.c" \
+      || say "run-command.c does not refuse a shell command or a path outside the exec path (INV-0464-3)"
     # The helper trusts the system's roots and reads no device file for entropy. The variables git itself names
     # (GIT_SSL_NO_VERIFY and the rest) are read through zoraya_getenv, which answers "not set" (INV-0347-2); that
     # they decide nothing is the test of INV-0461-2 (tests/shell/apps-git.script), not a string check.

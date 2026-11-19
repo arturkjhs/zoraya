@@ -2479,11 +2479,11 @@ credential helpers are not built.
   (INV-0461-1, `ports/check-early.sh`). mbedTLS is a TLS 1.2 and 1.3 client only, its entropy is `getrandom`
   (`ports/patches/mbedtls/`), its roots are `/system/tls/roots`; `http.ssl*`, `http.proxy*`, `GIT_SSL_*`, `credential.helper`,
   `core.askPass`, `SSH_ASKPASS`, `GIT_SSH_COMMAND` and `GIT_CONFIG_*` decide nothing (patches `0001` to `0004`). `git-remote-http`
-  is 6,191,000 bytes (OpenSSL's build was 9,306,128), `git` 6,708,472.
+  is 6,193,088 bytes (OpenSSL's build was 9,306,128), `git` 6,710,560.
 - **What a line gives git.** `user/describe/posix/git.cmd` has `repository`: the shell looks for the nearest directory with a `.git`
   directory from the current directory (or `-C DIR`) inside its own table (`zoraya_shell::repository`), and gives it as a `tree`
   entry (read where that is all the shell holds). A `.git` file, the home directory and `/` as a repository refuse the line with a hint.
-  The shell sets `GIT_CEILING_DIRECTORIES` to the repository's root (or the starting directory). `git clone`, `git init` and
+  The shell sets `GIT_CEILING_DIRECTORIES` to the parent of the repository (or of the starting directory). `git clone`, `git init` and
   `git ls-remote` are forms (`git-clone.cmd` and the others, `sub`): `init DIR` and `clone URL [DIR]` have a `create-tree` operand,
   `clone` and `ls-remote` a `url` operand that gives its host and port with `/system/tls`; `git clone URL` makes the directory the
   address names (`derive`). `fetch`, `pull` and `push` take their address from the repository, which is data: they get no network

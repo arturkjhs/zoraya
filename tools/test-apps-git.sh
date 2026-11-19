@@ -45,6 +45,18 @@ $HTTPD --port 0 --lifetime $((TIMEOUT * 2 + 120)) --ready-file "$http_ready" --t
 	--git-root "$dir" --git-auth ada:s3cret > "$log" 2>&1 &
 httpd=$!
 trap 'status=$?; kill $httpd 2>/dev/null; wait $httpd 2>/dev/null; exit $status' EXIT
+# A second server whose valid certificate is made by the OTHER test root (tests/net/tls), which the git disk does not trust
+# (INV-0461-2: a certificate not made by a root of /system/tls/roots is refused, whatever GIT_SSL_CAINFO says).
+tls2_ready=$dir/tls2.ports
+log2=target/test-logs/test-httpd-git-untrusted.log
+: > "$tls2_ready"
+$HTTPD --port 0 --lifetime $((TIMEOUT * 2 + 120)) --ready-file "$dir/httpd2.port" --tls-dir tests/net/tls --tls-ready-file "$tls2_ready" \
+	--git-root "$dir" > "$log2" 2>&1 &
+httpd2=$!
+trap 'status=$?; kill $httpd $httpd2 2>/dev/null; wait $httpd 2>/dev/null; wait $httpd2 2>/dev/null; exit $status' EXIT
+for _ in $(seq 1 40); do [ -s "$tls2_ready" ] && break; perl -e 'select(undef,undef,undef,0.25)'; done
+tlsother=$(cut -d' ' -f1 "$tls2_ready")
+[ -n "$tlsother" ] || { cat "$log2"; fail "the second test server did not start"; }
 for _ in $(seq 1 40); do [ -s "$http_ready" ] && [ -s "$tls_ready" ] && break; perl -e 'select(undef,undef,undef,0.25)'; done
 port=$(cat "$http_ready")
 set -- $(cat "$tls_ready")
@@ -55,11 +67,11 @@ cp -R "$ROOT_FROM"/. "$root"/
 # The git test's own root (tests/net/tls-git/README.md: mbedTLS cannot read the other one's critical name constraint).
 cp tests/net/tls-git/root.pem "$root/system/tls/roots"
 target/debug/zoraya-mkfs --size 64M --from "$root" "$disk"
-sed -e "s/@HOST@/$NET_HOST/g" -e "s/@TLSVALID@/$tlsvalid/g" -e "s/@TLSEXPIRED@/$tlsexpired/g" -e "s/@TLSWRONG@/$tlswrong/g" \
+sed -e "s/@HOST@/$NET_HOST/g" -e "s/@TLSVALID@/$tlsvalid/g" -e "s/@TLSEXPIRED@/$tlsexpired/g" -e "s/@TLSWRONG@/$tlswrong/g" -e "s/@TLSOTHER@/$tlsother/g" \
 	"$template" > "$script"
 
 set --
-for p in $port $tlsvalid $tlsexpired $tlswrong; do
+for p in $port $tlsvalid $tlsexpired $tlswrong $tlsother; do
 	set -- "$@" --net-guestfwd "$NET_HOST:$p=$PWD/$HTTPD --relay 127.0.0.1:$p"
 done
 set +e
@@ -101,4 +113,7 @@ for name in expired wrong; do
 	grep -q "^tls $name: ended after 0 request bytes" "$log" || { tail -30 "$log"; fail "tls $name: no refused handshake logged"; }
 	if grep "^tls $name: request of" "$log"; then fail "INV-0461-2: a request reached the $name server"; fi
 done
+# INV-0461-2: the server of the other root saw a handshake and no request.
+grep -q "^tls valid: ended after 0 request bytes" "$log2" || { tail -20 "$log2"; fail "INV-0461-2: no refused handshake on the untrusted-root server"; }
+if grep "^tls valid: request of" "$log2"; then fail "INV-0461-2: a request reached the untrusted-root server"; fi
 echo "[apps-git] ok: clone, commit and push over https; the expired and wrong-name servers saw no request byte"
