@@ -3607,13 +3607,15 @@ fn a_run_the_reaper_frees_at_the_step_before_its_help_is_found() {
     let run = frames::alloc_contig(RUN).expect("a run");
     let head = hoard_frames();
     // The step points of a scan that finds nothing.
+    // Masked, as the callers of a step point are: the window it opens leaves
+    // interrupts masked.
+    let daif = arch::save_and_mask_interrupts();
     let mut points = 0;
     let none = frames::alloc_contig_in_steps(RUN, || {
         points += 1;
         test_step_point()
     });
     assert!(none.is_err(), "every frame is taken");
-    let daif = arch::save_and_mask_interrupts();
     crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
     crate::steps::masked_max_units(true);
     let mut calls = 0;
@@ -3670,6 +3672,9 @@ fn a_run_search_over_a_fragmented_map_goes_in_steps() {
         points >= 2 && points as u64 * 66 >= words,
         "{points} step points in a search of {words} words"
     );
+    if units > crate::steps::STEP as u64 + 16 {
+        crate::steps::diagnose_units();
+    }
     assert!(
         units <= crate::steps::STEP as u64 + 16,
         "{units} units in one interval of a run's search (INV-0270-1)"
