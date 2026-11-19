@@ -3692,6 +3692,7 @@ fn a_run_the_reaper_frees_during_a_later_scan_is_found() {
     crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
     assert_eq!(crate::reaper::held() - held, RUN, "the run was queued");
     let mut calls = 0;
+    let mut drained = false;
     let got = frames::alloc_contig_in_steps(RUN, || {
         calls += 1;
         if calls == 1 {
@@ -3703,13 +3704,17 @@ fn a_run_the_reaper_frees_during_a_later_scan_is_found() {
         // The last step point of the second scan after it (the rescan's
         // own step point comes between).
         if calls == 2 * scan + 1 {
+            // The run is still queued here, whole: the point is a scan's.
+            assert_eq!(crate::reaper::held(), held + RUN, "the queue at the drain");
             while crate::reaper::help() {}
+            drained = true;
         }
         test_step_point()
     });
     arch::restore_interrupts(daif);
     crate::steps::masked_max_units(true);
     unhoard(kept);
+    assert!(drained, "the drain's step point was reached");
     let got = got.expect("the run freed during a scan (ADR-0349)");
     frames::free_contig(got, RUN);
     assert_eq!(frames_accounted(), before);

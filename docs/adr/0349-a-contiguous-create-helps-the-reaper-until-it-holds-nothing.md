@@ -72,8 +72,8 @@ teardown.
 
 ## Invariants
 - **INV-0349-1.** A contiguous run that is free except for frames the reaper holds is found by `alloc_contig`, however
-  many frames the queue holds ahead of it (up to the machine's memory) and when the reaper frees the queue at the step point before the first help, and no interval of the search holds more than a step of work. *Check:* the
-  kernel tests `a_run_queued_behind_many_frames_is_still_found_by_a_create` and `a_run_the_reaper_frees_at_the_step_before_its_help_is_found` (`make test-qemu-one`).
+  many frames the queue holds ahead of it (up to the machine's memory) and when the reaper frees the queue at the step point before the first help or at a later scan's last step point, and no interval of the search holds more than a step of work. *Check:* the
+  kernel tests `a_run_queued_behind_many_frames_is_still_found_by_a_create`, `a_run_the_reaper_frees_at_the_step_before_its_help_is_found` and `a_run_the_reaper_frees_during_a_later_scan_is_found` (`make test-qemu-one`).
 
 ## Open questions
 - Whether the reaper's order (frames of earlier items first) should prefer the items whose frames are adjacent when a

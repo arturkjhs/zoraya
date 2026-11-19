@@ -98,8 +98,9 @@ pub const MAX_CONTIG_FRAMES: u64 = 1024;
 const HELP_STEPS_PER_ROUND: usize = (MAX_CONTIG_FRAMES / crate::steps::STEP as u64) as usize;
 
 /// Rounds of help a run's search makes before it fails (ADR-0349): enough to
-/// free every frame of the machine, since a round that frees nothing ends
-/// the search, so a create is refused only when the reaper holds nothing. Churn
+/// free every frame of the machine; a round that frees nothing ends the
+/// search only if no frame was freed since the scan began, so a create is
+/// refused only when the reaper holds nothing and freed nothing behind the scan. Churn
 /// that refills the queue as fast as the rounds empty it is bounded by this
 /// number, and every step of it is a step point, which a kill ends.
 pub(crate) fn contig_help_rounds() -> u64 {
