@@ -428,7 +428,7 @@ fn socket_nodes_need_bind(root: &File) {
         Some(status::ACCESS_DENIED)
     );
     assert_eq!(
-        plain.open("", DIRECTORY, rights::BIND).err(),
+        plain.open("f", 0, rights::BIND).err(),
         Some(status::ACCESS_DENIED)
     );
     println!("t_storage: bind: BIND cannot be asked for through a connection without it");
