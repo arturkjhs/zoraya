@@ -53,7 +53,7 @@ log2=target/test-logs/test-httpd-git-untrusted.log
 $HTTPD --port 0 --lifetime $((TIMEOUT * 2 + 120)) --ready-file "$dir/httpd2.port" --tls-dir tests/net/tls --tls-ready-file "$tls2_ready" \
 	--git-root "$dir" > "$log2" 2>&1 &
 httpd2=$!
-trap 'status=$?; kill $httpd $httpd2 2>/dev/null; wait $httpd 2>/dev/null; wait $httpd2 2>/dev/null; exit $status' EXIT
+trap 'status=$?; kill $httpd $httpd2 2>/dev/null; wait $httpd 2>/dev/null || true; wait $httpd2 2>/dev/null || true; exit $status' EXIT
 for _ in $(seq 1 40); do [ -s "$tls2_ready" ] && break; perl -e 'select(undef,undef,undef,0.25)'; done
 tlsother=$(cut -d' ' -f1 "$tls2_ready")
 [ -n "$tlsother" ] || { cat "$log2"; fail "the second test server did not start"; }
