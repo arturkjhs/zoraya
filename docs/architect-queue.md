@@ -16,6 +16,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 | ADR | What | Recommendation | From |
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
+| ADR-0464 | What 10h decided: forms of `git` (`sub`), the clone directory (`derive`), only the transport helper has a connection, the ceiling, ancestors of an entry not reported, a child keeps the write of a `+w` entry | Option A (as built); NOT MERGED: see `docs/tasks/TASK-31-review-10h.md` | `work/10h`, TASK-31 |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 
 ## B. Decisions taken to continue (the architect may overrule)
@@ -60,6 +61,8 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
    `python3 -c 'import sqlite3, ssl, asyncio'` and `ping google.com` in the guest.
 4. **Later parts:** 10f's grant line (first terminal, a room's terminal, a shell that entered a room), 10g's `ssh -l NAME HOST`
    to a real host, 10h's `git clone` and `git push`: commands will be listed with the part.
+
+- **10h (git), not merged:** hand-check commands are in `docs/tasks/TASK-31-part-10h.md` (a clone and a push against a real host). Open review findings there.
 
 ## D. Open questions
 

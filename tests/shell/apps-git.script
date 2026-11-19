@@ -65,7 +65,7 @@
 > git status\r
 < nothing to commit
 < \r\n~/proj/sub>
-> GIT_CEILING_DIRECTORIES=/home/proj/sub git status\r
+> GIT_CEILING_DIRECTORIES=/home/proj git status\r
 < nothing to commit
 < \r\n~/proj/sub>
 > cd ~\r

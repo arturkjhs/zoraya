@@ -1967,6 +1967,19 @@ impl Z {
     ) -> Result<(), String> {
         use zoraya_shell::repository::{Held as Rights, Probe};
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        // git applies each -C in turn; the shell searches from one directory, so a second is refused (review of 10h, finding 4).
+        if let Ok(zoraya_command::Outcome::Run(p)) =
+            zoraya_command::parse(d, grants::words_of(d, &texts))
+            && let Some(c) = d.option_by_short('C')
+            && p.options.iter().filter(|(o, _)| *o == c).count() > 1
+        {
+            return Err(zoraya_command::error(
+                "zosh",
+                Some("-C"),
+                "git gets one -C: the shell looks for the repository from one directory",
+                &["write the directory once"],
+            ));
+        }
         let start = match zoraya_command::parse(d, grants::words_of(d, &texts)) {
             Ok(zoraya_command::Outcome::Run(p)) => d
                 .option_by_short('C')
@@ -3627,10 +3640,19 @@ impl Z {
         } else {
             format!("/bin/{name}")
         };
-        descriptions::POSIX
+        let all: Vec<Description> = descriptions::POSIX
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
-            .find(|d| d.program.as_deref() == Some(path.as_str()))
+            .collect();
+        // A form of a program (`help git-clone`, ADR-0464) is named by its own name; the program's page is the
+        // description that is not a form.
+        all.iter()
+            .find(|d| d.sub.is_some() && d.name == name)
+            .or_else(|| {
+                all.iter()
+                    .find(|d| d.sub.is_none() && d.program.as_deref() == Some(path.as_str()))
+            })
+            .cloned()
     }
 
     fn help(&mut self, state: &State, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
