@@ -98,8 +98,8 @@ program is meant to be a server in. A program that was handed a writable folder 
 
 ## Invariants
 
-- **INV-0466-1.** The file service makes a socket node (`open_with_mode` of `S_IFSOCK` with a create) only through a connection that holds `BIND`: with the right it makes the node; without it, in a writable directory, the request is `ACCESS_DENIED`, makes no node and uses no slot of the table. *Check:* `cargo test -p zoraya-fs-service --test socket` (`a_socket_node_needs_bind_on_the_connection_that_makes_it`, `a_subdirectory_binds_only_if_opened_with_bind`) and, from a raw-call program with no `libposix`, `socket_nodes_need_bind_from_a_process` (`t_bind`, in `make test-qemu`).
-- **INV-0466-2.** `BIND` is never gained: `rights::ALL` does not contain it, and a `clone`, `share`, `narrow` or `open` of a connection without it that asks for it is `ACCESS_DENIED`; a clone or narrowing of a connection with it that does not ask for it has none; an own-directory child (`READ` and `CLONE` only) has none. *Check:* `cargo test -p zoraya-proto-file --test bind_sites` (`ordinary_rights_do_not_contain_bind`), `cargo test -p zoraya-fs-service --test socket` (`bind_is_never_gained_by_cloning_sharing_or_narrowing`) and `t_bind`.
+- **INV-0466-1.** The file service makes a socket node (`open_with_mode` of `S_IFSOCK` with a create) only through a connection that holds `BIND`: with the right it makes the node; without it, in a writable directory, the request is `ACCESS_DENIED`, makes no node and uses no slot of the table. *Check:* `cargo test -p zoraya-fs-service --test socket` (`a_socket_node_needs_bind_on_the_connection_that_makes_it`, `a_subdirectory_binds_only_if_opened_with_bind`) and, from a raw-call program with no `libposix`, `socket_nodes_need_bind` in `t_storage` (run by the kernel test `storage_from_a_process`, in `make test-qemu`).
+- **INV-0466-2.** `BIND` is never gained: `rights::ALL` does not contain it, and a `clone`, `share`, `narrow` or `open` of a connection without it that asks for it is `ACCESS_DENIED`; a clone or narrowing of a connection with it that does not ask for it has none; an own-directory child (`READ` and `CLONE` only) has none. *Check:* `cargo test -p zoraya-proto-file --test bind_sites` (`ordinary_rights_do_not_contain_bind`), `cargo test -p zoraya-fs-service --test socket` (`bind_is_never_gained_by_cloning_sharing_or_narrowing`) and `t_storage`'s `socket_nodes_need_bind`.
 - **INV-0466-3.** `BIND` is named in the source at a short list of places only (the protocol, the service, the trusted hand-overs of a root, the shell's own-directory and `/tmp` connections, `libposix`'s `/tmp` clone, the tests); a new place is a change to the list and to this ADR. *Check:* `cargo test -p zoraya-proto-file --test bind_sites` (`bind_is_named_only_where_the_adr_says`).
 
 ## Open questions
@@ -108,7 +108,7 @@ program is meant to be a server in. A program that was handed a writable folder 
   narrowed name needs `BIND` for itself), and whether an own directory should refuse `BIND` below its first level; neither is done.
 - The shell's `Held` entries of a window shell (a table of write entries) carry `BIND` when the root has it, so the shell can make
   an own directory below them; they hand it on only through `own_connection`. A second check that no `+w` grant carries it, from the
-  QEMU side (a program given `+w` that tries a raw bind), is the `t_bind` case (a), at the service; the shell's part is the list of INV-0466-3.
+  QEMU side (a program given `+w` that tries a raw bind), is the `t_storage` case (a), at the service; the shell's part is the list of INV-0466-3.
 - Per-room counts of nodes and listeners remain F11's (ADR-0465).
 
 ## Revisit triggers

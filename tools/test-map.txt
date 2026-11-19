@@ -141,7 +141,6 @@ tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
-user/src/bin/t_bind.rs        test-qemu
 user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu test-net test-netsurf test-apps
@@ -326,3 +325,4 @@ docs/adr/0346-surface-for-ssh.md check test-libposix test-posix-threads test-pos
 docs/adr/0347-surface-for-git.md check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-apps test-python test-python-regr test-python-mem test-netsurf test-python-serve
 tests/python-ext/            test-python-ext
 tests/shell/python-ext.script test-python-ext
+user/src/namespace.rs         test-qemu test-gui test-files test-posix

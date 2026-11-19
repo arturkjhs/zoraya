@@ -50,7 +50,7 @@ const SITES: &[(&str, &str)] = &[
         "a child of a line keeps the `/tmp` it shares (`clone_tmp`)",
     ),
     (
-        "user/src/bin/t_bind.rs",
+        "user/src/bin/t_storage.rs",
         "the raw-call test of the service's check",
     ),
     (
