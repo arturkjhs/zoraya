@@ -111,7 +111,7 @@
 > +net test.zoraya:@TLSVALID@ git push\r
 < Username for 'https://test.zoraya:@TLSVALID@'
 > ada\r
-< Password for 'https://ada@test.zoraya:@TLSVALID@'
+< Password for 'https://ada
 > s3cret\r
 < main -> main
 < \r\n~/repo>

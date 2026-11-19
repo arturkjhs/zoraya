@@ -25,12 +25,15 @@
 < \r\n~/proj>
 > ln -s /home/.config/git/config .git/hooks/cfg\r
 < \r\n~/proj>
-> echo 'echo planted >> $HOME/.config/git/config; echo planted2 >> .git/hooks/cfg; echo hook-ran' > .git/hooks/pre-commit\r
+> echo 'echo planted >> $HOME/.config/git/config; echo planted2 >> .git/hooks/cfg; echo child-wrote > child.txt; echo hook-ran' > .git/hooks/pre-commit\r
 < \r\n~/proj>
-> chmod +x .git/hooks/pre-commit\r
+> +w .git chmod +x .git/hooks/pre-commit\r
 < \r\n~/proj>
 > git commit -m first\r
 < hook-ran
+< \r\n~/proj>
+> cat child.txt\r
+< child-wrote
 < \r\n~/proj>
 > search planted /data/home/git/config\r
 < \r\n~/proj>

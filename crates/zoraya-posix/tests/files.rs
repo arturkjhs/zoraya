@@ -2062,6 +2062,40 @@ fn a_link_from_outside_does_not_lead_into_the_own_directory() {
     assert!(open(&mut r, "/own/key", o::RDONLY, 0).is_ok());
 }
 
+/// A directory entry the shell gives with `+w` or as a `create-tree` has every right but `publish`
+/// (ADR-0153 rule 2): the child a fork or a spawn starts keeps them all and can write there, as its parent can
+/// (TASK-31 10h: before this the child was left with read alone, and git's `index-pack` could not write a clone).
+#[test]
+fn a_child_keeps_the_write_of_an_entry_that_lacks_publish() {
+    use proto::rights::*;
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"tree", 0o755).unwrap();
+    let tree = narrowed(&mut r, ALL & !PUBLISH);
+    r.p.add_entry("/tree", EntryKind::Directory, Some(tree));
+    assert!(open(&mut r, "/tree/by-parent", RW_CREATE, 0o600).is_ok());
+    let (broker, _b) = r.p.sys.channel_create().unwrap();
+    let (job, _j) = r.p.sys.channel_create().unwrap();
+    let (cj, _c) = r.p.sys.channel_create().unwrap();
+    let (be, _e) = r.p.sys.channel_create().unwrap();
+    let (pj, _p) = r.p.sys.channel_create().unwrap();
+    r.p.broker = Some(broker);
+    r.p.process_job = Some(job);
+    let prepared = zoraya_posix::jobs::Prepared {
+        pid: 2,
+        pgid: 2,
+        sid: 1,
+        parent_job: pj,
+        child_job: cj,
+        broker_end: be,
+    };
+    let moves = r.p.fork_moves(1, &prepared).unwrap();
+    // The table's entries in order (`/`, `/tree`, and whatever else the rig holds), then the broker and the job.
+    assert!(moves.len() >= 4, "{}", moves.len());
+    r.p.add_entry("/child", EntryKind::Directory, Some(moves[1].1));
+    assert!(open(&mut r, "/child/by-child", RW_CREATE, 0o600).is_ok());
+    assert!(open(&mut r, "/child/by-parent", o::WRONLY, 0).is_ok());
+}
+
 /// ADR-0341 item 7, INV-0341-6 for `fork`: the connection a fork gives the
 /// child for the own directory reads and cannot write; an ordinary directory
 /// keeps what it had (review of 10g, finding 4).
