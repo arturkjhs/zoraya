@@ -2214,13 +2214,15 @@ fn a_killed_room_ends_in_the_period_after_the_kill() {
     // TCG (scheduled run 43843667050), more than the period. What never
     // depends on the speed is that no ending thread is parked again, and
     // that the room goes in the period after the kill's plus one for each
-    // whole period the ways out ran.
+    // period the ways out ran, started part-way into a period: ways out that
+    // ran 99 ms of a 100 ms period straddle two (scheduled run 44506470551,
+    // TCG: 2 periods after the kill's with 0 whole periods run).
     assert!(
         parks == 0,
         "{parks} parks after the kill: an ending thread was parked again"
     );
     assert!(
-        died <= killed + 1 + ran / PERIOD,
+        died <= killed + 1 + ran.div_ceil(PERIOD),
         "the killed room ended {} periods after the kill's period, {parks} parks after the kill, its ending threads ran {ran} ns",
         died - killed
     );
