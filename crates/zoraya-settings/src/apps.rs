@@ -256,7 +256,7 @@ pub fn expand(path: &str, home: &str) -> String {
 /// Why `abs` can never be a saved `+r` or `+w` (ADR-0397 item 3): the volume
 /// root, `/config`, `/apps`, `/data` and everything below the last three
 /// (the room directories, `/data/home`, another program's own directory).
-fn refused_place(abs: &str) -> Option<&'static str> {
+pub fn refused_place(abs: &str) -> Option<&'static str> {
     let abs = abs.trim_end_matches('/');
     if abs.is_empty() {
         return Some("the whole volume");

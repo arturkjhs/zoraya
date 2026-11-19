@@ -23,6 +23,11 @@ use zoraya_describe::{Description, Kind};
 
 use crate::grants::{Line, Refused, value_of};
 
+/// Whether `w` is `any`, which is never saved (ADR-0397 item 3).
+pub fn is_any(w: &NetWord) -> bool {
+    w.target == Named::Any
+}
+
 /// A `+net` word: what it names, owned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetWord {
@@ -267,11 +272,7 @@ pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     // and 3): public hosts on ports 80 and 443, TCP; beside the line's
     // words, never a word that would let a value designate.
     if d.net_web && line.base_system {
-        words.push(NetWord {
-            target: Named::Public,
-            ports: Ports::ranges(&WEB_PORTS).unwrap_or(Ports::one(443)),
-            protocols: Protocols::TCP,
-        });
+        words.push(web_word());
     }
     // In a room every rule the line asks for lies inside the room's words
     // (ADR-0224 item 2, ADR-0462): refused before anything runs, naming them.
@@ -462,6 +463,74 @@ pub fn words_scope(words: &[String]) -> Result<Option<(u32, Vec<u8>)>, String> {
         out.truncate(n);
         (rights::REACH, out)
     }))
+}
+
+/// The web rule's word (ADR-0324 items 1 and 3): public hosts on ports 80 and
+/// 443, TCP.
+fn web_word() -> NetWord {
+    NetWord {
+        target: Named::Public,
+        ports: Ports::ranges(&WEB_PORTS).unwrap_or(Ports::one(443)),
+        protocols: Protocols::TCP,
+    }
+}
+
+/// What a program's saved network words give (ADR-0397 item 5).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SavedNet {
+    /// For `narrow` from the shell's own connection, `None` for no word that
+    /// holds here.
+    pub scope: Option<(u32, Vec<u8>)>,
+    /// The words that were left out, as written (`+net host:443`, `+web`):
+    /// one that does not parse, `any`, or one outside the room's words.
+    pub dropped: Vec<String>,
+}
+
+/// The scope of an installed program's saved `+net` words and `+web`
+/// (ADR-0397 items 1 and 5), the words the shell holds here only: in a room
+/// (`room` is the room's `+net` words) each lies inside them, as a line's
+/// do (INV-0172-4, ADR-0462); outside a room the shell's own connection is
+/// the bound and `narrow` refuses what is wider. `+net any` is never kept.
+pub fn saved_scope(words: &[String], web: bool, room: Option<&[String]>) -> SavedNet {
+    let inside = |w: &NetWord| {
+        room.is_none_or(|outer| {
+            is_loopback(w)
+                || outer
+                    .iter()
+                    .filter_map(|o| parse_word(o).ok())
+                    .any(|o| w.rule().within(&o.rule()))
+        })
+    };
+    let mut out = SavedNet::default();
+    let mut parsed: Vec<NetWord> = Vec::new();
+    for w in words {
+        match parse_word(w) {
+            Ok(n) if n.target != Named::Any && inside(&n) => parsed.push(n),
+            _ => out.dropped.push(alloc::format!("+net {w}")),
+        }
+    }
+    if web {
+        let n = web_word();
+        if inside(&n) {
+            parsed.push(n);
+        } else {
+            out.dropped.push(String::from("+web"));
+        }
+    }
+    let rules: Vec<ReachRule<'_>> = parsed.iter().map(NetWord::rule).collect();
+    if rules.is_empty() {
+        return out;
+    }
+    if rules.len() > MAX_RULES {
+        out.dropped.push(String::from("too many network rules"));
+        return out;
+    }
+    let mut buf = alloc::vec![0u8; 512 + 128 * rules.len()];
+    out.scope = encode(&rules, &[], &mut buf).map(|n| {
+        buf.truncate(n);
+        (rights::REACH, buf)
+    });
+    out
 }
 
 /// The rule a `host` operand adds (ADR-0330): the host, a name or a dotted

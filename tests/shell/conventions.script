@@ -128,6 +128,26 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> install --help\r
+< \r\ninstall: install a program from a package directory, with the grants you type
+^ \r\nusage: install PACKAGE [WORD...]
+^ \r\n       install --keep PACKAGE [WORD...]
+^ \r\n  -k, --keep   on an upgrade, keep the grants saved for the old package
+^ \r\n  --help       show this help
+^ \r\nmore: help install
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> install --no-such-option\r
+< \r\ninstall: --no-such-option: no such option
+^ \r\nusage: install PACKAGE [WORD...]
+^ \r\n       install --keep PACKAGE [WORD...]
+^ \r\nmore: help install
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > jobs --help\r
 < \r\njobs: list jobs
 ^ \r\nusage: jobs
@@ -180,6 +200,41 @@
 < \r\npoweroff: --no-such-option: no such option
 ^ \r\nusage: poweroff
 ^ \r\nmore: help poweroff
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
+> programs --help\r
+< \r\nprograms: list installed programs, see their saved grants, revoke or remove them
+^ \r\nusage: programs
+^ \r\n       programs NAME
+^ \r\n       programs grant NAME WORD...
+^ \r\n       programs revoke NAME WORD...
+^ \r\n       programs revoke NAME --all
+^ \r\n       programs revoke --kill NAME
+^ \r\n       programs remove NAME [--data]
+^ \r\n       programs --log [NAME]
+^ \r\n  --all    with revoke: every saved grant of the program
+^ \r\n  --kill   with revoke: also end the running copies of the program
+^ \r\n  --data   with remove: also delete its own files in every room
+^ \r\n  --log    print what was installed, granted, revoked and removed
+^ \r\n  --help   show this help
+^ \r\nmore: help programs
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> programs --no-such-option\r
+< \r\nprograms: --no-such-option: no such option
+^ \r\nusage: programs
+^ \r\n       programs NAME
+^ \r\n       programs grant NAME WORD...
+^ \r\n       programs revoke NAME WORD...
+^ \r\n       programs revoke NAME --all
+^ \r\n       programs revoke --kill NAME
+^ \r\n       programs remove NAME [--data]
+^ \r\n       programs --log [NAME]
+^ \r\nmore: help programs
 ^ \r\n~>
 > status\r
 < \r\nexit status 2

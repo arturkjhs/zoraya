@@ -137,6 +137,10 @@ pub struct Io {
     pub err: String,
     /// Output goes to the terminal: a builtin may page it.
     pub terminal: bool,
+    /// The builtin's words as expanded, each with whether it was typed
+    /// literally (ADR-0153 rule 4): `install` and `programs` save only words
+    /// the person typed (INV-0397-1).
+    pub words: Vec<Value>,
 }
 
 /// Where an output stream goes.
@@ -1835,6 +1839,7 @@ impl<H: Host> Shell<H> {
         } else {
             let mut io = Io {
                 terminal: self.sink_out() == Sink::Terminal,
+                words: args.to_vec(),
                 ..Io::default()
             };
             let mut state = core::mem::take(&mut self.state);

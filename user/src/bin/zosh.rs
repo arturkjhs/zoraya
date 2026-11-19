@@ -118,11 +118,15 @@ const ENTRY_BREAK: &str = "\u{1e}";
 /// The first line of every interactive shell (ADR-0154 rule 9).
 const GREETING: &str = "Type help to begin, or help tour.\n";
 
+/// `install`, `programs` and what the shell does for an installed program (ADR-0396, ADR-0397, ADR-0399).
+#[path = "zosh/apps.rs"]
+mod apps;
+
 /// Builtins this program runs (ADR-0155 item 8), and, until step 7, the
 /// file commands.
-const BUILTINS: [&str; 18] = [
+const BUILTINS: [&str; 20] = [
     "cd", "pwd", "history", "help", "grants", "jobs", "fg", "bg", "wait", "kill", "settings",
-    "slots", "uptime", "exit", "poweroff", "reboot", "room", "top",
+    "slots", "uptime", "exit", "poweroff", "reboot", "room", "top", "install", "programs",
 ];
 /// File commands still built in: `sync` needs the `sync` right, which no
 /// entry of a program's table carries (ADR-0155's open questions).
@@ -344,6 +348,18 @@ fn tamed(bytes: &[u8]) -> String {
             }
         })
         .collect()
+}
+
+/// Writes `bytes` to `file` from its start, at most one message's data at a
+/// time (a request carries `MAX_INLINE` bytes; the record of installed
+/// programs and its log are larger than one).
+fn write_chunks(file: &File, bytes: &[u8]) -> FsResult<()> {
+    let mut at = 0u64;
+    for chunk in bytes.chunks(zoraya_proto_file::MAX_INLINE) {
+        file.write(at, 0, chunk)?;
+        at += chunk.len() as u64;
+    }
+    Ok(())
 }
 
 /// Removes `name` from `dir`, and everything in it first.
@@ -883,6 +899,12 @@ struct Z {
     /// connection (slot 9) is already keyed by that room, and has no `ROOM` right
     /// to name one (ADR-0442, ADR-0462).
     net_keyed: bool,
+    /// The installed programs the last lookups found, by name, with their
+    /// records (ADR-0396 item 6): what a launch checks and applies.
+    installed_now: BTreeMap<String, zoraya_settings::apps::App>,
+    /// The descriptions of installed programs read and checked against their
+    /// record, by name, with the record's hash they matched.
+    installed_cache: BTreeMap<String, (zoraya_settings::sha256::Digest, Rc<Description>)>,
 }
 
 impl Z {
@@ -1001,9 +1023,7 @@ impl Z {
     fn write_file(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let flags = open_flags::CREATE | open_flags::TRUNCATE;
         let f = self.open(path, flags).map_err(problem)?;
-        if !bytes.is_empty() {
-            f.write(0, 0, bytes).map_err(problem)?;
-        }
+        write_chunks(&f, bytes).map_err(problem)?;
         Ok(())
     }
 
@@ -1015,9 +1035,7 @@ impl Z {
         let (dir, name) = split_last(&abs);
         let dir = self.open(dir, OPEN_DIRECTORY).map_err(problem)?;
         let published = dir.create_unnamed().and_then(|file| {
-            if !bytes.is_empty() {
-                file.write(0, 0, bytes)?;
-            }
+            write_chunks(&file, bytes)?;
             file.publish(&dir, name)
         });
         match published {
@@ -1027,9 +1045,7 @@ impl Z {
                 let file = self
                     .open(&abs, open_flags::CREATE | open_flags::TRUNCATE)
                     .map_err(problem)?;
-                if !bytes.is_empty() {
-                    file.write(0, 0, bytes).map_err(problem)?;
-                }
+                write_chunks(&file, bytes).map_err(problem)?;
                 Ok(())
             }
             other => other.map_err(problem),
@@ -1211,6 +1227,11 @@ impl Z {
         exec: &Exec<'_>,
         path: &str,
     ) -> Result<Option<(u32, Vec<u8>)>, String> {
+        // An installed program's network is its saved `+net` and `+web` words,
+        // the ones this shell holds (ADR-0397 item 5); none in an untrusted room.
+        if let Some(saved) = self.saved(exec.name) {
+            return Ok(saved.net.scope);
+        }
         let trusted: Vec<Description> = descriptions::POSIX
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
@@ -1311,6 +1332,10 @@ impl Z {
             grants::through_links(p, &self.cwd, &home, |abs| {
                 root.and_then(|r| r.link_target(abs).ok().flatten())
             })
+        });
+        let planned = planned.and_then(|p| {
+            // ADR-0396 item 2: installed programs are changed with install.
+            zoraya_shell::installed::refuse_apps_write(&p).map(|()| p)
         });
         match planned {
             Ok(mut p) => {
@@ -1696,12 +1721,72 @@ impl Z {
                 file_rights::READ | file_rights::CLONE,
             )
             .map_err(|s| fail(&problem(s)))?;
-        let (image, native) = posix_child::load(&file, self.image_job())
-            .map_err(|s| fail(&zoraya_command::status_problem(s)))?;
+        // An installed program starts only when the bytes the loader receives
+        // are the ones the record names (ADR-0396 item 8, INV-0396-4).
+        let installed = self.installed_now.get(exec.name).cloned();
+        let cmd = match &installed {
+            Some(app) => self
+                .open(&format!("/apps/{0}/{0}.cmd", app.name), 0)
+                .and_then(|f| read_all(&f))
+                .ok()
+                .filter(|b| b.len() <= zoraya_settings::apps::MAX_PACKAGE_TEXT)
+                .ok_or_else(|| fail("not what was installed (install again)"))?,
+            None => Vec::new(),
+        };
+        let mismatch = core::cell::Cell::new(false);
+        let record = zoraya_settings::apps::Apps {
+            apps: installed.iter().cloned().collect(),
+            problems: Vec::new(),
+        };
+        let check = |bytes: &[u8]| {
+            let identity = zoraya_settings::sha256::identity(bytes, &cmd);
+            let ok = matches!(
+                zoraya_shell::installed::launch(&record, exec.name, &identity),
+                zoraya_shell::installed::Launch::Run(_)
+            );
+            if !ok {
+                mismatch.set(true);
+            }
+            ok
+        };
+        let loaded = posix_child::load_checked(
+            &file,
+            self.image_job(),
+            installed
+                .is_some()
+                .then_some(&check as &dyn Fn(&[u8]) -> bool),
+        );
+        let (image, native) = match loaded {
+            Ok(x) => x,
+            Err(_) if mismatch.get() => {
+                return Err(fail("not what was installed (install again)"));
+            }
+            Err(s) => return Err(fail(&zoraya_command::status_problem(s))),
+        };
         drop(file);
+        if let Some(app) = &installed {
+            // The description of the loaded program, checked with it.
+            if let Ok(d) = zoraya_describe::parse(&cmd)
+                && d.name == app.name
+            {
+                self.installed_cache.insert(
+                    app.name.clone(),
+                    (app.hash, Rc::new(zoraya_describe::for_volume(d))),
+                );
+            }
+            // What the saved words come to, before the program starts.
+            if let Some(saved) = self.saved(exec.name) {
+                for note in &saved.notes {
+                    show(note);
+                }
+            }
+        }
         let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes()).map_err(|_| fail("?"))?;
         if native {
-            let plan = self.plan_with(exec, &undescribed, false);
+            let mut plan = self.plan_with(exec, &undescribed, false);
+            if let Ok(p) = &mut plan {
+                self.add_saved(exec.name, p);
+            }
             let table = plan.and_then(|p| self.table(&p, None));
             return match table {
                 Ok(t) => Ok((
@@ -1971,11 +2056,18 @@ impl Z {
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
             .collect();
-        let Some(d) = grants::trusted_description(&trusted, path) else {
-            return Ok(None);
+        // An installed program's own directory is a saved `+own` word of its
+        // record, never a description's `data` line (ADR-0397 item 1, INV-0341-1).
+        let own = if let Some(saved) = self.saved(exec.name) {
+            saved.own
+        } else {
+            let Some(d) = grants::trusted_description(&trusted, path) else {
+                return Ok(None);
+            };
+            let room = self.room.as_ref().map(|r| r.name.as_str());
+            grants::own_directory(d, true, room)
         };
-        let room = self.room.as_ref().map(|r| r.name.as_str());
-        let Some(own) = grants::own_directory(d, true, room) else {
+        let Some(own) = own else {
             return Ok(None);
         };
         let refuse = |subject: &str, problem: &str, hints: &[&str]| {
@@ -2085,7 +2177,11 @@ impl Z {
             None => {
                 let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes())
                     .map_err(|_| String::from("zosh: a description of its own is refused\n"))?;
-                self.plan_with(exec, &undescribed, false)
+                let mut plan = self.plan_with(exec, &undescribed, false)?;
+                // An installed program: its package and the saved words, as if
+                // typed before the command (ADR-0397 item 5).
+                self.add_saved(exec.name, &mut plan);
+                Ok(plan)
             }
         }
     }
@@ -4209,6 +4305,15 @@ impl Z {
                 d.program.clone().unwrap_or_default()
             );
             (Rc::new(d), first)
+        } else if let Some(page) = self.installed_page(name) {
+            match page {
+                Ok(x) => x,
+                Err(e) => {
+                    io.err
+                        .push_str(&zoraya_command::error("help", Some(name), &e, &[]));
+                    return 1;
+                }
+            }
         } else {
             let mut hints = Vec::new();
             let mut names: Vec<String> = self.commands(state).into_iter().map(|(n, _)| n).collect();
@@ -4280,6 +4385,9 @@ impl Z {
                 out.push((f.clone(), function_description(&func).summary));
             }
         }
+        // Programs installed from the volume, as their own kind (ADR-0396
+        // item 6): the summary only once its description was checked.
+        out.extend(self.installed_listing());
         out.sort();
         out
     }
@@ -5399,6 +5507,13 @@ impl Z {
                         !native && tty.contains(&true),
                         own.as_ref(),
                     ));
+                    // What a start would drop of the saved words, said as it
+                    // would be (ADR-0397 item 5).
+                    if let Some(saved) = self.saved(name) {
+                        for note in &saved.notes {
+                            io.out.push_str(note);
+                        }
+                    }
                     0
                 }
             };
@@ -5542,17 +5657,38 @@ impl Host for Z {
         // The volume is looked at each time: what a line builds, the next
         // runs (`tcc hello.c -o hello`, then `./hello`).
         self.on_volume.remove(name);
-        if f == Found::Nothing
-            && let Some(path) = self.find_on_volume(name)
-        {
-            self.on_volume.insert(name.into(), path);
-            return Found::Program;
+        self.installed_now.remove(name);
+        // ADR-0396 item 6: builtins and functions (the evaluator's), the image
+        // and `shell.path`, then the installed names: none shadows another.
+        if f == Found::Nothing {
+            let path = self.find_on_volume(name);
+            let on_path = path.is_some();
+            let installed = if on_path {
+                None
+            } else {
+                self.installed_find(name)
+            };
+            match zoraya_shell::installed::pick(false, on_path, installed.is_some()) {
+                zoraya_shell::installed::Source::Path => {
+                    self.on_volume.insert(name.into(), path.unwrap_or_default());
+                    return Found::Program;
+                }
+                zoraya_shell::installed::Source::Installed => {
+                    self.on_volume
+                        .insert(name.into(), installed.unwrap_or_default());
+                    return Found::Program;
+                }
+                _ => {}
+            }
         }
         f
     }
 
     fn description(&mut self, name: &str) -> Option<Rc<Description>> {
-        Z::description(self, name)
+        Z::description(self, name).or_else(|| {
+            // An installed program's, once it was read and checked this session.
+            self.installed_cache.get(name).map(|(_, d)| d.clone())
+        })
     }
 
     fn names(&mut self) -> Vec<String> {
@@ -5563,6 +5699,7 @@ impl Host for Z {
             .collect();
         n.extend(descriptions::COMMANDS.iter().map(|(s, _)| s.to_string()));
         n.extend(descriptions::DEMOS.iter().map(|(s, _)| s.to_string()));
+        n.extend(self.installed_listing().into_iter().map(|(s, _)| s));
         n
     }
 
@@ -5771,6 +5908,8 @@ impl Host for Z {
             "settings" => self.settings_builtin(d, p, io),
             "room" => self.room_builtin(d, p, io),
             "top" => self.top_builtin(d, p, io),
+            "install" => self.install_builtin(state, d, p, io),
+            "programs" => self.programs_builtin(d, p, io),
             "slots" => {
                 io.out.push_str("slots:");
                 for slot in 1..=u64::from(MAX_HANDLES) {
@@ -6395,7 +6534,9 @@ impl Assist for Helper<'_> {
             let d = if let Some(f) = self.shell.state.function(cmd) {
                 Some(Rc::new(function_description(&f)))
             } else {
-                self.shell.builtin_description(cmd)
+                self.shell
+                    .builtin_description(cmd)
+                    .or_else(|| self.shell.host.installed_description(cmd))
             };
             if let Some(d) = d {
                 for (opt, text) in zoraya_command::completion_options(&d) {
@@ -6599,6 +6740,8 @@ fn main() -> i32 {
         usage_tracker: zoraya_rooms::Tracker::new(),
         launch_nets: Vec::new(),
         net_keyed: false,
+        installed_now: BTreeMap::new(),
+        installed_cache: BTreeMap::new(),
     };
     // The broker tells the host of the terminal of its lines' groups
     // (proposed ADR-0388).

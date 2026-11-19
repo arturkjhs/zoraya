@@ -63,18 +63,13 @@
 > +w /system rm /system/tls/roots\r
 < /system is read-only
 < \r\n/>
-# A grant that is allowed (the whole volume) reaches the rest and not
+# The whole volume is no grant any more (ADR-0396 item 2: it would reach /apps, which
+# only `install` changes), and a wide grant that is allowed reaches the rest and not
 # /system: the volume refuses what the program asks.
 > +w / cp /hello.txt /system/tls/roots\r
-< not granted
+< +w /: installed programs are changed with install
 < \r\n/>
-> +w / rm /system/tls/roots\r
-< not granted
-< \r\n/>
-> +w / mv /system /home/system\r
-< not granted
-< \r\n/>
-> +w / probe /system/tls/roots\r
+> +w /home probe /system/tls/roots\r
 < path /system/tls/roots: read=ok change=not granted
 < \r\n/>
 # Reading works, and the file is as it was.
