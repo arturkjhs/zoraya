@@ -533,7 +533,7 @@ fn start_shell(
         if terminal.is_some() {
             let home = zoraya_user::namespace::shell_home(root);
             let holds = zoraya_panel::terminal(None).holds;
-            if let Some(r) = zoraya_user::namespace::record(root, &home, &home, &holds) {
+            if let Some(r) = zoraya_user::namespace::record(root, &home, &home, &holds, true) {
                 e.handle(moved(zoraya_panel::STARTUP_SLOT, r));
             }
         } else {

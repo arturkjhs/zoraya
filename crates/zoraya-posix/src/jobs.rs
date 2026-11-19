@@ -980,6 +980,8 @@ impl<S: Sys> Posix<S> {
             rights::ALL & !rights::PUBLISH,
             rights::READ | rights::CLONE,
         ]);
+        // A cwd connection (`clone_conn` of the working directory) has no `BIND`: `bind` always
+        // resolves through the table's entry (`unix::bind_place`), never through the cwd.
         for wanted in asks {
             let (mine, theirs) = self.sys.channel_create().map_err(|_| EMFILE)?;
             let m = fp::Clone {

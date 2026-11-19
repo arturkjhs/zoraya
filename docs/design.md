@@ -2253,6 +2253,14 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   `tests/posix/zosh-sockets.script` (QEMU: two installed programs started on separate lines). **Limits:** the server sees the file at
   its view path (`~/.config/NAME/FILE`) and the client names the real one (`/data/ROOM/NAME/FILE`); the volume's 256 nodes and 64
   listeners are shared by every room; a `+sock` is not given in a room (`room new` takes +r, +w and +net only).
+  **The `BIND` right** (part bind-right, ADR-0466 proposed): the place rule is the service's, not only `libposix`'s. `rights::BIND`
+  (`1 << 9`) is outside `rights::ALL`, so no request for `ALL` (`+w`, `create-tree`, a child's clone) names it; a service's root holds
+  it (`WITH_BIND`), rights only shrink, and `open_with_mode` of `S_IFSOCK` with a create is `ACCESS_DENIED` without it on the
+  connection used. The shell asks for it for two connections only: the own directory and the line's `/tmp`; `init`, the broker, the
+  panel and `posixrun` pass the root on with `user::files::MASTER`; a child of a line keeps the `/tmp` with it (`clone_tmp`), a
+  child's own directory is `READ | CLONE` and has none. A program without `libposix` that has write on a directory cannot plant a
+  node. Tests: `t_storage`'s `socket_nodes_need_bind` (raw requests, QEMU), `tests/socket.rs` (service), `bind_sites.rs` (the list
+  of places that name the bit). **Limit:** `BIND` is on a connection, not a path: it covers the whole own tree and `/tmp`.
   Tests: `crates/zoraya-fs-service/tests/socket.rs`, `crates/zoraya-posix/tests/socketfile.rs`, `tests/posix-core/t_unix.c` (`file`, run
   by zosh in `make test-libposix`).
 - **TCP listeners and the loopback** (plan part F7b, ADR-0225 item 5, ADR-0224 item 1; ADR-0441, proposed, records what the code

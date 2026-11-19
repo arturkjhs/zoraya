@@ -517,7 +517,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
             Give::Startup => {
                 let home = home.as_deref()?;
                 let start = zoraya_user::namespace::expand(cwd, home);
-                zoraya_user::namespace::record(root?, home, &start, &l.holds)
+                zoraya_user::namespace::record(root?, home, &start, &l.holds, p.image == "zosh")
             }
             Give::Chooser => chooser_channel(chooser?, tag, l.app),
             Give::Random => zoraya_user::random::share(random_root?),

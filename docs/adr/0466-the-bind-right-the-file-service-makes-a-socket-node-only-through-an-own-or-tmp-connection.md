@@ -62,7 +62,7 @@ A socket node anywhere a program may write. Rejected: ADR-0465 driver 1, and the
    rights word, in a bit that was unused.
 2. **The check.** `open_with_mode` that creates (`CREATE` or `UNNAMED` in its flags) a node of type `S_IFSOCK` needs `BIND` on the
    connection it is made through, in addition to `CREATE` (it joins the rights the request needs, so a narrowed connection needs it
-   for the name, too). A refused request makes nothing and counts nothing against the table of 256 nodes. The same check
+   for the name, too). A refused request makes nothing and counts nothing against the table of 256 nodes (the right is checked before the table's bound). A node does not leave the place that made it either: `rename` (also `exchange`) of a socket node, or of a directory that may hold one, into another directory needs `BIND` on the target's connection, and so does `publish` of an unnamed node. The same check
    covers every service `fsd` serves (ADR-0465 item 2).
 3. **Who holds it.** A service's root connection (`add_root`) holds `WITH_BIND`. Every other connection has what its
    parent gave: a `clone`, `share`, `narrow`, `narrow_names` or `open` that asks for `BIND` of a connection without it is
@@ -70,7 +70,7 @@ A socket node anywhere a program may write. Rejected: ADR-0465 driver 1, and the
    `READ | CLONE` there (ADR-0341 item 7), so it has none.
 4. **Who asks for it.** The shell (`zosh`), for two connections only: the program's own directory (`own_connection`), and
    the line's `/tmp` (`line_tmp`). The trusted hand-overs of a root that lead to those two (`init` to the shell and to the
-   panel, the broker to the first program's `/tmp`, a window shell's write entries, `posixrun`'s test `/tmp`) ask for it as
+   panel, the broker to the first program's `/tmp`, the write entries of a window's *shell* record (`namespace::record` with `bind`; never the record of an application such as `files`), `posixrun`'s test `/tmp`, which it takes from any path its caller names) ask for it as
    they pass the root on (`user::files::MASTER` is `WITH_BIND`). The children of a line keep the `/tmp` of the line with it
    (`libposix`'s `clone_tmp`), as they kept every right of it before; a child's own directory is read only, as before. No `+w`,
    `+own`, `+sock`, `create-tree` or file operand asks for it. A shell that does not hold `BIND` gives the directory without it:
@@ -98,8 +98,8 @@ program is meant to be a server in. A program that was handed a writable folder 
 
 ## Invariants
 
-- **INV-0466-1.** The file service makes a socket node (`open_with_mode` of `S_IFSOCK` with a create) only through a connection that holds `BIND`: with the right it makes the node; without it, in a writable directory, the request is `ACCESS_DENIED`, makes no node and uses no slot of the table. *Check:* `cargo test -p zoraya-fs-service --test socket` (`a_socket_node_needs_bind_on_the_connection_that_makes_it`, `a_subdirectory_binds_only_if_opened_with_bind`) and, from a raw-call program with no `libposix`, `socket_nodes_need_bind` in `t_storage` (run by the kernel test `storage_from_a_process`, in `make test-qemu`).
-- **INV-0466-2.** `BIND` is never gained: `rights::ALL` does not contain it, and a `clone`, `share`, `narrow` or `open` of a connection without it that asks for it is `ACCESS_DENIED`; a clone or narrowing of a connection with it that does not ask for it has none; an own-directory child (`READ` and `CLONE` only) has none. *Check:* `cargo test -p zoraya-proto-file --test bind_sites` (`ordinary_rights_do_not_contain_bind`), `cargo test -p zoraya-fs-service --test socket` (`bind_is_never_gained_by_cloning_sharing_or_narrowing`) and `t_storage`'s `socket_nodes_need_bind`.
+- **INV-0466-1.** The file service makes a socket node (`open_with_mode` of `S_IFSOCK` with a create) only through a connection that holds `BIND`: with the right it makes the node; without it, in a writable directory, the request is `ACCESS_DENIED`, makes no node and uses no slot of the table. *Check:* `cargo test -p zoraya-fs-service --test socket` (`a_socket_node_needs_bind_on_the_connection_that_makes_it`, `a_subdirectory_binds_only_if_opened_with_bind`, `a_socket_node_does_not_leave_the_places_with_bind`) and, from a raw-call program with no `libposix`, `socket_nodes_need_bind` in `t_storage` (run by the kernel test `storage_from_a_process`, in `make test-qemu`).
+- **INV-0466-2.** `BIND` is never gained: `rights::ALL` does not contain it, and a `clone`, `share`, `narrow` or `open` of a connection without it that asks for it is `ACCESS_DENIED`; a clone or narrowing of a connection with it that does not ask for it has none; an own-directory child (`READ` and `CLONE` only) has none. *Check:* `cargo test -p zoraya-proto-file --test bind_sites` (`ordinary_rights_do_not_contain_bind`), `cargo test -p zoraya-fs-service --test socket` (`bind_is_never_gained_by_cloning_sharing_or_narrowing`, `bind_is_not_gained_by_share_narrow_names_or_open`) and `t_storage`'s `socket_nodes_need_bind`.
 - **INV-0466-3.** `BIND` is named in the source at a short list of places only (the protocol, the service, the trusted hand-overs of a root, the shell's own-directory and `/tmp` connections, `libposix`'s `/tmp` clone, the tests); a new place is a change to the list and to this ADR. *Check:* `cargo test -p zoraya-proto-file --test bind_sites` (`bind_is_named_only_where_the_adr_says`).
 
 ## Open questions

@@ -938,7 +938,9 @@ fn a_socket_node_needs_bind_on_the_connection_that_makes_it() {
         vec![r.net.channel()],
     );
     r.run();
-    assert_eq!(r.reply(plain).map(|_| ()), Some(()));
+    let (bytes, _) = r.reply(plain).expect("a reply");
+    let (_, reply) = decode::<proto::OpenWithModeReply<'_>>(&bytes, 0).unwrap();
+    assert_eq!(reply.status.0, status::OK, "a plain file is made there");
     // With `BIND`, a node is made.
     let own = r.derive(root, rights::ALL | rights::BIND).unwrap();
     let conn = r.bind_in(own, "s").unwrap();
@@ -1026,6 +1028,144 @@ fn a_subdirectory_binds_only_if_opened_with_bind() {
     }
     assert_eq!(r.bind_in(a, "s"), Err(status::ACCESS_DENIED));
     assert!(r.bind_in(b, "s").is_ok());
+}
+
+/// A directory connection and a token of it.
+fn dir_with(r: &mut Rig, name: &str, wanted: u32) -> (End, End) {
+    let (dir, _) = r
+        .open(name, open_flags::DIRECTORY, 0, wanted)
+        .expect("a directory");
+    r.post(dir, &proto::GetToken {}, vec![]);
+    r.run();
+    let (_, handles) = r.reply(dir).expect("a token");
+    (dir, handles[0])
+}
+
+/// A node or a directory that holds one does not move to a directory without
+/// `BIND` (rename, exchange, and publish of an unnamed node), and moves where
+/// the right is held: the place is the service's, not the name's (ADR-0466).
+#[test]
+fn a_socket_node_does_not_leave_the_places_with_bind() {
+    let mut r = rig();
+    let root = r.root;
+    for d in ["own", "other", "plain"] {
+        r.post(
+            root,
+            &proto::MakeDirectory {
+                name: Name(d),
+                mode: 0o755,
+            },
+            vec![],
+        );
+        r.run();
+        assert_eq!(r.status_of(root), status::OK);
+    }
+    let all = rights::ALL;
+    let (own, own_token) = dir_with(&mut r, "own", all | rights::BIND);
+    let (_, other_token) = dir_with(&mut r, "other", all | rights::BIND);
+    let (_, plain_token) = dir_with(&mut r, "plain", all);
+    let node = r.bind_in(own, "s").unwrap();
+    let rename = |r: &mut Rig, token: End, old: &str, new: &str, mode: u32| {
+        r.post(
+            own,
+            &proto::Rename {
+                old: Name(old),
+                new: Name(new),
+                mode: Below(mode),
+            },
+            vec![token],
+        );
+        r.run();
+        r.status_of(own)
+    };
+    let replace = proto::rename_mode::REPLACE;
+    assert_eq!(
+        rename(&mut r, plain_token, "s", "s", replace),
+        status::ACCESS_DENIED
+    );
+    // Neither does a directory that holds one.
+    assert_eq!(
+        r.derive(own, rights::ALL | rights::BIND).map(|_| ()),
+        Ok(())
+    );
+    r.post(
+        own,
+        &proto::MakeDirectory {
+            name: Name("sub"),
+            mode: 0o755,
+        },
+        vec![],
+    );
+    r.run();
+    assert_eq!(r.status_of(own), status::OK);
+    assert_eq!(
+        rename(&mut r, plain_token, "sub", "sub", replace),
+        status::ACCESS_DENIED
+    );
+    // An exchange with a name there moves a node into the plain directory, too.
+    assert_eq!(
+        rename(&mut r, plain_token, "s", "s", proto::rename_mode::EXCHANGE),
+        status::ACCESS_DENIED
+    );
+    // Within the directory, and to another that has `BIND`, it moves.
+    assert_eq!(rename(&mut r, own_token, "s", "t", replace), status::OK);
+    assert_eq!(rename(&mut r, other_token, "t", "t", replace), status::OK);
+    // An unnamed node published into a directory without `BIND` is refused.
+    let (unnamed, _) = r
+        .open(
+            "ignored",
+            open_flags::UNNAMED,
+            S_IFSOCK | 0o600,
+            rights::READ | rights::WRITE,
+        )
+        .expect("an unnamed node");
+    r.post(
+        unnamed,
+        &proto::Publish {
+            mode: Below(proto::publish_mode::REPLACE),
+            name: Name("p"),
+        },
+        vec![plain_token],
+    );
+    r.run();
+    assert_eq!(r.status_of(unnamed), status::ACCESS_DENIED);
+    r.net.client_close(node);
+    r.run();
+}
+
+/// The other derivations of a connection: `share`, `narrow_names`, and an
+/// `open` that names the right.
+#[test]
+fn bind_is_not_gained_by_share_narrow_names_or_open() {
+    let mut r = rig();
+    let root = r.root;
+    let plain = r.derive(root, rights::ALL).unwrap();
+    for wanted in [rights::BIND, rights::ALL | rights::BIND] {
+        let end = r.net.channel();
+        r.post(
+            plain,
+            &proto::Share {
+                rights: Flags(wanted),
+            },
+            vec![end],
+        );
+        r.run();
+        assert_eq!(r.status_of(plain), status::ACCESS_DENIED);
+        let end = r.net.channel();
+        r.post(
+            plain,
+            &proto::Open {
+                flags: Flags(open_flags::DIRECTORY),
+                rights: Flags(wanted),
+                path: Path("x"),
+            },
+            vec![end],
+        );
+        r.run();
+        let (bytes, _) = r.reply(plain).expect("a reply");
+        let (_, reply) = decode::<proto::OpenReply<'_>>(&bytes, 0).unwrap();
+        assert_eq!(reply.status.0, status::ACCESS_DENIED);
+    }
 }
 
 zoraya_test_alloc::cap_memory!();

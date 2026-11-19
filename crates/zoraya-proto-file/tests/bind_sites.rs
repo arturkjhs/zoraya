@@ -1,7 +1,7 @@
 //! ADR-0466: `BIND` is minted at a short, named list of places and nowhere else.
 //! The rights word is the ABI; this test reads the sources of the repository for
-//! the two names that carry the bit (`rights::BIND`, `rights::WITH_BIND`, also as
-//! `file_rights::` and `proto::rights::`) and fails on a file not in the list, so
+//! the names that carry the bit (the identifiers `BIND`, `WITH_BIND` and `MASTER`,
+//! however imported) and fails on a file not in the list, so
 //! that a new place that asks for it is a change to this list, and to the ADR.
 
 use std::fs;
@@ -59,6 +59,15 @@ const SITES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Whether `word` occurs in `text` as a whole identifier.
+fn has_word(text: &str, word: &str) -> bool {
+    let id = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(id)
+            && !text[at + word.len()..].chars().next().is_some_and(id)
+    })
+}
+
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -93,7 +102,7 @@ fn bind_is_named_only_where_the_adr_says() {
         let text = fs::read_to_string(&f).unwrap_or_default();
         let names_it = text.lines().any(|l| {
             let code = l.split("//").next().unwrap_or("");
-            code.contains("rights::BIND") || code.contains("rights::WITH_BIND")
+            has_word(code, "BIND") || has_word(code, "WITH_BIND") || has_word(code, "MASTER")
         });
         if names_it {
             let rel = f
