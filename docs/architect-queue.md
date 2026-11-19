@@ -21,6 +21,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 
 ## B. Decisions taken to continue (the architect may overrule)
 
+- **10f (2026-11-19):** `grantable()` does not refuse `/data` (ADR-0341 item 3 does not say `Grants` must, and the abi tests use a `/data/x` entry); a program's own directory is protected by `Held::fixed`. `tests/gui/spinners.script` reads the memhog refusal without its amount (it varies 8960 to 9088 KiB). Open: `cpu_ceiling_from_a_process` failed once under a parallel `test-changed` and passed alone.
 - **10e:** the ADR-0212 image cache was not built (a broker, `posix_child` and `libposix` change with its own security
   argument); the userland does not depend on it. The independent review of `tr`, `expr` and `diff` was done by an
   `opus-review` (decided 2026-11-15 that it counts).
