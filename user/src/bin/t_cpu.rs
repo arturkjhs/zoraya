@@ -50,7 +50,9 @@ const MIN_SLICE_NS: u64 = 50_000;
 
 static FACTOR: AtomicU64 = AtomicU64::new(1);
 
-fn calibrate() {
+/// The host's speed now: the best of five fills of 256 KiB, as a multiple of
+/// the reference (`REFERENCE_FILL_NS`), and the time of the best.
+fn measure_host() -> (u64, u64) {
     let mut buffer = alloc::vec![0u64; 32768];
     let mut best = u64::MAX;
     for _ in 0..5 {
@@ -61,9 +63,52 @@ fn calibrate() {
         }
         best = best.min(clock_monotonic() - began);
     }
-    let factor = best.div_ceil(REFERENCE_FILL_NS).clamp(1, MAX_FACTOR);
+    (best.div_ceil(REFERENCE_FILL_NS).clamp(1, MAX_FACTOR), best)
+}
+
+fn calibrate() {
+    let (factor, best) = measure_host();
     FACTOR.store(factor, Ordering::Relaxed);
     println!("t_cpu: fill of 256 KiB takes {best} ns: time bounds scaled by {factor}");
+}
+
+/// Wall-clock checks over their limit in this process (`time_over`).
+static OVER: AtomicU64 = AtomicU64::new(0);
+/// The exit code of a run that went over a time limit on a quiet host: the
+/// kernel test runs `t_cpu` again (`cpu_ceiling_from_a_process`), as it does
+/// for `t_bound`.
+const OVER_TIME: i32 = 3;
+
+/// A wall-clock bound that was passed (`what`). The guest's clock runs while
+/// the host stalls the vCPU (other QEMU runs, a busy machine: 3.0 ms masked
+/// against 2 ms, 56 ms of wake-up lateness against 50, with 60 units of work
+/// and the same kernel), so a time alone does not say the kernel is wrong. The
+/// host is measured again now: if it is not quiet (a fill slower than the
+/// reference) the overrun is reported and not counted; if it is quiet the
+/// overrun is counted, the run fails with `OVER_TIME` and is repeated, up to
+/// three runs. A kernel that overruns does so in every run, a stall does not.
+/// What no host excuses stays an assertion at the call (the counted units,
+/// twice the budget, a second of masked time).
+fn time_over(what: &str) {
+    let (now, best) = measure_host();
+    if now > 1 {
+        println!(
+            "t_cpu: {what}: over the time bound, host not quiet now (fill {best} ns): not counted"
+        );
+        return;
+    }
+    println!("t_cpu: {what}: over the time bound on a quiet host: the run is repeated");
+    OVER.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A charge `used` against a ceiling of `budget` ns over `periods`: never
+/// beyond twice the budget (an assertion, whatever the host), and within
+/// `upper` where the host is quiet (`time_over`).
+fn within_ceiling(used: u64, budget: u64, periods: u64, what: &str) {
+    assert!(used <= 2 * budget, "{what}: {used} ns of {budget}");
+    if used > upper(budget, periods) {
+        time_over(&alloc::format!("{what}: {used} ns of {budget}"));
+    }
 }
 
 fn factor() -> u64 {
@@ -212,30 +257,22 @@ fn check_masked(what: &str) {
         raw_syscall(DIAGNOSE_UNITS, [0; 6]);
     }
     assert!(u <= MAX_UNITS, "{what}: {u} units");
-    let limit = masked_limit();
-    assert!(ns <= limit, "{what}: {ns} ns masked, limit {limit}");
-}
-
-/// What one interval with IRQ masked may last in wall time over a whole
-/// subtest. Under HVF (factor 1) it is ADR-0270's 2 ms. Off HVF the guest's
-/// clock runs while the host stalls the vCPU, and these subtests run for
-/// seconds under load, so one interval can hold a stall that is no work of
-/// the kernel's: on CI's EL2 runner (factor 13) intervals of 25 to 27 ms
-/// showed up with 55 units of work, fewer than the 71 of a 10 ms one, in a
-/// different subtest each run; on CI's `auto` (TCG) runner at factor 12 `the
-/// exit of 40 sleepers` held 156.7 ms with 55 units, where the same job's
-/// green runs hold 1.6 ms with the same 55 units (and HVF 87 us). There the
-/// units (above) are the check that the work between step points is bounded,
-/// and the time, as in `t_bound`, only that nothing ran masked for a second.
-fn masked_limit() -> u64 {
-    if factor() > 1 {
-        return SLOW_HOST_LIMIT_NS;
+    // Nothing ran masked for a second, whatever the host; the 2 ms of
+    // ADR-0270 where the host is quiet (`time_over`). The units above are
+    // the check of the work between step points on every host.
+    assert!(
+        ns <= SLOW_HOST_LIMIT_NS,
+        "{what}: {ns} ns masked, limit {SLOW_HOST_LIMIT_NS}"
+    );
+    if ns > BOUND_NS {
+        time_over(&alloc::format!("{what}: {ns} ns masked, limit {BOUND_NS}"));
     }
-    BOUND_NS
 }
 
-/// The masked-time limit off HVF (`masked_limit`), `t_bound`'s: a wall-clock
-/// figure there measures the host, so only a gross hang fails it.
+/// The masked-time limit no host excuses, `t_bound`'s: a wall-clock figure
+/// measures the host (on CI's EL2 runner intervals of 25 ms showed up with 55
+/// units of work, on `auto` under TCG one of 156.7 ms where the same job's
+/// green runs hold 1.6 ms; under HVF on a shared machine 3.0 ms and 13 ms).
 const SLOW_HOST_LIMIT_NS: u64 = 1_000 * MS;
 
 /// A page of counters shared with the spinners: word `i` is spinner `i`'s.
@@ -346,7 +383,7 @@ fn a_room_at_a_quarter_gets_a_quarter(n: usize) {
         budget / MS,
         u1.cpu.parked - u0.cpu.parked
     );
-    assert!(used <= upper(budget, periods), "{used} ns of {budget}");
+    within_ceiling(used, budget, periods, "a room's charge");
     assert!(used * 5 >= budget * 4, "{used} ns of {budget}: starved");
     assert!(u1.cpu.parked > u0.cpu.parked);
     assert_eq!(u1.cpu.limit, Some(250));
@@ -393,16 +430,13 @@ fn a_room_at_a_quarter_by_its_own_clock() {
         own / MS,
         budget / MS
     );
-    assert!(used <= upper(budget, periods), "{used} ns of {budget}");
+    within_ceiling(used, budget, periods, "the charge of clock spinners");
     assert!(used * 5 >= budget * 4, "{used} ns of {budget}: starved");
     assert!(
         own * 4 <= used * 5,
         "the room ran {own} ns by its own clock, it was charged {used} ns"
     );
-    assert!(
-        own <= upper(budget, periods),
-        "the room ran {own} ns by its own clock, budget {budget}"
-    );
+    within_ceiling(own, budget, periods, "the room's own clock");
     end(room, &spinners);
     end(free_job, &[free]);
     page.close();
@@ -454,12 +488,12 @@ fn rooms_together_stay_under_their_parent() {
         total / MS,
         elapsed / 2 / MS
     );
-    assert!(total <= upper(elapsed / 2, periods), "{total} ns together");
+    within_ceiling(total, elapsed / 2, periods, "three rooms together");
     assert!(total * 5 >= elapsed / 2 * 4, "{total} ns: starved");
     check_share(counted, total, uncapped, free_ns, 500);
     for (room, was) in rooms.iter().zip(before) {
         let used = job_get_usage(*room, false).expect("u").cpu.used_ns - was;
-        assert!(used <= upper(elapsed / 4, periods), "a room used {used} ns");
+        within_ceiling(used, elapsed / 4, periods, "one of three rooms");
         // No room is promised any: ADR-0264 has ceilings and no shares, and
         // the first rooms in the queue can spend the parent's budget before
         // the third runs (ADR-0285, open questions).
@@ -514,7 +548,7 @@ fn a_deep_job_tree() {
         used / MS,
         elapsed / 4 / MS
     );
-    assert!(used <= upper(elapsed / 4, elapsed / 20_000_000 + 2));
+    within_ceiling(used, elapsed / 4, elapsed / 20_000_000 + 2, "a deep job");
     assert!(used * 5 >= elapsed / 4 * 4);
     job_kill(chain[0]).expect("kill");
     for h in &spinners {
@@ -595,7 +629,10 @@ fn a_killed_room_with_parked_threads_dies() {
         "t_cpu: a parked room died in {} ms (period 100 ms)",
         took / MS
     );
-    assert!(took <= (PERIOD + 50 * MS) * factor(), "{took} ns");
+    assert!(took <= 1_000 * MS, "{took} ns");
+    if took > (PERIOD + 50 * MS) * factor() {
+        time_over(&alloc::format!("a parked room died in {took} ns"));
+    }
     handle_close(room).expect("close");
     set_period(0);
 }
@@ -714,10 +751,15 @@ fn wake_up_latency_next_to_capped_rooms(period: u64) {
     // ADR-0264 option D: with the capped jobs together at C of the period P,
     // a wake-up waits at most 2 C P, one slice and a step: C = 1/2.
     let bound = (period + 10 * MS + 5 * MS) * factor();
-    assert!(max <= bound, "lateness {max} ns, bound {bound}");
-    if period <= 20 * MS {
-        // INV-0264-3's 50 ms, which a key's echo must also fit in.
-        assert!(max <= 50 * MS * factor(), "lateness {max} ns");
+    // Nothing is starved for a second, whatever the host; the bounds of
+    // ADR-0264 where it is quiet (`time_over`).
+    assert!(max <= 1_000 * MS, "lateness {max} ns");
+    if max > bound {
+        time_over(&alloc::format!("lateness {max} ns, bound {bound}"));
+    }
+    // INV-0264-3's 50 ms, which a key's echo must also fit in.
+    if period <= 20 * MS && max > 50 * MS * factor() {
+        time_over(&alloc::format!("lateness {max} ns, 50 ms"));
     }
     for room in &rooms {
         job_kill(*room).expect("kill");
@@ -841,6 +883,10 @@ fn main() -> i32 {
     a_parked_spinner_makes_no_progress();
     for period in [20 * MS, 10 * MS, 100 * MS] {
         wake_up_latency_next_to_capped_rooms(period);
+    }
+    if OVER.load(Ordering::Relaxed) > 0 {
+        println!("t_cpu: over a time bound on a quiet host");
+        return OVER_TIME;
     }
     println!("t_cpu: all passed");
     0

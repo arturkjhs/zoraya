@@ -2129,8 +2129,24 @@ fn quotas_from_a_process() {
 
 /// ADR-0264: the CPU ceiling, parking and the wake-up latency next to capped
 /// rooms (INV-0264-1, -2, -4 and the kernel half of -3).
+///
+/// The wall-clock bounds of `t_cpu` are held where the host is quiet: a run
+/// that went over one on a quiet host exits with 3 and is repeated, up to
+/// three runs (as `t_bound`'s `outer`): a kernel that overruns does so in
+/// every run, a stall of the host (other guests on the machine) does not.
+/// What no host excuses (units of work between step points, twice the
+/// budget, a second of masked time or lateness, starvation, the counts)
+/// fails the first run.
 fn cpu_ceiling_from_a_process() {
-    assert_eq!(run_program("t_cpu"), exited(0));
+    let mut record = run_program("t_cpu");
+    for run in 1..3 {
+        if record != exited(3) {
+            break;
+        }
+        println!("t_cpu: run {run} went over a time bound on a quiet host; again");
+        record = run_program("t_cpu");
+    }
+    assert_eq!(record, exited(0));
 }
 
 /// ADR-0285 item 7 with ADR-0460: a room at a ceiling of one thousandth
