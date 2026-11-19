@@ -144,6 +144,10 @@ static TESTS: &[Test] = &[
         run: a_run_queued_behind_many_frames_is_still_found_by_a_create,
     },
     Test {
+        name: "a_run_the_reaper_frees_at_the_step_before_its_help_is_found",
+        run: a_run_the_reaper_frees_at_the_step_before_its_help_is_found,
+    },
+    Test {
         name: "a_run_search_over_a_fragmented_map_goes_in_steps",
         run: a_run_search_over_a_fragmented_map_goes_in_steps,
     },
@@ -3591,6 +3595,38 @@ fn a_run_queued_behind_many_frames_is_still_found_by_a_create() {
         units <= crate::steps::STEP as u64 + 1,
         "{units} units in one interval of a run's search (INV-0270-1)"
     );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The step point before the first round of help may switch to the reaper,
+/// whose turn frees the queue with the run in it: `help` then finds nothing,
+/// and the search must scan again before it refuses (ADR-0349).
+fn a_run_the_reaper_frees_at_the_step_before_its_help_is_found() {
+    const RUN: u64 = 128;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let head = hoard_frames();
+    // The step points of a scan that finds nothing.
+    let mut points = 0;
+    let none = frames::alloc_contig_in_steps(RUN, || {
+        points += 1;
+        test_step_point()
+    });
+    assert!(none.is_err(), "every frame is taken");
+    let daif = arch::save_and_mask_interrupts();
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    let mut calls = 0;
+    let got = frames::alloc_contig_in_steps(RUN, || {
+        calls += 1;
+        if calls == points + 1 {
+            while crate::reaper::help() {}
+        }
+        test_step_point()
+    });
+    arch::restore_interrupts(daif);
+    unhoard(head);
+    let got = got.expect("the run the reaper freed at the step point (ADR-0349)");
+    frames::free_contig(got, RUN);
     assert_eq!(frames_accounted(), before);
 }
 
