@@ -44,7 +44,7 @@ tls_ready=$dir/tls.ports
 $HTTPD --port 0 --lifetime $((TIMEOUT * 2 + 120)) --ready-file "$http_ready" --tls-dir tests/net/tls-git --tls-ready-file "$tls_ready" \
 	--git-root "$dir" --git-auth ada:s3cret > "$log" 2>&1 &
 httpd=$!
-trap 'kill $httpd 2>/dev/null; wait $httpd 2>/dev/null; true' EXIT
+trap 'status=$?; kill $httpd 2>/dev/null; wait $httpd 2>/dev/null; exit $status' EXIT
 for _ in $(seq 1 40); do [ -s "$http_ready" ] && [ -s "$tls_ready" ] && break; perl -e 'select(undef,undef,undef,0.25)'; done
 port=$(cat "$http_ready")
 set -- $(cat "$tls_ready")
@@ -91,6 +91,10 @@ git -C "$dir/repo.git" log --format=%an main | grep -q '^Ada Test$' || fail "the
 grep -q 'git: POST /git/repo.git/git-receive-pack auth=yes' "$log" || fail "the server saw no authenticated push"
 # A push without the credentials never got past the 401: the server never saw git-receive-pack unauthenticated succeed.
 if grep -q 'git: POST /git/repo.git/git-receive-pack auth=no' "$log"; then fail "a push body reached the server without credentials"; fi
+# INV-0339-2: the push with no `+net` word never reached the server: of the requests for the push's refs the log holds the one
+# challenge (no credentials, answered 401) of the push that had the word, and the one with them.
+n=$(grep -c 'git: GET /git/repo.git/info/refs?service=git-receive-pack auth=no' "$log" || true)
+[ "$n" = 1 ] || { tail -30 "$log"; fail "INV-0339-2: $n unauthenticated requests for the push's refs, wanted 1 (the challenge)"; }
 # INV-0339-5, INV-0461-2: the expired and the wrong-name servers saw a handshake and no request, and the host
 # saw no request on them for the repository.
 for name in expired wrong; do

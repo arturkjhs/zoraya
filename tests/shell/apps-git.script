@@ -118,7 +118,7 @@
 > status\r
 < succeeded (exit status 0)
 < \r\n~/repo>
-> search s3cret /data/home/git/config\r
+> search s3cr /data/home/git/config\r
 < \r\n~/repo>
 > status\r
 < exit status 1

@@ -62,15 +62,25 @@ Against: ADR-0411 Option C (a request path from a running program to the shell) 
    write a directory. It is the rule git's own naming gives for such an address; where git would name it otherwise git's write is
    refused, never widened.
 3. **A child's network and random service (ADR-0339 item 7, narrowed).** ADR-0339 says a fork and a spawn each get a connection of the
-   parent's scope. Built here: only the transport helper (`git-remote-https` and `-http`, started as a dashed command or through
-   `git remote-https`) is started by `posix_spawn` with `POSIX_SPAWN_GRANT_NET | POSIX_SPAWN_GRANT_RANDOM` (`ports/patches/git/0006-*`):
-   a duplicate of git's own connection, with its scope, and a share of the random service. If git holds no connection (no `+net`, no
-   typed URL) the spawn is refused with `EACCES` and the helper is started without, so that its failure to connect is the
-   network refusal the person sees. **Hooks, the editor, the pager and every other child are forked and have neither a
-   connection nor the random service.** This is narrower than ADR-0339 item 5 ("the network the line gave"): a hook cannot reach
+   parent's scope. Built here: only the transport helper is started by `posix_spawn` with `POSIX_SPAWN_GRANT_NET |
+   POSIX_SPAWN_GRANT_RANDOM` (`ports/patches/git/0006-*`): a duplicate of git's own connection, with its scope, and a share of the random
+   service. If git holds no connection (no `+net`, no typed URL) the grant of the network is refused with `EACCES` and the helper is
+   started with the random service alone: libcurl cannot start without it (`curl_global_init failed`), and the helper then fails to
+   connect, which is the network refusal the person sees. The helper is started as `git-remote-https` itself, not through `git
+   remote-https` (`0008`): the random service is shared one level below a program's own connection only (ADR-0435: depth 2 to 3, a
+   leaf), and the network account counts each holder, so the chain git, `git remote-https`, `git-remote-https` failed at its third
+   link with `EAGAIN` (measured). **Hooks, the editor, the pager and every other child are forked and have neither a connection nor
+   the random service.** The helper's own children (`fetch-pack`, then `index-pack`) are therefore without it: git's temporary file
+   names fall back to the clock, the process and a counter where `getrandom` fails (`0009`), which is safe because the file is made
+   with `O_CREAT | O_EXCL` and the name need only be new. This is narrower than ADR-0339 item 5 ("the network the line gave"): a hook cannot reach
    the line's hosts. It is the safer reading until a hook that needs the network is asked for, and INV-0339-4's hook test passes
    trivially for the second host. A helper that runs in another directory (`cmd->dir`) is forked, because `libc.a` has no
-   `posix_spawn_file_actions_addchdir_np`; git sets none for the helper.
+   `posix_spawn_file_actions_addchdir_np`; git sets none for the helper. git's account is three connections (`GIT_NET_BUDGET`, git, the
+   helper and one spare) where other programs have two. **Also found and fixed:** `libposix`'s `clone_conn` asked a file service for
+   ALL and then for read alone, and the shell gives a `+w` or `create-tree` entry everything but `publish`, so a child of any program
+   (a fork or a spawn) held a read-only connection to the directories its parent could write: `index-pack` in a clone could not write
+   `.git` and a hook could not write the work tree. It now asks for ALL, then ALL without `publish`, then read
+   (`a_child_keeps_the_write_of_an_entry_that_lacks_publish`; a child's own directory stays read-only, ADR-0341 item 7).
 4. **The ceiling.** The shell sets `GIT_CEILING_DIRECTORIES` for a description with `repository`: the parent of the repository it found,
    or the parent of the starting directory when it found none (ADR-0339 item 2), replacing any value on the line. git never goes up
    into a ceiling directory (measured: the ceiling itself is not searched), so the parent is the directory its search must not

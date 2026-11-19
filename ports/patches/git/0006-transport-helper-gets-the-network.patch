@@ -11,7 +11,7 @@ diff -ruN a/run-command.c b/run-command.c
  
  void child_process_init(struct child_process *child)
  {
-@@ -674,6 +677,113 @@
+@@ -674,6 +677,115 @@
  	strbuf_release(&buf);
  }
  
@@ -51,7 +51,8 @@ diff -ruN a/run-command.c b/run-command.c
 +			  int need_in, int *fdin, int need_out, int *fdout,
 +			  int need_err, int *fderr, const int *notify)
 +{
-+	unsigned grants[2] = { POSIX_SPAWN_GRANT_NET | POSIX_SPAWN_GRANT_RANDOM, 0 };
++	unsigned grants[2] = { POSIX_SPAWN_GRANT_NET | POSIX_SPAWN_GRANT_RANDOM,
++			       POSIX_SPAWN_GRANT_RANDOM };
 +	int in = -1, out = -1, err = -1, i, rc = EINVAL;
 +	pid_t pid = -1;
 +
@@ -108,8 +109,9 @@ diff -ruN a/run-command.c b/run-command.c
 +		posix_spawnattr_destroy(&attr);
 +		/*
 +		 * Without a network connection of its own git cannot give one
-+		 * (EACCES): the helper then starts without, and says so when
-+		 * it fails to connect.
++		 * (EACCES): the helper then starts with the random service alone
++		 * (libcurl cannot start without it) and fails to connect, which is
++		 * the refusal the person sees.
 +		 */
 +		if (!rc || rc != EACCES)
 +			break;
@@ -125,7 +127,7 @@ diff -ruN a/run-command.c b/run-command.c
  int start_command(struct child_process *cmd)
  {
  	int need_in, need_out, need_err;
-@@ -784,8 +894,19 @@
+@@ -784,8 +896,19 @@
  	 * never be released in the child process.  This means only
  	 * Async-Signal-Safe functions are permitted in the child.
  	 */
