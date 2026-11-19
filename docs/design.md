@@ -2478,8 +2478,42 @@ volume, ADR-0311 on the `names` key and the roots, ADR-0312 on OpenSSL in place 
 - **Known limits.** *Storage:* `--disk` limits a room's `+w` grants only; `/data/ROOM` is not limited (ADR-0341 item 6 is
   not built), so a line in a limited room can write there beyond the limit; the room's panel applications' directories
   (`/data/ROOM/APP`) are reachable by its shell. *Open files:* a file inside the own directory that the program has open
-  for writing stays writable in a child that inherits the descriptor (not reachable with ssh; to be closed before 10h's
-  git hooks). *Tests:* the INV-0340-2/-0341-4 lints run in `make test-unit`, not `make check`; no askpass prompt is run.
+  for writing stays writable in a child that inherits the descriptor (not reachable with ssh or with git's hooks: git holds no
+  such file open across a hook, 10h). *Tests:* the INV-0340-2/-0341-4 lints run in `make test-unit`, not `make check`; no askpass prompt is run.
+
+## git (stage 10, 10h)
+
+`git` runs inside Zoraya as a POSIX program of the image (ADR-0339 Option C, ADR-0347, ADR-0461, ADR-0464): git 2.56.1 from the
+ports, `/bin/git`, with `git-remote-http` and `git-remote-https` in `/usr/libexec/git-core` (git's compiled-in exec path; no
+`GIT_EXEC_PATH`), `/etc/gitconfig` (`ports/git/gitconfig`: no detached garbage collection, no guessed author) and an
+`info/exclude` template. No other command of git's is a file; the Perl and shell-script commands, `gitk`, the ssh transport and the
+credential helpers are not built.
+
+- **Licence and TLS.** git is GPL-2.0-only, so `git-remote-http` links a second libcurl (the curl port's pin and patches, library
+  only) on mbedTLS 3.6.8 under its GPL-2.0-or-later option (ADR-0461); nothing else links mbedTLS and `git` links no TLS library
+  (INV-0461-1, `ports/check-early.sh`). mbedTLS is a TLS 1.2 and 1.3 client only, its entropy is `getrandom`
+  (`ports/patches/mbedtls/`), its roots are `/system/tls/roots`; `http.ssl*`, `http.proxy*`, `GIT_SSL_*`, `credential.helper`,
+  `core.askPass`, `SSH_ASKPASS`, `GIT_SSH_COMMAND` and `GIT_CONFIG_*` decide nothing (patches `0001` to `0004`). `git-remote-http`
+  is 6,193,088 bytes (OpenSSL's build was 9,306,128), `git` 6,710,560.
+- **What a line gives git.** `user/describe/posix/git.cmd` has `repository`: the shell looks for the nearest directory with a `.git`
+  directory from the current directory (or `-C DIR`) inside its own table (`zoraya_shell::repository`), and gives it as a `tree`
+  entry (read where that is all the shell holds). A `.git` file, the home directory and `/` as a repository refuse the line with a hint.
+  The shell sets `GIT_CEILING_DIRECTORIES` to the parent of the repository (or of the starting directory). `git clone`, `git init` and
+  `git ls-remote` are forms (`git-clone.cmd` and the others, `sub`): `init DIR` and `clone URL [DIR]` have a `create-tree` operand,
+  `clone` and `ls-remote` a `url` operand that gives its host and port with `/system/tls`; `git clone URL` makes the directory the
+  address names (`derive`). `fetch`, `pull` and `push` take their address from the repository, which is data: they get no network
+  without `+net HOST:PORT` on the line or in the room. git's own directory is `/data/home/git` (`/data/ROOM/git`), seen as
+  `~/.config/git`.
+- **Children.** Only the transport helper has a network connection and the random service: git starts it with `posix_spawn` and
+  `POSIX_SPAWN_GRANT_NET | POSIX_SPAWN_GRANT_RANDOM` (`ports/patches/git/0006-*`, ADR-0433), a duplicate of its own connection with
+  its own scope. Hooks, the editor and the pager are forked: they get git's table with its own directory read-only (ADR-0341 item
+  7) and no connection.
+- **Credentials** are typed to git on the terminal each time and never stored.
+- **Tests.** `tools/test-apps-git.sh` (in `make test-apps`) serves a bare repository over smart HTTP with the host's
+  `git http-backend` behind `tools/test-httpd`'s TLS listeners (a valid, an expired and a wrong-name certificate; a push needs Basic
+  credentials) and runs `tests/shell/apps-git.script`.
+- **Known limits.** See `docs/tasks/TASK-31-part-10h.md`: no ssh transport, submodules, `git daemon`, `git help` viewer or
+  `git-upload-pack` as a server; `Expect: 100-continue` and a push over 1 MiB are not exercised; a hook has no network.
 
 ## CPython (stage 9, 9c)
 

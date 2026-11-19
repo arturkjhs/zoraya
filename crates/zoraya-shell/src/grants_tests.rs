@@ -1415,3 +1415,225 @@ fn a_long_option_of_ssh_is_a_usage_mistake_with_the_short_form_named() {
         Some(("--nope".into(), String::new()))
     );
 }
+
+// ------------------------------------------------------------ ADR-0339 (git)
+
+const GIT_CMD: &str = include_str!("../../../user/describe/posix/git.cmd");
+const GIT_CLONE_CMD: &str = include_str!("../../../user/describe/posix/git-clone.cmd");
+const GIT_INIT_CMD: &str = include_str!("../../../user/describe/posix/git-init.cmd");
+const GIT_LS_REMOTE_CMD: &str = include_str!("../../../user/describe/posix/git-ls-remote.cmd");
+
+/// The descriptions of git, as the shell's list holds them.
+fn git_descriptions() -> Vec<Description> {
+    [GIT_CMD, GIT_CLONE_CMD, GIT_INIT_CMD, GIT_LS_REMOTE_CMD]
+        .iter()
+        .map(|t| d(t))
+        .collect()
+}
+
+#[test]
+fn the_form_of_a_command_is_chosen_by_its_first_word() {
+    use crate::grants::{trusted_description_args, words_of};
+    let all = git_descriptions();
+    let by = |words: &[&str]| {
+        trusted_description_args(&all, "/bin/git", words).map(|d| d.name.as_str().to_string())
+    };
+    assert_eq!(
+        by(&["clone", "https://e.org/a.git"]).as_deref(),
+        Some("git-clone")
+    );
+    assert_eq!(by(&["init", "p"]).as_deref(), Some("git-init"));
+    assert_eq!(
+        by(&["ls-remote", "https://e.org/a"]).as_deref(),
+        Some("git-ls-remote")
+    );
+    // Any other command, `-C` first, a bare `git`, and a copy of the program: the program's own or none.
+    assert_eq!(by(&["status"]).as_deref(), Some("git"));
+    assert_eq!(by(&["-C", "x", "clone", "u"]).as_deref(), Some("git"));
+    assert_eq!(by(&[]).as_deref(), Some("git"));
+    assert!(trusted_description_args(&all, "/tmp/git", &["clone"]).is_none());
+    // The plain lookup never gives a form.
+    assert_eq!(
+        trusted_description(&all, "/bin/git").map(|d| d.name.as_str()),
+        Some("git")
+    );
+    // A form parses the words after its command word.
+    let clone = &all[1];
+    assert_eq!(words_of(clone, &["clone", "u"]), ["u"]);
+    assert_eq!(words_of(&all[0], &["status"]), ["status"]);
+}
+
+#[test]
+fn git_init_creates_the_directory_it_names_and_everything_in_it() {
+    // INV-0339 item 3: the parent narrowed to the name, and what is in it.
+    let p = go(GIT_INIT_CMD, &["proj"], &[], &[], true, "/u").unwrap();
+    assert_eq!(
+        rows(&p),
+        [
+            ("/u".into(), Access::Read, "current directory".into()),
+            (
+                "/u".into(),
+                Access::CreateTree("proj".into()),
+                "operand DIR".into()
+            ),
+        ]
+    );
+    assert_eq!(
+        Access::CreateTree("proj".into()).words(),
+        "create proj, and change anything in it"
+    );
+    // Everything but `publish`, as for a `+w` tree; the name is the one narrowed to.
+    assert_eq!(
+        Access::CreateTree("proj".into()).rights(),
+        Access::Tree.rights()
+    );
+    assert_eq!(Access::CreateTree("proj".into()).name(), Some("proj"));
+    // Without a directory git makes `.git` in the current directory: nothing is given but the read.
+    let p = go(GIT_INIT_CMD, &[], &[], &[], true, "/u").unwrap();
+    assert_eq!(rows(&p).len(), 1);
+    // A directory that is a value from outside the current directory is refused, as a `create` is.
+    let r = go(
+        GIT_INIT_CMD,
+        &["/other/place"],
+        &["/other/place"],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap_err();
+    assert!(r.problem.contains("from a value"), "{}", r.problem);
+    // An undescribed copy of the description gets no create-tree (only the image's designate).
+    let p = go(GIT_INIT_CMD, &["proj"], &[], &[], false, "/u").unwrap();
+    assert_eq!(rows(&p).len(), 1);
+}
+
+#[test]
+fn git_clone_without_a_directory_makes_the_one_the_address_names() {
+    let url = "https://example.org/ada/proj.git";
+    // Written: that directory.
+    let p = go(GIT_CLONE_CMD, &[url, "work"], &[], &[], true, "/u").unwrap();
+    assert!(rows(&p).contains(&(
+        "/u".into(),
+        Access::CreateTree("work".into()),
+        "operand DIR".into()
+    )));
+    // Left out: the last part without `.git`, as git names it, designated by the shell itself.
+    let p = go(GIT_CLONE_CMD, &[url], &[], &[], true, "/u").unwrap();
+    assert!(rows(&p).contains(&(
+        "/u".into(),
+        Access::CreateTree("proj".into()),
+        "operand DIR".into()
+    )));
+    let p = go(
+        GIT_CLONE_CMD,
+        &["https://example.org/ada/tool"],
+        &[],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap();
+    assert!(rows(&p).contains(&(
+        "/u".into(),
+        Access::CreateTree("tool".into()),
+        "operand DIR".into()
+    )));
+    // A name the shell cannot be sure of refuses the line, with the way out.
+    for bad in [
+        "https://example.org/",
+        "https://example.org/a/",
+        "https://example.org/a/%2e",
+        "https://example.org/.git",
+        "https://example.org/a/.hidden",
+    ] {
+        let r = go(GIT_CLONE_CMD, &[bad], &[], &[], true, "/u").unwrap_err();
+        assert!(r.problem.contains("cannot be sure"), "{bad}: {}", r.problem);
+        assert!(
+            r.hint
+                .as_deref()
+                .unwrap_or("")
+                .contains("write a directory"),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn the_url_of_git_clone_is_not_a_path_and_the_option_values_are_text() {
+    let p = go(
+        GIT_CLONE_CMD,
+        &[
+            "--depth",
+            "1",
+            "-b",
+            "main",
+            "https://example.org/a/p.git",
+            "d",
+        ],
+        &[],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap();
+    // Only the current directory and the new directory: no entry for the URL, the depth or the branch.
+    assert_eq!(rows(&p).len(), 2, "{p:?}");
+}
+
+#[test]
+fn git_dash_c_designates_its_directory_to_read() {
+    let p = go(GIT_CMD, &["-C", "proj/src", "status"], &[], &[], true, "/u").unwrap();
+    assert!(
+        rows(&p).contains(&("/u/proj/src".into(), Access::Read, "option -C".into())),
+        "{p:?}"
+    );
+    // From a value outside the current directory: refused as any path is.
+    let r = go(
+        GIT_CMD,
+        &["-C", "/etc", "status"],
+        &["/etc"],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap_err();
+    assert!(r.problem.contains("from a value"), "{}", r.problem);
+    // The words after the command are the program's: a path there designates nothing.
+    let p = go(GIT_CMD, &["add", "-f", "/etc/passwd"], &[], &[], true, "/u").unwrap();
+    assert_eq!(rows(&p).len(), 1, "{p:?}");
+}
+
+#[test]
+fn the_git_descriptions_carry_the_repository_key_and_the_own_directory() {
+    let all = git_descriptions();
+    assert!(all[0].repository && all[0].sub.is_none());
+    for form in &all[1..] {
+        assert!(
+            !form.repository,
+            "{}: a form that makes a repository does not search",
+            form.name
+        );
+        assert!(form.sub.is_some());
+    }
+    for d in &all {
+        let own = crate::grants::own_directory(d, true, Some("proj")).expect("git's directory");
+        assert_eq!(own.real, "/data/proj/git", "{}", d.name);
+        assert_eq!(own.view, "/home/.config/git");
+    }
+}
+
+#[test]
+fn git_gets_no_double_dash_before_its_command() {
+    use crate::grants::end_of_options_at;
+    // ssh has one before the host (ADR-0340 item 4); git would read it as an option before the command.
+    let git = d(GIT_CMD);
+    assert_eq!(end_of_options_at(&git, &["status"]), None);
+    assert_eq!(
+        end_of_options_at(&git, &["-C", "p", "log", "-n", "3"]),
+        None
+    );
+    assert_eq!(
+        end_of_options_at(&d(SSH_CMD), &["-l", "ada", "h", "ls"]),
+        Some(2)
+    );
+}

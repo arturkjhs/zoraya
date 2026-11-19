@@ -1388,3 +1388,52 @@ fn the_loopback_asks_nothing_of_a_rooms_words() {
     );
     assert!(got.is_err(), "the other address still is");
 }
+
+const GIT_CLONE: &str = include_str!("../../../user/describe/posix/git-clone.cmd");
+const GIT_LS_REMOTE: &str = include_str!("../../../user/describe/posix/git-ls-remote.cmd");
+const GIT: &str = include_str!("../../../user/describe/posix/git.cmd");
+
+/// ADR-0339 item 6, INV-0339-2: a typed URL gives its host and port; a line with no URL (`git push`,
+/// `git fetch`) gives none, whatever a repository's configuration says.
+#[test]
+fn git_clone_reaches_the_host_of_its_url_and_a_push_reaches_nothing() {
+    use zoraya_abi::net::Target;
+    let ok = go(GIT_CLONE, &[("https://example.org/ada/p.git", true)], true)
+        .unwrap()
+        .expect("a scope");
+    assert_eq!(ok.0, rights::REACH);
+    let s = Scope::decode(&ok.1).unwrap();
+    let rules: Vec<_> = s.reach_rules().collect();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].target, Target::PublicName("example.org"));
+    assert_eq!(rules[0].ports.list(), &[(443, 443)]);
+    // A port in the address is the port.
+    let ok = go(
+        GIT_LS_REMOTE,
+        &[("https://10.0.2.2:8443/r.git", true)],
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let s = Scope::decode(&ok.1).unwrap();
+    assert!(s.names_address([10, 0, 2, 2], 8443, Protocols::TCP));
+    assert!(!s.names_address([10, 0, 2, 2], 443, Protocols::TCP));
+    // From a value: refused without a +net word.
+    assert!(go(GIT_CLONE, &[("https://example.org/p.git", false)], true).is_err());
+    // `git push`, `fetch`, `status`: no URL operand, no network.
+    for words in [
+        &["push"][..],
+        &["fetch", "origin"],
+        &["status"],
+        &["pull", "https://example.org/x"],
+    ] {
+        let args: Vec<(&str, bool)> = words.iter().map(|w| (*w, true)).collect();
+        assert!(go(GIT, &args, true).unwrap().is_none(), "{words:?}");
+    }
+    // With the word on the line, the host is given to the program as the word says.
+    let ok = go_nets(GIT, &[("push", true)], &["example.org:443"], true)
+        .unwrap()
+        .expect("a scope");
+    let s = Scope::decode(&ok.1).unwrap();
+    assert_eq!(s.reach_rules().count(), 1);
+}

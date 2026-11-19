@@ -29,6 +29,13 @@
 //!                    /ns/web-port, a page for a URL on port 8080 (ADR-0328)
 //! ```
 //!
+//! With `--git-root DIR` (TASK-31 10h, ADR-0339), `/git/NAME` is the bare repository `DIR/NAME` served
+//! over smart HTTP by the host's own `git http-backend` (run as a CGI program, one process per request, with a
+//! scrubbed environment and the repository's `http.receivepack` on). A request for `git-receive-pack`
+//! (a push) needs `--git-auth USER:PASSWORD` as Basic credentials and is refused with 401 without them, so
+//! that git asks for them on its terminal; `git: METHOD TARGET auth=yes|no` is logged to stderr for the
+//! test's checks. The TLS listeners pass a request's body on (Content-Length or chunked), which a push needs.
+//!
 //! `--relay ADDRESS:PORT` is one connection of QEMU's `guestfwd=...-cmd:`
 //! (`tools/run-qemu.sh --net-guestfwd`): stdin and stdout are the guest's
 //! connection, copied to and from the server at ADDRESS:PORT.
@@ -50,8 +57,8 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::process::exit;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -60,6 +67,17 @@ const MAX_REQUESTS: usize = 10_000;
 const MAX_BODY: u64 = 64 << 20;
 const MAX_HEAD: usize = 8 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// The largest request or CGI body a git request may carry.
+const MAX_GIT_BODY: usize = 16 << 20;
+
+/// `--git-root` and `--git-auth`.
+struct GitConfig {
+    root: String,
+    /// The `Authorization` header value a push needs.
+    auth: Option<String>,
+}
+static GIT: OnceLock<GitConfig> = OnceLock::new();
+
 const PAGE: &str = "Zoraya test page\nfetched over HTTP, byte for byte\n";
 
 /// The bytes of `/pattern/N`: xorshift64, low byte, from a fixed seed.
@@ -78,6 +96,24 @@ fn checksum(n: u64) -> u64 {
     pattern(n).fold(0xcbf2_9ce4_8422_2325, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     })
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in bytes.chunks(3) {
+        let n = u32::from(c[0]) << 16
+            | u32::from(*c.get(1).unwrap_or(&0)) << 8
+            | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 fn head(status: u16, reason: &str, extra: &[(&str, String)]) -> Vec<u8> {
@@ -289,6 +325,7 @@ fn serve(mut stream: TcpStream) {
     let mut first = String::new();
     let mut total = 0;
     let mut line = String::new();
+    let mut headers: Vec<(String, String)> = Vec::new();
     loop {
         line.clear();
         match reader.by_ref().take(MAX_HEAD as u64).read_line(&mut line) {
@@ -297,6 +334,8 @@ fn serve(mut stream: TcpStream) {
         }
         if first.is_empty() {
             first = line.trim_end().to_string();
+        } else if let Some((k, v)) = line.trim_end().split_once(':') {
+            headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
         }
         if line == "\r\n" || line == "\n" {
             break;
@@ -311,6 +350,12 @@ fn serve(mut stream: TcpStream) {
     }
     let mut parts = first.split(' ');
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    if let Some(git) = GIT.get()
+        && path.starts_with("/git/")
+    {
+        git_cgi(&mut stream, &mut reader, git, method, path, &headers);
+        return;
+    }
     if method != "GET" {
         let _ = stream.write_all(&head(
             405,
@@ -446,6 +491,186 @@ fn serve(mut stream: TcpStream) {
     let _ = stream.read(&mut sink);
 }
 
+/// The body of a request: `Content-Length` bytes, or the chunks of `Transfer-Encoding: chunked`.
+fn request_body(
+    reader: &mut BufReader<TcpStream>,
+    headers: &[(String, String)],
+) -> Option<Vec<u8>> {
+    let get = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+    if get("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
+        let mut body = Vec::new();
+        loop {
+            let mut size = String::new();
+            reader.read_line(&mut size).ok()?;
+            let n = usize::from_str_radix(size.trim().split(';').next()?, 16).ok()?;
+            if n == 0 {
+                // The trailer: lines up to an empty one.
+                loop {
+                    let mut t = String::new();
+                    reader.read_line(&mut t).ok()?;
+                    if t.trim().is_empty() {
+                        return Some(body);
+                    }
+                }
+            }
+            if body.len() + n > MAX_GIT_BODY {
+                return None;
+            }
+            let at = body.len();
+            body.resize(at + n, 0);
+            reader.read_exact(&mut body[at..]).ok()?;
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf).ok()?;
+        }
+    }
+    let n: usize = get("content-length").map_or(Some(0), |v| v.parse().ok())?;
+    if n > MAX_GIT_BODY {
+        return None;
+    }
+    let mut body = vec![0u8; n];
+    reader.read_exact(&mut body).ok()?;
+    Some(body)
+}
+
+/// `/git/NAME...` through the host's `git http-backend` (a CGI program: RFC 3875).
+fn git_cgi(
+    stream: &mut TcpStream,
+    reader: &mut BufReader<TcpStream>,
+    git: &GitConfig,
+    method: &str,
+    target: &str,
+    headers: &[(String, String)],
+) {
+    use std::process::{Command, Stdio};
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let path_info = &path["/git".len()..];
+    let authed = match (&git.auth, header("authorization")) {
+        (Some(want), Some(got)) => *want == got,
+        _ => false,
+    };
+    eprintln!(
+        "git: {method} {target} auth={}",
+        if authed { "yes" } else { "no" }
+    );
+    let push = target.contains("git-receive-pack");
+    if push && git.auth.is_some() && !authed {
+        let _ = stream.write_all(&head(
+            401,
+            "Unauthorized",
+            &[
+                ("WWW-Authenticate", "Basic realm=\"zoraya-test\"".into()),
+                ("Content-Length", "0".into()),
+            ],
+        ));
+        return;
+    }
+    if path_info.contains("..") {
+        let _ = stream.write_all(&head(400, "Bad Request", &[("Content-Length", "0".into())]));
+        return;
+    }
+    let Some(body) = request_body(reader, headers) else {
+        let _ = stream.write_all(&head(400, "Bad Request", &[("Content-Length", "0".into())]));
+        return;
+    };
+    let mut cmd = Command::new("git");
+    cmd.arg("http-backend")
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("GIT_PROJECT_ROOT", &git.root)
+        .env("GIT_HTTP_EXPORT_ALL", "1")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "http.receivepack")
+        .env("GIT_CONFIG_VALUE_0", "true")
+        .env("REQUEST_METHOD", method)
+        .env("PATH_INFO", path_info)
+        .env("QUERY_STRING", query)
+        .env("CONTENT_LENGTH", body.len().to_string())
+        .env("REMOTE_ADDR", "127.0.0.1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(t) = header("content-type") {
+        cmd.env("CONTENT_TYPE", t);
+    }
+    if let Some(e) = header("content-encoding") {
+        cmd.env("HTTP_CONTENT_ENCODING", e);
+    }
+    if let Some(p) = header("git-protocol") {
+        cmd.env("HTTP_GIT_PROTOCOL", p);
+    }
+    if authed {
+        cmd.env("REMOTE_USER", "ada");
+    }
+    let Ok(mut child) = cmd.spawn() else {
+        let _ = stream.write_all(&head(502, "Bad Gateway", &[("Content-Length", "0".into())]));
+        return;
+    };
+    let mut stdin = child.stdin.take();
+    let writer = thread::spawn(move || {
+        if let Some(mut i) = stdin.take() {
+            let _ = i.write_all(&body);
+        }
+    });
+    let mut out = Vec::new();
+    if let Some(o) = child.stdout.take() {
+        let _ = o.take(MAX_BODY).read_to_end(&mut out);
+    }
+    let _ = writer.join();
+    let _ = child.wait();
+    // The CGI answer: header lines, an empty line, the body.
+    let split = out
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| (i, 4))
+        .or_else(|| out.windows(2).position(|w| w == b"\n\n").map(|i| (i, 2)));
+    let Some((at, skip)) = split else {
+        let _ = stream.write_all(&head(502, "Bad Gateway", &[("Content-Length", "0".into())]));
+        return;
+    };
+    let text = String::from_utf8_lossy(&out[..at]).into_owned();
+    let (mut status, mut reason) = (200u16, "OK".to_string());
+    let mut extra: Vec<(&str, String)> = Vec::new();
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for l in text.lines() {
+        let Some((k, v)) = l.split_once(':') else {
+            continue;
+        };
+        if k.eq_ignore_ascii_case("status") {
+            let v = v.trim();
+            status = v
+                .split(' ')
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(200);
+            reason = v.split_once(' ').map_or("OK", |(_, r)| r).to_string();
+        } else {
+            owned.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    for (k, v) in &owned {
+        extra.push((k.as_str(), v.clone()));
+    }
+    let payload = &out[at + skip..];
+    extra.push(("Content-Length", payload.len().to_string()));
+    let _ = stream.write_all(&head(status, &reason, &extra));
+    let _ = stream.write_all(payload);
+    let _ = stream.flush();
+    let _ = stream.shutdown(Shutdown::Write);
+}
+
 /// The certificate chain and key of `DIR/NAME.pem` and `DIR/NAME.key`.
 fn tls_config(dir: &str, name: &str) -> Result<Arc<rustls::ServerConfig>, String> {
     let pem = |ext: &str| {
@@ -475,7 +700,9 @@ fn tls_serve(name: &str, config: Arc<rustls::ServerConfig>, backend: u16, mut tc
     let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
     let mut request = Vec::new();
     let mut chunk = [0u8; 1024];
-    while !request.ends_with(b"\r\n\r\n") && request.len() < MAX_HEAD {
+    // The head ends at the first empty line; a request body (a push) may arrive in the same record.
+    let head_end = |r: &[u8]| r.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
+    while head_end(&request).is_none() && request.len() < MAX_HEAD {
         match tls.read(&mut chunk) {
             Ok(0) | Err(_) => {
                 // The test script's checker reads these lines: a refused
@@ -484,6 +711,26 @@ fn tls_serve(name: &str, config: Arc<rustls::ServerConfig>, backend: u16, mut tc
                 return;
             }
             Ok(n) => request.extend_from_slice(&chunk[..n]),
+        }
+    }
+    // The body, if the head announces one: Content-Length bytes, or chunks to the last one.
+    if let Some(end) = head_end(&request) {
+        let head_text = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+        let length: Option<usize> = head_text.lines().find_map(|l| {
+            l.strip_prefix("content-length:")
+                .and_then(|v| v.trim().parse().ok())
+        });
+        let chunked = head_text.contains("transfer-encoding: chunked");
+        let done = |r: &[u8]| match length {
+            _ if chunked => r[end..].ends_with(b"0\r\n\r\n"),
+            Some(n) => r.len() - end >= n,
+            None => true,
+        };
+        while !done(&request) && request.len() < MAX_GIT_BODY {
+            match tls.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => request.extend_from_slice(&chunk[..n]),
+            }
         }
     }
     eprintln!("tls {name}: request of {} bytes", request.len());
@@ -599,6 +846,7 @@ fn main() {
     let mut lifetime = 300u64;
     let mut ready: Option<String> = None;
     let (mut tls_dir, mut tls_ready): (Option<String>, Option<String>) = (None, None);
+    let (mut git_root, mut git_auth): (Option<String>, Option<String>) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -607,6 +855,8 @@ fn main() {
             "--ready-file" => ready = args.next(),
             "--tls-dir" => tls_dir = args.next(),
             "--tls-ready-file" => tls_ready = args.next(),
+            "--git-root" => git_root = args.next(),
+            "--git-auth" => git_auth = args.next(),
             "--relay" => {
                 // One connection of QEMU's `guestfwd=...-cmd:` (ADR-0324's
                 // test): stdin and stdout are the guest's connection; copy
@@ -623,7 +873,7 @@ fn main() {
             }
             _ => {
                 eprintln!(
-                    "usage: zoraya-test-httpd --port N [--lifetime SECONDS] [--ready-file FILE] [--tls-dir DIR --tls-ready-file FILE] | --checksum N"
+                    "usage: zoraya-test-httpd --port N [--lifetime SECONDS] [--ready-file FILE] [--tls-dir DIR --tls-ready-file FILE] [--git-root DIR [--git-auth USER:PASSWORD]] | --checksum N"
                 );
                 exit(2);
             }
@@ -646,6 +896,11 @@ fn main() {
         let _ = std::fs::write(path, format!("{got}\n"));
     }
     let deadline = Instant::now() + Duration::from_secs(lifetime);
+    if let Some(root) = git_root {
+        // `Authorization: Basic base64(USER:PASSWORD)`.
+        let auth = git_auth.map(|a| format!("Basic {}", base64(a.as_bytes())));
+        let _ = GIT.set(GitConfig { root, auth });
+    }
     if let Some(dir) = tls_dir {
         let backend = listener.local_addr().map_or(port, |a| a.port());
         match start_tls(&dir, backend, deadline) {

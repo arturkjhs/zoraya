@@ -958,7 +958,14 @@ impl<S: Sys> Posix<S> {
     /// A fresh connection to `conn`'s object (`clone`): every right first,
     /// then reading alone, for a connection that has fewer.
     pub fn clone_conn(&mut self, conn: S::H) -> Result<S::H, i32> {
-        for wanted in [rights::ALL, rights::READ | rights::CLONE] {
+        // What the shell gives a `+w` or `create-tree` entry is everything but `publish` (ADR-0153 rule 2): asking
+        // for ALL is refused for it, and the child would be left with read alone and could not write what its parent
+        // gave it to write (git's `index-pack` in a clone, TASK-31 10h).
+        for wanted in [
+            rights::ALL,
+            rights::ALL & !rights::PUBLISH,
+            rights::READ | rights::CLONE,
+        ] {
             let (mine, theirs) = self.sys.channel_create().map_err(|_| EMFILE)?;
             let m = fp::Clone {
                 rights: Flags(wanted),

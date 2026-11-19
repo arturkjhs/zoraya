@@ -21,6 +21,7 @@ pub mod netgrant;
 pub mod paste;
 pub mod record;
 pub mod refusal;
+pub mod repository;
 pub mod syntax;
 pub mod terminal;
 pub mod tty_host;
@@ -36,6 +37,8 @@ mod lang_tests;
 #[cfg(test)]
 #[path = "netgrant_tests.rs"]
 mod netgrant_tests;
+#[cfg(test)]
+mod repository_tests;
 #[cfg(test)]
 mod status_tests;
 

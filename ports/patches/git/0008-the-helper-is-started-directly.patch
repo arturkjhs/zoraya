@@ -1,0 +1,29 @@
+--- a/transport-helper.c
++++ b/transport-helper.c
+@@ -142,11 +142,26 @@
+ 	helper->in = -1;
+ 	helper->out = -1;
+ 	helper->err = 0;
++#ifdef __zoraya__
++	/*
++	 * Zoraya (ADR-0464 item 3): the helper is started as the program it is, not through
++	 * `git remote-NAME` (which starts it again): the random service may be shared one
++	 * level down from git's own connection only (ADR-0435), and the network account
++	 * counts each holder.
++	 */
++	strvec_pushf(&helper->args, "git-remote-%s", data->name);
++#else
+ 	strvec_pushf(&helper->args, "remote-%s", data->name);
++#endif
+ 	strvec_push(&helper->args, transport->remote->name);
+ 	strvec_push(&helper->args, remove_ext_force(transport->url));
++#ifndef __zoraya__
+ 	helper->git_cmd = 1;
++#endif
+ 	helper->silent_exec_failure = 1;
++#ifdef __zoraya__
++	helper->zoraya_helper = 1;
++#endif
+ 
+ 	if (have_git_dir())
+ 		strvec_pushf(&helper->env, "%s=%s",

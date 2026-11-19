@@ -1,0 +1,47 @@
+# A hook of git (TASK-31 10h, ADR-0339 items 5, INV-0339-4, INV-0341-6; `make test-apps`, when `make ports` has made
+# the root file system: a hook is run by `/bin/sh`, and `chmod` and `ln` are toybox's). A hook is a child of git with
+# git's table: git's own directory is read only to it (ADR-0341 item 7), so a hook that writes git's configuration, by
+# its path or through a link planted in the repository, is refused and the configuration is as it was.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> sleep 3\r
+< \r\n~>
+> git config --global user.name 'Ada Test'\r
+< \r\n~>
+> git config --global user.email ada@test\r
+< \r\n~>
+> git init proj\r
+< Initialized empty Git repository
+< \r\n~>
+> cd proj\r
+< \r\n~/proj>
+> echo hello > notes.txt\r
+< \r\n~/proj>
+> git add notes.txt\r
+< \r\n~/proj>
+> mkdir .git/hooks\r
+< \r\n~/proj>
+> ln -s /home/.config/git/config .git/hooks/cfg\r
+< \r\n~/proj>
+> echo 'echo planted >> $HOME/.config/git/config; echo planted2 >> .git/hooks/cfg; echo child-wrote > child.txt; echo hook-ran' > .git/hooks/pre-commit\r
+< \r\n~/proj>
+> +w .git chmod +x .git/hooks/pre-commit\r
+< \r\n~/proj>
+> git commit -m first\r
+< hook-ran
+< \r\n~/proj>
+> cat child.txt\r
+< child-wrote
+< \r\n~/proj>
+> search planted /data/home/git/config\r
+< \r\n~/proj>
+> status\r
+< exit status 1
+< \r\n~/proj>
+> cat /data/home/git/config\r
+< name = Ada Test
+< \r\n~/proj>
+x power off
+> poweroff\r
