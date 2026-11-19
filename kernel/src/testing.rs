@@ -140,6 +140,22 @@ static TESTS: &[Test] = &[
         run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
     },
     Test {
+        name: "a_run_queued_behind_many_frames_is_still_found_by_a_create",
+        run: a_run_queued_behind_many_frames_is_still_found_by_a_create,
+    },
+    Test {
+        name: "a_run_the_reaper_frees_at_the_step_before_its_help_is_found",
+        run: a_run_the_reaper_frees_at_the_step_before_its_help_is_found,
+    },
+    Test {
+        name: "a_run_the_reaper_frees_during_a_later_scan_is_found",
+        run: a_run_the_reaper_frees_during_a_later_scan_is_found,
+    },
+    Test {
+        name: "a_create_under_churn_is_refused_within_the_round_cap",
+        run: a_create_under_churn_is_refused_within_the_round_cap,
+    },
+    Test {
         name: "a_run_search_over_a_fragmented_map_goes_in_steps",
         run: a_run_search_over_a_fragmented_map_goes_in_steps,
     },
@@ -3522,8 +3538,8 @@ fn the_worst_single_allocation_is_bounded_by_the_machines_ram() {
 }
 
 /// INV-0270-1: a contiguous run that has to wait for the reaper to free
-/// frames makes a step point after each round of help, so that no interval
-/// holds more than one round (64 frames) of the reaper's work.
+/// frames makes a step point after each step of help (64 frames), so that no
+/// interval holds more than a step of the reaper's work.
 fn a_run_short_of_frames_waits_for_the_reaper_in_steps() {
     const RUN: u64 = 128;
     let before = frames_accounted();
@@ -3542,6 +3558,228 @@ fn a_run_short_of_frames_waits_for_the_reaper_in_steps() {
         units <= crate::steps::STEP as u64 + 1,
         "{units} units in one interval of a run's search (INV-0270-1)"
     );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The backlog's "contiguous create refused while the reaper holds the
+/// frames" (ADR-0349): the reaper holds more scattered frames than the old
+/// 17 rounds of help could free (17 x 64 = 1088), and the run behind them
+/// is the only one that makes a run of 1024. The create must still get it,
+/// as the reaper would give it within a few turns, and with a step point
+/// between every round of help.
+fn a_run_queued_behind_many_frames_is_still_found_by_a_create() {
+    const RUN: u64 = 1024;
+    const SCATTERED: usize = 3000;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let mut scattered: Vec<Frame> = Vec::new();
+    scattered.try_reserve_exact(SCATTERED).expect("room");
+    let mut kept: Vec<Frame> = Vec::new();
+    kept.try_reserve_exact(SCATTERED).expect("room");
+    let head = hoard_frames();
+    // Every other frame of the list is queued, the rest stays taken: the
+    // queued frames are never adjacent, so only the run ends the wait.
+    let mut at = head;
+    while scattered.len() < SCATTERED {
+        let (frame, next) = unhoard_one(at).expect("enough frames");
+        let (other, next) = unhoard_one(next).expect("enough frames");
+        scattered.push(frame);
+        kept.push(other);
+        at = next;
+    }
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    let held = crate::reaper::held();
+    crate::reaper::release(scattered, crate::charge::Paid::new(None));
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    let queued = crate::reaper::held() - held;
+    let got = frames::alloc_contig_in_steps(RUN, test_step_point);
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    assert_eq!(queued, SCATTERED as u64 + RUN, "the frames were queued");
+    // What is hoarded and not queued: the kept frames and the rest of the list.
+    for frame in kept {
+        frames::free(frame);
+    }
+    unhoard(at);
+    let got = got.expect("the run the reaper held (ADR-0349)");
+    frames::free_contig(got, RUN);
+    assert!(
+        units <= crate::steps::STEP as u64 + 1,
+        "{units} units in one interval of a run's search (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The step point before the first round of help may switch to the reaper,
+/// whose turn frees the queue with the run in it: `help` then finds nothing,
+/// and the search must scan again before it refuses (ADR-0349).
+fn a_run_the_reaper_frees_at_the_step_before_its_help_is_found() {
+    const RUN: u64 = 128;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let head = hoard_frames();
+    // The step points of a scan that finds nothing.
+    // Masked, as the callers of a step point are: the window it opens leaves
+    // interrupts masked.
+    let daif = arch::save_and_mask_interrupts();
+    let mut points = 0;
+    let none = frames::alloc_contig_in_steps(RUN, || {
+        points += 1;
+        test_step_point()
+    });
+    assert!(none.is_err(), "every frame is taken");
+    let held = crate::reaper::held();
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    assert_eq!(crate::reaper::held() - held, RUN, "the run was queued");
+    crate::steps::masked_max_units(true);
+    let mut calls = 0;
+    let got = frames::alloc_contig_in_steps(RUN, || {
+        calls += 1;
+        // The last step point of the dry run is the one before its help.
+        if calls == points {
+            while crate::reaper::help() {}
+        }
+        test_step_point()
+    });
+    arch::restore_interrupts(daif);
+    crate::steps::masked_max_units(true);
+    unhoard(head);
+    let got = got.expect("the run the reaper freed at the step point (ADR-0349)");
+    frames::free_contig(got, RUN);
+    assert_eq!(frames_accounted(), before);
+}
+
+/// Takes every frame, then frees every other one (the even ones): no two
+/// adjacent frames are free, and the scan for a run reads the whole map in
+/// steps. Returns the list of the frames kept (`unhoard` gives them back).
+fn fragment_map() -> u64 {
+    let mut head = hoard_frames();
+    let mut kept = 0;
+    while let Some((frame, next)) = unhoard_one(head) {
+        if (frame.addr() / zoraya_pmm::FRAME_SIZE).is_multiple_of(2) {
+            frames::free(frame);
+        } else {
+            // SAFETY: the frame is still allocated, so this code owns it, and
+            // the direct map holds it read-write.
+            unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(kept) };
+            kept = frame.addr();
+        }
+        head = next;
+    }
+    kept
+}
+
+/// ADR-0349: the first scan spends the rescan (a frame is freed during it),
+/// and the reaper's turn at the last step point of a later scan frees the
+/// queue with the run in it, behind the scan's cursor: the scan fails, no
+/// help is left, and the create must still scan again, as a frame was freed
+/// since that scan began.
+fn a_run_the_reaper_frees_during_a_later_scan_is_found() {
+    const RUN: u64 = 128;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let mut kept = fragment_map();
+    let daif = arch::save_and_mask_interrupts();
+    let mut points = 0;
+    let none = frames::alloc_contig_in_steps(RUN, || {
+        points += 1;
+        test_step_point()
+    });
+    assert!(none.is_err(), "no two adjacent frames are free");
+    // The scan's own step points: the last of the dry run is before its help.
+    let scan = points - 1;
+    assert!(scan > 3, "{scan} step points in a scan");
+    let held = crate::reaper::held();
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    assert_eq!(crate::reaper::held() - held, RUN, "the run was queued");
+    let mut calls = 0;
+    let mut drained = false;
+    let got = frames::alloc_contig_in_steps(RUN, || {
+        calls += 1;
+        if calls == 1 {
+            // A frame freed during the first scan: the rescan is spent.
+            let (frame, next) = unhoard_one(kept).expect("a kept frame");
+            kept = next;
+            frames::free(frame);
+        }
+        // The last step point of the second scan after it (the rescan's
+        // own step point comes between).
+        if calls == 2 * scan + 1 {
+            // The run is still queued here, whole: the point is a scan's.
+            assert_eq!(crate::reaper::held(), held + RUN, "the queue at the drain");
+            while crate::reaper::help() {}
+            drained = true;
+        }
+        test_step_point()
+    });
+    arch::restore_interrupts(daif);
+    crate::steps::masked_max_units(true);
+    unhoard(kept);
+    assert!(drained, "the drain's step point was reached");
+    let got = got.expect("the run freed during a scan (ADR-0349)");
+    frames::free_contig(got, RUN);
+    assert_eq!(frames_accounted(), before);
+}
+
+/// ADR-0349 driver 2: the one bound under churn. A fresh batch is queued with
+/// the reaper at every step point, taken from the free frames (so memory is
+/// only moved: the free frames are the even ones, no run can form), and the
+/// create is refused within the round cap's scans.
+fn a_create_under_churn_is_refused_within_the_round_cap() {
+    const RUN: u64 = 128;
+    const BATCH: usize = 65; // more than a step, so that it is queued
+    let before = frames_accounted();
+    let kept = fragment_map();
+    let daif = arch::save_and_mask_interrupts();
+    let mut points = 0;
+    let none = frames::alloc_contig_in_steps(RUN, || {
+        points += 1;
+        test_step_point()
+    });
+    assert!(none.is_err(), "no two adjacent frames are free");
+    let scan = points - 1;
+    let rounds = frames::contig_help_rounds();
+    // Per round: a scan, the rescan's point, the point before the help and
+    // one after each of its steps; twice that, since the churn changes the
+    // scan's length (measured: 1.2 times). Without the cap the create does
+    // not end: the step point cancels it at twice the bound.
+    let bound = 2 * (rounds + 1) * (scan + 2 + 16);
+    let mut calls = 0;
+    let got = frames::alloc_contig_in_steps(RUN, || {
+        calls += 1;
+        if calls > 2 * bound {
+            return Err(zoraya_abi::Status::Cancelled);
+        }
+        if crate::reaper::held() < 4096 {
+            let mut batch: Vec<Frame> = Vec::new();
+            if batch.try_reserve_exact(BATCH).is_ok() {
+                while batch.len() < BATCH {
+                    match frames::alloc() {
+                        Ok(frame) => batch.push(frame),
+                        Err(_) => break,
+                    }
+                }
+                if batch.len() > crate::steps::STEP {
+                    crate::reaper::release(batch, crate::charge::Paid::new(None));
+                } else {
+                    for frame in batch {
+                        frames::free(frame);
+                    }
+                }
+            }
+        }
+        test_step_point()
+    });
+    arch::restore_interrupts(daif);
+    crate::steps::masked_max_units(true);
+    unhoard(kept);
+    assert_eq!(
+        got.map(|run| run.addr()),
+        Err(zoraya_abi::Status::NoMemory),
+        "refused, after {calls} step points of at most {bound} ({rounds} rounds)"
+    );
+    assert!(calls <= bound, "{calls} step points, bound {bound}");
     assert_eq!(frames_accounted(), before);
 }
 
@@ -3582,6 +3820,9 @@ fn a_run_search_over_a_fragmented_map_goes_in_steps() {
         points >= 2 && points as u64 * 66 >= words,
         "{points} step points in a search of {words} words"
     );
+    if units > crate::steps::STEP as u64 + 16 {
+        crate::steps::diagnose_units();
+    }
     assert!(
         units <= crate::steps::STEP as u64 + 16,
         "{units} units in one interval of a run's search (INV-0270-1)"
