@@ -44,8 +44,9 @@ pub enum Access {
     /// where a directory of that name may be created, and everything in it.
     CreateTree(String),
     /// `+sock` (ADR-0465): the parent narrowed to the name of a socket file,
-    /// to connect to; the rights of `ChangeName`, which `connect` needs
-    /// (`WRITE` on the node) and nothing else is given.
+    /// to connect to: `CONNECT` and `CLONE`, so not even the file's bytes
+    /// can be read or written through it (a plain file given by mistake is
+    /// as closed as a socket).
     Connect(String),
 }
 
@@ -64,9 +65,8 @@ impl Access {
             }
             Access::Tree => rights::ALL & !rights::PUBLISH,
             Access::ReadName(_) => rights::READ | rights::CLONE,
-            Access::ChangeName(_) | Access::Connect(_) => {
-                rights::READ | rights::WRITE | rights::SYNC | rights::CLONE
-            }
+            Access::ChangeName(_) => rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
+            Access::Connect(_) => rights::CONNECT | rights::CLONE,
             Access::CreateTree(_) => rights::ALL & !rights::PUBLISH,
         }
     }
@@ -458,6 +458,39 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
     }
     out.extend(grant_entries);
     Ok(out)
+}
+
+/// ADR-0465: a socket file's entry (`+sock`, typed or saved) is its directory
+/// narrowed to one name and is never merged. A plan that gives the same
+/// directory another way (the current directory, a `+r`, a second `+sock`,
+/// a file operand) would merge it into the whole directory with more rights,
+/// so it is refused, with the way out.
+pub fn connect_conflict(plan: &[Planned]) -> Result<(), Refused> {
+    for (i, e) in plan.iter().enumerate() {
+        let Access::Connect(name) = &e.access else {
+            continue;
+        };
+        if let Some(other) = plan
+            .iter()
+            .enumerate()
+            .find(|(j, f)| *j != i && f.path == e.path && f.access != e.access)
+            .map(|(_, f)| f)
+        {
+            return Err(Refused {
+                subject: format!("+sock {}", join(&e.path, 0, name)),
+                problem: format!(
+                    "{} is also given to this command ({})",
+                    e.path, other.reason
+                ),
+                hint: Some(
+                    "a socket file is given alone in its directory: run the command from \
+                     another directory, and give one socket per directory"
+                        .into(),
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// One entry as it is given: the plan's entries for one path, merged

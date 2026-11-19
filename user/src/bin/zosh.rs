@@ -1438,6 +1438,16 @@ impl Z {
         plan: &[grants::Planned],
         net: Option<(u32, Vec<u8>)>,
     ) -> Result<Table, String> {
+        // ADR-0465: a socket file's entry is never merged with another.
+        if let Err(r) = grants::connect_conflict(plan) {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(&r.subject),
+                &r.problem,
+                &hints,
+            ));
+        }
         let merged = grants::merge(plan);
         let gone = || zoraya_command::error("zosh", None, "too many entries or handles", &[]);
         let mut handles: Vec<ChannelEntry> = Vec::new();

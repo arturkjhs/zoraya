@@ -220,7 +220,7 @@ impl<S: Sys> Posix<S> {
         }
         let path = unix::parse_sockaddr_un(addr)?.to_vec();
         let r = self.resolve(AT_FDCWD, &path, Access::Write)?;
-        let (_, opened) = self.open_resolved(r, 0, rights::WRITE, 0, 0, Access::Write)?;
+        let (_, opened) = self.open_resolved(r, 0, rights::CONNECT, 0, 0, Access::Write)?;
         let conn = opened.conn;
         if opened.meta().mode & stat::S_IFMT != stat::S_IFSOCK {
             self.sys.close(conn);

@@ -749,7 +749,7 @@ fn own_rig() -> (Rig, Rc<RefCell<Svc>>) {
 }
 
 /// A second process whose only entry is a connection to `/data/home/srv`
-/// narrowed to `name`, with the rights `+sock` gives (read, write, sync, clone).
+/// narrowed to `name`, with the rights `+sock` gives (connect, clone).
 fn socket_grant(r: &Rig, service: &Rc<RefCell<Svc>>, name: &str, rights: u32) -> Rig {
     use zoraya_protocol::{Flags, decode, encode};
     let mut b = peer(r, service, false);
@@ -776,10 +776,7 @@ fn socket_grant(r: &Rig, service: &Rc<RefCell<Svc>>, name: &str, rights: u32) ->
     b
 }
 
-const SOCK_RIGHTS: u32 = zoraya_proto_file::rights::READ
-    | zoraya_proto_file::rights::WRITE
-    | zoraya_proto_file::rights::SYNC
-    | zoraya_proto_file::rights::CLONE;
+const SOCK_RIGHTS: u32 = zoraya_proto_file::rights::CONNECT | zoraya_proto_file::rights::CLONE;
 
 /// ADR-0465 item 1: `bind` works in the own directory, the node is an
 /// `S_IFSOCK` object, and a program that only has a narrowed grant meets it.
@@ -829,6 +826,40 @@ fn a_grant_to_one_socket_reaches_no_other_and_cannot_unlink_or_rename() {
     a.p.unlink_at(AT_FDCWD, b"/data/home/srv/s", 0).unwrap();
     let c3 = sock(&mut b, SOCK_STREAM);
     assert_eq!(b.p.connect(c3, &un("/data/home/srv/s")), Err(ENOENT));
+}
+
+/// The grant `+sock` gives is `CONNECT | CLONE`: given a plain file by mistake
+/// (or a server that planted one), the program can neither read nor write it,
+/// and a child of the own directory (`READ | CLONE`) cannot `bind`.
+#[test]
+fn a_connect_grant_reads_and_writes_nothing_and_a_read_only_own_cannot_bind() {
+    let (mut a, svc) = own_rig();
+    // A plain file in the server's directory.
+    let fd =
+        a.p.open(AT_FDCWD, b"/data/home/srv/plain", o::CREAT | o::RDWR, 0o600)
+            .unwrap();
+    a.write(fd, b"private").unwrap();
+    let mut b = socket_grant(&a, &svc, "plain", SOCK_RIGHTS);
+    assert!(
+        b.p.open(AT_FDCWD, b"/data/home/srv/plain", o::RDONLY, 0)
+            .is_err(),
+        "read"
+    );
+    assert!(
+        b.p.open(AT_FDCWD, b"/data/home/srv/plain", o::WRONLY, 0)
+            .is_err(),
+        "write"
+    );
+    let c = sock(&mut b, SOCK_STREAM);
+    assert_eq!(
+        b.p.connect(c, &un("/data/home/srv/plain")),
+        Err(ECONNREFUSED),
+        "not a socket"
+    );
+    // The own directory as a child holds it: read and clone only.
+    let mut child = socket_grant(&a, &svc, "x", zoraya_proto_file::rights::READ);
+    let s = sock(&mut child, SOCK_STREAM);
+    assert!(child.p.bind(s, &un("/data/home/srv/x")).is_err());
 }
 
 /// A read-only grant does not connect (`WRITE` is needed), as in `/tmp`.

@@ -68,7 +68,11 @@ pub mod rights {
     pub const PUBLISH: u32 = 1 << 5;
     pub const SYNC: u32 = 1 << 6;
     pub const CLONE: u32 = 1 << 7;
-    pub const ALL: u32 = (1 << 8) - 1;
+    /// `connect` to a socket node (ADR-0465): the right to hand the node's
+    /// listener one end of a new pair, and nothing else of the file. A grant
+    /// of one socket file (`+sock`) has this and `CLONE` alone.
+    pub const CONNECT: u32 = 1 << 8;
+    pub const ALL: u32 = (1 << 9) - 1;
 }
 
 /// `open`'s flags.

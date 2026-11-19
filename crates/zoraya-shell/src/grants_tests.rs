@@ -1639,6 +1639,31 @@ fn git_gets_no_double_dash_before_its_command() {
     );
 }
 
+/// ADR-0465: a socket entry is never merged with another of its directory.
+#[test]
+fn a_socket_entry_is_refused_beside_another_of_its_directory() {
+    let c = |n: &str| Planned {
+        path: "/data/home/srv".into(),
+        access: Access::Connect(n.into()),
+        reason: "+sock".into(),
+    };
+    let read = Planned {
+        path: "/data/home/srv".into(),
+        access: Access::Read,
+        reason: "current directory".into(),
+    };
+    let other = Planned {
+        path: "/data/home/other".into(),
+        access: Access::Read,
+        reason: "+r".into(),
+    };
+    assert!(crate::grants::connect_conflict(&[c("a"), other.clone()]).is_ok());
+    assert!(crate::grants::connect_conflict(&[c("a"), c("a")]).is_ok());
+    assert!(crate::grants::connect_conflict(&[c("a"), c("b")]).is_err());
+    assert!(crate::grants::connect_conflict(&[read.clone(), c("a")]).is_err());
+    assert!(crate::grants::connect_conflict(&[c("a"), read]).is_err());
+}
+
 /// ADR-0465: `+sock PATH` gives the directory narrowed to the name, to
 /// change (connect to), and nothing about its siblings; `grants` says so and
 /// the window's pill names the file, not the directory.

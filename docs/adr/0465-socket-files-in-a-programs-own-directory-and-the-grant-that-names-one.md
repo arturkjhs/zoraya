@@ -64,8 +64,13 @@ A socket file anywhere a program may write, reached by any program that can open
    the machine stops, the file remains as an empty regular file: `connect` is `ECONNREFUSED`, `bind` of that name is `EADDRINUSE`
    until someone unlinks it, as a stale socket file is on Linux. A server unlinks its name first (the test program does).
 3. **The grant: `+sock PATH`.** A word of a line, a literal token like `+net` (a value never makes one), with one path word. It gives
-   the file's directory narrowed to the name, with `READ | WRITE | SYNC | CLONE` (the rights of `Access::ChangeName`, a new `Access::Connect`
-   so that `grants` and the window's pill say `connect to NAME` and `+sock PATH`, not the directory). Through that entry a program can
+   the file's directory narrowed to the name, with the rights `CONNECT | CLONE` (a new `Access::Connect`, so that `grants` and the
+   window's pill say `connect to NAME` and `+sock PATH`, not the directory). **`CONNECT` is a new right bit** of the file protocol
+   (`1 << 8`, `rights::ALL` grows with it): `socket_connect` needs it instead of `WRITE`, so a grant that names a plain file by mistake
+   (or a server that plants one) gives no read and no write of it. A `Tree` grant has it as it has every right; `listen` still needs
+   `WRITE` on the binder's connection. A plan that gives the same directory another way (the current directory, a `+r`, a second
+   `+sock`, a file operand) is refused (`connect_conflict`), since merging would widen the narrowed entry: one socket per directory
+   per line. Through that entry a program can
    `connect` to that file and to nothing else: another name in the directory is refused, so is `unlink`, `rename` and a new `bind` there
    (no `REMOVE`, `RENAME` or `CREATE`). The shell gives it only if it holds the file to change (`not_given`), like any entry.
 4. **Saved.** `install` and `programs grant` accept `+sock PATH` with `PATH` exactly `/data/ROOM/NAME/.../FILE`: plain parts, a name
@@ -82,7 +87,11 @@ A socket file anywhere a program may write, reached by any program that can open
    entry is at the real path (`/data/ROOM/NAME/...`), so the two use different strings for one file. A port that hard-codes one
    path in both programs must be given the other by its arguments. **Known limit**; a view-path alias for the client's entry would
    be a change to ADR-0341's table and is not done.
-7. **Known limits.** The service's 256 nodes and 64 listeners are now the volume's: one program (or one room) can fill them for
+7. **Known limits.** `bind`'s place rule (item 1) is enforced by `libposix`, which labels its own entries; the service makes a socket
+   node wherever a connection with `CREATE` asks, now on the whole volume (before: the `/tmp` service). A program that does not use
+   `libposix` and holds a writable directory can make a node there and listen: it holds that write already, and a client reaches the
+   node only through a grant naming it or a `Tree` grant of that directory. Restricting socket creation to `/data/ROOM/NAME` needs the
+   service to know a directory's path: for the architect. The service's 256 nodes and 64 listeners are now the volume's: one program (or one room) can fill them for
    every program of the machine (ADR-0442's bounds per room do not cover the volume service); `readdir` shows the node as a plain
    file; a stale node stays after a crash (item 2); a node is not removed when a listener goes (ADR-0439 item 2).
 
@@ -108,7 +117,9 @@ was not given it has no path to it. The person sees the grant in `grants` as `co
 ## Open questions
 
 - **For the architect.** The exception to ADR-0397 item 1 (item 4), and the two path strings (item 6).
-- Whether the volume's socket tables should be counted per room (item 7) before a second program offers sockets.
+- Whether the volume's socket tables should be counted per room (item 7) before a second program offers sockets: a node whose
+  binder has gone stays until unlinked, so a room can fill the 256 for every other; and whether the service should refuse socket
+  creation outside `/data/ROOM/NAME` (item 7).
 - A client that connects to a stale node gets `ECONNREFUSED`, the same as a node with no listener: no way to tell them apart.
 
 ## Revisit triggers

@@ -156,6 +156,10 @@
 > sockn /data/home/sockd/t ping\r
 < sockc: refused
 < \r\n~>
+# Two socket files of one directory on one line are refused (merging would widen the grant).
+> +sock /data/home/sockd/s +sock /data/home/sockd/t sockn /data/home/sockd/s ping\r
+< is also given to this command
+< \r\n~>
 # The typed grant of s does not reach t either.
 > +sock /data/home/sockd/s sockn /data/home/sockd/t ping\r
 < sockc: refused
