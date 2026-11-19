@@ -1,6 +1,6 @@
 # ADR-0349: A contiguous create helps the reaper in bounded rounds until a run appears or the reaper holds nothing
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-19
 - **Depends on:** ADR-0022, ADR-0270
 - **Evidence:** alternatives-postmortem.md#keykos--eros--capros-and-coyotos
@@ -84,4 +84,7 @@ teardown.
 - A measured interval above INV-0270-1's bound that names the rounds of help.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+
+Accepted 2026-11-19. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted on the condition that the independent review is clean: the third review (`docs/tasks/TASK-31-review-reaper-race-3.md`) found no errors.
