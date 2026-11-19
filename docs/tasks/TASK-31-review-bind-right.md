@@ -18,3 +18,13 @@ The dispositions are the implementer's.
 The reviewer also checked as sound: roots get `WITH_BIND` only at `add_root`; `clone`, `share`, `narrow`, `open` need `has(requested)`; per-name
 rights of `narrow_names`; the create is detected only in ordinal 27; no other service decodes `Rights`; grants are `ALL & !PUBLISH`; an
 own-directory child has `READ | CLONE`; the broker to shell `/tmp` hand-off; the fallbacks in `line_tmp` and `own_connection`.
+
+## Changed-lines check of the fixes (second look of `opus-review`, head `bfe7dadc`)
+
+| # | Kind | Finding | Disposition |
+|---|---|---|---|
+| 1 | warning | The publish test opened the unnamed node without `PUBLISH`, so the old check refused it. | Fixed: the node has `PUBLISH`; refusal into a plain directory and success into one with `BIND` are both asserted. |
+| 2 | warning | Every directory counted as one that may hold a node, so any cross-directory `mv` of a directory without `BIND` failed once any node existed. | Fixed: `carries_socket` walks the moved directory (depth 16, 4096 entries; past the bound the answer is yes). Test `only_a_directory_that_holds_a_node_is_held_back`. Known limit: a directory with more than 4096 entries below it, or deeper than 16, is held back. |
+| 3 | note | The `into_source` half of an exchange has no test. | Not added; the code is the mirror of `into_target`. Stated here. |
+| 4 | note | A test name said `narrow_names`; no test of an unnamed create without `BIND`. | Renamed to `bind_is_not_gained_by_share_or_open`; added `an_unnamed_socket_node_needs_bind_too`. `narrow_names` is not tested (per-name rights are a subset of the connection's, read in the code). |
+| 5 | note | Finding 3's disposition pointed to a run not recorded below. | The run is in `docs/tasks/TASK-31-part-bind-right.md`. |

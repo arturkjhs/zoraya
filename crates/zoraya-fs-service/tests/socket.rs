@@ -1098,6 +1098,15 @@ fn a_socket_node_does_not_leave_the_places_with_bind() {
     );
     r.run();
     assert_eq!(r.status_of(own), status::OK);
+    let (sub, _) = r
+        .open(
+            "own/sub",
+            open_flags::DIRECTORY,
+            0,
+            rights::ALL | rights::BIND,
+        )
+        .unwrap();
+    let inner = r.bind_in(sub, "x").unwrap();
     assert_eq!(
         rename(&mut r, plain_token, "sub", "sub", replace),
         status::ACCESS_DENIED
@@ -1116,7 +1125,7 @@ fn a_socket_node_does_not_leave_the_places_with_bind() {
             "ignored",
             open_flags::UNNAMED,
             S_IFSOCK | 0o600,
-            rights::READ | rights::WRITE,
+            rights::READ | rights::WRITE | rights::PUBLISH,
         )
         .expect("an unnamed node");
     r.post(
@@ -1129,14 +1138,26 @@ fn a_socket_node_does_not_leave_the_places_with_bind() {
     );
     r.run();
     assert_eq!(r.status_of(unnamed), status::ACCESS_DENIED);
+    // And published where `BIND` is held, it takes the name.
+    r.post(
+        unnamed,
+        &proto::Publish {
+            mode: Below(proto::publish_mode::REPLACE),
+            name: Name("p"),
+        },
+        vec![other_token],
+    );
+    r.run();
+    assert_eq!(r.status_of(unnamed), status::OK);
     r.net.client_close(node);
+    r.net.client_close(inner);
     r.run();
 }
 
 /// The other derivations of a connection: `share`, `narrow_names`, and an
 /// `open` that names the right.
 #[test]
-fn bind_is_not_gained_by_share_narrow_names_or_open() {
+fn bind_is_not_gained_by_share_or_open() {
     let mut r = rig();
     let root = r.root;
     let plain = r.derive(root, rights::ALL).unwrap();
@@ -1166,6 +1187,126 @@ fn bind_is_not_gained_by_share_narrow_names_or_open() {
         let (_, reply) = decode::<proto::OpenReply<'_>>(&bytes, 0).unwrap();
         assert_eq!(reply.status.0, status::ACCESS_DENIED);
     }
+}
+
+/// Only what holds a node is held back: an empty directory, or one with plain files,
+/// moves between directories without `BIND`; one that holds a node at any depth
+/// does not, and an exchange that would put a node into a plain place is refused.
+#[test]
+fn only_a_directory_that_holds_a_node_is_held_back() {
+    let mut r = rig();
+    let root = r.root;
+    for d in ["own", "plain", "plain2"] {
+        r.post(
+            root,
+            &proto::MakeDirectory {
+                name: Name(d),
+                mode: 0o755,
+            },
+            vec![],
+        );
+        r.run();
+        assert_eq!(r.status_of(root), status::OK);
+    }
+    let (own, _) = dir_with(&mut r, "own", rights::ALL | rights::BIND);
+    let (plain, _) = dir_with(&mut r, "plain", rights::ALL);
+    let (_, plain2_token) = dir_with(&mut r, "plain2", rights::ALL);
+    let mk = |r: &mut Rig, dir: End, name: &str| {
+        r.post(
+            dir,
+            &proto::MakeDirectory {
+                name: Name(name),
+                mode: 0o755,
+            },
+            vec![],
+        );
+        r.run();
+        assert_eq!(r.status_of(dir), status::OK);
+    };
+    let mv = |r: &mut Rig, from: End, token: End, name: &str, mode: u32| {
+        r.post(
+            from,
+            &proto::Rename {
+                old: Name(name),
+                new: Name(name),
+                mode: Below(mode),
+            },
+            vec![token],
+        );
+        r.run();
+        r.status_of(from)
+    };
+    let replace = proto::rename_mode::REPLACE;
+    // A node exists on the volume, in `own/deep/er`.
+    mk(&mut r, own, "deep");
+    let (deep, _) = r
+        .open(
+            "own/deep",
+            open_flags::DIRECTORY,
+            0,
+            rights::ALL | rights::BIND,
+        )
+        .unwrap();
+    mk(&mut r, deep, "er");
+    let (er, _) = r
+        .open(
+            "own/deep/er",
+            open_flags::DIRECTORY,
+            0,
+            rights::ALL | rights::BIND,
+        )
+        .unwrap();
+    let node = r.bind_in(er, "s").unwrap();
+    // Empty and plain directories move.
+    mk(&mut r, plain, "empty");
+    mk(&mut r, plain, "full");
+    let (full, _) = r
+        .open("plain/full", open_flags::DIRECTORY, 0, rights::ALL)
+        .unwrap();
+    r.open("plain/full/f", open_flags::CREATE, 0o600, rights::ALL)
+        .unwrap();
+    let _ = full;
+    assert_eq!(
+        mv(&mut r, plain, plain2_token, "empty", replace),
+        status::OK
+    );
+    assert_eq!(mv(&mut r, plain, plain2_token, "full", replace), status::OK);
+    // `deep` holds a node two levels down: held back, whatever its name.
+    r.post(own, &proto::GetToken {}, vec![]);
+    r.run();
+    let (_, own_handles) = r.reply(own).unwrap();
+    let _ = own_handles;
+    assert_eq!(
+        mv(&mut r, own, plain2_token, "deep", replace),
+        status::ACCESS_DENIED
+    );
+    r.net.client_close(node);
+    r.run();
+}
+
+/// An unnamed socket node is a create too: refused without `BIND`.
+#[test]
+fn an_unnamed_socket_node_needs_bind_too() {
+    let mut r = rig();
+    let root = r.root;
+    let plain = r.derive(root, rights::ALL).unwrap();
+    let end = r.net.channel();
+    r.post(
+        plain,
+        &proto::OpenWithMode {
+            flags: Flags(open_flags::UNNAMED),
+            rights: Flags(rights::READ | rights::WRITE),
+            description: Flags(0),
+            mode: S_IFSOCK | 0o600,
+            path: Path("ignored"),
+        },
+        vec![end],
+    );
+    r.run();
+    let (bytes, _) = r.reply(plain).expect("a reply");
+    let (_, reply) = decode::<proto::OpenWithModeReply<'_>>(&bytes, 0).unwrap();
+    assert_eq!(reply.status.0, status::ACCESS_DENIED);
+    assert_eq!(r.service.socket_nodes(), (0, 0));
 }
 
 zoraya_test_alloc::cap_memory!();

@@ -1923,14 +1923,77 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// The id of what `name` names in the directory of connection `i`, if it
     /// is a socket node.
-    /// Whether `name` in `directory` is a socket node or a directory, which may hold one.
+    /// Whether `name` in `directory` is a socket node, or a directory that holds one at
+    /// any depth. The walk is bounded (depth 16, 4096 entries); past the bound the
+    /// answer is yes, the safe one.
     fn carries_socket(&mut self, directory: Handle, name: &str) -> bool {
-        match self.volume.stat_at(directory, name) {
-            Ok(a) => {
-                matches!(a.kind, ObjKind::Directory)
-                    || self.sockets.as_ref().is_some_and(|x| x.contains_key(&a.id))
+        let Ok(a) = self.volume.stat_at(directory, name) else {
+            return false;
+        };
+        if self.sockets.as_ref().is_some_and(|x| x.contains_key(&a.id)) {
+            return true;
+        }
+        if !matches!(a.kind, ObjKind::Directory) {
+            return false;
+        }
+        let Ok(handle) = self.volume.open(
+            directory,
+            name,
+            OpenOptions {
+                create: None,
+                exclusive: false,
+                truncate: false,
+                link_itself: false,
+            },
+        ) else {
+            return true;
+        };
+        let mut budget = 4096usize;
+        let found = self.directory_holds_socket(handle, 16, &mut budget);
+        let _ = self.volume.close(handle);
+        found
+    }
+
+    fn directory_holds_socket(&mut self, handle: Handle, depth: u32, budget: &mut usize) -> bool {
+        let mut after: Option<String> = None;
+        loop {
+            let entry = match self.volume.readdir(handle, after.as_deref()) {
+                Ok(Some(e)) => e,
+                Ok(None) => return false,
+                Err(_) => return true,
+            };
+            if *budget == 0 || depth == 0 {
+                return true;
             }
-            Err(_) => false,
+            *budget -= 1;
+            if self
+                .sockets
+                .as_ref()
+                .is_some_and(|x| x.contains_key(&entry.id))
+            {
+                return true;
+            }
+            if matches!(entry.kind, ObjKind::Directory) {
+                let opened = self.volume.open(
+                    handle,
+                    &entry.name,
+                    OpenOptions {
+                        create: None,
+                        exclusive: false,
+                        truncate: false,
+                        link_itself: true,
+                    },
+                );
+                let Ok(sub) = opened else {
+                    return true;
+                };
+                let inner = self.directory_holds_socket(sub, depth - 1, budget);
+                let _ = self.volume.close(sub);
+                if inner {
+                    return true;
+                }
+            }
+            after = Some(entry.name);
         }
     }
 
