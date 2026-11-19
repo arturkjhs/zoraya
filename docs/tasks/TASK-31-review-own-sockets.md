@@ -174,3 +174,17 @@ untrusted room may exhaust.
    only, so it gives no byte of the target.
 6. **warning, recorded** (ADR-0465 item 7 and open questions): the volume's 256 nodes are shared by every room.
 7. **note, fixed** by the test of item 1 (a `READ | CLONE` own entry cannot `bind`).
+
+## Second look (independent reviewer, `git diff 836524ea..d2ddfb88`)
+
+Ran `cargo test -p zoraya-fs-service -p zoraya-posix -p zoraya-shell -p zoraya-settings -p zoraya-proto-file`: all passed. No QEMU.
+
+1. **Fixed.** `rights::CONNECT` (bit 8, `ALL` widened to 9 bits; every user of `ALL` is symbolic, no rights are stored narrower than `u32`). `socket_connect` checks `CONNECT` alone, `libposix` opens the node with `CONNECT`, and `Access::Connect` is `CONNECT | CLONE`. No data operation tests `CONNECT`. `Tree` (`ALL & !PUBLISH`) and the `/tmp` and own entries (`ALL`, `TREE_RIGHTS`) gain it, so `/tmp` and the owner still connect. **Behaviour change, record it:** a socket given as a file operand (`Change`, `ChangeName`, `Create(n)`), which connected before with `WRITE`, is now `ECONNREFUSED`/`EACCES`; only `+sock`, `+w DIR` and `/tmp` connect. The doc comment of `a_read_only_grant_to_the_socket_cannot_connect` still says `WRITE` is needed.
+2. **Fixed.** `connect_conflict` runs in `table` (native) and `posix_entries` (POSIX), the two places that build a table from `merge`. The other `merge` users only display (`window_pills`, `grants`'s report, the `not_given` loop) or read a table that is already checked (`held_of` → `delivery::Held::from_table`). Delivery to a running program (`delivery::give`) keeps rights per name in `NarrowNames`, so giving a file beside a held `+sock` does not widen it, and a `+r DIR` there is refused ("more rights than that"). Equal-path only is enough: an outer `+r` (no `CONNECT`) keeps the name in `covered`, and an outer `+w` already gives more, as the person typed.
+3. **Open, error stands for acceptance.** Recording it as a known limit is honest, but "it holds that write already" is not the harm: the harm is a rendezvous and impersonation point for a later client, which Option C rejects. With a right bit now in place, the same pattern closes it: a `BIND` right that `S_IFSOCK` creation requires, given only on the `Own` and `/tmp` connections and never by `Tree` from `+w`. Leave it to the architect, as the ADR now says.
+4. **Accepted.** With `CONNECT | CLONE`, a `+sock` pointing at `/apps` or a person's file gives no bytes.
+5. **Accepted**, for the same reason. The refusal hint still says `+w` for a `+sock` (cosmetic).
+6. **Accepted as recorded.**
+7. **Not fixed as claimed (note).** The new test's "child" is `socket_grant(…, READ)`, a `Directory`-kind entry, so `bind` fails at `libposix`'s place rule (`EACCES`) before the service is asked. It does not show that an `Own` entry holding `READ | CLONE` is refused for want of `CREATE`. Use `add_entry(…, EntryKind::Own, …)` with a `READ | CLONE` connection and assert the errno.
+
+**Verdict:** 1 and 2 are sound. 3 is open for the architect. 7 needs its test corrected (small). Nothing else blocks the merge.

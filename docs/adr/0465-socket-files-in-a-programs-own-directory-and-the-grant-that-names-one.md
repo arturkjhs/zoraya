@@ -120,6 +120,7 @@ was not given it has no path to it. The person sees the grant in `grants` as `co
 - Whether the volume's socket tables should be counted per room (item 7) before a second program offers sockets: a node whose
   binder has gone stays until unlinked, so a room can fill the 256 for every other; and whether the service should refuse socket
   creation outside `/data/ROOM/NAME` (item 7).
+- A `BIND` right, given only on the own-directory and `/tmp` connections, would let the service enforce item 1 (the reviewer's suggestion, now that a right bit exists). Also: a socket named as a file operand (a `Change` or `Create` entry) used to connect with `WRITE` and no longer does; only `+sock`, a `Tree` grant and `/tmp` connect.
 - A client that connects to a stale node gets `ECONNREFUSED`, the same as a node with no listener: no way to tell them apart.
 
 ## Revisit triggers

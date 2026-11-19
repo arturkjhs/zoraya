@@ -751,6 +751,17 @@ fn own_rig() -> (Rig, Rc<RefCell<Svc>>) {
 /// A second process whose only entry is a connection to `/data/home/srv`
 /// narrowed to `name`, with the rights `+sock` gives (connect, clone).
 fn socket_grant(r: &Rig, service: &Rc<RefCell<Svc>>, name: &str, rights: u32) -> Rig {
+    socket_entry(r, service, name, rights, EntryKind::Directory)
+}
+
+/// The same, with the entry's kind as the program's table says it.
+fn socket_entry(
+    r: &Rig,
+    service: &Rc<RefCell<Svc>>,
+    name: &str,
+    rights: u32,
+    kind: EntryKind,
+) -> Rig {
     use zoraya_protocol::{Flags, decode, encode};
     let mut b = peer(r, service, false);
     let root = another_root(&b.net, service);
@@ -772,7 +783,7 @@ fn socket_grant(r: &Rig, service: &Rc<RefCell<Svc>>, name: &str, rights: u32) ->
     let got = b.p.sys.channel_read(root, &mut buf, &mut hs).unwrap();
     let (_, done) = decode::<zoraya_proto_file::Done>(&buf[..got], 0).unwrap();
     assert_eq!(done.status.0, zoraya_proto_file::status::OK);
-    b.p.add_entry("/data/home/srv", EntryKind::Directory, Some(mine));
+    b.p.add_entry("/data/home/srv", kind, Some(mine));
     b
 }
 
@@ -857,12 +868,22 @@ fn a_connect_grant_reads_and_writes_nothing_and_a_read_only_own_cannot_bind() {
         "not a socket"
     );
     // The own directory as a child holds it: read and clone only.
-    let mut child = socket_grant(&a, &svc, "x", zoraya_proto_file::rights::READ);
+    let mut child = socket_entry(
+        &a,
+        &svc,
+        "x",
+        zoraya_proto_file::rights::READ,
+        EntryKind::Own,
+    );
     let s = sock(&mut child, SOCK_STREAM);
-    assert!(child.p.bind(s, &un("/data/home/srv/x")).is_err());
+    assert_eq!(
+        child.p.bind(s, &un("/data/home/srv/x")),
+        Err(EACCES),
+        "the service refuses: no CREATE"
+    );
 }
 
-/// A read-only grant does not connect (`WRITE` is needed), as in `/tmp`.
+/// A read-only grant does not connect (`CONNECT` is needed), as in `/tmp`.
 #[test]
 fn a_read_only_grant_to_the_socket_cannot_connect() {
     let (mut a, svc) = own_rig();
