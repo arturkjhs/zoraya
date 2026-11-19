@@ -100,11 +100,13 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
     (`workflow_dispatch` with `full=true`) except to chase a flake.
   - A candidate run (the tag `candidate/BRANCH` on the branch's head, a pull request, or
     `gh workflow run test.yml --ref BRANCH`; it runs the steps `tools/ci-plan.sh` selects and a smoke set) is made only
-    when a part changes `.github/workflows`, `tools/ci-plan.sh` or what it reads (`tools/ci-tests.txt`,
-    `tools/test-map.txt`, `tools/plan-lib.sh`, `tools/ci-plan-step.sh`, `tools/ci-makefile-steps.rb`,
-    `tools/ci-last-full.rb`), or `tools/test-runner/`; when a failure shows only under TCG; and as `candidate-full/NAME`
-    before a stage tag where no green scheduled or nightly run already includes the commit. The architect tags a
-    candidate; an agent that changes those files reports its head and does not tag it.
+    when a part changes `.github/workflows`, the ci-plan scripts (`tools/ci-plan.sh`, `tools/plan-lib.sh`,
+    `tools/ci-plan-step.sh`, `tools/ci-makefile-steps.rb`, `tools/ci-last-full.rb`) or `tools/test-runner/`; when a
+    failure shows only under TCG; and as `candidate-full/NAME` before a stage tag where no green scheduled or nightly
+    run already includes the commit. Adding or changing a test's own lines in `tools/ci-tests.txt` or
+    `tools/test-map.txt` (a new step, a map entry) needs no candidate run. The agent tags a candidate itself (a
+    `git push` of `refs/tags/candidate/...`, a command of its own); the architect does not. Architect's decision of
+    2026-11-19.
   - `main`'s full set runs on a schedule: every 2 hours if `main` changed since the last full run, and nightly (a
     2-hourly run that skips fails if the last full run was red). A push to `main` runs the document checks only,
     whatever changed, and does not cancel a scheduled or manual full run in progress. GitHub's cron is not reliable
