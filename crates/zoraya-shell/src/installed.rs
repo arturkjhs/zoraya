@@ -196,6 +196,20 @@ pub fn apply(name: &str, words: &[Word], held: &Held<'_>) -> Applied {
                     out.notes.push(not_held(w));
                 }
             }
+            Word::Sock(p) => {
+                // ADR-0465: the socket file's directory narrowed to its name,
+                // given only if the shell holds the file to change.
+                match apps::sock_place(p) {
+                    Some((dir, file)) if (held.path)(p, true) => {
+                        out.planned.push(Planned {
+                            path: dir.into(),
+                            access: Access::Connect(file.into()),
+                            reason: String::from("saved"),
+                        });
+                    }
+                    _ => out.notes.push(not_held(w)),
+                }
+            }
             Word::Own(p) => {
                 let room = held.room.unwrap_or("home");
                 let real = format!("/data/{room}/{name}");

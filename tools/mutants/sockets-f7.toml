@@ -25,11 +25,13 @@ note = "INV-0439-1: a read-only connection may not listen"
 [[mutant]]
 id = "F7-connect-without-write"
 file = "crates/zoraya-fs-service/src/lib.rs"
-find = '''        // Connecting is talking to the listener: the right to write.
-        if !self.has(i, proto::rights::WRITE) {'''
-replace = '''        // Connecting is talking to the listener: the right to write.
+find = '''        // Connecting is the right to connect (ADR-0465), not to read or
+        // write the file: a grant of one socket file has that alone.
+        if !self.has(i, proto::rights::CONNECT) {'''
+replace = '''        // Connecting is the right to connect (ADR-0465), not to read or
+        // write the file: a grant of one socket file has that alone.
         if false {'''
-note = "INV-0439-1: a read-only connection may not connect"
+note = "INV-0439-1, INV-0465-2: a connection without CONNECT may not connect"
 
 [[mutant]]
 id = "F7-connect-any-type"
@@ -144,7 +146,10 @@ note = "INV-0439-1: a forwarded handle is the listener's, the loop must not clos
 [[mutant]]
 id = "F7-bind-anywhere"
 file = "crates/zoraya-posix/src/unix.rs"
-find = '''    if entry != zoraya_abi::posix::EntryKind::Tmp {
+find = '''    if !matches!(
+        entry,
+        zoraya_abi::posix::EntryKind::Tmp | zoraya_abi::posix::EntryKind::Own
+    ) {
         return Err(EACCES);
     }'''
 replace = '''    if false {
@@ -183,9 +188,9 @@ note = "a name is taken once (EADDRINUSE)"
 [[mutant]]
 id = "F7-connect-asks-read"
 file = "crates/zoraya-posix/src/unix_file.rs"
-find = '''        let (_, opened) = self.open_resolved(r, 0, rights::WRITE, 0, 0, Access::Write)?;'''
+find = '''        let (_, opened) = self.open_resolved(r, 0, rights::CONNECT, 0, 0, Access::Write)?;'''
 replace = '''        let (_, opened) = self.open_resolved(r, 0, rights::READ, 0, 0, Access::Write)?;'''
-note = "connecting needs WRITE on the node: with READ the service refuses"
+note = "connecting needs CONNECT on the node: with READ the service refuses"
 
 [[mutant]]
 id = "F7-accept-without-room"
@@ -266,3 +271,14 @@ replace = '''                        if let Some(u) = sock.unix.as_mut() {
                             let _ = u;
                         }'''
 note = "ECONNABORTED comes once: a server that retries must not spin on it"
+
+[[mutant]]
+id = "F7-own-bind-in-a-directory"
+file = "crates/zoraya-posix/src/unix.rs"
+find = '''        zoraya_abi::posix::EntryKind::Tmp | zoraya_abi::posix::EntryKind::Own
+    ) {'''
+replace = '''        zoraya_abi::posix::EntryKind::Tmp
+            | zoraya_abi::posix::EntryKind::Own
+            | zoraya_abi::posix::EntryKind::Directory
+    ) {'''
+note = "ADR-0465: bind in an ordinary directory entry is EACCES, only /tmp and the own directory take a socket"

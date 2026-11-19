@@ -654,9 +654,8 @@ per image (the image's pages once, however many processes run from it, as ADR-04
   is not met. Needs a `listen` request in `netd`'s protocol, `Accepted` on a listener channel, a loopback interface in `netd`'s
   stack (a spike on smoltcp's two-interface dispatch first) and a network step in QEMU; the architect writes the word a person types
   for a listen rule (ADR-0225 item 5).
-- **A socket file in a program's own directory** (ADR-0412 item 5; ADR-0439 item 1): only the line's `/tmp` is built. Needs a kind in
-  the bootstrap record for "own directory" (stage 10's planner) and a transient node in `fsd`'s volume service. tmux's default place
-  is an own directory.
+- **A socket file in a program's own directory**: built (part own-sockets, ADR-0465 proposed). Left: the server's view path and the client's real
+  path differ; the volume's 256 nodes and 64 listeners are shared by every room (a per-room count); `+sock` is not accepted by `room new`.
 - **A datagram socket with a name** (`bind` of `SOCK_DGRAM`): `EOPNOTSUPP`.
 - `readdir` of `/tmp` shows a socket file as a plain name (`DT_REG`); the service's listing does not carry the kind.
 - The `/tmp` service's 256 socket nodes are shared by the whole line: one program can fill them (it can also fill the volume, which has
@@ -684,7 +683,6 @@ rooms' `+listen` words and the panel's pills for a listen rule are not built (on
 
 ## Socket files in a program's own directory (the architect, 2026-11-17)
 
-Allowed now (ADR-0412): `bind` of a Unix socket in a program's own directory, not only in the line's `/tmp` (ADR-0439 item 1). It needs a kind for
-"own directory" in the bootstrap record and a transient node in `fsd`. Unlinking a listening node follows the ordinary rules (write on its directory).
-tmux's default place is an own directory.
+Allowed (ADR-0412). Built in part own-sockets (2026-11-19, ADR-0465 proposed): `bind` in an `Own` entry, socket nodes in the volume's `fsd`, `+sock PATH`.
+Unlinking a listening node follows the ordinary rules (write on its directory). tmux's default place is an own directory.
 

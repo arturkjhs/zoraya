@@ -144,6 +144,7 @@ another service.
 
 - **For the architect.** Whether the own-directory place is wanted soon enough to change the bootstrap record (a kind for "own") and
   give `fsd` a transient node, or whether `/tmp` alone is enough until tmux is ported.
+- **Own directory (2026-11-19).** Built by the proposed ADR-0465: `bind` in an `Own` entry, socket nodes in the volume's service, a grant `+sock` that names one file.
 - A socket file is shown to `readdir` as a plain file (`DT_REG`): the service's listing would need the kind.
 - A listener whose process stopped but whose descriptors another process holds (a `dup`ed fd shares the description, so the listener
   lives): the same as Linux.

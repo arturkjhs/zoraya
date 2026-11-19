@@ -54,6 +54,11 @@ pub enum Word {
     Web,
     /// `+own PATH`: the program's own directory seen at `PATH`.
     Own(String),
+    /// `+sock PATH` (ADR-0465): a socket file in another program's own
+    /// directory, `/data/ROOM/NAME/FILE`, which the program may connect to.
+    /// The one saved word that names a file (ADR-0397 item 1's narrow
+    /// exception), because it gives `connect` and nothing else.
+    Sock(String),
 }
 
 impl Word {
@@ -65,6 +70,7 @@ impl Word {
             Word::Net(t) => format!("+net {t}"),
             Word::Web => String::from("+web"),
             Word::Own(p) => format!("+own {}", quote_value(p)),
+            Word::Sock(p) => format!("+sock {}", quote_value(p)),
         }
     }
 
@@ -76,6 +82,7 @@ impl Word {
             Word::Net(_) => "+net",
             Word::Web => "+web",
             Word::Own(_) => "+own",
+            Word::Sock(_) => "+sock",
         }
     }
 }
@@ -168,7 +175,7 @@ fn split_words(mut s: &str) -> Result<Vec<String>, &'static str> {
 }
 
 /// The saved words in `tokens` (ADR-0397 item 1): `+r PATH`, `+w PATH`,
-/// `+net TARGET`, `+web`, `+own PATH`. Nothing else is saved: `+listen`, a
+/// `+net TARGET`, `+web`, `+own PATH`, `+sock PATH` (ADR-0465). Nothing else is saved: `+listen`, a
 /// file, an argument, an environment variable are refused with their text.
 /// Only the syntax of each word is read here; [`check_word`] says what may
 /// be saved.
@@ -184,7 +191,7 @@ pub fn parse_words(tokens: &[String]) -> Result<Vec<Word>, String> {
                 .ok_or_else(|| format!("{t} needs a word after it"))
         };
         let (word, used) = match t {
-            "+r" | "+w" | "+own" => {
+            "+r" | "+w" | "+own" | "+sock" => {
                 let p = arg(i)?;
                 if !is_grant_path(p) {
                     return Err(format!(
@@ -195,6 +202,7 @@ pub fn parse_words(tokens: &[String]) -> Result<Vec<Word>, String> {
                 let w = match t {
                     "+r" => Word::Read(p.into()),
                     "+w" => Word::Write(p.into()),
+                    "+sock" => Word::Sock(p.into()),
                     _ => Word::Own(p.into()),
                 };
                 (w, 2)
@@ -214,7 +222,7 @@ pub fn parse_words(tokens: &[String]) -> Result<Vec<Word>, String> {
             }
             other => {
                 return Err(format!(
-                    "{}: not a word that can be saved; saved words are +r, +w, +net, +web and +own",
+                    "{}: not a word that can be saved; saved words are +r, +w, +net, +web, +own and +sock",
                     quote_value(other)
                 ));
             }
@@ -273,6 +281,23 @@ pub fn refused_place(abs: &str) -> Option<&'static str> {
     }
 }
 
+/// The directory and the name of a `+sock` path (ADR-0465): exactly
+/// `/data/ROOM/NAME/.../FILE`, plain parts, a name inside a program's own
+/// directory and not the directory itself. `None` for anything else.
+pub fn sock_place(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/data/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts.len() < 3
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || *p == "." || *p == "..")
+    {
+        return None;
+    }
+    let cut = path.rfind('/')?;
+    Some((&path[..cut], &path[cut + 1..]))
+}
+
 /// Whether the word is the person's home or the volume root with `+w`,
 /// which the printed form calls `everything` (ADR-0397 item 3).
 pub fn is_everything(w: &Word, home: &str) -> bool {
@@ -309,6 +334,16 @@ pub fn check_word(w: &Word, ctx: &Ctx<'_>) -> Result<(), String> {
         }
         Word::Net(t) => (ctx.net)(t).map_err(|why| format!("+net {t}: {why}")),
         Word::Web => Ok(()),
+        Word::Sock(p) => {
+            if sock_place(p).is_some() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "+sock {}: a socket file in another program's own directory, /data/ROOM/NAME/FILE",
+                    quote_value(p)
+                ))
+            }
+        }
         Word::Own(p) => {
             if zoraya_describe::is_data_path(p) {
                 Ok(())
@@ -689,6 +724,7 @@ pub fn meaning(w: &Word, home: &str) -> String {
         Word::Net(t) => format!("net: {t}  reach"),
         Word::Web => String::from("net: web  public hosts, ports 80 and 443"),
         Word::Own(p) => format!("{}  its own files", shown(p)),
+        Word::Sock(p) => format!("{}  connect to", shown(p)),
     }
 }
 

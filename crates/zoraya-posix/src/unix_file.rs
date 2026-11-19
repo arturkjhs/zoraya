@@ -1,6 +1,6 @@
 //! Socket files (ADR-0412 item 5, plan part F7, proposed ADR-0439): `bind`
 //! makes an `S_IFSOCK` node in the line's `/tmp` (the temporary directory
-//! service), `listen` gives it a listener channel, `connect` opens the node
+//! service) or in the program's own directory (ADR-0465, the volume's service), `listen` gives it a listener channel, `connect` opens the node
 //! through the connecting program's own table and hands one end of a new
 //! pair to the listener, `accept` takes it. A program that cannot see the
 //! directory cannot connect (no ambient authority), and one that sees it
@@ -117,7 +117,10 @@ impl<S: Sys> Posix<S> {
         let (made, opened) = self
             .open_resolved(r, wire, wanted, 0, mode, Access::Write)
             .map_err(|e| if e == EEXIST { EADDRINUSE } else { e })?;
-        let in_tmp = self.entries.get(made.place.entry).map(|e| e.kind) == Some(EntryKind::Tmp);
+        let in_tmp = matches!(
+            self.entries.get(made.place.entry).map(|e| e.kind),
+            Some(EntryKind::Tmp | EntryKind::Own)
+        );
         if !in_tmp || opened.meta().mode & stat::S_IFMT != stat::S_IFSOCK {
             // A service that keeps no socket nodes made a plain file.
             self.sys.close(opened.conn);
@@ -217,7 +220,7 @@ impl<S: Sys> Posix<S> {
         }
         let path = unix::parse_sockaddr_un(addr)?.to_vec();
         let r = self.resolve(AT_FDCWD, &path, Access::Write)?;
-        let (_, opened) = self.open_resolved(r, 0, rights::WRITE, 0, 0, Access::Write)?;
+        let (_, opened) = self.open_resolved(r, 0, rights::CONNECT, 0, 0, Access::Write)?;
         let conn = opened.conn;
         if opened.meta().mode & stat::S_IFMT != stat::S_IFSOCK {
             self.sys.close(conn);

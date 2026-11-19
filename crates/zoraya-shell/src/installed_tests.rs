@@ -34,6 +34,7 @@ fn planned(grants: &[(bool, &str)], cwd: &str) -> Vec<Planned> {
         grants: &g,
         nets: &[],
         listens: &[],
+        socks: &[],
         base_system: false,
         room: None,
     })
@@ -414,4 +415,50 @@ fn sixty_four_network_rules_make_a_scope_and_sixty_five_do_not() {
     let n = saved_scope(&words(65), false, None);
     assert!(n.scope.is_none());
     assert_eq!(n.dropped, ["too many network rules"]);
+}
+
+/// ADR-0465: a saved `+sock` applies as the socket file's directory narrowed
+/// to its name, only if the shell holds the file, never in an untrusted room.
+#[test]
+fn a_saved_sock_word_applies_narrowed_and_only_if_held() {
+    let everything = |_: &str, _: bool| true;
+    let a = apply(
+        "cl",
+        &words("+sock /data/home/srv/s"),
+        &held(&everything, None, false, None, false),
+    );
+    assert!(a.notes.is_empty(), "{:?}", a.notes);
+    assert_eq!(
+        a.planned,
+        vec![Planned {
+            path: "/data/home/srv".into(),
+            access: Access::Connect("s".into()),
+            reason: "saved".into()
+        }]
+    );
+    let nothing = |_: &str, _: bool| false;
+    let a = apply(
+        "cl",
+        &words("+sock /data/home/srv/s"),
+        &held(&nothing, None, false, None, false),
+    );
+    assert!(a.planned.is_empty());
+    assert_eq!(
+        a.notes,
+        ["zosh: cl: saved +sock /data/home/srv/s is not held here\n"]
+    );
+    // A hand-edited record naming the directory itself or a place outside
+    // /data is not applied.
+    for bad in ["/data/home/srv", "/config/apps", "/data/home/x/../y/s"] {
+        let w = vec![Word::Sock(bad.into())];
+        let a = apply("cl", &w, &held(&everything, None, false, None, false));
+        assert!(a.planned.is_empty(), "{bad}");
+        assert_eq!(a.notes.len(), 1, "{bad}");
+    }
+    let a = apply(
+        "cl",
+        &words("+sock /data/home/srv/s"),
+        &held(&everything, None, true, None, false),
+    );
+    assert!(a.planned.is_empty());
 }

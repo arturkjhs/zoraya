@@ -1449,7 +1449,7 @@ posix-image: $(KERNEL) tools-storage
 # set from the first measured durations (TASK-22) with a margin of about
 # three; QEMU_TIMEOUT for the others.
 POSIX_TIMEOUTS := threads=900 w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-term=600 \
-	w10=600 w4=1800 w5-jobs=300 zosh-install=600 zosh-measure-install=1500 tour=900 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
+	w10=600 w4=1800 w5-jobs=300 zosh-install=600 zosh-sockets=600 zosh-measure-install=1500 tour=900 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
 # W8's five builds: w8.script runs them in one boot; w8-BUILD.script runs one
 # (CI's jobs, ADR-0213's Decision).
 POSIX_W8_BUILDS := j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4
@@ -1485,7 +1485,7 @@ endef
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
 	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/threads.script \
-	tests/posix/zosh.script tests/posix/zosh-install.script tests/posix/zosh-userland.script tests/posix/zosh-curses.script tests/posix/tour.script
+	tests/posix/zosh.script tests/posix/zosh-install.script tests/posix/zosh-sockets.script tests/posix/zosh-userland.script tests/posix/zosh-curses.script tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).

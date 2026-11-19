@@ -426,7 +426,7 @@ fn a_connect_is_forwarded_to_the_listener_with_its_handles() {
         "the listener end is charged"
     );
     // A second program connects through its own connection.
-    let c = r.connection("sock", rights::READ | rights::WRITE).unwrap();
+    let c = r.connection("sock", rights::CONNECT).unwrap();
     let (s, far) = r.connect(c, 5, &[7; 24]);
     assert_eq!(s, status::OK);
     assert!(!r.is_closed(far), "the far end went on, it was not closed");
@@ -436,7 +436,7 @@ fn a_connect_is_forwarded_to_the_listener_with_its_handles() {
     assert_eq!(bytes, vec![7; 24]);
     assert_eq!(handles, vec![far]);
     // A stream connect forwards three.
-    let c2 = r.connection("sock", rights::WRITE).unwrap();
+    let c2 = r.connection("sock", rights::CONNECT).unwrap();
     let (s, _) = r.connect_stream(c2, &[1; 24]);
     assert_eq!(
         s,
@@ -451,7 +451,7 @@ fn a_stream_listener_takes_the_three_ends_in_one_message() {
     let conn = r.bind("sock").unwrap();
     let (s, listener) = r.listen(conn, 1);
     assert_eq!(s, status::OK);
-    let c = r.connection("sock", rights::WRITE).unwrap();
+    let c = r.connection("sock", rights::CONNECT).unwrap();
     let (s, far) = r.connect_stream(c, &[9; 24]);
     assert_eq!(s, status::OK);
     let (bytes, handles) = r.reply(listener).unwrap();
@@ -463,14 +463,19 @@ fn a_stream_listener_takes_the_three_ends_in_one_message() {
 fn nothing_listens_until_the_node_has_a_listener_and_nothing_after() {
     let mut r = rig();
     let conn = r.bind("sock").unwrap();
-    let c = r.connection("sock", rights::WRITE).unwrap();
+    let c = r.connection("sock", rights::CONNECT).unwrap();
     // Bound, not listening: refused, and the far end is not kept.
     let (s, far) = r.connect(c, 1, &[0; 24]);
     assert_eq!(s, status::NOT_FOUND);
     assert!(r.is_closed(far));
     // A regular file is no socket: the same answer.
     let (file, _) = r
-        .open("plain", BIND, 0o600, rights::READ | rights::WRITE)
+        .open(
+            "plain",
+            BIND,
+            0o600,
+            rights::READ | rights::WRITE | rights::CONNECT,
+        )
         .unwrap();
     let (s, _) = r.connect(file, 1, &[0; 24]);
     assert_eq!(s, status::NOT_FOUND);
@@ -507,6 +512,11 @@ fn listening_and_connecting_need_write() {
     let (s, far) = r.connect(read_only, 1, &[0; 24]);
     assert_eq!(s, status::ACCESS_DENIED);
     assert!(r.is_closed(far));
+    // WRITE alone does not connect: the right is CONNECT (ADR-0465).
+    let write_only = r.connection("sock", rights::WRITE).unwrap();
+    let (s, far) = r.connect(write_only, 1, &[0; 24]);
+    assert_eq!(s, status::ACCESS_DENIED);
+    assert!(r.is_closed(far));
     let (s, end) = r.listen(read_only, 1);
     assert_eq!(s, status::ACCESS_DENIED);
     assert!(r.is_closed(end));
@@ -516,7 +526,7 @@ fn listening_and_connecting_need_write() {
 fn one_listener_a_node_and_one_node_a_connection_and_only_two_types() {
     let mut r = rig();
     let a = r.bind("a").unwrap();
-    let b = r.connection("a", rights::WRITE).unwrap();
+    let b = r.connection("a", rights::WRITE | rights::CONNECT).unwrap();
     assert_eq!(r.listen(a, 1).0, status::OK);
     // Another connection to the same node, with WRITE: not the binder's, refused
     // (it could not take the name over), and taken anyway.
@@ -557,7 +567,7 @@ fn a_full_queue_refuses_the_connect_and_keeps_nothing() {
     let conn = r.bind("sock").unwrap();
     let (_, listener) = r.listen(conn, 1);
     r.net.0.borrow_mut().full.insert(listener);
-    let c = r.connection("sock", rights::WRITE).unwrap();
+    let c = r.connection("sock", rights::CONNECT).unwrap();
     let (s, far) = r.connect(c, 1, &[0; 24]);
     assert_eq!(s, status::LIMIT_REACHED);
     assert!(
@@ -578,7 +588,7 @@ fn a_far_end_the_kernel_refuses_is_the_connectors_fault_and_not_the_listeners_de
     let conn = r.bind("sock").unwrap();
     let (_, listener) = r.listen(conn, 1);
     r.net.0.borrow_mut().refuse.insert(listener);
-    let c = r.connection("sock", rights::WRITE).unwrap();
+    let c = r.connection("sock", rights::CONNECT).unwrap();
     let (s, far) = r.connect(c, 1, &[0; 24]);
     assert_eq!(s, status::INVALID_ARGUMENT);
     assert!(r.is_closed(far));
@@ -597,7 +607,7 @@ fn a_listener_channel_that_closed_is_a_dead_listener() {
     let base = r.service.open_count();
     // The client end's closing shows as `Closed` on the service's write.
     r.net.client_close(listener);
-    let c = r.connection("sock", rights::WRITE).unwrap();
+    let c = r.connection("sock", rights::CONNECT).unwrap();
     let (s, far) = r.connect(c, 1, &[0; 24]);
     assert_eq!(s, status::NOT_FOUND);
     assert!(r.is_closed(far));
@@ -632,7 +642,7 @@ fn unlink_frees_a_node_and_a_listening_node_stays_until_its_listener_goes() {
     assert_eq!(r.service.socket_nodes(), (2, 1));
     // No one can connect to the old node by name any more: `connection`
     // finds the new one.
-    let c = r.connection("b", rights::WRITE).unwrap();
+    let c = r.connection("b", rights::CONNECT).unwrap();
     let (s, _) = r.connect(c, 1, &[0; 24]);
     assert_eq!(s, status::NOT_FOUND);
     r.net.client_close(b);

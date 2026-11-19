@@ -1221,6 +1221,7 @@ impl Z {
             grants: exec.grants,
             nets: exec.nets,
             listens: exec.listens,
+            socks: exec.socks,
             base_system: base,
             room: room.map(|r| grants::RoomBound {
                 name: &r.name,
@@ -1347,6 +1348,7 @@ impl Z {
             grants: exec.grants,
             nets: exec.nets,
             listens: exec.listens,
+            socks: exec.socks,
             base_system: base,
             room: None,
         };
@@ -1436,6 +1438,16 @@ impl Z {
         plan: &[grants::Planned],
         net: Option<(u32, Vec<u8>)>,
     ) -> Result<Table, String> {
+        // ADR-0465: a socket file's entry is never merged with another.
+        if let Err(r) = grants::connect_conflict(plan) {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(&r.subject),
+                &r.problem,
+                &hints,
+            ));
+        }
         let merged = grants::merge(plan);
         let gone = || zoraya_command::error("zosh", None, "too many entries or handles", &[]);
         let mut handles: Vec<ChannelEntry> = Vec::new();
@@ -2418,6 +2430,16 @@ impl Z {
         own: Option<&grants::Own>,
     ) -> Result<(Vec<posix_child::Entry>, u32, String), String> {
         use zoraya_abi::posix::EntryKind as P;
+        // ADR-0465: a socket file's entry is never merged with another.
+        if let Err(r) = grants::connect_conflict(plan) {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(&r.subject),
+                &r.problem,
+                &hints,
+            ));
+        }
         let merged = grants::merge(plan);
         let mut entries: Vec<posix_child::Entry> = Vec::new();
         let close = |entries: &[posix_child::Entry]| {

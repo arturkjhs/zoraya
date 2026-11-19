@@ -960,6 +960,14 @@ pub fn tmp_volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) 
     volume_with(net, blocks, true)
 }
 
+/// The volume's own service with socket nodes (ADR-0465): `fsd` over a
+/// disk, where `/data` lives, and no FIFO nodes.
+pub fn data_volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
+    let (service, client) = volume_with(net, blocks, false);
+    service.borrow_mut().enable_sockets();
+    (service, client)
+}
+
 /// Another root connection to `service`, as a second process would be given.
 pub fn another_root(net: &Rc<RefCell<Net>>, service: &Rc<RefCell<Svc>>) -> H {
     let mut fake = Fake::new(net.clone(), vec![]);

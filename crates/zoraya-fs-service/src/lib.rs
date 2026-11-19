@@ -1824,7 +1824,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// `socket_connect`: forwards the connector's far end to the listener.
     /// The service reads none of `record`; the listener checks it (it comes
-    /// from any program with `WRITE` on the node).
+    /// from any program with `CONNECT` on the node).
     fn socket_connect(
         &mut self,
         i: usize,
@@ -1836,8 +1836,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         if self.sockets.is_none() {
             return self.error_reply(i, t, status::UNSUPPORTED);
         }
-        // Connecting is talking to the listener: the right to write.
-        if !self.has(i, proto::rights::WRITE) {
+        // Connecting is the right to connect (ADR-0465), not to read or
+        // write the file: a grant of one socket file has that alone.
+        if !self.has(i, proto::rights::CONNECT) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let Some(id) = self.socket_node_of(i) else {

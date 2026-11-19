@@ -43,6 +43,11 @@ pub enum Access {
     /// `create-tree` (ADR-0339 item 3): the parent narrowed to the name,
     /// where a directory of that name may be created, and everything in it.
     CreateTree(String),
+    /// `+sock` (ADR-0465): the parent narrowed to the name of a socket file,
+    /// to connect to: `CONNECT` and `CLONE`, so not even the file's bytes
+    /// can be read or written through it (a plain file given by mistake is
+    /// as closed as a socket).
+    Connect(String),
 }
 
 impl Access {
@@ -61,6 +66,7 @@ impl Access {
             Access::Tree => rights::ALL & !rights::PUBLISH,
             Access::ReadName(_) => rights::READ | rights::CLONE,
             Access::ChangeName(_) => rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
+            Access::Connect(_) => rights::CONNECT | rights::CLONE,
             Access::CreateTree(_) => rights::ALL & !rights::PUBLISH,
         }
     }
@@ -73,6 +79,7 @@ impl Access {
             | Access::Rename(n)
             | Access::ReadName(n)
             | Access::ChangeName(n)
+            | Access::Connect(n)
             | Access::CreateTree(n) => Some(n),
             _ => None,
         }
@@ -87,6 +94,7 @@ impl Access {
             Access::Rename(_) => Access::Rename(name),
             Access::ReadName(_) => Access::ReadName(name),
             Access::ChangeName(_) => Access::ChangeName(name),
+            Access::Connect(_) => Access::Connect(name),
             Access::CreateTree(_) => Access::CreateTree(name),
             other => other.clone(),
         }
@@ -104,6 +112,7 @@ impl Access {
             Access::Tree => "change anything in".into(),
             Access::ReadName(n) => format!("read {n}"),
             Access::ChangeName(n) => format!("change {n}"),
+            Access::Connect(n) => format!("connect to {n}"),
             Access::CreateTree(n) => format!("create {n}, and change anything in it"),
         }
     }
@@ -134,6 +143,9 @@ pub struct Line<'a> {
     pub nets: &'a [Value],
     /// `+listen` words with their arguments, as written (ADR-0224 item 1).
     pub listens: &'a [Value],
+    /// `+sock` words' paths (ADR-0465): each is a socket file, given as its
+    /// directory narrowed to the name, to connect to.
+    pub socks: &'a [Value],
     /// The description is the system image's own (ADR-0153's Decision):
     /// only then are kinds other than `read` designated.
     pub base_system: bool,
@@ -243,6 +255,24 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             path: abs,
             access: if *write { Access::Tree } else { Access::Read },
             reason: if *write { "+w".into() } else { "+r".into() },
+        });
+    }
+    // ADR-0465: a socket file the line names is its directory narrowed to
+    // the name, to change (connect to); the person typed the word, so the
+    // value of a variable never makes one (`+sock` is a literal word).
+    for value in line.socks {
+        let abs = join(line.cwd, 0, &value.text);
+        let Some((parent, name)) = parent_and_name(&abs) else {
+            return Err(Refused {
+                subject: value.text.clone(),
+                problem: "is not a socket file".into(),
+                hint: Some("+sock names a file, as +sock /data/home/NAME/sock".into()),
+            });
+        };
+        grant_entries.push(Planned {
+            path: parent,
+            access: Access::Connect(name),
+            reason: "+sock".into(),
         });
     }
     let designate =
@@ -430,6 +460,39 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
     Ok(out)
 }
 
+/// ADR-0465: a socket file's entry (`+sock`, typed or saved) is its directory
+/// narrowed to one name and is never merged. A plan that gives the same
+/// directory another way (the current directory, a `+r`, a second `+sock`,
+/// a file operand) would merge it into the whole directory with more rights,
+/// so it is refused, with the way out.
+pub fn connect_conflict(plan: &[Planned]) -> Result<(), Refused> {
+    for (i, e) in plan.iter().enumerate() {
+        let Access::Connect(name) = &e.access else {
+            continue;
+        };
+        if let Some(other) = plan
+            .iter()
+            .enumerate()
+            .find(|(j, f)| *j != i && f.path == e.path && f.access != e.access)
+            .map(|(_, f)| f)
+        {
+            return Err(Refused {
+                subject: format!("+sock {}", join(&e.path, 0, name)),
+                problem: format!(
+                    "{} is also given to this command ({})",
+                    e.path, other.reason
+                ),
+                hint: Some(
+                    "a socket file is given alone in its directory: run the command from \
+                     another directory, and give one socket per directory"
+                        .into(),
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// One entry as it is given: the plan's entries for one path, merged
 /// (rule 2: "two entries with the same prefix are merged into one with the
 /// union of their rights").
@@ -495,7 +558,10 @@ pub fn through_links(
         // be replaced through it. `create`, `remove` and
         // `rename` act on the link object itself (`ln -sf`, `mv` onto a
         // link), so only their directory is followed (below; N2).
-        let opens = matches!(e.access, Access::ReadName(_) | Access::ChangeName(_));
+        let opens = matches!(
+            e.access,
+            Access::ReadName(_) | Access::ChangeName(_) | Access::Connect(_)
+        );
         let named = e.access.name().filter(|_| opens).map(String::from);
         if let Some(name) = named
             && let full = join(&e.path, 0, &name)
@@ -597,6 +663,16 @@ pub fn window_pills(plan: &[Planned], net_pills: &[String]) -> Result<Vec<String
         add(p.clone());
     }
     for m in merge(plan) {
+        // A socket file (ADR-0465) is shown as itself: `+w DIR` would read
+        // as the whole directory.
+        if let Some(n) = &m.name
+            && m.lines
+                .iter()
+                .all(|(words, _)| words.starts_with("connect to "))
+        {
+            add(alloc::format!("+sock {}", join(&m.path, 0, n)));
+            continue;
+        }
         let word = if m.rights & rights::WRITE != 0 {
             "+w"
         } else {

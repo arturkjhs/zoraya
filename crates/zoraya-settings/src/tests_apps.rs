@@ -816,3 +816,43 @@ fn the_file_is_cut_at_the_last_whole_line() {
         .unwrap();
     assert_eq!(cut.line, 3);
 }
+
+// --- `+sock` (ADR-0465): the one saved word that names a file ---
+
+#[test]
+fn a_sock_word_is_saved_only_for_a_file_in_a_program_directory() {
+    let w = parse_words(&toks("+sock /data/home/srv/s")).unwrap();
+    assert_eq!(w, [Word::Sock("/data/home/srv/s".into())]);
+    assert_eq!(w[0].words(), "+sock /data/home/srv/s");
+    assert_eq!(w[0].token(), "+sock");
+    assert_eq!(check(&w[0], "/home"), Ok(()));
+    assert_eq!(
+        sock_place("/data/home/srv/run/s"),
+        Some(("/data/home/srv/run", "s"))
+    );
+    for bad in [
+        "/data/home/srv",
+        "/data/home",
+        "/data",
+        "/data/home/srv/",
+        "/data/home/../srv/s",
+        "/data/home/srv//s",
+        "/tmp/s",
+        "/config/s/x",
+    ] {
+        assert_eq!(sock_place(bad), None, "{bad}");
+        let r = check(&Word::Sock(bad.into()), "/home");
+        assert!(r.is_err(), "{bad}");
+    }
+    // A word needs its path, and a relative or `~` one is not a socket's.
+    assert!(parse_words(&toks("+sock")).is_err());
+    assert!(check(&Word::Sock("~/s".into()), "/home").is_err());
+    // It round-trips through a record line.
+    let app = App {
+        name: "cl".into(),
+        hash: sha256::identity(b"p", b"d"),
+        installed: String::new(),
+        words: w,
+    };
+    assert!(app.line().contains("+sock /data/home/srv/s"));
+}
