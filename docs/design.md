@@ -1783,7 +1783,7 @@ copy and stack of `spawn` and the close of a chain of channels do at most 64 pag
 fails with `Cancelled` if `job_kill` came meanwhile, and the call frees what it did: nothing is visible until the last
 step. The frames of a closed memory object over 64 pages and of an address space over 64 frames go to the `reaper`
 kernel thread (`kernel/src/reaper.rs`) with their charge, which stays on the job until they are freed. An allocation
-that finds no free frame first frees a step of the reaper's queue, so memory on its way back is not refused. The test
+that finds no free frame first frees a step of the reaper's queue, so memory on its way back is not refused. A contiguous run that finds none helps the reaper in rounds of up to 1024 frames, a step at a time with a step point after each, and scans again; it is refused only when a round frees nothing or after as many rounds as the machine has 1024-frame runs (ADR-0349, proposed). The test
 kernel counts the longest time IRQ stayed masked (`MASKED_MAX_NS`, `kernel/src/steps.rs`), without the idle thread's wait.
 Measured under HVF, 24 MiB (`t_bound`): before the steps `memory_create` 1707 us, `memory_map` 1333 us, `memory_unmap`
 786 us and the close of the object 962 us masked; after, one step and the whole are the same, about 19 us, 15 to 19 us,

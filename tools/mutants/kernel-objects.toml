@@ -396,9 +396,23 @@ note = "INV-0270-1: the first zeroing step is apart from the search for the run 
 [[mutant]]
 id = "K-contig-no-rescan"
 file = "kernel/src/memory/frames.rs"
-find = 'Err(_) if changed && !rescanned && round < CONTIG_HELP_ROUNDS => {'
-replace = 'Err(_) if false && changed && !rescanned && round < CONTIG_HELP_ROUNDS => {'
+find = 'Err(_) if changed && !rescanned && round < rounds => {'
+replace = 'Err(_) if false && changed && !rescanned && round < rounds => {'
 note = "a run freed behind the stepped scan is found by a second pass (a_run_freed_behind_the_scan_is_found_by_a_second_pass)"
+
+[[mutant]]
+id = "K-contig-help-one-step"
+file = "kernel/src/memory/frames.rs"
+find = 'for _ in 0..HELP_STEPS_PER_ROUND {'
+replace = 'for _ in 0..1 {'
+note = "ADR-0349: a round of help frees up to a run's worth of the reaper's frames, so the queue ahead of a run is freed within the round cap (a_run_queued_behind_many_frames_is_still_found_by_a_create)"
+
+[[mutant]]
+id = "K-contig-no-rescan-after-empty-help"
+file = "kernel/src/memory/frames.rs"
+find = 'if !helped && generation() == scanned_at {'
+replace = 'if !helped {'
+note = "ADR-0349: frames the reaper freed at the step point before the help are scanned for (a_run_the_reaper_frees_at_the_step_before_its_help_is_found)"
 
 [[mutant]]
 id = "K-kernel-tables-not-in-backing"
