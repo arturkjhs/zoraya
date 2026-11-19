@@ -724,6 +724,7 @@ impl Z {
                 e.payload
                     .elements
                     .iter()
+                    .filter(|(n, _, _)| self.live_apps.contains(n))
                     .map(|(n, _, _)| apps::Instance {
                         job: e.number,
                         program: n.clone(),
@@ -748,6 +749,18 @@ impl Z {
             return fail(io, None, &why, &[]);
         }
         self.refresh_states();
+        let names: Vec<String> = self
+            .read_apps()
+            .apps
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
+        self.live_apps = names
+            .into_iter()
+            .filter(|n| {
+                Host::lookup(self, n) == Found::Program && self.installed_now.contains_key(n)
+            })
+            .collect();
         let (all, kill, data, log) = (
             p.flag(d, "all"),
             p.flag(d, "kill"),

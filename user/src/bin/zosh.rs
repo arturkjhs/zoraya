@@ -902,6 +902,9 @@ struct Z {
     /// The installed programs the last lookups found, by name, with their
     /// records (ADR-0396 item 6): what a launch checks and applies.
     installed_now: BTreeMap<String, zoraya_settings::apps::App>,
+    /// The installed names that resolve to the installed program now (not
+    /// shadowed by a path program): the copies `programs` counts and ends.
+    live_apps: Vec<String>,
     /// The descriptions of installed programs read and checked against their
     /// record, by name, with the record's hash they matched.
     installed_cache: BTreeMap<String, (zoraya_settings::sha256::Digest, Rc<Description>)>,
@@ -6748,6 +6751,7 @@ fn main() -> i32 {
         launch_nets: Vec::new(),
         net_keyed: false,
         installed_now: BTreeMap::new(),
+        live_apps: Vec::new(),
         installed_cache: BTreeMap::new(),
     };
     // The broker tells the host of the terminal of its lines' groups
