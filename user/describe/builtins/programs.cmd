@@ -1,5 +1,5 @@
 name     programs
-summary  list installed programs, see their saved grants, revoke or remove them
+summary  list installed programs and their saved grants
 usage    programs
 usage    programs NAME
 usage    programs grant NAME WORD...

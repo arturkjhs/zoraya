@@ -205,7 +205,7 @@
 < \r\nexit status 2
 ^ \r\n~>
 > programs --help\r
-< \r\nprograms: list installed programs, see their saved grants, revoke or remove them
+< \r\nprograms: list installed programs and their saved grants
 ^ \r\nusage: programs
 ^ \r\n       programs NAME
 ^ \r\n       programs grant NAME WORD...

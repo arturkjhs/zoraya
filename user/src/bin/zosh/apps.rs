@@ -322,6 +322,14 @@ impl Z {
         // The old package is put aside, not removed, until the new one is in
         // place: a failed rename puts it back (ADR-0394 item 4).
         let aside = format!(".old-{name}");
+        // A stop between the two renames of an earlier upgrade left the old
+        // package aside and none in place: put it back first.
+        if existing.is_some()
+            && self.open(&format!("/apps/{name}"), OPEN_DIRECTORY).is_err()
+            && self.open(&format!("/apps/{aside}"), OPEN_DIRECTORY).is_ok()
+        {
+            let _ = apps_dir.rename(&aside, &apps_dir, &name);
+        }
         remove_tree(&apps_dir, &aside);
         if existing.is_some()
             && let Err(s) = apps_dir.rename(&name, &apps_dir, &aside)

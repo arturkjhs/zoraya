@@ -30,18 +30,20 @@ screen   grants    show what a command would be given, without running it
 screen   head      print the first lines of files
 screen   help      show help
 screen   history   list the lines you have run
+screen   install   install a program from a package directory, with the grants you type
 screen   jobs      list jobs
 screen   kill      end a job
 screen   ls        list a directory
 screen   math      calculate
-screen   mkdir     make a directory
 prefix -- space: next page, q: quit --
 key spc
 window
+screen   mkdir     make a directory
 screen   mv        move or rename
 screen   net       show the state of the network
 screen   ping      send echo requests to a host and show the replies
 screen   poweroff  turn the machine off
+screen   programs  list installed programs and their saved grants
 screen   pwd       print the current directory
 screen   random    show random bytes
 screen   reboot    start the machine again
@@ -59,11 +61,11 @@ screen   sync      make written data durable
 screen   test      check a condition
 screen   top       each room's use against its limits
 screen   unset     remove a variable
-screen   uptime    time since boot
-screen   wait      wait for background jobs
 prefix -- space: next page, q: quit --
 key spc
 window
+screen   uptime    time since boot
+screen   wait      wait for background jobs
 screen Demonstrations: echo-args exit-with fault hello spin stubborn
 screen ~> _
 chord ctrl l

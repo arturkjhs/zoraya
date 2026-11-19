@@ -363,3 +363,21 @@ fn only_words_typed_on_the_line_are_saved() {
     }
     assert_eq!(literal_tokens(&[]).unwrap(), Vec::<String>::new());
 }
+
+#[test]
+fn a_rooms_write_over_apps_is_refused_too() {
+    for path in ["/", "/apps", "/apps/ed"] {
+        let plan = vec![Planned {
+            path: path.into(),
+            access: Access::Tree,
+            reason: "room work".into(),
+        }];
+        assert!(refuse_apps_write(&plan).is_err(), "{path}");
+    }
+    let ok = vec![Planned {
+        path: "/home/p".into(),
+        access: Access::Tree,
+        reason: "room work".into(),
+    }];
+    assert!(refuse_apps_write(&ok).is_ok());
+}

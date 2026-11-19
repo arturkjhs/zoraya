@@ -25,17 +25,19 @@
 ^ \r\n  head      print the first lines of files
 ^ \r\n  help      show help
 ^ \r\n  history   list the lines you have run
+^ \r\n  install   install a program from a package directory, with the grants you type
 ^ \r\n  jobs      list jobs
 ^ \r\n  kill      end a job
 ^ \r\n  ls        list a directory
 ^ \r\n  math      calculate
-^ \r\n  mkdir     make a directory
 < -- space: next page, q: quit --
 > \x20
-<   mv        move or rename
+<   mkdir     make a directory
+^ \r\n  mv        move or rename
 ^ \r\n  net       show the state of the network
 ^ \r\n  ping      send echo requests to a host and show the replies
 ^ \r\n  poweroff  turn the machine off
+^ \r\n  programs  list installed programs and their saved grants
 ^ \r\n  pwd       print the current directory
 ^ \r\n  random    show random bytes
 ^ \r\n  reboot    start the machine again
@@ -53,11 +55,11 @@
 ^ \r\n  test      check a condition
 ^ \r\n  top       each room's use against its limits
 ^ \r\n  unset     remove a variable
-^ \r\n  uptime    time since boot
-^ \r\n  wait      wait for background jobs
 < -- space: next page, q: quit --
 > \x20
-< Demonstrations: echo-args exit-with fault hello spin stubborn
+<   uptime    time since boot
+^ \r\n  wait      wait for background jobs
+^ \r\nDemonstrations: echo-args exit-with fault hello spin stubborn
 ^ \r\n~>
 > pwd\r
 < \r\n/home

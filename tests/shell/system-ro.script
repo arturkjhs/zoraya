@@ -69,7 +69,7 @@
 > +w / cp /hello.txt /system/tls/roots\r
 < +w /: installed programs are changed with install
 < \r\n/>
-> +w /home probe /system/tls/roots\r
+> +r /system +w /home probe /system/tls/roots\r
 < path /system/tls/roots: read=ok change=not granted
 < \r\n/>
 # Reading works, and the file is as it was.

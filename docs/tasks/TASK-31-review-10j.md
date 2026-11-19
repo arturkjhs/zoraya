@@ -209,3 +209,69 @@ in ADR-0394 and the part report. The notes may be fixed or recorded as known lim
 | 8 to 18 | Notes, not acted on, except the stray directory check, which now opens with the directory flag (note 17 stays: the person is asked). |
 
 `make check` exit 0 and `tests/posix/zosh-install.script` PASS (207 steps, HVF) after the fixes. No separate changed-lines check was run.
+
+## Changed-lines check
+
+`git diff 97c83e3a..1b9b189e -- user crates` (the fixes of findings 1, 3 and 7), read against the code around it. No
+build and no test was run for this check.
+
+### C1. warning: an interrupted upgrade cannot be repaired by `install`, and the next attempt deletes the old package
+
+`user/src/bin/zosh/apps.rs:324-339`. If the shell stops between the two renames (killed, power off), or the put-back
+at line 334 fails (its error is dropped with `let _`), the state is: the record holds `NAME`, `/apps/NAME` does not
+exist, `/apps/.old-NAME` holds the old package. The next `install ./pkg` over `NAME` runs `remove_tree(.old-NAME)`
+first (line 325), which deletes the only copy of the old package, then `rename(NAME, .old-NAME)` fails because `NAME`
+is missing, and the install is refused. Every later attempt is refused the same way, until `programs remove NAME`
+(which drops the saved words, so `--keep` is lost). Before the fix, the same interruption left a state that the next
+`install` repaired. The failed put-back is also not reported: the person is told only the rename's status, not that
+the old package is at `/apps/.old-NAME`.
+*Fix:* before putting aside, if `/apps/NAME` is missing and `.old-NAME` exists, rename `.old-NAME` back (or treat a
+missing `NAME` as nothing to put aside); remove `.old-NAME` only after `NAME` has been renamed onto it successfully.
+If the put-back fails, say where the old package is.
+
+### C2. warning: none of the three fixes has a test
+
+`crates/zoraya-shell/src/installed_tests.rs` is not changed: no case has a `room NAME` reason, so deleting
+`|| e.reason.starts_with("room ")` (`installed.rs:73`) survives the host tests. Nothing forces a failed rename in
+`install`, and nothing runs `programs revoke` on a name that is not in the record (`tests/posix/zosh-install.script`
+is not changed). Finding 3 asked for a host test with a room line, and finding 1 for a forced error. The doc comment
+of `refuse_apps_write` (`installed.rs:66-70`, "Only a typed `+w` is refused") is now wrong.
+*Fix:* add `room work` reasons over `/`, `/apps` and `/apps/ed` (refused) and over `/home` (allowed) to
+`a_typed_write_over_apps_is_refused_and_nothing_else_is`; a script step `programs revoke --kill NOTINSTALLED`; and
+fix the comment.
+
+### C3. note: the stray check no longer sees a non-directory at `/apps/NAME`
+
+`apps.rs:252, 1061`. With `OPEN_DIRECTORY`, a file at `/apps/NAME` is not a stray. `install` then gets past
+`check_package` and fails at the rename with a raw status instead of "another package"; `programs remove NAME`
+refuses it as "not an installed program". Since a typed `+w /apps` is refused, the shell then has no way to remove it.
+*Fix:* count any entry: `open(.., 0).is_ok() || open(.., OPEN_DIRECTORY).is_ok()`.
+
+### C4. note: a room's refused grant is reported as if it were typed
+
+`installed.rs:85-96` builds the subject `+w /apps...` and the hint "install PACKAGE replaces a program" for a
+`room NAME` entry as well. In a room made with `+w /`, every line that starts a program is now refused with
+`+w /: ...` although the person typed no `+w`. *Fix:* when the reason starts with `room `, say so (for example
+`room work: its +w / reaches /apps`) and point to `room set`.
+
+### C5. note: finding 7 is fixed only in its first half
+
+`apps.rs:902` and `one_instances` still match instances by the typed program name. A `shell.path` program that
+shadows an installed name is still counted and killed by `programs revoke --kill NAME`. The disposition says "Fixed".
+
+### Checked and found sound
+
+The refusal now sees the whole plan (typed, through links, room), and its message has the same form as the `Err`
+branch. The revoke check comes before `--all` and `--kill`, so `NoSuchApp` is no longer reachable by `--kill` alone.
+The rename order (old aside, new in, old removed) keeps the old package on a failure of the second rename; a
+`.old-NAME` that `remove_tree` cannot empty makes the first rename fail and leaves the old package in place.
+`.old-NAME` and `.new-NAME` are not app names (`is_app_name` wants a lowercase first byte), so they are never listed,
+launched or removed as programs. Changing the stray check to `OPEN_DIRECTORY` makes a stray directory visible, which
+it was not before.
+
+### Dispositions of the changed-lines check
+C1 fixed (an upgrade puts `.old-NAME` back when NAME is missing, before setting it aside). C2 fixed (a test for the room refusal, the comment). C3, C4 notes. C5 open (`--kill` matches by typed name).
+Finding 6: `lang_tests::a_builtin_sees_which_words_were_typed` now goes through the evaluator (`Io::words`).
+
+## `make test-changed` (HVF, PAR_QEMU=1) at 1b9b189e
+Host tests (32 binaries) and test-boot, test-posix-gui, test-gui, test-net, test-apps, test-netsurf, test-python-serve passed. Three failed for causes of this part, not flakes: `system-ro.script` (`+w /home probe` had no read of `/system`; now `+r /system +w /home`), `tour.script` and `tour-gui.script` (`help` lists `install` and `programs`: docs/tour.md pages and the 80-column summary of `programs` fixed). Rerun alone after the fixes: `make test-files` RC=0 (system-ro PASS 94 steps), `make test-posix` tour (PASS 350) and zosh-install (PASS 207), `make test-tour-gui` (PASS 925, room-gui 29). `make test-tour-terminal` was not rerun (it maps from zosh.rs; not run after the fix pass).

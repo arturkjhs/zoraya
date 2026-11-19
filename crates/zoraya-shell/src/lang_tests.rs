@@ -143,7 +143,7 @@ impl Host for Fake {
     fn lookup(&mut self, name: &str) -> Found {
         if self.programs.contains_key(name) {
             Found::Program
-        } else if name == "grants" || name == "pager" || name == "settings" {
+        } else if name == "grants" || name == "pager" || name == "settings" || name == "saves" {
             Found::Builtin
         } else {
             Found::Nothing
@@ -155,6 +155,9 @@ impl Host for Fake {
             "ask" => QUESTION,
             "grants" => {
                 "name grants\nsummary show\nusage grants LINE...\noperand LINE... text l\ncwd none\n"
+            }
+            "saves" => {
+                "name saves\nsummary s\nusage saves WORD...\noperand WORD... text w\ncwd none\n"
             }
             "pager" => "name pager\nsummary page\nusage pager\ncwd none\n",
             "settings" => include_str!("../../../user/describe/builtins/settings.cmd"),
@@ -177,6 +180,12 @@ impl Host for Fake {
         parsed: &Parsed<'_>,
         io: &mut Io,
     ) -> i32 {
+        if name == "saves" {
+            for v in &io.words {
+                io.out
+                    .push_str(&alloc::format!("{}:{}\n", v.text, v.literal));
+            }
+        }
         if name == "pager" {
             self.terminals.push(io.terminal);
             io.out.push_str("paged\n");
@@ -1772,4 +1781,15 @@ fn a_settings_at_with_nothing_after_it_is_a_value() {
         run(&mut sh, "settings gui.keyboard-layouts +ru --at"),
         "operand NAME gui.keyboard-layouts\noperand VALUE +ru\noperand VALUE --at\n"
     );
+}
+
+// INV-0397-1: a builtin sees whether each of its words was typed (`Io::words`),
+// which `install` and `programs` use to save only typed words.
+#[test]
+fn a_builtin_sees_which_words_were_typed() {
+    let mut sh = shell();
+    run(&mut sh, "set w '+w ~/x'");
+    assert_eq!(run(&mut sh, "saves +w /x"), "+w:true\n/x:true\n");
+    assert_eq!(run(&mut sh, "saves +w $w"), "+w:true\n+w ~/x:false\n");
+    assert_eq!(run(&mut sh, "saves $(echo a)"), "a:false\n");
 }

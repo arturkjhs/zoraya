@@ -64,7 +64,7 @@ pub fn launch<'a>(record: &'a Apps, name: &str, loaded: &Digest) -> Launch<'a> {
 }
 
 /// INV-0396-1: no line gives a program a writable connection over `/apps`, `/`
-/// or anything inside a package. Only a typed `+w` is refused, and it is the
+/// or anything inside a package. Only a typed `+w` and a room's are refused, and it is the
 /// one case where the shell refuses a typed word: installed programs are
 /// changed with `install`. `plan` is the line's plan; its `+w` entries have
 /// the reason `+w` (possibly with a link's note after it).

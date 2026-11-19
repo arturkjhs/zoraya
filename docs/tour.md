@@ -43,16 +43,18 @@ Commands:
   head      print the first lines of files
   help      show help
   history   list the lines you have run
+  install   install a program from a package directory, with the grants you type
   jobs      list jobs
   kill      end a job
   ls        list a directory
   math      calculate
-  mkdir     make a directory
 -- space: next page, q: quit --
+  mkdir     make a directory
   mv        move or rename
   net       show the state of the network
   ping      send echo requests to a host and show the replies
   poweroff  turn the machine off
+  programs  list installed programs and their saved grants
   pwd       print the current directory
   random    show random bytes
   reboot    start the machine again
@@ -70,9 +72,9 @@ Commands:
   test      check a condition
   top       each room's use against its limits
   unset     remove a variable
+-- space: next page, q: quit --
   uptime    time since boot
   wait      wait for background jobs
--- space: next page, q: quit --
 Demonstrations: echo-args exit-with fault hello spin stubborn
 ```
 
