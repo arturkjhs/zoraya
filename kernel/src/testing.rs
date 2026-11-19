@@ -550,6 +550,10 @@ static TESTS: &[Test] = &[
         run: storage_from_a_process,
     },
     Test {
+        name: "socket_nodes_need_bind_from_a_process",
+        run: socket_nodes_need_bind_from_a_process,
+    },
+    Test {
         name: "gui_from_a_process",
         run: gui_from_a_process,
     },
@@ -2431,6 +2435,16 @@ fn snapshots_from_a_process() {
 /// The storage stack: failure paths and hostile clients, on the test disk.
 fn storage_from_a_process() {
     let record = process::spawn_with_devices("t_storage")
+        .expect("program in the ramdisk")
+        .wait();
+    assert_eq!(record, exited(0));
+}
+
+/// ADR-0466 (INV-0466-1, INV-0466-2): a raw-call program that does not use `libposix`
+/// makes no socket node through a connection without `BIND` and makes one through
+/// the own directory's, on the test disk.
+fn socket_nodes_need_bind_from_a_process() {
+    let record = process::spawn_with_devices("t_bind")
         .expect("program in the ramdisk")
         .wait();
     assert_eq!(record, exited(0));

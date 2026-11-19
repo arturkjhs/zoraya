@@ -34,7 +34,7 @@ use zoraya_abi::{
 };
 use zoraya_fs_service::Restarts;
 use zoraya_user::beside::{Beside, start_broker};
-use zoraya_user::files::{ALL, File};
+use zoraya_user::files::{ALL, File, MASTER};
 use zoraya_user::gui::{
     Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
 };
@@ -833,7 +833,7 @@ fn main() -> i32 {
             session.as_ref().map(|s| s.broker)
         } else {
             beside = stack.as_ref().and_then(|s| start_broker(&s.root));
-            let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
+            let root = stack.as_ref().and_then(|s| s.root.clone_as(MASTER).ok());
             // Its root network connection, made from `init`'s own (item 4).
             let root_network = network.as_ref().and_then(root_connection);
             let services = if network_allowed || network.is_some() {

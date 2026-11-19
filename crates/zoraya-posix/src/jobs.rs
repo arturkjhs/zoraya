@@ -958,14 +958,29 @@ impl<S: Sys> Posix<S> {
     /// A fresh connection to `conn`'s object (`clone`): every right first,
     /// then reading alone, for a connection that has fewer.
     pub fn clone_conn(&mut self, conn: S::H) -> Result<S::H, i32> {
+        self.clone_conn_asking(conn, 0)
+    }
+
+    /// `clone_conn` for the line's `/tmp`: asks for `BIND` first (ADR-0466), so that a child
+    /// of the line binds in the `/tmp` it shares; a parent without it gives the child none.
+    pub fn clone_tmp(&mut self, conn: S::H) -> Result<S::H, i32> {
+        self.clone_conn_asking(conn, rights::BIND)
+    }
+
+    fn clone_conn_asking(&mut self, conn: S::H, extra: u32) -> Result<S::H, i32> {
         // What the shell gives a `+w` or `create-tree` entry is everything but `publish` (ADR-0153 rule 2): asking
         // for ALL is refused for it, and the child would be left with read alone and could not write what its parent
         // gave it to write (git's `index-pack` in a clone, TASK-31 10h).
-        for wanted in [
+        let mut asks = Vec::new();
+        if extra != 0 {
+            asks.push(rights::ALL | extra);
+        }
+        asks.extend([
             rights::ALL,
             rights::ALL & !rights::PUBLISH,
             rights::READ | rights::CLONE,
-        ] {
+        ]);
+        for wanted in asks {
             let (mine, theirs) = self.sys.channel_create().map_err(|_| EMFILE)?;
             let m = fp::Clone {
                 rights: Flags(wanted),
@@ -1209,7 +1224,8 @@ impl<S: Sys> Posix<S> {
             self.stats.inherit_failed_at = 1000 + i as u32;
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
             let made = match (kind, handle) {
-                (EntryKind::Directory | EntryKind::Tmp, Some(h)) => Some(self.clone_conn(h)?),
+                (EntryKind::Directory, Some(h)) => Some(self.clone_conn(h)?),
+                (EntryKind::Tmp, Some(h)) => Some(self.clone_tmp(h)?),
                 // ADR-0341 item 7: a child never holds a connection to the
                 // program's own directory that can write.
                 (EntryKind::Own, Some(h)) => Some(self.clone_read_only(h)?),
@@ -1321,7 +1337,8 @@ impl<S: Sys> Posix<S> {
         for i in 0..self.entries.len() {
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
             let made = match (kind, handle) {
-                (EntryKind::Directory | EntryKind::Tmp, Some(h)) => Some((h, self.clone_conn(h)?)),
+                (EntryKind::Directory, Some(h)) => Some((h, self.clone_conn(h)?)),
+                (EntryKind::Tmp, Some(h)) => Some((h, self.clone_tmp(h)?)),
                 (EntryKind::Own, Some(h)) => Some((h, self.clone_read_only(h)?)),
                 (EntryKind::Terminal, Some(h)) => Some((h, self.clone_tty(h, group)?)),
                 _ => None,

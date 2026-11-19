@@ -79,10 +79,19 @@ fn answer_report(end: Handle, message: &[u8]) -> u32 {
 /// A directory of the volume, by its absolute path, with `wanted`.
 fn directory(root: &File, path: &str, wanted: u32) -> File {
     let relative = path.trim_start_matches('/');
-    let found = if relative.is_empty() {
-        root.clone_as(wanted)
-    } else {
-        root.open(relative, open_flags::DIRECTORY, wanted)
+    let open = |wanted: u32| {
+        if relative.is_empty() {
+            root.clone_as(wanted)
+        } else {
+            root.open(relative, open_flags::DIRECTORY, wanted)
+        }
+    };
+    // `BIND` is asked for a `/tmp` (ADR-0466); a root without it gives the directory without.
+    let found = match open(wanted) {
+        Err(zoraya_proto_file::status::ACCESS_DENIED) if wanted & rights::BIND != 0 => {
+            open(wanted & !rights::BIND)
+        }
+        other => other,
     };
     found.unwrap_or_else(|s| fail(&alloc::format!("{path}: {}", status_name(s))))
 }
@@ -246,6 +255,12 @@ fn main() -> i32 {
                 rights::READ | rights::CLONE
             } else {
                 ALL
+            };
+            // A `/tmp` may make socket nodes (ADR-0466): `BIND`, if the root has it.
+            let wanted = if *kind == EntryKind::Tmp && !*ro {
+                rights::WITH_BIND
+            } else {
+                wanted
             };
             (prefix.clone(), *kind, Some(directory(&root, path, wanted)))
         })

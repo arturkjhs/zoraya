@@ -646,7 +646,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             r.seal = Seal::Root;
         }
         let account = self.session_account();
-        self.add_connection(end, record, proto::rights::ALL, account)
+        // A root holds `BIND` too (ADR-0466): the supervisor derives from it
+        // the connections that may make a socket node, and no other.
+        self.add_connection(end, record, proto::rights::WITH_BIND, account)
             .is_some()
     }
 
@@ -2192,6 +2194,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         if flags & f::TRUNCATE != 0 {
             needed |= r::WRITE;
+        }
+        // A socket node is made only through a connection that holds `BIND`
+        // (ADR-0466): the own directory's and a line's `/tmp`, so a program
+        // that has write on any other directory cannot plant one there.
+        if self.socket_create && creates {
+            needed |= r::BIND;
         }
         let Some(dir) = self.handle_of(i) else {
             return self.open_answer(i, t, full, status::STORAGE_FAILED, ("", ""), None);

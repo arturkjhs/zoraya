@@ -141,6 +141,7 @@ tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
+user/src/bin/t_bind.rs        test-qemu
 user/src/bin/t_thread.rs      test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu test-net test-netsurf test-apps

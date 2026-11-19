@@ -159,6 +159,35 @@ impl File {
         }
     }
 
+    /// The raw request `bind` makes: an exclusive create of a socket node
+    /// (`open_with_mode` with `S_IFSOCK`) of `name` under this directory, asking
+    /// `wanted` for the connection to it. The new connection, or the service's status
+    /// (ADR-0466: `ACCESS_DENIED` unless this connection holds `BIND`).
+    pub fn make_socket_node(&self, name: &str, wanted: u32) -> FsResult<File> {
+        let (client, server) = channel_create().map_err(|_| GONE)?;
+        let client = File { end: client };
+        let m = proto::OpenWithMode {
+            flags: Flags(open_flags::CREATE | open_flags::EXCLUSIVE),
+            rights: Flags(wanted),
+            description: Flags(0),
+            mode: proto::S_IFSOCK | 0o600,
+            path: Path(name),
+        };
+        let mut reply = Vec::new();
+        let (length, _) = call(
+            self.end,
+            &m,
+            &[moved(server, ChannelObject::RIGHTS)],
+            &mut reply,
+        )?;
+        match decode::<proto::OpenWithModeReply<'_>>(&reply[..length], 0) {
+            Ok((_, r)) => check(r.status.0).map(|()| client),
+            Err(_) => Err(done(&reply[..length])
+                .err()
+                .unwrap_or(status::INVALID_ARGUMENT)),
+        }
+    }
+
     /// `open`, or the link it met on the way: the part of `path` after the
     /// link and the link's target (ADR-0013 rule 7).
     pub fn open_link(&self, path: &str, flags: u32, wanted: u32) -> FsResult<Opened> {
@@ -635,6 +664,12 @@ pub fn split_path(path: &str) -> (&str, &str) {
 
 /// What every shell connection may do.
 pub const ALL: u32 = rights::ALL;
+/// `ALL` and `BIND` (ADR-0466): what a trusted holder of a service's root asks
+/// for when it passes the root on to another trusted holder (`init` to the shell, the
+/// broker to the shell for `/tmp`), so that the shell can derive the own
+/// directory's and the line's `/tmp` connections that may make a socket node.
+/// Never given to a program: a grant is `ALL`, which has no `BIND`.
+pub const MASTER: u32 = rights::WITH_BIND;
 /// The flags of a directory open.
 pub const DIRECTORY: u32 = open_flags::DIRECTORY;
 

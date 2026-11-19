@@ -319,9 +319,23 @@ pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> O
         } else {
             rights::READ | rights::CLONE
         };
-        let open = |rel: &str| match rel {
+        // A write entry also asks for `BIND` (ADR-0466), so that the shell can make
+        // its program's own directory below it with it; a root without it gives
+        // the entry without.
+        let open_with = |rel: &str, wanted: u32| match rel {
             "" => root.clone_as(wanted),
             rel => root.open(rel, 0, wanted),
+        };
+        let open = |rel: &str| match open_with(
+            rel,
+            if *write {
+                wanted | rights::BIND
+            } else {
+                wanted
+            },
+        ) {
+            Err(status::ACCESS_DENIED) if *write => open_with(rel, wanted),
+            other => other,
         };
         let rel = abs.trim_start_matches('/');
         // A folder the shell may change that is not there yet (`/config`

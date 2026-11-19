@@ -480,6 +480,11 @@ test = false
 bench = false
 
 [[bin]]
+name = "t_bind"
+test = false
+bench = false
+
+[[bin]]
 name = "t_quota"
 test = false
 bench = false

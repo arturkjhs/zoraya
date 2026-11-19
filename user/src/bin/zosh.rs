@@ -669,9 +669,14 @@ impl Held {
         let mut entries = Vec::new();
         for e in ns.entries {
             let Some(file) = e.file else { continue };
-            let rights = match file.clone_as(TREE_RIGHTS) {
-                Ok(_) => TREE_RIGHTS,
-                Err(_) => READ_RIGHTS,
+            // `BIND` too if the entry has it (ADR-0466): the own directory below it is
+            // made with it; no grant is, since a grant asks for `TREE_RIGHTS`.
+            let rights = if file.clone_as(TREE_RIGHTS | file_rights::BIND).is_ok() {
+                TREE_RIGHTS | file_rights::BIND
+            } else if file.clone_as(TREE_RIGHTS).is_ok() {
+                TREE_RIGHTS
+            } else {
+                READ_RIGHTS
             };
             let dir = e.kind == native::EntryKind::Directory;
             entries.push(HeldEntry {
@@ -2164,10 +2169,12 @@ impl Z {
     /// `/data/home` or `/data/ROOM` only.
     fn own_connection(&self, who: &str, own: &grants::Own) -> Result<File, String> {
         let fail = |s: u32| zoraya_command::error("zosh", Some(&own.real), &problem(s), &[]);
+        // ADR-0466: the own directory is the one entry the shell asks `BIND` for
+        // (its children get `READ | CLONE`, and a `+w` grant is `TREE_RIGHTS`).
         let wanted = if own.read {
             file_rights::READ | file_rights::CLONE
         } else {
-            file_rights::ALL & !file_rights::PUBLISH
+            TREE_RIGHTS | file_rights::BIND
         };
         let root = self
             .root
@@ -2211,7 +2218,15 @@ impl Z {
             .map_err(fail)?;
             dir.make_directory(parts[i]).map_err(fail)?;
         }
-        root.open(rel, OPEN_DIRECTORY, wanted).map_err(fail)
+        // A shell that holds no `BIND` there still gives the directory: the program
+        // cannot bind in it (the service refuses).
+        match root.open(rel, OPEN_DIRECTORY, wanted) {
+            Err(zoraya_proto_file::status::ACCESS_DENIED) if wanted & file_rights::BIND != 0 => {
+                root.open(rel, OPEN_DIRECTORY, wanted & !file_rights::BIND)
+            }
+            other => other,
+        }
+        .map_err(fail)
     }
 
     /// A POSIX program's plan: by the description of the system image's
@@ -2649,7 +2664,10 @@ impl Z {
             self.line_tmp_name = Some(name);
         }
         let name = self.line_tmp_name.as_deref()?;
-        tmp.open(name, open_flags::DIRECTORY, ALL).ok()
+        // The line's `/tmp` may make socket nodes (ADR-0466).
+        tmp.open(name, open_flags::DIRECTORY, file_rights::WITH_BIND)
+            .or_else(|_| tmp.open(name, open_flags::DIRECTORY, ALL))
+            .ok()
     }
 
     /// The output destination a sink names.
