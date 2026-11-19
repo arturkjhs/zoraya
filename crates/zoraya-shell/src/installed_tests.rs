@@ -401,3 +401,17 @@ fn only_a_writable_entry_is_refused_and_any_is_any() {
     assert!(is_any(&parse_word("ANY:443").unwrap()));
     assert!(!is_any(&parse_word("example.org").unwrap()));
 }
+
+#[test]
+fn sixty_four_network_rules_make_a_scope_and_sixty_five_do_not() {
+    use crate::netgrant::saved_scope;
+    let words = |n: usize| -> Vec<String> {
+        (0..n)
+            .map(|i| alloc::format!("h{i}.example.org:443"))
+            .collect()
+    };
+    assert!(saved_scope(&words(64), false, None).scope.is_some());
+    let n = saved_scope(&words(65), false, None);
+    assert!(n.scope.is_none());
+    assert_eq!(n.dropped, ["too many network rules"]);
+}

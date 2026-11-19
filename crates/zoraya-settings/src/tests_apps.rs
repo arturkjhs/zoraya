@@ -718,3 +718,101 @@ fn tokens_hex_and_the_names_of_words() {
     assert!(meaning(&Word::Read("/home".into()), "/home").starts_with("~  read"));
     assert!(meaning(&Word::Read("/home/x".into()), "/home").starts_with("~/x  read"));
 }
+
+// The caps, exactly (the mutation run's triage).
+
+fn line_with(n_web: usize) -> String {
+    let mut s = alloc::format!("ed sha256:{}", sha256::hex(&sha256::hash(b"x")));
+    for _ in 0..n_web {
+        s.push_str(" +web");
+    }
+    s.push('\n');
+    s
+}
+
+#[test]
+fn the_log_keeps_exactly_its_cap() {
+    assert_eq!(LOG_CAP, 65536);
+    let mut log = Vec::new();
+    let detail = "d".repeat(1023 - "t grant ed ".len());
+    for _ in 0..64 {
+        log = log_append(&log, &log_line("t", "grant", "ed", &detail));
+    }
+    assert_eq!(log.len(), 65536);
+    assert!(log.starts_with(b"t grant ed d"));
+    assert_eq!(log.iter().filter(|b| **b == b'\n').count(), 64);
+    log = log_append(&log, &log_line("t", "grant", "ed", &detail));
+    assert!(log.len() <= 65536 && log.iter().filter(|b| **b == b'\n').count() == 64);
+}
+
+#[test]
+fn the_limits_of_a_line_and_of_a_record() {
+    // The 37th token of a line is the last: the name, the hash, `--installed DATE`
+    // and 16 words of two tokens (a record of 16 words with its date reads).
+    assert!(read(line_with(1).as_bytes()).problems.is_empty());
+    // (+web repeats are one word; the token limit is what is tested.)
+    let long = line_with(35);
+    assert!(read(long.as_bytes()).problems.is_empty(), "37 tokens");
+    assert_eq!(
+        read(line_with(36).as_bytes()).problems.len(),
+        1,
+        "38 tokens"
+    );
+    // 16 distinct words parse, 17 do not.
+    let words = |n: usize| -> Vec<String> {
+        (0..n)
+            .flat_map(|i| [String::from("+r"), alloc::format!("~/d{i}")])
+            .collect()
+    };
+    assert_eq!(parse_words(&words(16)).unwrap().len(), 16);
+    assert!(parse_words(&words(17)).is_err());
+    // A record of 16 words is stored, new or replaced, and 17 is not.
+    let mut a = app("ed", "");
+    a.words = parse_words(&words(16)).unwrap();
+    let bytes = put(b"", &a).unwrap();
+    assert_eq!(read(&bytes).get("ed").unwrap().words.len(), 16);
+    assert!(put(&bytes, &a).is_ok());
+    a.words.push(Word::Read("~/more".into()));
+    assert_eq!(put(&bytes, &a), Err(Refusal::TooMany));
+    assert_eq!(put(b"", &a), Err(Refusal::TooMany));
+    // A request keeps 16 words.
+    let req: String = (0..17).map(|i| alloc::format!("+r ~/d{i}\n")).collect();
+    assert_eq!(request_words(req.as_bytes()).len(), 16);
+}
+
+#[test]
+fn the_file_is_cut_at_the_last_whole_line() {
+    let one = line_with(1);
+    // Exactly the size, ending in a newline: no problem.
+    let mut exact = String::new();
+    while exact.len() + one.len() < crate::MAX_SIZE {
+        exact.push_str(&one.replace("ed ", "ed2 "));
+    }
+    let pad = crate::MAX_SIZE - exact.len();
+    exact.push_str(&"#".repeat(pad - 1));
+    exact.push('\n');
+    assert_eq!(exact.len(), crate::MAX_SIZE);
+    assert!(
+        read(exact.as_bytes())
+            .problems
+            .iter()
+            .all(|p| !p.problem.contains("256 KiB"))
+    );
+    // Over it: the partial last line is dropped, the whole ones before stay.
+    let kept = one.len() * 2;
+    let mut big = String::new();
+    big.push_str(&one);
+    big.push_str(&"#".repeat(crate::MAX_SIZE - kept - 1));
+    big.push('\n');
+    big.push_str(&one.replace("ed ", "zed "));
+    big.push_str(&"#".repeat(10));
+    let r = read(big.as_bytes());
+    assert!(r.get("ed").is_some_and(|a| a.words == vec![Word::Web]));
+    assert!(r.get("zed").is_none());
+    let cut = r
+        .problems
+        .iter()
+        .find(|p| p.problem.contains("256 KiB"))
+        .unwrap();
+    assert_eq!(cut.line, 3);
+}

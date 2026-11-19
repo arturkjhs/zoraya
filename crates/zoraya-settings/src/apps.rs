@@ -160,7 +160,7 @@ fn split_words(mut s: &str) -> Result<Vec<String>, &'static str> {
         }
         let (w, rest) = split_value(s)?;
         out.push(w);
-        if out.len() > 3 + 2 * MAX_WORDS {
+        if out.len() > 5 + 2 * MAX_WORDS {
             return Err("too many words");
         }
         s = rest;
