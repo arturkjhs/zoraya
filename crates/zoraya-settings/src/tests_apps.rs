@@ -684,3 +684,37 @@ fn the_instances_of_a_name_in_this_tree_and_elsewhere() {
     assert_eq!((here, elsewhere), (vec![2], 0));
     assert_eq!(instances_of(&all, "nobody"), (vec![], 0));
 }
+
+// Holes the mutation run found (10j).
+
+#[test]
+fn tokens_hex_and_the_names_of_words() {
+    assert_eq!(Word::Read("~".into()).token(), "+r");
+    assert_eq!(Word::Write("~".into()).token(), "+w");
+    assert_eq!(Word::Net("h".into()).token(), "+net");
+    assert_eq!(Word::Web.token(), "+web");
+    assert_eq!(Word::Own("~/x".into()).token(), "+own");
+    let d = sha256::hash(b"abc");
+    let hex = sha256::hex(&d);
+    assert_eq!(sha256::from_hex(&hex.to_uppercase()), Some(d));
+    let mixed: String = hex
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i % 2 == 0 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    assert_eq!(sha256::from_hex(&mixed), Some(d));
+    assert_eq!(sha256::from_hex(&"g".repeat(64)), None);
+    assert_eq!(sha256::from_hex(&"0".repeat(64)), Some([0; 32]));
+    assert_eq!(sha256::from_hex(&"f".repeat(64)), Some([255; 32]));
+    assert_eq!(sha256::from_hex(&"A".repeat(64)), Some([0xAA; 32]));
+    assert!(is_app_name("a") && is_app_name("a-1") && is_app_name(&"a".repeat(MAX_NAME)));
+    assert!(!is_app_name("-a") && !is_app_name("a_b") && !is_app_name("1a"));
+    assert!(meaning(&Word::Read("/home".into()), "/home").starts_with("~  read"));
+    assert!(meaning(&Word::Read("/home/x".into()), "/home").starts_with("~/x  read"));
+}

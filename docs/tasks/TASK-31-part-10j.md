@@ -53,3 +53,9 @@ where the step is skipped for time. For the 1.4 MiB program of ADR-0396's assump
   on the head in the merge report); I did not tag it.
 - `+w /` is refused as ADR-0396 item 2 says; `tests/shell/system-ro.script` changed (`+w /home`).
 - Hand check, in a desktop terminal: `mkdir p; ... install ./p +w ~/notes`, `programs`, `programs revoke NAME --all` (the commands of the script).
+
+## Results after the review, test-changed and mutation (2026-11-19)
+
+- `make test-changed` (HVF, PAR_QEMU=1) at 1b9b189e: host tests (32 binaries), test-boot, test-posix-gui, test-gui, test-net, test-apps, test-netsurf, test-python-serve passed; test-files (system-ro.script), test-posix (tour.script) and test-tour-gui failed from this part's changes (not flakes): fixed in 979af45b, rerun alone: `make test-files` RC=0, tour.script PASS 350, zosh-install.script PASS 207, `make test-tour-gui` PASS 925. `make test-tour-terminal` was not rerun.
+- Review: no errors, 7 warnings (5 fixed or recorded), changed-lines check 2 warnings (fixed), see `TASK-31-review-10j.md`.
+- Mutation, `--in-diff` against origin/main: zoraya-settings 306 mutants, 232 caught, 32 missed, 41 unviable, 1 timeout; the holes with a test (`Word::token`, upper-case hex, name form, `meaning`) got one, the rest are bounds (caps of 64 programs, 16 words, 256 KiB, the log's 64 KiB, `>` against `>=`) and left. zoraya-shell: 52 mutants, 33 caught, 6 missed, 13 unviable: `is_any` and the writable-entry test got tests; the `MAX_RULES` bound is left. The mutants were not rerun after the new tests, and no list in `tools/mutants/` was added.

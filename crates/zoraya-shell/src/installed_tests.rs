@@ -381,3 +381,23 @@ fn a_rooms_write_over_apps_is_refused_too() {
     }];
     assert!(refuse_apps_write(&ok).is_ok());
 }
+
+#[test]
+fn only_a_writable_entry_is_refused_and_any_is_any() {
+    let read = vec![Planned {
+        path: "/apps/ed".into(),
+        access: Access::Read,
+        reason: "+w".into(),
+    }];
+    assert!(refuse_apps_write(&read).is_ok());
+    let other = vec![Planned {
+        path: "/apps/ed".into(),
+        access: Access::Tree,
+        reason: "operand FILE".into(),
+    }];
+    assert!(refuse_apps_write(&other).is_ok());
+    use crate::netgrant::{is_any, parse_word};
+    assert!(is_any(&parse_word("any").unwrap()));
+    assert!(is_any(&parse_word("ANY:443").unwrap()));
+    assert!(!is_any(&parse_word("example.org").unwrap()));
+}
