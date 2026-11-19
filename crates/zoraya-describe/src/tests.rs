@@ -937,3 +937,52 @@ fn reach_data_and_rest_are_checked() {
         assert_eq!(t.problem, "a topic has only a summary and a body", "{key}");
     }
 }
+
+// ADR-0396 item 5 (INV-0396-2): what the shell reads of a description from
+// the volume.
+
+#[test]
+fn a_volume_description_has_only_the_help_keys() {
+    let ok = "name ed\nsummary s\nusage ed\noperand [F] read  f\noption -s --silent  q\nexit 0 fine\nquestion\n# c\n\n---\ndata x as ~/.x\n";
+    assert_eq!(volume_key_problem(ok.as_bytes()), None);
+    for key in [
+        "data ed as ~/.ed",
+        "needs net-status",
+        "program /bin/ed",
+        "cwd none",
+        "setting ed.x text a b",
+        "when a B read",
+        "net web",
+        "reach h tcp 22",
+        "window T",
+        "names a b",
+        "topic ed",
+    ] {
+        let text = format!("name ed\nsummary s\n{key}\n---\n");
+        let k = key.split(' ').next().unwrap();
+        assert_eq!(
+            volume_key_problem(text.as_bytes()),
+            Some((3, k.to_string())),
+            "{key}"
+        );
+    }
+    // Not UTF-8: the parser says so; the key check has nothing to add.
+    assert_eq!(volume_key_problem(b"\xff"), None);
+}
+
+#[test]
+fn for_volume_makes_every_kind_text_and_drops_authority() {
+    let text = "name ed\nsummary s\nusage ed F\noperand F create  f\noperand [D...] tree  d\noption -o --out F rename  where\nreach_none\n";
+    // (`reach_none` is not a key; the parser refuses the whole text.)
+    assert!(parse(text.as_bytes()).is_err());
+    let text = "name ed\nsummary s\nusage ed F\noperand F create  f\noperand [D...] tree  d\noption -o --out F rename  where\ndata ed as ~/.ed\nneeds net-status\nnet web\n";
+    let d = for_volume(parse(text.as_bytes()).unwrap());
+    assert!(d.operands.iter().all(|o| o.kind == Kind::Text));
+    assert!(
+        d.options
+            .iter()
+            .all(|o| o.argument.as_ref().is_none_or(|a| a.kind == Kind::Text))
+    );
+    assert!(d.data.is_none() && !d.net_web && !d.needs_net_status);
+    assert_eq!(d.name, "ed");
+}

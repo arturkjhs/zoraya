@@ -362,11 +362,15 @@ fn distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+pub mod apps;
 pub mod rooms;
+pub mod sha256;
 pub mod usage;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_apps;
 #[cfg(test)]
 mod tests_rooms;
 #[cfg(test)]
