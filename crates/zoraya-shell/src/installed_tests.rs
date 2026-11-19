@@ -330,3 +330,36 @@ fn the_network_words_make_one_scope() {
     assert_eq!(n.dropped, ["+net not a host"]);
     assert!(n.scope.is_some());
 }
+
+// --- INV-0396-5 and INV-0397-1: who may run the builtins and what may be saved ---
+
+#[test]
+fn install_and_programs_need_a_shell_that_holds_both_and_no_untrusted_room() {
+    assert_eq!(gate(false, true, true), None);
+    assert!(gate(true, true, true).unwrap().contains("untrusted"));
+    for (apps, config) in [(false, true), (true, false), (false, false)] {
+        assert!(
+            gate(false, apps, config)
+                .unwrap()
+                .contains("/apps and /config")
+        );
+    }
+    assert!(gate(true, false, false).unwrap().contains("untrusted"));
+}
+
+#[test]
+fn only_words_typed_on_the_line_are_saved() {
+    let typed = vec![Value::literal("+w"), Value::literal("~/notes")];
+    assert_eq!(literal_tokens(&typed).unwrap(), ["+w", "~/notes"]);
+    // A variable's value, a substitution's and a pipe's are data.
+    for data in ["+w", "~/notes", "+w ~/notes"] {
+        let mut v = typed.clone();
+        v[1] = Value::data(data);
+        let e = literal_tokens(&v).unwrap_err();
+        assert!(e.contains("variable, a substitution or a pipe"), "{e}");
+        let mut v = typed.clone();
+        v[0] = Value::data(data);
+        assert!(literal_tokens(&v).is_err());
+    }
+    assert_eq!(literal_tokens(&[]).unwrap(), Vec::<String>::new());
+}

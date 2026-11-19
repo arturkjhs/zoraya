@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use zoraya_settings::apps::{self, Apps, Word, expand};
 use zoraya_settings::sha256::Digest;
 
+use crate::eval::Value;
 use crate::grants::{Access, Own, Planned, Refused, USER_HOME};
 use crate::netgrant::{self, SavedNet};
 
@@ -95,6 +96,33 @@ pub fn refuse_apps_write(plan: &[Planned]) -> Result<(), Refused> {
         }
     }
     Ok(())
+}
+
+/// Why `install` or `programs` is refused here (ADR-0396 item 3, INV-0396-5):
+/// an untrusted room, or a shell that holds `/apps` or `/config` without the
+/// right to change it. `None`: allowed. A program cannot reach a builtin: only
+/// the shell's own terminal line runs one.
+pub fn gate(untrusted_room: bool, holds_apps: bool, holds_config: bool) -> Option<&'static str> {
+    if untrusted_room {
+        Some("not in an untrusted room")
+    } else if !holds_apps || !holds_config {
+        Some("this shell does not hold /apps and /config (open a terminal that does)")
+    } else {
+        None
+    }
+}
+
+/// The words of an `install` or `programs` line that may be saved: each one
+/// typed literally on the line (ADR-0397 item 2, INV-0397-1). The value of a
+/// variable, a substitution or a pipe is data, never a word to save.
+pub fn literal_tokens(values: &[Value]) -> Result<Vec<String>, String> {
+    if let Some(v) = values.iter().find(|v| !v.literal) {
+        return Err(format!(
+            "{}: from a variable, a substitution or a pipe: a saved word is typed on the line",
+            v.text
+        ));
+    }
+    Ok(values.iter().map(|v| v.text.clone()).collect())
 }
 
 /// What the shell holds and where it is, for [`apply`].

@@ -176,6 +176,8 @@ person sees every word they ever gave a program, in the words they typed.
 - Whether the Programs page should also install; it would need a chooser for the package directory, which is
   ADR-0167's grant path.
 
+- The Programs page of `settings` and INV-0399-4's check are not built (part 10j, ADR-0394 item 11): the settings window holds no `/config` and asks the panel for the rooms; the page needs a panel message and the panel the right to write the record, a decision of its own.
+
 ## Revisit triggers
 
 - A long-running installed program (the browser engine) whose users revoke often: Option C.

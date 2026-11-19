@@ -16,6 +16,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 | ADR | What | Recommendation | From |
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
+| ADR-0394 | 10j: what the installed-program part decided where ADR-0396, 0397 and 0399 are silent (the record's date, the name's form, the copy, a typed word, what a hand-edited record may do, `--kill`), and what it did not build: the Programs page of `settings` (INV-0399-4) and INV-0397-6's grant-line script | Option A now; the page as Option C, a part of its own (the panel writes the record through `zoraya_settings::apps`) | 10j |
 | ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 44), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
 | ADR-0410 | The first modern browser engine: WPE WebKit without a JIT (Ladybird if a Rust `std` target for POSIX programs is accepted) | Yours; the choice turns on the Rust policy | TASK-33 |
 
@@ -54,6 +55,10 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 - **10g, not built:** the `/data/ROOM` storage limit (ADR-0341 item 6), `scp` and `sftp`; a file held open for writing in an
   own directory stays writable in a child that inherits it (ADR-0393 item 13, before 10h's git hooks).
 
+- **10j, `+w /` is refused on every line** (ADR-0396 item 2, built as written): `tests/shell/system-ro.script` used it for "a wide grant does not reach /system" and uses `+w /home` now; `docs/tour.md` only sets a variable to that text.
+- **10j, the name of an installed program** is at most 24 bytes (the description's limit), not 32; `grant`, `revoke`, `remove`, a help topic, a name of `data-names.txt`, a program of `shell.path` and a stray `/apps/NAME` are refused (ADR-0394 item 2).
+- **10j, the hash covers the program then the description**, each behind an 8-byte length; the date is not in it.
+
 ## C. Hand checks (exact commands)
 
 1. **10a, xterm comparison** (ADR-0332 item 10): in an 80x24 xterm run `TERM=xterm-256color cat crates/zoraya-term/recordings/vi-edit.rec`
@@ -67,7 +72,7 @@ Last updated: 2026-11-18 (the architect's decisions of 2026-11-18 recorded; befo
 ## D. Open questions
 
 
-- **Volume programs:** ADR-0396, 0397 and 0399 are accepted; implementation is part 10j after 10g.
+- **Volume programs:** ADR-0396, 0397 and 0399 are accepted and built by part 10j (ADR-0394). Open: the Programs page of `settings`, the hint line after a job given something while it ran, INV-0397-6's script; and: `tools/ci-tests.txt` has a new line for `tests/posix/zosh-install.script` (candidate run for you to tag; a head is in the part report).
 
 
 

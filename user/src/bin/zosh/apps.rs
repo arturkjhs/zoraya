@@ -16,18 +16,6 @@ const MAX_ENTRIES: usize = 2000;
 const MAX_DEPTH: usize = 6;
 const MAX_BYTES: u64 = 256 << 20;
 
-/// The words of a line that may be saved: each token and its argument typed
-/// literally (INV-0397-1).
-fn literal_words(values: &[Value]) -> Result<Vec<String>, String> {
-    if let Some(v) = values.iter().find(|v| !v.literal) {
-        return Err(format!(
-            "{}: from a variable, a substitution or a pipe: a saved word is typed on the line",
-            v.text
-        ));
-    }
-    Ok(values.iter().map(|v| v.text.clone()).collect())
-}
-
 /// What `install` found while copying.
 #[derive(Default)]
 struct Copied {
@@ -48,20 +36,13 @@ impl Z {
     /// (INV-0396-5): an untrusted room, or a shell that does not hold both
     /// `/apps` and `/config`.
     fn apps_refusal(&self) -> Option<String> {
-        if self.room.as_ref().is_some_and(|r| r.untrusted) {
-            return Some(String::from("not in an untrusted room"));
-        }
-        let holds = self
-            .root
-            .as_ref()
-            .is_some_and(|h| h.covers("/apps", true) && h.covers("/config", true));
-        if holds {
-            None
-        } else {
-            Some(String::from(
-                "this shell does not hold /apps and /config (open a terminal that does)",
-            ))
-        }
+        let holds = |dir: &str| self.root.as_ref().is_some_and(|h| h.covers(dir, true));
+        plan::gate(
+            self.room.as_ref().is_some_and(|r| r.untrusted),
+            holds("/apps"),
+            holds("/config"),
+        )
+        .map(String::from)
     }
 
     fn read_apps(&self) -> Apps {
@@ -206,7 +187,7 @@ impl Z {
             .iter()
             .position(|v| v.text == package)
             .unwrap_or(values.len());
-        let tokens = match literal_words(values.get(at + 1..).unwrap_or(&[])) {
+        let tokens = match plan::literal_tokens(values.get(at + 1..).unwrap_or(&[])) {
             Ok(t) => t,
             Err(e) => return fail(io, None, &e, &[]),
         };
@@ -816,7 +797,7 @@ impl Z {
                 let Some(app) = record.get(&name).cloned() else {
                     return fail(io, Some(&name), "not an installed program", &[]);
                 };
-                let tokens = match literal_words(rest) {
+                let tokens = match plan::literal_tokens(rest) {
                     Ok(t) => t,
                     Err(e) => return fail(io, None, &e, &[]),
                 };
@@ -857,7 +838,7 @@ impl Z {
                 0
             }
             "revoke" => {
-                let tokens = match literal_words(rest) {
+                let tokens = match plan::literal_tokens(rest) {
                     Ok(t) => t,
                     Err(e) => return fail(io, None, &e, &[]),
                 };

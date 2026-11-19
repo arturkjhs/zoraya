@@ -113,6 +113,15 @@
 > tbx w /apps/tbx/x\r
 < no
 < \r\n~>
+> tbx w /apps/tbx/tbx.cmd\r
+< no
+< \r\n~>
+> tbx w /config/apps.log\r
+< no
+< \r\n~>
+> +w ~ tbx w /apps/tbx/x\r
+< no
+< \r\n~>
 > grants tbx r f.txt\r
 < tbx gets (a POSIX program):
 < /apps/tbx
