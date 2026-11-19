@@ -102,7 +102,7 @@ const HELP_STEPS_PER_ROUND: usize = (MAX_CONTIG_FRAMES / crate::steps::STEP as u
 /// the search, so a create is refused only when the reaper holds nothing. Churn
 /// that refills the queue as fast as the rounds empty it is bounded by this
 /// number, and every step of it is a step point, which a kill ends.
-fn contig_help_rounds() -> u64 {
+pub(crate) fn contig_help_rounds() -> u64 {
     stats().total / MAX_CONTIG_FRAMES + 2
 }
 
