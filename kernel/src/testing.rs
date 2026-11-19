@@ -3615,15 +3615,18 @@ fn a_run_the_reaper_frees_at_the_step_before_its_help_is_found() {
     assert!(none.is_err(), "every frame is taken");
     let daif = arch::save_and_mask_interrupts();
     crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    crate::steps::masked_max_units(true);
     let mut calls = 0;
     let got = frames::alloc_contig_in_steps(RUN, || {
         calls += 1;
-        if calls == points + 1 {
+        // The last step point of the dry run is the one before its help.
+        if calls == points {
             while crate::reaper::help() {}
         }
         test_step_point()
     });
     arch::restore_interrupts(daif);
+    crate::steps::masked_max_units(true);
     unhoard(head);
     let got = got.expect("the run the reaper freed at the step point (ADR-0349)");
     frames::free_contig(got, RUN);
