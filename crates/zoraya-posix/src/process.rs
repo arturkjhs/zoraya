@@ -11,6 +11,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use zoraya_abi::Status;
+use zoraya_abi::posix as abi;
 use zoraya_abi::posix::{
     Access, Bootstrap, EntryKind, FD_NONBLOCK, FD_READ, FD_WRITE, Facts, FdKind, MAX_REPORTS,
     Report,
@@ -282,10 +283,19 @@ pub struct Posix<S: Sys> {
     pub facts: Facts,
     pub exe: String,
     pub(crate) report: Option<S::H>,
+    /// The read end of the `GRANTS` channel (ADR-0337 item 7), read only when
+    /// a path is refused.
+    grants: Option<S::H>,
+    /// A path was refused in the call being made: a grant may have arrived.
+    refused_in_call: bool,
+    /// Network refusals already reported: target, port, access.
+    reported_net: Vec<(String, u16, u32)>,
     /// The process itself, with `WAIT`, from the bootstrap channel's second
     /// message (ADR-0107 item 5), for 6d's `REQUEST_PENDING` waits.
     pub self_handle: Option<S::H>,
-    reported: Vec<String>,
+    /// Refused paths already counted, with the access they were named for
+    /// (ADR-0337 item 1: once per path and access).
+    reported: Vec<(String, Access)>,
     report_dropped: u32,
     reports_sent: u32,
     pub(crate) scratch: Option<(S::H, u64)>,
@@ -391,6 +401,9 @@ impl<S: Sys> Posix<S> {
             facts,
             exe: String::new(),
             report: None,
+            grants: None,
+            refused_in_call: false,
+            reported_net: Vec::new(),
             self_handle: None,
             reported: Vec::new(),
             report_dropped: 0,
@@ -535,6 +548,16 @@ impl<S: Sys> Posix<S> {
         self.form = form;
     }
 
+    /// How many entries the table has.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// The read end of the channel the shell gives more files on.
+    pub fn set_grants(&mut self, end: Option<S::H>) {
+        self.grants = end;
+    }
+
     pub fn set_report(&mut self, end: Option<S::H>) {
         self.report = end;
     }
@@ -674,18 +697,31 @@ impl<S: Sys> Posix<S> {
         let Refusal::Outside(path) = refusal else {
             return refusal.errno();
         };
-        if self.reported.contains(&path) {
-            return ENOENT;
+        self.report_path(path, access);
+        ENOENT
+    }
+
+    /// Reports `path` (absolute and normal), once per path and access
+    /// (ADR-0153 rule 11, ADR-0337 item 1), and notes that a grant may now
+    /// have arrived for it.
+    fn report_path(&mut self, path: String, access: Access) {
+        self.refused_in_call = true;
+        if self
+            .reported
+            .iter()
+            .any(|(p, a)| *p == path && *a == access)
+        {
+            return;
         }
         let Some(end) = self.report else {
-            return ENOENT;
+            return;
         };
         if self.reports_sent >= MAX_REPORTS {
             // Remembered up to a bound, so a program that names many paths
             // outside its table costs neither memory nor time without end.
             self.report_dropped = self.report_dropped.saturating_add(1);
-            self.remember(path);
-            return ENOENT;
+            self.remember(path, access);
+            return;
         }
         let r = Report {
             access,
@@ -704,15 +740,141 @@ impl<S: Sys> Posix<S> {
             // Never waiting: a report that does not fit is dropped, counted.
             None => self.report_dropped = self.report_dropped.saturating_add(1),
         }
-        self.remember(path);
-        ENOENT
+        self.remember(path, access);
+    }
+
+    /// Reports a network request `netd` refused with `NotGranted` (ADR-0224
+    /// item 5), once per target, port and access, within the same 16 as the
+    /// paths. `target` is the name the program gave or a dotted address.
+    pub(crate) fn report_net(&mut self, target: &str, port: u16, access: abi::NetAccess) {
+        if self
+            .reported_net
+            .iter()
+            .any(|(t, p, a)| t == target && *p == port && *a == access as u32)
+        {
+            return;
+        }
+        if self.reported_net.len() < REMEMBERED {
+            self.reported_net
+                .push((target.to_string(), port, access as u32));
+        }
+        let Some(end) = self.report else {
+            return;
+        };
+        if self.reports_sent >= MAX_REPORTS {
+            self.report_dropped = self.report_dropped.saturating_add(1);
+            return;
+        }
+        let r = abi::NetReport {
+            access,
+            port,
+            target,
+        };
+        let mut bytes = [0u8; abi::NetReport::HEADER_SIZE + 253];
+        if let Some(size) = r.encode(&mut bytes)
+            && self.sys.channel_write(end, &bytes[..size], &[]).is_ok()
+        {
+            self.reports_sent += 1;
+            self.stats.reports += 1;
+        }
+    }
+
+    /// A service refused an open of what `r` names (`EACCES`: a name its
+    /// connection is not narrowed to, or a right it lacks): reported as a
+    /// path the program was not given (ADR-0337 item 1).
+    fn report_denied(&mut self, r: &Resolved, access: Access) {
+        let Some(entry) = self.entries.get(r.place.entry) else {
+            return;
+        };
+        let prefix = entry.prefix.trim_end_matches('/');
+        let path = if r.place.path.is_empty() {
+            if prefix.is_empty() {
+                "/".to_string()
+            } else {
+                prefix.to_string()
+            }
+        } else {
+            alloc::format!("{prefix}/{}", r.place.path)
+        };
+        if abi::is_absolute_normal(&path) && path.len() <= path::PATH_MAX {
+            self.report_path(path, access);
+        }
+    }
+
+    /// Takes what the shell gave the program since (ADR-0337 item 7): the
+    /// channel is read only when a path was refused, once, all that waits. An
+    /// entry for a prefix the table has replaces it; a new prefix is added
+    /// unless the table is full. Says whether the table changed; if it did,
+    /// the refusals start to be counted again.
+    fn take_grants(&mut self) -> bool {
+        let Some(end) = self.grants else {
+            return false;
+        };
+        let mut changed = false;
+        loop {
+            let mut buffer = vec![0u8; 4096];
+            let mut handles: Vec<S::H> = Vec::new();
+            let Ok(n) = self.sys.channel_read(end, &mut buffer, &mut handles) else {
+                break;
+            };
+            changed |= self.install_grants(&buffer[..n], handles);
+        }
+        if changed {
+            self.reported.clear();
+            self.reports_sent = 0;
+            self.report_dropped = 0;
+        }
+        changed
+    }
+
+    fn install_grants(&mut self, bytes: &[u8], handles: Vec<S::H>) -> bool {
+        let mut changed = false;
+        let mut used = vec![false; handles.len()];
+        if let Some(g) = abi::Grants::decode(bytes, handles.len()) {
+            for e in g.entries() {
+                let h = handles[usize::from(e.handle)];
+                // A program's own directory (ADR-0341 item 3) is never replaced:
+                // a grant at its prefix is dropped, whoever sent it.
+                if self
+                    .entries
+                    .iter()
+                    .any(|x| x.prefix == e.prefix && x.kind == EntryKind::Own)
+                {
+                    continue;
+                }
+                let same = self
+                    .entries
+                    .iter()
+                    .position(|x| x.prefix == e.prefix && x.kind.is_directory());
+                match same {
+                    // The connection the shell now sends holds the union; the
+                    // old one stays open (descriptors of the program may be
+                    // clones of it, and the table is bounded).
+                    Some(i) => self.entries[i].handle = Some(h),
+                    None if self.entries.len() < abi::MAX_TABLE => self.entries.push(Entry {
+                        prefix: e.prefix.to_string(),
+                        kind: EntryKind::Directory,
+                        handle: Some(h),
+                    }),
+                    None => continue,
+                }
+                used[usize::from(e.handle)] = true;
+                changed = true;
+            }
+        }
+        for (h, used) in handles.into_iter().zip(used) {
+            if !used {
+                self.sys.close(h);
+            }
+        }
+        changed
     }
 
     /// Keeps a refused path, so that it is never counted twice, up to
     /// `REMEMBERED` of them, whatever became of its report.
-    fn remember(&mut self, path: String) {
+    fn remember(&mut self, path: String, access: Access) {
         if self.reported.len() < REMEMBERED {
-            self.reported.push(path);
+            self.reported.push((path, access));
         }
     }
 
@@ -866,7 +1028,16 @@ impl<S: Sys> Posix<S> {
     ) -> Result<(Resolved, Opened<S::H>), i32> {
         let mut links = Links::default();
         loop {
-            match self.open_place(&r, flags, wanted, description, mode)? {
+            let outcome = match self.open_place(&r, flags, wanted, description, mode) {
+                Ok(o) => o,
+                Err(e) => {
+                    if e == EACCES {
+                        self.report_denied(&r, access);
+                    }
+                    return Err(e);
+                }
+            };
+            match outcome {
                 Outcome::Opened(o) => return Ok((r, o)),
                 Outcome::Link { remaining, target } => {
                     links.take()?;
@@ -955,6 +1126,17 @@ impl<S: Sys> Posix<S> {
 
     /// `openat` (ADR-0103, ADR-0014 rule 6).
     pub fn open(&mut self, dirfd: i32, path: &[u8], flags: u32, mode: u32) -> Result<i32, i32> {
+        self.refused_in_call = false;
+        let r = self.open_once(dirfd, path, flags, mode);
+        // A refusal in the call: the shell may have given the path since
+        // (ADR-0337 item 7). Resolved once more before it fails.
+        if r.is_err() && self.refused_in_call && self.take_grants() {
+            return self.open_once(dirfd, path, flags, mode);
+        }
+        r
+    }
+
+    fn open_once(&mut self, dirfd: i32, path: &[u8], flags: u32, mode: u32) -> Result<i32, i32> {
         let accmode = flags & o::ACCMODE;
         if accmode == 3
             || (flags & o::CREAT != 0
@@ -1689,6 +1871,15 @@ impl<S: Sys> Posix<S> {
         path: &[u8],
         flags: u32,
     ) -> Result<[u8; stat::SIZE], i32> {
+        self.refused_in_call = false;
+        let r = self.stat_once(dirfd, path, flags);
+        if r.is_err() && self.refused_in_call && self.take_grants() {
+            return self.stat_once(dirfd, path, flags);
+        }
+        r
+    }
+
+    fn stat_once(&mut self, dirfd: i32, path: &[u8], flags: u32) -> Result<[u8; stat::SIZE], i32> {
         if path.is_empty() && flags & AT_EMPTY_PATH != 0 {
             return self.fstat(dirfd);
         }

@@ -12,7 +12,7 @@
 
 pub mod paste;
 
-use zoraya_protocol::{Data, protocol};
+use zoraya_protocol::{Below, Data, protocol};
 
 pub const MAX_OUTPUT: usize = 4096;
 pub const MAX_INPUT: usize = 256;
@@ -20,6 +20,20 @@ pub const MAX_INPUT: usize = 256;
 pub const MAX_TITLE: usize = 240;
 /// The most bytes one `Paste` carries.
 pub const MAX_PASTE: usize = paste::MAX_CHUNK;
+/// The longest `Status` text, in bytes. The row holds fewer cells; the
+/// terminal cuts the text to the row and never draws past it.
+pub const MAX_STATUS: usize = 240;
+
+/// What the status row shows (ADR-0337 item 3, 5): `Notice` a refusal and
+/// the words `System+G: give` at its right end, `Plain` text alone, `Field`
+/// the grant line or the kill question, drawn as an edit field.
+pub const STATUS_NOTICE: u32 = 0;
+pub const STATUS_PLAIN: u32 = 1;
+pub const STATUS_FIELD: u32 = 2;
+/// The attention key's two meanings, ADR-0337 item 4 and ADR-0158 rule 3:
+/// System+G opens the grant line, System+K the kill offer.
+pub const ATTENTION_GIVE: u32 = 0;
+pub const ATTENTION_KILL: u32 = 1;
 
 protocol! {
     /// Shell to terminal, with no reply.
@@ -81,6 +95,27 @@ protocol! {
     message Scrollback = 8, handles 0 {
         lines: u32,
     }
+
+    /// Shell to terminal, out of band, no reply (ADR-0337 items 3 and 5):
+    /// the text of the status row, the one row below the grid that no output
+    /// sequence reaches. `kind` is `STATUS_NOTICE`, `STATUS_PLAIN` or
+    /// `STATUS_FIELD`; an empty text clears the row. The terminal draws
+    /// exactly these bytes as plain cells (a control character as a space)
+    /// and never from program output. A new ordinal under ADR-0052; `ttyd`
+    /// ignores it.
+    message Status<'a> = 9, handles 0 {
+        kind: Below<3>,
+        text: Data<'a, MAX_STATUS>,
+    }
+
+    /// Terminal to shell, out of band (ADR-0337 item 4): the compositor told
+    /// the terminal that the person pressed System+G (`ATTENTION_GIVE`) or
+    /// System+K (`ATTENTION_KILL`). Never input bytes; nothing a program
+    /// writes or is sent makes the terminal send it. A new ordinal under
+    /// ADR-0052.
+    message Attention = 10, handles 0 {
+        kind: Below<2>,
+    }
 }
 
 #[cfg(test)]
@@ -130,6 +165,41 @@ mod tests {
         });
         let length = encode(&Reinstate {}, 0, &mut out).unwrap();
         decode::<Reinstate>(&out[..length], 0).unwrap();
+        let status = Status {
+            kind: Below(STATUS_FIELD),
+            text: Data(b"give vi: +r ~/o"),
+        };
+        let length = encode(&status, 0, &mut out).unwrap();
+        assert_eq!(decode::<Status<'_>>(&out[..length], 0).unwrap().1, status);
+        exercise(&out[..length], |b| {
+            let _ = decode::<Status<'_>>(b, 0);
+        });
+        let bad = Status {
+            kind: Below(3),
+            text: Data(b""),
+        };
+        let length = encode(&bad, 0, &mut out).unwrap_or(0);
+        assert!(length == 0 || decode::<Status<'_>>(&out[..length], 0).is_err());
+        let long = [b'x'; MAX_STATUS + 1];
+        assert!(
+            encode(
+                &Status {
+                    kind: Below(STATUS_PLAIN),
+                    text: Data(&long)
+                },
+                0,
+                &mut out
+            )
+            .is_err()
+        );
+        let attention = Attention {
+            kind: Below(ATTENTION_KILL),
+        };
+        let length = encode(&attention, 0, &mut out).unwrap();
+        assert_eq!(decode::<Attention>(&out[..length], 0).unwrap().1, attention);
+        exercise(&out[..length], |b| {
+            let _ = decode::<Attention>(b, 0);
+        });
         let length = encode(&Scrollback { lines: 2000 }, 0, &mut out).unwrap();
         let (_, back) = decode::<Scrollback>(&out[..length], 0).unwrap();
         assert_eq!(back, Scrollback { lines: 2000 });

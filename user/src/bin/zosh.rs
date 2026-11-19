@@ -40,9 +40,9 @@ use zoraya_command::Parsed;
 use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
 use zoraya_proto_term::{
-    Input as TermInput, MAX_OUTPUT, MAX_PASTE, MAX_TITLE, Output as TermOutput, Paste as TermPaste,
-    Reinstate as TermReinstate, Restore as TermRestore, Scrollback as TermScrollback,
-    Size as TermSize, Title as TermTitle,
+    Attention as TermAttention, Input as TermInput, MAX_OUTPUT, MAX_PASTE, MAX_STATUS, MAX_TITLE,
+    Output as TermOutput, Paste as TermPaste, Reinstate as TermReinstate, Restore as TermRestore,
+    Scrollback as TermScrollback, Size as TermSize, Status as TermStatus, Title as TermTitle,
 };
 use zoraya_protocol::{Data, Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode};
 use zoraya_shell::crlf::Crlf;
@@ -51,10 +51,12 @@ use zoraya_shell::eval::{
     self, Exec, Found, Host, Io, LANGUAGE, Member, Pipe, Ran, Shell, Sink, State,
     function_description, pipeline_status,
 };
+use zoraya_shell::grantline;
 use zoraya_shell::grants;
 use zoraya_shell::jobs::{self, At, Exit, Jobs, State as JobState};
 use zoraya_shell::paste::{Reading, Routed};
 use zoraya_shell::record;
+use zoraya_shell::refusal;
 use zoraya_shell::syntax;
 use zoraya_shell::syntax::Stream;
 use zoraya_shell::tty_host::{self, Effect};
@@ -206,6 +208,31 @@ fn term_message<'m, M: Message<'m>>(m: &M) {
     }
 }
 
+/// An error written for the screen (`zosh: SUBJECT: PROBLEM` and hint lines)
+/// as one line for the status row: its first line without the `zosh: ` prefix.
+fn one_line(text: &str) -> String {
+    let first = text.lines().next().unwrap_or("");
+    String::from(first.strip_prefix("zosh: ").unwrap_or(first))
+}
+
+/// The status row's text, out of band (ADR-0337 items 3 and 5): at most
+/// `MAX_STATUS` bytes, cut at a character.
+fn send_status(kind: u32, text: &str) {
+    let Some(end) = terminal() else { return };
+    let mut cut = text.len().min(MAX_STATUS);
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let m = TermStatus {
+        kind: zoraya_protocol::Below(kind.min(2)),
+        text: Data(&text.as_bytes()[..cut]),
+    };
+    let mut out = [0u8; MAX_STATUS + 64];
+    if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
+        let _ = terminal_send(end, &out[..n]);
+    }
+}
+
 /// The discipline's clock: milliseconds of the monotonic clock.
 fn now_ms() -> u64 {
     clock_monotonic() / 1_000_000
@@ -221,6 +248,34 @@ fn show_processed(bytes: &[u8]) {
         None => {
             let _ = console_write(CONSOLE, bytes);
         }
+    }
+}
+
+/// This shell's own table, for the status row's words: nothing is opened for
+/// the program, and a link object is not followed (ADR-0337 item 3).
+struct LookUp<'a>(&'a Z);
+
+impl refusal::View for LookUp<'_> {
+    fn holds(&self, path: &str) -> bool {
+        self.0.root.as_ref().is_some_and(|h| h.covers(path, false))
+    }
+    fn exists(&self, path: &str) -> bool {
+        // A plain `open`, which follows no link object (ADR-0055).
+        self.0.open(path, 0).and_then(|f| f.stat()).is_ok()
+    }
+}
+
+/// What the grant line may give: what this shell holds (ADR-0337 item 6).
+struct Holds<'a>(&'a Z);
+
+impl grantline::Held for Holds<'_> {
+    fn path(&self, path: &str, write: bool) -> bool {
+        self.0.root.as_ref().is_some_and(|h| h.covers(path, write))
+    }
+    fn net(&self, _word: &str) -> bool {
+        // A host is not delivered to a running program (`give` says so before
+        // anything is checked), so the shell claims to hold none here.
+        false
     }
 }
 
@@ -347,6 +402,9 @@ struct Job {
     job: Handle,
     /// One per element of the pipeline, in order.
     processes: Vec<Handle>,
+    /// One per element, in order: a POSIX program's `GRANTS` channel and what
+    /// its table holds (ADR-0337 item 7); `None` for a native one.
+    granted: Vec<Option<Given>>,
     /// Each element's name, whether it is a question command, and the read
     /// end of its `REPORT` channel (ADR-0153 rule 11).
     elements: Vec<(String, bool, Option<Handle>)>,
@@ -361,10 +419,23 @@ struct Job {
     tmp: Option<String>,
 }
 
+/// What the shell keeps for one POSIX element so that the person can give it
+/// more while it runs (ADR-0337): the write end of its `GRANTS` channel, the
+/// what its table holds (what a grant must not shadow). Nothing
+/// of it outlives the job (INV-0337-4): the end closes with the job, the rest
+/// is dropped with it.
+struct Given {
+    tx: Handle,
+    held: zoraya_shell::delivery::Held,
+}
+
 impl Drop for Job {
     /// A background job's reports are not read (ADR-0158 rule 6 reports its
     /// end only): the channels go with it.
     fn drop(&mut self) {
+        for g in self.granted.drain(..).flatten() {
+            let _ = handle_close(g.tx);
+        }
         for (_, _, report) in &mut self.elements {
             if let Some(r) = report.take() {
                 let _ = handle_close(r);
@@ -407,6 +478,10 @@ enum Ready {
         /// The current directory below that entry.
         cwd: String,
         report: (Handle, Handle),
+        /// The `GRANTS` channel: the shell's write end, the program's read
+        /// end (ADR-0337 item 7), and the plan the table was made of.
+        grants: (Handle, Handle),
+        held: zoraya_shell::delivery::Held,
         /// A connection to `netd` for the program (ADR-0225 item 2), made
         /// with `narrow` from a literal `url` operand.
         net: Option<Handle>,
@@ -434,11 +509,12 @@ impl Ready {
                 image,
                 entries,
                 report,
+                grants,
                 net,
                 window,
                 ..
             } => {
-                for h in [image, report.0, report.1]
+                for h in [image, report.0, report.1, grants.0, grants.1]
                     .into_iter()
                     .chain(net)
                     .chain(window)
@@ -469,6 +545,14 @@ enum Waited {
 
 /// Port keys of the shell's stream ends: above every job's.
 const STREAM_KEY: u64 = 1 << 32;
+/// A job's report channels, read while it runs (ADR-0337 item 3): one key per
+/// element, `REPORT_KEY + 16 * job + element`; a wake only, the reading is
+/// `read_reports`'.
+const REPORT_KEY: u64 = 1 << 24;
+/// The most elements of a line whose reports are read live.
+const LIVE_ELEMENTS: usize = 16;
+/// The most report messages read from one element's channel in one wake.
+const MAX_REPORTS_PER_WAKE: usize = 32;
 /// Port keys of the terminal connections of POSIX programs: above every
 /// stream's (ADR-0331 item 2).
 const TTY_KEY: u64 = 1 << 48;
@@ -729,6 +813,12 @@ struct Z {
     next_stream: u64,
     /// The job in front, which gets the keys.
     foreground: Option<u32>,
+    /// The refusals the job in front reported since it last received a grant
+    /// (ADR-0337 items 1 and 3).
+    refusals: refusal::Pending,
+    /// What the jobs reported while they ran, for the hint after them: each
+    /// path as reported, with its access (ADR-0153 rule 11).
+    live: BTreeMap<u32, Vec<(usize, String, bool)>>,
     /// The discipline the shell hosts for its window (ADR-0331 Option B),
     /// with the lines it knows; a line is a job, by its number.
     tty: tty_host::Host<Handle>,
@@ -1405,18 +1495,23 @@ impl Z {
     }
 
     /// Rule 11: after a job, each refused path with the grant that allows it.
-    fn hints(&self, report: Handle, name: &str, line: Option<&str>) {
-        let mut seen: Vec<(String, bool)> = Vec::new();
+    fn hints(&self, report: Handle, name: &str, line: Option<&str>, mut seen: Vec<(String, bool)>) {
         let mut bytes = alloc::vec![0u8; 8192];
         let mut handles = [report; 1];
         while let Ok(sizes) = channel_read(report, &mut bytes, &mut handles) {
             for h in &handles[..sizes.handles as usize] {
                 let _ = handle_close(*h);
             }
-            if let Some(r) = posix::Report::decode(&bytes[..sizes.bytes as usize]) {
+            let message = &bytes[..sizes.bytes as usize];
+            if let Some(r) = posix::Report::decode(message) {
                 let write = r.access == posix::Access::Write;
                 if !seen.iter().any(|(p, _)| p == r.path) {
                     seen.push((r.path.into(), write));
+                }
+            } else if let Some(r) = posix::NetReport::decode(message) {
+                let key = format!("net:{}:{}", r.target, r.port);
+                if !seen.iter().any(|(p, _)| *p == key) {
+                    seen.push((key, false));
                 }
             }
         }
@@ -1424,8 +1519,43 @@ impl Z {
         let home = self.home();
         let mut dirs: Vec<String> = Vec::new();
         let mut text = String::new();
+        let mut hidden = false;
+        // A reported path is the program's own text: it is printed only after
+        // the filter of ADR-0337 item 2, which also gives the hint's grant
+        // words only characters a word needs no quoting for (INV-0337-5).
+        let name = refusal::program_name(name);
         for (path, write) in &seen {
-            let dir = split_last(path).0.to_string();
+            // A refused network request (ADR-0224 item 5): `net:HOST:PORT`.
+            if let Some(rest) = path.strip_prefix("net:") {
+                let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "0"));
+                let port: u16 = port.parse().unwrap_or(0);
+                match refusal::shown_target(host, port) {
+                    Some(t) => {
+                        let allow = match line {
+                            Some(line) => format!("+net {t} {line}"),
+                            None => format!("put +net {t} before {name} in the line"),
+                        };
+                        text.push_str(&format!(
+                            "  hint: {name} tried to reach {t}, which it was not given\n  to allow it: {allow}\n"
+                        ));
+                    }
+                    None => text.push_str(&format!(
+                        "  hint: {name} was refused a host that cannot be shown\n"
+                    )),
+                }
+                continue;
+            }
+            let Some(path) = refusal::shown_path(path) else {
+                if !hidden {
+                    hidden = true;
+                    text.push_str(&format!(
+                        "  hint: {name} was refused {}\n",
+                        refusal::CANNOT_SHOW
+                    ));
+                }
+                continue;
+            };
+            let dir = split_last(&path).0.to_string();
             if dirs.contains(&dir) {
                 continue;
             }
@@ -1445,7 +1575,7 @@ impl Z {
             };
             text.push_str(&format!(
                 "  hint: {name} tried to {verb} {}, which it was not given\n  to allow it: {allow}\n",
-                grants::shown(path, &home),
+                grants::shown(&path, &home),
             ));
         }
         if dirs.len() > 3 {
@@ -1656,6 +1786,7 @@ impl Z {
                 return Err(e);
             }
         };
+        let held = Self::held_of(&entries, &plan);
         let window = match self.posix_window(exec, path, &plan) {
             Ok(w) => w,
             Err(e) => {
@@ -1681,6 +1812,20 @@ impl Z {
                 return Err(fail(&zoraya_command::status_problem(s)));
             }
         };
+        let grants_channel = match channel_create() {
+            Ok(g) => g,
+            Err(s) => {
+                for h in core::iter::once(image)
+                    .chain(net)
+                    .chain(window)
+                    .chain([report.0, report.1])
+                    .chain(entries.iter().filter_map(|e| e.handle))
+                {
+                    let _ = handle_close(h);
+                }
+                return Err(fail(&zoraya_command::status_problem(s)));
+            }
+        };
         let given = grants::summary(&plan, &self.home());
         Ok((
             Ready::Posix {
@@ -1690,12 +1835,38 @@ impl Z {
                 cwd_entry,
                 cwd,
                 report,
+                grants: grants_channel,
+                held,
                 net,
                 window,
                 own_home,
             },
             given,
         ))
+    }
+
+    /// What a POSIX program's table holds, for what is given to it while it
+    /// runs (ADR-0337 item 7): each directory it holds whole with its rights,
+    /// and each name a directory is narrowed to. An entry with no connection
+    /// (the current directory's placeholder) holds nothing.
+    fn held_of(
+        entries: &[posix_child::Entry],
+        plan: &[grants::Planned],
+    ) -> zoraya_shell::delivery::Held {
+        use zoraya_abi::posix::EntryKind as P;
+        use zoraya_shell::delivery::TableKind;
+        let kind = |k: P| match k {
+            P::Directory => TableKind::Directory,
+            P::Tmp => TableKind::Tmp,
+            P::Own => TableKind::Own,
+            _ => TableKind::Other,
+        };
+        zoraya_shell::delivery::Held::from_table(
+            entries
+                .iter()
+                .map(|e| (e.prefix.as_str(), kind(e.kind), e.handle.is_some())),
+            &grants::merge(plan),
+        )
     }
 
     /// Whether a line for a POSIX program the image describes may run: a
@@ -2559,6 +2730,31 @@ impl Z {
                 Effect::Reinstate => term_message(&TermReinstate {}),
                 Effect::Question(Some(q)) => send_title_text(&q),
                 Effect::Question(None) => self.send_title(),
+                Effect::Status { kind, text } => send_status(kind, &text),
+                Effect::Kill { line } => {
+                    // The kill offer's Enter (ADR-0387 item 4): the line's
+                    // whole job, as the second Ctrl-C used to.
+                    if let Some(job) = self.jobs.get(line).map(|e| e.payload.job) {
+                        let _ = job_kill(job);
+                    }
+                }
+                Effect::Give {
+                    line,
+                    element,
+                    text,
+                } => {
+                    let answer = self.give(line, element, &text);
+                    let more = match &answer {
+                        Ok(words) => self.tty.gave(Ok(words)),
+                        Err(why) => self.tty.gave(Err(why)),
+                    };
+                    self.carry(more, None);
+                }
+                Effect::Complete { word } => {
+                    let candidates = self.complete_given(&word);
+                    let more = self.tty.completed(&candidates);
+                    self.carry(more, None);
+                }
             }
         }
         carried
@@ -2873,6 +3069,10 @@ impl Z {
         }
         if packet.key >= TTY_KEY {
             self.tty_event((packet.key - TTY_KEY) as usize);
+            return None;
+        }
+        // A report channel is readable: `wait_foreground` reads it each wake.
+        if (REPORT_KEY..STREAM_KEY).contains(&packet.key) {
             return None;
         }
         if packet.key >= STREAM_KEY {
@@ -3200,6 +3400,18 @@ impl Z {
                                 .queue("zosh: paste: dropped: too many are waiting\n".into());
                         }
                     }
+                    // System+G or System+K (ADR-0337 item 4): a mark in the key
+                    // stream, at its place, only while a line is in front.
+                    Ok(10) => {
+                        if let Ok((_, m)) = decode::<TermAttention>(bytes, 0)
+                            && self.tty.front().is_some()
+                        {
+                            self.paste.attention(
+                                m.kind.0 == zoraya_proto_term::ATTENTION_GIVE,
+                                &mut keys,
+                            );
+                        }
+                    }
                     Ok(3) => {
                         if let Ok((_, m)) = decode::<TermSize>(bytes, 0) {
                             self.columns = (m.columns as usize).clamp(1, 500);
@@ -3250,6 +3462,27 @@ impl Z {
         self.tty.tty.set_time(now_ms());
         let effects = self.tty.bring_front(number);
         self.carry(effects, None);
+        // The status row and the attention keys (ADR-0337): where this shell
+        // runs, the line's elements, and its report channels, whose messages
+        // wake the wait.
+        self.refusals.clear();
+        self.tty.set_scope(if terminal().is_none() {
+            tty_host::Scope::Console
+        } else if self.room.as_ref().is_some_and(|r| r.untrusted) {
+            tty_host::Scope::Untrusted
+        } else {
+            tty_host::Scope::Normal
+        });
+        if let Some(names) = self.jobs.get(number).map(|e| {
+            e.payload
+                .elements
+                .iter()
+                .map(|(n, _, _)| n.clone())
+                .collect()
+        }) {
+            self.tty.set_elements(number, names);
+        }
+        let watched = self.watch_reports(number);
         let tty_line = self.tty.takes_keys();
         let waited = 'wait: loop {
             // Keys typed ahead of the job reach it first.
@@ -3298,6 +3531,15 @@ impl Z {
             let Some(job) = self.jobs.get(number).map(|e| e.payload.job) else {
                 continue;
             };
+            // What the job reported is shown at once, and the attention
+            // keys and an open field take their keys before the job does
+            // (ADR-0337 items 3 to 5, INV-0337-2).
+            self.tty.set_clock(now_ms());
+            self.read_reports(number);
+            let keys = self.attention_keys(keys);
+            if keys.is_empty() {
+                continue;
+            }
             if self.tty.front() == Some(number) && self.tty.takes_keys() {
                 // A POSIX program has the terminal: every key goes through
                 // the discipline, which echoes, edits and signals as its
@@ -3326,6 +3568,8 @@ impl Z {
                             show("zosh: paste: dropped: it is gone\n");
                             continue;
                         }
+                        // Taken out before (`attention_keys`); never a key.
+                        Routed::Attention(_) => continue,
                     };
                     let carried = self.carry(effects, None);
                     ctrl_c |= carried.interrupt;
@@ -3393,9 +3637,357 @@ impl Z {
             }
             show_bytes(&echo);
         };
+        for key in watched {
+            let _ = port_unsubscribe(self.port, key);
+        }
         self.foreground = None;
         self.typed.clear();
         waited
+    }
+
+    // --- The status row and the grant line (ADR-0337) ---
+
+    /// Subscribes the report channels of job `number`'s elements, so that a
+    /// refusal wakes the wait; the keys, to unsubscribe at the end.
+    fn watch_reports(&mut self, number: u32) -> Vec<u64> {
+        let Some(entry) = self.jobs.get(number) else {
+            return Vec::new();
+        };
+        let wanted = channel_signals::READABLE;
+        let ends: Vec<(usize, Handle)> = entry
+            .payload
+            .elements
+            .iter()
+            .enumerate()
+            .take(LIVE_ELEMENTS)
+            .filter_map(|(i, (_, _, r))| r.map(|h| (i, h)))
+            .collect();
+        let mut keys = Vec::new();
+        for (i, end) in ends {
+            let key = REPORT_KEY + 16 * u64::from(number) + i as u64;
+            if port_subscribe(self.port, end, wanted, key, Mode::Level).is_ok() {
+                keys.push(key);
+            }
+        }
+        keys
+    }
+
+    /// Reads what job `number`'s programs reported since the last wake. A
+    /// report is the program's own text: it is kept for the hint after the
+    /// job, and for the front line shown only after the filter of
+    /// `zoraya_shell::refusal` (INV-0337-5).
+    fn read_reports(&mut self, number: u32) {
+        let Some(entry) = self.jobs.get(number) else {
+            return;
+        };
+        let ends: Vec<(usize, Handle)> = entry
+            .payload
+            .elements
+            .iter()
+            .enumerate()
+            .take(LIVE_ELEMENTS)
+            .filter_map(|(i, (_, _, r))| r.map(|h| (i, h)))
+            .collect();
+        let mut bytes = alloc::vec![0u8; 8192];
+        for (element, end) in ends {
+            let mut handles = [end; 1];
+            // At most this many a wake: a program writing as fast as it can
+            // must not keep the shell from its keys (the review of 10f,
+            // finding 4); the subscription wakes the loop again.
+            for _ in 0..MAX_REPORTS_PER_WAKE {
+                match channel_read(end, &mut bytes, &mut handles) {
+                    Ok(sizes) => {
+                        for h in &handles[..sizes.handles as usize] {
+                            let _ = handle_close(*h);
+                        }
+                        let message = &bytes[..sizes.bytes as usize];
+                        if let Some(r) = posix::Report::decode(message) {
+                            let path: String = r.path.into();
+                            self.note_refusal(
+                                number,
+                                element,
+                                &path,
+                                r.access == posix::Access::Write,
+                            );
+                        } else if let Some(r) = posix::NetReport::decode(message) {
+                            let target: String = r.target.into();
+                            self.note_net_refusal(number, element, &target, r.port);
+                        }
+                    }
+                    Err((Status::WouldBlock, _)) => break,
+                    Err(_) => {
+                        // The program's end is closed: nothing more comes.
+                        let _ = port_unsubscribe(
+                            self.port,
+                            REPORT_KEY + 16 * u64::from(number) + element as u64,
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// One report of element `element` of job `number`: kept for the hint,
+    /// and, for the line in front, worded by the shell's own lookup and shown
+    /// on the status row (ADR-0337 items 1 to 3).
+    fn note_refusal(&mut self, number: u32, element: usize, path: &str, write: bool) {
+        let seen = self.live.entry(number).or_default();
+        if seen.len() < 256
+            && !seen
+                .iter()
+                .any(|(e, p, w)| *e == element && p == path && *w == write)
+        {
+            seen.push((element, path.into(), write));
+        }
+        if self.tty.front() != Some(number) || !self.refusals.note(path, write, element) {
+            return;
+        }
+        self.show_latest(number);
+    }
+
+    /// A refused network request of element `element` (ADR-0224 item 5).
+    fn note_net_refusal(&mut self, number: u32, element: usize, target: &str, port: u16) {
+        let key = format!("net:{target}:{port}");
+        let seen = self.live.entry(number).or_default();
+        if seen.len() < 256 && !seen.iter().any(|(e, p, _)| *e == element && *p == key) {
+            seen.push((element, key, false));
+        }
+        if self.tty.front() != Some(number) || !self.refusals.note_net(target, port, element) {
+            return;
+        }
+        self.show_latest(number);
+    }
+
+    /// The latest refusal of the line in front, worded and shown on the row.
+    fn show_latest(&mut self, number: u32) {
+        let Some(r) = self.refusals.latest().cloned() else {
+            return;
+        };
+        let case = match &r.path {
+            Some(p) => refusal::classify(&LookUp(self), p),
+            None => refusal::Case::NotGiven,
+        };
+        let name = self
+            .jobs
+            .get(number)
+            .and_then(|e| e.payload.elements.get(r.element).map(|(n, _, _)| n.clone()))
+            .unwrap_or_default();
+        let text = refusal::notice(&name, &r, case, &self.home(), self.refusals.more());
+        let effects = self.tty.refusal(number, r.element, &text);
+        self.carry(effects, None);
+    }
+
+    /// The keys of a read, with the attention marks and an open field taken
+    /// out: what is left is for the program (or the job's keys). A key typed
+    /// before the mark is the program's; a key after it, while the field is
+    /// open, is the field's (INV-0337-1, INV-0337-2).
+    fn attention_keys(&mut self, keys: Vec<u8>) -> Vec<u8> {
+        if !self.tty.grant_open() && !keys.iter().any(|k| zoraya_shell::paste::is_attention(*k)) {
+            return keys;
+        }
+        let mut rest = Vec::new();
+        let mut run: Vec<u8> = Vec::new();
+        for k in keys {
+            if zoraya_shell::paste::is_attention(k) {
+                self.field_keys(&mut run);
+                let effects = self.tty.attention(k == zoraya_shell::paste::ATTENTION_GIVE);
+                self.carry(effects, None);
+            } else if self.tty.grant_open() {
+                if zoraya_shell::paste::is_mark(k) {
+                    self.field_keys(&mut run);
+                    if let Routed::Insert(text) = self.paste.route(k, Reading::Program) {
+                        let effects = self.tty.grant_paste(&text);
+                        self.carry(effects, None);
+                    }
+                } else {
+                    run.push(k);
+                }
+            } else {
+                rest.push(k);
+            }
+        }
+        self.field_keys(&mut run);
+        rest
+    }
+
+    /// Gives the open field the keys typed so far.
+    fn field_keys(&mut self, run: &mut Vec<u8>) {
+        if run.is_empty() {
+            return;
+        }
+        let effects = self.tty.grant_keys(run);
+        run.clear();
+        self.carry(effects, None);
+    }
+
+    /// Enter on the grant line: what its text parses to, resolved against
+    /// what this shell holds (ADR-0337 item 6), given to the one element's
+    /// program through its `GRANTS` channel (item 7); `Ok(words)` once sent.
+    /// Nothing is kept past the job (INV-0337-4).
+    fn give(&mut self, line: u32, element: usize, text: &str) -> Result<String, String> {
+        use zoraya_shell::delivery::{Spec, Wanted};
+        let home = self.home();
+        // A host is given on the grant line like a file (ADR-0337 item 6),
+        // but the delivery of a network connection is not built (proposed
+        // ADR-0395): said before anything is checked, so that nothing is
+        // claimed.
+        if text.split_ascii_whitespace().any(|w| w == "+net") {
+            return Err(String::from(
+                "+net cannot be given to a running program yet; start it with the grant instead",
+            ));
+        }
+        let gives = grantline::parse_give(text, &self.cwd, &home, &Holds(self))?;
+        let words = grantline::words(&gives, &home);
+        let mut wanted = Vec::new();
+        for g in &gives {
+            match g {
+                grantline::Give::Net(_) => {
+                    return Err(format!(
+                        "{words}: a host cannot be given to a running program yet"
+                    ));
+                }
+                grantline::Give::Path { path, write } => {
+                    let shown = refusal::hint_path(path, &home);
+                    let dir = match self.open(path, 0).and_then(|f| f.stat()) {
+                        Ok(s) => s.kind == proto_kind::DIRECTORY,
+                        Err(_) => return Err(format!("{shown}: does not exist")),
+                    };
+                    wanted.push(Wanted {
+                        path: path.clone(),
+                        dir,
+                        write: *write,
+                    });
+                }
+            }
+        }
+        let Some(mut trial) = self
+            .jobs
+            .get(line)
+            .and_then(|e| e.payload.granted.get(element))
+            .and_then(|g| g.as_ref().map(|g| g.held.clone()))
+        else {
+            return Err(format!(
+                "{words}: this program takes grants only when it starts"
+            ));
+        };
+        let specs = trial.give(&wanted)?;
+        // One message at most: a grant is made whole or not at all, so the row
+        // and the record never differ from what the program holds (the review
+        // of 10f, finding 5).
+        if specs.len() > zoraya_abi::posix::MAX_GRANTED {
+            return Err(format!(
+                "{words}: too many places for one line; give fewer at a time"
+            ));
+        }
+        // The connections: each directory opened from this shell's own root,
+        // whole or narrowed to its names, so that nothing is given that the
+        // shell does not hold.
+        let mut files: Vec<(String, File)> = Vec::new();
+        for spec in &specs {
+            let made = match spec {
+                Spec::Whole { prefix, rights } => self
+                    .open_entry(&grants::Merged {
+                        path: prefix.clone(),
+                        rights: *rights,
+                        name: None,
+                        lines: Vec::new(),
+                    })
+                    .map_err(|e| one_line(&e))
+                    .and_then(|o| match o {
+                        Some((f, native::EntryKind::Directory)) => Ok((prefix.clone(), f)),
+                        _ => Err(format!("{prefix}: not a directory")),
+                    }),
+                Spec::Names {
+                    prefix,
+                    names,
+                    rights,
+                } => self
+                    .open(prefix, OPEN_DIRECTORY)
+                    .map_err(|s| format!("{prefix}: {}", problem(s)))
+                    .and_then(|dir| {
+                        let list: Vec<(&str, u32)> =
+                            names.iter().map(|(n, r)| (n.as_str(), *r)).collect();
+                        dir.narrow_names(&list, *rights)
+                            .map_err(|s| format!("{prefix}: {}", problem(s)))
+                    })
+                    .map(|f| (prefix.clone(), f)),
+            };
+            files.push(made?);
+        }
+        let tx = self
+            .jobs
+            .get(line)
+            .and_then(|e| e.payload.granted.get(element))
+            .and_then(|g| g.as_ref().map(|g| g.tx))
+            .ok_or_else(|| String::from("the program has ended"))?;
+        let prefixes: Vec<(&str, u8)> = files
+            .iter()
+            .enumerate()
+            .map(|(i, (p, _))| (p.as_str(), i as u8))
+            .collect();
+        let mut bytes = [0u8; 4096];
+        let Some(n) = posix::Grants::encode(&prefixes, files.len(), &mut bytes) else {
+            return Err(format!("{words}: cannot be sent"));
+        };
+        let entries: Vec<ChannelEntry> = files
+            .iter()
+            .map(|(_, f)| ChannelEntry {
+                handle: f.end,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            })
+            .collect();
+        if channel_write(tx, &bytes[..n], &entries).is_err() {
+            return Err(format!("{words}: the program does not take it"));
+        }
+        // Moved: these handles are the program's now.
+        core::mem::forget(files);
+        if let Some(g) = self
+            .jobs
+            .get_mut(line)
+            .and_then(|e| e.payload.granted.get_mut(element))
+            .and_then(Option::as_mut)
+        {
+            g.held = trial;
+        }
+        if let Some(e) = self.jobs.get_mut(line) {
+            if !e.given.is_empty() {
+                e.given.push_str(", ");
+            }
+            e.given.push_str(&format!("{words} (given while running)"));
+        }
+        self.refusals.clear();
+        Ok(words)
+    }
+
+    /// The names of this shell's table that begin with `word`, for the grant
+    /// line's Tab: a path word of a `+r` or `+w`, as the person typed it.
+    fn complete_given(&self, word: &str) -> Vec<String> {
+        let home = self.home();
+        let expanded = if word == "~" {
+            home.clone()
+        } else if let Some(rest) = word.strip_prefix("~/") {
+            format!("{}/{rest}", home.trim_end_matches('/'))
+        } else {
+            word.to_string()
+        };
+        let abs = zoraya_resolve::join(&self.cwd, 0, &expanded);
+        let (dir, prefix) = if expanded.ends_with('/') {
+            (abs.clone(), "")
+        } else {
+            let (d, n) = split_last(&abs);
+            (d.to_string(), n)
+        };
+        let Ok(names) = self.entries(&dir) else {
+            return Vec::new();
+        };
+        let shown_dir = word.rfind('/').map_or("", |i| &word[..=i]);
+        names
+            .into_iter()
+            .filter(|(n, _)| n.starts_with(prefix))
+            .map(|(n, is_dir)| format!("{shown_dir}{n}{}", if is_dir { "/" } else { "" }))
+            .collect()
     }
 
     /// The suspend character for the line in front (ADR-0158 rule 4): the
@@ -3448,9 +4040,17 @@ impl Z {
         // A grant belongs before its own element (rule 3, review S11): a
         // pipeline's hint names the element instead of the whole line.
         let alone = entry.payload.elements.len() == 1;
-        for (name, _, report) in &mut entry.payload.elements {
+        let reported = self.live.remove(&entry.number).unwrap_or_default();
+        for (i, (name, _, report)) in entry.payload.elements.iter_mut().enumerate() {
             if let Some(r) = report.take() {
-                self.hints(r, name, alone.then_some(line.as_str()));
+                // What it reported while it ran (read live), then what is
+                // still on the channel.
+                let before: Vec<(String, bool)> = reported
+                    .iter()
+                    .filter(|(e, _, _)| *e == i)
+                    .map(|(_, p, w)| (p.clone(), *w))
+                    .collect();
+                self.hints(r, name, alone.then_some(line.as_str()), before);
             }
         }
         let captured = String::from_utf8_lossy(&entry.payload.captured).into_owned();
@@ -5323,6 +5923,7 @@ impl Host for Z {
         let streams = self.streams(number, pipe, &mut given);
         let mut processes = Vec::new();
         let mut elements = Vec::new();
+        let mut granted: Vec<Option<Given>> = Vec::new();
         let mut posix = Vec::new();
         let mut native = Vec::new();
         let mut failed = streams.as_ref().err().cloned();
@@ -5353,14 +5954,20 @@ impl Host for Z {
                         cwd_entry,
                         cwd,
                         report,
+                        grants: grants_channel,
+                        held,
                         net,
                         window,
                         own_home,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
+                        granted.push(Some(Given {
+                            tx: grants_channel.0,
+                            held,
+                        }));
                         if failed.is_some() {
-                            for h in [image, report.1]
+                            for h in [image, report.1, grants_channel.1]
                                 .into_iter()
                                 .chain(net)
                                 .chain(window)
@@ -5412,6 +6019,7 @@ impl Host for Z {
                             streams: *ends,
                             tty: term_out.map(|out| (*tty, out)),
                             report: report.1,
+                            grants: grants_channel.1,
                             net,
                             // Every program gets its own connection to the
                             // random service, with no word of the line's
@@ -5470,6 +6078,7 @@ impl Host for Z {
                 let report = table.map(|t| t.report);
                 let question = self.description(exec.name).is_some_and(|d| d.question);
                 elements.push((exec.name.to_string(), question, report));
+                granted.push(None);
                 match started {
                     Ok(p) => processes.push(p),
                     Err(s) if failed.is_none() => {
@@ -5506,6 +6115,7 @@ impl Host for Z {
         let record = Job {
             job,
             processes,
+            granted,
             elements,
             captured: Vec::new(),
             posix,
@@ -5949,6 +6559,8 @@ fn main() -> i32 {
         feeds: Vec::new(),
         next_stream: 0,
         foreground: None,
+        refusals: refusal::Pending::new(),
+        live: BTreeMap::new(),
         tty: tty_host::Host::new(),
         tty_ends: BTreeMap::new(),
         host: None,
@@ -6122,7 +6734,9 @@ fn main() -> i32 {
                         screen.add(&out);
                         continue;
                     }
-                    Routed::Dropped => continue,
+                    // No line is in front at the prompt: the grant line and the
+                    // kill offer have nothing to open (ADR-0337 item 5).
+                    Routed::Dropped | Routed::Attention(_) => continue,
                     Routed::Key(k) => editor.key(k, &mut out, &mut Helper { shell: &mut shell }),
                 };
                 screen.add(&out);

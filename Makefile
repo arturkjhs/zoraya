@@ -1576,7 +1576,7 @@ test-tour-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 # paste to it, on the tour's image at each size of POSIX_TERM_SIZES: a scale or
 # a WxH (the GUI sizes of test-gui; a big display has fewer than 24 rows, so
 # the script depends on none).
-POSIX_TERM_SCRIPTS := tests/gui/posix-terminal.script tests/gui/posix-curses.script
+POSIX_TERM_SCRIPTS := tests/gui/posix-terminal.script tests/gui/posix-curses.script tests/gui/posix-grant.script
 POSIX_TERM_SIZES ?= 1 2 1600x1000 1920x1200
 test-tour-terminal: $(POSIX_IMAGE_DEP) $(RUNNER)
 	@for script in $(POSIX_TERM_SCRIPTS); do for accel in $(POSIX_ACCELS); do for size in $(POSIX_TERM_SIZES); do \

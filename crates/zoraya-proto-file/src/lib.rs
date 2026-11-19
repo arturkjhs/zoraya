@@ -5,6 +5,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
 use zoraya_protocol::{Below, Data, Flags, Name, Path, Seq, Text, protocol};
 
 /// Largest read or write in a message (ADR-0055).
@@ -173,6 +175,17 @@ protocol! {
     message Narrow<'a> = 36, handles 1 {
         rights: Rights,
         name: Name<'a>,
+    }
+
+    /// `Narrow` for several names, each with its rights (ADR-0337 item 8,
+    /// ADR-0335 item 3): a new connection to this directory through which
+    /// requests may name only these, each with at most the rights listed for
+    /// it (and the connection's own `rights`, which must cover them all). The
+    /// list is [`narrow_names`]' encoding. It cannot list the directory.
+    /// Answered by `Done`. A new ordinal (ADR-0052; 44, after the socket calls' 41 to 43).
+    message NarrowNames<'a> = 44, handles 1 {
+        rights: Rights,
+        names: Data<'a, { narrow_names::MAX_BYTES }>,
     }
 
     message Read = 3, handles 0 {
@@ -500,7 +513,7 @@ protocol! {
 pub const MAX_SOCKET_RECORD: usize = 64;
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 43] = [
+pub const REQUESTS: [(&str, u32); 44] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -544,7 +557,57 @@ pub const REQUESTS: [(&str, u32); 43] = [
     ("socket_listen", 41),
     ("socket_connect", 42),
     ("socket_connect_stream", 43),
+    ("narrow_names", 44),
 ];
+
+/// The list of names of `NarrowNames`: for each, its rights as 4 bytes
+/// little-endian, its length as one byte, and its bytes; at most
+/// [`MAX_NAMES`](narrow_names::MAX_NAMES) names, no two alike. Total on any input.
+pub mod narrow_names {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    pub const MAX_NAMES: usize = 16;
+    pub const MAX_BYTES: usize = MAX_NAMES * (4 + 1 + 255);
+
+    /// The names with their rights, or `None` if one is not a valid name or
+    /// the list does not fit.
+    pub fn encode(names: &[(&str, u32)]) -> Option<Vec<u8>> {
+        if names.is_empty() || names.len() > MAX_NAMES {
+            return None;
+        }
+        let mut out = Vec::new();
+        for (i, (name, rights)) in names.iter().enumerate() {
+            if !super::Name::is_valid(name) || names[..i].iter().any(|(n, _)| n == name) {
+                return None;
+            }
+            out.extend_from_slice(&rights.to_le_bytes());
+            out.push(u8::try_from(name.len()).ok()?);
+            out.extend_from_slice(name.as_bytes());
+        }
+        Some(out)
+    }
+
+    /// The list as `encode` wrote it; `None` for anything else.
+    pub fn decode(bytes: &[u8]) -> Option<Vec<(String, u32)>> {
+        let mut out: Vec<(String, u32)> = Vec::new();
+        let mut at = 0;
+        while at < bytes.len() {
+            let rights = u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?);
+            let len = usize::from(*bytes.get(at + 4)?);
+            let name = core::str::from_utf8(bytes.get(at + 5..at + 5 + len)?).ok()?;
+            if !super::Name::is_valid(name)
+                || out.iter().any(|(n, _)| n == name)
+                || out.len() == MAX_NAMES
+            {
+                return None;
+            }
+            out.push((name.into(), rights));
+            at += 5 + len;
+        }
+        (!out.is_empty()).then_some(out)
+    }
+}
 
 /// `fifo_open`'s side.
 pub mod fifo_side {
@@ -583,6 +646,51 @@ mod tests {
         assert_eq!(back, message);
         exercise(&out[..length], |bytes| {
             let _ = decode::<M>(bytes, handles);
+        });
+    }
+
+    #[test]
+    fn a_narrow_list_round_trips_and_is_total() {
+        let list = [
+            ("notes.txt", rights::READ | rights::WRITE),
+            ("other.txt", rights::READ),
+        ];
+        let bytes = narrow_names::encode(&list).unwrap();
+        let back = narrow_names::decode(&bytes).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[1], ("other.txt".into(), rights::READ));
+        // No empty list, no repeated or invalid name, no more than the bound.
+        assert!(narrow_names::encode(&[]).is_none());
+        assert!(narrow_names::encode(&[("a", 1), ("a", 2)]).is_none());
+        assert!(narrow_names::encode(&[("a/b", 1)]).is_none());
+        assert!(narrow_names::encode(&[("", 1)]).is_none());
+        let many: Vec<(std::string::String, u32)> = (0..=narrow_names::MAX_NAMES)
+            .map(|i| (std::format!("n{i}"), 1))
+            .collect();
+        let refs: Vec<(&str, u32)> = many.iter().map(|(n, r)| (n.as_str(), *r)).collect();
+        assert!(narrow_names::encode(&refs).is_none());
+        assert!(narrow_names::decode(&[]).is_none());
+        // Every truncation and every one-byte change of a valid list.
+        for cut in 0..bytes.len() {
+            let _ = narrow_names::decode(&bytes[..cut]);
+        }
+        for i in 0..bytes.len() {
+            for v in [0u8, 1, 0x2f, 0xff] {
+                let mut b = bytes.clone();
+                b[i] = v;
+                let _ = narrow_names::decode(&b);
+            }
+        }
+        let mut out = [0; 2048];
+        let m = NarrowNames {
+            rights: Flags(rights::READ),
+            names: Data(&bytes),
+        };
+        let length = encode(&m, 1, &mut out).unwrap();
+        let (_, back) = decode::<NarrowNames<'_>>(&out[..length], 1).unwrap();
+        assert_eq!(back, m);
+        exercise(&out[..length], |b| {
+            let _ = decode::<NarrowNames<'_>>(b, 1);
         });
     }
 

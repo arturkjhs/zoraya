@@ -2155,6 +2155,140 @@ fn narrow(r: &mut Rig, dir: End, name: &str, wanted: u32) -> (u32, End) {
     (r.done(dir, &m, vec![end]).0, end)
 }
 
+fn narrow_list(r: &mut Rig, dir: End, list: &[(&str, u32)], wanted: u32) -> (u32, End) {
+    let end = r.net.channel();
+    let bytes = proto::narrow_names::encode(list).expect("a valid list");
+    let m = proto::NarrowNames {
+        rights: Flags(wanted),
+        names: Data(&bytes),
+    };
+    (r.done(dir, &m, vec![end]).0, end)
+}
+
+/// ADR-0337 item 8: a connection narrowed to a list of names, each with its
+/// rights, opens those names with at most their rights and nothing else; it
+/// cannot list, and a narrower list from it stays within it.
+#[test]
+fn a_connection_narrowed_to_a_list_gives_each_name_its_own_rights() {
+    let mut r = rig();
+    let root = r.root;
+    for n in ["notes.txt", "other.txt", "secret.txt"] {
+        let f = r.open(root, n, open_flags::CREATE);
+        r.write_text(f, 0, 0, b"x");
+    }
+    let rw = rights::READ | rights::WRITE | rights::SYNC | rights::CLONE;
+    let ro = rights::READ | rights::CLONE;
+    let (s, n) = narrow_list(&mut r, root, &[("notes.txt", rw), ("other.txt", ro)], rw);
+    assert_eq!(s, status::OK);
+    let denied = status::ACCESS_DENIED;
+    assert_eq!(
+        r.try_open(n, "notes.txt", 0, rights::READ | rights::WRITE)
+            .0,
+        status::OK
+    );
+    assert_eq!(r.try_open(n, "other.txt", 0, rights::READ).0, status::OK);
+    assert_eq!(
+        r.try_open(n, "other.txt", 0, rights::READ | rights::WRITE)
+            .0,
+        denied
+    );
+    assert_eq!(r.try_open(n, "secret.txt", 0, rights::READ).0, denied);
+    assert_eq!(r.try_open(n, "new.txt", open_flags::CREATE, rw).0, denied);
+    let reply = r.call(n, &proto::ReadDirectory { cookie: 0 }, vec![]);
+    assert_eq!(status_of(&reply), denied);
+    // A narrower list from it, but not a wider one or another name.
+    assert_eq!(
+        narrow_list(&mut r, n, &[("other.txt", ro)], ro).0,
+        status::OK
+    );
+    assert_eq!(narrow_list(&mut r, n, &[("other.txt", rw)], rw).0, denied);
+    assert_eq!(narrow_list(&mut r, n, &[("secret.txt", ro)], ro).0, denied);
+    // The connection's own rights must cover the list's.
+    assert_eq!(
+        narrow_list(&mut r, root, &[("notes.txt", rw)], ro).0,
+        denied
+    );
+    // A clone keeps the list.
+    let c = r.net.channel();
+    let m = proto::Clone { rights: Flags(ro) };
+    assert_eq!(r.done(n, &m, vec![c]).0, status::OK);
+    assert_eq!(r.try_open(c, "secret.txt", 0, rights::READ).0, denied);
+    assert_eq!(r.try_open(c, "other.txt", 0, rights::READ).0, status::OK);
+    // A malformed list is refused, not a panic.
+    let end = r.net.channel();
+    let m = proto::NarrowNames {
+        rights: Flags(ro),
+        names: Data(b"\x01\x00\x00\x00\x09ab"),
+    };
+    assert_ne!(r.done(root, &m, vec![end]).0, status::OK);
+}
+
+/// The review of 10f, finding 2: a right one name of a list holds is not another's
+/// for any request that names something (`Remove`, `MakeDirectory`, `MakeLink`,
+/// `Rename` from and to, `Publish` through a token), not only for `open`.
+#[test]
+fn a_list_gives_remove_rename_and_the_rest_to_the_names_that_hold_them() {
+    let mut r = rig();
+    let root = r.root;
+    for n in ["a.txt", "b.txt"] {
+        let f = r.open(root, n, open_flags::CREATE);
+        r.write_text(f, 0, 0, b"x");
+    }
+    let denied = status::ACCESS_DENIED;
+    let ro = rights::READ | rights::CLONE;
+    let all = rights::READ | rights::RENAME | rights::CREATE | rights::REMOVE | rights::CLONE;
+    let (s, n) = narrow_list(&mut r, root, &[("a.txt", all), ("b.txt", ro)], all);
+    assert_eq!(s, status::OK);
+    // b.txt is read only: it cannot be removed, made, linked, renamed over or from.
+    let rm_b = proto::Remove {
+        name: Name("b.txt"),
+    };
+    assert_eq!(r.done(n, &rm_b, vec![]).0, denied);
+    assert_eq!(
+        r.try_open(root, "b.txt", 0, rights::READ).0,
+        status::OK,
+        "still there"
+    );
+    let mk = proto::MakeDirectory {
+        mode: 0o755,
+        name: Name("b.txt"),
+    };
+    assert_eq!(r.done(n, &mk, vec![]).0, denied);
+    let ln = proto::MakeLink {
+        name: Name("b.txt"),
+        target: zoraya_protocol::Text("a.txt"),
+    };
+    assert_eq!(r.done(n, &ln, vec![]).0, denied);
+    let token = token_of(&mut r, n);
+    let onto = proto::Rename {
+        mode: Below(0),
+        old: Name("a.txt"),
+        new: Name("b.txt"),
+    };
+    assert_eq!(
+        r.done(n, &onto, vec![token]).0,
+        denied,
+        "a rename onto b.txt"
+    );
+    let token = token_of(&mut r, n);
+    let from = proto::Rename {
+        mode: Below(0),
+        old: Name("b.txt"),
+        new: Name("a.txt"),
+    };
+    assert_eq!(
+        r.done(n, &from, vec![token]).0,
+        denied,
+        "a rename from b.txt"
+    );
+    assert_eq!(r.try_open(root, "b.txt", 0, rights::READ).0, status::OK);
+    // a.txt holds them: its own removal works.
+    let rm_a = proto::Remove {
+        name: Name("a.txt"),
+    };
+    assert_eq!(r.done(n, &rm_a, vec![]).0, status::OK);
+}
+
 /// ADR-0055's note (ADR-0153 rule 2): a narrowed connection names its one
 /// name and nothing else, cannot list, cannot widen, and its clones and
 /// shares stay narrowed; "create or replace" works through it.

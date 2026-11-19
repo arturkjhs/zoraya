@@ -75,7 +75,10 @@ pub mod slot {
     /// fd 0's handle: slot 0 holds none, so fd 0 is the one fd not at its
     /// number (ADR-0190).
     pub const FD0: Handle = Handle(1005);
-    pub const ALL: [Handle; 6] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT, FD0];
+    /// The read end of the channel the shell gives a running program more
+    /// files on (ADR-0337 item 7): messages of [`crate::posix::Grants`].
+    pub const GRANTS: Handle = Handle(1006);
+    pub const ALL: [Handle; 7] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT, FD0, GRANTS];
 
     /// The slot that holds fd `fd`'s handle: its number, but fd 0's.
     pub const fn of_fd(fd: u32) -> u32 {
@@ -630,6 +633,183 @@ pub fn encode(
     }
     let size = at;
     Bootstrap::decode(&out[..size], handles).map(|_| size)
+}
+
+/// The most entries a program's table holds, counting those the shell gives
+/// it later (ADR-0337 item 7; the limit of ADR-0107).
+pub const MAX_TABLE: usize = 64;
+/// The most entries one `GRANTS` message carries.
+pub const MAX_GRANTED: usize = 4;
+const GRANTS_MAGIC: &[u8; 4] = b"ZGR1";
+
+/// One message on the `GRANTS` channel (ADR-0337 item 7): directory entries
+/// to add to the table, each with its connection among the message's
+/// handles. An entry for a prefix the table has replaces it (the shell sends
+/// the whole entry, with the rights and names it now holds).
+///
+/// ```text
+/// magic "ZGR1", count u32, then count times:
+///   kind u8 (0, a directory), handle u8, 2 zero bytes, prefix length u32, prefix
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grants<'a> {
+    entries: &'a [u8],
+    count: usize,
+}
+
+/// A prefix the table may be given on this channel: not `/`, and not the
+/// process's own files and devices, nor the temporary directory.
+fn grantable(prefix: &str) -> bool {
+    is_absolute_normal(prefix)
+        && prefix != "/"
+        && !["/dev", "/proc", "/tmp"].iter().any(|p| {
+            prefix == *p
+                || prefix
+                    .strip_prefix(p)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
+impl<'a> Grants<'a> {
+    pub const HEADER_SIZE: usize = 8;
+
+    /// Decodes a message that came with `handles` handles. Any input gives a
+    /// result, never a panic: a count above [`MAX_GRANTED`], an entry that is
+    /// not a directory, a prefix that is not absolute and normal or that is
+    /// `/`, `/dev`, `/proc` or `/tmp` or below one, a handle index used twice
+    /// or not in the message, or bytes left over, is `None`.
+    pub fn decode(bytes: &'a [u8], handles: usize) -> Option<Grants<'a>> {
+        if bytes.get(..4)? != GRANTS_MAGIC {
+            return None;
+        }
+        let count = u32_at(bytes, 4)? as usize;
+        if count == 0 || count > MAX_GRANTED {
+            return None;
+        }
+        let mut at = Grants::HEADER_SIZE;
+        let mut used = 0u64;
+        for _ in 0..count {
+            let head = bytes.get(at..at.checked_add(ENTRY_HEADER)?)?;
+            let (prefix, end) = string_at(bytes, at + 4)?;
+            let index = head[1];
+            if head[0] != EntryKind::Directory as u8
+                || head[2..4] != [0, 0]
+                || !grantable(prefix)
+                || usize::from(index) >= handles.min(MAX_MESSAGE_HANDLES)
+                || used & (1 << index) != 0
+            {
+                return None;
+            }
+            used |= 1 << index;
+            at = end;
+        }
+        (at == bytes.len()).then_some(Grants {
+            entries: &bytes[Grants::HEADER_SIZE..],
+            count,
+        })
+    }
+
+    /// Writes a message of `entries` (prefix and the index of its connection
+    /// among `handles`), and gives its size; `None` if it does not fit or
+    /// `decode` would refuse it.
+    pub fn encode(entries: &[(&str, u8)], handles: usize, out: &mut [u8]) -> Option<usize> {
+        let mut at = 0usize;
+        let mut put = |bytes: &[u8]| -> Option<()> {
+            let end = at.checked_add(bytes.len())?;
+            out.get_mut(at..end)?.copy_from_slice(bytes);
+            at = end;
+            Some(())
+        };
+        put(GRANTS_MAGIC)?;
+        put(&u32::try_from(entries.len()).ok()?.to_le_bytes())?;
+        for (prefix, handle) in entries {
+            put(&[EntryKind::Directory as u8, *handle, 0, 0])?;
+            put(&u32::try_from(prefix.len()).ok()?.to_le_bytes())?;
+            put(prefix.as_bytes())?;
+        }
+        let size = at;
+        Grants::decode(&out[..size], handles).map(|_| size)
+    }
+
+    /// The entries, each as a namespace entry with the index of its handle.
+    pub fn entries(&self) -> Entries<'a> {
+        Entries {
+            bytes: self.entries,
+            left: self.count,
+        }
+    }
+}
+
+const NET_REPORT_MAGIC: &[u8; 4] = b"ZPN1";
+
+/// What a refused network call asked for (ADR-0224 item 5).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetAccess {
+    Reach = 0,
+    Listen = 1,
+}
+
+/// One message on the `REPORT` channel for a network request `netd` answered
+/// `NotGranted` (ADR-0224 item 5): the host or address the program named, the
+/// port (0 for a lookup), and what it wanted. Like a path report it is the
+/// program's own text and is hostile data: the decoder accepts only a host
+/// name or dotted address (ASCII letters, digits, `.`, `-`, `_`, at most 253),
+/// and the shell filters it again before it shows it.
+///
+/// ```text
+/// magic "ZPN1", access u32, port u32, the target's bytes to the end
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetReport<'a> {
+    pub access: NetAccess,
+    pub port: u16,
+    pub target: &'a str,
+}
+
+/// Whether `text` is a host name or a dotted address: 1 to 253 of ASCII
+/// letters, digits, `.`, `-` and `_`.
+pub fn is_host_text(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 253
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+impl<'a> NetReport<'a> {
+    pub const HEADER_SIZE: usize = 12;
+
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        if !is_host_text(self.target) {
+            return None;
+        }
+        let size = NetReport::HEADER_SIZE.checked_add(self.target.len())?;
+        let out = out.get_mut(..size)?;
+        out[..4].copy_from_slice(NET_REPORT_MAGIC);
+        out[4..8].copy_from_slice(&(self.access as u32).to_le_bytes());
+        out[8..12].copy_from_slice(&u32::from(self.port).to_le_bytes());
+        out[12..].copy_from_slice(self.target.as_bytes());
+        Some(size)
+    }
+
+    pub fn decode(bytes: &'a [u8]) -> Option<NetReport<'a>> {
+        if bytes.get(..4)? != NET_REPORT_MAGIC {
+            return None;
+        }
+        let access = match u32_at(bytes, 4)? {
+            0 => NetAccess::Reach,
+            1 => NetAccess::Listen,
+            _ => return None,
+        };
+        let port = u16::try_from(u32_at(bytes, 8)?).ok()?;
+        let target = core::str::from_utf8(bytes.get(NetReport::HEADER_SIZE..)?).ok()?;
+        is_host_text(target).then_some(NetReport {
+            access,
+            port,
+            target,
+        })
+    }
 }
 
 /// The access a refused path was named for (ADR-0153 rule 11).

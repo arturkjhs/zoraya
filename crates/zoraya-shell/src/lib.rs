@@ -10,14 +10,17 @@
 extern crate alloc;
 
 pub mod crlf;
+pub mod delivery;
 pub mod editor;
 pub mod eval;
 pub mod glob;
+pub mod grantline;
 pub mod grants;
 pub mod jobs;
 pub mod netgrant;
 pub mod paste;
 pub mod record;
+pub mod refusal;
 pub mod syntax;
 pub mod terminal;
 pub mod tty_host;
@@ -33,6 +36,8 @@ mod lang_tests;
 #[cfg(test)]
 #[path = "netgrant_tests.rs"]
 mod netgrant_tests;
+#[cfg(test)]
+mod status_tests;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

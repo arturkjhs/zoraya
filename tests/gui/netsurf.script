@@ -129,6 +129,10 @@ pause 3000
 click 300 87
 pause 500
 type echo closed3\r
+# The two refusals above now print their hints at once (a write refused inside a read-only
+# entry is reported since 10f: ADR-0337 item 1), which scrolls the screen by more lines than the
+# row of `closed2` allowed for: the row is read from the top.
+window
 screen closed3
 # ADR-0324: the web grant. `grants` says it in words (on a clear screen: with
 # /system/fonts its lines reach past the window's last row).
@@ -227,6 +231,9 @@ pause 3000
 click 300 87
 pause 500
 type echo closed-web\r
+# Read from the top: a refusal inside an entry prints its hint since 10f (see closed3), which scrolls
+# the screen past the row an earlier step matched; the text must still be on the screen.
+window
 screen closed-web
 # ADR-0328 (INV-0328-1): a URL on another port than 80 and 443. Its name's
 # answer is public (two.web.test, relayed on 8080 to the server): the
@@ -243,6 +250,9 @@ pause 3000
 click 300 87
 pause 500
 type echo closed-port\r
+# Read from the top: a refusal inside an entry prints its hint since 10f (see closed3), which scrolls
+# the screen past the row an earlier step matched; the text must still be on the screen.
+window
 screen closed-port
 # A name whose only answer is private (lan.web.test, 10.0.2.2 in net.hosts)
 # on port 8080: the same rule refuses its lookup, and the page names the host
@@ -258,6 +268,9 @@ pause 3000
 click 300 87
 pause 500
 type echo closed-lan\r
+# Read from the top: a refusal inside an entry prints its hint since 10f (see closed3), which scrolls
+# the screen past the row an earlier step matched; the text must still be on the screen.
+window
 screen closed-lan
 type poweroff\r
 exit

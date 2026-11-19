@@ -40,8 +40,9 @@ screen Type help to begin, or help tour.
 prefix project ~/project> _
 click 400 120
 type memhog\r
-prefix memhog: refused after 9
+prefix memhog: refused after
 prefix project ~/project> _
+# The amount refused at varies by a few KiB from run to run (8960 and 9088 seen), so only the refusal is read; limits.script reads the room's limit.
 # The first terminal's shell enters the same room: a hog started there is
 # refused at the same point, since the room has one job.
 click 400 80
@@ -50,7 +51,7 @@ origin 73 106
 type room project\r
 prefix project ~/project> _
 type memhog\r
-prefix memhog: refused after 9
+prefix memhog: refused after
 prefix project ~/project> _
 shot one-job
 type room --leave\r

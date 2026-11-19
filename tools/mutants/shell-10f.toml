@@ -1,0 +1,68 @@
+# Part 10f (TASK-31), hand mutations of the status row, the grant line's parser and guard and the
+# delivery's rules; each is killed by the test named in its note. Host tests only. Not run by 10f
+# (the dispatcher schedules `make mutants-host`).
+tests = ["cargo test -q -p zoraya-shell --lib status_tests", "cargo test -q -p zoraya-shell --lib tty_host", "cargo test -q -p zoraya-abi grants_message", "cargo test -q -p zoraya-posix --test files"]
+timeout = 300
+
+[[mutant]]
+id = "F-guard-zero"
+file = "crates/zoraya-shell/src/grantline.rs"
+find = "pub const GUARD_MS: u64 = 500;"
+replace = "pub const GUARD_MS: u64 = 0;"
+note = "10f: enter_within_the_guard_gives_nothing"
+
+[[mutant]]
+id = "F-plus-word-is-a-path"
+file = "crates/zoraya-shell/src/grantline.rs"
+find = "                if expanded.starts_with('+') {"
+replace = "                if false {"
+note = "10f: a_grant_line_reads_no_variable_no_substitution_and_no_pattern (`+r +w`)"
+
+[[mutant]]
+id = "F-shadow-allowed"
+file = "crates/zoraya-shell/src/delivery.rs"
+find = "covers(q, &w.path) && *q != w.path"
+replace = "covers(q, &w.path) && false"
+note = "10f: a_grant_never_shadows_or_replaces_what_the_program_holds_whole"
+
+[[mutant]]
+id = "F-long-path-shown"
+file = "crates/zoraya-shell/src/refusal.rs"
+find = "    if n.len() > MAX_SHOWN || !n.chars().all(allowed) {"
+replace = "    if !n.chars().all(allowed) {"
+note = "10f: hostile_reports_are_not_shown (4096 bytes, the bound)"
+
+[[mutant]]
+id = "F-untrusted-gives"
+file = "crates/zoraya-shell/src/tty_host.rs"
+find = "        if give && self.scope == Scope::Untrusted {"
+replace = "        if false {"
+note = "10f: with_no_line_in_front_on_the_console_or_in_an_untrusted_room_the_key_gives_nothing"
+
+[[mutant]]
+id = "F-grants-accept-tmp"
+file = "crates/zoraya-abi/src/posix.rs"
+find = "&& ![\"/dev\", \"/proc\", \"/tmp\"].iter().any(|p| {"
+replace = "&& ![\"/dev\", \"/proc\"].iter().any(|p| {"
+note = "10f: a_message_round_trips_and_refuses_what_it_must (/tmp is never given on this channel)"
+
+[[mutant]]
+id = "F-grants-any-kind"
+file = "crates/zoraya-abi/src/posix.rs"
+find = "head[0] != EntryKind::Directory as u8"
+replace = "false"
+note = "10f review 9: only_a_directory_entry_is_added"
+
+[[mutant]]
+id = "F-report-count-not-restarted"
+file = "crates/zoraya-posix/src/process.rs"
+find = "            self.reports_sent = 0;"
+replace = ""
+note = "10f review 9: the_limit_of_sixteen_reports_restarts_after_a_grant (cargo test -p zoraya-posix --test files)"
+
+[[mutant]]
+id = "F-pending-unbounded"
+file = "crates/zoraya-shell/src/refusal.rs"
+find = "        if self.seen.len() >= MAX_PENDING {\n            self.overflow = self.overflow.saturating_add(1);\n            return false;\n        }\n        self.seen.push(Refusal {\n            path: shown_path(path),"
+replace = "        self.seen.push(Refusal {\n            path: shown_path(path),"
+note = "10f review 9: refusals_are_counted_per_path_and_access_and_restart_after_a_grant (the 65th report)"

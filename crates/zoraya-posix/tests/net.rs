@@ -359,6 +359,50 @@ fn resolve_statuses_become_getaddrinfo_codes() {
     }
 }
 
+/// ADR-0224 item 5: a request `netd` answers `NotGranted` is reported, once
+/// per target, port and access, as the program named it (a name, or a dotted
+/// address); another refusal is not.
+#[test]
+fn a_network_refusal_is_reported_once_per_target() {
+    use zoraya_abi::posix::{NetAccess, NetReport};
+    let mut t = rigged(Script {
+        connecting: status::NOT_GRANTED,
+        resolve: (status::NOT_GRANTED, vec![]),
+        ..Script::default()
+    });
+    let fd = stream(&mut t.r);
+    assert_eq!(t.r.p.connect(fd, &addr(EXAMPLE, 80)), Err(EACCES));
+    let fd = stream(&mut t.r);
+    assert_eq!(t.r.p.connect(fd, &addr(EXAMPLE, 80)), Err(EACCES));
+    let e =
+        t.r.p
+            .lookup(Some(b"example.org"), None, &Hints::default())
+            .unwrap_err();
+    assert_eq!(e.errno, EACCES);
+    let mut got = Vec::new();
+    let mut buffer = vec![0u8; 512];
+    let mut handles = vec![];
+    while let Ok(n) =
+        t.r.p
+            .sys
+            .channel_read(t.r.reports, &mut buffer, &mut handles)
+    {
+        let r = NetReport::decode(&buffer[..n]).expect("a net report");
+        got.push((r.target.to_string(), r.port, r.access));
+    }
+    let dotted = format!(
+        "{}.{}.{}.{}",
+        EXAMPLE[0], EXAMPLE[1], EXAMPLE[2], EXAMPLE[3]
+    );
+    assert_eq!(
+        got,
+        vec![
+            (dotted, 80, NetAccess::Reach),
+            ("example.org".to_string(), 0, NetAccess::Reach)
+        ]
+    );
+}
+
 #[test]
 fn a_refused_connect_is_the_errno_of_its_status_or_reason() {
     for (st, errno) in [
