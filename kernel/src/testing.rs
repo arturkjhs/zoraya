@@ -3734,8 +3734,10 @@ fn a_create_under_churn_is_refused_within_the_round_cap() {
     let scan = points - 1;
     let rounds = frames::contig_help_rounds();
     // Per round: a scan, the rescan's point, the point before the help and
-    // one after each of its steps.
-    let bound = (rounds + 1) * (scan + 2 + 16);
+    // one after each of its steps; twice that, since the churn changes the
+    // scan's length (measured: 1.2 times). Without the cap the create does
+    // not end: the step point cancels it at twice the bound.
+    let bound = 2 * (rounds + 1) * (scan + 2 + 16);
     let mut calls = 0;
     let got = frames::alloc_contig_in_steps(RUN, || {
         calls += 1;
