@@ -70,7 +70,9 @@ pub fn launch<'a>(record: &'a Apps, name: &str, loaded: &Digest) -> Launch<'a> {
 /// the reason `+w` (possibly with a link's note after it).
 pub fn refuse_apps_write(plan: &[Planned]) -> Result<(), Refused> {
     for e in plan {
-        if !e.reason.starts_with("+w") || e.access != Access::Tree {
+        if !(e.reason.starts_with("+w") || e.reason.starts_with("room "))
+            || e.access != Access::Tree
+        {
             continue;
         }
         let path = e.path.trim_end_matches('/');

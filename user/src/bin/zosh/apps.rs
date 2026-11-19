@@ -249,7 +249,8 @@ impl Z {
         let record_bytes = self.apps_bytes();
         let record = apps::read(&record_bytes);
         let existing = record.get(&name).cloned();
-        let stray = existing.is_none() && self.open(&format!("/apps/{name}"), 0).is_ok();
+        let stray =
+            existing.is_none() && self.open(&format!("/apps/{name}"), OPEN_DIRECTORY).is_ok();
         let taken = if existing.is_some() {
             None
         } else {
@@ -318,15 +319,24 @@ impl Z {
                 return fail(io, Some(package), &e, &[]);
             }
         };
-        if existing.is_some() {
-            remove_tree(&apps_dir, &name);
-        }
-        let to = self.open(&format!("/apps/{building}"), OPEN_DIRECTORY);
-        let renamed = to.and_then(|_| apps_dir.rename(&building, &apps_dir, &name));
-        if let Err(s) = renamed {
+        // The old package is put aside, not removed, until the new one is in
+        // place: a failed rename puts it back (ADR-0394 item 4).
+        let aside = format!(".old-{name}");
+        remove_tree(&apps_dir, &aside);
+        if existing.is_some()
+            && let Err(s) = apps_dir.rename(&name, &apps_dir, &aside)
+        {
             remove_tree(&apps_dir, &building);
             return fail(io, Some(&name), &problem(s), &[]);
         }
+        if let Err(s) = apps_dir.rename(&building, &apps_dir, &name) {
+            if existing.is_some() {
+                let _ = apps_dir.rename(&aside, &apps_dir, &name);
+            }
+            remove_tree(&apps_dir, &building);
+            return fail(io, Some(&name), &problem(s), &[]);
+        }
+        remove_tree(&apps_dir, &aside);
         // The record.
         let (date, _) = self.wall_time();
         let mut saved = words.clone();
@@ -838,6 +848,9 @@ impl Z {
                 0
             }
             "revoke" => {
+                if record.get(&name).is_none() {
+                    return fail(io, Some(&name), "not an installed program", &[]);
+                }
                 let tokens = match plan::literal_tokens(rest) {
                     Ok(t) => t,
                     Err(e) => return fail(io, None, &e, &[]),
@@ -1045,7 +1058,7 @@ impl Z {
             ));
             1
         };
-        let stray = self.open(&format!("/apps/{name}"), 0).is_ok();
+        let stray = self.open(&format!("/apps/{name}"), OPEN_DIRECTORY).is_ok();
         if record.get(name).is_none() && !(stray && apps::is_app_name(name)) {
             return fail(io, "not an installed program", &[]);
         }

@@ -95,7 +95,12 @@ the two rules every choice below was held to.
     one-line hint `to keep this for NAME: programs grant NAME WORD` after a job that was given something while it ran
     (ADR-0397 item 7, ADR-0399 item 6); `+own` and `+net` for a native program; a lock for two shells that run
     `programs` at once (the revisit trigger of ADR-0399).
-12. **Measured.** SHA-256 at launch, 64.3 MB program, HVF on the M4: about 0.15 s on top of a load of about 1.0 s (the
+12. **Known gaps found in review (`docs/tasks/TASK-31-review-10j.md`).** Only a typed `+w` and a room's `+w` are refused over
+    `/apps` and `/`; a redirect, a `cp` or `rm` operand into `/apps` is the person's typed word and is let through (the hash
+    catches the change). The package's own `NAME.cmd` gives the name: a package of an installed name replaces it, and
+    `--keep` gives it that program's words (the output says `replaces`). A glob that expands to a directory name counts as
+    typed for `programs grant`. `room new` accepts `+w /`.
+13. **Measured.** SHA-256 at launch, 64.3 MB program, HVF on the M4: about 0.15 s on top of a load of about 1.0 s (the
     same file by its path): about 440 MB/s. The install of that file (copy and hash) took 1.7 s. Not measured under TCG.
 
 ## Consequences

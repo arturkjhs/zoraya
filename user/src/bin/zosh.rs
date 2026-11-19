@@ -1333,13 +1333,20 @@ impl Z {
                 root.and_then(|r| r.link_target(abs).ok().flatten())
             })
         });
-        let planned = planned.and_then(|p| {
-            // ADR-0396 item 2: installed programs are changed with install.
-            zoraya_shell::installed::refuse_apps_write(&p).map(|()| p)
-        });
         match planned {
             Ok(mut p) => {
                 self.add_room_grants(&mut p);
+                // ADR-0396 item 2: installed programs are changed with install
+                // (a typed `+w` and a room's, checked after the room's are added).
+                if let Err(r) = zoraya_shell::installed::refuse_apps_write(&p) {
+                    let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+                    return Err(zoraya_command::error(
+                        "zosh",
+                        Some(&r.subject),
+                        &r.problem,
+                        &hints,
+                    ));
+                }
                 Ok(p)
             }
             Err(r) => {
