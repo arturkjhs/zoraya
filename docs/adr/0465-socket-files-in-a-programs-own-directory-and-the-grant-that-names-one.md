@@ -1,6 +1,6 @@
 # ADR-0465: Socket files in a program's own directory, and the grant that names one (`+sock`)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-19
 - **Depends on:** ADR-0107, ADR-0153, ADR-0341, ADR-0393, ADR-0396, ADR-0397, ADR-0412, ADR-0430, ADR-0439
 - **Evidence:** CP-01, CP-02, DM-039
@@ -130,4 +130,6 @@ was not given it has no path to it. The person sees the grant in `grants` as `co
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-19. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted with its stated limits, including the saved `+sock` word as a narrow exception to ADR-0397 item 1. The review's error (the place rule of `bind` is enforced only by `libposix`) is to be closed, not only recorded: a `BIND` right carried only by the own-directory and `/tmp` connections, checked by the file service when a socket node is made, so that a program without `libposix` cannot plant one elsewhere; a small part (`work/bind-right`) with a test from a raw-call program, before `work/rust-std`. The volume's shared 256 nodes and 64 listeners become per-room bounds in F11 (still queued, a gate condition).
