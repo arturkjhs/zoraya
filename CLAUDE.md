@@ -141,6 +141,13 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
   `build/logs/`) or the `test-runner` subagent, and mutation tests with `make mutants` (survivors in
   `build/mutants/report.md`) and the `mutant-triage` subagent (`.claude/agents/`). Open a log only when its step
   failed.
+- Merging into `main` is the dispatcher's job, under the architect's standing permission (the merge form above). A
+  subagent never pushes `main`: it pushes its own branch, reports the head, and the dispatcher merges it (architect's
+  rule of 2026-11-19).
+- A local `make test-changed` that fails only in `cpu_ceiling_from_a_process` (`t_cpu.rs`, the masked-time limit) or in
+  `kernel_work_is_bounded` (`t_bound`) while other QEMU runs share the machine does not block a merge; the test must
+  pass in the scheduled runs. Report the failure with its numbers (architect's decision of 2026-11-19; a part to make
+  `cpu_ceiling_from_a_process` robust to host load, as `t_bound` was, is queued).
 - A dispatcher never waits without a wake-up (architect's rule of 2026-11-19; a dispatcher idled for hours on an agent
   that had stopped). Before it waits on an agent or a run, it starts a background command `sleep 1800` (or a Monitor
   with a 30-minute limit). When that ends, it checks every agent's branch on origin, its log (the `RC=` line, or the
