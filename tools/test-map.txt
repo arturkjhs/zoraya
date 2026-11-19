@@ -182,6 +182,9 @@ ports/patches/git/            test-apps test-hand-run
 ports/patches/mbedtls/        test-apps test-hand-run
 ports/git/                    test-apps test-hand-run
 tests/shell/apps-git.script   test-apps
+tests/shell/apps-git-hooks.script test-apps
+tests/net/tls-git/            test-apps
+tools/check-dependencies.sh   check
 tools/test-apps-git.sh        test-apps
 user/describe/posix/git.cmd   test-apps test-files
 user/describe/posix/git-clone.cmd test-apps test-files
