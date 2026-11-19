@@ -475,6 +475,7 @@ dependencies = [
  "zoraya-proto-term",
  "zoraya-proto-tty",
  "zoraya-resolve",
+ "zoraya-settings",
  "zoraya-tty",
  "zoraya-width",
 ]
