@@ -43,7 +43,7 @@ need() { # what, arguments...: the netdev must have restrict=on and ipv6=off
 }
 need "a test with --net" --test --net
 need "a test with --net and guestfwd" --test --net --net-guestfwd 10.0.2.50:80=/bin/true
-need "a test with --net and --net-forward" --test --net --net-forward 47015
+need "a test with --net and --net-forward" --test --net --net-forward auto:${TMPDIR:-/tmp}/check-net-open-fwd.$$
 need "a test with --net and --net-pcap" --test --net --net-pcap /dev/null
 need "a test with --net, a subnet and guestfwd" --test --net --net-subnet 203.0.113.0/24 --net-guestfwd 203.0.113.50:80=/bin/true
 need "a GUI test with --net" --test --gui --net --net-guestfwd 10.0.2.50:80=/bin/true
@@ -146,4 +146,54 @@ if command -v python3 >/dev/null 2>&1; then
 		case $nd in *,ipv6=off*) ;; *) fail "--net-open has no ipv6=off ($nd)" ;; esac
 	fi
 fi
+# 7. No fixed host port (TASK-31 part host-ports): the host side of every forward is chosen by
+#    the OS, so that two runs on one machine do not collide. (a) No `--net-forward` takes a
+#    number in the Makefile or in tools/*.sh; (b) every test server is started with `--port 0`;
+#    (c) N run-qemu.sh at once, each with QEMU replaced by a stub that binds the hostfwd port
+#    it was given and holds it, all get a port, all binds succeed, all ports differ, and the
+#    guest side of the forward is the fixed 47015; (d) net-poke.sh reads the port from the file.
+if grep -nE -e '--net-forward[ =][0-9]' -e '--net-forward \$\(' Makefile tools/*.sh | grep -v -e 'check-net-open.sh' -e '^[^:]*:[0-9]*:#'; then
+	fail "a --net-forward with a fixed host port"
+fi
+if grep -nE -e '(HTTPD|TEST_DNS)[^|;]* --port [1-9]' Makefile tools/*.sh; then fail "a test server with a fixed --port"; fi
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-host-ports.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+cat >"$tmp/stub" <<'STUB'
+#!/bin/sh
+# Stands in for QEMU: binds the host side of the hostfwd of its -netdev, holds it for a moment, and
+# prints "HOSTPORT GUESTPORT" to the file named by $STUB_OUT.
+nd=$(printf '%s\n' "$@" | grep -A1 '^-netdev$' | tail -1)
+exec perl -MIO::Socket::INET -e '
+	my $nd = shift; my $out = shift;
+	$nd =~ /hostfwd=tcp:127\.0\.0\.1:(\d+)-10\.0\.2\.15:(\d+)/ or die "no hostfwd in $nd\n";
+	my $s = IO::Socket::INET->new(Listen => 1, LocalAddr => "127.0.0.1", LocalPort => $1, Proto => "tcp") or die "bind $1: $!\n";
+	open(my $o, ">", $out) or die; print $o "$1 $2\n"; close $o;
+	select(undef, undef, undef, 1.5);' "$nd" "$STUB_OUT"
+STUB
+chmod +x "$tmp/stub"
+n=12
+i=0
+while [ $i -lt $n ]; do
+	( QEMU="$tmp/stub" STUB_OUT="$tmp/out.$i" tools/run-qemu.sh --test --net --net-forward "auto:$tmp/port.$i" --accel tcg Makefile >/dev/null 2>"$tmp/err.$i" || echo "run $i failed" >"$tmp/bad.$i" ) &
+	i=$((i + 1))
+done
+wait
+[ -z "$(ls "$tmp" | grep '^bad\.')" ] || fail "a concurrent run-qemu.sh with --net-forward auto failed: $(cat "$tmp"/err.* | head -3)"
+ports=$(cat "$tmp"/out.* | awk '{print $1}' | sort -u | wc -l | tr -d ' ')
+[ "$ports" = "$n" ] || fail "$n concurrent run-qemu.sh got $ports distinct host ports"
+[ "$(cat "$tmp"/out.* | awk '{print $2}' | sort -u)" = 47015 ] || fail "the guest side of the forward is not 47015"
+for i in 0 1; do
+	[ "$(cat "$tmp/port.$i")" = "$(awk '{print $1}' "$tmp/out.$i")" ] || fail "the port file is not the port QEMU got"
+done
+# net-poke.sh waits for the file and connects to the port in it.
+perl -MIO::Socket::INET -e '
+	my $s = IO::Socket::INET->new(Listen => 1, LocalAddr => "127.0.0.1", LocalPort => 0, Proto => "tcp") or die;
+	open(my $o, ">", "$ARGV[0].tmp") or die; print $o $s->sockport, "\n"; close $o; rename "$ARGV[0].tmp", $ARGV[0];
+	alarm 10; my $c = $s->accept or exit 1; exit 0;' "$tmp/poke-port" &
+srv=$!
+tools/net-poke.sh "$tmp/poke-port" 10 &
+poke=$!
+wait $srv || fail "net-poke.sh did not connect to the port in the file"
+kill $poke 2>/dev/null || true
+wait $poke 2>/dev/null || true
 echo "check-net-open: ok ($(echo "$used" | wc -l | tr -d ' ') definitions without restrict=on, all listed; every guestfwd is a relay to 127.0.0.1; loopback wrapper: $confined)"

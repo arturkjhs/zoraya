@@ -58,6 +58,14 @@
 #   --net-forward PORT    with --net: forward 127.0.0.1:PORT on the host to the
 #                         guest's 10.0.2.15:PORT (tools/net-poke.sh connects to it,
 #                         so that SLIRP sends the guest an ARP who-has)
+#   --net-forward auto:FILE  the same, but the host's port is chosen by the OS
+#                         (a bind to port 0, read back, closed just before QEMU is
+#                         started) and written to FILE (by rename, so that a reader
+#                         sees all of it); the guest's port is 47015. Two runs on one
+#                         machine never name the same port (tools/check-host-ports.sh).
+#                         The window between the close and QEMU's bind is a few
+#                         milliseconds: if another process takes the port in it,
+#                         QEMU fails to start and the step fails (a known limit).
 #   --net-capture-all     with --net-pcap: whole frames, for benchmarks only
 #   --net-subnet A.B.C.0/24  with --net: QEMU's network is that /24 instead of
 #                         10.0.2.0/24 (the guest at .15, the host at .2, the DNS
@@ -123,6 +131,7 @@ gui_size=
 net=0
 net_pcap=
 net_forward=
+net_forward_file=
 net_open=0
 net_internet=0
 net_maxlen=,maxlen=256
@@ -276,7 +285,12 @@ esac
 
 # Version 2 of virtio-mmio: QEMU defaults to the legacy transport (ADR-0080).
 case $net_forward in
-    "") ;;
+    auto:?*)
+        net_forward_file=${net_forward#auto:}
+        net_forward=auto ;;
+esac
+case $net_forward in
+    "" | auto) ;;
     *[!0-9]*) die "--net-forward needs a port number" ;;
 esac
 if [ -n "$net_forward" ] && [ "$net" != 1 ]; then
@@ -359,7 +373,18 @@ if [ "$net" = 1 ]; then
         [ "$net_open" != 1 ] && restrict=,restrict=on,ipv6=off
     fi
     forward=
-    [ -z "$net_forward" ] || forward=",hostfwd=tcp:127.0.0.1:$net_forward-10.0.2.15:$net_forward"
+    if [ "$net_forward" = auto ]; then
+        # Picked here, as late as possible: QEMU is started by the exec below.
+        host_port=$(perl -MIO::Socket::INET -e '
+            my $s = IO::Socket::INET->new(Listen => 1, LocalAddr => "127.0.0.1", LocalPort => 0, Proto => "tcp")
+                or die "no free port: $!\n";
+            print $s->sockport;') || die "--net-forward auto: no free host port"
+        printf '%s\n' "$host_port" >"$net_forward_file.$$" && mv "$net_forward_file.$$" "$net_forward_file" ||
+            die "--net-forward auto: cannot write $net_forward_file"
+        forward=",hostfwd=tcp:127.0.0.1:$host_port-10.0.2.15:47015"
+    elif [ -n "$net_forward" ]; then
+        forward=",hostfwd=tcp:127.0.0.1:$net_forward-10.0.2.15:$net_forward"
+    fi
     subnet=
     [ -z "$net_subnet" ] || subnet=",net=$net_subnet"
     set -- "$@" -netdev "user,id=net0$restrict$forward$subnet$net_guestfwd" \

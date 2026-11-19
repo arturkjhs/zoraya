@@ -372,7 +372,9 @@ NET_OR_SKIP = $(RUN_QEMU) --probe-net >/dev/null 2>&1 || { \
 NET_DISK := $(BUILD)/net-disk.img
 NET_PCAP := target/test-logs/test-net.pcap
 # Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
-NET_FWD_PORT := 47015
+# The host's port is chosen by the OS at each run (`--net-forward auto:FILE`), so that two
+# runs on one machine do not collide; the guest's port is fixed (tools/run-qemu.sh).
+NET_FWD_FILE = $(BUILD)/net-forward-port.$$$$
 NET_SCRIPT := tests/shell/net.script
 # INV-0296-1: a string of each of the test image's Crash paths (feature
 # net-test), as PROGRAM:STRING: netd's end on request, init's request on its
@@ -395,10 +397,11 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
 		echo "[net] skipped: QEMU has no user-mode networking"; exit 0; \
 	elif [ $$rc != 0 ]; then echo "[net] FAIL: the networking probe failed (exit $$rc)"; exit 1; fi; \
+	fwd=$(NET_FWD_FILE); trap 'rm -f $$fwd $$fwd.*' EXIT; \
 	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
-	run() { accel=$$1; shift; tools/net-poke.sh $(NET_FWD_PORT) 240 & poke=$$!; \
-		$(RUN_TEST_SLOW) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
+	run() { accel=$$1; shift; rm -f $$fwd; tools/net-poke.sh $$fwd 240 & poke=$$!; \
+		$(RUN_TEST_SLOW) "$$@" -- $(RUN_QEMU) --test --net --net-forward auto:$$fwd --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
 		rc=$$?; kill $$poke 2>/dev/null; wait $$poke 2>/dev/null; return $$rc; }; \
 	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \
 		--expect-line "t_netd: all passed" --expect-line "t_netd: lease 10.0.2.15/24 gateway" \
