@@ -281,8 +281,12 @@ fn serve<D: Device>(
     service.set_time_base(BASE.load(Ordering::Relaxed));
     if fifos {
         service.enable_fifos();
-        service.enable_sockets();
     }
+    // Socket nodes on every service: the temporary directory's and the
+    // volume's, where a program's own directory lives (ADR-0465 item 2). The
+    // node is a file on the volume; its type and listener are the service's
+    // memory only.
+    service.enable_sockets();
     if sealed {
         service.seal("system");
     }

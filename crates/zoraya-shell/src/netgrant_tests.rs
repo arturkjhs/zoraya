@@ -72,6 +72,7 @@ fn go_all(
         grants: &[],
         nets: &nets,
         listens: &listens,
+        socks: &[],
         base_system: base,
         room: None,
     })
@@ -1092,6 +1093,7 @@ fn go_room(
         grants: &[],
         nets: &nets,
         listens: &[],
+        socks: &[],
         base_system: true,
         room: room.map(|(name, _)| crate::grants::RoomBound {
             name,

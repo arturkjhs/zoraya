@@ -60,6 +60,7 @@ fn go(
         grants: &grants,
         nets: &[],
         listens: &[],
+        socks: &[],
         base_system: base,
         room: None,
     })
@@ -1635,5 +1636,59 @@ fn git_gets_no_double_dash_before_its_command() {
     assert_eq!(
         end_of_options_at(&d(SSH_CMD), &["-l", "ada", "h", "ls"]),
         Some(2)
+    );
+}
+
+/// ADR-0465: `+sock PATH` gives the directory narrowed to the name, to
+/// change (connect to), and nothing about its siblings; `grants` says so and
+/// the window's pill names the file, not the directory.
+#[test]
+fn a_sock_word_is_a_directory_narrowed_to_one_name() {
+    let d = d(ECHO);
+    let parsed = Parsed::default();
+    let socks = [Value::literal("/data/home/srv/s")];
+    let line = Line {
+        description: &d,
+        parsed: &parsed,
+        args: &[],
+        cwd: "/w",
+        grants: &[],
+        nets: &[],
+        listens: &[],
+        socks: &socks,
+        base_system: true,
+        room: None,
+    };
+    let p = plan(&line).unwrap();
+    assert_eq!(
+        rows(&p),
+        [(
+            "/data/home/srv".into(),
+            Access::Connect("s".into()),
+            "+sock".into()
+        )]
+    );
+    let r = report("echo-args", &p, "/home", "the terminal", false, false);
+    assert!(r.contains("connect to s (+sock)"), "{r}");
+    assert!(!r.contains("change"), "{r}");
+    assert_eq!(
+        crate::grants::window_pills(&p, &[]),
+        Ok(vec!["+sock /data/home/srv/s".into()])
+    );
+    // A relative word joins the current directory; `/` has no name.
+    let rel = [Value::literal("x/sock")];
+    let p = plan(&Line {
+        socks: &rel,
+        ..line
+    })
+    .unwrap();
+    assert_eq!(p[0].path, "/w/x");
+    let bad = [Value::literal("/")];
+    assert!(
+        plan(&Line {
+            socks: &bad,
+            ..line
+        })
+        .is_err()
     );
 }

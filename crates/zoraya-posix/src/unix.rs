@@ -512,8 +512,8 @@ pub fn sockaddr_un(path: &[u8]) -> Vec<u8> {
 
 /// INV-0412-3: where `bind` may make a socket file. The resolved path of the
 /// call is `rest` inside table entry `entry`; only the line's `/tmp`, the
-/// `Tmp` entry, with a name inside it, qualifies (proposed ADR-0439: a
-/// program's own directory is not built). `EACCES` anywhere else; `EINVAL`
+/// `Tmp` entry, or the program's own directory, the `Own` entry (ADR-0465),
+/// with a name inside it, qualifies. `EACCES` anywhere else; `EINVAL`
 /// for the entry's root itself or a path that names a directory.
 pub fn bind_place(
     entry: zoraya_abi::posix::EntryKind,
@@ -521,7 +521,10 @@ pub fn bind_place(
     directory: bool,
 ) -> Result<(), i32> {
     use crate::errno::{EACCES, EINVAL};
-    if entry != zoraya_abi::posix::EntryKind::Tmp {
+    if !matches!(
+        entry,
+        zoraya_abi::posix::EntryKind::Tmp | zoraya_abi::posix::EntryKind::Own
+    ) {
         return Err(EACCES);
     }
     if rest.is_empty() || directory {
@@ -657,11 +660,13 @@ mod tests {
 
     /// INV-0412-3's path rule: only the `Tmp` entry, with a name inside it.
     #[test]
-    fn bind_is_allowed_only_in_the_tmp_entry() {
+    fn bind_is_allowed_only_in_the_tmp_and_own_entries() {
         use crate::errno::{EACCES, EINVAL};
         use zoraya_abi::posix::EntryKind::*;
         assert_eq!(bind_place(Tmp, "sock", false), Ok(()));
         assert_eq!(bind_place(Tmp, "a/b/sock", false), Ok(()));
+        assert_eq!(bind_place(Own, "sock", false), Ok(()));
+        assert_eq!(bind_place(Own, "", false), Err(EINVAL), "the own root");
         for kind in [Directory, Null, Terminal, Image] {
             assert_eq!(bind_place(kind, "sock", false), Err(EACCES), "{kind:?}");
             assert_eq!(bind_place(kind, "", false), Err(EACCES), "{kind:?}");

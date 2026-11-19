@@ -85,6 +85,8 @@ pub struct Exec<'a> {
     pub nets: &'a [Value],
     /// `+listen` words' arguments (ADR-0224 item 1; plan part F7b).
     pub listens: &'a [Value],
+    /// `+sock` words' paths (ADR-0465): socket files it may connect to.
+    pub socks: &'a [Value],
     /// Its own redirections, which take the place of what the pipeline
     /// gives that stream (ADR-0152 rule 3).
     pub redirects: &'a [(Stream, bool, String)],
@@ -1402,11 +1404,21 @@ impl<H: Host> Shell<H> {
         let mut given: Vec<(bool, Value)> = Vec::new();
         let mut nets: Vec<Value> = Vec::new();
         let mut listens: Vec<Value> = Vec::new();
+        let mut socks: Vec<Value> = Vec::new();
         while let [g, path, after @ ..] = rest {
             if !(g.literal
-                && (g.text == "+r" || g.text == "+w" || g.text == "+net" || g.text == "+listen"))
+                && (g.text == "+r"
+                    || g.text == "+w"
+                    || g.text == "+net"
+                    || g.text == "+listen"
+                    || g.text == "+sock"))
             {
                 break;
+            }
+            if g.text == "+sock" {
+                socks.push(path.clone());
+                rest = after;
+                continue;
             }
             if g.text == "+net" {
                 nets.push(path.clone());
@@ -1446,6 +1458,7 @@ impl<H: Host> Shell<H> {
             grants: &given,
             nets: &nets,
             listens: &listens,
+            socks: &socks,
             redirects: &[],
             err_too: false,
         };
@@ -1611,6 +1624,7 @@ impl<H: Host> Shell<H> {
         let mut grants = Vec::new();
         let mut nets = Vec::new();
         let mut listens = Vec::new();
+        let mut socks = Vec::new();
         for g in &s.grants {
             let v = match self.expand(src, &g.path, Context::Grant) {
                 Ok(v) => v,
@@ -1621,6 +1635,13 @@ impl<H: Host> Shell<H> {
                     return Err(self.report(&shell_error("+net", "needs exactly one host")));
                 }
                 nets.push(v[0].clone());
+                continue;
+            }
+            if g.sock {
+                if v.len() != 1 {
+                    return Err(self.report(&shell_error("+sock", "needs exactly one path")));
+                }
+                socks.push(v[0].clone());
                 continue;
             }
             if g.listen {
@@ -1668,6 +1689,7 @@ impl<H: Host> Shell<H> {
             grants,
             nets,
             listens,
+            socks,
             redirects,
             err_too: false,
         })
@@ -1870,6 +1892,7 @@ struct Prepared {
     grants: Vec<(bool, Value)>,
     nets: Vec<Value>,
     listens: Vec<Value>,
+    socks: Vec<Value>,
     redirects: Vec<(Stream, bool, String)>,
     err_too: bool,
 }
@@ -1883,6 +1906,7 @@ impl Prepared {
             grants: &self.grants,
             nets: &self.nets,
             listens: &self.listens,
+            socks: &self.socks,
             redirects: &self.redirects,
             err_too: self.err_too,
         }

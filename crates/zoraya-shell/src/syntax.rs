@@ -93,6 +93,9 @@ pub struct Grant {
     pub net: bool,
     /// `+listen PORTS` (ADR-0224 item 1): `path` is the ports word.
     pub listen: bool,
+    /// `+sock PATH` (ADR-0465): `path` is a socket file the program may
+    /// connect to, and nothing else.
+    pub sock: bool,
     pub write: bool,
     pub path: Word,
     pub span: Span,
@@ -716,7 +719,9 @@ impl<'a> Parser<'a> {
             }
             let start = self.at;
             let prefix = s.words.is_empty();
-            if prefix && let Some(marker @ ("+r" | "+w" | "+net" | "+listen")) = self.peek_literal()
+            if prefix
+                && let Some(marker @ ("+r" | "+w" | "+net" | "+listen" | "+sock")) =
+                    self.peek_literal()
             {
                 self.at += marker.len();
                 self.blanks();
@@ -736,6 +741,7 @@ impl<'a> Parser<'a> {
                 s.grants.push(Grant {
                     net: marker == "+net",
                     listen: marker == "+listen",
+                    sock: marker == "+sock",
                     write: marker == "+w",
                     path,
                     span: Span {

@@ -132,6 +132,10 @@ impl Host for Fake {
             io.out
                 .push_str(&alloc::format!("listen {} {}\n", l.text, l.literal));
         }
+        for k in exec.socks {
+            io.out
+                .push_str(&alloc::format!("sock {} {}\n", k.text, k.literal));
+        }
         io.out.push_str(&alloc::format!("command {}\n", exec.name));
         for a in exec.args {
             io.out
@@ -1191,6 +1195,20 @@ fn grants_sees_the_line_as_a_run_would() {
     assert_eq!(
         run(&mut sh, "grants cp -f x"),
         "command cp\narg -f true\narg x true\n"
+    );
+}
+
+/// `+sock` is a literal token and one path word, as `+listen` is (ADR-0465).
+#[test]
+fn a_sock_word_is_a_literal_grant_with_one_path() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "grants +sock /data/home/a/s cat x"),
+        "sock /data/home/a/s true\ncommand cat\narg x true\n"
+    );
+    assert_eq!(
+        run(&mut sh, "set g +sock; grants $g /data/home/a/s cat"),
+        "command +sock\narg /data/home/a/s true\narg cat true\n"
     );
 }
 

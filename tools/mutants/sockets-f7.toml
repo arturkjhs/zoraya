@@ -144,7 +144,10 @@ note = "INV-0439-1: a forwarded handle is the listener's, the loop must not clos
 [[mutant]]
 id = "F7-bind-anywhere"
 file = "crates/zoraya-posix/src/unix.rs"
-find = '''    if entry != zoraya_abi::posix::EntryKind::Tmp {
+find = '''    if !matches!(
+        entry,
+        zoraya_abi::posix::EntryKind::Tmp | zoraya_abi::posix::EntryKind::Own
+    ) {
         return Err(EACCES);
     }'''
 replace = '''    if false {
@@ -266,3 +269,14 @@ replace = '''                        if let Some(u) = sock.unix.as_mut() {
                             let _ = u;
                         }'''
 note = "ECONNABORTED comes once: a server that retries must not spin on it"
+
+[[mutant]]
+id = "F7-own-bind-in-a-directory"
+file = "crates/zoraya-posix/src/unix.rs"
+find = '''        zoraya_abi::posix::EntryKind::Tmp | zoraya_abi::posix::EntryKind::Own
+    ) {'''
+replace = '''        zoraya_abi::posix::EntryKind::Tmp
+            | zoraya_abi::posix::EntryKind::Own
+            | zoraya_abi::posix::EntryKind::Directory
+    ) {'''
+note = "ADR-0465: bind in an ordinary directory entry is EACCES, only /tmp and the own directory take a socket"

@@ -734,3 +734,123 @@ fn a_listening_unix_socket_is_not_reported_writable() {
     assert_eq!(r.p.poll_once(&mut f, Some(0)), Ok(Some(0)));
     assert_eq!(f[0].revents, 0);
 }
+
+// ---- A socket file in a program's own directory (ADR-0465) ----
+
+/// A process whose table has `/data/home/srv`, the program's own directory,
+/// on a volume service that keeps socket nodes.
+fn own_rig() -> (Rig, Rc<RefCell<Svc>>) {
+    let mut r = rig();
+    let net = r.net.clone();
+    let (service, conn) = data_volume(&net, 1024);
+    r.p.sys.services.push(service.clone());
+    r.p.add_entry("/data/home/srv", EntryKind::Own, Some(conn));
+    (r, service)
+}
+
+/// A second process whose only entry is a connection to `/data/home/srv`
+/// narrowed to `name`, with the rights `+sock` gives (read, write, sync, clone).
+fn socket_grant(r: &Rig, service: &Rc<RefCell<Svc>>, name: &str, rights: u32) -> Rig {
+    use zoraya_protocol::{Flags, decode, encode};
+    let mut b = peer(r, service, false);
+    let root = another_root(&b.net, service);
+    let (mine, theirs) = b.p.sys.channel_create().unwrap();
+    let mut out = vec![0u8; 256];
+    let n = encode(
+        &zoraya_proto_file::Narrow {
+            rights: Flags(rights),
+            name: zoraya_protocol::Name(name),
+        },
+        1,
+        &mut out,
+    )
+    .unwrap();
+    b.p.sys.channel_write(root, &out[..n], &[theirs]).unwrap();
+    b.settle();
+    let mut buf = vec![0u8; 256];
+    let mut hs = vec![];
+    let got = b.p.sys.channel_read(root, &mut buf, &mut hs).unwrap();
+    let (_, done) = decode::<zoraya_proto_file::Done>(&buf[..got], 0).unwrap();
+    assert_eq!(done.status.0, zoraya_proto_file::status::OK);
+    b.p.add_entry("/data/home/srv", EntryKind::Directory, Some(mine));
+    b
+}
+
+const SOCK_RIGHTS: u32 = zoraya_proto_file::rights::READ
+    | zoraya_proto_file::rights::WRITE
+    | zoraya_proto_file::rights::SYNC
+    | zoraya_proto_file::rights::CLONE;
+
+/// ADR-0465 item 1: `bind` works in the own directory, the node is an
+/// `S_IFSOCK` object, and a program that only has a narrowed grant meets it.
+#[test]
+fn a_socket_in_the_own_directory_is_reached_with_a_grant_naming_it() {
+    let (mut a, svc) = own_rig();
+    let s = server(&mut a, SOCK_STREAM, "/data/home/srv/s");
+    let st = a.p.stat_at(AT_FDCWD, b"/data/home/srv/s", 0).unwrap();
+    let mode = u32::from_le_bytes(st[16..20].try_into().unwrap());
+    assert_eq!(mode & 0o170000, 0o140000, "S_IFSOCK");
+    let mut b = socket_grant(&a, &svc, "s", SOCK_RIGHTS);
+    let c = sock(&mut b, SOCK_STREAM);
+    b.p.connect(c, &un("/data/home/srv/s")).unwrap();
+    let conn = a.p.accept(s, false, false).unwrap();
+    b.write(c, b"hi").unwrap();
+    assert_eq!(a.read(conn, 100).unwrap(), b"hi");
+}
+
+/// The refusals: no grant, a grant to a sibling, and what a grant-holder
+/// cannot do to the node (write on the directory is the rule).
+#[test]
+fn a_grant_to_one_socket_reaches_no_other_and_cannot_unlink_or_rename() {
+    let (mut a, svc) = own_rig();
+    let _s = server(&mut a, SOCK_STREAM, "/data/home/srv/s");
+    let _t = server(&mut a, SOCK_STREAM, "/data/home/srv/t");
+    // No entry at all: the resolver's refusal.
+    let mut blind = peer(&a, &svc, false);
+    let c = sock(&mut blind, SOCK_STREAM);
+    assert_eq!(blind.p.connect(c, &un("/data/home/srv/s")), Err(ENOENT));
+    // A grant naming `s` does not reach `t`.
+    let mut b = socket_grant(&a, &svc, "s", SOCK_RIGHTS);
+    let c = sock(&mut b, SOCK_STREAM);
+    let e = b.p.connect(c, &un("/data/home/srv/t")).unwrap_err();
+    assert!(e == EACCES || e == ECONNREFUSED || e == ENOENT, "{e}");
+    // It cannot bind a new name, unlink or rename the node it can reach.
+    let n = sock(&mut b, SOCK_STREAM);
+    assert!(b.p.bind(n, &un("/data/home/srv/u")).is_err());
+    assert!(b.p.unlink_at(AT_FDCWD, b"/data/home/srv/s", 0).is_err());
+    assert!(
+        b.p.rename(b"/data/home/srv/s", b"/data/home/srv/x")
+            .is_err()
+    );
+    // The listener is still there: the owner connects to itself, and the
+    // owner, with write on its directory, may unlink (the ordinary rule).
+    let c2 = sock(&mut b, SOCK_STREAM);
+    b.p.connect(c2, &un("/data/home/srv/s")).unwrap();
+    a.p.unlink_at(AT_FDCWD, b"/data/home/srv/s", 0).unwrap();
+    let c3 = sock(&mut b, SOCK_STREAM);
+    assert_eq!(b.p.connect(c3, &un("/data/home/srv/s")), Err(ENOENT));
+}
+
+/// A read-only grant does not connect (`WRITE` is needed), as in `/tmp`.
+#[test]
+fn a_read_only_grant_to_the_socket_cannot_connect() {
+    let (mut a, svc) = own_rig();
+    let _s = server(&mut a, SOCK_STREAM, "/data/home/srv/s");
+    let mut b = socket_grant(&a, &svc, "s", zoraya_proto_file::rights::READ);
+    let c = sock(&mut b, SOCK_STREAM);
+    assert_eq!(b.p.connect(c, &un("/data/home/srv/s")), Err(EACCES));
+}
+
+/// An own directory on a service that keeps no socket nodes: refused, and
+/// the file `bind` made is gone.
+#[test]
+fn a_volume_without_socket_nodes_refuses_bind_in_the_own_directory() {
+    let mut r = rig();
+    let net = r.net.clone();
+    let (service, conn) = volume(&net, 256);
+    r.p.sys.services.push(service);
+    r.p.add_entry("/data/home/srv", EntryKind::Own, Some(conn));
+    let s = sock(&mut r, SOCK_STREAM);
+    assert_eq!(r.p.bind(s, &un("/data/home/srv/s")), Err(EINVAL));
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"/data/home/srv/s", 0), Err(ENOENT));
+}
