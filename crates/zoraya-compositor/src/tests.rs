@@ -64,6 +64,12 @@ struct Fake {
     /// The driver takes a cursor image (`SetCursor` answers `OK`), else
     /// answers `DEVICE`.
     accept_cursor: bool,
+    /// The driver does not answer a `SetCursor` (the test does, or never).
+    cursor_hold: bool,
+    /// The first this many images fail (a passing hold-up).
+    cursor_fail_first: usize,
+    /// `SetCursor` messages the driver was sent.
+    cursor_asked: usize,
     /// The images the driver was given: hot spot, place, the image.
     cursor_sets: Vec<CursorSet>,
     /// Every `MoveCursor` the driver was told.
@@ -163,6 +169,36 @@ impl Platform for Fake {
                 let (_, m) = decode::<display::MoveCursor>(bytes, 0).unwrap();
                 assert_eq!(header.transaction, NO_REPLY, "a move has no reply");
                 self.cursor_moves.push((m.x, m.y));
+                return Outgoing::Sent;
+            }
+            if header.ordinal == 5 {
+                // The image: answered like a flush, unless held.
+                let (_, m) = decode::<display::SetCursor>(bytes, 0).unwrap();
+                let failing = self.cursor_fail_first > 0;
+                self.cursor_fail_first = self.cursor_fail_first.saturating_sub(1);
+                let status = if self.accept_cursor && !failing { 0 } else { 3 };
+                self.cursor_asked += 1;
+                if status == 0 {
+                    self.cursor_sets
+                        .push(((m.hot_x, m.hot_y), (m.x, m.y), m.pixels.0.to_vec()));
+                }
+                if !self.cursor_hold {
+                    let mut reply = vec![0; 64];
+                    let n = encode(
+                        &display::Done {
+                            status: Below(status),
+                        },
+                        header.transaction,
+                        &mut reply,
+                    )
+                    .unwrap();
+                    reply.truncate(n);
+                    self.peers
+                        .get_mut(&end)
+                        .unwrap()
+                        .inbox
+                        .push_back((reply, vec![]));
+                }
                 return Outgoing::Sent;
             }
             assert_eq!(header.ordinal, 3, "only flushes are sent unasked");
@@ -305,21 +341,6 @@ impl Platform for Fake {
                 assert_eq!(handles, [FRAMEBUFFER]);
                 self.attaches += 1;
                 encode(&display::Done { status: Below(0) }, t, reply)
-            }
-            5 => {
-                let (_, m) = decode::<display::SetCursor>(message, 0).unwrap();
-                let status = if self.accept_cursor { 0 } else { 3 };
-                if self.accept_cursor {
-                    self.cursor_sets
-                        .push(((m.hot_x, m.hot_y), (m.x, m.y), m.pixels.0.to_vec()));
-                }
-                encode(
-                    &display::Done {
-                        status: Below(status),
-                    },
-                    t,
-                    reply,
-                )
             }
             _ => panic!("unexpected display call: flushes do not wait"),
         };

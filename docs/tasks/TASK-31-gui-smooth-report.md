@@ -98,3 +98,37 @@ What the numbers say, and do not:
   Option C) and was not taken.
 - **The display's real refresh** is assumed 60 Hz.
 - A full `make test-par`/`make test` (the architect's, not an agent session's).
+
+## Review fixes, pacing and a second measurement (head of the branch after the review)
+
+The independent review (`docs/tasks/TASK-31-review-gui-smooth.md`, R1 to R14, each with its disposition) found that `SetCursor` was a
+blocking call; it is now a request answered later (as `Flush` is), with a test of a `Resized` queued before its answer. The ADR-0467
+text and invariant rows were corrected (the copy of a dragged window is in the Recommendation, INV-0467-5).
+
+**Pacing.** The rule asked for by the architect is the one the code already had: `frame_held` holds a frame only when the last
+frame *began* less than one interval (1/60 s) ago; with the last frame older, a change is composed in its own round. A new host
+test pins it (`an_event_after_an_idle_interval_is_drawn_at_once_and_one_right_after_a_frame_waits`: idle, then a move, a frame with
+no wait; a move 2 ms after that frame is held and due within one interval). No code changed for it. The drag delay of about 15 ms
+is therefore not a wait after idle: it is the cost of back-to-back frames. During a drag a message arrives every 5 to 6 ms, so
+every frame follows another by less than an interval and waits for the slot (59 frames a second, gap 17.6 to 18.3 ms). The script's
+glides and drags are all continuous motion; it has no slow-motion step, so the "delay after idle" is seen only in the first line of
+each run (the first second of the first glide: mean 2.4 ms at scale 1, 1.9 ms at scale 2, with 7 and 9 frames). Lowering the
+drag's delay would need a different rule (pacing by the flush's answer, or an interval shorter than the refresh), which is a
+decision for the architect: the first knob stays `set_frame_interval`.
+
+**Measured again** (`make test-gui GUI_RUNS="pointer:auto:1 pointer:auto:2"`, HVF, the same script and machine; lines of a full
+second; logs `target/test-logs/gui-pointer-auto-{1,2}.log`, not kept):
+
+| | scale 1, pointer only | scale 1, window drag | scale 2, pointer only | scale 2, window drag |
+|---|---|---|---|---|
+| Input messages a second | 191, 122 (a shorter line) | 191, 116 | 189, 124 | 191, 116 |
+| Frames a second | 0 | 59, 35 | 0 | 59, 35 |
+| Compose a frame (mean) | none | 1.0 to 1.4 ms | none | 3.4 to 5.2 ms |
+| Flushed a second | 0 | 110 MiB (59 frames) | 0 | 428 MiB (59 frames) |
+| `MoveCursor` a second | 190, 120 | 180, 107 | 188, 122 | 180, 104 |
+| Delay (mean, longest) | no frame | 15.1 to 15.8 ms, 17.4 to 20.2 ms | no frame | 16.5 to 17.4 ms, 18.3 to 19.3 ms |
+
+Against the first "After" table: the same frames, bytes and delays (the pointer only: no frame, no flush; a drag: 59 frames a
+second, delay 15 ms at scale 1 and 17 ms at scale 2). The runs also show `compd: hardware cursor: image accepted` (the script
+now fails without it, R7) and 0 hangs. The asynchronous `SetCursor` changed none of these numbers.
+

@@ -12,6 +12,12 @@ impl Setup {
         let (w, h) = self.c.size();
         let (ax, ay) = (axis(x, w), axis(y, h));
         self.point(ax, ay, None);
+        // The driver's answer to an image comes with the next round's
+        // messages (it is not waited for).
+        let display = self.f().display.unwrap();
+        if !self.f().peers[&display].inbox.is_empty() {
+            self.c.step();
+        }
     }
 
     /// A tablet frame to `(x, y)` physical queued, no round run.
@@ -427,4 +433,334 @@ fn a_drag_with_a_move_every_ten_ms_is_a_frame_every_interval() {
     }
     let made = s.c.stats().frames - frames;
     assert!((55..=65).contains(&made), "{made} frames in a second");
+}
+
+fn done_for_image(status: u32) -> Vec<u8> {
+    message(
+        &display::Done {
+            status: Below(status),
+        },
+        CURSOR_TRANSACTION,
+    )
+}
+
+/// The `Resized` of the fake driver at `w × h`, queued.
+fn queue_resize(s: &mut Setup, w: u32, h: u32) {
+    s.f().display_size = (w, h);
+    let display = s.f().display.unwrap();
+    let m = display::Resized {
+        width: w,
+        height: h,
+    };
+    s.f().send(display, message(&m, 0), vec![]);
+}
+
+#[test]
+fn a_resize_met_while_the_image_is_unanswered_is_not_lost() {
+    // INV-0467-3: the image is a request, not a call, so a `Resized` the
+    // driver wrote before its answer is not taken for the answer.
+    let mut s = setup_with(|f| {
+        f.accept_cursor = true;
+        f.cursor_hold = true;
+    });
+    s.move_to(300, 200);
+    assert!(s.c.cursor_sent.is_some(), "the image is asked for");
+    assert!(!s.c.hw_cursor);
+    let display = s.f().display.unwrap();
+    queue_resize(&mut s, 2048, 1536);
+    s.f().send(display, done_for_image(0), vec![]);
+    s.c.step();
+    assert!(s.c.resized, "the size waits for the image's answer");
+    s.c.step();
+    assert!(s.c.display.is_some(), "the display driver is kept");
+    assert_eq!(s.c.stats().hangs, 0);
+    assert_eq!(s.c.size(), (2048, 1536), "the new size was taken");
+    assert!(s.c.hw_cursor, "the image was taken");
+}
+
+#[test]
+fn the_answers_to_a_flush_and_to_an_image_are_told_apart() {
+    let mut s = setup_with(|f| {
+        f.accept_cursor = true;
+        f.cursor_hold = true;
+    });
+    s.move_to(300, 200);
+    assert!(s.c.cursor_sent.is_some());
+    // A frame is flushed (answered at once) while the image is unanswered.
+    let (a, _) = s.window(60, 60, 1);
+    s.f().take(a);
+    let display = s.f().display.unwrap();
+    // Only while an answer waits: an idle round would wait out the deadline.
+    while !s.f().peers[&display].inbox.is_empty() {
+        s.c.step();
+    }
+    assert_eq!(s.c.stats().hangs, 0);
+    assert!(s.c.stats().flushes > 0 && s.c.in_flight.is_none());
+    assert!(
+        s.c.cursor_sent.is_some(),
+        "the image's was not taken for it"
+    );
+    s.f().send(display, done_for_image(0), vec![]);
+    s.c.step();
+    assert!(s.c.cursor_sent.is_none() && s.c.hw_cursor);
+    assert!(s.c.display.is_some());
+}
+
+#[test]
+fn a_driver_that_never_answers_the_image_is_found_hung_with_only_the_pointer_moving() {
+    let mut s = setup_with(|f| {
+        f.accept_cursor = true;
+        f.cursor_hold = true;
+    });
+    let start = s.f().clock;
+    s.move_to(300, 200);
+    assert!(s.c.cursor_sent.is_some());
+    // The compositor was not waiting: it is here, and the loop's deadline
+    // is the flush's.
+    for i in 0..400 {
+        if s.c.stats().hangs > 0 {
+            break;
+        }
+        s.move_to(300 + i % 50, 200);
+        s.c.step();
+    }
+    assert_eq!(s.c.stats().hangs, 1);
+    assert!(s.f().clock >= start + FLUSH_DEADLINE_NS);
+}
+
+#[test]
+fn a_driver_that_never_makes_room_for_a_move_is_found_hung() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    s.c.step();
+    assert!(s.c.hw_cursor && s.c.cursor_sent.is_none());
+    s.f().display_full = true;
+    for i in 0..1000 {
+        if s.c.stats().hangs > 0 {
+            break;
+        }
+        s.move_to(310 + i % 50, 200);
+        s.c.step();
+    }
+    assert_eq!(s.c.stats().hangs, 1, "found with no flush due");
+}
+
+#[test]
+fn a_move_that_found_the_queue_full_is_told_again_with_the_next_place() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    s.c.step();
+    let told = s.f().cursor_moves.len();
+    s.f().display_full = true;
+    s.move_to(500, 400);
+    assert_eq!(s.f().cursor_moves.len(), told, "nothing was sent");
+    s.f().display_full = false;
+    s.move_to(520, 410);
+    s.c.step();
+    let (x, y) = *s.f().cursor_moves.last().unwrap();
+    assert!(
+        (519..=521).contains(&x) && (409..=411).contains(&y),
+        "{x} {y}"
+    );
+}
+
+#[test]
+fn a_passing_failure_of_the_image_is_asked_again() {
+    let mut s = setup_with(|f| {
+        f.accept_cursor = true;
+        f.cursor_fail_first = 2;
+    });
+    s.move_to(300, 200);
+    for _ in 0..10 {
+        s.c.step();
+    }
+    assert!(s.c.hw_cursor, "the third try was taken");
+    assert_eq!(s.f().cursor_asked, 3);
+    // Always failing: given up after three tries, the software pointer stays.
+    let mut s = setup_with(|f| {
+        f.accept_cursor = true;
+        f.cursor_fail_first = 100;
+    });
+    s.move_to(300, 200);
+    for _ in 0..20 {
+        s.c.step();
+    }
+    assert!(!s.c.hw_cursor);
+    assert_eq!(s.f().cursor_asked, 3);
+}
+
+#[test]
+fn a_refused_new_image_leaves_the_old_one_moving_not_two_pointers() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    s.c.step();
+    assert!(s.c.hw_cursor);
+    s.f().cursor_fail_first = 100;
+    let g = crate::settings::GuiSettings {
+        dark: true,
+        ..Default::default()
+    };
+    s.c.apply_settings(g);
+    for _ in 0..20 {
+        s.c.step();
+    }
+    assert!(s.c.hw_cursor, "the old image is still the host's pointer");
+    s.move_to(400, 300);
+    s.c.step();
+    let (x, y) = *s.f().cursor_moves.last().unwrap();
+    assert!((399..=401).contains(&x) && (299..=301).contains(&y));
+    assert_eq!(s.pixel(400, 300), s.paper(400, 300), "none drawn here");
+}
+
+/// The image `cursor_image` should be: the dots of `POINTER` in the
+/// palette's colours at `k`, clear elsewhere.
+fn expected_image(p: &zoraya_tokens::Palette, k: usize) -> Vec<u8> {
+    let mut out = vec![0u8; zoraya_proto_display::CURSOR_BYTES];
+    for (dy, line) in draw::POINTER.iter().enumerate() {
+        for (dx, dot) in line.iter().enumerate() {
+            let color = match dot {
+                0 => continue,
+                1 => p.bg_control,
+                _ => p.fg_text,
+            };
+            let word = 0xFF00_0000 | color.pixel();
+            for y in dy * k..(dy + 1) * k {
+                for x in dx * k..(dx + 1) * k {
+                    let at = (y * 64 + x) * 4;
+                    out[at..at + 4].copy_from_slice(&word.to_le_bytes());
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_whole_image_is_the_dots_at_the_scale() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    let p = s.c.palette();
+    let sets = s.f().cursor_sets.clone();
+    assert_eq!(sets[0].2, expected_image(p, 1), "scale one");
+    // A display of 2048 by 1536 is scale two: another image, whole.
+    queue_resize(&mut s, 2048, 1536);
+    for _ in 0..6 {
+        s.c.step();
+    }
+    s.move_to(310, 210);
+    s.c.step();
+    let p = s.c.palette();
+    let sets = s.f().cursor_sets.clone();
+    assert_eq!(sets.len(), 2, "a new image for the new scale");
+    assert_eq!(sets[1].2, expected_image(p, 2), "scale two");
+}
+
+#[test]
+fn a_round_reads_at_most_max_drain_messages_of_a_device() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    for i in 0..40 {
+        s.queue_move(310 + i, 210);
+    }
+    s.c.step();
+    let t = s.tablet;
+    assert_eq!(s.f().peers[&t].inbox.len(), 40 - MAX_DRAIN);
+    s.c.step();
+    assert!(s.f().peers[&t].inbox.is_empty());
+}
+
+#[test]
+fn an_event_after_an_idle_interval_is_drawn_at_once_and_one_right_after_a_frame_waits() {
+    let mut s = setup_with(|_| {});
+    s.c.set_frame_interval(16_666_667);
+    s.move_to(300, 200);
+    let frames = s.c.stats().frames;
+    // Idle for more than an interval: the next change is composed in its
+    // own round, no wait.
+    s.f().clock += 40_000_000;
+    s.move_to(320, 210);
+    assert_eq!(s.c.stats().frames, frames + 1, "no wait after idle");
+    assert_eq!(s.c.frame_due(), None);
+    // A change 2 ms after that frame waits for the slot.
+    s.f().clock += 2_000_000;
+    s.move_to(340, 220);
+    assert_eq!(s.c.stats().frames, frames + 1, "held right after a frame");
+    let due = s.c.frame_due().expect("a frame is held");
+    assert!(due > s.f().clock && due <= s.f().clock + 16_666_667);
+}
+
+#[test]
+fn a_move_that_found_the_queue_full_and_was_then_not_needed_is_not_a_hang() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    s.c.step();
+    let at = s.c.pointer.unwrap();
+    s.f().display_full = true;
+    s.move_to(400, 300);
+    assert!(s.c.cursor_stuck.is_some());
+    // The pointer is back where the host has it: nothing to send.
+    s.move_to(at.0, at.1);
+    s.f().display_full = false;
+    for _ in 0..400 {
+        s.f().clock += 10_000_000;
+        s.c.step();
+    }
+    assert_eq!(s.c.stats().hangs, 0);
+    assert!(s.c.cursor_stuck.is_none());
+}
+
+#[test]
+fn an_unanswered_image_is_found_even_while_flushes_are_answered() {
+    let mut s = setup_with(|f| {
+        f.accept_cursor = true;
+        f.cursor_hold = true;
+    });
+    s.move_to(300, 200);
+    assert!(s.c.cursor_sent.is_some());
+    for i in 0..600 {
+        if s.c.stats().hangs > 0 {
+            break;
+        }
+        s.f().clock += 10_000_000;
+        // The software pointer is drawn until the image is held: a frame
+        // and a flush for each move.
+        s.move_to(300 + i % 50, 200);
+    }
+    assert_eq!(s.c.stats().hangs, 1);
+    assert!(s.c.stats().flushes > 10, "flushes were answered meanwhile");
+}
+
+#[test]
+fn an_image_answer_nobody_asked_for_is_a_broken_driver() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    s.c.step();
+    assert!(s.c.cursor_sent.is_none());
+    let display = s.f().display.unwrap();
+    s.f().send(display, done_for_image(0), vec![]);
+    while s.c.display.is_some() && !s.f().peers[&display].inbox.is_empty() {
+        s.c.step();
+    }
+    assert!(s.c.display.is_none(), "the display is dropped");
+}
+
+#[test]
+fn moves_go_while_a_new_image_is_unanswered() {
+    let mut s = setup_cursor();
+    s.move_to(300, 200);
+    s.c.step();
+    s.f().cursor_hold = true;
+    let g = crate::settings::GuiSettings {
+        dark: true,
+        ..Default::default()
+    };
+    s.c.apply_settings(g);
+    s.move_to(310, 200);
+    assert!(s.c.cursor_sent.is_some());
+    let told = s.f().cursor_moves.len();
+    s.move_to(400, 300);
+    assert!(s.f().cursor_moves.len() > told, "a move went meanwhile");
+    // The image's place and the moves are the host's: the compositor knows
+    // where it is.
+    assert_eq!(s.c.cursor_at, s.c.pointer);
 }

@@ -34,6 +34,8 @@ enum Hostile {
     Silent,
     /// An error type in a response shorter than a header.
     ShortError,
+    /// The cursor's resource cannot be backed.
+    NoCursorBacking,
 }
 
 /// A command as the device saw it: its type and the words after the header.
@@ -136,6 +138,12 @@ fn serve(
             Hostile::WrongType => (0x1300, response.len() as u32),
             Hostile::Errors => (cmd::ERR_UNSPEC + 5, 24),
             Hostile::ShortError => (cmd::ERR_UNSPEC + 5, 16),
+            Hostile::NoCursorBacking
+                if kind == cmd::RESOURCE_ATTACH_BACKING
+                    && word(&request, 24) == CURSOR_RESOURCE =>
+            {
+                (cmd::ERR_UNSPEC + 5, 24)
+            }
             Hostile::Short => (ok, 16),
             Hostile::Long => (ok, chain[1].length + 1),
             _ => (ok, response.len() as u32),
@@ -771,6 +779,30 @@ fn a_cursor_is_made_backed_transferred_and_shown_through_the_cursor_queue() {
         .unwrap();
     let kinds: Vec<u32> = d.seen.borrow().iter().map(|s| s.kind).collect();
     assert_eq!(kinds, [cmd::TRANSFER_TO_HOST_2D]);
+}
+
+#[test]
+fn a_cursor_whose_backing_failed_is_not_made_twice() {
+    let d = device(Hostile::NoCursorBacking);
+    let mut gpu = ready(&d);
+    d.seen.borrow_mut().clear();
+    for _ in 0..2 {
+        assert!(
+            gpu.cursor_set(&image(0), (0, 0), (0, 0), &mut no_wait())
+                .is_err()
+        );
+    }
+    let kinds: Vec<u32> = d.seen.borrow().iter().map(|s| s.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            cmd::RESOURCE_CREATE_2D,
+            cmd::RESOURCE_ATTACH_BACKING,
+            cmd::RESOURCE_ATTACH_BACKING
+        ],
+        "the resource was made once, the backing tried again"
+    );
+    assert!(!gpu.cursor_ready());
 }
 
 #[test]

@@ -46,7 +46,10 @@ include it (to be confirmed by the architect's own look).
 
 ### Option B: the compositor gives `gpud` the pointer's image and its place; the host draws it (recommended)
 - **Description:** `gpud` sets up the cursor queue. Two display messages: `SetCursor` (ordinal 5, a reply `Done`) carries a 64 by 64
-  image of `0xAARRGGBB` words, its hot spot and the place; `MoveCursor` (ordinal 6, no reply) carries a place. The image is built
+  image of `0xAARRGGBB` words, its hot spot and the place (the compositor does not wait for the `Done`: it is a request like
+  `Flush`, answered with the transaction 5 it carried, read with the display's other messages, and `Resized` is held back
+  while it is unanswered; a failure is tried again up to three times, and an image refused after another was held leaves the old
+  one moving, never two pointers); `MoveCursor` (ordinal 6, no reply) carries a place. The image is built
   by the compositor from the pointer's dots and the palette (INV-0467-1); a new image goes at a new scale or appearance. A
   driver that refuses leaves the software pointer in force. Pointer moves cost one small message and no frame.
 - **Evidence for:** the measurements; virtio's own design; `gpud` owns no policy.
@@ -78,8 +81,14 @@ Option B, with the two smaller changes that the measurements asked for:
 4. **The measurement** (not a decision of the product): `compd` prints one console line per second of pointer activity, at most 64
    a boot, only when `/config/gui-measure` exists.
 
-Not decided here: moving a dragged window's last drawn pixels instead of composing them again (see the report: the cost is
-the transfer, and a frame's compose is what the blit would save); the report says what was and was not done.
+5. **A dragged window is copied within the frame** (built in this part; `drag_blit`, `blit_plan`, `compose_moved`). When the
+   person moves the topmost window, the host draws the pointer, nothing was damaged since the last frame except by the move, and
+   nothing is above either place (no popup, sheet, card, switcher, carried tag, command tags, dock or bar over the window's old or
+   new place), the window's frame and body, inset by the corner radius plus 2 pixels (so that corners and shadow, which depend on
+   what is under them, are drawn again), are copied from the last drawn pixels and the rest is composed as ever. The copy is
+   within the work area. The transfer to the host is still the whole new place (see the report).
+
+The report says what was and was not done.
 
 ## Consequences
 
@@ -96,23 +105,37 @@ apart; the host's own refresh read from the device instead of 60 Hz fixed.
 ## Invariants
 
 - **INV-0467-1.** The pointer's image is the compositor's own: built from the pointer's dots and the palette, never from a client's
-  memory or message. *Check:* `cargo test -p zoraya-compositor` (`a_hardware_cursor_moves_with_no_frame`: the image's words are
-  the palette's colours at the dots, clear elsewhere).
+  memory or message. *Check:* `cargo test -p zoraya-compositor` (`the_whole_image_is_the_dots_at_the_scale`: all 64 by 64 words
+  against the dots and the palette at scales 1 and 2; `a_hardware_cursor_moves_with_no_frame`).
 - **INV-0467-2.** The driver checks what the compositor sends the cursor queue: an image of other than 64 by 64 pixels or a hot spot
-  outside it reaches no device, and a position is clamped to the display. *Check:* `cargo test -p zoraya-virtio-gpu` (`a_cursor_image_of_the_wrong_size_or_a_hot_spot_outside_it_reaches_no_device`); the clamp is in `gpud` and is checked by reading.
-- **INV-0467-3.** The compositor never waits for the cursor: `MoveCursor` is a write that is dropped when the queue is full and told
-  again with the next place; a refused or missing image leaves the software pointer. *Check:* `cargo test -p zoraya-compositor`
-  (`the_pointer_is_drawn_by_the_compositor_until_the_driver_holds_an_image`).
+  outside it reaches no device. (The clamp of a position to the display is in `gpud`, a binary with no host tests, and is checked
+  by reading: see the open questions.) *Check:* `cargo test -p zoraya-virtio-gpu` (`a_cursor_image_of_the_wrong_size_or_a_hot_spot_outside_it_reaches_no_device`, `a_cursor_whose_backing_failed_is_not_made_twice`).
+- **INV-0467-3.** The compositor never waits for the cursor: `SetCursor` is a request answered later and `MoveCursor` a write that is
+  dropped when the queue is full and told again with the next place; a driver that answers neither is found hung (the flush's
+  deadline); an answer to the image is never taken for another message, nor a `Resized` for the answer; a refused or missing image
+  leaves the software pointer. *Check:* `cargo test -p zoraya-compositor` (`a_resize_met_while_the_image_is_unanswered_is_not_lost`,
+  `the_answers_to_a_flush_and_to_an_image_are_told_apart`, `a_driver_that_never_answers_the_image_is_found_hung_with_only_the_pointer_moving`,
+  `a_driver_that_never_makes_room_for_a_move_is_found_hung`, `a_move_that_found_the_queue_full_is_told_again_with_the_next_place`,
+  `a_passing_failure_of_the_image_is_asked_again`, `the_pointer_is_drawn_by_the_compositor_until_the_driver_holds_an_image`).
 - **INV-0467-4.** With a frame interval set, at most one frame is composed per interval unless a client's commit waits for it, and
   a commit is answered in its round. *Check:* `cargo test -p zoraya-compositor` (`frames_are_at_most_one_per_interval_when_one_is_set`,
   `a_commit_is_answered_in_its_round_even_when_a_frame_is_held`).
+- **INV-0467-5.** A frame made by copying a moved window equals the frame a whole compose makes, round by round, at both scales,
+  including under the bar and the dock; a change in the window or elsewhere is never copied over. *Check:* `cargo test -p zoraya-compositor`
+  (`a_moved_window_is_copied_and_the_frame_is_what_a_whole_compose_makes`, `a_change_in_the_moved_window_or_elsewhere_is_never_copied_over`,
+  `a_window_moved_under_the_dock_or_the_bar_is_copied_only_where_nothing_is_over_it`).
 
 ## Open questions
 
 - Whether Cocoa shows the guest's cursor image over its own: the architect's look at `make run-gui` (scale 2) settles it; if it
   does not, the option to turn the hardware cursor off is `SetCursor`'s refusal, which a setting could ask for.
 - Whether the display's refresh should be read from the host (QEMU gives none to the guest): 60 Hz is assumed.
-- The two-rectangle damage and the blit of a dragged window: measured, not built (see the report).
+- The two-rectangle damage (a list of rectangles instead of one bounding box): not built (see the report).
+- The clamp of a position in `gpud` (`on_display`) and its checks of the hot spot and the length have no host test: `gpud` is a
+  binary. Moving the clamp into `zoraya-virtio-gpu` (`cursor_move` taking the size) would let a test cover it.
+- A first image or a new scale shows two pointers for the time until the image's answer and the frame that leaves the software
+  pointer out (the answer is a round later, the frame at most 1/60 s): not removed.
+- The `Busy` of the final `UPDATE_CURSOR` is answered `DEVICE` and the compositor asks again (three tries); `gpud` does not keep it pending.
 
 ## Revisit triggers
 

@@ -77,6 +77,14 @@ pub const DENSE_SCALE_TWO_FROM: u32 = 1280;
 /// The most messages one input device is read for in a round: its moves
 /// are told once, but a device that never stops cannot hold the loop.
 pub const MAX_DRAIN: usize = 32;
+/// The transaction of `SetCursor` (the flush's is 3): the driver's `Done`
+/// echoes it, which tells the two answers apart.
+const CURSOR_TRANSACTION: u32 = 5;
+/// The transaction of `Flush`.
+const FLUSH_TRANSACTION: u32 = 3;
+/// A cursor image the driver failed this many times is not asked for again
+/// (the failure may be a passing one: the cursor queue was busy).
+const CURSOR_TRIES: u8 = 3;
 
 /// Port keys: the manager, the display, inputs from `INPUT_KEY`, clients
 /// from `CLIENT_KEY`.
@@ -213,7 +221,8 @@ pub trait Platform {
     fn framebuffer_shown(&mut self) {}
     /// Sends a request to a driver and waits, with a deadline, for its
     /// reply. None if the driver is gone or late. Used only to attach a
-    /// display driver (`Info`, `Attach`); flushes do not wait.
+    /// display driver (`Info`, `Attach`); flushes and the cursor do not
+    /// wait.
     fn call(
         &mut self,
         end: Self::End,
@@ -412,6 +421,17 @@ pub struct Compositor<P: Platform> {
     cursor_refused: Option<u32>,
     /// The position the driver was last told.
     cursor_at: Option<(i64, i64)>,
+    /// A `SetCursor` the driver has not answered: the image's key, when it
+    /// was sent and the place it carried (ADR-0467: never waited for; its
+    /// `Done` has transaction `CURSOR_TRANSACTION`).
+    cursor_sent: Option<(u32, u64, i64, i64)>,
+    /// Failed answers to the image of the key `cursor_tries_key`.
+    cursor_tries: u8,
+    cursor_tries_key: Option<u32>,
+    /// A failed image is asked again not before this time.
+    cursor_retry_at: u64,
+    /// Since when the cursor's write has found the driver's queue full.
+    cursor_stuck: Option<u64>,
     buttons: u32,
     drag: Option<Drag>,
     /// The window whose body holds the left button the compositor
@@ -556,6 +576,11 @@ impl<P: Platform> Compositor<P> {
             cursor_key: None,
             cursor_refused: None,
             cursor_at: None,
+            cursor_sent: None,
+            cursor_tries: 0,
+            cursor_tries_key: None,
+            cursor_retry_at: 0,
+            cursor_stuck: None,
             buttons: 0,
             drag: None,
             body_press: None,
@@ -768,12 +793,23 @@ impl<P: Platform> Compositor<P> {
             (None, f) => f,
             (d, None) => d,
         };
-        // A pointer move the driver's queue had no room for too.
-        let deadline = if self.hw_cursor && self.pointer != self.cursor_at {
+        // A pointer move the driver's queue had no room for too, and an
+        // image it failed or had no room for.
+        let deadline = if (self.hw_cursor && self.pointer != self.cursor_at)
+            || self.cursor_stuck.is_some()
+            || self.cursor_retry()
+        {
             let retry = self.platform.now() + RETRY_NS;
             Some(deadline.map_or(retry, |d| d.min(retry)))
         } else {
             deadline
+        };
+        // The cursor's image has the flush's deadline too: a driver that
+        // answers nothing is hung (ADR-0093).
+        let deadline = match (deadline, self.cursor_sent) {
+            (Some(d), Some((_, sent, _, _))) => Some(d.min(sent + FLUSH_DEADLINE_NS)),
+            (None, Some((_, sent, _, _))) => Some(sent + FLUSH_DEADLINE_NS),
+            (d, None) => d,
         };
         // A `ClientGone` waiting for room in the panel's queue is tried
         // again every 10 ms too.
@@ -811,7 +847,17 @@ impl<P: Platform> Compositor<P> {
             }
         }
         self.flush_client_gone();
-        let waiting = self.in_flight.or(self.stuck_since);
+        // The oldest of the waits: a driver that answers flushes but not
+        // the cursor is hung too.
+        let waiting = [
+            self.in_flight,
+            self.stuck_since,
+            self.cursor_stuck,
+            self.cursor_sent.map(|(_, sent, _, _)| sent),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         if let Some(since) = waiting
             && self.platform.now() >= since + FLUSH_DEADLINE_NS
         {
@@ -958,8 +1004,22 @@ impl<P: Platform> Compositor<P> {
             Incoming::Empty => {}
             Incoming::Message(n)
                 if handles.is_empty()
+                    && self.cursor_sent.is_some()
+                    && decode::<display::Done>(&self.message[..n], 0)
+                        .is_ok_and(|(h, _)| h.transaction == CURSOR_TRANSACTION) =>
+            {
+                let status = decode::<display::Done>(&self.message[..n], 0)
+                    .map_or(display::status::DEVICE, |(_, d)| d.status.0);
+                self.cursor_answered(status);
+                if self.resized && self.in_flight.is_none() {
+                    self.display_resized();
+                }
+            }
+            Incoming::Message(n)
+                if handles.is_empty()
                     && self.in_flight.is_some()
-                    && decode::<display::Done>(&self.message[..n], 0).is_ok() =>
+                    && decode::<display::Done>(&self.message[..n], 0)
+                        .is_ok_and(|(h, _)| h.transaction == FLUSH_TRANSACTION) =>
             {
                 let sent = self.in_flight.take().unwrap_or(0);
                 self.stats.flushes += 1;
@@ -967,7 +1027,11 @@ impl<P: Platform> Compositor<P> {
                 self.stats.flush_ns += now.saturating_sub(sent);
                 self.measure.flush_answered(now, now.saturating_sub(sent));
                 if self.resized {
-                    self.display_resized();
+                    // Not while the image's answer is due: `Info`'s reply
+                    // would be taken from it.
+                    if self.cursor_sent.is_none() {
+                        self.display_resized();
+                    }
                 } else {
                     // The latest frame, whatever was composed meanwhile.
                     self.sync_cursor();
@@ -975,12 +1039,13 @@ impl<P: Platform> Compositor<P> {
                 }
             }
             // ADR-0246: a new display size. One at a time from the driver,
-            // and never while the compositor waits for `Info`'s reply.
+            // and never while the compositor waits for `Info`'s reply: so
+            // not while a flush or an image is unanswered either.
             Incoming::Message(n)
                 if handles.is_empty()
                     && decode::<display::Resized>(&self.message[..n], 0).is_ok() =>
             {
-                if self.in_flight.is_some() {
+                if self.in_flight.is_some() || self.cursor_sent.is_some() {
                     self.resized = true;
                 } else {
                     self.display_resized();
@@ -4055,6 +4120,11 @@ impl<P: Platform> Compositor<P> {
         self.cursor_key = None;
         self.cursor_refused = None;
         self.cursor_at = None;
+        self.cursor_sent = None;
+        self.cursor_tries = 0;
+        self.cursor_tries_key = None;
+        self.cursor_retry_at = 0;
+        self.cursor_stuck = None;
     }
 
     /// What the pointer's image depends on: the scale and the appearance.
@@ -4062,21 +4132,42 @@ impl<P: Platform> Compositor<P> {
         self.scale.factor() * 2 + u32::from(self.appearance == Appearance::Dark)
     }
 
+    /// Whether the image of the current key failed and is to be asked for
+    /// again (`step` wakes for it).
+    fn cursor_retry(&self) -> bool {
+        self.display.is_some()
+            && self.pointer.is_some()
+            && self.cursor_sent.is_none()
+            && self.cursor_tries > 0
+            && self.cursor_key != Some(self.cursor_image_key())
+            && self.cursor_refused != Some(self.cursor_image_key())
+    }
+
     /// Gives the display driver the pointer's image when it has none or
-    /// the scale or appearance changed (once a pointer has spoken, with no
-    /// flush in flight: the `call` takes the next message as its reply),
-    /// and tells it where the pointer is. The host draws the pointer
-    /// meanwhile, so no frame is composed for a move. A driver that refuses
-    /// leaves the pointer to the compositor's own drawing.
+    /// the scale or appearance changed (once a pointer has spoken), and
+    /// tells it where the pointer is. Neither waits (ADR-0467): the image
+    /// is a request whose `Done` is read with the other messages
+    /// ([`Self::cursor_answered`]). The host draws the pointer meanwhile, so
+    /// no frame is composed for a move. A driver that refuses leaves the
+    /// pointer to the compositor's own drawing; one that refuses a new image
+    /// after it held one goes on showing the old image, moved (one pointer,
+    /// not two).
     fn sync_cursor(&mut self) {
         let Some(end) = self.display else { return };
         let Some((x, y)) = self.pointer else { return };
         let key = self.cursor_image_key();
-        if self.cursor_key != Some(key) && self.cursor_refused != Some(key) {
-            if self.in_flight.is_some() {
-                return;
-            }
+        let wants_image = self.cursor_key != Some(key) && self.cursor_refused != Some(key);
+        // Nothing to write: nothing is stuck.
+        if !wants_image && !(self.hw_cursor && self.cursor_at != Some((x, y))) {
+            self.cursor_stuck = None;
+        }
+        // The image is written when none is unanswered and a failed one has
+        // waited; moves go meanwhile (the channel is in order).
+        if wants_image && self.cursor_sent.is_none() && self.platform.now() >= self.cursor_retry_at
+        {
             let Some(image) = self.cursor_image() else {
+                // Too large to be a cursor: the old image, if there is one,
+                // stays and moves.
                 self.cursor_refused = Some(key);
                 return;
             };
@@ -4091,27 +4182,24 @@ impl<P: Platform> Compositor<P> {
                 y: at.1,
                 pixels: zoraya_protocol::Data(&image),
             };
-            let length = reply(&m, 5, &mut self.out);
-            let message = self.out[..length].to_vec();
-            let mut answer = [0u8; 64];
-            let done = self.platform.call(end, &message, &[], &mut answer);
-            if Self::done_ok(done, &answer) {
-                // The pointer's pixels in the frame go.
-                if !self.hw_cursor
-                    && let Some((px, py)) = self.pointer
-                {
-                    let r = self.pointer_rect(px, py);
-                    self.dirty(&r);
+            let length = reply(&m, CURSOR_TRANSACTION, &mut self.out);
+            match self.platform.write(end, &self.out[..length], &[]) {
+                Outgoing::Sent => {
+                    self.cursor_sent = Some((key, self.platform.now(), x, y));
+                    self.cursor_stuck = None;
+                    // The host's pointer is at the place the image carried.
+                    if self.hw_cursor {
+                        self.cursor_at = Some((x, y));
+                    }
                 }
-                self.hw_cursor = true;
-                self.cursor_key = Some(key);
-                self.cursor_at = Some((x, y));
-            } else {
-                self.cursor_refused = Some(key);
-                if self.hw_cursor {
-                    self.forget_cursor();
-                    self.cursor_refused = Some(key);
+                // Asked again at the end of the next round (`step`'s
+                // deadline); a driver that never makes room is hung.
+                Outgoing::Full => {
+                    if self.cursor_stuck.is_none() {
+                        self.cursor_stuck = Some(self.platform.now());
+                    }
                 }
+                Outgoing::Closed => self.lose_display(),
             }
             return;
         }
@@ -4124,12 +4212,56 @@ impl<P: Platform> Compositor<P> {
             match self.platform.write(end, &self.out[..length], &[]) {
                 Outgoing::Sent => {
                     self.cursor_at = Some((x, y));
+                    self.cursor_stuck = None;
                     self.measure.cursor_move();
                 }
                 // Told again at the end of the next round, which comes
-                // within `RETRY_NS` (`step`'s deadline).
-                Outgoing::Full => {}
+                // within `RETRY_NS` (`step`'s deadline). Its wait counts
+                // for the hang's deadline, as a flush's does (a driver
+                // that is hung while only the pointer moves is found).
+                Outgoing::Full => {
+                    if self.cursor_stuck.is_none() {
+                        self.cursor_stuck = Some(self.platform.now());
+                    }
+                }
                 Outgoing::Closed => self.lose_display(),
+            }
+        }
+    }
+
+    /// The driver's answer to the image sent.
+    fn cursor_answered(&mut self, status: u32) {
+        let Some((key, _, x, y)) = self.cursor_sent.take() else {
+            return;
+        };
+        if status == display::status::OK {
+            self.cursor_tries = 0;
+            // The pointer's pixels in the frame go.
+            if !self.hw_cursor
+                && let Some((px, py)) = self.pointer
+            {
+                let r = self.pointer_rect(px, py);
+                self.dirty(&r);
+                self.cursor_at = Some((x, y));
+            }
+            self.hw_cursor = true;
+            self.cursor_key = Some(key);
+            if self.measure.on {
+                self.platform.note("compd: hardware cursor: image accepted");
+            }
+        } else {
+            if self.cursor_tries_key != Some(key) {
+                self.cursor_tries = 0;
+                self.cursor_tries_key = Some(key);
+            }
+            self.cursor_tries += 1;
+            self.cursor_retry_at = self.platform.now() + RETRY_NS;
+            if self.cursor_tries >= CURSOR_TRIES {
+                self.cursor_tries = 0;
+                self.cursor_refused = Some(key);
+                if self.measure.on {
+                    self.platform.note("compd: hardware cursor: image refused");
+                }
             }
         }
     }
@@ -4148,7 +4280,7 @@ impl<P: Platform> Compositor<P> {
             width: r.width as u32,
             height: r.height as u32,
         };
-        let length = reply(&m, 3, &mut self.out);
+        let length = reply(&m, FLUSH_TRANSACTION, &mut self.out);
         match self.platform.write(end, &self.out[..length], &[]) {
             Outgoing::Sent => {
                 self.measure.flush_sent((r.width * r.height).max(0) as u64);

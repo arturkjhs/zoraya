@@ -184,6 +184,9 @@ pub struct Gpu<R, S> {
     cursor_free: u16,
     /// The cursor's resource exists and is backed.
     cursor_made: bool,
+    /// The cursor's resource exists (made, perhaps not yet backed): a
+    /// failed `cursor_set` is tried again without making it twice.
+    cursor_created: bool,
     /// The display's size as `GET_DISPLAY_INFO` last gave it.
     width: u32,
     height: u32,
@@ -243,6 +246,7 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             cursor_queue,
             cursor_free: u16::MAX,
             cursor_made: false,
+            cursor_created: false,
             width: 0,
             height: 0,
             shown: None,
@@ -505,17 +509,20 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             return Err(Error::BadRange);
         }
         if !self.cursor_made {
-            let mut r = Request {
-                shared: &mut self.shared,
-                at: 0,
-            };
-            r.header(cmd::RESOURCE_CREATE_2D)
-                .u32(CURSOR_RESOURCE)
-                .u32(FORMAT_CURSOR)
-                .u32(CURSOR_SIDE)
-                .u32(CURSOR_SIDE);
-            let length = r.at;
-            self.call(length, cmd::OK_NODATA, HEADER, wait)?;
+            if !self.cursor_created {
+                let mut r = Request {
+                    shared: &mut self.shared,
+                    at: 0,
+                };
+                r.header(cmd::RESOURCE_CREATE_2D)
+                    .u32(CURSOR_RESOURCE)
+                    .u32(FORMAT_CURSOR)
+                    .u32(CURSOR_SIDE)
+                    .u32(CURSOR_SIDE);
+                let length = r.at;
+                self.call(length, cmd::OK_NODATA, HEADER, wait)?;
+                self.cursor_created = true;
+            }
             let mut r = Request {
                 shared: &mut self.shared,
                 at: 0,
