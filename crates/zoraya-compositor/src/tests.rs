@@ -38,6 +38,9 @@ struct Memory {
     reads: Cell<u64>,
 }
 
+/// A cursor image the driver was given: hot spot, place, the image.
+type CursorSet = ((u32, u32), (u32, u32), Vec<u8>);
+
 #[derive(Default)]
 struct Fake {
     peers: BTreeMap<u32, Peer>,
@@ -62,7 +65,7 @@ struct Fake {
     /// answers `DEVICE`.
     accept_cursor: bool,
     /// The images the driver was given: hot spot, place, the image.
-    cursor_sets: Vec<((u32, u32), (u32, u32), Vec<u8>)>,
+    cursor_sets: Vec<CursorSet>,
     /// Every `MoveCursor` the driver was told.
     cursor_moves: Vec<(u32, u32)>,
     flushes: Vec<(u32, u32, u32, u32)>,

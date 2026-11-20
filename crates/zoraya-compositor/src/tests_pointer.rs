@@ -114,8 +114,10 @@ fn a_scale_or_appearance_change_gives_the_driver_a_new_image() {
     let mut s = setup_cursor();
     s.move_to(300, 200);
     assert_eq!(s.f().cursor_sets.len(), 1);
-    let mut g = crate::settings::GuiSettings::default();
-    g.dark = true;
+    let g = crate::settings::GuiSettings {
+        dark: true,
+        ..Default::default()
+    };
     s.c.apply_settings(g);
     s.c.step();
     s.move_to(310, 200);
@@ -385,4 +387,38 @@ fn a_window_moved_under_the_dock_or_the_bar_is_copied_only_where_nothing_is_over
             assert_eq!(bad, 0, "scale two {scale_two}, round {i}: {bad} differ");
         }
     }
+}
+
+#[test]
+fn a_drag_with_a_move_every_ten_ms_is_a_frame_every_interval() {
+    let mut s = setup_with(|f| f.accept_cursor = true);
+    s.c.set_frame_interval(16_666_667);
+    let (_a, _, _) = s.toplevel(180, 120, 0x30_6090);
+    let body = s.body(0, 1);
+    let (tx, ty) = (body.x + 60, body.y - 18);
+    s.at(tx, ty, None);
+    s.at(tx, ty, Some(1));
+    s.at(tx + 1, ty, None);
+    // A second of fake time: a move each 10 ms, the loop waiting to its
+    // deadline in between.
+    let start = s.f().clock;
+    let frames = s.c.stats().frames;
+    let mut i = 0;
+    while s.f().clock < start + 1_000_000_000 {
+        let next = start + (i + 1) * 10_000_000;
+        // Rounds until the next move is due: the compositor's deadline
+        // (a held frame) comes first when it is before.
+        while s.f().clock < next {
+            let due = s.c.frame_due().map_or(next, |d| d.min(next));
+            s.f().clock = s.f().clock.max(due);
+            if due == next {
+                break;
+            }
+            s.c.step();
+        }
+        s.at(tx + 2 + (i as i64 % 200), ty + (i as i64 % 90), None);
+        i += 1;
+    }
+    let made = s.c.stats().frames - frames;
+    assert!((55..=65).contains(&made), "{made} frames in a second");
 }

@@ -307,7 +307,7 @@ impl<P: Platform> Compositor<P> {
                     1 => p.bg_control,
                     _ => p.fg_text,
                 };
-                let word = 0xFF00_0000 | color.pixel();
+                let word = (255u32 << 24) | color.pixel();
                 for y in dy * k..(dy + 1) * k {
                     for x in dx * k..(dx + 1) * k {
                         let at = (y * side + x) * 4;

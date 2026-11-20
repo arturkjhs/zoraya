@@ -530,8 +530,8 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             self.call(length, cmd::OK_NODATA, HEADER, wait)?;
             self.cursor_made = true;
         }
-        for (i, word) in image.chunks_exact(4).enumerate() {
-            let w = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        for (i, word) in image.as_chunks::<4>().0.iter().enumerate() {
+            let w = u32::from_le_bytes(*word);
             self.shared.write32(CURSOR_IMAGE_AT + 4 * i, w);
         }
         let whole = Rect {
