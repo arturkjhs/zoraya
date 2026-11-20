@@ -18,6 +18,11 @@
 #   ZORAYA_LD       an ld.lld-flavoured linker (default: rust-lld's gcc-ld
 #                   wrapper from the toolchain rustc reports)
 #
+# ZORAYA_RUST=1 (set by tools/zcargo, ADR-0452 item 3, INV-0452-2): the one
+# argument --target=aarch64-unknown-linux-musl is accepted and dropped, because
+# the `cc` crate adds it when it builds a Rust program's C parts; every other
+# --target is refused as always, and __linux__ stays undefined.
+#
 # Usage is that of cc: -c, -S, -E and -M compile only; anything else links.
 # -nostdlib, -nostartfiles and -nodefaultlibs leave out what they say.
 set -eu
@@ -37,6 +42,17 @@ here=$(cd "$(dirname "$self")" && pwd)
 root=$(cd "$here/.." && pwd)
 sysroot=${ZORAYA_SYSROOT:-$root/build/sysroot}
 clang=${ZORAYA_CLANG:-clang}
+
+# The cc crate's --target, for a build zcargo started (ADR-0452 item 3).
+if [ "${ZORAYA_RUST:-}" = 1 ]; then
+    n=$#
+    while [ "$n" -gt 0 ]; do
+        a=$1
+        shift
+        [ "$a" = "--target=aarch64-unknown-linux-musl" ] || set -- "$@" "$a"
+        n=$((n - 1))
+    done
+fi
 
 link=1
 startfiles=1

@@ -333,6 +333,9 @@ jobs:
           - make check-ethd-maps
           - make check-tls-roots
           - make check-libposix-widths
+          - make check-rust-stable
+          - make check-rust-archive
+          - make check-zcargo
           - make check-netsurf-refusal
           - make check-run-disk
           - make check-ci-plan

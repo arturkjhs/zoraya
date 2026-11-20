@@ -34,4 +34,19 @@ grep -qx '__zoraya__ 1' "$dir/zcc.txt" || { echo "compare-predefs: no __zoraya__
 for n in __unix__ __unix unix __linux__ __linux linux __gnu_linux__; do
     grep -qx "$n undefined" "$dir/zcc.txt" || { echo "compare-predefs: $n is defined"; exit 1; }
 done
+# INV-0452-2: for a Rust build (ZORAYA_RUST=1) zcc accepts exactly the cc
+# crate's --target=aarch64-unknown-linux-musl, drops it, and predefines the
+# same identity (no Linux); with no ZORAYA_RUST, and for any other target, it
+# refuses.
+ZORAYA_RUST=1 "$zcc" --target=aarch64-unknown-linux-musl -dM -E -x c /dev/null > "$dir/zcc-rust.h"
+pick "$dir/zcc-rust.h" > "$dir/zcc-rust.txt"
+diff "$dir/zcc.txt" "$dir/zcc-rust.txt" || { echo "compare-predefs: zcc differs under ZORAYA_RUST=1"; exit 1; }
+if "$zcc" --target=aarch64-unknown-linux-musl -dM -E -x c /dev/null > /dev/null 2>&1; then
+    echo "compare-predefs: zcc accepts --target without ZORAYA_RUST=1"; exit 1
+fi
+for t in --target=aarch64-unknown-linux-gnu --target=x86_64-unknown-linux-musl "--target=aarch64-unknown-linux-musl " -target; do
+    if ZORAYA_RUST=1 "$zcc" "$t" -dM -E -x c /dev/null > /dev/null 2>&1; then
+        echo "compare-predefs: zcc accepts $t under ZORAYA_RUST=1"; exit 1
+    fi
+done
 echo "compare-predefs: zcc and tcc predefine the same identity: $(grep -cv undefined "$dir/zcc.txt") macros, no Unix or Linux"

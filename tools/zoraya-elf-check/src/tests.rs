@@ -131,3 +131,64 @@ fn the_range_is_the_kernel_s() {
     assert_eq!(USER_LOW, 4 << 20);
     const { assert!(USER_HIGH > USER_LOW && USER_HIGH < 1 << 47) };
 }
+
+// ------------------------------------------------------------ INV-0450-2
+
+const MAP: &str = "\
+     VMA      LMA     Size Align Out     In      Symbol
+  400000   400000       58     1 .interp
+  4000f0   4000f0     1000     4 .text
+  4000f0   4000f0       20     4         /w/target/release/deps/rprobe-1.rcgu.o:(.text.main)
+  400110   400110       20     4         /w/build/sysroot/usr/lib/libc.a(zoraya_rt-ab.o):(.text.raw_syscall)
+  400110   400110       20     1                 raw_syscall
+  400130   400130       10     4         /w/build/sysroot/usr/lib/libc.a(zoraya_posix-cd.o):(.text.exit)
+  400140   400140       10     4         /w/x/notlibc.a(a.o):(.text.f)
+  400150   400150       10     4         /w/x/libc.a:(.text.nomember)
+";
+
+#[test]
+fn the_map_gives_the_input_sections_of_libc_a_only() {
+    assert_eq!(
+        libc_ranges(MAP),
+        [(0x40_0110, 0x40_0130), (0x40_0130, 0x40_0140)]
+    );
+    assert!(libc_ranges("").is_empty());
+}
+
+/// A text segment of `words` at 0x400000.
+fn text(words: &[u32]) -> Vec<u8> {
+    let mut e = exec(2, &[(LOAD, PF_R | PF_X, 0x40_0000, 0x1000)], 0x40_0000);
+    for (i, w) in words.iter().enumerate() {
+        e[0x1000 + 4 * i..0x1000 + 4 * i + 4].copy_from_slice(&w.to_le_bytes());
+    }
+    e
+}
+
+#[test]
+fn an_svc_outside_libc_a_is_found_and_one_inside_is_not() {
+    const NOP: u32 = 0xd503_201f;
+    const SVC0: u32 = 0xd400_0001;
+    let file = text(&[NOP, SVC0, NOP, 0xd400_0021 /* svc #1 */, NOP]);
+    // No range: both are foreign.
+    assert_eq!(foreign_svc(&file, &[]).unwrap(), [0x40_0004, 0x40_000c]);
+    // The first inside libc.a's range, the second not.
+    assert_eq!(
+        foreign_svc(&file, &[(0x40_0004, 0x40_0008)]).unwrap(),
+        [0x40_000c]
+    );
+    // Both inside.
+    assert!(
+        foreign_svc(&file, &[(0x40_0000, 0x40_0010)])
+            .unwrap()
+            .is_empty()
+    );
+    // Neighbours of the encoding are not svc: hvc, smc, brk.
+    let file = text(&[0xd400_0002, 0xd400_0003, 0xd420_0000, NOP]);
+    assert!(foreign_svc(&file, &[]).unwrap().is_empty());
+    // Data is not read as code: a word in a non-executable segment.
+    let mut e = exec(2, &[TEXT, DATA], 0x40_0000);
+    e[0x2000..0x2004].copy_from_slice(&SVC0.to_le_bytes());
+    assert!(foreign_svc(&e, &[]).unwrap().is_empty());
+    // A file the loader refuses is refused.
+    assert!(foreign_svc(b"not an elf", &[]).is_err());
+}

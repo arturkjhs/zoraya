@@ -18,9 +18,9 @@
 # tests of the crates that changed (and of those that depend on them) are what it can break.
 Cargo.toml                    check
 Cargo.lock                    check
-Makefile                      check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-tour-terminal test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-fuzz test-fuzz-net test-python-serve
-tools/run-qemu.sh             check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-tour-terminal test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-fuzz test-fuzz-net test-python-serve
-tools/test-runner/            check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-tour-terminal test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-fuzz test-fuzz-net test-python-serve
+Makefile                      check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-tour-terminal test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-fuzz test-fuzz-net test-python-serve
+tools/run-qemu.sh             check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-tour-terminal test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-fuzz test-fuzz-net test-python-serve
+tools/test-runner/            check test-qemu test-boot test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-files test-crash test-posix test-posix-gui test-tour-gui test-tour-terminal test-gui test-net test-keeper test-hand-run test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-fuzz test-fuzz-net test-python-serve
 tools/test-par.sh             check
 tools/test-lanes.txt          check
 tools/check-test-lanes.sh     check
@@ -203,7 +203,7 @@ user/describe/posix/zfetch.cmd test-net test-files
 user/describe/posix/tcptest.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-python-serve
+crates/zoraya-posix/          check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-python-serve
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 crates/zoraya-tty/            test-posix test-posix-gui test-gui
@@ -219,17 +219,17 @@ tests/shell/python.script    test-python
 tests/shell/python-regr.script test-python-regr
 tests/shell/python-mem.script test-python-mem
 tests/shell/python-serve.script test-python-serve
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-gtest test-python-serve
-ports/musl/                   test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-python-serve
-ports/include/                test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-python-serve
-ports/crt/                    test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-python-serve
-ports/sources.lock            test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-python-serve
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-gtest test-rust-std test-python-serve
+ports/musl/                   test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-python-serve
+ports/include/                test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-python-serve
+ports/crt/                    test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-python-serve
+ports/sources.lock            test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std test-python-serve
 ports/Makefile                test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-libcxx test-cxx-gtest test-python-serve
 ports/cxx/                    test-cxx test-cxx-libcxx test-cxx-gtest
 ports/cmake/                  test-cxx-gtest
 ports/patches/llvm/           test-cxx test-cxx-libcxx test-cxx-gtest
 ports/patches/googletest/     test-cxx-gtest
-tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-gtest test-cxx-libcxx test-python-serve
+tools/zcc                     test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-python test-python-ext test-python-regr test-python-mem test-hand-run test-cxx test-cxx-gtest test-cxx-libcxx test-python-serve test-rust-std
 tools/zc++                    test-cxx test-cxx-libcxx test-cxx-gtest
 tests/gui/posix-terminal.script test-tour-terminal
 tests/gui/posix-curses.script test-tour-terminal
@@ -326,3 +326,18 @@ docs/adr/0347-surface-for-git.md check test-libposix test-posix-threads test-pos
 tests/python-ext/            test-python-ext
 tests/shell/python-ext.script test-python-ext
 user/src/namespace.rs         test-qemu test-gui test-files test-posix
+# Rust's std as a POSIX program (ADR-0450 to ADR-0454, make test-rust-std): its test crate, its build wrapper and
+# archive, its descriptions, and what libposix and the broker answer it.
+tests/rust-std/               test-rust-std
+tools/zcargo                  check test-rust-std
+tools/zcargo-link             check test-rust-std
+tools/test-zcargo.sh          check test-rust-std
+tools/rust-musl-target.sh     check test-rust-std
+tools/check-rust-stable.sh    check
+tools/check-rust-archive.sh   check
+ports/rust/                   check test-rust-std
+tools/zoraya-elf-check/       check test-rust-std
+tools/posix-surface-check/    check test-libposix test-rust-std
+user/describe/posix/rstest.cmd test-rust-std test-files
+user/describe/posix/rsnet.cmd  test-rust-std test-files
+rust-toolchain.toml           check test-rust-std

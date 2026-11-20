@@ -73,3 +73,40 @@ fn passes_good_files_and_fails_on_any_refusal() {
     }
     assert!(!run(&[d.join("nowhere")]).0);
 }
+
+#[test]
+fn no_foreign_svc_fails_on_an_svc_outside_the_maps_libc_a() {
+    let d = std::env::temp_dir().join(format!("zoraya-elf-check-svc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let mut file = exec(0x40_0000, 5);
+    file[0x1000..0x1004].copy_from_slice(&0xd400_0001u32.to_le_bytes());
+    std::fs::write(d.join("prog"), &file).unwrap();
+    // The map attributes the first words to libc.a, or not.
+    let inside = "  400000   400000       10     4         /x/libc.a(rt.o):(.text.a)\n";
+    let outside = "  400000   400000       10     4         /x/prog.o:(.text.main)\n";
+    std::fs::write(d.join("inside.map"), inside).unwrap();
+    std::fs::write(d.join("outside.map"), outside).unwrap();
+    let svc = |map: &str| {
+        run(&[
+            PathBuf::from("--no-foreign-svc"),
+            d.join(map),
+            d.join("prog"),
+        ])
+    };
+    let (ok, text) = svc("inside.map");
+    assert!(ok, "{text}");
+    let (ok, text) = svc("outside.map");
+    assert!(
+        !ok && text.contains("svc instruction(s) outside libc.a, at 0x400000"),
+        "{text}"
+    );
+    // A missing map or no map argument fails.
+    let (ok, _) = svc("missing.map");
+    assert!(!ok);
+    let (ok, _) = run(&[PathBuf::from("--no-foreign-svc")]);
+    assert!(!ok);
+    // Without the option the file is checked as before.
+    let (ok, text) = run(&[d.join("prog")]);
+    assert!(ok, "{text}");
+}
