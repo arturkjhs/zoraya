@@ -261,10 +261,18 @@ fn a_held_frame_is_due_at_the_interval_and_the_wait_ends_there() {
     assert_eq!(s.c.frame_due(), None);
 }
 
+/// A digest of a frame (FNV-1a over its words): frames of a 2048 by 1536
+/// display are 12 MiB, too many to keep for the memory cap of a test.
+fn digest(frame: &[u32]) -> u64 {
+    frame.iter().fold(0xcbf2_9ce4_8422_2325, |h, w| {
+        (h ^ u64::from(*w)).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
 /// A hardware-cursor desktop with two windows, the second on top, and the
 /// person dragging its title bar along `path` (a point each round); the
 /// frame after each round, as the compositor composed it.
-fn drag_frames(blit: bool, scale_two: bool, path: &[(i64, i64)]) -> (Vec<Vec<u32>>, u64) {
+fn drag_frames(blit: bool, scale_two: bool, path: &[(i64, i64)]) -> (Vec<u64>, u64) {
     // A display of 2048 wide has scale 2 (`SCALE_TWO_FROM`).
     let mut s = setup_with(|f| {
         f.accept_cursor = true;
@@ -288,14 +296,14 @@ fn drag_frames(blit: bool, scale_two: bool, path: &[(i64, i64)]) -> (Vec<Vec<u32
     let mut out = Vec::new();
     for (dx, dy) in path {
         s.at(tx + dx, ty + dy, None);
-        out.push(s.f().frame.clone());
+        out.push(digest(&s.f().frame));
     }
     s.at(
         tx + path.last().unwrap().0,
         ty + path.last().unwrap().1,
         Some(0),
     );
-    out.push(s.f().frame.clone());
+    out.push(digest(&s.f().frame));
     (out, s.c.stats().blits)
 }
 
@@ -316,8 +324,7 @@ fn a_moved_window_is_copied_and_the_frame_is_what_a_whole_compose_makes() {
     assert!(some >= 3, "frames made by copying: {some}");
     assert_eq!(whole.len(), copied.len());
     for (i, (a, b)) in whole.iter().zip(&copied).enumerate() {
-        let bad = a.iter().zip(b).filter(|(x, y)| x != y).count();
-        assert_eq!(bad, 0, "round {i}: {bad} pixels differ");
+        assert_eq!(a, b, "round {i}: the frames differ");
     }
 }
 
@@ -383,8 +390,7 @@ fn a_window_moved_under_the_dock_or_the_bar_is_copied_only_where_nothing_is_over
         let (copied, blits) = drag_frames(true, scale_two, &path);
         assert!(blits >= 2, "scale two {scale_two}: {blits}");
         for (i, (a, b)) in whole.iter().zip(&copied).enumerate() {
-            let bad = a.iter().zip(b).filter(|(x, y)| x != y).count();
-            assert_eq!(bad, 0, "scale two {scale_two}, round {i}: {bad} differ");
+            assert_eq!(a, b, "scale two {scale_two}, round {i}: the frames differ");
         }
     }
 }
