@@ -686,3 +686,22 @@ rooms' `+listen` words and the panel's pills for a listen rule are not built (on
 Allowed (ADR-0412). Built in part own-sockets (2026-11-19, ADR-0465 proposed): `bind` in an `Own` entry, socket nodes in the volume's `fsd`, `+sock PATH`.
 Unlinking a listening node follows the ordinary rules (write on its directory). tmux's default place is an own directory.
 
+## Requests from outside work: R22 (second half) and R23 to R26, an emoji font, install from the desktop (the architect, 2026-11-20)
+
+- **R22, second half: an installed native program started from the shell gets its window from the panel.** Its saved grants
+  (ADR-0397) show as pills. Minimal test: install a native program with a saved grant, start it by name from a terminal of the
+  desktop: its window opens through the panel with the saved grants as pills; without a saved grant, none.
+- **R23, `realpath` fails inside a program's own directory.** Minimal test: a POSIX program in its own directory calls
+  `realpath(".")` and `realpath("file")` and gets the path of the own directory, not an error.
+- **R24, the panel refuses a `+sock` pill, so a window with a socket grant is refused.** Minimal test: open a window with a
+  `+sock PATH` grant (ADR-0465); the panel shows the pill and the window opens.
+- **R25, a terminal reopened after the first one closes cannot open windows.** Its shell has no channel to the panel. Minimal
+  test: open a terminal, close it, open another: a window program started from the second opens its window.
+- **R26, a minimum desktop size.** The desktop shrinks to a small host window and then refuses windows. Minimal test: resize the
+  host window to below the minimum: the desktop keeps its minimum size (scrolls or clips) and a window still opens.
+- **An emoji font in `/system/fonts`:** Noto Emoji, OFL-1.1, unmodified (ADR-0327 rules), with regional-indicator pairs (a flag
+  is one wide cell) and wide-character width in the terminal grid. Minimal test: the terminal shows U+1F600 and a flag pair as
+  two-cell glyphs and the cursor advances two cells.
+- **Install from a terminal of the desktop.** Today only the console holds the volume root. Minimal test: in a desktop terminal
+  the install command (ADR-0396) installs a program and it runs by name.
+

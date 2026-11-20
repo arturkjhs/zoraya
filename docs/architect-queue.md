@@ -16,7 +16,6 @@ Last updated: 2026-11-19 (bind-right part added ADR-0466); before: 2026-11-18 (t
 | ADR | What | Recommendation | From |
 |---|---|---|---|
 | ADR-0460 | Charge but do not park the thread of a process that is ending (a killed room dies at once). Option A is the architect's decision of 2026-11-16; the ADR is for you to accept after the implementation | Option A (decided); a QEMU kernel test is to be built by another agent | `work/smp-tcg`, TASK-31 |
-| ADR-0466 | The `BIND` right (bit `1 << 9`, outside `ALL`): the file service makes a socket node only through a connection that holds it; the shell asks for it for the own directory and the line's `/tmp` only. Closes the review's finding 3 of own-sockets. | Accept. | bind-right |
 | ADR-0394 | 10j: what the installed-program part decided where ADR-0396, 0397 and 0399 are silent (the record's date, the name's form, the copy, a typed word, what a hand-edited record may do, `--kill`), and what it did not build: the Programs page of `settings` (INV-0399-4) and INV-0397-6's grant-line script | Option A now; the page as Option C, a part of its own (the panel writes the record through `zoraya_settings::apps`) | 10j |
 | ADR-0464 | What 10h decided: forms of `git` (`sub`), the clone directory (`derive`), only the transport helper has a connection, the ceiling, ancestors of an entry not reported, a child keeps the write of a `+w` entry | Option A (as built); NOT MERGED: see `docs/tasks/TASK-31-review-10h.md` | `work/10h`, TASK-31 |
 | ADR-0395 | 10f: the status row, System+G and System+K, the grant line and **the delivery of a grant to a running POSIX program** (`GRANTS` slot 1006, `ZGR1`, `NarrowNames` ordinal 44), the network refusal report; a `+net` word and a native program are not delivered | Option A as built | 10f |
@@ -84,6 +83,7 @@ Last updated: 2026-11-19 (bind-right part added ADR-0466); before: 2026-11-18 (t
 ## E. Decided 2026-11-19 (removed from the lists above)
 
 - ADR-0465 accepted with its stated limits (the saved `+sock` word is a narrow exception to ADR-0397 item 1). Its review error is closed by a `BIND` right (part `work/bind-right`, done: ADR-0466 proposed, A above); the shared 256 nodes and 64 listeners become per-room bounds in F11.
+- ADR-0466 accepted 2026-11-20 with its known limit (a directory more than 16 levels deep or with more than 4096 entries is treated as holding a node when moved).
 
 ## E. Decided 2026-11-18 (removed from the lists above)
 

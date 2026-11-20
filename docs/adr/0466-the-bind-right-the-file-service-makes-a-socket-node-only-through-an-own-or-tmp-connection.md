@@ -1,6 +1,6 @@
 # ADR-0466: The `BIND` right: the file service makes a socket node only through an own-directory or `/tmp` connection
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-19
 - **Depends on:** ADR-0055, ADR-0153, ADR-0341, ADR-0393, ADR-0412, ADR-0439, ADR-0465
 - **Evidence:** CP-01, CP-02, DM-039
@@ -118,4 +118,6 @@ program is meant to be a server in. A program that was handed a writable folder 
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-20. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted with its known limit (a directory more than 16 levels deep or with more than 4096 entries is treated as holding a node when moved).
