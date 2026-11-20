@@ -123,6 +123,7 @@ tests/gui/ssh-room.script     test-apps
 user/src/bin/compd.rs         test-gui
 user/src/bin/term.rs          test-gui test-tour-gui test-tour-terminal
 user/src/bin/gpud.rs          test-gui
+user/src/bin/guibench.rs      test-gui test-qemu
 user/src/bin/inputd.rs        test-gui
 user/src/bin/panel.rs         test-gui test-apps test-rust-std
 user/src/bin/chooser.rs       test-gui

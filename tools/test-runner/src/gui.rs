@@ -39,6 +39,10 @@
 //!                   left button
 //! drag X Y X2 Y2 [HOLD]  press the left button at (X, Y), hold it HOLD ms,
 //!                   move to (X2, Y2) in steps, release
+//! sweep X Y X2 Y2 STEPS MS  the same as `drag`, but with STEPS moves MS
+//!                   milliseconds apart (a measurement of dragging, TASK-31)
+//! glide X Y X2 Y2 STEPS MS  move the pointer, no button, in STEPS moves MS
+//!                   milliseconds apart
 //! dclick X Y        two left clicks at (X, Y) at once: a double click
 //! rclick X Y        a right click at (X, Y)
 //! mclick MOD X Y    a left click with MOD (shift, ctrl, alt, meta) held
@@ -225,6 +229,9 @@ pub enum Step {
     Layout(usize),
     /// From, to, and how long the press is held before the move, in ms.
     Drag(i64, i64, i64, i64, u64),
+    /// `sweep` (`true`, the left button held) or `glide`: from, to, the
+    /// number of moves and the milliseconds between them.
+    Sweep(bool, [i64; 4], u32, u64),
     /// Reads the terminal whose body is at this logical point (a second
     /// window), instead of the first.
     Origin(i64, i64),
@@ -406,6 +413,22 @@ fn parse_step(n: usize, line: &str) -> Result<Step, String> {
                 _ => return Err(bad("drag X Y X2 Y2 [HOLD_MS]")),
             };
             Step::Drag(x, y, x2, y2, hold)
+        }
+        "sweep" | "glide" => {
+            let v: Vec<i64> = rest
+                .split_whitespace()
+                .map(|n| n.parse().map_err(|_| bad("not a number")))
+                .collect::<Result<_, _>>()?;
+            match v[..] {
+                [x, y, x2, y2, n, ms] if (1..=10_000).contains(&n) && (0..=1000).contains(&ms) => {
+                    Step::Sweep(kind == "sweep", [x, y, x2, y2], n as u32, ms as u64)
+                }
+                _ => {
+                    return Err(bad(
+                        "sweep X Y X2 Y2 STEPS MS (STEPS 1 to 10000, MS to 1000)",
+                    ));
+                }
+            }
         }
         "latency" => {
             let mut words = rest.split_whitespace();
@@ -1171,6 +1194,7 @@ impl Run {
                 | Step::ModClick(..)
                 | Step::ModDrag(..)
                 | Step::Drag(..)
+                | Step::Sweep(..)
         ) {
             self.pump()?;
             self.mark = self.seen.len();
@@ -1560,6 +1584,25 @@ impl Run {
                 std::thread::sleep(DRAG_SETTLE);
                 self.qmp.pointer((x2 * k, y2 * k), size, Some(false))
             }
+            Step::Sweep(held, [x, y, x2, y2], n, ms) => {
+                let (size, k) = self.display()?;
+                self.qmp.pointer((x * k, y * k), size, None)?;
+                if *held {
+                    self.qmp.pointer((x * k, y * k), size, Some(true))?;
+                    std::thread::sleep(Duration::from_millis(400));
+                }
+                let n = i64::from(*n);
+                for i in 1..=n {
+                    let at = ((x + (x2 - x) * i / n) * k, (y + (y2 - y) * i / n) * k);
+                    self.qmp.pointer(at, size, None)?;
+                    std::thread::sleep(Duration::from_millis(*ms));
+                }
+                if *held {
+                    std::thread::sleep(DRAG_SETTLE);
+                    self.qmp.pointer((x2 * k, y2 * k), size, Some(false))?;
+                }
+                Ok(())
+            }
             Step::Shot(name) => {
                 self.qmp.dump()?;
                 std::fs::create_dir_all("build/shots").map_err(|e| e.to_string())?;
@@ -1908,6 +1951,16 @@ mod tests {
             [Step::Drag(1, 2, 3, 4, 500)]
         );
         assert!(parse("drag 1 2 3 4 -5\n").is_err());
+        assert_eq!(
+            parse("sweep 1 2 3 4 50 4\n").unwrap(),
+            [Step::Sweep(true, [1, 2, 3, 4], 50, 4)]
+        );
+        assert_eq!(
+            parse("glide 1 2 3 4 5 0\n").unwrap(),
+            [Step::Sweep(false, [1, 2, 3, 4], 5, 0)]
+        );
+        assert!(parse("sweep 1 2 3 4 0 4\n").is_err());
+        assert!(parse("glide 1 2 3 4 5\n").is_err());
         assert!(parse("click 3\n").is_err());
         assert!(parse("drag 1 2 3 x\n").is_err());
     }

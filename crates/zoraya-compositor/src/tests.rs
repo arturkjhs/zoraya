@@ -38,6 +38,9 @@ struct Memory {
     reads: Cell<u64>,
 }
 
+/// A cursor image the driver was given: hot spot, place, the image.
+type CursorSet = ((u32, u32), (u32, u32), Vec<u8>);
+
 #[derive(Default)]
 struct Fake {
     peers: BTreeMap<u32, Peer>,
@@ -58,6 +61,19 @@ struct Fake {
     info_status: u32,
     info_format: u32,
     refuse_attach: bool,
+    /// The driver takes a cursor image (`SetCursor` answers `OK`), else
+    /// answers `DEVICE`.
+    accept_cursor: bool,
+    /// The driver does not answer a `SetCursor` (the test does, or never).
+    cursor_hold: bool,
+    /// The first this many images fail (a passing hold-up).
+    cursor_fail_first: usize,
+    /// `SetCursor` messages the driver was sent.
+    cursor_asked: usize,
+    /// The images the driver was given: hot spot, place, the image.
+    cursor_sets: Vec<CursorSet>,
+    /// Every `MoveCursor` the driver was told.
+    cursor_moves: Vec<(u32, u32)>,
     flushes: Vec<(u32, u32, u32, u32)>,
     attaches: u32,
     /// How often the compositor said the newest framebuffer is shown.
@@ -149,6 +165,42 @@ impl Platform for Fake {
                 return Outgoing::Full;
             }
             let (header, _) = Header::decode(bytes).unwrap();
+            if header.ordinal == 6 {
+                let (_, m) = decode::<display::MoveCursor>(bytes, 0).unwrap();
+                assert_eq!(header.transaction, NO_REPLY, "a move has no reply");
+                self.cursor_moves.push((m.x, m.y));
+                return Outgoing::Sent;
+            }
+            if header.ordinal == 5 {
+                // The image: answered like a flush, unless held.
+                let (_, m) = decode::<display::SetCursor>(bytes, 0).unwrap();
+                let failing = self.cursor_fail_first > 0;
+                self.cursor_fail_first = self.cursor_fail_first.saturating_sub(1);
+                let status = if self.accept_cursor && !failing { 0 } else { 3 };
+                self.cursor_asked += 1;
+                if status == 0 {
+                    self.cursor_sets
+                        .push(((m.hot_x, m.hot_y), (m.x, m.y), m.pixels.0.to_vec()));
+                }
+                if !self.cursor_hold {
+                    let mut reply = vec![0; 64];
+                    let n = encode(
+                        &display::Done {
+                            status: Below(status),
+                        },
+                        header.transaction,
+                        &mut reply,
+                    )
+                    .unwrap();
+                    reply.truncate(n);
+                    self.peers
+                        .get_mut(&end)
+                        .unwrap()
+                        .inbox
+                        .push_back((reply, vec![]));
+                }
+                return Outgoing::Sent;
+            }
             assert_eq!(header.ordinal, 3, "only flushes are sent unasked");
             let (_, f) = decode::<display::Flush>(bytes, 0).unwrap();
             self.flushes.push((f.x, f.y, f.width, f.height));
@@ -1636,6 +1688,8 @@ mod windows;
 mod display_size;
 #[path = "tests_drops.rs"]
 mod drops;
+#[path = "tests_pointer.rs"]
+mod pointer;
 #[path = "tests_rooms.rs"]
 mod rooms;
 #[path = "tests_settings.rs"]

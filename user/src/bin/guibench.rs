@@ -8,7 +8,8 @@
 //!   the compositor copies it (ADR-0093).
 //! - `guibench hang-display` is a display driver on the channel at slot 5
 //!   that answers `Info` and `Attach` and never a `Flush`: a hung driver
-//!   (ADR-0093, Decision).
+//!   (ADR-0093, Decision); a cursor image (ADR-0467) goes unanswered too:
+//!   the compositor does not wait for it, and the hang is found.
 
 use zoraya_abi::{DEADLINE_INFINITE, Handle, MapFlags, Mode, Packet, channel_signals};
 use zoraya_proto_display::{Done, FORMAT_XRGB, InfoReply, status};
