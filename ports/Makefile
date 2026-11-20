@@ -50,7 +50,7 @@ ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-c
 	docs/adr/0390-surface-for-curses-less-and-vi.md docs/adr/0346-surface-for-ssh.md docs/adr/0347-surface-for-git.md \
 	docs/adr/0391-what-part-10d-decided-where-the-adrs-are-silent.md \
 	docs/adr/0432-memory-descriptors-as-built.md docs/adr/0433-posix-spawn-as-built.md docs/adr/0438-shared-read-only-segments-as-built.md \
-	docs/adr/0439-socket-files-as-built.md
+	docs/adr/0439-socket-files-as-built.md docs/adr/0451-what-libposix-answers-for-rust-std.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -66,7 +66,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl mbedtls curl-mbedtls curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: rust cxx gtest python python-trees check-python-cache hostpython netsurf netsurf-libs netsurf-src host-pkgconfig suites apps tlsthreads cryptothreads zlib openssl mbedtls curl-mbedtls curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	ncurses less db1 nvi openssh git dash make pdpmake toybox awk tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -596,12 +596,23 @@ sysroot: $(SYSROOT_STAMP) $(TCC_SYSROOT)
 # (make test-libposix).
 libc: $(SYSROOT_STAMP)
 
+# libzoraya-rust.a (ADR-0451 item 5, ADR-0452 item 5): the names Rust's std
+# references that libc.a keeps out, each failing with ENOSYS. Linked only by
+# tools/zcargo (`-C link-arg=-lzoraya-rust`); make check-rust-archive keeps it
+# to the names of ports/rust/names.txt and out of every other link line.
+RUST_ARCHIVE := $(SYSROOT)/usr/lib/libzoraya-rust.a
+rust: $(RUST_ARCHIVE)
+$(RUST_ARCHIVE): ports/rust/zoraya-rust.c $(SYSROOT_STAMP)
+	@mkdir -p $(OBJ)/rust
+	$(ZCC) -O2 -Wall -Wextra -Werror -c -o $(OBJ)/rust/zoraya-rust.o ports/rust/zoraya-rust.c
+	rm -f $@ && $(ZAR) rcs $@ $(OBJ)/rust/zoraya-rust.o
+
 # build/rootfs-posix (ADR-0109 item 6): the programs in /bin, toybox and
 # toybox in /usr/libexec with a link per applet in /bin (ADR-0108 item 6,
 # ADR-0336 item 8), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP) \
+$(ROOTFS_STAMP): $(RUST_ARCHIVE) $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(AWK_BIN) $(TCC_STAMP) $(TOYBOX_APPLET_FILE) $(TCC_SYSROOT) $(SYSROOT_STAMP) \
 	$(LESS_BIN) $(NVI_BIN) $(CURSES_SYSROOT_STAMP) tools/term-terminfo/terminfo.sh ports/terminfo.manifest
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh

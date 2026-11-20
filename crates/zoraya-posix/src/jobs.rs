@@ -1091,6 +1091,8 @@ impl<S: Sys> Posix<S> {
                 }
                 // Opened by the caller first (`inherit_shaped`).
                 FileAction::Open(..) => return Err(EINVAL),
+                // The child's directory, not its fds (`inherit_shaped`).
+                FileAction::Chdir(_) => {}
             }
         }
         Ok(map
@@ -1447,6 +1449,10 @@ pub enum FileAction {
     Opened(i32, i32),
     /// `addclosefrom_np(fd)`: every fd from `fd` up is closed in the child.
     CloseFrom(i32),
+    /// `addchdir(path)` (POSIX.1-2024, ADR-0451 item 3): the child's working
+    /// directory is `path`, resolved in the parent's table as `chdir` does,
+    /// after the actions before it.
+    Chdir(Vec<u8>),
 }
 
 /// What a spawned child inherits (ADR-0103 item 7, ADR-0107): handles for

@@ -1399,6 +1399,7 @@ const TIOCSPGRP: i64 = 0x5410;
 const TIOCGWINSZ: i64 = 0x5413;
 const TIOCSWINSZ: i64 = 0x5414;
 const TIOCSTI: i64 = 0x5412;
+const FIONBIO: i64 = crate::rust_std::FIONBIO;
 
 /// `ioctl` on a terminal (ADR-0105 item 7); `ENOTTY` on anything else.
 pub(super) fn ioctl_tty(fd: i32, request: i64, argument: i64) -> Result<i32, i32> {
@@ -1459,6 +1460,16 @@ pub(super) fn ioctl_tty(fd: i32, request: i64, argument: i64) -> Result<i32, i32
         }
         // Only the window sets the size (ADR-0331 item 7); input is never
         // injected (ADR-0338 item 2): `termios::ioctl_refusal`.
+        // ADR-0451 item 2: what `std` sets `O_NONBLOCK` with on Linux, on
+        // every descriptor `fcntl` accepts.
+        FIONBIO => {
+            if arg.is_null() {
+                return Err(EFAULT);
+            }
+            // SAFETY: C's contract: `FIONBIO` takes an `int *`.
+            let on = unsafe { (arg as *const i32).read_unaligned() } != 0;
+            state(|p| p.set_nonblocking(fd, on)).map(|()| 0)
+        }
         TIOCSWINSZ | TIOCSTI => state(|p| {
             p.tty_ioctl_refusal(fd, request)?;
             Err(ENOTTY)
@@ -2331,6 +2342,35 @@ extern "C" fn posix_spawn_file_actions_addclosefrom_np(fa: *mut u8, fd: i32) -> 
         }
         None => EINVAL,
     }
+}
+
+/// `posix_spawn_file_actions_addchdir(fa, path)` (POSIX.1-2024; ADR-0451
+/// item 3): the child starts in `path`. A path the parent cannot `chdir` to
+/// makes the spawn fail with that error, as musl's does.
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawn_file_actions_addchdir(fa: *mut u8, path: *const c_char) -> i32 {
+    if fa.is_null() {
+        return EBADF;
+    }
+    // SAFETY: C's contract: a C string.
+    let path = match unsafe { c_str(path) } {
+        Ok(p) => p.to_vec(),
+        Err(e) => return e,
+    };
+    // SAFETY: C's contract.
+    match unsafe { actions_of(fa) } {
+        Some(l) => {
+            l.push(FileAction::Chdir(path));
+            0
+        }
+        None => EINVAL,
+    }
+}
+
+/// The name `std` calls on musl (`posix_spawn_file_actions_addchdir_np`).
+#[unsafe(no_mangle)]
+extern "C" fn posix_spawn_file_actions_addchdir_np(fa: *mut u8, path: *const c_char) -> i32 {
+    posix_spawn_file_actions_addchdir(fa, path)
 }
 
 /// The scheduling attributes of `posix_spawn` are not offered, as musl's

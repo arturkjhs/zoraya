@@ -812,6 +812,41 @@ impl<'a> NetReport<'a> {
     }
 }
 
+const SYSCALL_REPORT_MAGIC: &[u8; 4] = b"ZPS1";
+
+/// One message on the `REPORT` channel for a `syscall()` number libposix does
+/// not answer (ADR-0451 item 1), once per number: the shell shows that the
+/// program asked for a call Zoraya has not got. The number is the program's
+/// own and is shown as a number only.
+///
+/// ```text
+/// magic "ZPS1", number u32 (the low 32 bits of the call's number)
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyscallReport {
+    pub number: u32,
+}
+
+impl SyscallReport {
+    pub const SIZE: usize = 8;
+
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        let out = out.get_mut(..SyscallReport::SIZE)?;
+        out[..4].copy_from_slice(SYSCALL_REPORT_MAGIC);
+        out[4..8].copy_from_slice(&self.number.to_le_bytes());
+        Some(SyscallReport::SIZE)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<SyscallReport> {
+        if bytes.len() != SyscallReport::SIZE || bytes.get(..4)? != SYSCALL_REPORT_MAGIC {
+            return None;
+        }
+        Some(SyscallReport {
+            number: u32_at(bytes, 4)?,
+        })
+    }
+}
+
 /// The access a refused path was named for (ADR-0153 rule 11).
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

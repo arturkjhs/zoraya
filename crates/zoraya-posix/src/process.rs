@@ -789,6 +789,27 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// Reports a `syscall()` number that is not answered (ADR-0451 item 1):
+    /// the caller has said it is the first time for the number. Within the
+    /// same 16 reports as the paths; never waits.
+    pub fn report_syscall(&mut self, number: i64) {
+        let Some(end) = self.report else {
+            return;
+        };
+        if self.reports_sent >= MAX_REPORTS {
+            self.report_dropped = self.report_dropped.saturating_add(1);
+            return;
+        }
+        let mut bytes = [0u8; abi::SyscallReport::SIZE];
+        let r = abi::SyscallReport {
+            number: number as u32,
+        };
+        if r.encode(&mut bytes).is_some() && self.sys.channel_write(end, &bytes, &[]).is_ok() {
+            self.reports_sent += 1;
+            self.stats.reports += 1;
+        }
+    }
+
     /// A service refused an open of what `r` names (`EACCES`: a name its
     /// connection is not narrowed to, or a right it lacks): reported as a
     /// path the program was not given (ADR-0337 item 1).
@@ -2373,6 +2394,19 @@ impl<S: Sys> Posix<S> {
             let _ = self.release(desc);
         }
         Ok(new)
+    }
+
+    /// `ioctl(fd, FIONBIO, &on)` (ADR-0451 item 2): sets or clears
+    /// `O_NONBLOCK` as `fcntl(F_SETFL)` does, on every descriptor `fcntl`
+    /// accepts, keeping the other status flags.
+    pub fn set_nonblocking(&mut self, fd: i32, on: bool) -> Result<(), i32> {
+        let flags = self.fcntl(fd, F_GETFL, 0)? as u32;
+        let flags = if on {
+            flags | o::NONBLOCK
+        } else {
+            flags & !o::NONBLOCK
+        };
+        self.fcntl(fd, F_SETFL, i64::from(flags)).map(|_| ())
     }
 
     pub fn fcntl(&mut self, fd: i32, command: i32, argument: i64) -> Result<i32, i32> {

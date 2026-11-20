@@ -34,11 +34,13 @@ cfsetospeed int 4
 chdir int 4
 chmod int 4
 clock_gettime int 4
+clock_nanosleep int 4
 close int 4
 closedir int 4
 connect int 4
 creat int 4
 ctermid char_* 8
+dirfd int 4
 dup int 4
 dup2 int 4
 eaccess int 4
@@ -123,6 +125,8 @@ pipe2 int 4
 poll int 4
 posix_memalign int 4
 posix_spawn int 4
+posix_spawn_file_actions_addchdir int 4
+posix_spawn_file_actions_addchdir_np int 4
 posix_spawn_file_actions_addclose int 4
 posix_spawn_file_actions_addclosefrom_np int 4
 posix_spawn_file_actions_adddup2 int 4
@@ -158,6 +162,7 @@ recvmsg ssize_t 8
 remove int 4
 rename int 4
 rmdir int 4
+sched_yield int 4
 select int 4
 send ssize_t 8
 sendmsg ssize_t 8

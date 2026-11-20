@@ -25,6 +25,7 @@ pub mod poll;
 pub mod process;
 pub mod random;
 pub mod records;
+pub mod rust_std;
 pub mod signals;
 pub mod socket;
 pub mod spawn;

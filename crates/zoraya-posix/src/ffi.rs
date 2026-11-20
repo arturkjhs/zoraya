@@ -1558,27 +1558,7 @@ extern "C" fn zoraya_posix_futex(
                     .saturating_add(nsec as u64)
                     .min(DEADLINE_INFINITE - 1)
             };
-            match zoraya_rt::futex_wait(address as u64, value as u32, deadline) {
-                Ok(false) => 0,
-                // Interrupted (ADR-0304 item 11): `-EINTR` only if a handler
-                // ran on this thread; otherwise a spurious wake, which
-                // `cancel.c` turns into the cancel if one is pending.
-                Ok(true) => {
-                    let _ = with(|p| p.take_interrupted());
-                    if procs::deliver_ran() {
-                        -i64::from(EINTR)
-                    } else {
-                        0
-                    }
-                }
-                Err(Status::WouldBlock) => -i64::from(EAGAIN),
-                Err(Status::DeadlineExceeded) => -i64::from(ETIMEDOUT),
-                Err(Status::BadAddress) => -i64::from(EFAULT),
-                // The process is ending: the thread leaves at its next
-                // return to EL0; a spurious wake until then.
-                Err(Status::Cancelled) => 0,
-                Err(_) => -i64::from(ENOMEM),
-            }
+            futex_wait_until(address as u64, value as u32, deadline)
         }
         WAKE => wake_up_to(address as u64, value),
         REQUEUE | CMP_REQUEUE => {
@@ -1601,6 +1581,33 @@ extern "C" fn zoraya_posix_futex(
         // "not supported", which `pthread_mutexattr_setprotocol` returns to
         // the program (ADR-0302 item 6, INV-0302-4).
         _ => -i64::from(ENOTSUP),
+    }
+}
+
+/// The wait of `FUTEX_WAIT` and `FUTEX_WAIT_BITSET`: sleeps while the word
+/// holds `value`, until `deadline` on the monotonic clock. Returns 0 or
+/// `-errno`.
+fn futex_wait_until(address: u64, value: u32, deadline: u64) -> i64 {
+    match zoraya_rt::futex_wait(address, value, deadline) {
+        Ok(false) => 0,
+        // Interrupted (ADR-0304 item 11): `-EINTR` only if a handler
+        // ran on this thread; otherwise a spurious wake, which
+        // `cancel.c` turns into the cancel if one is pending.
+        Ok(true) => {
+            let _ = with(|p| p.take_interrupted());
+            if procs::deliver_ran() {
+                -i64::from(EINTR)
+            } else {
+                0
+            }
+        }
+        Err(Status::WouldBlock) => -i64::from(EAGAIN),
+        Err(Status::DeadlineExceeded) => -i64::from(ETIMEDOUT),
+        Err(Status::BadAddress) => -i64::from(EFAULT),
+        // The process is ending: the thread leaves at its next
+        // return to EL0; a spurious wake until then.
+        Err(Status::Cancelled) => 0,
+        Err(_) => -i64::from(ENOMEM),
     }
 }
 
@@ -2318,6 +2325,16 @@ extern "C" fn readdir(dir: *mut Dir) -> *mut u8 {
     }
 }
 
+/// `dirfd` (ADR-0451 item 3): the descriptor `opendir` or `fdopendir` holds.
+#[unsafe(no_mangle)]
+extern "C" fn dirfd(dir: *mut Dir) -> i32 {
+    if dir.is_null() {
+        return int(Err(EINVAL));
+    }
+    // SAFETY: `dir` came from `fdopendir` (C's contract) and is not shared.
+    unsafe { (*dir).fd }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn closedir(dir: *mut Dir) -> i32 {
     if dir.is_null() {
@@ -2831,6 +2848,91 @@ extern "C" fn __clock_nanosleep(
     procs::nanosleep_until(deadline, _rem)
 }
 
+// ------------------------------------------------------------ syscall
+
+unsafe extern "C" {
+    /// `gettid` of `ports/musl/zoraya/rust_std.c`: the thread's id, which
+    /// musl keeps in its `struct pthread`.
+    fn gettid() -> i32;
+}
+
+/// `long syscall(long number, ...)` (ADR-0451 item 1): exactly the numbers
+/// of [`crate::rust_std`]'s table, every other one `-1` with `ENOSYS` and, once
+/// per number, a line on the `REPORT` channel. A C caller passes at most six
+/// arguments in the registers (AAPCS64 passes a variadic call's arguments as a
+/// plain call's), so the arguments are read as six `long`s.
+#[unsafe(no_mangle)]
+extern "C" fn syscall(number: i64, a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> i64 {
+    use crate::rust_std::{Futex, Number, absolute_deadline, classify, futex_form};
+    // `futex(uaddr, op, val, timeout, uaddr2, val3)`: `a` to `f`.
+    let result = match classify(number) {
+        Number::Futex => match futex_form(b, f) {
+            // Linux's relative timeout, as `zoraya_posix_futex` reads it.
+            Ok(Futex::Wait | Futex::Wake) => zoraya_posix_futex(a, b, c, d, e, f),
+            Ok(Futex::WaitAbsolute) => {
+                FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
+                let deadline = if d == 0 {
+                    Ok(DEADLINE_INFINITE)
+                } else {
+                    // SAFETY: C's contract: a non-null timeout is a `struct
+                    // timespec` (two 64-bit words, absolute here).
+                    let [sec, nsec] = unsafe { ptr::read(d as *const [i64; 2]) };
+                    absolute_deadline(sec, nsec, DEADLINE_INFINITE)
+                };
+                match deadline {
+                    Ok(deadline) => futex_wait_until(a as u64, c as u32, deadline),
+                    Err(err) => -i64::from(err),
+                }
+            }
+            Err(err) => -i64::from(err),
+        },
+        Number::Getrandom => return sockets::getrandom(a as *mut u8, b as usize, c as u32) as i64,
+        // SAFETY: `gettid` reads the calling thread's own record.
+        Number::Gettid => return i64::from(unsafe { gettid() }),
+        Number::Fallback => -i64::from(ENOSYS),
+        Number::Unanswered => {
+            if SYSCALLS_SEEN.first_time(number) {
+                let _ = with(|p| p.report_syscall(number));
+            }
+            -i64::from(ENOSYS)
+        }
+    };
+    if result < 0 {
+        set_errno((-result) as i32);
+        -1
+    } else {
+        result
+    }
+}
+
+/// The numbers `syscall()` has reported.
+static SYSCALLS_SEEN: crate::rust_std::Seen = crate::rust_std::Seen::new();
+
+/// `sched_yield` (ADR-0451 item 3): `SYS_sched_yield` as a name of `libc.a`.
+#[unsafe(no_mangle)]
+extern "C" fn sched_yield() -> i32 {
+    zoraya_rt::thread_yield();
+    0
+}
+
+/// `clock_nanosleep` (ADR-0451 item 3): `CLOCK_REALTIME` and `CLOCK_MONOTONIC`,
+/// relative or `TIMER_ABSTIME`, over the wait of `nanosleep`; another clock is
+/// `EINVAL`. Returns the error number, as POSIX asks, and sets no `errno`.
+#[unsafe(no_mangle)]
+extern "C" fn clock_nanosleep(
+    id: i32,
+    flags: i32,
+    request: *const [i64; 2],
+    remain: *mut [i64; 2],
+) -> i32 {
+    const REALTIME: i32 = 0;
+    const MONOTONIC: i32 = 1;
+    if id != REALTIME && id != MONOTONIC || flags & !TIMER_ABSTIME != 0 {
+        return EINVAL;
+    }
+    __clock_nanosleep(id, flags, request, remain)
+}
+
 /// `usleep`: `nanosleep` for a count of microseconds (POSIX.1-2001, still
 /// asked for by programs; musl's lives in a directory this port replaces).
 #[unsafe(no_mangle)]
@@ -2991,5 +3093,5 @@ fn not_yet_long() -> i64 {
 }
 
 not_yet!(int setgroups setsid);
-not_yet!(long syscall tee);
+not_yet!(long tee);
 not_yet!(ptr __map_file);

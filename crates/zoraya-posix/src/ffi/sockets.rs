@@ -612,7 +612,7 @@ extern "C" fn inet_ntoa(a: u32) -> *const u8 {
 /// (`random::in_spans`, INV-0302-2): with threads the wait for the reply is
 /// made inside it.
 #[unsafe(no_mangle)]
-extern "C" fn getrandom(buf: *mut u8, n: usize, flags: u32) -> isize {
+pub(super) extern "C" fn getrandom(buf: *mut u8, n: usize, flags: u32) -> isize {
     let r = user(buf, n).and_then(|u| {
         poll();
         crate::random::in_spans(u, |part| restartable(|p| p.getrandom(part, flags)))

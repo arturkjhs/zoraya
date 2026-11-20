@@ -306,6 +306,35 @@ fn hide_renames_exactly_the_unlisted_defined_names() {
     assert_eq!(renames, want);
 }
 
+/// ADR-0451 item 6, INV-0451-3: libposix's `__rustc` runtime names are hidden
+/// like any name outside the list, in the objects that define and use them,
+/// and `check` fails on one that is still defined.
+#[test]
+fn the_rustc_runtime_names_are_hidden_and_checked() {
+    const ALLOC: &str = "_RNvCs5fGHjzWXRav_7___rustc11___rust_alloc";
+    const UNWIND: &str = "_RNvCs5fGHjzWXRav_7___rustc17rust_begin_unwind";
+    // Another crate's v0 name, and a `_RNv` name outside the pseudo-crate.
+    const OTHER: &str = "_RNvCs1234abcd_9zoraya_rt4exit";
+    assert!(surface::is_rustc_runtime(ALLOC) && surface::is_rustc_runtime(UNWIND));
+    assert!(!surface::is_rustc_runtime(OTHER) && !surface::is_rustc_runtime("_rustc"));
+    assert!(!surface::is_internal(ALLOC) && surface::is_internal(OTHER));
+    let a = object(&[(ALLOC, STB_GLOBAL, TEXT), (OTHER, STB_GLOBAL, TEXT)], &[]);
+    let b = object(
+        &[(ALLOC, STB_GLOBAL, UNDEF), (UNWIND, STB_GLOBAL, TEXT)],
+        &[],
+    );
+    let objs = [elf::read(&a).unwrap(), elf::read(&b).unwrap()];
+    let renames = surface::hide(&list(&NAMES), &objs).unwrap();
+    let want: Vec<(String, String)> = [ALLOC, UNWIND]
+        .iter()
+        .map(|n| (n.to_string(), format!("__zoraya_{n}")))
+        .collect();
+    assert_eq!(renames, want);
+    let mut m = good();
+    m.push(("rt.o", object(&[(UNWIND, STB_GLOBAL, TEXT)], &[NOP])));
+    assert_eq!(check_archive(&NAMES, &archive(&m), &[]).extra, [UNWIND]);
+}
+
 #[test]
 fn hide_refuses_a_taken_name() {
     let a = object(
