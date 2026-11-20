@@ -74,12 +74,12 @@ Findings, in the order they drive the changes:
 What the numbers say, and do not:
 
 - **Pointer only: no frame, no flush, no transfer** (it was 161 to 177 frames, 2.9 MiB a second at scale 1 and 12 MiB at
-  scale 2). The pointer follows at the input's rate with one 16-byte message a move. Whether the host *shows* the guest's
+  scale 2). The pointer follows at the input's rate with one small message a move. Whether the host *shows* the guest's
   cursor image as the person expects (Cocoa) cannot be seen from the guest; the architect's look at `make run-gui` settles
   it (an open question of ADR-0467).
 - **A drag: compose 2 to 3 times cheaper** (3.7 to 1.8 ms at scale 1; 10.3 to 12.9 to 4.5 to 6.7 ms at scale 2), the frame rate held
-  at the refresh (58 a second, one every 17.4 to 18 ms) and the guest takes 182 of the 182 messages of the first second at scale 2
-  (it took 52 to 88 of about 170). The guest is no longer the bottleneck at scale 2.
+  at the refresh (58 a second, one every 17.4 to 18 ms) and the guest read 182 messages in the first second of the drag at scale 2
+  (it read 52 to 88 a second before, of about 170 sent). The guest is no longer the bottleneck at scale 2.
 - **Worse: the delay of a drag at scale 1** rose from 4.4 ms to 15.3 ms mean, because a frame now waits for the next 1/60 s slot
   (104 frames a second became 58). At scale 2 the delay is 17 ms against 10.8 to 13.9 ms. This is the price of "at most one frame per
   refresh": if the architect finds drags feel behind the hand, the first knob is `compd`'s `set_frame_interval` (a shorter interval,
