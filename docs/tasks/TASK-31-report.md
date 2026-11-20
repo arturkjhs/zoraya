@@ -124,3 +124,22 @@ ADR-0466 (BIND right), ADR-0394 (10j), ADR-0464 (10h; two deviations: hooks get 
 
 ### State of the machine
 Worktrees: `../zoraya-10f` (branch `work/bind-right`, merged; reuse it by `git checkout -b work/NAME origin/main`), `../zoraya-hp` (`work/host-ports`), this one (`zoraya-8`, detached). No agent and no timer of mine runs after this handoff. Disk 40 GB free at the last check. Never delete `build/ports/src` (copy it into a new worktree from another one).
+
+## Handoff of 2026-11-20 (stopped at the architect's request; nothing merged since the handoff of 2026-11-19)
+
+Main: `5060decb` (docs only since `f9fcaa51`: ADR-0466 accepted 2026-11-20, backlog items R22 second half, R23 to R26, R28, the emoji font, install from a desktop terminal). All agents and my wake-up timers are stopped; no process of mine is left (a broad `pkill` was refused, so I killed none; the stopped agent's worktree showed no process of its own).
+
+### Branches (pushed, not merged)
+
+- **`work/gui-smooth`, head `057416e0`** (worktree `../zoraya-gui-smooth`, clean). The architect's smoothness part. Steps 1 and 2 done; the report `docs/tasks/TASK-31-gui-smooth-report.md` holds the before and after numbers (pointer only: 0 frames and 0 KiB a second against 161 to 177 frames and 2.9 MiB at scale 1; a drag composes 2 to 3 times cheaper and holds 58 frames a second; the delay of a drag at scale 1 rose from 4.4 ms to 15.3 ms mean; a drag's bytes are unchanged). ADR-0467 is proposed in the branch. **Not done:** the Opus review (no `docs/tasks/TASK-31-review-gui-smooth.md`), `make test-changed` (the agent's last step was a pixel-oracle test of drag with and without the copy; the last commit moved the drag tests to a digest per frame for the test memory cap, so the tests were not yet run after it), `make check` on the head, a merge. Not done by design (listed in the report): damage as a list of rectangles, the host window's cursor, cursor shapes, the real refresh rate. Next: `make check`, `make test-changed`, opus-review of the final diff, then the merge form. The architect looks at `make run-gui` for the cursor.
+- **`work/host-ports` `06ac628e`**, **`work/cpu-ceiling-robust` `4abac058`**: as in the handoff of 2026-11-19, unchanged.
+
+### Tags
+`stage-10h` (f043ca57) and `stage-10j` (fe1feacd) are not tagged. Candidate-full run 44559914629 (on `5208de83`) ended red in `make test-qemu-auto-smp4-2g`, and one posix job (`w8-fifo-j4`) was cancelled. Next: split `auto-smp4-2g` (the architect's earlier item), start a full run on `main`'s head, tag when `tools/ci-last-full.rb --green-for SHA` names a green run. The scheduled runs also count.
+
+### Queue
+1. `work/gui-smooth` (finish, merge), 2. split `auto-smp4-2g`, tag 10h and 10j, 3. `work/host-ports`, 4. `work/cpu-ceiling-robust`, 5. F11, 6. `work/rust-std` (ADR-0450 to 0455), 7. 10i alone. Backlog: see the section of 2026-11-20 in `docs/backlog.md`.
+
+### For the architect
+ADR-0467 (proposed, gui-smooth, on its branch only), and those of the handoff of 2026-11-19 (0394, 0464, 0395, 0460, 0410, the two deviations of 0464, the ADR-0001 number question).
+
