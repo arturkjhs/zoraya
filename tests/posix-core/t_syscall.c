@@ -35,6 +35,9 @@
  *                       gives a broker): the child starts in /tmp, then in
  *                       /tmp/sub; a missing one fails the spawn
  *   t_syscall cwd DIR   (the child of chdir) exits 0 if getcwd is DIR
+ *   t_syscall forkexec  fork, then exec of "t_syscall random" in the child: an executed
+ *                       image has a random connection from the broker (ADR-0453 item 3,
+ *                       INV-0453-1's exec half; the fork child itself has none)
  *   t_syscall report    an unanswered number is reported to the shell once
  *                       (the shell prints the note after the line)
  */
@@ -361,6 +364,25 @@ static void chdir_(void)
 	printf("t_syscall: chdir passed (%d checks)\n", checks);
 }
 
+static void forkexec(void)
+{
+	int status;
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		/* The fork child has no random connection; the image it executes has one. */
+		errno = 0;
+		unsigned char b[8];
+		if (getrandom(b, sizeof b, 0) == (ssize_t)sizeof b)
+			_exit(40);
+		execl("/bin/t_syscall", "t_syscall", "random", (char *)NULL);
+		_exit(41);
+	}
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	printf("t_syscall: forkexec passed (%d checks)\n", checks);
+}
+
 static void report(void)
 {
 	/* A number no table holds, twice: the shell prints one note after the line. */
@@ -395,6 +417,8 @@ int main(int argc, char **argv)
 		chdir_();
 	else if (strcmp(mode, "cwd") == 0)
 		cwd(argc > 2 ? argv[2] : "/");
+	else if (strcmp(mode, "forkexec") == 0)
+		forkexec();
 	else if (strcmp(mode, "report") == 0)
 		report();
 	else {

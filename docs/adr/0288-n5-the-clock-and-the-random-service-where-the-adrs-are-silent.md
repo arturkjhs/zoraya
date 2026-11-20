@@ -101,6 +101,10 @@ Predictable; rejected for anything that guards a secret.
 - Note, 2026-11-15 (from plan part F4, recorded under ADR-0001 rule 6): item 6's limit on a program's `Random` connections
   is superseded by [ADR-0435](0435-a-programs-random-connection-makes-eight.md) (accepted 2026-11-15): a program's connection may
   make 8 live ones, depth 3 none.
+- Note, 2026-11-20 (part `work/rust-std`, recorded under ADR-0001 rule 6, [ADR-0453](0453-rust-command-and-fs-under-grants.md) item 3 accepted
+  2026-11-15): item 6 reads "`init`'s, the shell's and a broker's": the broker beside a native shell holds a connection of a shell's kind
+  (depth 1, 64 live ones, made by `random::share` of `init`'s or the panel's launcher connection) from which it makes one for each POSIX process
+  its session starts. A program's connection still makes 8 (ADR-0435). Built in `user/src/bin/broker.rs`, `user/src/beside.rs`; `zoraya-rng` is unchanged.
 
 ## Revisit triggers
 - A virtio-rng device in the QEMU command line: build the reseed path.

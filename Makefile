@@ -98,7 +98,7 @@ QEMU_SLOW_TIMEOUT ?= 420
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: check-test-shards FORCE print-legs test-rust-std check-rust-stable check-rust-archive check-zcargo test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-serve test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
+.PHONY: check-test-shards FORCE print-legs test-cxx test-cxx-libcxx test-cxx-libcxx-slow test-cxx-gtest cxx-libcxx-tests apps netsurf test-netsurf hand-netsurf-wikipedia hand-netsurf-wikipedia-2 test-apps python python-testlib test-python test-python-ext test-python-regr test-python-mem test-python-serve test-python-long test-hand-run test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch test-net-lookup bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui test-tour-terminal posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths check-netsurf-refusal clippy adr-check clean test-posix-threads test-posix-threadtest3 posix-threadtest3 run-browser \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -1274,7 +1274,8 @@ check-zcargo:
 # INV-0454-1) and the raw svc a Rust program must not have (INV-0450-2).
 # Needs the toolchain's std for the target (rustup target add, or
 # tools/rust-musl-target.sh into build/) and the sysroot with libunwind.a and
-# libzoraya-rust.a (make -f ports/Makefile libc cxx rust).
+# libzoraya-rust.a (make -f ports/Makefile libc cxx rust). The program is linked anew each time: cargo does not
+# see a changed libc.a.
 RUST_STD_ROOT := $(BUILD)/rust-std-root
 RUST_STD_DISK := $(BUILD)/rust-std-disk.img
 RUST_STD_TARGET := $(BUILD)/rust-std-target
@@ -1289,6 +1290,7 @@ test-rust-std: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	mkdir -p $(RUST_STD_ROOT)/bin $(RUST_STD_ROOT)/work/granted $(RUST_STD_ROOT)/work/secret && \
 	printf 'one\n' > $(RUST_STD_ROOT)/work/granted/one.txt && printf 'not for rstest\n' > $(RUST_STD_ROOT)/work/secret/key.txt && \
 	printf 'net.hosts = test.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(RUST_STD_ROOT)/config/settings && \
+	rm -rf $(RUST_STD_TARGET) && \
 	( cd tests/rust-std && CARGO_TARGET_DIR=$(CURDIR)/$(RUST_STD_TARGET) $(CURDIR)/tools/zcargo build --release ) && \
 	cp $(RUST_STD_TARGET)/aarch64-unknown-linux-musl/release/rstest $(RUST_STD_ROOT)/bin/rstest && \
 	cp $(RUST_STD_TARGET)/aarch64-unknown-linux-musl/release/rstest $(RUST_STD_ROOT)/bin/rsnet && \
@@ -1769,7 +1771,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-port-logs check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-libposix-widths-built check-rust-stable check-rust-archive check-zcargo check-run-disk check-test-lanes check-python-cache
+.PHONY: check-workflow-syntax check-ci-plan fetch-ports ports check-ports clean-ports check-fetch-ports check-port-logs check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-libposix-widths-built check-run-disk check-test-lanes check-python-cache
 fetch-ports ports check-ports clean-ports check-python-cache:
 	@$(MAKE) -f ports/Makefile $@
 

@@ -116,6 +116,8 @@ $ make -f ports/Makefile wpewebkit     # on the M4: configures with ports/cmake/
 - Whether libc++ 20 with clang 18 builds WPE 2.54 at all (the upstream combination is libstdc++), and whether the
   global `-D__cpp_concepts=202002` workaround is harmless under libc++; E1 answers both.
 - CI's job time and disk for the engine.
+- **Note, 2026-11-20 (part `work/rust-std`, ADR-0001 rule 6).** Item 4's "No Rust `std` ... for POSIX programs now" is superseded by
+  [ADR-0450](0450-rust-std-for-posix-programs.md) item 4 (accepted 2026-11-15) and built: `tools/zcargo`, `make test-rust-std`. The other items stand.
 
 ## Revisit triggers
 

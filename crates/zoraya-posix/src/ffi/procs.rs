@@ -2875,7 +2875,8 @@ fn fork_locked() -> Result<i32, i32> {
         let moves = match p.fork_moves(prepared.pgid, &prepared) {
             Ok(m) => m,
             Err(e) => {
-                debug_later(p, "fork: moves", e);
+                let at = p.stats.inherit_failed_at;
+                debug_later(p, "fork: moves", (e, at));
                 let _ = zoraya_rt::handle_close(prepared.child_job);
                 let _ = zoraya_rt::handle_close(prepared.broker_end);
                 let _ = zoraya_rt::handle_close(prepared.parent_job);

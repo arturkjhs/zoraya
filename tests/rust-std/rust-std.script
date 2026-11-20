@@ -36,8 +36,8 @@
 < rstest: denied passed
 < hint: rstest tried to
 < \r\n~>
-# std::process::Command: both ways of starting a child; each child hashes (its own random connection) and has no
-# network; uid and gid fail and the child never runs.
+# std::process::Command by posix_spawn: the child hashes (its own random connection, made by the broker) and has no
+# network; the fork path fails by name (ADR-0468); uid and gid fail and the child never runs.
 > rstest process\r
 < rstest: process passed
 < \r\n~>

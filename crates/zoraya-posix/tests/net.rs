@@ -496,6 +496,41 @@ fn a_nonblocking_connect_is_in_progress_until_the_channel_says_so() {
     assert_eq!(recv(&mut t.r, fd, 10).unwrap(), b"late");
 }
 
+/// Rust's `connect_timeout` waits for `POLLOUT` and then asks `peer_addr`, never
+/// `SO_ERROR` (std's `sys/net/connection/socket/unix.rs`): `getpeername` finishes a
+/// connect `netd` has answered, and says `ENOTCONN` while it has not.
+#[test]
+fn getpeername_finishes_a_nonblocking_connect_that_has_been_answered() {
+    let mut t = rigged(Script {
+        hold: true,
+        page: b"late".to_vec(),
+        ..Script::default()
+    });
+    let fd =
+        t.r.p
+            .socket(sock::AF_INET, sock::SOCK_STREAM | sock::SOCK_NONBLOCK, 0)
+            .unwrap();
+    assert_eq!(t.r.p.connect(fd, &addr(EXAMPLE, 80)), Err(EINPROGRESS));
+    // Not answered yet: not connected.
+    assert_eq!(t.r.p.getpeername(fd), Err(ENOTCONN));
+    // Answered on the connection channel: the peer, with no `SO_ERROR` or read in between.
+    let ctl = t.log.borrow().held[0].ctl;
+    t.r.net.borrow_mut().send_message(
+        ctl,
+        &reply(
+            &Connected {
+                address: 0x5db8_d822,
+                port: Below(80),
+            },
+            0,
+        ),
+        &[],
+    );
+    assert_eq!(t.r.p.getpeername(fd), Ok(([0x5d, 0xb8, 0xd8, 0x22], 80)));
+    assert_eq!(t.r.p.connect(fd, &addr(EXAMPLE, 80)), Err(EISCONN));
+    t.r.p.close(fd).unwrap();
+}
+
 #[test]
 fn a_reset_arrives_after_the_data_before_it() {
     let mut t = rigged(Script {

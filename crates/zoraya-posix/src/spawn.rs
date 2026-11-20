@@ -416,6 +416,17 @@ impl<S: Sys> Posix<S> {
             }
             return Err(e);
         }
+        // Every POSIX process the broker's session starts has a connection of
+        // its own to the random service, whoever started it and with no grant
+        // word (ADR-0453 item 3, ADR-0227 item 3): the broker makes it. A
+        // process the parent named `GRANT_RANDOM` for has the parent's
+        // (ADR-0435); a session with no broker, or a broker with none to give,
+        // starts the child as it always was, without one.
+        if g.random.is_none()
+            && let Ok(h) = self.broker_random()
+        {
+            g.random = Some(h);
+        }
         Ok(g)
     }
 

@@ -386,6 +386,17 @@ fn rights_for(flags: u32) -> u32 {
     r
 }
 
+/// The paths Rust's `std` reads to find out about its host and does without
+/// when they are not there (`available_parallelism` reads the cgroup and mount
+/// tables, a backtrace reads the memory map): refused with `ENOENT` and no
+/// report (ADR-0451 item 7). Any other missing path is reported as ever.
+pub fn is_probe(path: &str) -> bool {
+    matches!(
+        path,
+        "/proc/self/cgroup" | "/proc/self/mountinfo" | "/proc/self/maps"
+    )
+}
+
 impl<S: Sys> Posix<S> {
     pub fn new(sys: S, facts: Facts) -> Posix<S> {
         Posix {
@@ -705,6 +716,11 @@ impl<S: Sys> Posix<S> {
             .iter()
             .any(|e| zoraya_resolve::covers(&path, &e.prefix))
         {
+            return ENOENT;
+        }
+        // What Rust's std probes and does without (ADR-0451 item 7): `ENOENT`,
+        // and no hint for a grant nobody needs.
+        if is_probe(&path) {
             return ENOENT;
         }
         self.report_path(path, access);

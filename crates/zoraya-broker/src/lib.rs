@@ -25,12 +25,12 @@ use zoraya_abi::posix::signal::{self, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTI
 use zoraya_abi::{ExitRecord, RequestKind, Rights, Status, job_signals};
 use zoraya_proto_posix::{
     Background, BackgroundReply, ExecCommit, ExecCommitReply, ForegroundAsked, GroupMade,
-    HostTerminal, HostTerminalReply, Kill, KillReply, Lookup, LookupReply, ORDINALS, Reap, Reaped,
-    ReportStats, ReportStatsReply, SetPgid, SetPgidReply, SetStopDisposition,
-    SetStopDispositionReply, SpawnAbort, SpawnAbortReply, SpawnCommit, SpawnCommitReply,
-    SpawnPrepare, SpawnPrepareIn, SpawnPrepared, SpawnPreparedIn, Statistics, StatisticsReply,
-    StopSelf, StopSelfReply, Tcgetpgrp, TcgetpgrpReply, Tcsetpgrp, TcsetpgrpReply, group, lookup,
-    status, stop, target,
+    HostTerminal, HostTerminalReply, Kill, KillReply, Lookup, LookupReply, ORDINALS,
+    RandomConnection, RandomConnectionReply, Reap, Reaped, ReportStats, ReportStatsReply, SetPgid,
+    SetPgidReply, SetStopDisposition, SetStopDispositionReply, SpawnAbort, SpawnAbortReply,
+    SpawnCommit, SpawnCommitReply, SpawnPrepare, SpawnPrepareIn, SpawnPrepared, SpawnPreparedIn,
+    Statistics, StatisticsReply, StopSelf, StopSelfReply, Tcgetpgrp, TcgetpgrpReply, Tcsetpgrp,
+    TcsetpgrpReply, group, lookup, status, stop, target,
 };
 use zoraya_protocol::{
     Below, ErrorReply, Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode,
@@ -71,6 +71,13 @@ pub trait Kernel {
     fn exit_record(&mut self, process: Self::H) -> Result<ExitRecord, Status>;
     /// The type of the object a handle names (ADR-0072), if it is valid.
     fn type_name(&mut self, h: Self::H) -> Option<&'static str>;
+    /// A new connection to the random service for a process the broker's
+    /// client starts (ADR-0453 item 3): the end the child holds. `None` when
+    /// the broker has no connection that may share, or the service has no room
+    /// (the broker's 64 live ones, the service's 256).
+    fn random_connection(&mut self) -> Option<Self::H> {
+        None
+    }
 }
 
 /// A connection's index.
@@ -593,6 +600,41 @@ impl<K: Kernel> Broker<K> {
                     None => Err(status::NO_TERMINAL),
                 };
                 answer!(TcsetpgrpReply { status: code(r) });
+            }
+            // ADR-0453 item 3: a process of the session asks for the random
+            // connection of the child it is about to start.
+            o if o == RandomConnection::ORDINAL => {
+                let _ = parse!(RandomConnection);
+                if caller.is_none() {
+                    let bytes = self.error(status::NOT_PERMITTED, t);
+                    actions.push(Action::Reply {
+                        to: conn,
+                        bytes,
+                        handles: Vec::new(),
+                    });
+                } else {
+                    match self.kernel.random_connection() {
+                        Some(h) => {
+                            let ok = RandomConnectionReply {
+                                status: Below(status::OK),
+                            };
+                            let bytes = self.encode(&ok, t);
+                            actions.push(Action::Reply {
+                                to: conn,
+                                bytes,
+                                handles: vec![h],
+                            });
+                        }
+                        None => {
+                            let bytes = self.error(status::AGAIN, t);
+                            actions.push(Action::Reply {
+                                to: conn,
+                                bytes,
+                                handles: Vec::new(),
+                            });
+                        }
+                    }
+                }
             }
             o if o == HostTerminal::ORDINAL => {
                 let _ = parse!(HostTerminal);

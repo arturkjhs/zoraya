@@ -490,10 +490,14 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         .iter()
         .any(|p| p.handles.iter().any(|s| s.give == Give::Broker));
     let parent = launch_job.unwrap_or(JOB);
+    // The broker makes the random connection of each POSIX process its session
+    // starts (ADR-0453 item 3): it holds one of its own, a shell's kind, from the
+    // panel's launcher connection (ADR-0462).
     let beside = if wants_broker {
+        let broker_random = st.random.and_then(zoraya_user::random::share);
         st.root
             .as_ref()
-            .and_then(|r| zoraya_user::beside::start_broker_in(r, parent))
+            .and_then(|r| zoraya_user::beside::start_broker_in(r, parent, broker_random))
     } else {
         None
     };

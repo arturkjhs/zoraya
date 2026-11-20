@@ -180,6 +180,10 @@ and the network process refuses `file:` URLs from a page.
   syntax, the working directory, `addopen`, the third bootstrap message), with ADR-0434 (`netd`'s `Duplicate`) and ADR-0435 (a program's
   random connection makes eight), all proposed. The changes to ADR-0287 item 3, ADR-0310 item 3 and ADR-0341 item 7 that the
   decision accepts are recorded in those ADRs.
+- **Rule 6 note (part `work/rust-std`, 2026-11-20).** INV-0411-4 ("no network, random or window connection") is superseded for the random
+  connection by [ADR-0453](0453-rust-command-and-fs-under-grants.md) item 3 (accepted 2026-11-15): a child started without the attributes has a
+  random connection made by the broker, and still no network or window. `POSIX_SPAWN_GRANT_RANDOM` still gives the parent's own (ADR-0435).
+  `posix_spawn_file_actions_addchdir` is built (ADR-0451 item 3).
 
 ## Revisit triggers
 

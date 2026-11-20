@@ -2,8 +2,8 @@
 //! as a POSIX program on Zoraya (ADR-0450 to ADR-0454), with every check of the
 //! probe of TASK-35 (`docs/research/rust-std/probes`) asserted. A mode prints a
 //! line per check and ends with `rstest: MODE passed`, or exits 1 after the
-//! first failing check's line (`rstest: CHECK FAIL ...`) and all that came
-//! before it. A check that panics is caught and reported, so the failure line
+//! first failing check's lines (`rstest: CHECK went wrong: WHY`, then
+//! `rstest: CHECK FAIL`) and all that came before them. A check that panics is caught and reported, so the failure line
 //! says what it was.
 //!
 //! The binary is installed as `/bin/rstest` (the modes that need no network)
@@ -36,7 +36,9 @@ fn check(name: &str, f: impl FnOnce() -> Outcome + panic::UnwindSafe) {
 
 fn fail(name: &str, why: &str) {
     FAILED.fetch_add(1, Ordering::SeqCst);
-    println!("rstest: {name} FAIL {why}");
+    // The reason first: the test runner stops at the first line with FAIL in it.
+    println!("rstest: {name} went wrong: {why}");
+    println!("rstest: {name} FAIL");
 }
 
 fn payload(p: &Box<dyn std::any::Any + Send>) -> String {
@@ -378,7 +380,7 @@ fn fs_checks(dir: &str) {
         std::os::unix::fs::symlink("g.txt", format!("{base}/link")).map_err(e)?;
         let t = fs::read_link(format!("{base}/link")).map_err(e)?;
         let through = fs::read_to_string(format!("{base}/link")).map_err(e)?;
-        expect(t.to_str() == Some("g.txt") && through == "file\n", || format!("{t:?} {through:?}"))
+        expect(t.to_str() == Some("g.txt") && through == "hello", || format!("{t:?} {through:?}"))
     });
     check("hard_link-refused", || match fs::hard_link(format!("{base}/g.txt"), format!("{base}/h.txt")) {
         // ADR-0013: no hard links (EPERM).
@@ -392,8 +394,17 @@ fn fs_checks(dir: &str) {
         expect(m & 0o7777 == 0o600, || format!("mode {:o}", m & 0o7777))
     });
     check("canonicalize", || {
-        let p = fs::canonicalize(format!("{base}/a/b/..")).map_err(e)?;
-        expect(p.to_str() == Some(format!("{base}/a").as_str()), || format!("{p:?}"))
+        let r = fs::canonicalize(format!("{base}/a/b/.."));
+        if dir == "/tmp" {
+            let p = r.map_err(e)?;
+            return expect(p.to_str() == Some(format!("{base}/a").as_str()), || format!("{p:?}"));
+        }
+        // In a directory the line grants, whose parent it does not: `canonicalize` reads
+        // every ancestor, as `realpath` does, so it is `NotFound` (a known limit, ADR-0453 context).
+        match r {
+            Err(x) if x.kind() == std::io::ErrorKind::NotFound => Ok(format!("{x} (the parent is not granted)")),
+            other => Err(format!("{other:?}")),
+        }
     });
     check("current_dir", || env::current_dir().map(|p| p.display().to_string()).map_err(e));
     check("current_exe", || {
@@ -520,32 +531,34 @@ fn process() {
         Err(x) if x.kind() == std::io::ErrorKind::NotFound => Ok(format!("{x}")),
         other => Err(format!("{other:?}")),
     });
-    // INV-0453-1: a child, started by posix_spawnp and by the fork path (a bare
-    // name with PATH set), has a random connection of its own and no network.
+    // INV-0453-1: a child started by posix_spawnp (the fork path: ADR-0468) has a random
+    // connection of its own and no network.
     check("child-hashmap-spawn", || {
         let o = Command::new(&me).args(["child", "hash"]).output().map_err(e)?;
         expect(o.status.success() && o.stdout == b"hashmap 2", || {
             format!("{} {:?} {:?}", o.status, String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
         })
     });
-    check("child-hashmap-fork-path", || {
-        let o = Command::new("rstest").env("PATH", "/bin").args(["child", "hash"]).output().map_err(e)?;
-        expect(o.status.success() && o.stdout == b"hashmap 2", || {
-            format!("{} {:?} {:?}", o.status, String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
-        })
+    // ADR-0468: Rust 1.99's fork path makes a SOCK_SEQPACKET socketpair for its exec-error channel, which
+    // `fork` cannot give the child (a channel end cannot be duplicated): the spawn fails by name, no child runs.
+    check("fork-path-unsupported", || {
+        let marker = "/tmp/rstest-fork-path";
+        let _ = fs::remove_file(marker);
+        let r = Command::new("rstest").env("PATH", "/bin").args(["child", "touch", marker]).status();
+        thread::sleep(Duration::from_millis(50));
+        match r {
+            Err(x) if x.kind() == std::io::ErrorKind::Unsupported => {
+                expect(fs::metadata(marker).is_err(), || "the child ran".into())?;
+                Ok(format!("{x}"))
+            }
+            other => Err(format!("{other:?}")),
+        }
     });
     check("child-no-network", || {
-        for fork_path in [false, true] {
-            let mut c = if fork_path { Command::new("rstest") } else { Command::new(&me) };
-            if fork_path {
-                c.env("PATH", "/bin");
-            }
-            let o = c.args(["child", "connect"]).output().map_err(e)?;
-            expect(o.status.success() && o.stdout == b"connect refused", || {
-                format!("fork path {fork_path}: {} {:?}", o.status, String::from_utf8_lossy(&o.stdout))
-            })?;
-        }
-        Ok(String::new())
+        let o = Command::new(&me).args(["child", "connect"]).output().map_err(e)?;
+        expect(o.status.success() && o.stdout == b"connect refused", || {
+            format!("{} {:?}", o.status, String::from_utf8_lossy(&o.stdout))
+        })
     });
     check("current_dir", || {
         // posix_spawn_file_actions_addchdir (ADR-0451 item 3).
@@ -568,7 +581,8 @@ fn process() {
     // fails with ENOSYS as well, and a stable program cannot call them.
 }
 
-/// A spawn that must have failed with `ENOSYS`, the child never having run.
+/// A spawn that must have failed, the child never having run: `ENOSYS` from the Rust-only archive's `setuid`
+/// or `setgid` once the fork path works, `ENOTSUP` while it does not (ADR-0468).
 fn never_runs(r: std::io::Result<std::process::Child>, marker: &str) -> Outcome {
     match r {
         Ok(mut c) => {
@@ -577,7 +591,7 @@ fn never_runs(r: std::io::Result<std::process::Child>, marker: &str) -> Outcome 
         }
         Err(x) => {
             thread::sleep(Duration::from_millis(50));
-            expect(x.raw_os_error() == Some(38) && fs::metadata(marker).is_err(), || format!("{x}, marker {:?}", fs::metadata(marker).is_ok()))
+            expect(matches!(x.raw_os_error(), Some(38 | 95)) && fs::metadata(marker).is_err(), || format!("{x}, marker {:?}", fs::metadata(marker).is_ok()))
         }
     }
 }

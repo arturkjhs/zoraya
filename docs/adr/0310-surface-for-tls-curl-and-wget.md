@@ -170,6 +170,11 @@ tzset
   gets no random service" becomes: none unless its parent passes one with `POSIX_SPAWN_GRANT_RANDOM`, which asks the service for a
   new connection; a program's own connection may make eight (the service's depth rule was: none). Without the attribute, and for
   `exec` and `fork`, it is as written.
+- **Amended by ADR-0453 (accepted 2026-11-15), recorded by part `work/rust-std` (2026-11-20).** Item 3's and INV-0310-1's "a `fork` child has no
+  connection" and the amendment above are superseded for randomness only: a POSIX process started by `posix_spawn` or `exec` has a connection of
+  its own made by the broker (the message `RandomConnection`, ordinal 20), with no `POSIX_SPAWN_GRANT_RANDOM`; a `fork` child before `exec` still
+  has none, and neither network nor window connection is given. Checked by `make test-rust-std` (`rstest process`) and `make test-libposix`
+  (`t_syscall random`, `t_spawn`).
 
 ## Revisit triggers
 - A program that needs `bind`, `listen` or `accept` (a server): the shim's refusals become real calls in `libc.a`.

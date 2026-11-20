@@ -2690,6 +2690,64 @@ C++ programs are built on the host by `zc++` and run inside Zoraya as POSIX prog
   in the middle of `exit` (as in musl and glibc). `aligned_alloc` and `posix_memalign` take `align` bytes before the block (the
   header sits just before the pointer), so a page-aligned block costs a page more.
 
+## Rust `std` for POSIX programs (TASK-31 `work/rust-std`; ADR-0450 to ADR-0454)
+
+A Rust program built outside the workspace runs as a POSIX program: the stable toolchain's prebuilt `std` for
+`aarch64-unknown-linux-musl`, linked by `zcc` against `libc.a` (ADR-0450). The repository's own programs stay native and
+`no_std`; `rust-toolchain.toml` lists the target so that `rustup toolchain install` (CI's image) brings it.
+
+- **`tools/zcargo`** (ADR-0452) is cargo with the flags that decide whether a program loads fixed: `RUSTUP_TOOLCHAIN` to the
+  pinned channel, `CARGO_BUILD_TARGET`, `tools/zcargo-link` as the linker, and in `CARGO_ENCODED_RUSTFLAGS` (which cargo
+  prefers to every other source) `-C relocation-model=static -C link-self-contained=no -C target-feature=+crt-static -C
+  link-arg=-lzoraya-rust` before the caller's `RUSTFLAGS`. It refuses a `-Z` argument, `+toolchain`, a set `RUSTC_BOOTSTRAP`,
+  another `--target`, a `--config` of a linker, target or rustflags, and in the caller's flags a self-contained link, a relocation
+  model other than static, `-crt-static`, a linker, `--sysroot`, `-Z` and a `panic=` other than unwind or abort
+  (`make check-zcargo`, `tools/test-zcargo.sh refusals`). `CC`, `CXX` and `AR` of the target are `zcc`, `zc++` and `zoraya-ar`;
+  `zcc` drops exactly `--target=aarch64-unknown-linux-musl` under `ZORAYA_RUST=1` (the `cc` crate's argument) and refuses every
+  other `--target`. `tools/zcargo-link` runs `zcc` with `-Wl,-Map`, keeps the link line and the map beside the output
+  (`NAME.link`, `NAME.map`, `NAME.check`) and runs `zoraya-elf-check --no-foreign-svc MAP` on it: a Rust program contains no
+  `svc` outside the members of `libc.a` (INV-0450-2; a crate with `asm!("svc #0")` is refused and leaves no program). A host
+  whose toolchain lacks the target runs `tools/rust-musl-target.sh`, which puts the component of the toolchain's own channel
+  manifest (its URL and sha256) in `build/rust-musl-sysroot`; zcargo then passes `--sysroot`.
+- **What `libposix` answers** (ADR-0451): `syscall()` is `long` and answers `futex` (98: `FUTEX_WAIT`, `FUTEX_WAKE` and
+  `FUTEX_WAIT_BITSET` with the full mask and an absolute `CLOCK_MONOTONIC` deadline, with or without the private flag),
+  `getrandom` (278) and `gettid` (178; `ports/musl/zoraya/rust_std.c`, musl's thread record); `statx`, `copy_file_range`,
+  `splice` and the two `pidfd` calls are `ENOSYS` without a report, every other number `ENOSYS` and one `SyscallReport` on the
+  `REPORT` channel (`crates/zoraya-abi`, shown by the shell after the line as "asked for system call N, which Zoraya does not
+  answer"). The decisions are in `crates/zoraya-posix/src/rust_std.rs` (host tests). `ioctl(FIONBIO)` is `fcntl(F_SETFL)` of
+  `O_NONBLOCK`. Ten names enter `libc.a` (ADR-0451's block joins the tier list in `ports/Makefile`): `bcmp`, `getauxval`,
+  `pause`, `pipe2` (musl's or libposix's, hidden until now), `sched_yield`, `clock_nanosleep` (`CLOCK_REALTIME` and
+  `CLOCK_MONOTONIC`, relative or absolute), `dirfd`, `gettid`, `posix_spawn_file_actions_addchdir` and its `_np` alias (an
+  action `Chdir` resolved in the parent's table as `chdir` does, relative paths following the one before; the musl patch
+  declares the non-`_np` name); `libpyshim.a` no longer defines `sched_yield`, `pause` and `dirfd`. libposix's own `__rustc`
+  runtime names (`_RNvCs..._7___rustc...`) are hidden like any name outside the tier list (`posix-surface-check`; INV-0451-3).
+  `std`'s probes of `/proc/self/cgroup`, `/proc/self/mountinfo` and `/proc/self/maps` are `ENOENT` with no hint.
+- **`libzoraya-rust.a`** (`ports/rust/zoraya-rust.c`, `make -f ports/Makefile rust`, into `build/sysroot/usr/lib`): `setuid`,
+  `setgid`, `setgroups`, `setsid`, `chroot`, `sigaltstack`, `sched_getaffinity`, `sendfile`, `splice`, `waitid`, each `ENOSYS`.
+  Only `tools/zcargo` links it (`make check-rust-archive` compares its names with `ports/rust/names.txt` and ADR-0451 item 5, and
+  looks for any other file that names it).
+- **Randomness for every child** (ADR-0453 item 3): the shell that starts a broker (`init`'s first shell, the panel for each
+  terminal) gives it, at slot 10, a connection to the random service of the shell's kind (`random::share` of its own, so it
+  may share 64). A new broker message `RandomConnection` (ordinal 20, `zoraya-proto-posix`) makes the broker share that
+  connection for the process that asks; libposix asks once per `posix_spawn` and `exec` that was not given `GRANT_RANDOM`
+  (`Posix::grant_connections`) and the child holds the end in its `RANDOM` slot. A broker with none to give, or a service with no
+  room, answers `AGAIN` and the child starts without one, as before. A `fork` child before `exec` still has none.
+  A session broker (`init`'s `start_session`, whose first process is a POSIX shell) is not given a connection.
+- **Tests.** `make test-rust-std` (`tests/rust-std/`, the probe of TASK-35 asserted; `rstest` and, under another name and
+  description, `rsnet`; `tests/rust-std/rust-std.script`): threads whose waits sleep, `HashMap`, `std::fs` in `/tmp` and in a
+  granted directory, a directory not granted, `Command` by both paths with a child that hashes and has no network, `uid` and `gid`
+  that fail with the child never run, panics that unwind, an uncaught panic (status 101), `abort` (signal 6), a stack overflow (a
+  fault), and `std::net` under a grant, with `connect_timeout` (the non-blocking connect). `tools/test-zcargo.sh build` reads the
+  link line (static, non-PIE, the sysroot's `libunwind` and `libc`, nothing of the toolchain's `self-contained` directory) and
+  refuses the raw `svc`. `make test-libposix` runs `t_syscall futex|tid|fionbio|names|random|chdir|report` for the C boundary.
+- **Known limits.** The main thread's stack is 64 KiB and `std`'s threads take 2 MiB (ADR-0454 item 3). A stack overflow is a
+  fault with no Rust message. `CommandExt::groups` and `chroot` are unstable in Rust 1.99.1, so the test checks `uid` and `gid`
+  only (the names they reach fail in the archive). `canonicalize` of a path in a granted directory whose parent is not granted
+  is `ENOENT` (`realpath` reads every ancestor). `metadata().created()` is an error (no birth time), `hard_link` is `EPERM`,
+  `TcpListener` and `UdpSocket` fail, `set_read_timeout` never fires (ADR-0287). `getauxval(AT_HWCAP)` is 0. No `std` backtrace
+  names without symbols. A crate with a `build.rs` that picks Linux C sources takes them (ADR-0450 item 3). The test runs under
+  HVF here and under TCG in CI.
+
 ## The window of a POSIX program and NetSurf (stage 9, 9d)
 
 A POSIX program can have one window (ADR-0317), and NetSurf 3.11 is the first (ADR-0318).

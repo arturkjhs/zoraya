@@ -319,6 +319,10 @@ wmemcmp
 - *(Measured, 9c.)* `MAPPING_SLOTS` (libposix, 256, the kernel's own limit per process, ADR-0300): 4000 threads (2000 joined, 2000 daemon) and 30 `fork` + `waitpid` leave the free count flat (248 free at the start, 247 after; probed with private `mmap`s). Not flat but a limit: deep Python recursion (`sys.setrecursionlimit(10**7)`) ends with `MemoryError` at about 33,000 frames, because each frame-chunk and each obmalloc arena (1 MiB) is one mapping. The limit is of mappings, not of recursion: a program that holds about 250 MiB of small objects (250 arenas) ends in `MemoryError` too, at any depth (from the count of slots; not measured), and a machine of 512 MiB reaches it before its memory. The default recursion limit of 1000 is far from the 33,000 frames. Raising the table alone is not safe (the kernel limit is the same number); left as it is.
 - Whether the modules of `regr-modules.txt` can grow once `AF_UNIX` and server sockets exist.
 - The Sigstore bundle of the archive: verification by `make fetch-ports` (needs a tool that is not on the host).
+- **Rule 6 note (part `work/rust-std`, 2026-11-20, [ADR-0451](0451-what-libposix-answers-for-rust-std.md) item 3).** `libpyshim.a` no longer
+  defines `sched_yield`, `pause` and `dirfd`: `libc.a` exports them (libposix is one archive member, so a second strong definition would clash).
+  `pause` now returns on a signal as POSIX says (`thread.c` parks a thread with it), and `dirfd` returns the descriptor of the stream instead of
+  `ENOTSUP`; the other shims stand.
 
 ## Revisit triggers
 - A larger initial stack for processes (patch 0004 goes), or `dlopen` (shared modules).

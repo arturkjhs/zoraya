@@ -341,3 +341,5 @@ tools/posix-surface-check/    check test-libposix test-rust-std
 user/describe/posix/rstest.cmd test-rust-std test-files
 user/describe/posix/rsnet.cmd  test-rust-std test-files
 rust-toolchain.toml           check test-rust-std
+crates/zoraya-proto-posix/    check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-netsurf test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std
+user/src/beside.rs            test-qemu test-boot test-files test-gui test-posix test-posix-gui test-net test-hand-run test-netsurf test-apps test-rust-std

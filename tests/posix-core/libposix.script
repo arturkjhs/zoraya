@@ -98,6 +98,10 @@ x missing.h
 < t_syscall: child cwd /tmp/sub
 < t_syscall: chdir passed
 < \r\n~> 
+> /bin/t_syscall forkexec\r
+< t_syscall: random passed
+< t_syscall: forkexec passed
+< \r\n~> 
 > /bin/t_syscall report\r
 < t_syscall: report passed
 < note: t_syscall asked for system call 279, which Zoraya does not answer (ENOSYS)
