@@ -133,7 +133,7 @@ impl Seen {
     /// false for a new number: a program that tries more numbers than it
     /// can be told about is not told about the later ones.
     pub fn first_time(&self, number: i64) -> bool {
-        // A number outside `0..=u32::MAX` is not a Linux number; it is reported by the caller as such.
+        // A number outside `0..=u32::MAX` is not a Linux number: never remembered, so never reported.
         if !(0..=i64::from(u32::MAX)).contains(&number) {
             return false;
         }

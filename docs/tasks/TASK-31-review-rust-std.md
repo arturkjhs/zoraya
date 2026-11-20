@@ -26,3 +26,18 @@ the commit after this file, and `make check`, `make test-rust-std` and `make tes
 | 17 | minor | a comment about a retired image; the `inherit_failed_at` debug numbers | **Left**: the numbers are documented in `jobs.rs` as a debug aid for `ZORAYA_POSIX_DEBUG` |
 
 ADR-0468's analysis was checked against the unpacked `std` source and found right. It stays `proposed`.
+
+## Second review (the fixes of `ac36ed36`, `opus-review` again, read only)
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | error | credit per connection was minted by every prepare (forks, prepare then abort), so it did not bound what a process holds | **Fixed.** Credit is per prepared non-fork child (spent once), plus one for the image's exec; an aborted child that was served costs the parent its next credit; commit, abort, reap and a closed connection drop entries; tests: fork prepare gives none, prepare-abort-ask refused, ask-abort-prepare-ask refused |
+| 2 | warning | stale credit reaching a reused connection slot | **Fixed** (`start_credit` on every new connection, removal in `remove`) |
+| 3 | warning | a failed `exec` or spawn spent the credit, so a retry started without a connection | **Fixed**: libposix keeps the broker-made connection (`Posix::spare_random`) and uses it for the next ask |
+| 4 | warning | the `--config` word list is bypassed by quoted keys and refuses harmless keys (`build.jobs`) | **Not fixed**; recorded: an allow-list of keys is the follow-up |
+| 5 | warning | `@argfile` hides flags | **Fixed** (refused in the flags and after `--`; tests) |
+| 6 | note | the encoding loop globbed | **Fixed** (`set -f`) |
+| 7 | note | the after-`--` refusal applied to `cargo run -- ...` | **Fixed** (only `rustc` and `rustdoc`) |
+| 8 | note | `-l zoraya-rust` and `-Xlinker` forms; the test passed on any failure | **Fixed** (the test looks for "refusing") |
+| 9 | note | `--libc` without a value fell back silently | **Fixed** (an error) |
+| 10, 11 | note | a wrong comment; a missing blank line in ADR-0453 | **Fixed** |

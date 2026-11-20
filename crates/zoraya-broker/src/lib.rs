@@ -220,10 +220,16 @@ pub struct Broker<K: Kernel> {
     /// Whether a native client was ever added (the mode with no first
     /// shell).
     had_client: bool,
-    /// Random connections a connection may still ask for (ADR-0453 item 3): one for the
-    /// `exec` its image may make, and one for each `SpawnPrepare` it has made, so that a
-    /// process gets a connection for a child it starts and for no other purpose.
-    random_credit: BTreeMap<Conn, u32>,
+    /// Random connections a process may still ask for (ADR-0453 item 3): one for the `exec` its
+    /// image may make (`exec_credit`), and one for each non-fork child it has prepared and not
+    /// yet committed or aborted (`spawn_credit`), so that a process gets a connection for a child
+    /// it starts and for no other purpose.
+    exec_credit: BTreeSet<Conn>,
+    /// Prepared (not fork) children whose parent may ask for their random connection: child pid
+    /// to (parent pid, already asked).
+    spawn_credit: BTreeMap<u32, (u32, bool)>,
+    /// Connections a parent was given for a child that was then aborted: its next prepare has no credit.
+    owed: BTreeMap<u32, u32>,
     out: Vec<u8>,
 }
 
@@ -255,7 +261,9 @@ impl<K: Kernel> Broker<K> {
             next_pid: FIRST_PID,
             sid: 0,
             had_client: false,
-            random_credit: BTreeMap::new(),
+            exec_credit: BTreeSet::new(),
+            spawn_credit: BTreeMap::new(),
+            owed: BTreeMap::new(),
             foreground: None,
             host: false,
             asked: BTreeMap::new(),
@@ -270,10 +278,23 @@ impl<K: Kernel> Broker<K> {
     fn add_connection(&mut self, peer: Peer) -> Conn {
         if let Some(i) = self.connections.iter().position(Option::is_none) {
             self.connections[i] = Some(peer);
+            self.start_credit(i, peer);
             return i;
         }
         self.connections.push(Some(peer));
-        self.connections.len() - 1
+        let i = self.connections.len() - 1;
+        self.start_credit(i, peer);
+        i
+    }
+
+    /// A connection of a process begins with the credit of its image's `exec`; a reused slot has
+    /// none of the last one's.
+    fn start_credit(&mut self, conn: Conn, peer: Peer) {
+        if matches!(peer, Peer::Process(_)) {
+            self.exec_credit.insert(conn);
+        } else {
+            self.exec_credit.remove(&conn);
+        }
     }
 
     /// The number of pids prepared or running and not yet terminated.
@@ -466,7 +487,14 @@ impl<K: Kernel> Broker<K> {
                 let from = caller.map_or(Peer::Client, Peer::Process);
                 match self.prepare(from, form, stops, &mut actions) {
                     Ok((pid, pgid, (parent_job, child_job), end)) => {
-                        *self.random_credit.entry(conn).or_insert(1) += 1;
+                        if let (Some(parent), 0) = (caller, m.fork.0) {
+                            match self.owed.get_mut(&parent) {
+                                Some(n) if *n > 0 => *n -= 1,
+                                _ => {
+                                    self.spawn_credit.insert(pid, (parent, false));
+                                }
+                            }
+                        }
                         let sid = self.sid_of(pgid);
                         let bytes = self.encode(&SpawnPrepared { pid, pgid, sid }, t);
                         actions.push(Action::Reply {
@@ -520,11 +548,17 @@ impl<K: Kernel> Broker<K> {
             }
             o if o == SpawnCommit::ORDINAL => {
                 let m = parse!(SpawnCommit);
+                self.spawn_credit.remove(&m.pid);
                 let r = self.commit(caller, m.pid, handles[0], &mut actions);
                 answer!(SpawnCommitReply { status: code(r) });
             }
             o if o == SpawnAbort::ORDINAL => {
                 let m = parse!(SpawnAbort);
+                if let Some((parent, true)) = self.spawn_credit.remove(&m.pid)
+                    && caller == Some(parent)
+                {
+                    *self.owed.entry(parent).or_insert(0) += 1;
+                }
                 let r = self.abort(caller, m.pid, &mut actions);
                 answer!(SpawnAbortReply { status: code(r) });
             }
@@ -611,10 +645,24 @@ impl<K: Kernel> Broker<K> {
             // connection of the child it is about to start.
             o if o == RandomConnection::ORDINAL => {
                 let _ = parse!(RandomConnection);
-                // One for the `exec` of the image, one per prepare: no process holds more than it
-                // starts children with.
-                let credit = self.random_credit.entry(conn).or_insert(1);
-                if caller.is_none() || *credit == 0 {
+                // One for the `exec` of the image, one per prepared child: no process holds more
+                // than it starts children with.
+                let allowed = match caller {
+                    None => false,
+                    Some(pid) => {
+                        if let Some(e) = self
+                            .spawn_credit
+                            .values_mut()
+                            .find(|(parent, asked)| *parent == pid && !*asked)
+                        {
+                            e.1 = true;
+                            true
+                        } else {
+                            self.exec_credit.remove(&conn)
+                        }
+                    }
+                };
+                if !allowed {
                     let bytes = self.error(status::NOT_PERMITTED, t);
                     actions.push(Action::Reply {
                         to: conn,
@@ -622,7 +670,6 @@ impl<K: Kernel> Broker<K> {
                         handles: Vec::new(),
                     });
                 } else {
-                    *self.random_credit.entry(conn).or_insert(1) -= 1;
                     match self.kernel.random_connection() {
                         Some(h) => {
                             let ok = RandomConnectionReply {
@@ -796,7 +843,7 @@ impl<K: Kernel> Broker<K> {
             return actions;
         };
         actions.push(Action::Forget { conn });
-        self.random_credit.remove(&conn);
+        self.exec_credit.remove(&conn);
         if peer == Peer::Client {
             // A native shell gone: its children are orphans.
             let children: Vec<u32> = self
@@ -1139,8 +1186,12 @@ impl<K: Kernel> Broker<K> {
         if !r.terminated {
             actions.push(Action::UnwatchJob { pid });
         }
+        self.spawn_credit
+            .retain(|child, (parent, _)| *child != pid && *parent != pid);
+        self.owed.remove(&pid);
         for (i, c) in self.connections.iter_mut().enumerate() {
             if *c == Some(Peer::Process(pid)) {
+                self.exec_credit.remove(&i);
                 *c = None;
                 actions.push(Action::Forget { conn: i });
             }

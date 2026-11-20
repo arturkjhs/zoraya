@@ -2762,7 +2762,7 @@ A Rust program built outside the workspace runs as a POSIX program: the stable t
   Only `tools/zcargo` links it (`make check-rust-archive` compares its names with `ports/rust/names.txt` and ADR-0451 item 5, and
   looks for any other file that names it).
 - **Randomness for every child** (ADR-0453 item 3): `init` (for its first shell's broker) and the panel (for each terminal's) give the broker, at slot 10, a connection to the random service of a shell's kind (`random::share` of their own, so it
-  may share 64). The broker lets a process ask for one per `SpawnPrepare` it made and one for its own `exec`, no more. A new broker message `RandomConnection` (ordinal 20, `zoraya-proto-posix`) makes the broker share that
+  may share 64). The broker lets a process ask for one per non-fork child it prepared and has not committed or aborted, and one for its image's `exec`; a failed spawn keeps its connection in the process for the next ask. A new broker message `RandomConnection` (ordinal 20, `zoraya-proto-posix`) makes the broker share that
   connection for the process that asks; libposix asks once per `posix_spawn` and `exec` that was not given `GRANT_RANDOM`
   (`Posix::grant_connections`) and the child holds the end in its `RANDOM` slot. A broker with none to give, or a service with no
   room, answers `AGAIN` and the child starts without one, as before. A `fork` child before `exec` still has none.

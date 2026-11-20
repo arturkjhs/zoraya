@@ -58,7 +58,11 @@ fn main() -> ExitCode {
         };
         let archive = if args.peek().map(String::as_str) == Some("--libc") {
             args.next();
-            args.next()
+            let Some(path) = args.next() else {
+                eprintln!("zoraya-elf-check: --libc needs the archive's path");
+                return ExitCode::FAILURE;
+            };
+            Some(path)
         } else {
             None
         };

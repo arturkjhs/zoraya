@@ -78,6 +78,13 @@ for a in "$@"; do
         prev=$a
         continue
     fi
+    if [ "${ZORAYA_RUST:-}" != 1 ]; then
+        case "$prev:$a" in
+        -l:zoraya-rust|-Xlinker:*zoraya-rust*)
+            echo "zcc: refusing $prev $a: libzoraya-rust.a is for tools/zcargo's links only (INV-0451-2)" >&2
+            exit 1 ;;
+        esac
+    fi
     case "$a" in
     -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*|*,-D,__linux*|*,-D,__gnu_linux*|*,-D,linux*)
         echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2

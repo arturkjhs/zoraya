@@ -1748,9 +1748,15 @@ fn send_record(
     passed: &crate::jobs::Passed<Handle>,
 ) -> Result<(), (i32, bool)> {
     // The error says whether the descriptors had been sent (and so moved).
-    let close_made = |granted: &crate::spawn::Granted<Handle>| {
-        for h in granted.made() {
+    let close_made = |p: &mut Posix<RtSys>, granted: &crate::spawn::Granted<Handle>| {
+        let (made, spare) = granted.made_and_spare();
+        for h in made {
             let _ = zoraya_rt::handle_close(h);
+        }
+        if let Some(h) = spare
+            && let Some(old) = p.spare_random.replace(h)
+        {
+            let _ = zoraya_rt::handle_close(old);
         }
     };
     let entries: Vec<ChannelEntry> = record
@@ -1767,7 +1773,7 @@ fn send_record(
         for h in record.handles {
             let _ = zoraya_rt::handle_close(h);
         }
-        close_made(granted);
+        close_made(p, granted);
         return Err((E2BIG, false));
     }
     // Made first: a failure after the sockets moved would leave them dead.
@@ -1775,7 +1781,7 @@ fn send_record(
     let me = match zoraya_rt::handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
         Ok(me) => me,
         Err(_) => {
-            close_made(granted);
+            close_made(p, granted);
             return Err((EAGAIN, false));
         }
     };
@@ -1792,7 +1798,7 @@ fn send_record(
             .channel_send(boot, &third, &passed.handles, &passed.read_only)
         {
             let _ = zoraya_rt::handle_close(me);
-            close_made(granted);
+            close_made(p, granted);
             return Err((if s == Status::BadState { EBUSY } else { EAGAIN }, false));
         }
         passed_sent = true;
@@ -1831,7 +1837,7 @@ fn send_record(
     if zoraya_rt::channel_write(boot, bytes, &second).is_err() {
         // The kernel leaves the handles with the caller.
         let _ = zoraya_rt::handle_close(me);
-        close_made(granted);
+        close_made(p, granted);
         return Err((EAGAIN, passed_sent));
     }
     Ok(())
@@ -1885,8 +1891,14 @@ fn spawn_into(
     // What a refused spawn gives back: every handle it made, and the files
     // `addopen` opened. What moved is the caller's again.
     let undo_made = |p: &mut Posix<RtSys>, made: &[Handle], message: &[Handle]| {
-        for &h in made.iter().chain(message).chain(&granted.made()) {
+        let (granted_made, spare) = granted.made_and_spare();
+        for &h in made.iter().chain(message).chain(&granted_made) {
             let _ = zoraya_rt::handle_close(h);
+        }
+        if let Some(h) = spare
+            && let Some(old) = p.spare_random.replace(h)
+        {
+            let _ = zoraya_rt::handle_close(old);
         }
         p.spawn_refused(&inherited);
     };

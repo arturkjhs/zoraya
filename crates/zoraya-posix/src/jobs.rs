@@ -424,6 +424,9 @@ impl<S: Sys> Posix<S> {
     /// when the process has no broker; `EAGAIN` when the broker has none to
     /// give (it holds none, 64 are live, or the service is full).
     pub fn broker_random(&mut self) -> Result<S::H, i32> {
+        if let Some(h) = self.spare_random.take() {
+            return Ok(h);
+        }
         let n = self.broker_call(&bp::RandomConnection {}, &[])?;
         let mut handles = core::mem::take(&mut self.handles);
         match decode::<bp::RandomConnectionReply>(&self.input[..n], handles.len()) {

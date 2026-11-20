@@ -67,10 +67,10 @@ first=1
 prev=
 after_dashes=0
 for a in "$@"; do
-    if [ "$after_dashes" = 1 ]; then
+    if [ "$after_dashes" = 1 ] && { [ "${1:-}" = rustc ] || [ "${1:-}" = rustdoc ]; }; then
         # `cargo rustc -- ARGS`: the arguments go to rustc itself.
         case "$a" in
-        -C*|--codegen*|-Z*|--target*|--sysroot*|-L*|-l*|--cfg*|--extern*)
+        -C*|--codegen*|-Z*|--target*|--sysroot*|-L*|-l*|--cfg*|--extern*|@*)
             die "refusing $a after --: it would reach rustc past zcargo's flags (ADR-0452)" ;;
         esac
     fi
@@ -135,6 +135,7 @@ check_flags() {
         -Clinker*|-Clinker-flavor*) die "refusing $w: zcargo links through zcc (ADR-0452)" ;;
         --target|--target=*|--sysroot|--sysroot=*) die "refusing $w (ADR-0452)" ;;
         -Z*) die "refusing $w: Rust POSIX programs use the stable toolchain (ADR-0450)" ;;
+        @*) die "refusing $w: an argument file would hide flags from this check (ADR-0452)" ;;
         esac
     done
 }
@@ -192,9 +193,11 @@ flags="-C relocation-model=static -C link-self-contained=no -C target-feature=+c
 [ -z "$sysroot_flag" ] || flags="$flags $sysroot_flag"
 encoded=
 sep=$(printf '\037')
+set -f
 for w in $flags $caller; do
     if [ -z "$encoded" ]; then encoded=$w; else encoded=$encoded$sep$w; fi
 done
+set +f
 unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
 export CARGO_ENCODED_RUSTFLAGS=$encoded
 export CARGO_BUILD_TARGET=$TARGET

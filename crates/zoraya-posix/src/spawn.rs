@@ -113,6 +113,9 @@ pub struct Granted<H> {
     pub random: Option<H>,
     /// The parent's window channel, moved.
     pub window: Option<H>,
+    /// `random` is the broker's (ADR-0453 item 3): a failed spawn keeps it for the next ask,
+    /// since the broker lets a process ask once per child.
+    pub broker_random: bool,
 }
 
 impl<H: Copy> Granted<H> {
@@ -121,7 +124,19 @@ impl<H: Copy> Granted<H> {
             net: None,
             random: None,
             window: None,
+            broker_random: false,
         }
+    }
+
+    /// What a failed spawn closes, and the broker-made connection it keeps instead.
+    pub fn made_and_spare(&self) -> (Vec<H>, Option<H>) {
+        let spare = self.random.filter(|_| self.broker_random);
+        let net = self.net.filter(|n| !n.1).map(|n| n.0);
+        let mut made: Vec<H> = net.into_iter().collect();
+        if spare.is_none() {
+            made.extend(self.random);
+        }
+        (made, spare)
     }
 
     /// The handles made for this spawn alone: closed if it does not happen.
@@ -426,6 +441,7 @@ impl<S: Sys> Posix<S> {
             && let Ok(h) = self.broker_random()
         {
             g.random = Some(h);
+            g.broker_random = true;
         }
         Ok(g)
     }

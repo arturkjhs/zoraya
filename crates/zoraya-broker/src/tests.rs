@@ -1866,28 +1866,60 @@ fn a_process_gets_a_random_connection_for_its_child_while_the_broker_has_one_to_
         assert!(handles.is_empty());
     }
     assert_eq!(s.b.kernel.random_made, 1);
-    // A prepare gives one more, and only one.
-    s.spawn(&shell, bp_inherit(), 0).unwrap();
+    // A prepare gives one more, and only one; a fork prepare gives none.
+    let prepare = |s: &mut Session, fork: u32| -> u32 {
+        let (r, handles) = s.ask(
+            shell.conn,
+            &message(&proto::SpawnPrepare {
+                group: Below(group::INHERIT),
+                pgid: 0,
+                ignored: 0,
+                fork: Below(fork),
+            }),
+            vec![],
+        );
+        assert_eq!(handles.len(), 3);
+        let (_, m) = decode::<SpawnPrepared>(&r, 3).unwrap();
+        let c = s.watched.take().unwrap();
+        s.conns.insert(c, m.pid);
+        m.pid
+    };
+    let abort = |s: &mut Session, pid: u32| {
+        let r = s
+            .ask(shell.conn, &message(&proto::SpawnAbort { pid }), vec![])
+            .0;
+        assert_eq!(status_of(&r), status::OK);
+    };
+    let forked = prepare(&mut s, 1);
+    assert_eq!(status_of(&ask(&mut s).0), status::NOT_PERMITTED);
+    abort(&mut s, forked);
+    let first = prepare(&mut s, 0);
     let (r, handles) = ask(&mut s);
     assert_eq!(status_of(&r), status::OK);
     assert_eq!(handles.len(), 1);
     assert_eq!(status_of(&ask(&mut s).0), status::NOT_PERMITTED);
     assert_eq!(s.b.kernel.random_made, 2);
+    // Aborted after its connection was given: the next prepare has no credit (no free connections by prepare and abort).
+    abort(&mut s, first);
+    let second = prepare(&mut s, 0);
+    assert_eq!(status_of(&ask(&mut s).0), status::NOT_PERMITTED);
+    abort(&mut s, second);
+    // Aborted before an ask: the credit goes with it.
+    let third = prepare(&mut s, 0);
+    abort(&mut s, third);
+    assert_eq!(status_of(&ask(&mut s).0), status::NOT_PERMITTED);
     // None left to give: AGAIN, and no handle (the credit is spent).
-    s.spawn(&shell, bp_inherit(), 0).unwrap();
+    let fourth = prepare(&mut s, 0);
     s.b.kernel.random_left = 0;
     let (r, handles) = ask(&mut s);
     assert_eq!(status_of(&r), status::AGAIN);
     assert!(handles.is_empty());
+    abort(&mut s, fourth);
     // A message with a handle it does not take is invalid and closes it.
     let own = s.b.kernel.new_object(Obj::Channel, Rights::NONE);
     let (r, handles) = s.ask(shell.conn, &message(&proto::RandomConnection {}), vec![own]);
     assert_eq!(status_of(&r), status::INVALID);
     assert!(handles.is_empty());
-}
-
-fn bp_inherit() -> u32 {
-    group::INHERIT
 }
 
 #[test]

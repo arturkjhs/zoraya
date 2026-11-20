@@ -49,7 +49,10 @@ for t in --target=aarch64-unknown-linux-gnu --target=x86_64-unknown-linux-musl "
         echo "compare-predefs: zcc accepts $t under ZORAYA_RUST=1"; exit 1
     fi
 done
-if "$zcc" -lzoraya-rust -E -x c /dev/null > /dev/null 2>&1; then
-    echo "compare-predefs: zcc accepts -lzoraya-rust without ZORAYA_RUST=1"; exit 1
-fi
+for a in "-lzoraya-rust" "-l zoraya-rust" "-Xlinker zoraya-rust"; do
+    # shellcheck disable=SC2086
+    if "$zcc" $a -E -x c /dev/null 2>&1 | grep -q 'refusing'; then :; else
+        echo "compare-predefs: zcc does not refuse $a without ZORAYA_RUST=1"; exit 1
+    fi
+done
 echo "compare-predefs: zcc and tcc predefine the same identity: $(grep -cv undefined "$dir/zcc.txt") macros, no Unix or Linux"

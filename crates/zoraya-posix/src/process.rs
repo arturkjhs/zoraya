@@ -315,6 +315,8 @@ pub struct Posix<S: Sys> {
     /// if the launcher gave one: `getrandom` needs it. Like `net`, a `fork`
     /// child has none (a channel end cannot be duplicated, ADR-0102 item 3).
     pub random: Option<S::H>,
+    /// A broker-made random connection a failed spawn or `exec` did not use (ADR-0453 item 3).
+    pub spare_random: Option<S::H>,
     /// The window channel the launcher gave (`EXT_WINDOW`, proposed ADR-0317), until
     /// `zoraya_window_open` takes it. A `fork` child has none.
     pub window: Option<S::H>,
@@ -429,6 +431,7 @@ impl<S: Sys> Posix<S> {
             signals: crate::signals::Signals::starting(facts.ignored, facts.blocked),
             net: None,
             random: None,
+            spare_random: None,
             window: None,
             addrs: crate::socket::AddrCache::default(),
             broker: None,
