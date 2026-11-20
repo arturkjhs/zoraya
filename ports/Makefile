@@ -634,7 +634,7 @@ $(ROOTFS_STAMP): $(RUST_ARCHIVE) $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBO
 	rm -rf $(ROOTFS)/usr/include/c++ $(addprefix $(ROOTFS)/usr/,$(CXX_IMAGE_LEFT_OUT))
 	@touch $@
 # The C++ runtime's files outside usr/include/c++ (ADR-0365, INV-0365-1).
-CXX_IMAGE_LEFT_OUT := include/unwind.h include/libunwind.h include/__libunwind_config.h include/unwind_itanium.h \
+CXX_IMAGE_LEFT_OUT := lib/libzoraya-rust.a include/unwind.h include/libunwind.h include/__libunwind_config.h include/unwind_itanium.h \
 	include/unwind_arm_ehabi.h lib/libc++.a lib/libc++abi.a lib/libunwind.a
 
 # ---------------------------------------------------------------- C++ (TASK-30)

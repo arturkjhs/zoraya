@@ -65,7 +65,10 @@ pub fn start_broker_in(root: &File, parent: Handle, random: Option<Handle>) -> O
         return None;
     }
     let base = root.time_base().unwrap_or(0);
-    let (handoff, handoff_broker) = channel_create().ok()?;
+    let Ok((handoff, handoff_broker)) = channel_create() else {
+        close_random();
+        return None;
+    };
     // Every way out below closes what was made before it (review K6).
     let Ok(job) = job_create(parent, JobFlags::POSIX) else {
         let _ = handle_close(handoff);

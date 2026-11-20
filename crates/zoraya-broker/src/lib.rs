@@ -220,6 +220,10 @@ pub struct Broker<K: Kernel> {
     /// Whether a native client was ever added (the mode with no first
     /// shell).
     had_client: bool,
+    /// Random connections a connection may still ask for (ADR-0453 item 3): one for the
+    /// `exec` its image may make, and one for each `SpawnPrepare` it has made, so that a
+    /// process gets a connection for a child it starts and for no other purpose.
+    random_credit: BTreeMap<Conn, u32>,
     out: Vec<u8>,
 }
 
@@ -251,6 +255,7 @@ impl<K: Kernel> Broker<K> {
             next_pid: FIRST_PID,
             sid: 0,
             had_client: false,
+            random_credit: BTreeMap::new(),
             foreground: None,
             host: false,
             asked: BTreeMap::new(),
@@ -461,6 +466,7 @@ impl<K: Kernel> Broker<K> {
                 let from = caller.map_or(Peer::Client, Peer::Process);
                 match self.prepare(from, form, stops, &mut actions) {
                     Ok((pid, pgid, (parent_job, child_job), end)) => {
+                        *self.random_credit.entry(conn).or_insert(1) += 1;
                         let sid = self.sid_of(pgid);
                         let bytes = self.encode(&SpawnPrepared { pid, pgid, sid }, t);
                         actions.push(Action::Reply {
@@ -605,7 +611,10 @@ impl<K: Kernel> Broker<K> {
             // connection of the child it is about to start.
             o if o == RandomConnection::ORDINAL => {
                 let _ = parse!(RandomConnection);
-                if caller.is_none() {
+                // One for the `exec` of the image, one per prepare: no process holds more than it
+                // starts children with.
+                let credit = self.random_credit.entry(conn).or_insert(1);
+                if caller.is_none() || *credit == 0 {
                     let bytes = self.error(status::NOT_PERMITTED, t);
                     actions.push(Action::Reply {
                         to: conn,
@@ -613,6 +622,7 @@ impl<K: Kernel> Broker<K> {
                         handles: Vec::new(),
                     });
                 } else {
+                    *self.random_credit.entry(conn).or_insert(1) -= 1;
                     match self.kernel.random_connection() {
                         Some(h) => {
                             let ok = RandomConnectionReply {
@@ -786,6 +796,7 @@ impl<K: Kernel> Broker<K> {
             return actions;
         };
         actions.push(Action::Forget { conn });
+        self.random_credit.remove(&conn);
         if peer == Peer::Client {
             // A native shell gone: its children are orphans.
             let children: Vec<u32> = self

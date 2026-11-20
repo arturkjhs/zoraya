@@ -45,6 +45,13 @@ refusals() {
     refused "-Z in the flags" env RUSTFLAGS="-Zunstable-options" "$zcargo" build
     refused "--sysroot in the flags" env RUSTFLAGS="--sysroot /tmp" "$zcargo" build
     refused "the encoded flags" env CARGO_ENCODED_RUSTFLAGS="$(printf -- '-C\037link-self-contained=yes')" "$zcargo" build
+    refused "a --config file" "$zcargo" build --config my.toml
+    refused "a rustc in --config" "$zcargo" build --config build.rustc-wrapper=x
+    refused "--codegen" "$zcargo" build --codegen linker=cc
+    refused "args after --" "$zcargo" rustc -- -C relocation-model=pic
+    refused "--codegen in the flags" env RUSTFLAGS="--codegen link-self-contained=yes" "$zcargo" build
+    refused "RUSTC_WRAPPER" env RUSTC_WRAPPER=/bin/echo "$zcargo" build
+    refused "RUSTC" env RUSTC=/bin/echo "$zcargo" build
     # What it lets through: the refusals are not about these, so whatever stops
     # the command later (no sysroot, say) does not say "refusing".
     for flags in "-C panic=abort" "-C panic=unwind" "-C relocation-model=static" "-C link-self-contained=no" \

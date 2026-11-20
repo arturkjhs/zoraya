@@ -494,10 +494,10 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     // starts (ADR-0453 item 3): it holds one of its own, a shell's kind, from the
     // panel's launcher connection (ADR-0462).
     let beside = if wants_broker {
-        let broker_random = st.random.and_then(zoraya_user::random::share);
-        st.root
-            .as_ref()
-            .and_then(|r| zoraya_user::beside::start_broker_in(r, parent, broker_random))
+        st.root.as_ref().and_then(|r| {
+            let broker_random = st.random.and_then(zoraya_user::random::share);
+            zoraya_user::beside::start_broker_in(r, parent, broker_random)
+        })
     } else {
         None
     };

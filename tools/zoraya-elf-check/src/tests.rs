@@ -149,10 +149,20 @@ const MAP: &str = "\
 #[test]
 fn the_map_gives_the_input_sections_of_libc_a_only() {
     assert_eq!(
-        libc_ranges(MAP),
+        libc_ranges(MAP, None),
         [(0x40_0110, 0x40_0130), (0x40_0130, 0x40_0140)]
     );
-    assert!(libc_ranges("").is_empty());
+    assert!(libc_ranges("", None).is_empty());
+    // With the archive's exact path, another libc.a is not it (a build script's, say).
+    assert_eq!(
+        libc_ranges(MAP, Some("/w/build/sysroot/usr/lib/libc.a")),
+        [(0x40_0110, 0x40_0130), (0x40_0130, 0x40_0140)]
+    );
+    assert!(libc_ranges(MAP, Some("/elsewhere/libc.a")).is_empty());
+    // A section or a path made to look like a member of libc.a is not one.
+    let forged = "  400000   400000       10     4         /w/x.rcgu.o:(/w/libc.a(m):(.text))\n  400010   400010       10     4         /w/t/libc.a(x):(y)/prog.o:(.text)\n";
+    assert!(libc_ranges(forged, Some("/w/libc.a")).is_empty());
+    assert!(libc_ranges(forged, None).is_empty());
 }
 
 /// A text segment of `words` at 0x400000.

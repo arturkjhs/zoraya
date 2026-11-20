@@ -27,7 +27,8 @@ printf '%s\n' "$@" > "$out.link"
 "$here/zcc" "$@" "-Wl,-Map=$map"
 check=${ZCARGO_ELF_CHECK:-$here/../target/debug/zoraya-elf-check}
 # What the check says goes beside the output; cargo shows it only on a refusal.
-if ! "$check" --no-foreign-svc "$map" "$out" > "$out.check" 2>&1; then
+archive=${ZORAYA_SYSROOT:-$here/../build/sysroot}/usr/lib/libc.a
+if ! "$check" --no-foreign-svc "$map" --libc "$archive" "$out" > "$out.check" 2>&1; then
     cat "$out.check" >&2
     rm -f "$out"
     echo "zcargo-link: $out was refused" >&2

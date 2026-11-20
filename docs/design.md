@@ -2726,21 +2726,20 @@ A Rust program built outside the workspace runs as a POSIX program: the stable t
   `setgid`, `setgroups`, `setsid`, `chroot`, `sigaltstack`, `sched_getaffinity`, `sendfile`, `splice`, `waitid`, each `ENOSYS`.
   Only `tools/zcargo` links it (`make check-rust-archive` compares its names with `ports/rust/names.txt` and ADR-0451 item 5, and
   looks for any other file that names it).
-- **Randomness for every child** (ADR-0453 item 3): the shell that starts a broker (`init`'s first shell, the panel for each
-  terminal) gives it, at slot 10, a connection to the random service of the shell's kind (`random::share` of its own, so it
-  may share 64). A new broker message `RandomConnection` (ordinal 20, `zoraya-proto-posix`) makes the broker share that
+- **Randomness for every child** (ADR-0453 item 3): `init` (for its first shell's broker) and the panel (for each terminal's) give the broker, at slot 10, a connection to the random service of a shell's kind (`random::share` of their own, so it
+  may share 64). The broker lets a process ask for one per `SpawnPrepare` it made and one for its own `exec`, no more. A new broker message `RandomConnection` (ordinal 20, `zoraya-proto-posix`) makes the broker share that
   connection for the process that asks; libposix asks once per `posix_spawn` and `exec` that was not given `GRANT_RANDOM`
   (`Posix::grant_connections`) and the child holds the end in its `RANDOM` slot. A broker with none to give, or a service with no
   room, answers `AGAIN` and the child starts without one, as before. A `fork` child before `exec` still has none.
   A session broker (`init`'s `start_session`, whose first process is a POSIX shell) is not given a connection.
 - **Tests.** `make test-rust-std` (`tests/rust-std/`, the probe of TASK-35 asserted; `rstest` and, under another name and
   description, `rsnet`; `tests/rust-std/rust-std.script`): threads whose waits sleep, `HashMap`, `std::fs` in `/tmp` and in a
-  granted directory, a directory not granted, `Command` by both paths with a child that hashes and has no network, `uid` and `gid`
+  granted directory, a directory not granted, `Command` by `posix_spawn` with a child that hashes and has no network (the fork path fails with `Unsupported`, proposed ADR-0468), `uid` and `gid`
   that fail with the child never run, panics that unwind, an uncaught panic (status 101), `abort` (signal 6), a stack overflow (a
   fault), and `std::net` under a grant, with `connect_timeout` (the non-blocking connect). `tools/test-zcargo.sh build` reads the
   link line (static, non-PIE, the sysroot's `libunwind` and `libc`, nothing of the toolchain's `self-contained` directory) and
   refuses the raw `svc`. `make test-libposix` runs `t_syscall futex|tid|fionbio|names|random|chdir|report` for the C boundary.
-- **Known limits.** The main thread's stack is 64 KiB and `std`'s threads take 2 MiB (ADR-0454 item 3). A stack overflow is a
+- **Known limits.** `Command`'s fork path (a bare program name with `PATH` set, `uid`, `gid`, `pre_exec`) fails with `Unsupported`: Rust 1.99's `Command::spawn` makes a `SOCK_SEQPACKET` socketpair that `fork` cannot give the child (proposed ADR-0468). A broker-made child connection is at depth 2 and may make 8 (ADR-0435); a session holds at most 64 of them per broker. The main thread's stack is 64 KiB and `std`'s threads take 2 MiB (ADR-0454 item 3). A stack overflow is a
   fault with no Rust message. `CommandExt::groups` and `chroot` are unstable in Rust 1.99.1, so the test checks `uid` and `gid`
   only (the names they reach fail in the archive). `canonicalize` of a path in a granted directory whose parent is not granted
   is `ENOENT` (`realpath` reads every ancestor). `metadata().created()` is an error (no birth time), `hard_link` is `EPERM`,

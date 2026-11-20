@@ -57,9 +57,24 @@ die() {
 # ---- what is refused
 
 [ -z "${RUSTC_BOOTSTRAP:-}" ] || die "refusing a set RUSTC_BOOTSTRAP: Rust POSIX programs use the stable toolchain (ADR-0450)"
+# What would replace the compiler or its wrapper, or set a linker, for the build.
+for v in RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \
+    CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER ZORAYA_LD ZORAYA_CLANG __CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS; do
+    eval "val=\${$v:-}"
+    [ -z "$val" ] || die "refusing the set variable $v: zcargo runs the pinned toolchain and linker (ADR-0450, ADR-0452)"
+done
 first=1
 prev=
+after_dashes=0
 for a in "$@"; do
+    if [ "$after_dashes" = 1 ]; then
+        # `cargo rustc -- ARGS`: the arguments go to rustc itself.
+        case "$a" in
+        -C*|--codegen*|-Z*|--target*|--sysroot*|-L*|-l*|--cfg*|--extern*)
+            die "refusing $a after --: it would reach rustc past zcargo's flags (ADR-0452)" ;;
+        esac
+    fi
+    [ "$a" != -- ] || after_dashes=1
     case "$a" in
     +*)
         if [ "$first" = 1 ]; then
@@ -70,14 +85,22 @@ for a in "$@"; do
     --target|--target=*)
         die "refusing $a: zcargo builds for $TARGET only (ADR-0452)" ;;
     --config=*)
-        case "${a#--config=}" in *linker*|*target*|*rustflags*|*runner*)
+        case "${a#--config=}" in
+        *linker*|*target*|*rustflags*|*runner*|*rustc*|*unstable*|*build*)
             die "refusing $a: it would replace what zcargo sets (ADR-0452)" ;;
+        *=*) ;;
+        *) die "refusing $a: a --config that is not KEY=VALUE may name a file of settings (ADR-0452)" ;;
         esac ;;
+    --codegen|--codegen=*)
+        die "refusing $a: pass a flag in RUSTFLAGS, where zcargo checks it (ADR-0452)" ;;
     esac
     case "$prev" in
     --config)
-        case "$a" in *linker*|*target*|*rustflags*|*runner*)
+        case "$a" in
+        *linker*|*target*|*rustflags*|*runner*|*rustc*|*unstable*|*build*)
             die "refusing --config $a: it would replace what zcargo sets (ADR-0452)" ;;
+        *=*) ;;
+        *) die "refusing --config $a: not KEY=VALUE, it may name a file of settings (ADR-0452)" ;;
         esac ;;
     esac
     first=0
@@ -90,13 +113,15 @@ if [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
     caller="$caller $(printf '%s' "$CARGO_ENCODED_RUSTFLAGS" | tr '\037' ' ')"
 fi
 check_flags() {
-    # $1 is the flags as one string: look at each `-C x=y` and `-Cx=y`.
+    # $1 is the flags as one string: look at each `-C x=y` and `-Cx=y`. No globbing of the words.
+    set -f
     set -- $1
     while [ $# -gt 0 ]; do
         w=$1
         shift
         case "$w" in
-        -C) w=-C$1; [ $# -gt 0 ] && shift ;;
+        -C|--codegen) w=-C$1; [ $# -gt 0 ] && shift ;;
+        --codegen=*) w=-C${w#--codegen=} ;;
         esac
         case "$w" in
         -Clink-self-contained=no) ;;
@@ -114,6 +139,7 @@ check_flags() {
     done
 }
 check_flags "$caller"
+set +f
 
 # ---- the toolchain
 

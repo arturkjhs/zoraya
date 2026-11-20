@@ -4,7 +4,7 @@
 //! link to nothing fails the check (an applet link in `/bin`).
 //! Fails if any file is refused or if no file was checked.
 //!
-//! `zoraya-elf-check --no-foreign-svc MAP PATH...` also fails on an `svc`
+//! `zoraya-elf-check --no-foreign-svc MAP [--libc ARCHIVE] PATH...` also fails on an `svc`
 //! instruction in an executable segment that the linker's map (`-Wl,-Map=MAP`,
 //! lld's format) does not attribute to a member of `libc.a` (INV-0450-2): the
 //! check of a Rust program built by `tools/zcargo`, run before any stripping.
@@ -56,8 +56,14 @@ fn main() -> ExitCode {
             eprintln!("zoraya-elf-check: --no-foreign-svc needs a map file");
             return ExitCode::FAILURE;
         };
+        let archive = if args.peek().map(String::as_str) == Some("--libc") {
+            args.next();
+            args.next()
+        } else {
+            None
+        };
         match std::fs::read_to_string(&map) {
-            Ok(text) => allowed = Some(zoraya_elf_check::libc_ranges(&text)),
+            Ok(text) => allowed = Some(zoraya_elf_check::libc_ranges(&text, archive.as_deref())),
             Err(e) => {
                 eprintln!("zoraya-elf-check: {map}: {e}");
                 return ExitCode::FAILURE;

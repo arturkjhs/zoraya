@@ -85,6 +85,11 @@ for a in "$@"; do
     --target=*|-target=*|-Xclang|-Xpreprocessor|--define-macro*|@*)
         echo "zcc: refusing $a: zcc sets the target and the preprocessor's definitions itself" >&2
         exit 1;;
+    -lzoraya-rust|-Wl,*zoraya-rust*|*libzoraya-rust.a)
+        if [ "${ZORAYA_RUST:-}" != 1 ]; then
+            echo "zcc: refusing $a: libzoraya-rust.a is for tools/zcargo's links only (INV-0451-2)" >&2
+            exit 1
+        fi ;;
     -shared|-rdynamic|-pie|-static-pie)
         echo "zcc: refusing $a: Zoraya programs are static ET_EXEC (ADR-0033)" >&2
         exit 1;;

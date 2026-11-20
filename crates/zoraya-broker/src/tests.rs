@@ -1848,20 +1848,35 @@ fn a_signal_to_a_group_with_groups_made_inside_it_reaches_its_members_only() {
 #[test]
 fn a_process_gets_a_random_connection_for_its_child_while_the_broker_has_one_to_give() {
     let mut s = session(false);
-    s.b.kernel.random_left = 2;
+    s.b.kernel.random_left = 3;
     let shell = s.shell;
     let held = s.b.kernel.open_handles();
-    for made in 1..=2 {
-        let (r, handles) = s.ask(shell.conn, &message(&proto::RandomConnection {}), vec![]);
-        assert_eq!(status_of(&r), status::OK);
-        assert_eq!(handles.len(), 1);
-        assert!(decode::<proto::RandomConnectionReply>(&r, 1).is_ok());
-        assert_eq!(s.b.kernel.random_made, made);
-        // The connection is the caller's now: the broker holds none of it.
-        assert_eq!(s.b.kernel.open_handles(), held + made as usize);
+    let ask = |s: &mut Session| s.ask(shell.conn, &message(&proto::RandomConnection {}), vec![]);
+    // The exec of its own image: one.
+    let (r, handles) = ask(&mut s);
+    assert_eq!(status_of(&r), status::OK);
+    assert_eq!(handles.len(), 1);
+    assert!(decode::<proto::RandomConnectionReply>(&r, 1).is_ok());
+    assert_eq!(s.b.kernel.random_made, 1);
+    assert_eq!(s.b.kernel.open_handles(), held + 1);
+    // No more without a child to start: the service is not drained by asking (ADR-0453, review of work/rust-std).
+    for _ in 0..5 {
+        let (r, handles) = ask(&mut s);
+        assert_eq!(status_of(&r), status::NOT_PERMITTED);
+        assert!(handles.is_empty());
     }
-    // None left: AGAIN, and no handle.
-    let (r, handles) = s.ask(shell.conn, &message(&proto::RandomConnection {}), vec![]);
+    assert_eq!(s.b.kernel.random_made, 1);
+    // A prepare gives one more, and only one.
+    s.spawn(&shell, bp_inherit(), 0).unwrap();
+    let (r, handles) = ask(&mut s);
+    assert_eq!(status_of(&r), status::OK);
+    assert_eq!(handles.len(), 1);
+    assert_eq!(status_of(&ask(&mut s).0), status::NOT_PERMITTED);
+    assert_eq!(s.b.kernel.random_made, 2);
+    // None left to give: AGAIN, and no handle (the credit is spent).
+    s.spawn(&shell, bp_inherit(), 0).unwrap();
+    s.b.kernel.random_left = 0;
+    let (r, handles) = ask(&mut s);
     assert_eq!(status_of(&r), status::AGAIN);
     assert!(handles.is_empty());
     // A message with a handle it does not take is invalid and closes it.
@@ -1869,6 +1884,10 @@ fn a_process_gets_a_random_connection_for_its_child_while_the_broker_has_one_to_
     let (r, handles) = s.ask(shell.conn, &message(&proto::RandomConnection {}), vec![own]);
     assert_eq!(status_of(&r), status::INVALID);
     assert!(handles.is_empty());
+}
+
+fn bp_inherit() -> u32 {
+    group::INHERIT
 }
 
 #[test]

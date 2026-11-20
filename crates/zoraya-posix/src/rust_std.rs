@@ -107,6 +107,9 @@ pub const FIONBIO: i64 = 0x5421;
 /// How many numbers are remembered: a process reports at most 16 things
 /// (`MAX_REPORTS`), so a seventeenth number would not be shown anyway.
 const REMEMBERED: usize = 16;
+/// The empty slot: a number that is none of `Seen`'s (`i64::MIN` is outside the numbers it
+/// remembers, which are `0..=u32::MAX`; `first_time` says false for the rest).
+const EMPTY: i64 = i64::MIN;
 
 /// The numbers `syscall()` has reported, so that each is reported once.
 pub struct Seen {
@@ -122,7 +125,7 @@ impl Default for Seen {
 impl Seen {
     pub const fn new() -> Seen {
         Seen {
-            numbers: [const { AtomicI64::new(i64::MIN) }; REMEMBERED],
+            numbers: [const { AtomicI64::new(EMPTY) }; REMEMBERED],
         }
     }
 
@@ -130,8 +133,12 @@ impl Seen {
     /// false for a new number: a program that tries more numbers than it
     /// can be told about is not told about the later ones.
     pub fn first_time(&self, number: i64) -> bool {
+        // A number outside `0..=u32::MAX` is not a Linux number; it is reported by the caller as such.
+        if !(0..=i64::from(u32::MAX)).contains(&number) {
+            return false;
+        }
         for slot in &self.numbers {
-            match slot.compare_exchange(i64::MIN, number, Ordering::AcqRel, Ordering::Acquire) {
+            match slot.compare_exchange(EMPTY, number, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => return true,
                 Err(now) if now == number => return false,
                 Err(_) => {}
@@ -212,10 +219,13 @@ mod tests {
         let seen = Seen::new();
         assert!(seen.first_time(279));
         assert!(!seen.first_time(279));
-        assert!(seen.first_time(-1));
+        assert!(seen.first_time(1));
         assert!(seen.first_time(0));
         assert!(!seen.first_time(0));
-        assert!(!seen.first_time(-1));
+        // Outside `0..=u32::MAX`: never remembered, never first (including i64::MIN, the empty slot).
+        for n in [-1, i64::MIN, i64::MAX, 1 << 32] {
+            assert!(!seen.first_time(n), "{n}");
+        }
         // The table holds 16; a seventeenth number is not remembered.
         for n in 1000..1013 {
             assert!(seen.first_time(n), "{n}");

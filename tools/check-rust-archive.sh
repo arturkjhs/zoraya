@@ -44,15 +44,13 @@ else
     echo "check-rust-archive: $archive is not built; its names are not compared"
 fi
 # Every other place that names the archive.
-allowed='Makefile tools/zcargo tools/zcargo-link tools/check-rust-archive.sh tools/test-zcargo.sh tools/rust-musl-target.sh ports/Makefile ports/rust/zoraya-rust.c ports/rust/names.txt'
+allowed='Makefile tools/zcc ports/compare-predefs.sh tools/zcargo tools/zcargo-link tools/check-rust-archive.sh tools/test-zcargo.sh tools/rust-musl-target.sh ports/Makefile ports/rust/zoraya-rust.c ports/rust/names.txt'
 for f in $(git grep -l -e 'zoraya-rust' -- . ':!docs' ':!*.md' 2>/dev/null || true); do
     case " $allowed " in *" $f "*) continue ;; esac
     echo "check-rust-archive: $f names the archive and is not one of: $allowed"
     bad=1
 done
-# The two C drivers never do.
-for f in tools/zcc tools/zc++; do
-    ! grep -q 'zoraya-rust' "$f" || { echo "check-rust-archive: $f names the archive"; bad=1; }
-done
+# zcc and zc++ refuse the name unless zcargo set ZORAYA_RUST=1 (ports/compare-predefs.sh tests it); zc++ is a link to zcc.
+grep -q 'refusing.*zoraya-rust' tools/zcc || { echo "check-rust-archive: tools/zcc does not refuse -lzoraya-rust"; bad=1; }
 [ "$bad" = 0 ] || exit 1
 echo "check-rust-archive: ok ($(echo "$list" | wc -l | tr -d ' ') names)"

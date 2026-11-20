@@ -71,10 +71,10 @@ const SVC_MASK: u32 = 0xffe0_001f;
 const SVC_VALUE: u32 = 0xd400_0001;
 
 /// The ranges a linker's map (`-Wl,-Map`, lld's format) attributes to input
-/// sections of an archive named `libc.a`: a line of `VMA LMA Size Align`
+/// sections of the archive `libc.a` (its exact path, if given): a line of `VMA LMA Size Align`
 /// followed by `.../libc.a(member.o):(.section)`. A section the linker
 /// discarded is not in the map.
-pub fn libc_ranges(map: &str) -> Vec<(u64, u64)> {
+pub fn libc_ranges(map: &str, archive: Option<&str>) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     for line in map.lines() {
         let mut words = line.split_whitespace();
@@ -87,16 +87,32 @@ pub fn libc_ranges(map: &str) -> Vec<(u64, u64)> {
         ) else {
             continue;
         };
-        // The input section's own line has the member and the section in the
-        // file column: `PATH/libc.a(member.o):(.text.name)`.
-        let in_libc = input.split_once("libc.a(").is_some_and(|(before, after)| {
-            (before.is_empty() || before.ends_with('/')) && after.contains("):(")
-        });
-        if in_libc && size > 0 {
+        if size > 0 && input_in_libc(input, archive) {
             out.push((vma, vma.saturating_add(size)));
         }
     }
     out
+}
+
+/// Whether the map's input word is `ARCHIVE(member):(section)` of the archive: with
+/// `archive` given, its exact path; otherwise any path that ends in `/libc.a` (or is
+/// `libc.a`). The member has no `/`, `(` or `)`, so that a section named
+/// `/x/libc.a(m):(.text)` of an object of the program is not taken for one.
+fn input_in_libc(input: &str, archive: Option<&str>) -> bool {
+    let rest = match archive {
+        Some(a) => input.strip_prefix(a).and_then(|r| r.strip_prefix('(')),
+        None => input.split_once("libc.a(").and_then(|(before, after)| {
+            (before.is_empty() || before.ends_with('/')).then_some(after)
+        }),
+    };
+    let Some((member, tail)) = rest.and_then(|r| r.split_once(')')) else {
+        return false;
+    };
+    !member.is_empty()
+        && !member.contains(['/', '(', ')'])
+        && tail.starts_with(":(")
+        && tail.ends_with(')')
+        && !tail[2..tail.len() - 1].contains(['(', ')', '/'])
 }
 
 /// The addresses of `svc` instructions in the executable segments of `file`

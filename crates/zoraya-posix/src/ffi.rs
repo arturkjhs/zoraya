@@ -2866,9 +2866,10 @@ extern "C" fn syscall(number: i64, a: i64, b: i64, c: i64, d: i64, e: i64, f: i6
     use crate::rust_std::{Futex, Number, absolute_deadline, classify, futex_form};
     // `futex(uaddr, op, val, timeout, uaddr2, val3)`: `a` to `f`.
     let result = match classify(number) {
-        Number::Futex => match futex_form(b, f) {
+        // `op` is a C `int`: the upper half of its register is not part of it.
+        Number::Futex => match futex_form(i64::from(b as i32), f) {
             // Linux's relative timeout, as `zoraya_posix_futex` reads it.
-            Ok(Futex::Wait | Futex::Wake) => zoraya_posix_futex(a, b, c, d, e, f),
+            Ok(Futex::Wait | Futex::Wake) => zoraya_posix_futex(a, i64::from(b as i32), c, d, e, f),
             Ok(Futex::WaitAbsolute) => {
                 FUTEX_CALLS.fetch_add(1, Ordering::Relaxed);
                 let deadline = if d == 0 {
