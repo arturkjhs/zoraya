@@ -704,4 +704,9 @@ Unlinking a listening node follows the ordinary rules (write on its directory). 
   two-cell glyphs and the cursor advances two cells.
 - **Install from a terminal of the desktop.** Today only the console holds the volume root. Minimal test: in a desktop terminal
   the install command (ADR-0396) installs a program and it runs by name.
+- **R28, `cwd none` in an installed program's description (the architect, 2026-11-20).** The launch honours it. Only `none` is
+  accepted: a description can only take access away. Today every program a shell starts gets its current directory read-only
+  unless the image's description says otherwise. Minimal test: install a program whose description says `cwd none`; started
+  from a shell in a directory, it cannot open that directory or a file in it; a description with any other `cwd` value is
+  refused at install; a program without the line is as today.
 
