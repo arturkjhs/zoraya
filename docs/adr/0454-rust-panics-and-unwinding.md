@@ -128,6 +128,9 @@ exit status 101
   on unwinding across them; read before the engine's first Rust part.
 - Whether 2 MiB `std` thread stacks are committed at once by libposix's `mmap` or as touched, which decides how many
   Rust threads fit a job's memory quota; measured with a thread-heavy program.
+- **Rule 6 note (part `work/rust-std`, 2026-11-20).** INV-0454-1 and INV-0454-2 are checked by `make test-rust-std`. Measured as the decision says: an
+  uncaught panic is "exit status 101" and `abort` "ended by signal 6"; a stack overflow is "crashed (data abort, class 0x24)" with no Rust message. Eight
+  threads of `std`'s 2 MiB default stack run in `rstest threads` (and one of 256 KiB by `Builder::stack_size`); whether the stacks are committed at once is not measured.
 
 ## Revisit triggers
 

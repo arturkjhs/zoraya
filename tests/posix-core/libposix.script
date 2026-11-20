@@ -104,7 +104,7 @@ x missing.h
 < \r\n~> 
 > /bin/t_syscall report\r
 < t_syscall: report passed
-< note: t_syscall asked for system call 279, which Zoraya does not answer (ENOSYS)
+< asked for system call 279, which Zoraya does not answer (ENOSYS)
 < \r\n~> 
 # poll and ppoll (ADR-0342 item 5, ADR-0414 item 1): one case at a time.
 > posixrun /bin/t_poll pipe\r

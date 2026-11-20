@@ -196,6 +196,13 @@ rust-tool: syscall 279 is not answered (ENOSYS)     # the report's wording is th
   `make check-libposix-widths` only (the definition against the header's prototype, offline and with the built sysroot);
   the `sendmsg` call of the check, and the `REPORT` line per unanswered `syscall` number of item 1, wait for that part and
   for `work/rust-std`.
+- **Rule 6 note (part `work/rust-std`, 2026-11-20).** Built: item 1 (`syscall()` as `crates/zoraya-posix/src/rust_std.rs` and `ffi.rs`; the `REPORT` line is a
+  `SyscallReport` that the shell prints after the line and `posixrun` prints), item 2 (`FIONBIO`), item 3 (the ten names, `addchdir` with its non-`_np`
+  prototype in musl patch 0005; `libpyshim.a` lost `sched_yield`, `pause` and `dirfd`, recorded in ADR-0320), item 5 (`ports/rust/`), item 6
+  (`posix-surface-check`), item 7 (`is_probe`). INV-0451-1's `sendmsg` call is in `t_syscall stubs` (`sendmsg` is exported since ADR-0412).
+  The open questions: `getauxval(AT_HWCAP)` is 0 (libposix lays out no such entry, musl answers `ENOENT`), `gettid` of the main thread is 1 (the
+  `set_tid_address` value), not the broker's pid. Item 4 needed nothing: `posix_spawnp`, `socketpair`, `sendmsg` and `recvmsg` were exported
+  already, so the archive does not define them.
 
 ## Revisit triggers
 

@@ -471,6 +471,11 @@ fn main() -> i32 {
     }
     println!("posixrun: broker messages {broker}");
     while let Ok(sizes) = channel_read(report_mine, &mut bytes, &mut handles) {
+        // A system call number libposix does not answer (ADR-0451 item 1), once per number.
+        if let Some(r) = abi::SyscallReport::decode(&bytes[..sizes.bytes as usize]) {
+            println!("posixrun: system call {} is not answered", r.number);
+            continue;
+        }
         match Report::decode(&bytes[..sizes.bytes as usize]) {
             Some(r) => {
                 let access = match r.access {

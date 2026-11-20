@@ -8,11 +8,12 @@
  *
  *   table     an empty namespace with one read-only entry: the child has the
  *             fd the actions gave and no other, its table is that entry
- *             (read-only at the service), no cwd, no random, no network
+ *             (read-only at the service), no cwd, no network, and a random
+ *             connection of its own from the broker (ADR-0453 item 3)
  *   table2    two entries, one read-write: the child writes in it, and its
  *             cwd is the parent's, since a listed directory covers it
  *   default   no attribute: the child has the parent's table and fds, and no
- *             random or network connection (INV-0411-4)
+ *             network connection (INV-0411-4); its random connection is the broker's
  *   refuse    an entry outside the parent's table, or wider than the parent
  *             holds it, is EACCES; no child is left; bad attributes are EINVAL
  *   grants    a connection the parent lacks is EACCES; with the shell's random
@@ -373,8 +374,9 @@ static void t_table(void)
 	NEEDS(r, "create /tmp/_spawn_probe=2\n");
 	/* The parent's cwd, /work, is in no entry. */
 	NEEDS(r, "cwd=/\n");
-	/* No connection: random is ENOSYS, a connect is EACCES. */
-	NEEDS(r, "getrandom=38\n");
+	/* No network: a connect is EACCES. Random: the broker makes every child one, whatever its table
+	 * (ADR-0453 item 3, which supersedes INV-0411-4 for randomness; under zosh the broker has one). */
+	NEEDS(r, "getrandom=0\n");
 	NEEDS(r, "connect=13\n");
 	done(&attr, &fa);
 	/* An empty table: nothing at all. */
@@ -430,8 +432,9 @@ static void t_default(void)
 	NEEDS(r, "create /tmp/_spawn_probe=0\n");
 	NEEDS(r, "create /bin/_spawn_probe=13\n");
 	NEEDS(r, "fds=");
-	/* No network and no random service, as a spawn always had (INV-0411-4). */
-	NEEDS(r, "getrandom=38\n");
+	/* No network, as a spawn always had (INV-0411-4); but a random connection of its own, which the broker makes
+	 * for every child (ADR-0453 item 3). */
+	NEEDS(r, "getrandom=0\n");
 	NEEDS(r, "connect=13\n");
 	done(&attr, &fa);
 	CHECK(count_fds() == before);
@@ -512,7 +515,7 @@ static void t_grants(void)
 	errno = 0;
 	CHECK(waitpid(-1, NULL, WNOHANG) == -1 && errno == ECHILD);
 	if (random) {
-		/* With it, the child has its own, and without the grant it has none. */
+		/* With the grant the child has the parent's kind, and without it the broker's (ADR-0453 item 3). */
 		fresh(&attr, &fa);
 		CHECK(posix_spawnattr_setgrants_np(&attr, POSIX_SPAWN_GRANT_RANDOM) == 0);
 		run(&r, &attr, &fa, "report", "");
@@ -523,7 +526,8 @@ static void t_grants(void)
 		fresh(&attr, &fa);
 		run(&r, &attr, &fa, "report", "");
 		OKX(r);
-		NEEDS(r, "getrandom=38\n");
+		NEEDS(r, "getrandom=0\n");
+		NEEDS(r, "connect=13\n");
 		done(&attr, &fa);
 		/* And an empty table with the grant: random, and nothing else. */
 		fresh(&attr, &fa);

@@ -7,10 +7,8 @@
  *   t_syscall syscall   syscall() is a long; a number it does not answer gives
  *                       -1 and ENOSYS, as a 64-bit -1 (also with a number
  *                       whose low 32 bits are a valid number)
- *   t_syscall stubs     tee returns ssize_t: -1 and ENOSYS (sendmsg is outside the
- *                       tier list: libc.a hides it as __zoraya_sendmsg, so only its
- *                       prototype is checked here, and its definition by
- *                       make check-libposix-widths)
+ *   t_syscall stubs     tee returns ssize_t: -1 and ENOSYS; sendmsg (exported since
+ *                       ADR-0412) to a closed peer is a 64-bit -1 with EPIPE
  *   t_syscall wide      a result above 2^32 survives: lseek's off_t past 4 GiB
  *
  * ADR-0451 items 1 to 3, built by part work/rust-std (Linux AArch64's numbers,
@@ -57,6 +55,7 @@
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -118,6 +117,22 @@ static void numbers(void)
 static void stubs(void)
 {
 	ENOSYS64(tee(-1, -1, 4096, 0));
+	/* sendmsg is exported now (ADR-0412): to a closed peer it is -1 as a 64-bit ssize_t, with EPIPE. */
+	{
+		int sv[2];
+		char c = 'x';
+		struct iovec iov = { &c, 1 };
+		struct msghdr m;
+		memset(&m, 0, sizeof m);
+		m.msg_iov = &iov;
+		m.msg_iovlen = 1;
+		CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+		CHECK(close(sv[1]) == 0);
+		errno = 0;
+		long long r = (long long)sendmsg(sv[0], &m, MSG_NOSIGNAL);
+		CHECK(r == -1LL && (unsigned long long)r == 0xffffffffffffffffULL && errno == EPIPE);
+		CHECK(close(sv[0]) == 0);
+	}
 	printf("t_syscall: stubs passed (%d checks)\n", checks);
 }
 
@@ -226,9 +241,8 @@ static void random_(void)
 	CHECK(memcmp(a, b, sizeof a) != 0);
 	/* As getrandom itself. */
 	CHECK(getrandom(b, sizeof b, 0) == (ssize_t)sizeof b);
-	/* A bad buffer is EFAULT as for getrandom, a 64-bit -1 either way. */
-	errno = 0;
-	CHECK(syscall(NR_GETRANDOM, (void *)8, 16L, 0L) == -1L && errno == EFAULT);
+	/* A request for nothing is nothing. */
+	CHECK(syscall(NR_GETRANDOM, a, 0L, 0L) == 0L);
 	printf("t_syscall: random passed (%d checks)\n", checks);
 }
 

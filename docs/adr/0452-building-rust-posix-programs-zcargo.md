@@ -139,6 +139,12 @@ zcargo: refusing -Zbuild-std: Rust POSIX programs use the stable toolchain's pre
   build of a crate with C code answers it, and item 3's exception is built only if needed.
 - Whether a cargo workspace with build scripts (`build.rs`, run on the host) needs anything more than cargo's own
   host/target split; Ladybird's first part answers it.
+- **Rule 6 note (part `work/rust-std`, 2026-11-20).** Built as decided, with two additions that are not decisions: `tools/zcargo-link` is the
+  linker cargo is given (it runs `zcc` with `-Wl,-Map`, keeps `NAME.link` and `NAME.map` beside the output and runs the checks of item 4 on every
+  program, so cargo's own output files need no scan), and `tools/rust-musl-target.sh` puts the toolchain's own `rust-std` component for the target
+  in `build/rust-musl-sysroot` (from the URL and sha256 of the channel manifest) where `rustup target add` may not be run; `zcargo` then passes
+  `--sysroot`. Item 7 (CMake and Corrosion) is not built. Whether a cargo workspace with build scripts needs more than cargo's host and target
+  split is not measured.
 
 ## Revisit triggers
 
