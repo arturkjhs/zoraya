@@ -1002,6 +1002,41 @@ Not built in 9f-wheel, or known: pixel-smooth scrolling (settings moves by child
 turn (`dx`) scrolls nothing; Page Up and Page Down in the file manager and the editor; the sidebar of places and the
 editor's find field do not scroll.
 
+## The pointer and the frame rate (as built; TASK-31 `gui-smooth`, ADR-0467 proposed)
+
+Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the order the numbers asked for.
+
+- **The host draws the pointer.** `gpud` sets up virtio-gpu's cursor queue (queue 1, 16 entries, no completion
+  interrupt asked for). The display protocol has two messages more: `SetCursor` (ordinal 5; a 64 by 64 image of
+  `0xAARRGGBB` words, the hot spot and the place; reply `Done`) and `MoveCursor` (ordinal 6, no reply). The compositor
+  builds the image itself from the pointer's dots and the palette (`Compositor::cursor_image`; never from a client),
+  gives it when a pointer has spoken, at a new scale or appearance, and to a new driver; after that a pointer move is
+  one `MoveCursor` and no frame. A driver that refuses (`DEVICE`) leaves the software pointer in force, drawn into the
+  frame as before. `gpud` checks the image's size, the hot spot and the place against the display (INV-0467-2).
+- **A device's messages are read together.** Up to `MAX_DRAIN` (32) messages of an input device a round; the pointer
+  is told to the window under it once, at the end, with the last place. A message that changes a button or turns a
+  wheel is told at its end, as before.
+- **One frame per refresh.** `compd` sets 1/60 s (`set_frame_interval`; the library's default is none, so the host
+  tests see every frame). What changed waits in the damage, and the loop's wait ends at the due time. A client's
+  commit is never held: it is answered in its round (a client with a commit unanswered is not read, and its channel
+  would keep the loop awake: found by the first measurement of this change, 5000 rounds a second).
+- **A dragged window is copied.** When the person moves the topmost window, the host draws the pointer, and nothing
+  else was damaged since the last frame (`other_dirty`), the frame copies the window's last drawn interior (its frame
+  and body inset by its corner radius and two pixels, and only where neither place is under the bar or the dock's zone)
+  to its new place with `copy_within`, and composes the rest of the damage as ever. Host tests compare every frame of a
+  drag, at both scales and into the bar and the dock's zone, with the frame a whole compose makes: no pixel differs.
+- **The measurement.** `/config/gui-measure` (any content) turns on `compd`'s one console line per second of pointer
+  activity (at most 64 a boot): input messages and position events, rounds, frames and their damage, flush bytes,
+  the time of the driver's answer, the delay from the first event a flush carried to its answer, the gap between frames.
+  `make test-gui`'s `pointer` script (`glide` and `sweep` steps of the runner) plays pointer-only motion and a window
+  drag at 4 ms steps and waits for the lines. The delay ends at the driver's answer: the host's own scan-out is not seen.
+- **Known limits.** The flush is still one bounding box a frame (no rectangle list: after the hardware cursor, a frame's
+  damage is mostly one region); a drag transfers the whole moved window each frame (the cost at scale 2 is the host's
+  transfer of 7 MiB, not the guest's compose); pacing adds up to one interval of delay where the host could show a
+  frame at once (scale 1 drag: delay 4 ms before, 15 ms after, in return for 59 instead of 104 frames a second); a
+  screendump of the guest has no pointer (the host draws it); whether Cocoa shows the guest's cursor image over its own
+  is for the architect's look at `make run-gui`.
+
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and

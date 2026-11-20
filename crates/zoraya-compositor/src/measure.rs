@@ -38,6 +38,9 @@ pub struct Counts {
     pub drag_frames: u64,
     pub drag_ns: u64,
     pub drag_max_ns: u64,
+    /// The time between the starts of two frames in a row: sum, longest.
+    pub gap_ns: u64,
+    pub gap_max_ns: u64,
     /// Pixels the frames' damage covered (before flushing's union).
     pub damage_pixels: u64,
     /// Flush messages sent to the driver, and the bytes they cover
@@ -114,6 +117,14 @@ impl Measure {
         self.event_at = None;
     }
 
+    /// A frame started `gap` ns after the one before.
+    pub fn gap(&mut self, gap: u64) {
+        if self.on {
+            self.counts.gap_ns += gap;
+            self.counts.gap_max_ns = self.counts.gap_max_ns.max(gap);
+        }
+    }
+
     /// A frame of `pixels` damage took `took` ns; `drag`: a window was
     /// being moved or resized.
     pub fn frame(&mut self, took: u64, pixels: u64, drag: bool) {
@@ -181,7 +192,7 @@ impl Measure {
         let line = format!(
             "compd: measure: {} us: input {} messages {} axis {} moves; {} rounds ({} idle; wakes mgr {} disp {} in {} cl {}) {} frames \
              (mean {} us, {} px) drag {} frames (mean {} us, max {} us); flush {} sent {} KiB \
-             (mean {} us) cursor {} moves; delay mean {} us max {} us",
+             (mean {} us) cursor {} moves; delay mean {} us max {} us; frame gap mean {} us max {} us",
             secs_us,
             c.messages,
             c.axis_events,
@@ -204,6 +215,8 @@ impl Measure {
             c.cursor_moves,
             per(c.delay_ns, c.answered) / 1000,
             c.delay_max_ns / 1000,
+            per(c.gap_ns, c.frames.saturating_sub(1)) / 1000,
+            c.gap_max_ns / 1000,
         );
         self.counts = Counts::default();
         self.since = 0;

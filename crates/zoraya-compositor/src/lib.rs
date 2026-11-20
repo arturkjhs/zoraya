@@ -3884,6 +3884,9 @@ impl<P: Platform> Compositor<P> {
                 }
             }
             let took = self.platform.now().saturating_sub(start);
+            if let Some(last) = self.last_frame {
+                self.measure.gap(start.saturating_sub(last));
+            }
             self.last_frame = Some(start);
             self.moving = None;
             self.other_dirty = false;
