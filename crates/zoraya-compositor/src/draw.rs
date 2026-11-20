@@ -45,7 +45,7 @@ pub const THUMB: (u32, u32) = (80, 52);
 const WALLPAPER_DIVISOR: usize = 4;
 
 impl<P: Platform> Compositor<P> {
-    fn palette(&self) -> &'static Palette {
+    pub(crate) fn palette(&self) -> &'static Palette {
         self.appearance.palette()
     }
 
@@ -112,6 +112,7 @@ impl<P: Platform> Compositor<P> {
             title_text,
             mono,
             keymap,
+            hw_cursor,
             ..
         } = self;
         let ground = if fielded.len() == wallpaper.len() {
@@ -280,7 +281,42 @@ impl<P: Platform> Compositor<P> {
                 (title_text, mono),
             );
         }
-        draw_pointer(&mut c, *pointer, scale.factor(), p);
+        if !*hw_cursor {
+            draw_pointer(&mut c, *pointer, scale.factor(), p);
+        }
+    }
+
+    /// The pointer as the display driver's hardware cursor wants it:
+    /// `CURSOR_BYTES` of `0xAARRGGBB` words, the pointer's dots at the
+    /// scale in the top left of the 64 by 64 square, the rest clear, drawn
+    /// from the same dots and tokens as [`draw_pointer`] (the image is the
+    /// compositor's own, INV-0467-1). `None` when the pointer is larger than
+    /// the square.
+    pub(crate) fn cursor_image(&self) -> Option<Vec<u8>> {
+        let k = self.scale.factor() as usize;
+        let side = zoraya_proto_display::CURSOR_SIDE as usize;
+        if POINTER[0].len() * k > side || POINTER.len() * k > side {
+            return None;
+        }
+        let p = self.palette();
+        let mut out = alloc::vec![0u8; zoraya_proto_display::CURSOR_BYTES];
+        for (dy, line) in POINTER.iter().enumerate() {
+            for (dx, dot) in line.iter().enumerate() {
+                let color = match dot {
+                    0 => continue,
+                    1 => p.bg_control,
+                    _ => p.fg_text,
+                };
+                let word = 0xFF00_0000 | color.pixel();
+                for y in dy * k..(dy + 1) * k {
+                    for x in dx * k..(dx + 1) * k {
+                        let at = (y * side + x) * 4;
+                        out[at..at + 4].copy_from_slice(&word.to_le_bytes());
+                    }
+                }
+            }
+        }
+        Some(out)
     }
 
     /// Keeps the screen as composed with the switcher open.
@@ -301,6 +337,7 @@ impl<P: Platform> Compositor<P> {
         let p = self.palette();
         let scale = self.scale.factor();
         let pointer = self.pointer;
+        let hw_cursor = self.hw_cursor;
         let Compositor {
             platform,
             switcher_frame,
@@ -315,7 +352,9 @@ impl<P: Platform> Compositor<P> {
         let mut c = Canvas::new(&mut pixels[..switcher_frame.len()], width);
         c.set_clip(prect(r));
         c.image(switcher_frame, width, 0, 0, None);
-        draw_pointer(&mut c, pointer, scale, p);
+        if !hw_cursor {
+            draw_pointer(&mut c, pointer, scale, p);
+        }
     }
 }
 

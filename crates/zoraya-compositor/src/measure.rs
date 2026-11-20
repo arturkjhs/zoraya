@@ -25,8 +25,12 @@ pub struct Counts {
     pub axis_events: u64,
     /// Rounds in which the pointer's position changed.
     pub moves: u64,
-    /// Rounds of the loop.
+    /// Rounds of the loop, and those that woke with nothing ready (a
+    /// deadline: a frame held to the refresh, a retry).
     pub rounds: u64,
+    pub idle_rounds: u64,
+    /// Wakeups by what was ready: managers, display, inputs, clients.
+    pub wakes: [u64; 4],
     /// Frames composed.
     pub frames: u64,
     pub compose_ns: u64,
@@ -90,10 +94,24 @@ impl Measure {
         }
     }
 
-    pub fn round(&mut self) {
+    /// A ready key's kind: 0 managers, 1 display, 2 input, 3 client.
+    pub fn wake(&mut self, kind: usize) {
+        if self.on {
+            self.counts.wakes[kind.min(3)] += 1;
+        }
+    }
+
+    pub fn round(&mut self, idle: bool) {
         if self.on {
             self.counts.rounds += 1;
+            self.counts.idle_rounds += u64::from(idle);
         }
+    }
+
+    /// A round ended with no frame to compose (the host drew the move): the
+    /// first event it brought is not one a frame will show.
+    pub fn no_frame(&mut self) {
+        self.event_at = None;
     }
 
     /// A frame of `pixels` damage took `took` ns; `drag`: a window was
@@ -161,7 +179,7 @@ impl Measure {
         let secs_us = now.saturating_sub(self.since) / 1000;
         let per = |n: u64, d: u64| n.checked_div(d).unwrap_or(0);
         let line = format!(
-            "compd: measure: {} us: input {} messages {} axis {} moves; {} rounds {} frames \
+            "compd: measure: {} us: input {} messages {} axis {} moves; {} rounds ({} idle; wakes mgr {} disp {} in {} cl {}) {} frames \
              (mean {} us, {} px) drag {} frames (mean {} us, max {} us); flush {} sent {} KiB \
              (mean {} us) cursor {} moves; delay mean {} us max {} us",
             secs_us,
@@ -169,6 +187,11 @@ impl Measure {
             c.axis_events,
             c.moves,
             c.rounds,
+            c.idle_rounds,
+            c.wakes[0],
+            c.wakes[1],
+            c.wakes[2],
+            c.wakes[3],
             c.frames,
             per(c.compose_ns, c.frames) / 1000,
             per(c.damage_pixels, c.frames),
@@ -210,7 +233,7 @@ mod tests {
         m.message(100);
         m.axis(100);
         m.moved(100);
-        m.round();
+        m.round(false);
         m.frame(2_000, 64, false);
         m.frame(4_000, 64, true);
         m.flush_sent(100);
@@ -238,6 +261,18 @@ mod tests {
         m.flush_sent(1);
         m.flush_answered(30_000, 10);
         assert_eq!(m.counts.delay_max_ns, 21_000);
+    }
+
+    #[test]
+    fn a_move_the_host_drew_has_no_delay_to_report() {
+        let mut m = Measure::new();
+        m.on = true;
+        m.moved(1_000);
+        m.no_frame();
+        m.moved(9_000_000);
+        m.flush_sent(1);
+        m.flush_answered(9_100_000, 10);
+        assert_eq!(m.counts.delay_max_ns, 100_000);
     }
 
     #[test]

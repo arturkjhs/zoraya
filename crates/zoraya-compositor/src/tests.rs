@@ -58,6 +58,13 @@ struct Fake {
     info_status: u32,
     info_format: u32,
     refuse_attach: bool,
+    /// The driver takes a cursor image (`SetCursor` answers `OK`), else
+    /// answers `DEVICE`.
+    accept_cursor: bool,
+    /// The images the driver was given: hot spot, place, the image.
+    cursor_sets: Vec<((u32, u32), (u32, u32), Vec<u8>)>,
+    /// Every `MoveCursor` the driver was told.
+    cursor_moves: Vec<(u32, u32)>,
     flushes: Vec<(u32, u32, u32, u32)>,
     attaches: u32,
     /// How often the compositor said the newest framebuffer is shown.
@@ -149,6 +156,12 @@ impl Platform for Fake {
                 return Outgoing::Full;
             }
             let (header, _) = Header::decode(bytes).unwrap();
+            if header.ordinal == 6 {
+                let (_, m) = decode::<display::MoveCursor>(bytes, 0).unwrap();
+                assert_eq!(header.transaction, NO_REPLY, "a move has no reply");
+                self.cursor_moves.push((m.x, m.y));
+                return Outgoing::Sent;
+            }
             assert_eq!(header.ordinal, 3, "only flushes are sent unasked");
             let (_, f) = decode::<display::Flush>(bytes, 0).unwrap();
             self.flushes.push((f.x, f.y, f.width, f.height));
@@ -289,6 +302,21 @@ impl Platform for Fake {
                 assert_eq!(handles, [FRAMEBUFFER]);
                 self.attaches += 1;
                 encode(&display::Done { status: Below(0) }, t, reply)
+            }
+            5 => {
+                let (_, m) = decode::<display::SetCursor>(message, 0).unwrap();
+                let status = if self.accept_cursor { 0 } else { 3 };
+                if self.accept_cursor {
+                    self.cursor_sets
+                        .push(((m.hot_x, m.hot_y), (m.x, m.y), m.pixels.0.to_vec()));
+                }
+                encode(
+                    &display::Done {
+                        status: Below(status),
+                    },
+                    t,
+                    reply,
+                )
             }
             _ => panic!("unexpected display call: flushes do not wait"),
         };
@@ -1636,6 +1664,8 @@ mod windows;
 mod display_size;
 #[path = "tests_drops.rs"]
 mod drops;
+#[path = "tests_pointer.rs"]
+mod pointer;
 #[path = "tests_rooms.rs"]
 mod rooms;
 #[path = "tests_settings.rs"]

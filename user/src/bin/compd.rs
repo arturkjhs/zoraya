@@ -273,6 +273,8 @@ fn main() -> i32 {
         println!("{p}");
     }
     let mut compositor = Compositor::with_settings(system, manager, display, &inputs, settings);
+    // At most one frame per refresh of a 60 Hz display (proposed ADR-0467).
+    compositor.set_frame_interval(16_666_667);
     if measure {
         compositor.measure_on();
     }

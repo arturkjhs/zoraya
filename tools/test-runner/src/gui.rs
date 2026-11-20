@@ -423,7 +423,11 @@ fn parse_step(n: usize, line: &str) -> Result<Step, String> {
                 [x, y, x2, y2, n, ms] if (1..=10_000).contains(&n) && (0..=1000).contains(&ms) => {
                     Step::Sweep(kind == "sweep", [x, y, x2, y2], n as u32, ms as u64)
                 }
-                _ => return Err(bad("sweep X Y X2 Y2 STEPS MS (STEPS 1 to 10000, MS to 1000)")),
+                _ => {
+                    return Err(bad(
+                        "sweep X Y X2 Y2 STEPS MS (STEPS 1 to 10000, MS to 1000)",
+                    ));
+                }
             }
         }
         "latency" => {

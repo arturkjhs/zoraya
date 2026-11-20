@@ -74,6 +74,10 @@ pub const SCALE_TWO_FROM: u32 = 1920;
 pub const DENSE_PPI: u64 = 150;
 pub const DENSE_SCALE_TWO_FROM: u32 = 1280;
 
+/// The most messages one input device is read for in a round: its moves
+/// are told once, but a device that never stops cannot hold the loop.
+pub const MAX_DRAIN: usize = 32;
+
 /// Port keys: the manager, the display, inputs from `INPUT_KEY`, clients
 /// from `CLIENT_KEY`.
 pub const MANAGER_KEY: u64 = 1;
@@ -249,6 +253,8 @@ struct Client<E> {
 pub struct Stats {
     pub frames: u64,
     pub commits: u64,
+    /// Frames of a moved window made by copying its last drawn pixels.
+    pub blits: u64,
     pub compose_ns: u64,
     pub flush_ns: u64,
     /// Flushes a display driver answered.
@@ -396,6 +402,16 @@ pub struct Compositor<P: Platform> {
     meta: u8,
     /// Where the pointer is, once a pointer has spoken.
     pointer: Option<(i64, i64)>,
+    /// The display driver holds the pointer's image and the host draws the
+    /// pointer (proposed ADR-0467): the compositor only tells where it is,
+    /// and draws none itself.
+    hw_cursor: bool,
+    /// The key (scale, appearance) of the image the driver holds, and of
+    /// the one it refused, so that a refusal is not asked again.
+    cursor_key: Option<u32>,
+    cursor_refused: Option<u32>,
+    /// The position the driver was last told.
+    cursor_at: Option<(i64, i64)>,
     buttons: u32,
     drag: Option<Drag>,
     /// The window whose body holds the left button the compositor
@@ -436,6 +452,20 @@ pub struct Compositor<P: Platform> {
     /// in switching order (ADR-0163: `gui.keyboard-layouts`, a setting from
     /// 7f; `us ua cz` until then).
     layouts: Vec<usize>,
+    /// The window being moved by the person and where its frame was drawn
+    /// at the last composed frame, for [`Compositor::blit_plan`].
+    moving: Option<(Key, Rect)>,
+    /// Something but a window's move changed since the last frame.
+    other_dirty: bool,
+    /// `dirty` is called by the move itself.
+    in_move: bool,
+    /// A moved window is copied within the frame (default true; the tests
+    /// turn it off to compare with a frame composed whole).
+    drag_blit: bool,
+    /// The least time between two frames, 0 for none, and when the last
+    /// one was composed (`finish_round`).
+    frame_ns: u64,
+    last_frame: Option<u64>,
     /// What changed on the screen this round.
     damage: Rect,
     /// Composed and not yet sent to the display driver.
@@ -450,6 +480,8 @@ pub struct Compositor<P: Platform> {
     stats: Stats,
     /// The bounded measurement of pointer input (`measure`), off by default.
     measure: measure::Measure,
+    /// The last wait ended with nothing ready.
+    idle: bool,
     /// The wallpaper and its blurred copy, made when the display attaches.
     wallpaper: Vec<u32>,
     blurred: Vec<u32>,
@@ -520,6 +552,10 @@ impl<P: Platform> Compositor<P> {
             keymap: Keymap::new(),
             meta: 0,
             pointer: None,
+            hw_cursor: false,
+            cursor_key: None,
+            cursor_refused: None,
+            cursor_at: None,
             buttons: 0,
             drag: None,
             body_press: None,
@@ -539,6 +575,12 @@ impl<P: Platform> Compositor<P> {
                 .iter()
                 .filter_map(|n| zoraya_keymap::by_name(n))
                 .collect(),
+            moving: None,
+            other_dirty: false,
+            in_move: false,
+            drag_blit: true,
+            frame_ns: 0,
+            last_frame: None,
             damage: Rect::default(),
             unflushed: Rect::default(),
             in_flight: None,
@@ -546,6 +588,7 @@ impl<P: Platform> Compositor<P> {
             stuck_since: None,
             stats: Stats::default(),
             measure: measure::Measure::new(),
+            idle: false,
             wallpaper: Vec::new(),
             blurred: Vec::new(),
             ui: Text::new(fonts(zoraya_fonts::INTER_REGULAR)),
@@ -621,6 +664,12 @@ impl<P: Platform> Compositor<P> {
         if layout_changed {
             self.layout_changed();
         }
+    }
+
+    /// At most one frame per `ns` (0: every round, as in the tests): the
+    /// display's refresh (proposed ADR-0467).
+    pub fn set_frame_interval(&mut self, ns: u64) {
+        self.frame_ns = ns;
     }
 
     /// Turns the bounded pointer measurement on (`measure`).
@@ -713,6 +762,19 @@ impl<P: Platform> Compositor<P> {
             (None, Some(_)) => Some(self.platform.now() + RETRY_NS),
             (None, None) => None,
         };
+        // A frame held to the display's refresh is composed when it is due.
+        let deadline = match (deadline, self.frame_due()) {
+            (Some(d), Some(f)) => Some(d.min(f)),
+            (None, f) => f,
+            (d, None) => d,
+        };
+        // A pointer move the driver's queue had no room for too.
+        let deadline = if self.hw_cursor && self.pointer != self.cursor_at {
+            let retry = self.platform.now() + RETRY_NS;
+            Some(deadline.map_or(retry, |d| d.min(retry)))
+        } else {
+            deadline
+        };
         // A `ClientGone` waiting for room in the panel's queue is tried
         // again every 10 ms too.
         let deadline = if self.gone_pending.is_empty() {
@@ -722,15 +784,27 @@ impl<P: Platform> Compositor<P> {
             Some(deadline.map_or(retry, |d| d.min(retry)))
         };
         self.platform.wait(&mut ready, deadline);
+        self.idle = ready.is_empty();
         for key in ready {
             match key {
-                MANAGER_KEY => self.manager_message(false),
-                CLIENT_MANAGER_KEY => self.manager_message(true),
-                DISPLAY_KEY => self.display_message(),
+                MANAGER_KEY => {
+                    self.measure.wake(0);
+                    self.manager_message(false);
+                }
+                CLIENT_MANAGER_KEY => {
+                    self.measure.wake(0);
+                    self.manager_message(true);
+                }
+                DISPLAY_KEY => {
+                    self.measure.wake(1);
+                    self.display_message();
+                }
                 k if (INPUT_KEY..INPUT_KEY + MAX_INPUTS as u64).contains(&k) => {
+                    self.measure.wake(2);
                     self.input_message((k - INPUT_KEY) as usize);
                 }
                 k if (CLIENT_KEY..CLIENT_KEY + MAX_CLIENTS as u64).contains(&k) => {
+                    self.measure.wake(3);
                     self.client_message((k - CLIENT_KEY) as usize);
                 }
                 _ => {}
@@ -770,6 +844,7 @@ impl<P: Platform> Compositor<P> {
             return s;
         }
         self.display = Some(end);
+        self.forget_cursor();
         self.platform.watch(end, DISPLAY_KEY);
         // Everything, once: a new driver shows nothing until told.
         self.dirty(&self.screen());
@@ -895,6 +970,7 @@ impl<P: Platform> Compositor<P> {
                     self.display_resized();
                 } else {
                     // The latest frame, whatever was composed meanwhile.
+                    self.sync_cursor();
                     self.send_flush();
                 }
             }
@@ -920,6 +996,7 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn lose_display(&mut self) {
+        self.forget_cursor();
         self.in_flight = None;
         self.resized = false;
         self.stuck_since = None;
@@ -943,43 +1020,56 @@ impl<P: Platform> Compositor<P> {
         self.handles.clear();
         let mut message = core::mem::take(&mut self.message);
         let mut handles = core::mem::take(&mut self.handles);
-        let incoming = self.platform.read(end, &mut message, &mut handles);
-        for h in handles.drain(..) {
-            self.platform.close(h);
-        }
-        self.handles = handles;
-        match incoming {
-            Incoming::Message(n) => {
-                if let Ok((_, frame)) = decode::<input::Frame<'_>>(&message[..n], 0) {
-                    let now = self.platform.now();
-                    self.measure.message(now);
-                    for event in frame.events.iter() {
-                        if event.is_valid() {
-                            self.input_event(event);
+        // Everything the device has waiting, up to `MAX_DRAIN` messages: a
+        // pointer that sent ten positions since the last round is told once
+        // (proposed ADR-0467). A message that changes a button or turns a
+        // wheel is told at its end, as before: the client hears the press
+        // where it happened, in order.
+        for _ in 0..MAX_DRAIN {
+            let incoming = self.platform.read(end, &mut message, &mut handles);
+            for h in handles.drain(..) {
+                self.platform.close(h);
+            }
+            match incoming {
+                Incoming::Message(n) => {
+                    if let Ok((_, frame)) = decode::<input::Frame<'_>>(&message[..n], 0) {
+                        let now = self.platform.now();
+                        self.measure.message(now);
+                        let buttons = self.buttons;
+                        for event in frame.events.iter() {
+                            if event.is_valid() {
+                                self.input_event(event);
+                            }
+                        }
+                        if self.buttons != buttons || self.wheel != (0, 0) {
+                            self.pointer_moved_or_pressed();
+                            self.send_wheel();
                         }
                     }
-                    self.pointer_moved_or_pressed();
-                    self.send_wheel();
                 }
-            }
-            Incoming::Empty => {}
-            Incoming::Closed | Incoming::Refused => {
-                self.platform.close(end);
-                self.inputs[slot] = None;
-                // Keys it held down will never be released (review R10).
-                self.keymap = Keymap::new();
-                self.meta = 0;
-                self.held = [0; 8];
-                self.delivered = [0; 8];
-                for g in &mut self.sheet_guards {
-                    g.keys = [0; 8];
-                    g.buttons = 0;
+                Incoming::Empty => break,
+                Incoming::Closed | Incoming::Refused => {
+                    self.platform.close(end);
+                    self.inputs[slot] = None;
+                    // Keys it held down will never be released (review R10).
+                    self.keymap = Keymap::new();
+                    self.meta = 0;
+                    self.held = [0; 8];
+                    self.delivered = [0; 8];
+                    for g in &mut self.sheet_guards {
+                        g.keys = [0; 8];
+                        g.buttons = 0;
+                    }
+                    self.buttons = 0;
+                    self.drag = None;
+                    break;
                 }
-                self.buttons = 0;
-                self.drag = None;
             }
         }
+        self.handles = handles;
         self.message = message;
+        self.pointer_moved_or_pressed();
+        self.send_wheel();
     }
 
     // ---- input routing ----------------------------------------------------
@@ -1329,6 +1419,9 @@ impl<P: Platform> Compositor<P> {
     fn dirty(&mut self, r: &Rect) -> Rect {
         if !r.is_empty() {
             self.scene = true;
+            if !self.in_move {
+                self.other_dirty = true;
+            }
         }
         self.damage = self.damage.union(r);
         self.damage
@@ -1341,7 +1434,9 @@ impl<P: Platform> Compositor<P> {
         }
         // The pointer alone is not the scene: over the switcher it is drawn
         // on the last frame.
-        if let Some((ox, oy)) = old {
+        if let Some((ox, oy)) = old
+            && !self.hw_cursor
+        {
             self.damage = self.damage.union(&self.pointer_rect(ox, oy));
         }
         self.pointer = Some((x, y));
@@ -1349,7 +1444,10 @@ impl<P: Platform> Compositor<P> {
             let now = self.platform.now();
             self.measure.moved(now);
         }
-        self.damage = self.damage.union(&self.pointer_rect(x, y));
+        if !self.hw_cursor {
+            self.other_dirty = true;
+            self.damage = self.damage.union(&self.pointer_rect(x, y));
+        }
         if self.carried.is_some() {
             if let Some((ox, oy)) = old {
                 self.dirty(&self.carried_rect(ox, oy));
@@ -1677,6 +1775,10 @@ impl<P: Platform> Compositor<P> {
             Some(Drag::Move { window, dx, dy }) => {
                 let Some(i) = self.index(window) else { return };
                 let before = self.windows[i].reach(&f);
+                // What the frame shows of it now, until a frame is composed.
+                if self.moving.is_none_or(|(k, _)| k != window) {
+                    self.moving = Some((window, self.windows[i].outer(&f)));
+                }
                 // The title bar stays reachable: below the bar, and a part
                 // of it on the screen.
                 let w = &mut self.windows[i];
@@ -1690,8 +1792,10 @@ impl<P: Platform> Compositor<P> {
                 );
                 let (mx, my) = (w.x - ox, w.y - oy);
                 let after = w.reach(&f);
+                self.in_move = true;
                 self.dirty(&before);
                 self.dirty(&after);
+                self.in_move = false;
                 // Its popups move with it.
                 for j in 0..self.windows.len() {
                     let p = &mut self.windows[j];
@@ -1702,6 +1806,7 @@ impl<P: Platform> Compositor<P> {
                         p.x += mx;
                         p.y += my;
                         let after = p.reach(&f);
+                        // A popup is above the window: no copy of it.
                         self.dirty(&before);
                         self.dirty(&after);
                     }
@@ -3749,6 +3854,15 @@ impl<P: Platform> Compositor<P> {
             self.update_fields();
         }
         self.card_sync();
+        // One frame per display refresh at most: what changed waits, in the
+        // damage, until the interval since the last frame has passed (the
+        // wait's deadline, `frame_wait`); commits are answered with it.
+        if self.frame_held() {
+            self.sync_cursor();
+            self.send_flush();
+            self.measure_round();
+            return;
+        }
         let scene = core::mem::take(&mut self.scene);
         let reuse = self.switcher.is_some() && !scene && !self.switcher_frame.is_empty();
         if self.switcher.is_some() && scene {
@@ -3760,6 +3874,9 @@ impl<P: Platform> Compositor<P> {
             let start = self.platform.now();
             if reuse {
                 self.restore(damage);
+            } else if let Some(plan) = self.blit_plan(damage) {
+                self.compose_moved(plan, damage);
+                self.stats.blits += 1;
             } else {
                 self.compose(damage);
                 if self.switcher.is_some() {
@@ -3767,6 +3884,9 @@ impl<P: Platform> Compositor<P> {
                 }
             }
             let took = self.platform.now().saturating_sub(start);
+            self.last_frame = Some(start);
+            self.moving = None;
+            self.other_dirty = false;
             self.stats.compose_ns += took;
             self.stats.frames += 1;
             let dragging = matches!(self.drag, Some(Drag::Move { .. } | Drag::Resize { .. }));
@@ -3774,6 +3894,8 @@ impl<P: Platform> Compositor<P> {
                 .frame(took, (damage.width * damage.height).max(0) as u64, dragging);
             self.timed(took);
             self.unflushed = self.unflushed.union(&damage);
+        } else {
+            self.measure.no_frame();
         }
         // The frame callback: the commit is copied and composed. It does
         // not wait for the display driver (ADR-0093, Decision).
@@ -3789,12 +3911,222 @@ impl<P: Platform> Compositor<P> {
                 self.answer(slot, &gui::CommitDone { status: ok }, t);
             }
         }
+        self.sync_cursor();
         self.send_flush();
+        self.measure_round();
+    }
+
+    fn measure_round(&mut self) {
         if self.measure.on {
-            self.measure.round();
+            self.measure.round(self.idle);
             let now = self.platform.now();
             if let Some(line) = self.measure.report(now) {
                 self.platform.note(&line);
+            }
+        }
+    }
+
+    /// Something is to be drawn, no client waits for its commit's frame, and
+    /// the last frame was less than `frame_ns` ago.
+    fn frame_held(&mut self) -> bool {
+        // A commit is answered with its frame, in the round it came (a
+        // client with a commit waiting is not read again, and its channel
+        // would keep the loop awake): the client's own wait for that
+        // answer paces it.
+        if self.frame_ns == 0
+            || self.damage.is_empty()
+            || self.clients.iter().flatten().any(|c| c.commit.is_some())
+        {
+            return false;
+        }
+        let Some(last) = self.last_frame else {
+            return false;
+        };
+        self.platform.now() < last + self.frame_ns
+    }
+
+    /// Copying the moved window's last drawn interior is the same as
+    /// drawing it again where nothing has changed but its place: the person
+    /// moves the topmost window, the host draws the pointer, nothing is
+    /// above it (no popup, sheet, card, switcher, carried entry, dock or
+    /// bar over either place), and nothing else was damaged since the
+    /// frame. The copy is the window's frame and body inset by its corner
+    /// radius and two pixels, so that the rounded corners and the shadow,
+    /// which depend on what is under them, are drawn again.
+    fn blit_plan(&self, damage: Rect) -> Option<(Rect, i64, i64)> {
+        let (key, old) = self.moving?;
+        if !self.drag_blit
+            || self.other_dirty
+            || !self.hw_cursor
+            || self.switcher.is_some()
+            || self.carried.is_some()
+            || self.card.is_some()
+            || self.commands
+            || !matches!(self.drag, Some(Drag::Move { .. }))
+        {
+            return None;
+        }
+        let i = self.index(key)?;
+        let w = &self.windows[i];
+        // The top of the stack among what is shown: nothing is above it.
+        if w.hidden || !w.framed() || self.windows[i + 1..].iter().any(|o| !o.hidden) {
+            return None;
+        }
+        let f = self.frame();
+        let new = w.outer(&f);
+        if (new.width, new.height) != (old.width, old.height) {
+            return None;
+        }
+        let (dx, dy) = (new.x - old.x, new.y - old.y);
+        if (dx, dy) == (0, 0) {
+            return None;
+        }
+        let m = i64::from(f.radius) + 2;
+        let src = Rect::new(old.x + m, old.y + m, old.width - 2 * m, old.height - 2 * m);
+        if src.is_empty() {
+            return None;
+        }
+        // The part of it that is in the work area at both places: clear of
+        // the bar and the dock's zone, which are drawn over a window. The
+        // rest of the damage is drawn as ever.
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let s = i64::from(self.scale.factor());
+        let dock_top = if self.dock.rect.is_empty() {
+            i64::from(self.height)
+        } else {
+            self.dock.rect.y - 48 * s
+        };
+        let work = Rect::new(0, bar, i64::from(self.width), dock_top - bar);
+        let src = src.intersect(&work).intersect(&work.translate(-dx, -dy));
+        let dst = src.translate(dx, dy);
+        if src.is_empty() || damage.intersect(&dst) != dst {
+            return None;
+        }
+        Some((src, dx, dy))
+    }
+
+    /// The frame of a moved window: its interior copied, the rest of the
+    /// damage drawn as ever.
+    fn compose_moved(&mut self, (src, dx, dy): (Rect, i64, i64), damage: Rect) {
+        let width = self.width as usize;
+        let dst = src.translate(dx, dy);
+        let pixels = self.platform.pixels();
+        if pixels.len() < width * self.height as usize {
+            self.compose(damage);
+            return;
+        }
+        // Rows in the order that never reads a row already overwritten.
+        let rows = src.height as usize;
+        let n = src.width as usize;
+        for k in 0..rows {
+            let r = if dy > 0 { rows - 1 - k } else { k };
+            let from = (src.y as usize + r) * width + src.x as usize;
+            let to = (dst.y as usize + r) * width + dst.x as usize;
+            pixels.copy_within(from..from + n, to);
+        }
+        for part in damage.minus(&dst) {
+            if !part.is_empty() {
+                self.compose(part);
+            }
+        }
+    }
+
+    /// The time a frame held back is due, if one is.
+    fn frame_due(&self) -> Option<u64> {
+        if self.frame_ns == 0 || self.damage.is_empty() {
+            return None;
+        }
+        self.last_frame.map(|t| t + self.frame_ns)
+    }
+
+    /// A new driver holds no image: the pointer is drawn here until it has
+    /// one (and the pointer's place is drawn again where it was left out).
+    fn forget_cursor(&mut self) {
+        if self.hw_cursor
+            && let Some((x, y)) = self.pointer
+        {
+            let r = self.pointer_rect(x, y);
+            self.damage = self.damage.union(&r);
+        }
+        self.hw_cursor = false;
+        self.cursor_key = None;
+        self.cursor_refused = None;
+        self.cursor_at = None;
+    }
+
+    /// What the pointer's image depends on: the scale and the appearance.
+    fn cursor_image_key(&self) -> u32 {
+        self.scale.factor() * 2 + u32::from(self.appearance == Appearance::Dark)
+    }
+
+    /// Gives the display driver the pointer's image when it has none or
+    /// the scale or appearance changed (once a pointer has spoken, with no
+    /// flush in flight: the `call` takes the next message as its reply),
+    /// and tells it where the pointer is. The host draws the pointer
+    /// meanwhile, so no frame is composed for a move. A driver that refuses
+    /// leaves the pointer to the compositor's own drawing.
+    fn sync_cursor(&mut self) {
+        let Some(end) = self.display else { return };
+        let Some((x, y)) = self.pointer else { return };
+        let key = self.cursor_image_key();
+        if self.cursor_key != Some(key) && self.cursor_refused != Some(key) {
+            if self.in_flight.is_some() {
+                return;
+            }
+            let Some(image) = self.cursor_image() else {
+                self.cursor_refused = Some(key);
+                return;
+            };
+            let at = (
+                x.clamp(0, i64::from(u32::MAX)) as u32,
+                y.clamp(0, i64::from(u32::MAX)) as u32,
+            );
+            let m = display::SetCursor {
+                hot_x: 0,
+                hot_y: 0,
+                x: at.0,
+                y: at.1,
+                pixels: zoraya_protocol::Data(&image),
+            };
+            let length = reply(&m, 5, &mut self.out);
+            let message = self.out[..length].to_vec();
+            let mut answer = [0u8; 64];
+            let done = self.platform.call(end, &message, &[], &mut answer);
+            if Self::done_ok(done, &answer) {
+                // The pointer's pixels in the frame go.
+                if !self.hw_cursor
+                    && let Some((px, py)) = self.pointer
+                {
+                    let r = self.pointer_rect(px, py);
+                    self.dirty(&r);
+                }
+                self.hw_cursor = true;
+                self.cursor_key = Some(key);
+                self.cursor_at = Some((x, y));
+            } else {
+                self.cursor_refused = Some(key);
+                if self.hw_cursor {
+                    self.forget_cursor();
+                    self.cursor_refused = Some(key);
+                }
+            }
+            return;
+        }
+        if self.hw_cursor && self.cursor_at != Some((x, y)) {
+            let m = display::MoveCursor {
+                x: x.clamp(0, i64::from(u32::MAX)) as u32,
+                y: y.clamp(0, i64::from(u32::MAX)) as u32,
+            };
+            let length = reply(&m, NO_REPLY, &mut self.out);
+            match self.platform.write(end, &self.out[..length], &[]) {
+                Outgoing::Sent => {
+                    self.cursor_at = Some((x, y));
+                    self.measure.cursor_move();
+                }
+                // Told again at the end of the next round, which comes
+                // within `RETRY_NS` (`step`'s deadline).
+                Outgoing::Full => {}
+                Outgoing::Closed => self.lose_display(),
             }
         }
     }
@@ -3816,8 +4148,7 @@ impl<P: Platform> Compositor<P> {
         let length = reply(&m, 3, &mut self.out);
         match self.platform.write(end, &self.out[..length], &[]) {
             Outgoing::Sent => {
-                self.measure
-                    .flush_sent((r.width * r.height).max(0) as u64);
+                self.measure.flush_sent((r.width * r.height).max(0) as u64);
                 self.unflushed = Rect::default();
                 self.in_flight = Some(self.platform.now());
                 self.stuck_since = None;

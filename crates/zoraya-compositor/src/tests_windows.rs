@@ -13,7 +13,7 @@ pub(super) fn axis(p: i64, side: u32) -> u32 {
 impl Setup {
     /// A toplevel of `w × h` logical pixels filled with `colour`, from a
     /// new client; gives the client's end, its memory and the window id.
-    fn toplevel(&mut self, w: u32, h: u32, colour: u32) -> (u32, u32, u32) {
+    pub(super) fn toplevel(&mut self, w: u32, h: u32, colour: u32) -> (u32, u32, u32) {
         let end = self.client(64);
         let (memory, id) = self.toplevel_of(end, w, h, colour);
         (end, memory, id)
