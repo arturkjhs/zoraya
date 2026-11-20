@@ -248,9 +248,11 @@ fn main() -> i32 {
     let display = channel_at(6);
     let inputs: Vec<Handle> = (7..11).filter_map(channel_at).collect();
     // The desktop's settings, once, at start (ADR-0169); bad lines are
-    // reported and keep their defaults.
-    let bytes = channel_at(11)
-        .map(|end| File { end })
+    // reported and keep their defaults. The bounded pointer measurement
+    // (TASK-31) is on only when `/config/gui-measure` exists.
+    let config = channel_at(11).map(|end| File { end });
+    let bytes = config
+        .as_ref()
         .and_then(|config| {
             let f = config
                 .open("settings", 0, zoraya_proto_file::rights::READ)
@@ -258,6 +260,11 @@ fn main() -> i32 {
             zoraya_user::files::read_all(&f).ok()
         })
         .unwrap_or_default();
+    let measure = config.as_ref().is_some_and(|config| {
+        config
+            .open("gui-measure", 0, zoraya_proto_file::rights::READ)
+            .is_ok()
+    });
     // The same declarations the compositor reads (the packer checks this
     // copy against the file).
     debug_assert_eq!(DESCRIPTION, zoraya_compositor::settings::DESCRIPTION);
@@ -266,5 +273,8 @@ fn main() -> i32 {
         println!("{p}");
     }
     let mut compositor = Compositor::with_settings(system, manager, display, &inputs, settings);
+    if measure {
+        compositor.measure_on();
+    }
     compositor.run()
 }

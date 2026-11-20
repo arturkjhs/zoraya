@@ -24,6 +24,7 @@ extern crate alloc;
 mod draw;
 pub mod draw_rooms;
 pub mod fields;
+pub mod measure;
 pub mod rect;
 pub mod rooms;
 pub mod settings;
@@ -447,6 +448,8 @@ pub struct Compositor<P: Platform> {
     /// Since when a flush has been waiting for room in the driver's queue.
     stuck_since: Option<u64>,
     stats: Stats,
+    /// The bounded measurement of pointer input (`measure`), off by default.
+    measure: measure::Measure,
     /// The wallpaper and its blurred copy, made when the display attaches.
     wallpaper: Vec<u32>,
     blurred: Vec<u32>,
@@ -542,6 +545,7 @@ impl<P: Platform> Compositor<P> {
             resized: false,
             stuck_since: None,
             stats: Stats::default(),
+            measure: measure::Measure::new(),
             wallpaper: Vec::new(),
             blurred: Vec::new(),
             ui: Text::new(fonts(zoraya_fonts::INTER_REGULAR)),
@@ -617,6 +621,11 @@ impl<P: Platform> Compositor<P> {
         if layout_changed {
             self.layout_changed();
         }
+    }
+
+    /// Turns the bounded pointer measurement on (`measure`).
+    pub fn measure_on(&mut self) {
+        self.measure.on = true;
     }
 
     pub fn platform(&mut self) -> &mut P {
@@ -879,7 +888,9 @@ impl<P: Platform> Compositor<P> {
             {
                 let sent = self.in_flight.take().unwrap_or(0);
                 self.stats.flushes += 1;
-                self.stats.flush_ns += self.platform.now().saturating_sub(sent);
+                let now = self.platform.now();
+                self.stats.flush_ns += now.saturating_sub(sent);
+                self.measure.flush_answered(now, now.saturating_sub(sent));
                 if self.resized {
                     self.display_resized();
                 } else {
@@ -940,6 +951,8 @@ impl<P: Platform> Compositor<P> {
         match incoming {
             Incoming::Message(n) => {
                 if let Ok((_, frame)) = decode::<input::Frame<'_>>(&message[..n], 0) {
+                    let now = self.platform.now();
+                    self.measure.message(now);
                     for event in frame.events.iter() {
                         if event.is_valid() {
                             self.input_event(event);
@@ -974,6 +987,10 @@ impl<P: Platform> Compositor<P> {
     fn input_event(&mut self, e: input::Event) {
         match e.kind.0 {
             input::kind::AXIS => {
+                if self.measure.on {
+                    let now = self.platform.now();
+                    self.measure.axis(now);
+                }
                 let span = |side: u32| i64::from(side.max(1) - 1);
                 let v = i64::from(e.value);
                 let (mut x, mut y) = self.pointer.unwrap_or((0, 0));
@@ -1328,6 +1345,10 @@ impl<P: Platform> Compositor<P> {
             self.damage = self.damage.union(&self.pointer_rect(ox, oy));
         }
         self.pointer = Some((x, y));
+        if self.measure.on {
+            let now = self.platform.now();
+            self.measure.moved(now);
+        }
         self.damage = self.damage.union(&self.pointer_rect(x, y));
         if self.carried.is_some() {
             if let Some((ox, oy)) = old {
@@ -3748,6 +3769,9 @@ impl<P: Platform> Compositor<P> {
             let took = self.platform.now().saturating_sub(start);
             self.stats.compose_ns += took;
             self.stats.frames += 1;
+            let dragging = matches!(self.drag, Some(Drag::Move { .. } | Drag::Resize { .. }));
+            self.measure
+                .frame(took, (damage.width * damage.height).max(0) as u64, dragging);
             self.timed(took);
             self.unflushed = self.unflushed.union(&damage);
         }
@@ -3766,6 +3790,13 @@ impl<P: Platform> Compositor<P> {
             }
         }
         self.send_flush();
+        if self.measure.on {
+            self.measure.round();
+            let now = self.platform.now();
+            if let Some(line) = self.measure.report(now) {
+                self.platform.note(&line);
+            }
+        }
     }
 
     /// Sends what is composed and not yet shown, if no flush is in flight:
@@ -3785,6 +3816,8 @@ impl<P: Platform> Compositor<P> {
         let length = reply(&m, 3, &mut self.out);
         match self.platform.write(end, &self.out[..length], &[]) {
             Outgoing::Sent => {
+                self.measure
+                    .flush_sent((r.width * r.height).max(0) as u64);
                 self.unflushed = Rect::default();
                 self.in_flight = Some(self.platform.now());
                 self.stuck_since = None;
