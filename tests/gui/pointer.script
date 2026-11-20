@@ -1,0 +1,19 @@
+# TASK-31 gui-smooth: the pointer's and a dragged window's cost, read from
+# compd's own measurement (/config/gui-measure turns it on in this image;
+# crates/zoraya-compositor/src/measure.rs). Coordinates are logical: the
+# terminal is at (72, 70), 670 wide, its title bar at y 88; the glides are
+# over the wallpaper right of it. Each step lasts over a second, so the
+# console shows a line for each; the run fails if none is printed, or if the
+# driver did not take the pointer's image (the compositor would draw the
+# pointer itself and every other line would still pass).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+glide 800 300 1000 700 250 4
+glide 1000 700 800 300 250 4
+serial compd: hardware cursor: image accepted
+serial compd: measure:
+sweep 300 88 500 260 250 4
+sweep 500 260 300 88 250 4
+serial compd: measure:
+region 130 76 200 4 f7f7f8

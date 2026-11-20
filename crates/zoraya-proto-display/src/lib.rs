@@ -6,7 +6,13 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use zoraya_protocol::{Below, protocol};
+use zoraya_protocol::{Below, Data, protocol};
+
+/// The side of the hardware cursor's image: 64 by 64 pixels of
+/// `0xAARRGGBB` words (TASK-31, proposed ADR-0467).
+pub const CURSOR_SIDE: u32 = 64;
+/// The cursor image's bytes.
+pub const CURSOR_BYTES: usize = (CURSOR_SIDE * CURSOR_SIDE * 4) as usize;
 
 /// One of `status`.
 pub type Status = Below<6>;
@@ -62,11 +68,38 @@ protocol! {
         width: u32,
         height: u32,
     }
+
+    /// The pointer's image, which the compositor draws (never a client:
+    /// INV-0467-1), for the host to draw: `CURSOR_BYTES` of `0xAARRGGBB`
+    /// words, the hot spot inside the 64 by 64 square, and where the pointer
+    /// is now. The reply is `Done`: `OK` once the host has it, `DEVICE` when
+    /// it has not (the compositor then draws the pointer itself).
+    message SetCursor<'a> = 5, handles 0 {
+        hot_x: u32,
+        hot_y: u32,
+        x: u32,
+        y: u32,
+        pixels: Data<'a, CURSOR_BYTES>,
+    }
+
+    /// The pointer is at `(x, y)` of the display. No reply (send it with
+    /// transaction 0): a move is told again with the next position.
+    message MoveCursor = 6, handles 0 {
+        x: u32,
+        y: u32,
+    }
 }
 
 /// Every ordinal, the driver's `Resized` included, for a test that none
 /// repeats.
-pub const REQUESTS: [(&str, u32); 4] = [("info", 1), ("attach", 2), ("flush", 3), ("resized", 4)];
+pub const REQUESTS: [(&str, u32); 6] = [
+    ("info", 1),
+    ("attach", 2),
+    ("flush", 3),
+    ("resized", 4),
+    ("set-cursor", 5),
+    ("move-cursor", 6),
+];
 
 #[cfg(test)]
 extern crate std;
@@ -115,6 +148,27 @@ mod tests {
             width: 1600,
             height: 1000,
         });
+        total(MoveCursor { x: 5, y: 6 });
+        let pixels = [0x5Au8; CURSOR_BYTES];
+        let mut out = std::vec![0; CURSOR_BYTES + 64];
+        let set = SetCursor {
+            hot_x: 1,
+            hot_y: 2,
+            x: 3,
+            y: 4,
+            pixels: Data(&pixels),
+        };
+        let length = encode(&set, 1, &mut out).unwrap();
+        let (_, back) = decode::<SetCursor>(&out[..length], 0).unwrap();
+        assert_eq!(back, set);
+        // One byte more than an image is refused.
+        let long = [0u8; CURSOR_BYTES + 1];
+        let big = SetCursor {
+            pixels: Data(&long),
+            ..set
+        };
+        let mut out = std::vec![0; CURSOR_BYTES + 64];
+        assert!(encode(&big, 1, &mut out).is_err());
     }
 
     #[test]

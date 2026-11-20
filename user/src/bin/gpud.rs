@@ -13,7 +13,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use zoraya_abi::{
     Handle, MapFlags, MemoryFlags, Mode, Packet, Status, channel_signals, interrupt_signals,
 };
-use zoraya_proto_display::{Attach, Done, FORMAT_XRGB, Flush, Info, InfoReply, Resized, status};
+use zoraya_proto_display::{
+    Attach, CURSOR_BYTES, CURSOR_SIDE, Done, FORMAT_XRGB, Flush, Info, InfoReply, MoveCursor,
+    Resized, SetCursor, status,
+};
 use zoraya_protocol::{Below, ErrorReply, Header, Message, NO_REPLY, decode, encode};
 use zoraya_user::mmio::Window;
 use zoraya_user::{
@@ -33,6 +36,9 @@ const POLL_NS: u64 = 10_000_000;
 /// How often the driver looks for a display event between requests
 /// (ADR-0246): one register read.
 const DISPLAY_POLL_NS: u64 = 100_000_000;
+/// How long a cursor move that found the cursor queue full waits before it
+/// is sent again.
+const CURSOR_RETRY_NS: u64 = 2_000_000;
 /// Reported once: a wait passed 10 ms with no interrupt.
 static MISSED: AtomicBool = AtomicBool::new(false);
 
@@ -82,6 +88,8 @@ struct Driver {
     reply: [u8; 64],
     /// When a new display size may be told (ADR-0246).
     announce: Announce,
+    /// The latest cursor position the cursor queue had no room for.
+    cursor_pending: Option<(u32, u32)>,
 }
 
 impl Driver {
@@ -142,7 +150,7 @@ impl Driver {
             Error::BadRange => status::BAD_RANGE,
             Error::NotAttached => status::NOT_ATTACHED,
             Error::BadBacking | Error::Attached => status::BAD_BUFFER,
-            Error::NoDisplay | Error::Command(_) => status::DEVICE,
+            Error::NoDisplay | Error::Command(_) | Error::Busy => status::DEVICE,
         }
     }
 
@@ -223,6 +231,24 @@ impl Driver {
         }
     }
 
+    /// A position inside the display, from the compositor's hostile message.
+    fn on_display(&self, x: u32, y: u32) -> (u32, u32) {
+        let (w, h) = self.gpu.size();
+        (x.min(w.saturating_sub(1)), y.min(h.saturating_sub(1)))
+    }
+
+    /// Sends the position the cursor queue had no room for, if it has room
+    /// now.
+    fn retry_cursor(&mut self) {
+        if let Some(at) = self.cursor_pending {
+            match self.gpu.cursor_move(at) {
+                Ok(true) => self.cursor_pending = None,
+                Ok(false) => {}
+                Err(_) => self.lost(),
+            }
+        }
+    }
+
     fn respond<'a, M: Message<'a>>(&mut self, transaction: u32, m: &M) {
         let mut reply = self.reply;
         match encode(m, transaction, &mut reply) {
@@ -292,6 +318,39 @@ impl Driver {
                 }
                 Err(_) => self.done(t, status::BAD_RANGE),
             },
+            5 => match decode::<SetCursor>(bytes, received) {
+                Ok((_, m)) => {
+                    let at = self.on_display(m.x, m.y);
+                    let (side, hot) = (CURSOR_SIDE, (m.hot_x, m.hot_y));
+                    let s = if hot.0 >= side || hot.1 >= side || m.pixels.0.len() != CURSOR_BYTES {
+                        status::BAD_RANGE
+                    } else {
+                        match self.run(|gpu, wait| gpu.cursor_set(m.pixels.0, hot, at, wait)) {
+                            Ok(()) => {
+                                self.cursor_pending = None;
+                                status::OK
+                            }
+                            Err(e) => self.status(e),
+                        }
+                    };
+                    self.done(t, s);
+                }
+                Err(_) => self.done(t, status::BAD_RANGE),
+            },
+            // No reply: the compositor tells the next position.
+            6 => {
+                if let Ok((_, m)) = decode::<MoveCursor>(bytes, received) {
+                    let at = self.on_display(m.x, m.y);
+                    match self.gpu.cursor_move(at) {
+                        Ok(true) => self.cursor_pending = None,
+                        Ok(false) => self.cursor_pending = Some(at),
+                        Err(_) => self.lost(),
+                    }
+                }
+                // Not an `Info`'s next request or anything that ends its
+                // window: a move is not a request in `Announce`'s sense.
+                return;
+            }
             2 => {
                 if received == 1 {
                     let _ = handle_close(handles[0]);
@@ -363,6 +422,7 @@ fn main() -> i32 {
         pin: None,
         reply: [0; 64],
         announce: Announce::default(),
+        cursor_pending: None,
     };
     match driver.run(|gpu, wait| gpu.display_info(wait).map(|_| ())) {
         Ok(()) => {
@@ -374,14 +434,21 @@ fn main() -> i32 {
             driver.stop();
         }
     }
-    let mut message = vec![0u8; 256];
+    // Large enough for a cursor image and its fields.
+    let mut message = vec![0u8; CURSOR_BYTES + 256];
     let mut packets = [Packet::default()];
     loop {
-        match port_wait(requests, clock_monotonic() + DISPLAY_POLL_NS, &mut packets) {
+        let wait = if driver.cursor_pending.is_some() {
+            CURSOR_RETRY_NS
+        } else {
+            DISPLAY_POLL_NS
+        };
+        match port_wait(requests, clock_monotonic() + wait, &mut packets) {
             Ok(_) => driver.serve(&mut message),
             Err(Status::DeadlineExceeded) => {}
             Err(_) => driver.stop(),
         }
+        driver.retry_cursor();
         driver.display_event();
     }
 }

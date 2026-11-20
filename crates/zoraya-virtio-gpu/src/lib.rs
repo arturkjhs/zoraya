@@ -25,6 +25,9 @@ pub mod cmd {
     pub const TRANSFER_TO_HOST_2D: u32 = 0x0105;
     pub const RESOURCE_ATTACH_BACKING: u32 = 0x0106;
     pub const GET_EDID: u32 = 0x010a;
+    /// The cursor queue's commands (5.7.6.10).
+    pub const UPDATE_CURSOR: u32 = 0x0300;
+    pub const MOVE_CURSOR: u32 = 0x0301;
     pub const OK_NODATA: u32 = 0x1100;
     pub const OK_DISPLAY_INFO: u32 = 0x1101;
     pub const OK_EDID: u32 = 0x1104;
@@ -38,6 +41,17 @@ pub const FORMAT: u32 = 2;
 /// The resource the driver makes first; a new display size gets the other
 /// one, `3 - RESOURCE` (ADR-0246), and the old one is unreferenced.
 pub const RESOURCE: u32 = 1;
+
+/// The hardware cursor (TASK-31, proposed ADR-0467): a resource of the side
+/// QEMU's device accepts, in the format of a cursor, backed by one run of the
+/// driver's own shared memory, shown through the cursor queue (queue 1).
+pub const CURSOR_SIDE: u32 = 64;
+/// The cursor image's bytes: 64 by 64, four a pixel, `0xAARRGGBB` words.
+pub const CURSOR_BYTES: usize = (CURSOR_SIDE * CURSOR_SIDE * 4) as usize;
+/// The cursor's resource; the display's are 1 and 2.
+pub const CURSOR_RESOURCE: u32 = 3;
+/// `B8G8R8A8_UNORM` (5.7.6.8): the word `0xAARRGGBB`.
+pub const FORMAT_CURSOR: u32 = 1;
 
 /// The configuration space (5.7.4): what the device has to say.
 pub mod config {
@@ -66,9 +80,17 @@ const QUEUE: Layout = Layout::new(16, 0);
 const REQUEST_AT: usize = QUEUE.end;
 const MAX_REQUEST: usize = 32 + 16 * MAX_RUNS;
 const RESPONSE_AT: usize = (REQUEST_AT + MAX_REQUEST).next_multiple_of(4096);
+/// The cursor queue's entries, each a request and no response, so that
+/// sixteen moves can be outstanding while the host is busy.
+const CURSOR_SLOTS: usize = 16;
+const CURSOR_REQUEST: usize = 64;
+const CURSOR_QUEUE: Layout = Layout::new(CURSOR_SLOTS as u16, RESPONSE_AT + EDID_RESPONSE);
+const CURSOR_REQUESTS_AT: usize = CURSOR_QUEUE.end;
+const CURSOR_IMAGE_AT: usize =
+    (CURSOR_REQUESTS_AT + CURSOR_SLOTS * CURSOR_REQUEST).next_multiple_of(4096);
 /// The shared memory the driver needs: a contiguous, zeroed object of this
 /// many bytes, pinned, whose device address is passed to [`Gpu::new`].
-pub const SHARED_MEMORY: usize = (RESPONSE_AT + EDID_RESPONSE).next_multiple_of(4096);
+pub const SHARED_MEMORY: usize = (CURSOR_IMAGE_AT + CURSOR_BYTES).next_multiple_of(4096);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -88,6 +110,8 @@ pub enum Error {
     NotAttached,
     /// A resource of the display's size exists already.
     Attached,
+    /// The cursor queue has no free entry: try again later.
+    Busy,
 }
 
 impl From<TransportError> for Error {
@@ -155,6 +179,14 @@ pub struct Gpu<R, S> {
     /// The device address of `shared`.
     base: u64,
     queue: Queue,
+    /// The cursor queue (index 1), and which of its entries are free.
+    cursor_queue: Queue,
+    cursor_free: u16,
+    /// The cursor's resource exists and is backed.
+    cursor_made: bool,
+    /// The cursor's resource exists (made, perhaps not yet backed): a
+    /// failed `cursor_set` is tried again without making it twice.
+    cursor_created: bool,
     /// The display's size as `GET_DISPLAY_INFO` last gave it.
     width: u32,
     height: u32,
@@ -199,12 +231,22 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         let agreed = begin(&mut registers, DEVICE_GPU, F_EDID)?;
         let queue = Queue::new(0, QUEUE, base);
         queue.set_up(&mut registers)?;
+        let cursor_queue = Queue::new(1, CURSOR_QUEUE, base);
+        cursor_queue.set_up(&mut registers)?;
+        // No interrupt for a cursor command's completion (the available
+        // ring's flags, 2.7.6): the driver never waits for one.
+        let mut shared = shared;
+        shared.write16(CURSOR_QUEUE.avail, 1);
         ready(&mut registers);
         Ok(Gpu {
             registers,
             shared,
             base,
             queue,
+            cursor_queue,
+            cursor_free: u16::MAX,
+            cursor_made: false,
+            cursor_created: false,
             width: 0,
             height: 0,
             shown: None,
@@ -449,6 +491,134 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             self.call(length, cmd::OK_NODATA, HEADER, wait)?;
         }
         Ok(())
+    }
+
+    /// Makes the cursor's resource, backs it with the driver's own memory
+    /// and, from `image` (`CURSOR_BYTES` of `0xAARRGGBB` words), shows it
+    /// with its hot spot `hot` at `at` through the cursor queue. Again with
+    /// another image: the resource is made once, the pixels go to the host
+    /// again.
+    pub fn cursor_set(
+        &mut self,
+        image: &[u8],
+        hot: (u32, u32),
+        at: (u32, u32),
+        wait: &mut dyn FnMut() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if image.len() != CURSOR_BYTES || hot.0 >= CURSOR_SIDE || hot.1 >= CURSOR_SIDE {
+            return Err(Error::BadRange);
+        }
+        if !self.cursor_made {
+            if !self.cursor_created {
+                let mut r = Request {
+                    shared: &mut self.shared,
+                    at: 0,
+                };
+                r.header(cmd::RESOURCE_CREATE_2D)
+                    .u32(CURSOR_RESOURCE)
+                    .u32(FORMAT_CURSOR)
+                    .u32(CURSOR_SIDE)
+                    .u32(CURSOR_SIDE);
+                let length = r.at;
+                self.call(length, cmd::OK_NODATA, HEADER, wait)?;
+                self.cursor_created = true;
+            }
+            let mut r = Request {
+                shared: &mut self.shared,
+                at: 0,
+            };
+            r.header(cmd::RESOURCE_ATTACH_BACKING)
+                .u32(CURSOR_RESOURCE)
+                .u32(1)
+                .u64(self.base + CURSOR_IMAGE_AT as u64)
+                .u32(CURSOR_BYTES as u32)
+                .u32(0);
+            let length = r.at;
+            self.call(length, cmd::OK_NODATA, HEADER, wait)?;
+            self.cursor_made = true;
+        }
+        for (i, word) in image.as_chunks::<4>().0.iter().enumerate() {
+            let w = u32::from_le_bytes(*word);
+            self.shared.write32(CURSOR_IMAGE_AT + 4 * i, w);
+        }
+        let whole = Rect {
+            x: 0,
+            y: 0,
+            width: CURSOR_SIDE,
+            height: CURSOR_SIDE,
+        };
+        let mut r = Request {
+            shared: &mut self.shared,
+            at: 0,
+        };
+        r.header(cmd::TRANSFER_TO_HOST_2D)
+            .rect(whole)
+            .u64(0)
+            .u32(CURSOR_RESOURCE)
+            .u32(0);
+        let length = r.at;
+        self.call(length, cmd::OK_NODATA, HEADER, wait)?;
+        if self.cursor_post(cmd::UPDATE_CURSOR, at, hot)? {
+            Ok(())
+        } else {
+            Err(Error::Busy)
+        }
+    }
+
+    /// Moves the cursor to `at` without waiting. `Ok(false)`: the queue is
+    /// full, the caller tries again with the latest position. Nothing is
+    /// sent before [`Gpu::cursor_set`].
+    pub fn cursor_move(&mut self, at: (u32, u32)) -> Result<bool, Error> {
+        if !self.cursor_made {
+            return Ok(true);
+        }
+        self.cursor_post(cmd::MOVE_CURSOR, at, (0, 0))
+    }
+
+    /// Whether a cursor image was set.
+    pub const fn cursor_ready(&self) -> bool {
+        self.cursor_made
+    }
+
+    /// One command on the cursor queue; `false` when every entry is out.
+    fn cursor_post(&mut self, kind: u32, at: (u32, u32), hot: (u32, u32)) -> Result<bool, Error> {
+        // Entries the device finished are free again. A used entry that
+        // names no entry offered is a broken device.
+        while let Some(used) = self.cursor_queue.take(&self.shared)? {
+            self.cursor_free |= 1 << used.head;
+        }
+        if self.cursor_free == 0 {
+            return Ok(false);
+        }
+        let slot = self.cursor_free.trailing_zeros() as usize;
+        let base = CURSOR_REQUESTS_AT + slot * CURSOR_REQUEST;
+        // The header (type, flags, fence, context, ring and padding), then
+        // the position (scanout, x, y, padding), the resource, the hot spot
+        // and padding: 56 bytes.
+        self.shared.write32(base, kind);
+        self.shared.write32(base + 4, 0);
+        self.shared.write64(base + 8, 0);
+        self.shared.write32(base + 16, 0);
+        self.shared.write32(base + 20, 0);
+        self.shared.write32(base + 24, 0);
+        self.shared.write32(base + 28, at.0);
+        self.shared.write32(base + 32, at.1);
+        self.shared.write32(base + 36, 0);
+        self.shared.write32(base + 40, CURSOR_RESOURCE);
+        self.shared.write32(base + 44, hot.0);
+        self.shared.write32(base + 48, hot.1);
+        self.shared.write32(base + 52, 0);
+        let chain = [Buffer {
+            address: self.base + base as u64,
+            length: 56,
+            writable: false,
+        }];
+        self.cursor_queue
+            .offer(&mut self.shared, slot as u16, &chain)?;
+        self.cursor_free &= !(1 << slot);
+        self.cursor_queue
+            .notify(&mut self.registers, &mut self.shared);
+        Ok(true)
     }
 
     /// Transfers `rect` of the backing to the host and shows it. A rectangle

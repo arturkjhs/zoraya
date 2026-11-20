@@ -34,6 +34,8 @@ enum Hostile {
     Silent,
     /// An error type in a response shorter than a header.
     ShortError,
+    /// The cursor's resource cannot be backed.
+    NoCursorBacking,
 }
 
 /// A command as the device saw it: its type and the words after the header.
@@ -52,6 +54,10 @@ struct Gpu0 {
     size: Rc<Cell<(u32, u32)>>,
     /// The physical size `GET_EDID` reports, in millimetres.
     mm: Rc<Cell<(u32, u32)>>,
+    /// The cursor commands as the device saw them: the words of each.
+    cursor: Rc<RefCell<Vec<Vec<u32>>>>,
+    /// The cursor queue's device does not finish anything.
+    cursor_stuck: Rc<Cell<bool>>,
 }
 
 /// An EDID block as QEMU's generator writes one: the header, the size in
@@ -132,6 +138,12 @@ fn serve(
             Hostile::WrongType => (0x1300, response.len() as u32),
             Hostile::Errors => (cmd::ERR_UNSPEC + 5, 24),
             Hostile::ShortError => (cmd::ERR_UNSPEC + 5, 16),
+            Hostile::NoCursorBacking
+                if kind == cmd::RESOURCE_ATTACH_BACKING
+                    && word(&request, 24) == CURSOR_RESOURCE =>
+            {
+                (cmd::ERR_UNSPEC + 5, 24)
+            }
             Hostile::Short => (ok, 16),
             Hostile::Long => (ok, chain[1].length + 1),
             _ => (ok, response.len() as u32),
@@ -156,8 +168,28 @@ fn device(hostile: Hostile) -> Gpu0 {
     let size = Rc::new(Cell::new((1024, 768)));
     let mm = Rc::new(Cell::new((0, 0)));
     let (log, shown, physical) = (seen.clone(), size.clone(), mm.clone());
+    let cursor = Rc::new(RefCell::new(Vec::new()));
+    let cursor_stuck = Rc::new(Cell::new(false));
+    let (commands, stuck) = (cursor.clone(), cursor_stuck.clone());
     device.on(move |f, e| match e {
         Event::Notify(0) => serve(f, hostile, &log, shown.get(), physical.get()),
+        Event::Notify(1) => {
+            while let Some(head) = f.next_available(1) {
+                let chain = f.chain(1, head);
+                assert_eq!(chain.len(), 1, "a request and no response");
+                assert!(!chain[0].writable);
+                let request = f.read(chain[0].address, chain[0].length as usize).unwrap();
+                commands.borrow_mut().push(
+                    request
+                        .chunks(4)
+                        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                        .collect(),
+                );
+                if !stuck.get() {
+                    f.complete(1, u32::from(head), 0);
+                }
+            }
+        }
         // `events_clear`: the bits written there leave `events_read`.
         Event::Config(4) => {
             let read = word(&f.config, 0);
@@ -171,6 +203,8 @@ fn device(hostile: Hostile) -> Gpu0 {
         device,
         size,
         mm,
+        cursor,
+        cursor_stuck,
     }
 }
 
@@ -472,7 +506,7 @@ fn a_run_of_exactly_the_largest_length_is_accepted() {
 
 #[test]
 fn the_shared_memory_is_what_the_layout_needs() {
-    assert_eq!(SHARED_MEMORY, 36864);
+    assert_eq!(SHARED_MEMORY, 69632);
 }
 
 /// The device reports a new display: its event bit, and the new size.
@@ -682,4 +716,151 @@ fn a_wrong_edid_answer_leaves_the_size_unknown() {
         assert_eq!(gpu.millimetres(), (0, 0));
         gpu.attach(&[(FRAME, WHOLE)], &mut no_wait()).unwrap();
     }
+}
+
+fn image(first: u32) -> Vec<u8> {
+    (0..CURSOR_BYTES as u32 / 4)
+        .flat_map(|i| (first + i).to_le_bytes())
+        .collect()
+}
+
+#[test]
+fn a_cursor_is_made_backed_transferred_and_shown_through_the_cursor_queue() {
+    let d = device(Hostile::None);
+    let mut gpu = ready(&d);
+    assert!(!gpu.cursor_ready());
+    // Before an image, a move sends nothing.
+    assert_eq!(gpu.cursor_move((5, 6)), Ok(true));
+    assert!(d.cursor.borrow().is_empty());
+    gpu.cursor_set(&image(0xFF00_0000), (1, 2), (30, 40), &mut no_wait())
+        .unwrap();
+    let kinds: Vec<u32> = d.seen.borrow().iter().map(|s| s.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            cmd::RESOURCE_CREATE_2D,
+            cmd::RESOURCE_ATTACH_BACKING,
+            cmd::TRANSFER_TO_HOST_2D
+        ]
+    );
+    let seen = d.seen.borrow().clone();
+    assert_eq!(seen[0].words, [CURSOR_RESOURCE, FORMAT_CURSOR, 64, 64]);
+    // One run, in the driver's own shared memory, the image's size.
+    assert_eq!(
+        seen[1].words,
+        [
+            CURSOR_RESOURCE,
+            1,
+            (BASE + CURSOR_IMAGE_AT as u64) as u32,
+            (BASE >> 32) as u32,
+            CURSOR_BYTES as u32,
+            0
+        ]
+    );
+    assert_eq!(seen[2].words[..4], [0, 0, 64, 64]);
+    let update = d.cursor.borrow()[0].clone();
+    // type, flags, fence (2), context, ring, scanout, x, y, pad, resource,
+    // hot x, hot y, pad.
+    assert_eq!(update[0], cmd::UPDATE_CURSOR);
+    assert_eq!(update[6..], [0, 30, 40, 0, CURSOR_RESOURCE, 1, 2, 0]);
+    // The pixels are in the memory the device reads.
+    let at = CURSOR_IMAGE_AT;
+    assert_eq!(
+        d.device.state.borrow().memory[at..at + 4],
+        0xFF00_0000u32.to_le_bytes()
+    );
+    assert_eq!(gpu.cursor_move((31, 41)), Ok(true));
+    let moved = d.cursor.borrow()[1].clone();
+    assert_eq!(moved[0], cmd::MOVE_CURSOR);
+    assert_eq!(moved[6..9], [0, 31, 41]);
+    // A second image makes no second resource.
+    d.seen.borrow_mut().clear();
+    gpu.cursor_set(&image(0xFF11_0000), (0, 0), (31, 41), &mut no_wait())
+        .unwrap();
+    let kinds: Vec<u32> = d.seen.borrow().iter().map(|s| s.kind).collect();
+    assert_eq!(kinds, [cmd::TRANSFER_TO_HOST_2D]);
+}
+
+#[test]
+fn a_cursor_whose_backing_failed_is_not_made_twice() {
+    let d = device(Hostile::NoCursorBacking);
+    let mut gpu = ready(&d);
+    d.seen.borrow_mut().clear();
+    for _ in 0..2 {
+        assert!(
+            gpu.cursor_set(&image(0), (0, 0), (0, 0), &mut no_wait())
+                .is_err()
+        );
+    }
+    let kinds: Vec<u32> = d.seen.borrow().iter().map(|s| s.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            cmd::RESOURCE_CREATE_2D,
+            cmd::RESOURCE_ATTACH_BACKING,
+            cmd::RESOURCE_ATTACH_BACKING
+        ],
+        "the resource was made once, the backing tried again"
+    );
+    assert!(!gpu.cursor_ready());
+}
+
+#[test]
+fn a_cursor_image_of_the_wrong_size_or_a_hot_spot_outside_it_reaches_no_device() {
+    let d = device(Hostile::None);
+    let mut gpu = ready(&d);
+    let bad = [
+        (image(0)[..CURSOR_BYTES - 4].to_vec(), (0, 0)),
+        (image(0), (64, 0)),
+        (image(0), (0, 64)),
+    ];
+    for (pixels, hot) in bad {
+        assert_eq!(
+            gpu.cursor_set(&pixels, hot, (0, 0), &mut no_wait()),
+            Err(Error::BadRange)
+        );
+    }
+    assert!(d.seen.borrow().is_empty() && d.cursor.borrow().is_empty());
+    assert!(!gpu.cursor_ready());
+}
+
+#[test]
+fn a_full_cursor_queue_says_so_and_frees_when_the_device_finishes() {
+    let d = device(Hostile::None);
+    let mut gpu = ready(&d);
+    gpu.cursor_set(&image(0), (0, 0), (0, 0), &mut no_wait())
+        .unwrap();
+    d.cursor_stuck.set(true);
+    // Sixteen entries, all free (the image's update was finished): the
+    // seventeenth command finds none.
+    for i in 0..16 {
+        assert_eq!(gpu.cursor_move((i, i)), Ok(true), "move {i}");
+    }
+    assert_eq!(gpu.cursor_move((99, 99)), Ok(false));
+    assert_eq!(d.cursor.borrow().len(), 17);
+    // The device finishes one: its entry is free again.
+    d.device.state.borrow_mut().complete(1, 5, 0);
+    assert_eq!(gpu.cursor_move((7, 7)), Ok(true));
+    assert_eq!(d.cursor.borrow().last().unwrap()[7], 7);
+}
+
+#[test]
+fn a_cursor_queue_that_names_an_entry_never_offered_is_a_broken_device() {
+    let d = device(Hostile::None);
+    let mut gpu = ready(&d);
+    gpu.cursor_set(&image(0), (0, 0), (0, 0), &mut no_wait())
+        .unwrap();
+    d.cursor_stuck.set(true);
+    // Entry 9 was never offered.
+    d.device.state.borrow_mut().complete(1, 9, 0);
+    assert_eq!(gpu.cursor_move((1, 1)), Err(Error::Device));
+}
+
+#[test]
+fn the_cursor_queue_asks_for_no_interrupts() {
+    let d = device(Hostile::None);
+    let _gpu = up(&d);
+    let avail = d.device.state.borrow().queues[1].avail;
+    let flags = d.device.state.borrow().read(avail, 2).unwrap();
+    assert_eq!(flags, [1, 0]);
 }
