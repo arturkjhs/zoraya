@@ -437,6 +437,17 @@ pub struct Compositor<P: Platform> {
     /// The window whose body holds the left button the compositor
     /// delivered to it: the only one that may start a drag (ADR-0170).
     body_press: Option<(Key, u32, u64)>,
+    /// For each button held (left, right, middle), the client in whose
+    /// window body it was pressed: only that client's windows are told it
+    /// is held. Another client's window the pointer crosses meanwhile hears
+    /// it with no button (ADR-0094: a key released after a
+    /// focus change is no press for the new window either), so that a drag
+    /// passing over it is no press on what it passes (a drop on `t_open`'s
+    /// Save button pressed it under TCG, 2026-11-21).
+    pressed_in: [Option<usize>; 3],
+    /// Key events taken (any key but a pointer button): a device's round
+    /// ends at one (`input_message`).
+    key_events: u64,
 
     /// The entry being dragged; no client hears of the pointer meanwhile.
     carried: Option<Carried<P::End>>,
@@ -584,6 +595,8 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             drag: None,
             body_press: None,
+            pressed_in: [None; 3],
+            key_events: 0,
             clipboard: String::new(),
             copy_asked: None,
             gesture: None,
@@ -1085,11 +1098,16 @@ impl<P: Platform> Compositor<P> {
         self.handles.clear();
         let mut message = core::mem::take(&mut self.message);
         let mut handles = core::mem::take(&mut self.handles);
-        // Everything the device has waiting, up to `MAX_DRAIN` messages: a
+        // The device's waiting motions, up to `MAX_DRAIN` messages and up to
+        // its first key, button or wheel (which ends its round): a
         // pointer that sent ten positions since the last round is told once
         // (proposed ADR-0467). A message that changes a button or turns a
         // wheel is told at its end, as before: the client hears the press
-        // where it happened, in order.
+        // where it happened, in order. So is each message while a button
+        // is held: the window that has the press hears it move on the way
+        // out, not only the window under the last place (a file manager
+        // starts its drag from that move; under TCG a whole drag was read
+        // in one round and the release made a click of it elsewhere).
         for _ in 0..MAX_DRAIN {
             let incoming = self.platform.read(end, &mut message, &mut handles);
             for h in handles.drain(..) {
@@ -1101,14 +1119,31 @@ impl<P: Platform> Compositor<P> {
                         let now = self.platform.now();
                         self.measure.message(now);
                         let buttons = self.buttons;
+                        let keys = self.key_events;
+                        let pressed = self.pressed_in;
                         for event in frame.events.iter() {
                             if event.is_valid() {
                                 self.input_event(event);
                             }
                         }
-                        if self.buttons != buttons || self.wheel != (0, 0) {
+                        // What the message did, not what it held: a button
+                        // or a key taken.
+                        let keyed = self.key_events != keys
+                            || self.buttons != buttons
+                            || self.pressed_in != pressed;
+                        let turned = self.wheel != (0, 0);
+                        if self.buttons != buttons || self.buttons != 0 || turned {
                             self.pointer_moved_or_pressed();
                             self.send_wheel();
+                        }
+                        // A key, a button or a wheel ends the device's
+                        // round: the other devices' messages that came
+                        // before the next one are read first, as before
+                        // ADR-0467 (a keyboard's Shift down and up both
+                        // read before the pointer's press made a
+                        // Shift-click a plain click, files-manage:auto:2).
+                        if keyed || turned {
+                            break;
                         }
                     }
                 }
@@ -1126,6 +1161,7 @@ impl<P: Platform> Compositor<P> {
                         g.buttons = 0;
                     }
                     self.buttons = 0;
+                    self.pressed_in = [None; 3];
                     self.drag = None;
                     break;
                 }
@@ -1178,6 +1214,7 @@ impl<P: Platform> Compositor<P> {
             _ => 0,
         };
         if button != 0 {
+            let bit = button.trailing_zeros() as usize;
             let now = self.platform.now();
             for g in &mut self.sheet_guards {
                 if value == 0 {
@@ -1191,8 +1228,17 @@ impl<P: Platform> Compositor<P> {
                 if button == gui::buttons::LEFT {
                     self.release();
                 }
+                self.pressed_in[bit] = None;
             } else {
                 if value == 1 {
+                    // The client whose body is under the press, before the
+                    // press acts (a minimise or close on a title bar names
+                    // nobody, not the window it uncovers).
+                    self.pressed_in[bit] = self
+                        .pointer
+                        .and_then(|(x, y)| self.under(x, y))
+                        .filter(|(_, zone)| *zone == Zone::Body)
+                        .map(|(key, _)| key.client);
                     self.press(button);
                 }
                 self.buttons |= button;
@@ -1203,6 +1249,7 @@ impl<P: Platform> Compositor<P> {
         if (0x110..0x200).contains(&code_) {
             return;
         }
+        self.key_events += 1;
         if (code_ as usize) < 512 {
             let (word, mask) = (code_ as usize / 64, 1u64 << (code_ % 64));
             let now = self.platform.now();
@@ -1975,17 +2022,26 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let (px, py) = ((x - body.x) as u32, (y - body.y) as u32);
+        // Buttons pressed in another client's window, or outside every body,
+        // are not held here (`pressed_in`); the client's own popup, opened
+        // by the press, hears them.
+        let mine = self
+            .pressed_in
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c == Some(key.client))
+            .fold(0, |m, (i, _)| m | 1 << i);
         if w.kind == WindowKind::Legacy {
             let m = gui::Pointer {
                 dropped: 0,
                 x: px,
                 y: py,
-                buttons: Flags(self.buttons),
+                buttons: Flags(self.buttons & mine),
             };
             self.send_event(key.client, m);
         } else {
             let s = self.scale.factor();
-            let buttons = self.guarded_buttons(key);
+            let buttons = self.guarded_buttons(key) & mine;
             let m = gui::WindowPointerMods {
                 dropped: 0,
                 window: key.id,
@@ -3189,6 +3245,12 @@ impl<P: Platform> Compositor<P> {
         }
         if self.copy_asked.is_some_and(|(c, _)| c == slot) {
             self.copy_asked = None;
+        }
+        // The next client in the slot is not holding this one's buttons.
+        for c in &mut self.pressed_in {
+            if *c == Some(slot) {
+                *c = None;
+            }
         }
         let keys: Vec<Key> = self
             .windows
