@@ -900,11 +900,14 @@ fn two_devices(
         code,
         value,
     };
+    // Times just before the clock, as a driver's are when the compositor
+    // reads them.
+    let base = t.s.f().clock;
     let frame = |time: u64, events: &[input::Event]| {
         message(
             &input::Frame {
                 dropped: 0,
-                time: 1_000_000 + time,
+                time: base + time,
                 events: Seq::Of(events),
             },
             0,
@@ -1068,6 +1071,134 @@ fn a_frame_read_and_not_told_is_told_next_round_without_a_wait() {
     );
     assert_eq!(s.untold(tab), 0);
     assert_ne!(s.c.pointer, before, "the move is told");
+}
+
+/// A driver whose times are all 0 (a stopped clock, or a hostile one) and
+/// that floods holds another device's frame back by at most
+/// `MAX_INPUT_LAG_NS`, not for as long as it floods (review of 8e418c42,
+/// 1); its times are counted as odd.
+#[test]
+fn a_flood_with_early_times_holds_another_device_back_only_by_the_lag() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    let (k, tab) = (s.keyboard, s.tablet);
+    let time = s.f().clock;
+    let key = [input::Event {
+        kind: Below(input::kind::KEY),
+        code: KEY_A,
+        value: 1,
+    }];
+    let m = message(
+        &input::Frame {
+            dropped: 0,
+            time,
+            events: Seq::Of(&key),
+        },
+        0,
+    );
+    s.f().send(k, m, vec![]);
+    let flood = |s: &mut Setup| {
+        let events = [input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 0,
+            value: 100,
+        }];
+        let m = message(
+            &input::Frame {
+                dropped: 0,
+                time: 0,
+                events: Seq::Of(&events),
+            },
+            0,
+        );
+        for _ in 0..MAX_DRAIN + 1 {
+            s.f().send(tab, m.clone(), vec![]);
+        }
+    };
+    let mut rounds = 0;
+    while s.untold(k) > 0 {
+        assert!(rounds < 60, "the key is still held after {rounds} rounds");
+        flood(&mut s);
+        // 100 ms a round: the key is told once the lag has passed.
+        s.f().clock += 100_000_000;
+        s.c.step();
+        rounds += 1;
+    }
+    assert!(
+        (15..=30).contains(&rounds),
+        "told after the lag of 2 s: {rounds} rounds"
+    );
+    let odd = s.c.stats().odd_input_times;
+    assert!(
+        odd >= MAX_DRAIN as u64 * (rounds - 1),
+        "{odd} odd times in {rounds} rounds"
+    );
+}
+
+/// A pointer move before a key is told to the window under it before the
+/// key, with the modifiers before it: a move, then Shift down, both
+/// waiting (review of 8e418c42, 2).
+#[test]
+fn a_move_before_a_key_is_told_before_it_with_the_modifiers_before_it() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let base = t.s.f().clock;
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    t.s.f().inputs_reversed = false;
+    let moved = [
+        input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 0,
+            value: axis(px + 5, w),
+        },
+        input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 1,
+            value: axis(py + 5, h),
+        },
+    ];
+    let shift = [input::Event {
+        kind: Below(input::kind::KEY),
+        code: code::LEFT_SHIFT,
+        value: 1,
+    }];
+    let a = [input::Event {
+        kind: Below(input::kind::KEY),
+        code: KEY_A,
+        value: 1,
+    }];
+    let frame = |time: u64, events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                time: base + time,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    t.s.f().send(tab, frame(1, &moved), vec![]);
+    t.s.f().send(k, frame(2, &shift), vec![]);
+    t.s.f().send(k, frame(3, &a), vec![]);
+    for _ in 0..4 {
+        t.s.c.step();
+    }
+    let out = t.s.f().take(t.a);
+    let pointer = out
+        .iter()
+        .position(|m| decode::<gui::WindowPointerMods>(m, 0).is_ok())
+        .expect("the move is told");
+    let key = out
+        .iter()
+        .position(|m| decode::<gui::Key>(m, 0).is_ok())
+        .expect("the key is told");
+    assert!(pointer < key, "the move first: {pointer} {key}");
+    let (_, p) = decode::<gui::WindowPointerMods>(&out[pointer], 0).unwrap();
+    assert_eq!(p.modifiers.0 & gui::modifiers::SHIFT, 0, "no Shift yet");
 }
 
 /// The buttons each client hears in `WindowPointerMods` (taken).

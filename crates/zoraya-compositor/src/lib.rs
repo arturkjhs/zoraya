@@ -138,15 +138,27 @@ struct SheetGuard {
 }
 
 /// An input device's next frame, read from its channel and not yet told
-/// (proposed ADR-0469): its driver's time and its events. A message that is
-/// no frame is a head with no events and `decoded` false.
+/// (proposed ADR-0469): its driver's time as the compositor orders by it,
+/// and its events. A message that is no frame is a head with no events and
+/// `decoded` false.
 #[derive(Debug, Default)]
 struct Head {
     held: bool,
     decoded: bool,
+    /// The driver's time, kept within `[read - MAX_INPUT_LAG_NS, read]` of
+    /// the compositor's clock when it was read, and never before the
+    /// device's frame before it (`last`).
     time: u64,
+    /// The time the device's last frame was ordered by; 0 at attach.
+    last: u64,
     events: Vec<input::Event>,
 }
+
+/// The most a frame's time may say it is older than when the compositor
+/// read it (proposed ADR-0469): a driver whose times are too early (0, a
+/// stopped clock) holds the other devices back by at most this, not for
+/// as long as it floods. Above the second of backlog CI's GUI runs met.
+pub const MAX_INPUT_LAG_NS: u64 = 2_000_000_000;
 
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
@@ -290,6 +302,10 @@ pub struct Stats {
     pub steady_frames: u64,
     pub steady_ns: u64,
     pub steady_max_ns: u64,
+    /// Input frames whose driver's time was 0, later than the clock when
+    /// read, or before its device's frame before (proposed ADR-0469): an
+    /// `inputd` that stamps no time shows here.
+    pub odd_input_times: u64,
 }
 
 /// How many frames after the first are timed and reported.
@@ -1123,6 +1139,7 @@ impl<P: Platform> Compositor<P> {
         };
         self.inputs[slot] = Some(end);
         self.heads[slot].held = false;
+        self.heads[slot].last = 0;
         self.platform.watch(end, INPUT_KEY + slot as u64);
         status::OK
     }
@@ -1186,20 +1203,38 @@ impl<P: Platform> Compositor<P> {
         }
         match incoming {
             Incoming::Message(n) => {
+                let read = self.platform.now();
+                let mut odd = false;
                 let head = &mut self.heads[slot];
                 head.events.clear();
                 head.held = true;
-                match decode::<input::Frame<'_>>(&message[..n], 0) {
+                let time = match decode::<input::Frame<'_>>(&message[..n], 0) {
                     Ok((_, frame)) => {
                         head.decoded = true;
-                        head.time = frame.time;
                         head.events.extend(frame.events.iter());
+                        if frame.time == 0 || frame.time > read || frame.time < head.last {
+                            self.stats.odd_input_times += 1;
+                            odd = self.stats.odd_input_times == 1;
+                        }
+                        frame.time
                     }
+                    // Told as nothing, as early as the bounds allow.
                     Err(_) => {
-                        // Told as nothing, at once.
                         head.decoded = false;
-                        head.time = 0;
+                        0
                     }
+                };
+                // No later than now, no earlier than the lag allows or than
+                // the device's frame before.
+                head.time = time
+                    .min(read)
+                    .max(read.saturating_sub(MAX_INPUT_LAG_NS))
+                    .max(head.last);
+                head.last = head.time;
+                if odd {
+                    // Once a boot: an honest driver's times never are.
+                    self.platform
+                        .note("compd: an input driver's frame time is odd (proposed ADR-0469)");
                 }
             }
             Incoming::Empty => {}
@@ -1221,6 +1256,15 @@ impl<P: Platform> Compositor<P> {
             let buttons = self.buttons;
             let keys = self.key_events;
             let pressed = self.pressed_in;
+            // A pointer move told before a key that came after it: the
+            // window under it hears it first, with the modifiers before
+            // the key (review of 8e418c42, 2).
+            let key = |e: &input::Event| {
+                e.is_valid() && e.kind.0 == input::kind::KEY && !(0x110..0x200).contains(&e.code)
+            };
+            if events.iter().any(key) {
+                self.pointer_moved_or_pressed();
+            }
             for event in events.iter() {
                 if event.is_valid() {
                     self.input_event(*event);

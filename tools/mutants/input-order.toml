@@ -43,3 +43,28 @@ find = '''            if ends {
             }'''
 replace = ''
 note = "input-order: a_wheel_message_ends_the_devices_round, a_frame_read_and_not_told_is_told_next_round_without_a_wait"
+
+[[mutant]]
+id = "IO-no-lag-bound"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+                    .max(read.saturating_sub(MAX_INPUT_LAG_NS))'''
+replace = ''
+note = "input-order: a_flood_with_early_times_holds_another_device_back_only_by_the_lag"
+
+[[mutant]]
+id = "IO-key-before-move"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+            if events.iter().any(key) {
+                self.pointer_moved_or_pressed();
+            }'''
+replace = ''
+note = "input-order: a_move_before_a_key_is_told_before_it_with_the_modifiers_before_it"
+
+[[mutant]]
+id = "IO-odd-uncounted"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'self.stats.odd_input_times += 1;'
+replace = ''
+note = "input-order: a_flood_with_early_times_holds_another_device_back_only_by_the_lag"

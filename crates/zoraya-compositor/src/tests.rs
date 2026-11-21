@@ -143,7 +143,7 @@ impl Fake {
 
     /// The next input frame's time.
     fn time(&mut self) -> u64 {
-        self.stamps += 1;
+        self.stamps = self.clock.max(self.stamps + 1);
         self.stamps
     }
 
