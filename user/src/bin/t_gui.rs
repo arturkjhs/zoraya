@@ -262,6 +262,7 @@ impl FakeInput {
             .collect();
         let m = input::Frame {
             dropped: 0,
+            time: clock_monotonic(),
             events: Seq::Of(&events),
         };
         // As a driver would, but waiting: the compositor shares the CPU.
@@ -461,6 +462,7 @@ fn no_injection(gui: &Gui, a: &mut Client, b: &mut Client) {
     a.drain();
     let frame = input::Frame {
         dropped: 0,
+        time: clock_monotonic(),
         events: Seq::Of(&[input::Event {
             kind: Below(input::kind::KEY),
             code: 30,

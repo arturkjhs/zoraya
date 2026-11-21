@@ -1,0 +1,138 @@
+# work/input-order (proposed ADR-0469): the input devices' frames told in the
+# order of their drivers' times. Mutations made by hand while writing the
+# host tests; each is killed by the test named in its note. Host tests only.
+tests = ["cargo test -q -p zoraya-compositor"]
+timeout = 300
+
+[[mutant]]
+id = "IO-port-order"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '(!aged, heads[i].time, i)'
+replace = '(!aged, 0, i)'
+note = "input-order: a_modifier_click_waiting_in_two_devices_keeps_its_order"
+
+[[mutant]]
+id = "IO-no-held-round"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+        if heads && !input_told {
+            self.input_round();
+        }'''
+replace = ''
+note = "input-order: a_frame_read_and_not_told_is_told_next_round_without_a_wait"
+
+[[mutant]]
+id = "IO-held-waits"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''let deadline = if heads {'''
+replace = '''let deadline = if false {'''
+note = "input-order: a_frame_read_and_not_told_is_told_next_round_without_a_wait"
+
+[[mutant]]
+id = "IO-drain-unbounded"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if told[slot] == MAX_DRAIN {'
+replace = 'if told[slot] == MAX_DRAIN + 5 {'
+note = "input-order: a_round_reads_at_most_max_drain_messages_of_a_device"
+
+[[mutant]]
+id = "IO-key-does-not-end"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''            if ends {
+                break;
+            }'''
+replace = ''
+note = "input-order: a_wheel_message_ends_the_devices_round, a_frame_read_and_not_told_is_told_next_round_without_a_wait"
+
+[[mutant]]
+id = "IO-never-aged"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let aged = heads[i].passed >= MAX_PASSED;'
+replace = 'let aged = false;'
+note = "input-order: a_flood_with_early_times_holds_another_device_back_a_bounded_while"
+
+[[mutant]]
+id = "IO-aged-at-once"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let aged = heads[i].passed >= MAX_PASSED;'
+replace = 'let aged = heads[i].passed >= 2;'
+note = "input-order: a_slow_drain_of_an_honest_backlog_keeps_the_order"
+
+[[mutant]]
+id = "IO-passed-not-reset"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'head.passed = 0;'
+replace = ''
+note = "input-order: each_head_counts_the_frames_passed_from_its_read"
+
+[[mutant]]
+id = "IO-lag-on-times"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'head.time = time.min(read);'
+replace = 'head.time = time.min(read).max(read.saturating_sub(2_000_000_000));'
+note = "input-order: frames_read_together_keep_their_order_at_any_backlog"
+
+[[mutant]]
+id = "IO-no-ceiling"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'head.time = time.min(read);'
+replace = 'head.time = time;'
+note = "input-order: a_future_time_is_taken_as_when_the_frame_was_read"
+
+[[mutant]]
+id = "IO-no-refresh"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if self.heads[slot].may_end() {'
+replace = 'if false {'
+note = "input-order: a_frame_sent_during_the_round_is_told_before_a_later_press"
+
+[[mutant]]
+id = "IO-key-before-move"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+                    if is_key(event) {
+                        self.pointer_moved_or_pressed();
+                    }'''
+replace = ''
+note = "input-order: a_move_before_a_key_is_told_before_it_with_the_modifiers_before_it"
+
+[[mutant]]
+id = "IO-odd-uncounted"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'self.stats.odd_input_times += 1;'
+replace = ''
+note = "input-order: a_flood_with_early_times_holds_another_device_back_a_bounded_while"
+
+[[mutant]]
+id = "IO-odd-backward-unseen"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'head.last_raw = frame.time;'
+replace = ''
+note = "input-order: equal_and_backward_times_keep_each_devices_order"
+
+[[mutant]]
+id = "IO-flush-once"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+                    if is_key(event) {
+                        self.pointer_moved_or_pressed();
+                    }'''
+replace = '''
+                    if is_key(event) && self.key_events == keys {
+                        self.pointer_moved_or_pressed();
+                    }'''
+note = "input-order: each_move_in_a_frame_is_told_before_the_key_after_it"
+
+[[mutant]]
+id = "IO-last-raw-kept"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'self.heads[slot].last_raw = 0;'
+replace = ''
+note = "input-order: a_new_driver_in_a_slot_starts_with_no_time_before"
+
+[[mutant]]
+id = "IO-passed-small"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'pub const MAX_PASSED: usize = MAX_INPUTS * 2 * 64;'
+replace = 'pub const MAX_PASSED: usize = 64;'
+note = "input-order: an_honest_backlog_of_two_devices_passes_a_held_head"

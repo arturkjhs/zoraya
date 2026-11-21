@@ -136,6 +136,43 @@ struct SheetGuard {
     buttons: u32,
     shown: bool,
 }
+
+/// An input device's next frame, read from its channel and not yet told
+/// (proposed ADR-0469): its driver's time as the compositor orders by it,
+/// and its events. A message that is no frame is a head with no events and
+/// `decoded` false.
+#[derive(Debug, Default)]
+struct Head {
+    held: bool,
+    decoded: bool,
+    /// The driver's time, no later than the compositor's clock when it was
+    /// read (a device's own frames keep their channel's order whatever their
+    /// times: only heads are compared).
+    time: u64,
+    /// Frames of other devices told while it was held: at `MAX_PASSED` it
+    /// goes first, whatever the times.
+    passed: usize,
+    /// The time its driver gave the device's frame before (for
+    /// `Stats::odd_input_times`).
+    last_raw: u64,
+    events: Vec<input::Event>,
+}
+
+/// The most frames of other devices told while a device's frame read and
+/// not told waits behind their earlier times (proposed ADR-0469). When it
+/// was read, the others held at most one head each and at most a channel's
+/// queue (`zoraya_channel::MAX_QUEUED`, 64) each; an honest frame sent
+/// after it was read has a later time, except one stamped in the same wake,
+/// and a wake takes at most the 64 buffers `inputd` offers (its `poll`
+/// gives them back only at its end: `zoraya_virtio`'s `offer` does not
+/// write the available index, `notify` does), at most 32 frames. So an
+/// honest backlog, at most 3 by 97 frames, never reaches this, drained at
+/// any speed. A driver whose times are too early (0, a stopped clock) holds
+/// each frame of another device, from its read, back by at most this many
+/// frames and the other aged heads (from 16 rounds of `MAX_DRAIN`, to 512
+/// rounds if every flood frame is a key), not for as long as it floods.
+pub const MAX_PASSED: usize = MAX_INPUTS * 2 * 64;
+
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
 /// `ClientGone` tags kept while the panel's queue is full; past it the
@@ -278,6 +315,10 @@ pub struct Stats {
     pub steady_frames: u64,
     pub steady_ns: u64,
     pub steady_max_ns: u64,
+    /// Input frames whose driver's time was 0, later than the clock when
+    /// read, or before its device's frame before (proposed ADR-0469): an
+    /// `inputd` that stamps no time shows here.
+    pub odd_input_times: u64,
 }
 
 /// How many frames after the first are timed and reported.
@@ -389,6 +430,9 @@ pub struct Compositor<P: Platform> {
     fields_dirty: bool,
     display: Option<P::End>,
     inputs: Vec<Option<P::End>>,
+    /// Each input device's next frame, read and not yet told: the devices'
+    /// frames are told in the order of their times (proposed ADR-0469).
+    heads: Vec<Head>,
     clients: Vec<Option<Client<P::End>>>,
     /// Every window, bottom of the stack first.
     windows: Vec<Window>,
@@ -445,8 +489,8 @@ pub struct Compositor<P: Platform> {
     /// passing over it is no press on what it passes (a drop on `t_open`'s
     /// Save button pressed it under TCG, 2026-11-21).
     pressed_in: [Option<usize>; 3],
-    /// Key events taken (any key but a pointer button): a device's round
-    /// ends at one (`input_message`).
+    /// Key events taken (any key but a pointer button): the round's input
+    /// ends at one (`input_round`).
     key_events: u64,
 
     /// The entry being dragged; no client hears of the pointer meanwhile.
@@ -539,6 +583,20 @@ fn fonts(primary: &'static [u8]) -> FontList<'static> {
     )
 }
 
+/// A key (not a pointer button) in an input frame.
+fn is_key(e: &input::Event) -> bool {
+    e.kind.0 == input::kind::KEY && !(0x110..0x200).contains(&e.code)
+}
+
+impl Head {
+    /// Holds a key, a button or a wheel: telling it may end the round.
+    fn may_end(&self) -> bool {
+        self.events
+            .iter()
+            .any(|e| e.kind.0 == input::kind::KEY || e.kind.0 == input::kind::WHEEL)
+    }
+}
+
 impl<P: Platform> Compositor<P> {
     /// A compositor with its manager channel, and the drivers it starts
     /// with. It asks the display for its size and attaches a framebuffer.
@@ -569,6 +627,7 @@ impl<P: Platform> Compositor<P> {
             fields_dirty: true,
             display: None,
             inputs: vec![None; MAX_INPUTS],
+            heads: (0..MAX_INPUTS).map(|_| Head::default()).collect(),
             clients: (0..MAX_CLIENTS).map(|_| None).collect(),
             windows: Vec::new(),
             focus: None,
@@ -832,8 +891,19 @@ impl<P: Platform> Compositor<P> {
             let retry = self.platform.now() + RETRY_NS;
             Some(deadline.map_or(retry, |d| d.min(retry)))
         };
+        // A device's frame read and not yet told is told in the next round,
+        // which does not wait for it (`input_round`).
+        let heads = self.heads.iter().any(|h| h.held);
+        let deadline = if heads {
+            Some(self.platform.now())
+        } else {
+            deadline
+        };
         self.platform.wait(&mut ready, deadline);
-        self.idle = ready.is_empty();
+        self.idle = ready.is_empty() && !heads;
+        // The devices are read together, once a round, where the first of
+        // them is ready (proposed ADR-0469).
+        let mut input_told = false;
         for key in ready {
             match key {
                 MANAGER_KEY => {
@@ -850,7 +920,10 @@ impl<P: Platform> Compositor<P> {
                 }
                 k if (INPUT_KEY..INPUT_KEY + MAX_INPUTS as u64).contains(&k) => {
                     self.measure.wake(2);
-                    self.input_message((k - INPUT_KEY) as usize);
+                    if !input_told {
+                        input_told = true;
+                        self.input_round();
+                    }
                 }
                 k if (CLIENT_KEY..CLIENT_KEY + MAX_CLIENTS as u64).contains(&k) => {
                     self.measure.wake(3);
@@ -858,6 +931,9 @@ impl<P: Platform> Compositor<P> {
                 }
                 _ => {}
             }
+        }
+        if heads && !input_told {
+            self.input_round();
         }
         self.flush_client_gone();
         // The oldest of the waits: a driver that answers flushes but not
@@ -1088,89 +1164,186 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(end);
             return status::NO_MEMORY;
         };
+        // Its head is empty: `lose_input` emptied it when the slot was freed.
         self.inputs[slot] = Some(end);
         self.platform.watch(end, INPUT_KEY + slot as u64);
         status::OK
     }
 
-    fn input_message(&mut self, slot: usize) {
+    /// The round's input (proposed ADR-0469): the devices' waiting frames
+    /// told in the order of their drivers' times, each device's own in the
+    /// order of its channel. Every device's next frame is read (its head),
+    /// and the earliest head is told, until one tells a key, changes a
+    /// button or turns a wheel (which ends the round's input: what came
+    /// after it on any device waits for the next round), until the
+    /// earliest head's device has had `MAX_DRAIN` frames this round, or
+    /// until no device has one. A head read and not told waits, read, for
+    /// the next round. A pointer that sent ten positions since the last
+    /// round is told once, at the end (proposed ADR-0467). A frame that
+    /// changes a button or turns a wheel is told at its end, as before: the
+    /// client hears the press where it happened, in order. So is each frame
+    /// while a button is held: the window that has the press hears it move
+    /// on the way out, not only the window under the last place (a file
+    /// manager starts its drag from that move; under TCG a whole drag was
+    /// read in one round and the release made a click of it elsewhere).
+    /// Served in the port's order instead, a tablet's press read before the
+    /// keyboard's Shift that came first made a Shift-click a plain click
+    /// (`files-manage:auto:2`, step 22, CI run 44859568963).
+    fn input_round(&mut self) {
+        for slot in 0..MAX_INPUTS {
+            self.read_head(slot);
+        }
+        let mut told = [0usize; MAX_INPUTS];
+        while let Some(mut slot) = self.earliest_head() {
+            // A frame that may end the round: a device whose channel was
+            // empty is read again first, so that a frame sent meanwhile with
+            // an earlier time is not left behind it (review of 5add3833, 5).
+            if self.heads[slot].may_end() {
+                for i in 0..MAX_INPUTS {
+                    self.read_head(i);
+                }
+                slot = self.earliest_head().unwrap_or(slot);
+            }
+            if told[slot] == MAX_DRAIN {
+                break;
+            }
+            told[slot] += 1;
+            for (i, h) in self.heads.iter_mut().enumerate() {
+                if i != slot && h.held {
+                    h.passed += 1;
+                }
+            }
+            let ends = self.tell_head(slot);
+            self.read_head(slot);
+            if ends {
+                break;
+            }
+        }
+        self.pointer_moved_or_pressed();
+        self.send_wheel();
+    }
+
+    /// The head to tell next: one passed by `MAX_PASSED` frames first, then
+    /// the earliest time; of equal times, the first device's.
+    fn earliest_head(&self) -> Option<usize> {
+        let heads = &self.heads;
+        (0..MAX_INPUTS).filter(|&i| heads[i].held).min_by_key(|&i| {
+            let aged = heads[i].passed >= MAX_PASSED;
+            (!aged, heads[i].time, i)
+        })
+    }
+
+    /// Reads input `slot`'s next message into its head, if it has none and
+    /// one waits; a closed or broken channel loses the device.
+    fn read_head(&mut self, slot: usize) {
+        if self.heads[slot].held {
+            return;
+        }
         let Some(end) = self.inputs[slot] else { return };
         self.handles.clear();
         let mut message = core::mem::take(&mut self.message);
         let mut handles = core::mem::take(&mut self.handles);
-        // The device's waiting motions, up to `MAX_DRAIN` messages and up to
-        // its first key, button or wheel (which ends its round): a
-        // pointer that sent ten positions since the last round is told once
-        // (proposed ADR-0467). A message that changes a button or turns a
-        // wheel is told at its end, as before: the client hears the press
-        // where it happened, in order. So is each message while a button
-        // is held: the window that has the press hears it move on the way
-        // out, not only the window under the last place (a file manager
-        // starts its drag from that move; under TCG a whole drag was read
-        // in one round and the release made a click of it elsewhere).
-        for _ in 0..MAX_DRAIN {
-            let incoming = self.platform.read(end, &mut message, &mut handles);
-            for h in handles.drain(..) {
-                self.platform.close(h);
-            }
-            match incoming {
-                Incoming::Message(n) => {
-                    if let Ok((_, frame)) = decode::<input::Frame<'_>>(&message[..n], 0) {
-                        let now = self.platform.now();
-                        self.measure.message(now);
-                        let buttons = self.buttons;
-                        let keys = self.key_events;
-                        let pressed = self.pressed_in;
-                        for event in frame.events.iter() {
-                            if event.is_valid() {
-                                self.input_event(event);
-                            }
+        let incoming = self.platform.read(end, &mut message, &mut handles);
+        for h in handles.drain(..) {
+            self.platform.close(h);
+        }
+        match incoming {
+            Incoming::Message(n) => {
+                let read = self.platform.now();
+                let mut odd = false;
+                let head = &mut self.heads[slot];
+                head.events.clear();
+                head.held = true;
+                let time = match decode::<input::Frame<'_>>(&message[..n], 0) {
+                    Ok((_, frame)) => {
+                        head.decoded = true;
+                        head.events.extend(frame.events.iter());
+                        if frame.time == 0 || frame.time > read || frame.time < head.last_raw {
+                            self.stats.odd_input_times += 1;
+                            odd = self.stats.odd_input_times == 1;
                         }
-                        // What the message did, not what it held: a button
-                        // or a key taken.
-                        let keyed = self.key_events != keys
-                            || self.buttons != buttons
-                            || self.pressed_in != pressed;
-                        let turned = self.wheel != (0, 0);
-                        if self.buttons != buttons || self.buttons != 0 || turned {
-                            self.pointer_moved_or_pressed();
-                            self.send_wheel();
-                        }
-                        // A key, a button or a wheel ends the device's
-                        // round: the other devices' messages that came
-                        // before the next one are read first, as before
-                        // ADR-0467 (a keyboard's Shift down and up both
-                        // read before the pointer's press made a
-                        // Shift-click a plain click, files-manage:auto:2).
-                        if keyed || turned {
-                            break;
-                        }
+                        head.last_raw = frame.time;
+                        frame.time
                     }
-                }
-                Incoming::Empty => break,
-                Incoming::Closed | Incoming::Refused => {
-                    self.platform.close(end);
-                    self.inputs[slot] = None;
-                    // Keys it held down will never be released (review R10).
-                    self.keymap = Keymap::new();
-                    self.meta = 0;
-                    self.held = [0; 8];
-                    self.delivered = [0; 8];
-                    for g in &mut self.sheet_guards {
-                        g.keys = [0; 8];
-                        g.buttons = 0;
+                    // Time 0: told (as nothing) first.
+                    Err(_) => {
+                        head.decoded = false;
+                        0
                     }
-                    self.buttons = 0;
-                    self.pressed_in = [None; 3];
-                    self.drag = None;
-                    break;
+                };
+                // No later than now.
+                head.time = time.min(read);
+                head.passed = 0;
+                if odd {
+                    // Once a boot: an honest driver's times never are.
+                    self.platform
+                        .note("compd: an input driver's frame time is odd (proposed ADR-0469)");
                 }
             }
+            Incoming::Empty => {}
+            Incoming::Closed | Incoming::Refused => self.lose_input(slot, end),
         }
         self.handles = handles;
         self.message = message;
-        self.pointer_moved_or_pressed();
-        self.send_wheel();
+    }
+
+    /// Tells input `slot`'s head and empties it. True if it told a key,
+    /// changed a button or turned a wheel: what it did, not what it held.
+    fn tell_head(&mut self, slot: usize) -> bool {
+        let events = core::mem::take(&mut self.heads[slot].events);
+        self.heads[slot].held = false;
+        let mut ends = false;
+        if self.heads[slot].decoded {
+            let now = self.platform.now();
+            self.measure.message(now);
+            let buttons = self.buttons;
+            let keys = self.key_events;
+            let pressed = self.pressed_in;
+            for event in events.iter() {
+                if event.is_valid() {
+                    // A pointer move told before a key that came after it:
+                    // the window under it hears it first, with the
+                    // modifiers before the key (review of 8e418c42, 2).
+                    // Nothing when the pointer has not moved.
+                    if is_key(event) {
+                        self.pointer_moved_or_pressed();
+                    }
+                    self.input_event(*event);
+                }
+            }
+            let keyed =
+                self.key_events != keys || self.buttons != buttons || self.pressed_in != pressed;
+            let turned = self.wheel != (0, 0);
+            if self.buttons != buttons || self.buttons != 0 || turned {
+                self.pointer_moved_or_pressed();
+                self.send_wheel();
+            }
+            ends = keyed || turned;
+        }
+        // The buffer is kept for the device's next frame.
+        self.heads[slot].events = events;
+        ends
+    }
+
+    /// Input `slot`'s channel closed or broke: the device is gone, and so is
+    /// all it held.
+    fn lose_input(&mut self, slot: usize, end: P::End) {
+        self.platform.close(end);
+        self.inputs[slot] = None;
+        // Reached only from `read_head`, with the head empty.
+        self.heads[slot].last_raw = 0;
+        // Keys it held down will never be released (review R10).
+        self.keymap = Keymap::new();
+        self.meta = 0;
+        self.held = [0; 8];
+        self.delivered = [0; 8];
+        for g in &mut self.sheet_guards {
+            g.keys = [0; 8];
+            g.buttons = 0;
+        }
+        self.buttons = 0;
+        self.pressed_in = [None; 3];
+        self.drag = None;
     }
 
     // ---- input routing ----------------------------------------------------

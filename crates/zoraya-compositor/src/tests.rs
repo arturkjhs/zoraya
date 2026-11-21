@@ -83,6 +83,20 @@ struct Fake {
     /// Handles the compositor passed to a client: only a drop's entry
     /// (ADR-0170), as (the client's end, the handle).
     given: Vec<(u32, u32)>,
+    /// The input drivers' clock: each frame a test sends is later than the
+    /// one before (proposed ADR-0469).
+    stamps: u64,
+    /// The port serves the input devices last slot first (the tablet before
+    /// the keyboard), as the real port may.
+    inputs_reversed: bool,
+    /// The tablet is attached first, in input slot 0, as `init` attaches
+    /// QEMU's devices (the keyboard is slot 0 otherwise).
+    tablet_first: bool,
+    /// A message that lands on a channel once the compositor finds it
+    /// empty: sent while a round runs.
+    arrive_on_read: Option<(u32, Vec<u8>)>,
+    /// The deadline of the last wait, and the clock when it was asked.
+    waited: Option<(Option<u64>, u64)>,
 }
 
 impl Fake {
@@ -133,6 +147,12 @@ impl Fake {
             .push_back((bytes, handles));
     }
 
+    /// The next input frame's time.
+    fn time(&mut self) -> u64 {
+        self.stamps = self.clock.max(self.stamps + 1);
+        self.stamps
+    }
+
     fn take(&mut self, end: u32) -> Vec<Vec<u8>> {
         core::mem::take(&mut self.peers.get_mut(&end).unwrap().outbox)
     }
@@ -153,7 +173,13 @@ impl Platform for Fake {
                 Incoming::Message(m.len())
             }
             None if peer.gone => Incoming::Closed,
-            None => Incoming::Empty,
+            None => {
+                if self.arrive_on_read.as_ref().is_some_and(|(e, _)| *e == end) {
+                    let (_, m) = self.arrive_on_read.take().unwrap();
+                    peer.inbox.push_back((m, Vec::new()));
+                }
+                Incoming::Empty
+            }
         }
     }
 
@@ -348,11 +374,23 @@ impl Platform for Fake {
     }
 
     fn wait(&mut self, ready: &mut Vec<u64>, deadline: Option<u64>) {
+        self.waited = Some((deadline, self.clock));
         for (key, end) in &self.watched {
             if let Some(p) = self.peers.get(end)
                 && (!p.inbox.is_empty() || p.gone)
             {
                 ready.push(*key);
+            }
+        }
+        if self.inputs_reversed {
+            let inputs = INPUT_KEY..INPUT_KEY + MAX_INPUTS as u64;
+            let first = ready.iter().position(|k| inputs.contains(k));
+            if let Some(first) = first {
+                let n = ready[first..]
+                    .iter()
+                    .take_while(|k| inputs.contains(k))
+                    .count();
+                ready[first..first + n].reverse();
             }
         }
         // Nothing ready: time passes to the deadline.
@@ -389,7 +427,12 @@ fn setup_with(change: impl FnOnce(&mut Fake)) -> Setup {
     let keyboard = f.channel(64);
     let tablet = f.channel(64);
     f.display = Some(display);
-    let c = Compositor::new(f, manager, Some(display), &[keyboard, tablet]);
+    let inputs = if f.tablet_first {
+        [tablet, keyboard]
+    } else {
+        [keyboard, tablet]
+    };
+    let c = Compositor::new(f, manager, Some(display), &inputs);
     Setup {
         c,
         manager,
@@ -479,6 +522,7 @@ impl Setup {
         let k = self.keyboard;
         let m = input::Frame {
             dropped: 0,
+            time: self.f().time(),
             events: Seq::Of(&events),
         };
         self.f().send(k, message(&m, 0), vec![]);
@@ -508,6 +552,7 @@ impl Setup {
         let t = self.tablet;
         let m = input::Frame {
             dropped: 0,
+            time: self.f().time(),
             events: Seq::Of(&events),
         };
         self.f().send(t, message(&m, 0), vec![]);
@@ -693,6 +738,7 @@ fn a_client_cannot_use_manager_or_input_messages() {
             message(
                 &input::Frame {
                     dropped: 0,
+                    time: 0,
                     events: Seq::Of(&[input::Event {
                         kind: Below(input::kind::KEY),
                         code: 30,
@@ -1120,6 +1166,7 @@ fn invalid_input_events_are_ignored() {
         message(
             &input::Frame {
                 dropped: 0,
+                time: 0,
                 events: Seq::Of(&bad),
             },
             0,
@@ -1461,6 +1508,7 @@ fn press(s: &mut Setup, x: u32, y: u32, button: u32, value: u32) {
     let t = s.tablet;
     let m = input::Frame {
         dropped: 0,
+        time: s.f().time(),
         events: Seq::Of(&events),
     };
     s.f().send(t, message(&m, 0), vec![]);

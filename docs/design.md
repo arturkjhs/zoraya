@@ -466,8 +466,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   it drives a keyboard or an absolute pointer, keeps 64 event buffers offered, checks every event, and sends one
   `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535 and a pointer's wheels (`REL_WHEEL`,
   `REL_HWHEEL`, or their `HI_RES` axes when the device has them) as `WHEEL` records in 120ths of a notch, positive
-  toward the person and to the right (proposed ADR-0322). A frame that does not fit is dropped and
-  counted, and the count goes with the next one.
+  toward the person and to the right (proposed ADR-0322). Each frame carries the monotonic time the driver woke
+  for its interrupt (proposed ADR-0469). A frame that does not fit is dropped and counted, and the count goes with
+  the next one.
 - **`compd`** (`zoraya-compositor`, ADR-0093, ADR-0094). The loop runs over a `Platform` trait, so it is tested on
   the host. Slot 5 is the manager channel from `init`, 6 the display driver, 7 to 10 input drivers. A client
   (`zoraya-proto-gui`) asks the display size, creates one surface with a memory object, which the compositor maps
@@ -1004,7 +1005,7 @@ Not built in 9f-wheel, or known: pixel-smooth scrolling (settings moves by child
 turn (`dx`) scrolls nothing; Page Up and Page Down in the file manager and the editor; the sidebar of places and the
 editor's find field do not scroll.
 
-## The pointer and the frame rate (as built; TASK-31 `gui-smooth`, ADR-0467 proposed)
+## The pointer and the frame rate (as built; TASK-31 `gui-smooth`, ADR-0467 and ADR-0469 proposed)
 
 Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the order the numbers asked for.
 
@@ -1019,12 +1020,28 @@ Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the 
   is told to the window under it once, at the end, with the last place. A message that changes a button or turns a
   wheel is told at its end, as before, and so is every message while a button is held: the window that has the press
   hears it move before the pointer leaves it (a file manager starts its drag from that move; told only at the end, a
-  whole drag read in one round under TCG gave it none). A message with a key, a button or a wheel ends that device's
-  round, so that devices stay in order across a backlog (the keyboard's Shift down and up both read before the
-  pointer's press made a Shift-click plain); the round ends on what the message did (a button changed, a key taken,
-  a wheel turned), not on the kind of its events. Known limits: (1) the keyboard's message before the pointer's
-  press is read first only when the port serves the keyboard first in the round; `input::Event` carries no time, so
-  two devices' order within a round is the port's; (5) there are no grabs (ADR-0094): a release over another window
+  whole drag read in one round under TCG gave it none). **The devices are told in their drivers' order** (proposed
+  ADR-0469): each `input::Frame` carries `time`, the monotonic clock when its `inputd` woke for the interrupt; each
+  round the compositor reads every device's next frame (its head) and tells the earliest (of equal times, the first
+  device's), a device's own frames in its channel's order whatever their times. A message with a key, a button or a
+  wheel ends the round's input for every device (the keyboard's Shift down and up both read before the pointer's
+  press made a Shift-click plain; the tablet's press served first by the port, before the Shift that came 400 ms
+  earlier, made it plain too: `files-manage:auto:2`, CI run 44859568963); the round ends on what the message did (a
+  button changed, a key taken, a wheel turned), not on the kind of its events. A head read and not told waits for
+  the next round, which does not wait on the port. A time later than the compositor's clock when the frame is read
+  is taken as that clock; a head past which 512 frames of other devices were told (`MAX_PASSED`, more than an honest
+  backlog can hold) goes first whatever the times, so frames keep their order at any backlog, drained at any speed,
+  and no driver's times hold another device back longer; a time that is 0, later or before the driver's time before is counted (`odd_input_times`) and `compd`
+  prints `an input driver's frame time is odd` once a boot. Before a head that may end the round is told, the
+  devices whose channels were empty are read again. A pointer move waiting before a key is told before the key,
+  with the modifiers before it. Known limits: (1) the order is the drivers': two drivers that ran in the other order
+  than their interrupts, within the same few milliseconds, are told in the order they ran; an event the device adds
+  while its driver drains carries the drain's earlier time; a frame not yet sent when the compositor reads is not
+  waited for; a driver whose times are too early holds each frame of another device back by at most 512 of its frames from
+  that frame's read (16 to 512 rounds; a driver may
+  send any key already, ADR-0092); a frame sent during a round is caught only before a head that may end it, not
+  before a move while a button is held; no GUI run checks `inputd`'s stamp; (5) there are no
+  grabs (ADR-0094): a release over another window
   is not told to the client that had the press, which hears the button up only with its next pointer event; (7) a
   device frame that holds both a press and its release leaves the buttons as they were, and the client hears no
   click.
