@@ -258,7 +258,7 @@ EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
 # One target per machine configuration (CI runs each as a job of its own,
 # ADR-0213's Decision); make test-qemu runs them all, in this order, on one
 # test disk, with zoraya-fsck after each.
-QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2-a tcg-smp4-gicv2-b tcg-el2-a tcg-el2-b tcg-smp4-gicv3-a tcg-smp4-gicv3-b
+QEMU_CONFIGS := auto-default auto-smp4-2g-a auto-smp4-2g-b auto-el2 tcg-default tcg-smp4-gicv2-a tcg-smp4-gicv2-b tcg-el2-a tcg-el2-b tcg-smp4-gicv3-a tcg-smp4-gicv3-b
 # The `auto` configurations that are a `tcg` one's machine where `auto` is TCG
 # (the same options but the accelerator; ADR-0350): FULL=1 leaves them
 # out there, and the `tcg` twin expects their lines too.
@@ -281,10 +281,22 @@ test-qemu-auto-default: test-qemu-disk
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
-test-qemu-auto-smp4-2g: test-qemu-disk
-	$(RUN_TEST_SLOW) --label auto-smp4-2g \
+# auto-smp4-2g runs in two shards like the TCG suites below (SHARD_A_EXPECT and
+# RUN_TEST_SLOW_B are defined there): on CI's TCG runners one boot of the list
+# in this machine passed 420 s (run 44849798104; the slowest tests were
+# a_create_under_churn_is_refused_within_the_round_cap 72.9 s,
+# job_signal_reaches_every_process_of_its_tree 63.1 s and
+# threads_and_futexes_keep_their_rules 48.3 s).
+test-qemu-auto-smp4-2g-a: test-qemu-disk
+	$(RUN_TEST_SLOW) --label auto-smp4-2g-a $(SHARD_A_EXPECT) \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
-		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --shard 1/2 --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-auto-smp4-2g-b: test-qemu-disk
+	$(RUN_TEST_SLOW_B) --label auto-smp4-2g-b $(SHARD_B_EXPECT) \
+		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
+		-- $(RUN_QEMU) --test --shard 2/2 --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-auto-el2: test-qemu-disk

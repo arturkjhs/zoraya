@@ -129,6 +129,11 @@ fn bad_arguments() {
 /// INV-0051-1 at exhaustion: more than is free fails, and frees what it took.
 fn exhaustion_changes_nothing() {
     for flags in [MemoryFlags::NONE, MemoryFlags::CONTIGUOUS] {
+        // A first refusal may grow a kernel table that stays (this program
+        // is the first of a shard on a fresh boot, with nothing grown by the
+        // tests before it); the count is compared from the second one on.
+        let free = test_call(FREE_FRAMES);
+        assert_err!(memory_create((free + 16) * PAGE, flags), Status::NoMemory);
         let free = test_call(FREE_FRAMES);
         assert_err!(memory_create((free + 16) * PAGE, flags), Status::NoMemory);
         assert_eq!(test_call(FREE_FRAMES), free, "nothing kept");

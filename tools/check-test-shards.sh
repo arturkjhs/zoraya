@@ -36,5 +36,15 @@ done
 n=$(echo "$panics" | wc -l | tr -d ' ')
 want=$(sed -n -E 's/^const EXPECTED_FAILURES: usize = ([0-9]+);$/\1/p' "$src")
 [ "$n" = "$want" ] || { echo "check-test-shards: EXPECTED_FAILURES is $want, EXPECT lists $n" >&2; bad=1; }
+# Every sharded step has both halves: the targets `X-a` (`--shard 1/2`) and
+# `X-b` (`--shard 2/2`) run the same machine (the same options but the shard).
+for a in $(sed -n -E 's/^(test-qemu-[A-Za-z0-9-]+-a):.*/\1/p' "$makefile"); do
+	b="${a%-a}-b"
+	la=$(awk -v t="$a:" '$1==t{f=1;next} f&&/^\t/&&/--shard 1\/2/{sub(/.*--shard 1\/2/,"");print;exit} /^[^\t]/{f=0}' "$makefile")
+	lb=$(awk -v t="$b:" '$1==t{f=1;next} f&&/^\t/&&/--shard 2\/2/{sub(/.*--shard 2\/2/,"");print;exit} /^[^\t]/{f=0}' "$makefile")
+	if [ -z "$la" ] || [ "$la" != "$lb" ]; then
+		echo "check-test-shards: $a and $b do not run the same machine in shards 1/2 and 2/2" >&2; bad=1
+	fi
+done
 [ "$bad" = 0 ] || exit 1
 echo "check-test-shards: $total tests, shard 1 = 0..$split, shard 2 = $split..$total"

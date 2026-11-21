@@ -1,7 +1,7 @@
 # Plan part F5: mutants that need the 2 GiB guest (a process with 22 mappings
 # 1 GiB apart needs 45 MB of page tables): `t_bound`'s `far-pages` case runs
-# in `make test-qemu-auto-smp4-2g` and is skipped in the 128 MiB guest.
-tests = ["make -s test-qemu-auto-smp4-2g"]
+# in `make test-qemu-auto-smp4-2g-b` (shard 2 holds `kernel_work_is_bounded`) and is skipped in the 128 MiB guest.
+tests = ["make -s test-qemu-auto-smp4-2g-b"]
 timeout = 1800
 
 [[mutant]]
