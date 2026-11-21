@@ -83,6 +83,14 @@ struct Fake {
     /// Handles the compositor passed to a client: only a drop's entry
     /// (ADR-0170), as (the client's end, the handle).
     given: Vec<(u32, u32)>,
+    /// The input drivers' clock: each frame a test sends is later than the
+    /// one before (proposed ADR-0469).
+    stamps: u64,
+    /// The port serves the input devices last slot first (the tablet before
+    /// the keyboard), as the real port may.
+    inputs_reversed: bool,
+    /// The deadline of the last wait, and the clock when it was asked.
+    waited: Option<(Option<u64>, u64)>,
 }
 
 impl Fake {
@@ -131,6 +139,12 @@ impl Fake {
             .unwrap()
             .inbox
             .push_back((bytes, handles));
+    }
+
+    /// The next input frame's time.
+    fn time(&mut self) -> u64 {
+        self.stamps += 1;
+        self.stamps
     }
 
     fn take(&mut self, end: u32) -> Vec<Vec<u8>> {
@@ -348,11 +362,23 @@ impl Platform for Fake {
     }
 
     fn wait(&mut self, ready: &mut Vec<u64>, deadline: Option<u64>) {
+        self.waited = Some((deadline, self.clock));
         for (key, end) in &self.watched {
             if let Some(p) = self.peers.get(end)
                 && (!p.inbox.is_empty() || p.gone)
             {
                 ready.push(*key);
+            }
+        }
+        if self.inputs_reversed {
+            let inputs = INPUT_KEY..INPUT_KEY + MAX_INPUTS as u64;
+            let first = ready.iter().position(|k| inputs.contains(k));
+            if let Some(first) = first {
+                let n = ready[first..]
+                    .iter()
+                    .take_while(|k| inputs.contains(k))
+                    .count();
+                ready[first..first + n].reverse();
             }
         }
         // Nothing ready: time passes to the deadline.
@@ -479,6 +505,7 @@ impl Setup {
         let k = self.keyboard;
         let m = input::Frame {
             dropped: 0,
+            time: self.f().time(),
             events: Seq::Of(&events),
         };
         self.f().send(k, message(&m, 0), vec![]);
@@ -508,6 +535,7 @@ impl Setup {
         let t = self.tablet;
         let m = input::Frame {
             dropped: 0,
+            time: self.f().time(),
             events: Seq::Of(&events),
         };
         self.f().send(t, message(&m, 0), vec![]);
@@ -693,6 +721,7 @@ fn a_client_cannot_use_manager_or_input_messages() {
             message(
                 &input::Frame {
                     dropped: 0,
+                    time: 0,
                     events: Seq::Of(&[input::Event {
                         kind: Below(input::kind::KEY),
                         code: 30,
@@ -1120,6 +1149,7 @@ fn invalid_input_events_are_ignored() {
         message(
             &input::Frame {
                 dropped: 0,
+                time: 0,
                 events: Seq::Of(&bad),
             },
             0,
@@ -1461,6 +1491,7 @@ fn press(s: &mut Setup, x: u32, y: u32, button: u32, value: u32) {
     let t = s.tablet;
     let m = input::Frame {
         dropped: 0,
+        time: s.f().time(),
         events: Seq::Of(&events),
     };
     s.f().send(t, message(&m, 0), vec![]);

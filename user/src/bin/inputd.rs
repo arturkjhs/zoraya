@@ -4,7 +4,9 @@
 //! A virtio-input driver (ADR-0092) as a process: a keyboard or a tablet.
 //! Slot 5 is its device page, slot 6 the channel to the compositor; its
 //! first argument is the range. It never waits for the compositor: a frame
-//! that does not fit is dropped and counted.
+//! that does not fit is dropped and counted. Each frame carries the time
+//! the driver woke for it (proposed ADR-0469), so that the compositor tells
+//! two devices' waiting frames in the order they happened.
 
 use alloc::vec::Vec;
 
@@ -16,8 +18,9 @@ use zoraya_proto_input::{Event, Frame};
 use zoraya_protocol::{Below, NO_REPLY, Seq, encode};
 use zoraya_user::mmio::Window;
 use zoraya_user::{
-    channel_write, device_interrupt, dma_pin, dma_release_quarantine, dma_unpin, interrupt_ack,
-    memory_create, memory_map, port_create, port_subscribe, port_wait, println, startup,
+    channel_write, clock_monotonic, device_interrupt, dma_pin, dma_release_quarantine, dma_unpin,
+    interrupt_ack, memory_create, memory_map, port_create, port_subscribe, port_wait, println,
+    startup,
 };
 use zoraya_virtio::Shared;
 use zoraya_virtio_input::{Input, Kind, MAX_FRAME, Record, SHARED_MEMORY};
@@ -132,6 +135,9 @@ fn main() -> i32 {
             // The compositor is gone: stop the device and end.
             stop(&mut input, pin);
         }
+        // When the device's interrupt woke this driver: every frame it
+        // holds now happened before (proposed ADR-0469).
+        let time = clock_monotonic();
         input.acknowledge();
         let mut gone = false;
         let mut send = |records: &[Record], dropped: u32| -> bool {
@@ -143,6 +149,7 @@ fn main() -> i32 {
             }));
             let m = Frame {
                 dropped,
+                time,
                 events: Seq::Of(&events),
             };
             let Ok(n) = encode(&m, NO_REPLY, &mut out) else {

@@ -30,6 +30,7 @@ impl Setup {
         let t = self.tablet;
         let m = input::Frame {
             dropped: 0,
+            time: self.f().time(),
             events: Seq::Of(&events),
         };
         self.f().send(t, message(&m, 0), vec![]);

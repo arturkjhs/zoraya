@@ -20,6 +20,14 @@ impl Setup {
         }
     }
 
+    /// The frames of input `end` not yet told: in its channel, and the one
+    /// read as its head (proposed ADR-0469).
+    fn untold(&mut self, end: u32) -> usize {
+        let slot = self.c.inputs.iter().position(|e| *e == Some(end));
+        let head = slot.is_some_and(|i| self.c.heads[i].held);
+        self.f().peers[&end].inbox.len() + usize::from(head)
+    }
+
     /// A tablet frame to `(x, y)` physical queued, no round run.
     fn queue_move(&mut self, x: i64, y: i64) {
         let (w, h) = self.c.size();
@@ -38,6 +46,7 @@ impl Setup {
         let t = self.tablet;
         let m = input::Frame {
             dropped: 0,
+            time: self.f().time(),
             events: Seq::Of(&events),
         };
         self.f().send(t, message(&m, 0), vec![]);
@@ -190,6 +199,7 @@ fn a_press_between_motions_is_delivered_in_its_own_place_and_order() {
     let t = s.tablet;
     let m = input::Frame {
         dropped: 0,
+        time: s.f().time(),
         events: Seq::Of(&events),
     };
     s.f().send(t, message(&m, 0), vec![]);
@@ -666,9 +676,9 @@ fn a_round_reads_at_most_max_drain_messages_of_a_device() {
     }
     s.c.step();
     let t = s.tablet;
-    assert_eq!(s.f().peers[&t].inbox.len(), 40 - MAX_DRAIN);
+    assert_eq!(s.untold(t), 40 - MAX_DRAIN);
     s.c.step();
-    assert!(s.f().peers[&t].inbox.is_empty());
+    assert_eq!(s.untold(t), 0);
 }
 
 #[test]
@@ -868,18 +878,20 @@ fn a_press_from_another_window_is_never_held_in_the_window_it_crosses() {
     assert!(b.iter().all(|&k| k == 0), "pressed on the desktop: {b:?}");
 }
 
-/// A Shift-click whose messages all wait when the round starts: the
-/// keyboard's Shift down, the pointer's press and release, the keyboard's
-/// Shift up. The keyboard's backlog is not read past its first key before
-/// the pointer's press, so the press carries Shift (the keyboard read
-/// whole made the click a plain one: `files-manage:auto:2`, step 22,
-/// 2026-11-21).
-#[test]
-fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
+/// What two devices' frames waiting together tell window A (focused by a
+/// plain click first): the keyboard's frames and the tablet's, each with
+/// its driver's time, all queued before the rounds run, the port serving
+/// the keyboard first or (`reversed`) the tablet first. Gives the
+/// modifiers of the press A hears, and the keys A hears.
+fn two_devices(
+    reversed: bool,
+    keyboard: &[(u64, u32, u32)],
+    tablet: &[(u64, u32)],
+) -> (u32, Vec<(u32, bool, Option<char>)>) {
     let mut t = super::drops::two();
+    t.s.f().inputs_reversed = reversed;
     let (px, py) = (t.oa.x + 10, t.oa.y + 60);
     let (w, h) = t.s.f().display_size;
-    // A plain click focuses the window.
     t.s.point(axis(px, w), axis(py, h), Some(1));
     t.s.point(axis(px, w), axis(py, h), Some(0));
     t.s.f().take(t.a);
@@ -888,8 +900,22 @@ fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
         code,
         value,
     };
-    let button = |value: u32| {
-        [
+    let frame = |time: u64, events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                time: 1_000_000 + time,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    for &(time, code, value) in keyboard {
+        t.s.f().send(k, frame(time, &[key(code, value)]), vec![]);
+    }
+    for &(time, value) in tablet {
+        let events = [
             input::Event {
                 kind: Below(input::kind::AXIS),
                 code: 0,
@@ -901,38 +927,147 @@ fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
                 value: axis(py, h),
             },
             key(code::BTN_LEFT, value),
-        ]
-    };
-    let (k, tab) = (t.s.keyboard, t.s.tablet);
-    let frame = |events: &[input::Event]| {
-        message(
-            &input::Frame {
-                dropped: 0,
-                events: Seq::Of(events),
-            },
-            0,
-        )
-    };
-    t.s.f().send(k, frame(&[key(code::LEFT_SHIFT, 1)]), vec![]);
-    t.s.f().send(tab, frame(&button(1)), vec![]);
-    t.s.f().send(tab, frame(&button(0)), vec![]);
-    t.s.f().send(k, frame(&[key(code::LEFT_SHIFT, 0)]), vec![]);
-    for _ in 0..4 {
+        ];
+        t.s.f().send(tab, frame(time, &events), vec![]);
+    }
+    for _ in 0..12 {
         t.s.c.step();
     }
-    let press =
-        t.s.f()
-            .take(t.a)
-            .iter()
-            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
-            .map(|(_, p)| (p.buttons.0, p.modifiers.0))
-            .find(|(b, _)| b & gui::buttons::LEFT != 0)
-            .expect("the press is told");
-    assert_eq!(
-        press.1 & gui::modifiers::SHIFT,
-        gui::modifiers::SHIFT,
-        "the press carries Shift: {press:?}"
+    assert!(t.s.f().peers[&k].inbox.is_empty() && t.s.f().peers[&tab].inbox.is_empty());
+    let out = t.s.f().take(t.a);
+    let press = out
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+        .map(|(_, p)| (p.buttons.0, p.modifiers.0))
+        .find(|(b, _)| b & gui::buttons::LEFT != 0)
+        .expect("the press is told");
+    (press.1, super::keys_of(&out))
+}
+
+/// A Shift-click whose frames all wait when the round starts: the
+/// keyboard's Shift down, the pointer's press and release, the keyboard's
+/// Shift up. The press carries Shift whichever device the port serves
+/// first (served in the port's order, the tablet first made the click a
+/// plain one: `files-manage:auto:2`, step 22, CI run 44859568963, proposed
+/// ADR-0469; the keyboard read whole first did too, before ADR-0467's
+/// rounds ended on a key).
+#[test]
+fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
+    for reversed in [false, true] {
+        let (modifiers, _) = two_devices(
+            reversed,
+            &[(1, code::LEFT_SHIFT, 1), (4, code::LEFT_SHIFT, 0)],
+            &[(2, 1), (3, 0)],
+        );
+        assert_eq!(
+            modifiers & gui::modifiers::SHIFT,
+            gui::modifiers::SHIFT,
+            "the press carries Shift (tablet first: {reversed})"
+        );
+    }
+}
+
+/// evdev's A.
+const KEY_A: u32 = 30;
+
+/// A click, then Shift and a key, all waiting: the press carries no Shift
+/// and the key comes after it, whichever device the port serves first
+/// (the keyboard served first gave the press the Shift that came after
+/// it).
+#[test]
+fn a_click_before_a_modifier_waiting_in_two_devices_keeps_its_order() {
+    for reversed in [false, true] {
+        let (modifiers, keys) = two_devices(
+            reversed,
+            &[
+                (3, code::LEFT_SHIFT, 1),
+                (4, KEY_A, 1),
+                (5, KEY_A, 0),
+                (6, code::LEFT_SHIFT, 0),
+            ],
+            &[(1, 1), (2, 0)],
+        );
+        assert_eq!(
+            modifiers & gui::modifiers::SHIFT,
+            0,
+            "the press carries no Shift (tablet first: {reversed})"
+        );
+        assert!(
+            keys.contains(&(KEY_A, true, Some('A'))),
+            "the key after it has Shift: {keys:?}"
+        );
+    }
+}
+
+/// Of equal times the first device's frame is told first, and a device's
+/// own frames keep their channel's order whatever their times: a driver's
+/// times only order the devices' heads.
+#[test]
+fn equal_and_backward_times_keep_each_devices_order() {
+    // The keyboard's Shift up has a time before its Shift down: it is
+    // still told after it, so the press (time 2) comes between them.
+    for reversed in [false, true] {
+        let (modifiers, _) = two_devices(
+            reversed,
+            &[(1, code::LEFT_SHIFT, 1), (0, code::LEFT_SHIFT, 0)],
+            &[(2, 1), (3, 0)],
+        );
+        // Shift down (1) is the earliest head; then the keyboard's head is
+        // Shift up (0), earlier than the press (2): told first.
+        assert_eq!(modifiers & gui::modifiers::SHIFT, 0, "{reversed}");
+    }
+    // Equal times: the keyboard (slot 0) first, whichever the port serves.
+    for reversed in [false, true] {
+        let (modifiers, _) = two_devices(
+            reversed,
+            &[(2, code::LEFT_SHIFT, 1), (9, code::LEFT_SHIFT, 0)],
+            &[(2, 1), (3, 0)],
+        );
+        assert_eq!(
+            modifiers & gui::modifiers::SHIFT,
+            gui::modifiers::SHIFT,
+            "{reversed}"
+        );
+    }
+}
+
+/// A head read and not told (the round's input ended on a key before it) is
+/// told in the next round although its channel is empty, and that round
+/// does not wait: the port would not wake for it.
+#[test]
+fn a_frame_read_and_not_told_is_told_next_round_without_a_wait() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    let k = s.keyboard;
+    let key = [input::Event {
+        kind: Below(input::kind::KEY),
+        code: KEY_A,
+        value: 1,
+    }];
+    let time = s.f().time();
+    let m = message(
+        &input::Frame {
+            dropped: 0,
+            time,
+            events: Seq::Of(&key),
+        },
+        0,
     );
+    s.f().send(k, m, vec![]);
+    s.queue_move(320, 210);
+    s.c.step();
+    let tab = s.tablet;
+    assert_eq!(s.untold(tab), 1, "the move waits behind the key");
+    assert!(s.f().peers[&tab].inbox.is_empty(), "read, as the head");
+    let before = s.c.pointer;
+    s.c.step();
+    let (deadline, clock) = s.f().waited.unwrap();
+    assert!(
+        deadline.is_some_and(|d| d <= clock + 1000),
+        "no wait: {deadline:?} at {clock}"
+    );
+    assert_eq!(s.untold(tab), 0);
+    assert_ne!(s.c.pointer, before, "the move is told");
 }
 
 /// The buttons each client hears in `WindowPointerMods` (taken).
@@ -1012,6 +1147,7 @@ fn each_button_is_held_only_in_the_client_it_was_pressed_over() {
             message(
                 &input::Frame {
                     dropped: 0,
+                    time: 0,
                     events: Seq::Of(&events),
                 },
                 0,
@@ -1097,6 +1233,7 @@ fn a_wheel_message_ends_the_devices_round() {
     let m = message(
         &input::Frame {
             dropped: 0,
+            time: s.f().time(),
             events: Seq::Of(&wheel),
         },
         0,
@@ -1104,7 +1241,7 @@ fn a_wheel_message_ends_the_devices_round() {
     s.f().send(tab, m, vec![]);
     s.queue_move(320, 210);
     s.c.step();
-    assert_eq!(s.f().peers[&tab].inbox.len(), 1, "the move waits");
+    assert_eq!(s.untold(tab), 1, "the move waits");
     s.c.step();
-    assert!(s.f().peers[&tab].inbox.is_empty());
+    assert_eq!(s.untold(tab), 0);
 }

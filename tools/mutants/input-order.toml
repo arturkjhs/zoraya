@@ -1,0 +1,45 @@
+# work/input-order (proposed ADR-0469): the input devices' frames told in the
+# order of their drivers' times. Mutations made by hand while writing the
+# host tests; each is killed by the test named in its note. Host tests only.
+tests = ["cargo test -q -p zoraya-compositor"]
+timeout = 300
+
+[[mutant]]
+id = "IO-port-order"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '.min_by_key(|&i| (self.heads[i].time, i))'
+replace = '.min_by_key(|&i| i)'
+note = "input-order: a_modifier_click_waiting_in_two_devices_keeps_its_order"
+
+[[mutant]]
+id = "IO-no-held-round"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+        if heads && !input_told {
+            self.input_round();
+        }'''
+replace = ''
+note = "input-order: a_frame_read_and_not_told_is_told_next_round_without_a_wait"
+
+[[mutant]]
+id = "IO-held-waits"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''let deadline = if heads {'''
+replace = '''let deadline = if false {'''
+note = "input-order: a_frame_read_and_not_told_is_told_next_round_without_a_wait"
+
+[[mutant]]
+id = "IO-drain-unbounded"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if told[slot] == MAX_DRAIN {'
+replace = 'if told[slot] == MAX_DRAIN + 5 {'
+note = "input-order: a_round_reads_at_most_max_drain_messages_of_a_device"
+
+[[mutant]]
+id = "IO-key-does-not-end"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''            if ends {
+                break;
+            }'''
+replace = ''
+note = "input-order: a_wheel_message_ends_the_devices_round, a_frame_read_and_not_told_is_told_next_round_without_a_wait"

@@ -1,6 +1,7 @@
 //! The input protocol from an input driver to the compositor (ADR-0092): one
-//! message per frame of checked evdev events. No replies: the driver never
-//! waits for the compositor, and counts what did not fit.
+//! message per frame of checked evdev events, with the time the driver read
+//! it (proposed ADR-0469). No replies: the driver never waits for the
+//! compositor, and counts what did not fit.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -38,9 +39,15 @@ protocol! {
         value: u32,
     }
 
-    /// One frame, and the events the driver dropped before it.
+    /// One frame, and the events the driver dropped before it. `time` is
+    /// the monotonic clock (nanoseconds) when the driver took the frame from
+    /// its device (proposed ADR-0469): the compositor tells the devices'
+    /// frames waiting for it in this order. It orders only; it is never
+    /// checked against the clock, and a device's own frames keep the order
+    /// of its channel whatever their times.
     message Frame<'a> = 1, handles 0 {
         dropped: u32,
+        time: u64,
         events: Seq<'a, Event, MAX_FRAME>,
     }
 }
@@ -82,6 +89,7 @@ mod tests {
         let length = encode(
             &Frame {
                 dropped: 3,
+                time: 0x0123_4567_89ab_cdef,
                 events: Seq::Of(&events),
             },
             0,
@@ -89,7 +97,7 @@ mod tests {
         )
         .unwrap();
         let (_, m) = decode::<Frame<'_>>(&out[..length], 0).unwrap();
-        assert_eq!(m.dropped, 3);
+        assert_eq!((m.dropped, m.time), (3, 0x0123_4567_89ab_cdef));
         assert!(m.events.iter().eq(events.iter().copied()));
         exercise(&out[..length], |bytes| {
             if let Ok((_, m)) = decode::<Frame<'_>>(bytes, 0) {
@@ -106,6 +114,7 @@ mod tests {
         let refused = encode(
             &Frame {
                 dropped: 0,
+                time: 0,
                 events: Seq::Of(&events),
             },
             0,
