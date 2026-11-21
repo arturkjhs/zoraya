@@ -818,3 +818,50 @@ fn a_held_press_moving_out_of_its_window_is_told_to_it_on_the_way() {
         "the other window gets the drop"
     );
 }
+
+/// A press held from one window over another, before the source names its
+/// drag: the other window hears the pointer with no button, so that what
+/// it passes over (a button) is not pressed; the drop that follows is its
+/// only news. Under TCG `t_open` took such moves for a press on Save, and
+/// its sheet then refused the drop (`files:tcg:1`, 2026-11-21).
+#[test]
+fn a_press_from_another_window_is_never_held_in_the_window_it_crosses() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.f().take(t.b);
+    // The moves, one a round, reach the other window before the drag.
+    for i in 1..=8 {
+        t.s.move_to(px + (tx - px) * i / 8, py + (ty - py) * i / 8);
+    }
+    let heard = |out: &[Vec<u8>]| -> Vec<u32> {
+        out.iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| p.buttons.0)
+            .collect()
+    };
+    let b = heard(&t.s.f().take(t.b));
+    assert!(!b.is_empty(), "the other window hears the pointer");
+    assert!(b.iter().all(|&k| k == 0), "with no button held: {b:?}");
+    // The source's drag is still taken (its press is held), and the release
+    // drops on the other window.
+    let entry = t.s.f().channel(1);
+    assert_eq!(super::drops::drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    t.s.point(axis(tx, w), axis(ty, h), Some(0));
+    let got = t.s.f().take(t.b);
+    assert!(got.iter().any(|r| decode::<gui::Drop<'_>>(r, 1).is_ok()));
+    assert!(heard(&got).iter().all(|&k| k == 0));
+    // The same window, pressed in itself, hears its own press held.
+    t.s.point(axis(tx, w), axis(ty, h), Some(1));
+    t.s.move_to(tx - 5, ty - 5);
+    let b = heard(&t.s.f().take(t.b));
+    assert!(b.iter().any(|&k| k & gui::buttons::LEFT != 0), "{b:?}");
+    t.s.point(axis(tx - 5, w), axis(ty - 5, h), Some(0));
+    // A press outside every window is held in none.
+    t.s.point(axis(2, w), axis(H as i64 / 2, h), Some(1));
+    t.s.move_to(tx, ty);
+    let b = heard(&t.s.f().take(t.b));
+    assert!(b.iter().all(|&k| k == 0), "pressed on the desktop: {b:?}");
+}

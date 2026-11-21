@@ -437,6 +437,13 @@ pub struct Compositor<P: Platform> {
     /// The window whose body holds the left button the compositor
     /// delivered to it: the only one that may start a drag (ADR-0170).
     body_press: Option<(Key, u32, u64)>,
+    /// The window in whose body the buttons held now were first pressed:
+    /// the only one told they are held. Another window the pointer crosses
+    /// meanwhile hears it with no button (ADR-0094: a key released after a
+    /// focus change is no press for the new window either), so that a drag
+    /// passing over it is no press on what it passes (a drop on `t_open`'s
+    /// Save button pressed it under TCG, 2026-11-21).
+    pressed_in: Option<Key>,
 
     /// The entry being dragged; no client hears of the pointer meanwhile.
     carried: Option<Carried<P::End>>,
@@ -584,6 +591,7 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             drag: None,
             body_press: None,
+            pressed_in: None,
             clipboard: String::new(),
             copy_asked: None,
             gesture: None,
@@ -1130,6 +1138,7 @@ impl<P: Platform> Compositor<P> {
                         g.buttons = 0;
                     }
                     self.buttons = 0;
+                    self.pressed_in = None;
                     self.drag = None;
                     break;
                 }
@@ -1195,9 +1204,20 @@ impl<P: Platform> Compositor<P> {
                 if button == gui::buttons::LEFT {
                     self.release();
                 }
+                if self.buttons == 0 {
+                    self.pressed_in = None;
+                }
             } else {
                 if value == 1 {
                     self.press(button);
+                    // The first button held names the window it went to.
+                    if self.buttons == 0 {
+                        self.pressed_in = self
+                            .pointer
+                            .and_then(|(x, y)| self.under(x, y))
+                            .filter(|(_, zone)| *zone == Zone::Body)
+                            .map(|(key, _)| key);
+                    }
                 }
                 self.buttons |= button;
             }
@@ -1979,17 +1999,24 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let (px, py) = ((x - body.x) as u32, (y - body.y) as u32);
+        // Buttons pressed in another window, or outside every body, are not
+        // held here (`pressed_in`).
+        let mine = if self.pressed_in == Some(key) {
+            u32::MAX
+        } else {
+            0
+        };
         if w.kind == WindowKind::Legacy {
             let m = gui::Pointer {
                 dropped: 0,
                 x: px,
                 y: py,
-                buttons: Flags(self.buttons),
+                buttons: Flags(self.buttons & mine),
             };
             self.send_event(key.client, m);
         } else {
             let s = self.scale.factor();
-            let buttons = self.guarded_buttons(key);
+            let buttons = self.guarded_buttons(key) & mine;
             let m = gui::WindowPointerMods {
                 dropped: 0,
                 window: key.id,
