@@ -1252,8 +1252,10 @@ fn ends_with_sleepers(role: &[u8]) {
         _ => assert_eq!(record.reason, ExitReason::Killed),
     }
     // Far below any deadline in the child (100 s), and below the 1 s of the
-    // sleeps the older case used: the sweep woke them.
-    assert!(took < 400 * MS, "the process took {} ms to end", took / MS);
+    // sleeps the older case used: the sweep woke them. 400 ms failed once on
+    // CI's TCG with 429 ms (run 44875851405, tcg-smp4-gicv2-a, a slow runner),
+    // so the limit is 800 ms: still under that 1 s.
+    assert!(took < 800 * MS, "the process took {} ms to end", took / MS);
     handle_close(child).expect("close");
     handle_close(room).expect("close");
     memory_unmap(view, 4096).expect("unmap");
