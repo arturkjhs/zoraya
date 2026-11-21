@@ -53,19 +53,20 @@ Shift and its click, while the compositor may be a second behind.
   earliest head (of equal times, the first device's), then reads that device's next, until a frame tells a key, changes a button
   or turns a wheel (ADR-0467's end of the round, now for all devices at once), or the earliest head's device has had 32 frames
   this round, or no device has one. A head read and not told waits for the next round, which does not wait on the port. A device's
-  own frames keep the order of its channel whatever their times: the time only chooses between devices. The compositor orders by
-  the time kept within bounds when it reads the frame: no later than its clock then, no earlier than 2 s before it
-  (`MAX_INPUT_LAG_NS`) and no earlier than the device's frame before. A time out of those bounds, or 0, is counted
-  (`Stats::odd_input_times`) and `compd` says so once a boot. A pointer move waiting before a key is told to the window under it
-  before the key (with the modifiers it was made with).
+  own frames keep the order of its channel whatever their times: the time only chooses between devices. A time later than the
+  compositor's clock when it reads the frame is taken as that clock; a head held more than 2 s since it was read
+  (`MAX_INPUT_LAG_NS`) goes first whatever the times, so that no driver's times hold another device back longer; frames read
+  together keep their times' order at any backlog. A time that is 0, later than the clock or before the driver's time before is
+  counted (`Stats::odd_input_times`) and `compd` says so once a boot. Before a head that may end the round is told, the devices
+  whose channels were empty are read again, so that a frame sent during the round with an earlier time is not left behind it. A
+  pointer move waiting before a key is told to the window under it before the key (with the modifiers it was made with).
 - **Evidence for:** fixes both orders (Shift then click, click then Shift) whichever device the port serves first; one field and
   one clock read in `inputd`; no kernel change.
 - **Evidence against:** two frames whose drivers ran in the other order than their interrupts (both within the same few
   milliseconds) are told in the drivers' order; a frame not yet sent when the compositor reads is not waited for. The time is
   taken once a wake, before the driver drains its queue: an event the device adds during the drain carries the earlier time
-  (a window of the drain's length, microseconds). A driver whose times are too early holds the other devices back by at most
-  2 s a frame, then the bound orders it by when it was read (decision driver 3: it could already type any key); two honest
-  devices' frames waiting more than 2 s are ordered by when they were read, as without times.
+  (a window of the drain's length, microseconds). A driver whose times are too early holds another device's frame back by at
+  most 2 s after that frame was read (decision driver 3: it could already type any key).
 - **Cost:** one `u64` per frame; up to one read more per device and round (estimate: four non-blocking reads, microseconds).
 
 ### Option C: no time; a rule for modifiers
@@ -102,18 +103,21 @@ a press made before a sheet mapped is not guarded (not made worse here; the fram
 ## Invariants
 
 - **INV-0469-1.** Frames of two input devices waiting in the same round are told in the order of their drivers' times (of equal
-  times, the first device's first), and each device's own frames in the order of its channel, whichever order the port serves the
+  times, the first slot's first), and each device's own frames in the order of its channel, whichever order the port serves the
   devices in. *Check:* `cargo test -p zoraya-compositor` (`a_modifier_click_waiting_in_two_devices_keeps_its_order`,
   `a_click_before_a_modifier_waiting_in_two_devices_keeps_its_order`, `equal_and_backward_times_keep_each_devices_order`: each
-  with the fake's port serving the keyboard first and the tablet first).
+  with the fake's port serving the keyboard first and the tablet first, and with either device in slot 0).
 - **INV-0469-2.** A frame read and not told is told in the next round, which does not wait on the port for it; a round tells at most
   32 frames of a device and ends its input at the first frame that tells a key, changes a button or turns a wheel. *Check:*
   `cargo test -p zoraya-compositor` (`a_frame_read_and_not_told_is_told_next_round_without_a_wait`,
   `a_round_reads_at_most_max_drain_messages_of_a_device`, `a_wheel_message_ends_the_devices_round`).
-- **INV-0469-3.** No driver's times hold another device's frame back by more than `MAX_INPUT_LAG_NS` (2 s) and the rounds within
-  it: a frame is ordered by its time kept within `[read - 2 s, read]` and never before its device's frame before; a time out of
-  bounds or 0 is counted. A pointer move waiting before a key is told before the key, without the key's modifiers. *Check:*
+- **INV-0469-3.** No driver's times hold another device's frame back by more than `MAX_INPUT_LAG_NS` (2 s) after it was read and
+  the round that follows; frames read together keep their times' order at any backlog; a time later than the clock is taken as
+  the clock; a time that is 0, later or backwards is counted; a frame sent during a round with a time before the head that ends it
+  is told first; a pointer move waiting before a key is told before the key, without the key's modifiers. *Check:*
   `cargo test -p zoraya-compositor` (`a_flood_with_early_times_holds_another_device_back_only_by_the_lag`,
+  `frames_read_together_keep_their_order_at_any_backlog`, `a_future_time_is_taken_as_when_the_frame_was_read`,
+  `a_frame_sent_during_the_round_is_told_before_a_later_press`,
   `a_move_before_a_key_is_told_before_it_with_the_modifiers_before_it`).
 
 ## Open questions

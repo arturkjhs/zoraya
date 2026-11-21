@@ -89,6 +89,12 @@ struct Fake {
     /// The port serves the input devices last slot first (the tablet before
     /// the keyboard), as the real port may.
     inputs_reversed: bool,
+    /// The tablet is attached first, in input slot 0, as `init` attaches
+    /// QEMU's devices (the keyboard is slot 0 otherwise).
+    tablet_first: bool,
+    /// A message that lands on a channel once the compositor finds it
+    /// empty: sent while a round runs.
+    arrive_on_read: Option<(u32, Vec<u8>)>,
     /// The deadline of the last wait, and the clock when it was asked.
     waited: Option<(Option<u64>, u64)>,
 }
@@ -167,7 +173,13 @@ impl Platform for Fake {
                 Incoming::Message(m.len())
             }
             None if peer.gone => Incoming::Closed,
-            None => Incoming::Empty,
+            None => {
+                if self.arrive_on_read.as_ref().is_some_and(|(e, _)| *e == end) {
+                    let (_, m) = self.arrive_on_read.take().unwrap();
+                    peer.inbox.push_back((m, Vec::new()));
+                }
+                Incoming::Empty
+            }
         }
     }
 
@@ -415,7 +427,12 @@ fn setup_with(change: impl FnOnce(&mut Fake)) -> Setup {
     let keyboard = f.channel(64);
     let tablet = f.channel(64);
     f.display = Some(display);
-    let c = Compositor::new(f, manager, Some(display), &[keyboard, tablet]);
+    let inputs = if f.tablet_first {
+        [tablet, keyboard]
+    } else {
+        [keyboard, tablet]
+    };
+    let c = Compositor::new(f, manager, Some(display), &inputs);
     Setup {
         c,
         manager,

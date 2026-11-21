@@ -42,9 +42,11 @@ protocol! {
     /// One frame, and the events the driver dropped before it. `time` is
     /// the monotonic clock (nanoseconds) when the driver took the frame from
     /// its device (proposed ADR-0469): the compositor tells the devices'
-    /// frames waiting for it in this order. It orders only; it is never
-    /// checked against the clock, and a device's own frames keep the order
-    /// of its channel whatever their times.
+    /// frames waiting for it in this order. It orders only: the compositor
+    /// takes it as no later than its clock when it reads the frame, counts
+    /// a time that is 0, later or backwards, tells a frame that waited 2 s
+    /// first whatever its time, and keeps a device's own frames in the
+    /// order of its channel.
     message Frame<'a> = 1, handles 0 {
         dropped: u32,
         time: u64,

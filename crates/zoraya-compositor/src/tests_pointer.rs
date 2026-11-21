@@ -878,17 +878,39 @@ fn a_press_from_another_window_is_never_held_in_the_window_it_crosses() {
     assert!(b.iter().all(|&k| k == 0), "pressed on the desktop: {b:?}");
 }
 
+/// The four ways two devices reach the compositor: the port serving the
+/// keyboard first or the tablet first, and the keyboard or the tablet in
+/// input slot 0 (the real system's: `init` attaches the tablet first).
+const CASES: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+/// What window A heard of two devices' frames.
+struct Heard {
+    /// The modifiers of the press.
+    modifiers: u32,
+    keys: Vec<(u32, bool, Option<char>)>,
+    /// The press came before the first key.
+    press_first: bool,
+    /// Times counted as odd.
+    odd: u64,
+}
+
 /// What two devices' frames waiting together tell window A (focused by a
 /// plain click first): the keyboard's frames and the tablet's, each with
-/// its driver's time, all queued before the rounds run, the port serving
-/// the keyboard first or (`reversed`) the tablet first. Gives the
-/// modifiers of the press A hears, and the keys A hears.
+/// its driver's time, all queued before the rounds run, in `case` (the
+/// port serving the tablet first, the tablet in slot 0). `late`: the
+/// compositor reads them this long after they were stamped.
 fn two_devices(
-    reversed: bool,
+    case: (bool, bool),
     keyboard: &[(u64, u32, u32)],
     tablet: &[(u64, u32)],
-) -> (u32, Vec<(u32, bool, Option<char>)>) {
-    let mut t = super::drops::two();
+    late: u64,
+) -> Heard {
+    let (reversed, tablet_first) = case;
+    let mut t = if tablet_first {
+        super::drops::two_tablet_first()
+    } else {
+        super::drops::two()
+    };
     t.s.f().inputs_reversed = reversed;
     let (px, py) = (t.oa.x + 10, t.oa.y + 60);
     let (w, h) = t.s.f().display_size;
@@ -933,40 +955,49 @@ fn two_devices(
         ];
         t.s.f().send(tab, frame(time, &events), vec![]);
     }
+    t.s.f().clock += late;
     for _ in 0..12 {
         t.s.c.step();
     }
     assert!(t.s.f().peers[&k].inbox.is_empty() && t.s.f().peers[&tab].inbox.is_empty());
     let out = t.s.f().take(t.a);
-    let press = out
+    let (at, press) = out
         .iter()
-        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
-        .map(|(_, p)| (p.buttons.0, p.modifiers.0))
-        .find(|(b, _)| b & gui::buttons::LEFT != 0)
+        .enumerate()
+        .filter_map(|(i, m)| Some((i, decode::<gui::WindowPointerMods>(m, 0).ok()?.1)))
+        .map(|(i, p)| (i, (p.buttons.0, p.modifiers.0)))
+        .find(|(_, (b, _))| b & gui::buttons::LEFT != 0)
         .expect("the press is told");
-    (press.1, super::keys_of(&out))
+    let first_key = out.iter().position(|m| decode::<gui::Key>(m, 0).is_ok());
+    Heard {
+        modifiers: press.1,
+        keys: super::keys_of(&out),
+        press_first: first_key.is_none_or(|k| at < k),
+        odd: t.s.c.stats().odd_input_times,
+    }
 }
 
 /// A Shift-click whose frames all wait when the round starts: the
 /// keyboard's Shift down, the pointer's press and release, the keyboard's
-/// Shift up. The press carries Shift whichever device the port serves
-/// first (served in the port's order, the tablet first made the click a
-/// plain one: `files-manage:auto:2`, step 22, CI run 44859568963, proposed
-/// ADR-0469; the keyboard read whole first did too, before ADR-0467's
-/// rounds ended on a key).
+/// Shift up. The press carries Shift in every case (served in the port's
+/// order, the tablet first made the click a plain one: `files-manage:auto:2`,
+/// step 22, CI run 44859568963, proposed ADR-0469; the keyboard read whole
+/// first did too, before ADR-0467's rounds ended on a key).
 #[test]
 fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
-    for reversed in [false, true] {
-        let (modifiers, _) = two_devices(
-            reversed,
+    for case in CASES {
+        let heard = two_devices(
+            case,
             &[(1, code::LEFT_SHIFT, 1), (4, code::LEFT_SHIFT, 0)],
             &[(2, 1), (3, 0)],
+            0,
         );
         assert_eq!(
-            modifiers & gui::modifiers::SHIFT,
+            heard.modifiers & gui::modifiers::SHIFT,
             gui::modifiers::SHIFT,
-            "the press carries Shift (tablet first: {reversed})"
+            "the press carries Shift (port reversed, tablet first: {case:?})"
         );
+        assert_eq!(heard.odd, 0, "honest times");
     }
 }
 
@@ -974,14 +1005,13 @@ fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
 const KEY_A: u32 = 30;
 
 /// A click, then Shift and a key, all waiting: the press carries no Shift
-/// and the key comes after it, whichever device the port serves first
-/// (the keyboard served first gave the press the Shift that came after
-/// it).
+/// and comes before the key, in every case (the keyboard served first gave
+/// the press the Shift that came after it).
 #[test]
 fn a_click_before_a_modifier_waiting_in_two_devices_keeps_its_order() {
-    for reversed in [false, true] {
-        let (modifiers, keys) = two_devices(
-            reversed,
+    for case in CASES {
+        let heard = two_devices(
+            case,
             &[
                 (3, code::LEFT_SHIFT, 1),
                 (4, KEY_A, 1),
@@ -989,49 +1019,237 @@ fn a_click_before_a_modifier_waiting_in_two_devices_keeps_its_order() {
                 (6, code::LEFT_SHIFT, 0),
             ],
             &[(1, 1), (2, 0)],
+            0,
         );
         assert_eq!(
-            modifiers & gui::modifiers::SHIFT,
+            heard.modifiers & gui::modifiers::SHIFT,
             0,
-            "the press carries no Shift (tablet first: {reversed})"
+            "the press carries no Shift ({case:?})"
         );
+        assert!(heard.press_first, "the press before the key ({case:?})");
         assert!(
-            keys.contains(&(KEY_A, true, Some('A'))),
-            "the key after it has Shift: {keys:?}"
+            heard.keys.contains(&(KEY_A, true, Some('A'))),
+            "the key after it has Shift: {:?}",
+            heard.keys
         );
     }
 }
 
-/// Of equal times the first device's frame is told first, and a device's
-/// own frames keep their channel's order whatever their times: a driver's
-/// times only order the devices' heads.
+/// The same two gestures read 3 s after they were made (a backlog longer
+/// than `MAX_INPUT_LAG_NS`): the frames read together keep their times'
+/// order (a bound on the times themselves made every head equal and the
+/// slot decided: review of 5add3833, 1).
+#[test]
+fn frames_read_together_keep_their_order_at_any_backlog() {
+    const MS: u64 = 1_000_000;
+    for case in CASES {
+        let shift_click = two_devices(
+            case,
+            &[(MS, code::LEFT_SHIFT, 1), (900 * MS, code::LEFT_SHIFT, 0)],
+            &[(400 * MS, 1), (401 * MS, 0)],
+            3_000 * MS,
+        );
+        assert_eq!(
+            shift_click.modifiers & gui::modifiers::SHIFT,
+            gui::modifiers::SHIFT,
+            "Shift-click, {case:?}"
+        );
+        let click_then_shift = two_devices(
+            case,
+            &[
+                (400 * MS, code::LEFT_SHIFT, 1),
+                (500 * MS, KEY_A, 1),
+                (600 * MS, KEY_A, 0),
+                (700 * MS, code::LEFT_SHIFT, 0),
+            ],
+            &[(MS, 1), (2 * MS, 0)],
+            3_000 * MS,
+        );
+        assert_eq!(
+            click_then_shift.modifiers & gui::modifiers::SHIFT,
+            0,
+            "click then Shift, {case:?}"
+        );
+        assert!(click_then_shift.press_first, "{case:?}");
+        assert_eq!(
+            shift_click.odd + click_then_shift.odd,
+            0,
+            "honest, though late"
+        );
+    }
+}
+
+/// Of equal times the first slot's frame is told first, and a device's own
+/// frames keep their channel's order whatever their times: a driver's times
+/// only order the devices' heads.
 #[test]
 fn equal_and_backward_times_keep_each_devices_order() {
     // The keyboard's Shift up has a time before its Shift down: it is
-    // still told after it, so the press (time 2) comes between them.
-    for reversed in [false, true] {
-        let (modifiers, _) = two_devices(
-            reversed,
+    // still told after it, and before the press (time 2), which comes
+    // after both.
+    for case in CASES {
+        let heard = two_devices(
+            case,
             &[(1, code::LEFT_SHIFT, 1), (0, code::LEFT_SHIFT, 0)],
             &[(2, 1), (3, 0)],
+            0,
         );
-        // Shift down (1) is the earliest head; then the keyboard's head is
-        // Shift up (0), earlier than the press (2): told first.
-        assert_eq!(modifiers & gui::modifiers::SHIFT, 0, "{reversed}");
+        assert_eq!(heard.modifiers & gui::modifiers::SHIFT, 0, "{case:?}");
+        assert_eq!(heard.odd, 1, "the backward time is counted");
     }
-    // Equal times: the keyboard (slot 0) first, whichever the port serves.
-    for reversed in [false, true] {
-        let (modifiers, _) = two_devices(
-            reversed,
+    // Equal times: the device in slot 0 first, whichever the port serves.
+    for case in CASES {
+        let heard = two_devices(
+            case,
             &[(2, code::LEFT_SHIFT, 1), (9, code::LEFT_SHIFT, 0)],
             &[(2, 1), (3, 0)],
+            0,
         );
-        assert_eq!(
-            modifiers & gui::modifiers::SHIFT,
-            gui::modifiers::SHIFT,
-            "{reversed}"
-        );
+        let shift = if case.1 { 0 } else { gui::modifiers::SHIFT };
+        assert_eq!(heard.modifiers & gui::modifiers::SHIFT, shift, "{case:?}");
     }
+}
+
+/// A time later than the compositor's clock is taken as when the frame was
+/// read: a driver's future time cannot put its frame behind another
+/// device's frame sent after it was read.
+#[test]
+fn a_future_time_is_taken_as_when_the_frame_was_read() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    let frame = |time: u64, events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                time,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    let key = |code: u32, value: u32| input::Event {
+        kind: Below(input::kind::KEY),
+        code,
+        value,
+    };
+    // A key, which ends the round, then Shift down from the future: read
+    // as the keyboard's head and held.
+    let now = t.s.f().clock;
+    t.s.f().send(k, frame(now, &[key(KEY_A, 1)]), vec![]);
+    t.s.f()
+        .send(k, frame(u64::MAX, &[key(code::LEFT_SHIFT, 1)]), vec![]);
+    t.s.c.step();
+    assert_eq!(t.s.untold(k), 1, "Shift is the held head");
+    // The press, sent after Shift was read.
+    let later = t.s.f().clock + 1;
+    let press = [
+        input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 0,
+            value: axis(px, w),
+        },
+        input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 1,
+            value: axis(py, h),
+        },
+        key(code::BTN_LEFT, 1),
+    ];
+    t.s.f().send(tab, frame(later, &press), vec![]);
+    for _ in 0..4 {
+        t.s.c.step();
+    }
+    let p =
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| (p.buttons.0, p.modifiers.0))
+            .find(|(b, _)| b & gui::buttons::LEFT != 0)
+            .expect("the press is told");
+    assert_eq!(p.1 & gui::modifiers::SHIFT, gui::modifiers::SHIFT);
+    assert_eq!(t.s.c.stats().odd_input_times, 1, "the future time is odd");
+}
+
+/// A frame sent while a round runs, with a time before the head that ends
+/// the round, is told before it (review of 5add3833, 5): the keyboard's
+/// channel is empty when the round starts and its Shift, made before the
+/// press, arrives while the tablet's moves are told.
+#[test]
+fn a_frame_sent_during_the_round_is_told_before_a_later_press() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    let base = t.s.f().clock;
+    let mv = |x: i64, button: Option<u32>, time: u64| {
+        let mut events = vec![
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 0,
+                value: axis(x, w),
+            },
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 1,
+                value: axis(py, h),
+            },
+        ];
+        if let Some(v) = button {
+            events.push(input::Event {
+                kind: Below(input::kind::KEY),
+                code: code::BTN_LEFT,
+                value: v,
+            });
+        }
+        message(
+            &input::Frame {
+                dropped: 0,
+                time,
+                events: Seq::Of(&events),
+            },
+            0,
+        )
+    };
+    t.s.f().send(tab, mv(px + 1, None, base + 1), vec![]);
+    t.s.f().send(tab, mv(px, Some(1), base + 5), vec![]);
+    // The Shift arrives once the round has read the heads: the fake's
+    // read of the keyboard's empty channel is when it lands.
+    t.s.f().arrive_on_read = Some((
+        k,
+        message(
+            &input::Frame {
+                dropped: 0,
+                time: base + 3,
+                events: Seq::Of(&[input::Event {
+                    kind: Below(input::kind::KEY),
+                    code: code::LEFT_SHIFT,
+                    value: 1,
+                }]),
+            },
+            0,
+        ),
+    ));
+    for _ in 0..4 {
+        t.s.c.step();
+    }
+    let p =
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| (p.buttons.0, p.modifiers.0))
+            .find(|(b, _)| b & gui::buttons::LEFT != 0)
+            .expect("the press is told");
+    assert_eq!(p.1 & gui::modifiers::SHIFT, gui::modifiers::SHIFT);
 }
 
 /// A head read and not told (the round's input ended on a key before it) is

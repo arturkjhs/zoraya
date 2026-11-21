@@ -24,9 +24,22 @@ pub(super) fn two() -> Two {
     two_on(W, H)
 }
 
+/// The same with the tablet in input slot 0, as `init` attaches them.
+pub(super) fn two_tablet_first() -> Two {
+    two_with(|f| f.tablet_first = true)
+}
+
 /// The same on a display of `w × h`.
 fn two_on(w: u32, h: u32) -> Two {
-    let mut s = setup_with(|f| f.display_size = (w, h));
+    two_with(|f| f.display_size = (w, h))
+}
+
+/// The two windows on a fake changed by `change` first.
+fn two_with(change: impl FnOnce(&mut Fake)) -> Two {
+    let mut s = setup_with(|f| {
+        f.display_size = (W, H);
+        change(f);
+    });
     let panel = s.panel();
     assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
     let a = s.room_client(panel, "project", "files", "+w /");

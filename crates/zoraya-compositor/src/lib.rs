@@ -145,19 +145,24 @@ struct SheetGuard {
 struct Head {
     held: bool,
     decoded: bool,
-    /// The driver's time, kept within `[read - MAX_INPUT_LAG_NS, read]` of
-    /// the compositor's clock when it was read, and never before the
-    /// device's frame before it (`last`).
+    /// The driver's time, no later than the compositor's clock when it was
+    /// read (a device's own frames keep their channel's order whatever their
+    /// times: only heads are compared).
     time: u64,
-    /// The time the device's last frame was ordered by; 0 at attach.
-    last: u64,
+    /// The compositor's clock when it was read: a head held longer than
+    /// `MAX_INPUT_LAG_NS` goes first, whatever the times.
+    read: u64,
+    /// The time its driver gave the device's frame before (for
+    /// `Stats::odd_input_times`).
+    last_raw: u64,
     events: Vec<input::Event>,
 }
 
-/// The most a frame's time may say it is older than when the compositor
-/// read it (proposed ADR-0469): a driver whose times are too early (0, a
-/// stopped clock) holds the other devices back by at most this, not for
-/// as long as it floods. Above the second of backlog CI's GUI runs met.
+/// The longest a device's frame read and not told waits behind other
+/// devices' earlier times (proposed ADR-0469): a driver whose times are too
+/// early (0, a stopped clock) and that floods holds the other devices back
+/// by at most this, not for as long as it floods. Frames read together keep
+/// their times' order at any backlog.
 pub const MAX_INPUT_LAG_NS: u64 = 2_000_000_000;
 
 /// How often a flush that found the driver's queue full is tried again.
@@ -568,6 +573,20 @@ fn fonts(primary: &'static [u8]) -> FontList<'static> {
             .into_iter()
             .filter_map(|d| Font::parse(d).ok()),
     )
+}
+
+/// A key (not a pointer button) in an input frame.
+fn is_key(e: &input::Event) -> bool {
+    e.kind.0 == input::kind::KEY && !(0x110..0x200).contains(&e.code)
+}
+
+impl Head {
+    /// Holds a key, a button or a wheel: telling it may end the round.
+    fn may_end(&self) -> bool {
+        self.events
+            .iter()
+            .any(|e| e.kind.0 == input::kind::KEY || e.kind.0 == input::kind::WHEEL)
+    }
 }
 
 impl<P: Platform> Compositor<P> {
@@ -1137,9 +1156,8 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(end);
             return status::NO_MEMORY;
         };
+        // Its head is empty: `lose_input` emptied it when the slot was freed.
         self.inputs[slot] = Some(end);
-        self.heads[slot].held = false;
-        self.heads[slot].last = 0;
         self.platform.watch(end, INPUT_KEY + slot as u64);
         status::OK
     }
@@ -1168,11 +1186,16 @@ impl<P: Platform> Compositor<P> {
             self.read_head(slot);
         }
         let mut told = [0usize; MAX_INPUTS];
-        // The earliest head; of equal times, the first device's.
-        while let Some(slot) = (0..MAX_INPUTS)
-            .filter(|&i| self.heads[i].held)
-            .min_by_key(|&i| (self.heads[i].time, i))
-        {
+        while let Some(mut slot) = self.earliest_head() {
+            // A frame that may end the round: a device whose channel was
+            // empty is read again first, so that a frame sent meanwhile with
+            // an earlier time is not left behind it (review of 5add3833, 5).
+            if self.heads[slot].may_end() {
+                for i in 0..MAX_INPUTS {
+                    self.read_head(i);
+                }
+                slot = self.earliest_head().unwrap_or(slot);
+            }
             if told[slot] == MAX_DRAIN {
                 break;
             }
@@ -1185,6 +1208,17 @@ impl<P: Platform> Compositor<P> {
         }
         self.pointer_moved_or_pressed();
         self.send_wheel();
+    }
+
+    /// The head to tell next: one held longer than `MAX_INPUT_LAG_NS`
+    /// first, then the earliest time; of equal times, the first device's.
+    fn earliest_head(&mut self) -> Option<usize> {
+        let now = self.platform.now();
+        let heads = &self.heads;
+        (0..MAX_INPUTS).filter(|&i| heads[i].held).min_by_key(|&i| {
+            let aged = now.saturating_sub(heads[i].read) > MAX_INPUT_LAG_NS;
+            (!aged, heads[i].time, i)
+        })
     }
 
     /// Reads input `slot`'s next message into its head, if it has none and
@@ -1212,10 +1246,11 @@ impl<P: Platform> Compositor<P> {
                     Ok((_, frame)) => {
                         head.decoded = true;
                         head.events.extend(frame.events.iter());
-                        if frame.time == 0 || frame.time > read || frame.time < head.last {
+                        if frame.time == 0 || frame.time > read || frame.time < head.last_raw {
                             self.stats.odd_input_times += 1;
                             odd = self.stats.odd_input_times == 1;
                         }
+                        head.last_raw = frame.time;
                         frame.time
                     }
                     // Told as nothing, as early as the bounds allow.
@@ -1224,13 +1259,9 @@ impl<P: Platform> Compositor<P> {
                         0
                     }
                 };
-                // No later than now, no earlier than the lag allows or than
-                // the device's frame before.
-                head.time = time
-                    .min(read)
-                    .max(read.saturating_sub(MAX_INPUT_LAG_NS))
-                    .max(head.last);
-                head.last = head.time;
+                // No later than now.
+                head.time = time.min(read);
+                head.read = read;
                 if odd {
                     // Once a boot: an honest driver's times never are.
                     self.platform
@@ -1256,17 +1287,16 @@ impl<P: Platform> Compositor<P> {
             let buttons = self.buttons;
             let keys = self.key_events;
             let pressed = self.pressed_in;
-            // A pointer move told before a key that came after it: the
-            // window under it hears it first, with the modifiers before
-            // the key (review of 8e418c42, 2).
-            let key = |e: &input::Event| {
-                e.is_valid() && e.kind.0 == input::kind::KEY && !(0x110..0x200).contains(&e.code)
-            };
-            if events.iter().any(key) {
-                self.pointer_moved_or_pressed();
-            }
+            let mut flushed = false;
             for event in events.iter() {
                 if event.is_valid() {
+                    // A pointer move told before a key that came after it:
+                    // the window under it hears it first, with the
+                    // modifiers before the key (review of 8e418c42, 2).
+                    if !flushed && is_key(event) {
+                        flushed = true;
+                        self.pointer_moved_or_pressed();
+                    }
                     self.input_event(*event);
                 }
             }
@@ -1289,7 +1319,8 @@ impl<P: Platform> Compositor<P> {
     fn lose_input(&mut self, slot: usize, end: P::End) {
         self.platform.close(end);
         self.inputs[slot] = None;
-        self.heads[slot].held = false;
+        // Reached only from `read_head`, with the head empty. Its
+        // `last_raw` stays: a new driver's times are later.
         // Keys it held down will never be released (review R10).
         self.keymap = Keymap::new();
         self.meta = 0;
