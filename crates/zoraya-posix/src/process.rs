@@ -315,6 +315,8 @@ pub struct Posix<S: Sys> {
     /// if the launcher gave one: `getrandom` needs it. Like `net`, a `fork`
     /// child has none (a channel end cannot be duplicated, ADR-0102 item 3).
     pub random: Option<S::H>,
+    /// A broker-made random connection a failed spawn or `exec` did not use (ADR-0453 item 3).
+    pub spare_random: Option<S::H>,
     /// The window channel the launcher gave (`EXT_WINDOW`, proposed ADR-0317), until
     /// `zoraya_window_open` takes it. A `fork` child has none.
     pub window: Option<S::H>,
@@ -386,6 +388,17 @@ fn rights_for(flags: u32) -> u32 {
     r
 }
 
+/// The paths Rust's `std` reads to find out about its host and does without
+/// when they are not there (`available_parallelism` reads the cgroup and mount
+/// tables, a backtrace reads the memory map): refused with `ENOENT` and no
+/// report (ADR-0451 item 7). Any other missing path is reported as ever.
+pub fn is_probe(path: &str) -> bool {
+    matches!(
+        path,
+        "/proc/self/cgroup" | "/proc/self/mountinfo" | "/proc/self/maps"
+    )
+}
+
 impl<S: Sys> Posix<S> {
     pub fn new(sys: S, facts: Facts) -> Posix<S> {
         Posix {
@@ -418,6 +431,7 @@ impl<S: Sys> Posix<S> {
             signals: crate::signals::Signals::starting(facts.ignored, facts.blocked),
             net: None,
             random: None,
+            spare_random: None,
             window: None,
             addrs: crate::socket::AddrCache::default(),
             broker: None,
@@ -707,6 +721,11 @@ impl<S: Sys> Posix<S> {
         {
             return ENOENT;
         }
+        // What Rust's std probes and does without (ADR-0451 item 7): `ENOENT`,
+        // and no hint for a grant nobody needs.
+        if is_probe(&path) {
+            return ENOENT;
+        }
         self.report_path(path, access);
         ENOENT
     }
@@ -784,6 +803,27 @@ impl<S: Sys> Posix<S> {
         if let Some(size) = r.encode(&mut bytes)
             && self.sys.channel_write(end, &bytes[..size], &[]).is_ok()
         {
+            self.reports_sent += 1;
+            self.stats.reports += 1;
+        }
+    }
+
+    /// Reports a `syscall()` number that is not answered (ADR-0451 item 1):
+    /// the caller has said it is the first time for the number. Within the
+    /// same 16 reports as the paths; never waits.
+    pub fn report_syscall(&mut self, number: i64) {
+        let Some(end) = self.report else {
+            return;
+        };
+        if self.reports_sent >= MAX_REPORTS {
+            self.report_dropped = self.report_dropped.saturating_add(1);
+            return;
+        }
+        let mut bytes = [0u8; abi::SyscallReport::SIZE];
+        let r = abi::SyscallReport {
+            number: number as u32,
+        };
+        if r.encode(&mut bytes).is_some() && self.sys.channel_write(end, &bytes, &[]).is_ok() {
             self.reports_sent += 1;
             self.stats.reports += 1;
         }
@@ -2373,6 +2413,19 @@ impl<S: Sys> Posix<S> {
             let _ = self.release(desc);
         }
         Ok(new)
+    }
+
+    /// `ioctl(fd, FIONBIO, &on)` (ADR-0451 item 2): sets or clears
+    /// `O_NONBLOCK` as `fcntl(F_SETFL)` does, on every descriptor `fcntl`
+    /// accepts, keeping the other status flags.
+    pub fn set_nonblocking(&mut self, fd: i32, on: bool) -> Result<(), i32> {
+        let flags = self.fcntl(fd, F_GETFL, 0)? as u32;
+        let flags = if on {
+            flags | o::NONBLOCK
+        } else {
+            flags & !o::NONBLOCK
+        };
+        self.fcntl(fd, F_SETFL, i64::from(flags)).map(|_| ())
     }
 
     pub fn fcntl(&mut self, fd: i32, command: i32, argument: i64) -> Result<i32, i32> {

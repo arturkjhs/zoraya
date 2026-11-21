@@ -38,30 +38,50 @@ pub struct Beside {
     pub tmp: Handle,
 }
 
-pub fn start_broker(root: &File) -> Option<Beside> {
-    start_broker_in(root, JOB)
+pub fn start_broker(root: &File, random: Option<Handle>) -> Option<Beside> {
+    start_broker_in(root, JOB, random)
 }
 
 /// As [`start_broker`], with its job under `parent`: a room's launch job
 /// (ADR-0269, INV-0268-3), so that the broker counts against the room's
 /// limits.
-pub fn start_broker_in(root: &File, parent: Handle) -> Option<Beside> {
+///
+/// `random` is a connection to the random service that may share (a shell's own
+/// kind, made by `random::share` of the starter's), which the broker keeps at
+/// slot 10 to make the connection of each POSIX process it starts (ADR-0453
+/// item 3); it is moved into the broker or closed.
+pub fn start_broker_in(root: &File, parent: Handle, random: Option<Handle>) -> Option<Beside> {
+    let close_random = || {
+        if let Some(r) = random {
+            let _ = handle_close(r);
+        }
+    };
     let wanted = zoraya_proto_file::rights::READ;
-    root.open("bin", zoraya_proto_file::open_flags::DIRECTORY, wanted)
-        .ok()?;
+    if root
+        .open("bin", zoraya_proto_file::open_flags::DIRECTORY, wanted)
+        .is_err()
+    {
+        close_random();
+        return None;
+    }
     let base = root.time_base().unwrap_or(0);
-    let (handoff, handoff_broker) = channel_create().ok()?;
+    let Ok((handoff, handoff_broker)) = channel_create() else {
+        close_random();
+        return None;
+    };
     // Every way out below closes what was made before it (review K6).
     let Ok(job) = job_create(parent, JobFlags::POSIX) else {
         let _ = handle_close(handoff);
         let _ = handle_close(handoff_broker);
+        close_random();
         return None;
     };
-    let Some(broker) = spawn_broker(root, base, job, handoff_broker) else {
+    let Some(broker) = spawn_broker(root, base, job, handoff_broker, random) else {
         let _ = handle_close(handoff);
         let _ = handle_close(handoff_broker);
         let _ = job_kill(job);
         let _ = handle_close(job);
+        close_random();
         return None;
     };
     // The hand-off: `ZPBC`, the client connection and the temporary root.
@@ -107,9 +127,16 @@ pub fn start_broker_in(root: &File, parent: Handle) -> Option<Beside> {
     }
 }
 
-/// Spawns the broker in `job`, with the hand-off end at slot 9; the image and
-/// every handle not handed over are closed whatever happens.
-fn spawn_broker(root: &File, base: u64, job: Handle, handoff: Handle) -> Option<Handle> {
+/// Spawns the broker in `job`, with the hand-off end at slot 9 and `random`, if
+/// any, at slot 10; the image and every handle not handed over are closed
+/// whatever happens (`random` stays the caller's if the spawn is refused).
+fn spawn_broker(
+    root: &File,
+    base: u64,
+    job: Handle,
+    handoff: Handle,
+    random: Option<Handle>,
+) -> Option<Handle> {
     let image = directory_lookup(DIRECTORY, "broker").ok()?;
     let spawned = root.clone_as(ALL).ok().and_then(|root| {
         let mut buffer = [0; 512];
@@ -123,6 +150,9 @@ fn spawn_broker(root: &File, base: u64, job: Handle, handoff: Handle) -> Option<
         e.handle(dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS));
         e.handle(give(5, root.end, ChannelObject::RIGHTS));
         e.handle(moved(9, handoff));
+        if let Some(r) = random {
+            e.handle(moved(10, r));
+        }
         let base = alloc::format!("{base}");
         for a in [
             &b"broker"[..],

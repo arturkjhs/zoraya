@@ -707,8 +707,22 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    /// `getpeername`.
-    pub fn getpeername(&self, fd: i32) -> Result<([u8; 4], u16), i32> {
+    /// `getpeername`. A connect still going (a non-blocking one whose `poll`
+    /// said `POLLOUT`, which is what Rust's `connect_timeout` waits for and
+    /// then trusts) is finished first if `netd` has answered: nothing else
+    /// would read the answer from the connection channel before the first
+    /// read or write; a connect that failed leaves its error for `SO_ERROR`.
+    pub fn getpeername(&mut self, fd: i32) -> Result<([u8; 4], u16), i32> {
+        if self.socket_of(fd)?.state == State::Connecting {
+            match self.finish_connect(fd, false) {
+                Ok(()) | Err(EINPROGRESS) => {}
+                Err(e) => {
+                    if let Ok(s) = self.socket_mut(fd) {
+                        s.error = e;
+                    }
+                }
+            }
+        }
         let s = self.socket_of(fd)?;
         match (s.state, s.peer) {
             (State::Connected, Some(p)) => Ok(p),

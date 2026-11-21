@@ -1,0 +1,71 @@
+# ADR-0452 item 8, INV-0453-1, INV-0453-2, INV-0454-2: Rust's std as a POSIX program (tests/rust-std/, built by
+# tools/zcargo), through the broker under its description, on the normal kernel. run by `make test-rust-std`,
+# which turns @PORT@ and @HOST@ into the test server's.
+! ZORAYA-PANIC
+! first process ended
+! FAIL
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+> rstest hello\r
+< hello from Rust std
+< rstest: hello passed
+< \r\n~>
+> rstest syscall\r
+< rstest: syscall passed
+< \r\n~>
+> rstest time\r
+< rstest: time passed
+< \r\n~>
+> rstest hash\r
+< rstest: hash passed
+< \r\n~>
+> rstest threads\r
+< rstest: threads passed
+< \r\n~>
+# std::fs: the program's own /tmp, and a directory the line grants; one the line does not grant is not found.
+> rstest fs /tmp\r
+< rstest: fs passed
+< \r\n~>
+> +w /work/granted rstest fs /work/granted\r
+< rstest: fs passed
+< \r\n~>
+> rstest denied /work/secret\r
+< rstest: denied passed
+< hint: rstest tried to
+< \r\n~>
+# std::process::Command by posix_spawn: the child hashes (its own random connection, made by the broker) and has no
+# network; the fork path fails by name (ADR-0468); uid and gid fail and the child never runs.
+> rstest process\r
+< rstest: process passed
+< \r\n~>
+# Panics unwind through the sysroot's libunwind; an uncaught one ends with 101, abort with signal 6, an overflow is a fault.
+> rstest panic\r
+< rstest: panic passed
+< \r\n~>
+> rstest uncaught\r
+< nobody catches this
+< \r\n~>
+> status\r
+< exit status 101
+< \r\n~>
+> rstest abort\r
+< \r\n~>
+> status\r
+< signal 6
+< \r\n~>
+> rstest overflow\r
+< \r\n~>
+> status\r
+< data abort
+< \r\n~>
+# std::net under the grant of the line: by address and by name, a non-blocking connect, another port refused.
+> rsnet http://@HOST@:@PORT@/pattern/300000\r
+< rstest: net passed
+< \r\n~>
+> +net test.zoraya:@PORT@ rsnet http://test.zoraya:@PORT@/pattern/300000\r
+< rstest: net passed
+< \r\n~>
+> poweroff\r

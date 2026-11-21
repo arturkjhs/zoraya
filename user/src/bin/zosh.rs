@@ -1586,6 +1586,11 @@ impl Z {
                 if !seen.iter().any(|(p, _)| *p == key) {
                     seen.push((key, false));
                 }
+            } else if let Some(r) = posix::SyscallReport::decode(message) {
+                let key = format!("sys:{}", r.number);
+                if !seen.iter().any(|(p, _)| *p == key) {
+                    seen.push((key, false));
+                }
             }
         }
         let _ = handle_close(report);
@@ -1598,6 +1603,15 @@ impl Z {
         // words only characters a word needs no quoting for (INV-0337-5).
         let name = refusal::program_name(name);
         for (path, write) in &seen {
+            // A system call number that is not answered (ADR-0451 item 1):
+            // `sys:N`; the number is the program's own and is shown as one.
+            if let Some(number) = path.strip_prefix("sys:") {
+                let number: u32 = number.parse().unwrap_or(0);
+                text.push_str(&format!(
+                    "  note: {name} asked for system call {number}, which Zoraya does not answer (ENOSYS)\n"
+                ));
+                continue;
+            }
             // A refused network request (ADR-0224 item 5): `net:HOST:PORT`.
             if let Some(rest) = path.strip_prefix("net:") {
                 let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "0"));
@@ -3979,6 +3993,15 @@ impl Z {
                         } else if let Some(r) = posix::NetReport::decode(message) {
                             let target: String = r.target.into();
                             self.note_net_refusal(number, element, &target, r.port);
+                        } else if let Some(r) = posix::SyscallReport::decode(message) {
+                            // Kept for the line after the job (`hints`), not shown on the row.
+                            let key = format!("sys:{}", r.number);
+                            let seen = self.live.entry(number).or_default();
+                            if seen.len() < 256
+                                && !seen.iter().any(|(e, p, _)| *e == element && *p == key)
+                            {
+                                seen.push((element, key, false));
+                            }
                         }
                     }
                     Err((Status::WouldBlock, _)) => break,

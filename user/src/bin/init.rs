@@ -832,7 +832,15 @@ fn main() -> i32 {
             session = start_session(root, terminal.map(|t| t.1));
             session.as_ref().map(|s| s.broker)
         } else {
-            beside = stack.as_ref().and_then(|s| start_broker(&s.root));
+            // The broker beside the shell makes the random connection of each
+            // POSIX process its session starts (ADR-0453 item 3): it holds one
+            // of its own, a shell's kind (it may share), from init's.
+            beside = stack.as_ref().and_then(|s| {
+                let broker_random = rng
+                    .as_ref()
+                    .and_then(|(_, conn)| zoraya_user::random::share(*conn));
+                start_broker(&s.root, broker_random)
+            });
             let root = stack.as_ref().and_then(|s| s.root.clone_as(MASTER).ok());
             // Its root network connection, made from `init`'s own (item 4).
             let root_network = network.as_ref().and_then(root_connection);

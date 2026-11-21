@@ -1251,6 +1251,65 @@ test-cxx: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --keys --disk $(CXX_TEST)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(CXX_TEST)/disk.img || exit 1; done
 
+# INV-0450-1: no nightly feature in the build files of a Rust POSIX program,
+# and a stable channel in rust-toolchain.toml.
+check-rust-stable:
+	tools/check-rust-stable.sh
+
+# INV-0451-2: libzoraya-rust.a defines the names of ports/rust/names.txt (ADR-0451
+# item 5) and no other build names it.
+check-rust-archive:
+	tools/check-rust-archive.sh
+
+# INV-0452-1, INV-0450-1: what tools/zcargo refuses (offline).
+check-zcargo:
+	tools/test-zcargo.sh refusals
+
+# ADR-0452 item 8: Rust's std as a POSIX program (tests/rust-std/, built by
+# tools/zcargo with the stable toolchain's prebuilt std for
+# aarch64-unknown-linux-musl, linked by zcc against libc.a), run through the
+# broker under its description on the normal kernel, with a network part against
+# the host-side test server as test-net-posix has (INV-0453-1, INV-0453-2,
+# INV-0454-2). tools/test-zcargo.sh build adds the link line (INV-0452-1,
+# INV-0454-1) and the raw svc a Rust program must not have (INV-0450-2).
+# Needs the toolchain's std for the target (rustup target add, or
+# tools/rust-musl-target.sh into build/) and the sysroot with libunwind.a and
+# libzoraya-rust.a (make -f ports/Makefile libc cxx rust). The program is linked anew each time: cargo does not
+# see a changed libc.a.
+RUST_STD_ROOT := $(BUILD)/rust-std-root
+RUST_STD_DISK := $(BUILD)/rust-std-disk.img
+RUST_STD_TARGET := $(BUILD)/rust-std-target
+RUST_STD_SCRIPT := $(BUILD)/rust-std.script
+RUST_STD_RUN = $(RUNNER) --timeout $(1) --script $(RUST_STD_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net $(call NET_RELAY,$(NET_HOST),$$port) --disk $(RUST_STD_DISK) --accel $(3) $(KERNEL)
+test-rust-std: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@$(call NET_OR_SKIP,rust-std,skipped) \
+	$(MAKE) -s -f ports/Makefile libc cxx rust && $(MAKE) -s -f ports/Makefile check-libc && \
+	$(CARGO) build -q -p zoraya-elf-check -p zoraya-ar && \
+	tools/test-zcargo.sh build $(BUILD)/zcargo-test && \
+	rm -rf $(RUST_STD_ROOT) && mkdir -p $(RUST_STD_ROOT) target/test-logs && cp -R rootfs/. $(RUST_STD_ROOT)/ && \
+	mkdir -p $(RUST_STD_ROOT)/bin $(RUST_STD_ROOT)/work/granted $(RUST_STD_ROOT)/work/secret && \
+	printf 'one\n' > $(RUST_STD_ROOT)/work/granted/one.txt && printf 'not for rstest\n' > $(RUST_STD_ROOT)/work/secret/key.txt && \
+	printf 'net.hosts = test.zoraya=$(NET_HOST) gw.zoraya=10.0.2.2\n' > $(RUST_STD_ROOT)/config/settings && \
+	rm -rf $(RUST_STD_TARGET) && \
+	( cd tests/rust-std && CARGO_TARGET_DIR=$(CURDIR)/$(RUST_STD_TARGET) $(CURDIR)/tools/zcargo build --release ) && \
+	cp $(RUST_STD_TARGET)/aarch64-unknown-linux-musl/release/rstest $(RUST_STD_ROOT)/bin/rstest && \
+	cp $(RUST_STD_TARGET)/aarch64-unknown-linux-musl/release/rstest $(RUST_STD_ROOT)/bin/rsnet && \
+	target/debug/zoraya-elf-check $(RUST_STD_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 32M --from $(RUST_STD_ROOT) $(RUST_STD_DISK) && \
+	: > $(NET_HTTP_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 400 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-rust-std.log 2>&1 & echo $$! > $(BUILD)/net-httpd-rust-std.pid; } && \
+	httpd=$$(cat $(BUILD)/net-httpd-rust-std.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	port=$$(cat $(NET_HTTP_READY)); \
+	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[rust-std] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-rust-std.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@HOST@/$(NET_HOST)/g" tests/rust-std/rust-std.script > $(RUST_STD_SCRIPT); \
+	$(call RUST_STD_RUN,$(call AUTO_TIMEOUT,500),rust-std-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ] && [ "$(TCG_TOO)" = 1 ]; then $(call RUST_STD_RUN,500,rust-std-tcg,tcg); rc=$$?; fi; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(RUST_STD_DISK); rc=$$?; fi; \
+	exit $$rc
+
 # libc++'s own tests of tests/cxx/libcxx-groups.txt (exceptions, RTTI, new and
 # delete, threads, filesystem), built by tests/cxx/libcxx-build.sh from the
 # unpacked LLVM tree (make ci-build makes them, so that CI's test jobs only
@@ -1911,7 +1970,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-tour-gui test-tour-terminal test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-test-shards check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve test-cxx test-cxx-libcxx test-cxx-gtest
+TEST_STEPS += check-ci-jobs check-test-shards check-workflow-syntax test-keeper test-hand-run test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-rust-stable check-rust-archive check-zcargo check-netsurf-refusal check-run-disk check-ci-plan check-test-lanes test-apps test-netsurf test-python test-python-ext test-python-regr test-python-mem test-python-serve test-cxx test-cxx-libcxx test-cxx-gtest test-rust-std
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -1953,7 +2012,7 @@ check-workflow-syntax:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-port-logs check-ci-jobs check-test-shards check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-port-logs check-ci-jobs check-test-shards check-workflow-syntax check-charged-alloc check-untrusted-gate check-quota-tests check-net-open check-ethd-maps check-tls-roots check-libposix-widths check-rust-stable check-rust-archive check-zcargo check-netsurf-refusal check-mutant-lists check-run-disk check-ci-plan check-test-lanes check-python-cache
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

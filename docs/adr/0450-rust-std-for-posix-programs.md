@@ -170,6 +170,12 @@ $ +r /work/src rg main /work/src          # in Zoraya, under rg's description
 - Whether `std`'s Linux code paths drift between toolchain steps faster than item 6 can follow; measured at the first
   step after this is built.
 - Whether the `cc` crate builds C parts through `zcc` without adding a `--target` that `zcc` refuses (ADR-0452).
+- **Rule 6 note (part `work/rust-std`, 2026-11-20).** INV-0450-1 is checked by `make check-rust-stable` and `make check-zcargo`, INV-0450-2 by
+  `make test-rust-std` and `cargo test -p zoraya-elf-check` (rows in `invariants.md`). The first open question (drift of `std`'s Linux paths) is
+  answered once, by Rust 1.99.1's own `Command::spawn`, which makes a `SOCK_SEQPACKET` socketpair for its exec-error channel (proposed ADR-0468): the
+  step after this one has a measured example of what item 6's reread must find. The second (the `cc` crate and `--target`): `zcc` accepts and drops
+  exactly `--target=aarch64-unknown-linux-musl` under `ZORAYA_RUST=1` (ADR-0452 item 3), checked by `ports/compare-predefs.sh`; no crate with C code
+  was built by this part, so whether the `cc` crate adds the argument is still unmeasured.
 
 ## Revisit triggers
 

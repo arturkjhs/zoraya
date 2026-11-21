@@ -1,0 +1,13 @@
+# The names libzoraya-rust.a defines, and only those (ADR-0451 item 5; a name
+# enters only by an ADR). make check-rust-archive compares this list with the
+# archive's defined names, with the ADR's own list, and with the exports of libc.a.
+chroot
+sched_getaffinity
+sendfile
+setgid
+setgroups
+setsid
+setuid
+sigaltstack
+splice
+waitid

@@ -418,6 +418,33 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// A new connection to the random service for a child about to start
+    /// (ADR-0453 item 3): the broker makes it from the connection that its
+    /// launcher gave it, and the reply moves the child's end here. `ENOSYS`
+    /// when the process has no broker; `EAGAIN` when the broker has none to
+    /// give (it holds none, 64 are live, or the service is full).
+    pub fn broker_random(&mut self) -> Result<S::H, i32> {
+        if let Some(h) = self.spare_random.take() {
+            return Ok(h);
+        }
+        let n = self.broker_call(&bp::RandomConnection {}, &[])?;
+        let mut handles = core::mem::take(&mut self.handles);
+        match decode::<bp::RandomConnectionReply>(&self.input[..n], handles.len()) {
+            Ok((_, r)) if r.status.0 == bp::status::OK && handles.len() == 1 => {
+                Ok(handles.remove(0))
+            }
+            _ => {
+                for h in handles {
+                    self.sys.close(h);
+                }
+                Err(match broker_errno(broker_status(&self.input[..n])) {
+                    0 => EAGAIN,
+                    e => e,
+                })
+            }
+        }
+    }
+
     /// `spawn_prepare` (ADR-0104 item 4): the pid, its group and session,
     /// the parent's job handle, the child's, and the child's broker end.
     pub fn prepare(
@@ -1091,6 +1118,8 @@ impl<S: Sys> Posix<S> {
                 }
                 // Opened by the caller first (`inherit_shaped`).
                 FileAction::Open(..) => return Err(EINVAL),
+                // The child's directory, not its fds (`inherit_shaped`).
+                FileAction::Chdir(_) => {}
             }
         }
         Ok(map
@@ -1321,14 +1350,25 @@ impl<S: Sys> Posix<S> {
                 Desc::Socket(ref s)
                     if s.unix.as_ref().is_some_and(|u| u.node.is_none())
                         && (s.kind == crate::unix::SOCK_STREAM || s.ctl.is_none()) => {}
-                Desc::Socket(_) => return Err(crate::errno::ENOTSUP),
+                Desc::Socket(ref s) => {
+                    // Which kind, for `ZORAYA_POSIX_DEBUG`'s line: 9000, plus 100 for a Unix socket, 10 for one bound to a
+                    // file, 1 for one with a control channel, and its type.
+                    self.stats.inherit_failed_at = 9000
+                        + s.kind as u32
+                        + u32::from(s.unix.is_some()) * 100
+                        + u32::from(s.unix.as_ref().is_some_and(|u| u.node.is_some())) * 10
+                        + u32::from(s.ctl.is_some()) * 1000;
+                    return Err(crate::errno::ENOTSUP);
+                }
                 _ => {}
             }
         }
-        for (conn, wanted) in conns {
+        for (i, (conn, wanted)) in conns.into_iter().enumerate() {
             if moves.len() + 4 >= zoraya_abi::spawn::MAX_SPAWN_HANDLES {
                 return Err(EAGAIN);
             }
+            // Which connection was refused, for `ZORAYA_POSIX_DEBUG`'s line.
+            self.stats.inherit_failed_at = 2000 + i as u32;
             let new = if wanted == u32::MAX {
                 self.clone_tty(conn, group)?
             } else {
@@ -1336,6 +1376,7 @@ impl<S: Sys> Posix<S> {
             };
             moves.push((self.sys.slot_of(conn), new));
         }
+        self.stats.inherit_failed_at = 3000;
         for i in 0..self.entries.len() {
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
             let made = match (kind, handle) {
@@ -1447,6 +1488,10 @@ pub enum FileAction {
     Opened(i32, i32),
     /// `addclosefrom_np(fd)`: every fd from `fd` up is closed in the child.
     CloseFrom(i32),
+    /// `addchdir(path)` (POSIX.1-2024, ADR-0451 item 3): the child's working
+    /// directory is `path`, resolved in the parent's table as `chdir` does,
+    /// after the actions before it.
+    Chdir(Vec<u8>),
 }
 
 /// What a spawned child inherits (ADR-0103 item 7, ADR-0107): handles for

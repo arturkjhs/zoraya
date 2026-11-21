@@ -20,11 +20,11 @@ int execv(const char *path, char *const argv[])
 #include <sys/mman.h>
 #include <time.h>
 
-/* obmalloc.c asks madvise for huge pages on an arena, mmapmodule.c msyncs a
- * flushed mapping, and a thread of lock.c yields while it spins: advice that
- * no kernel here takes. madvise and msync fail with ENOSYS and change
- * nothing; sched_yield is libposix's own (SYS_sched_yield of ADR-0308 item 4,
- * which libc.a does not export under the POSIX name). */
+/* obmalloc.c asks madvise for huge pages on an arena, and mmapmodule.c msyncs a
+ * flushed mapping: advice that no kernel here takes. Both fail with ENOSYS and
+ * change nothing. (sched_yield, pause and dirfd were here until ADR-0451
+ * item 3 made libposix export them: a second strong definition would clash
+ * with libposix's, which is a single member.) */
 int madvise(void *addr, size_t len, int advice)
 {
 	(void)addr; (void)len; (void)advice;
@@ -36,36 +36,6 @@ int msync(void *addr, size_t len, int flags)
 {
 	(void)addr; (void)len; (void)flags;
 	errno = ENOSYS;
-	return -1;
-}
-
-long zoraya_posix_sched_yield(void);
-
-int sched_yield(void)
-{
-	return (int)zoraya_posix_sched_yield();
-}
-
-/* thread.c parks a thread for good with pause; it returns, as POSIX says,
- * only when a signal has been delivered (nanosleep ends with EINTR then), not
- * after a fixed time. */
-int pause(void)
-{
-	struct timespec ts = { 3600, 0 };
-	while (nanosleep(&ts, 0) == 0)
-		;
-	errno = EINTR;
-	return -1;
-}
-
-/* _posixsubprocess.c lists the open descriptors by opening a directory of
- * them (/proc/self/fd, /dev/fd); neither exists, so the opendir fails before
- * dirfd is reached, and the loop over every descriptor takes over. libposix
- * keeps a directory stream without a descriptor. */
-int dirfd(DIR *d)
-{
-	(void)d;
-	errno = ENOTSUP;
 	return -1;
 }
 

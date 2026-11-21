@@ -163,6 +163,13 @@ hint: rg tried to read /work/secret, which it was not given
 - Whether 64 live connections per broker and 256 in the service are enough for a session that runs a parallel build
   (cargo-like tools, `make -j`); measured when such a tool is ported. If not, the service's table grows, which is
   ADR-0288's to change.
+- **Rule 6 note (part `work/rust-std`, 2026-11-20).** Item 3 is built: the broker beside a native shell holds a connection of a shell's kind at
+  slot 10 (from `init`'s or the panel's own, by `random::share`) and answers the new message `RandomConnection` (ordinal 20); libposix asks once per
+  `posix_spawn` and `exec` without `GRANT_RANDOM`. A session broker (`init`'s `start_session`) is given none. Item 5's fork path does not work with
+  Rust 1.99.1: its `Command::spawn` makes a `SOCK_SEQPACKET` socketpair that `fork` cannot give the child (proposed ADR-0468); INV-0453-1's fork clause
+  is checked by a C `fork` and `exec` (`t_syscall forkexec`). INV-0453-2 is checked for `uid` and `gid`; `groups` and `chroot` are unstable in 1.99.1.
+  Measured, item 2: `canonicalize` of a path in a granted directory whose parent is not granted is `ENOENT`, as the context says.
+- **For the architect (part `work/rust-std`, review finding 10).** ADR-0453 INV-0453-1 says a program's connection can never `Share`; ADR-0435 (accepted the same day) lets a depth-2 connection make 8. A connection the broker makes for a child is at depth 2, so a default child may make 8 where a child given `POSIX_SPAWN_GRANT_RANDOM` (the parent's share, depth 3) makes none. Built as the two accepted texts allow; whether the broker's children should be at depth 3 is not decided here. The broker lets a process ask for one connection per non-fork child it has prepared and not yet committed or aborted, and one for its image's `exec`; an aborted child whose connection was given costs the parent its next credit, so a session holds at most 64 per broker.
 
 ## Revisit triggers
 

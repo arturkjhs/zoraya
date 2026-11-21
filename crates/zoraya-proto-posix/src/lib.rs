@@ -313,6 +313,19 @@ protocol! {
         status: Code,
     }
 
+    /// A new connection to the random service for the caller's next child
+    /// (ADR-0453 item 3, ADR-0227 item 3): the broker holds one that may share
+    /// (a launcher's, given by the shell that started it) and makes one for each
+    /// POSIX process `posix_spawn` or `exec` starts, so that a child has
+    /// `getrandom` whoever started it. Not counted among [`ORDINALS`]. A
+    /// process asks; a native client has no use for it. The reply carries the
+    /// connection's end, or an error: `AGAIN` when the broker has none to give
+    /// or the service has no room.
+    message RandomConnection = 20, handles 0 {}
+    message RandomConnectionReply = 20, handles 1 {
+        status: Code,
+    }
+
     /// What the broker has counted: the messages by ordinal, and the pids.
     message Statistics = 14, handles 0 {}
     message StatisticsReply = 14, handles 0 {

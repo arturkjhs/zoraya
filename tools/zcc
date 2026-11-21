@@ -18,6 +18,11 @@
 #   ZORAYA_LD       an ld.lld-flavoured linker (default: rust-lld's gcc-ld
 #                   wrapper from the toolchain rustc reports)
 #
+# ZORAYA_RUST=1 (set by tools/zcargo, ADR-0452 item 3, INV-0452-2): the one
+# argument --target=aarch64-unknown-linux-musl is accepted and dropped, because
+# the `cc` crate adds it when it builds a Rust program's C parts; every other
+# --target is refused as always, and __linux__ stays undefined.
+#
 # Usage is that of cc: -c, -S, -E and -M compile only; anything else links.
 # -nostdlib, -nostartfiles and -nodefaultlibs leave out what they say.
 set -eu
@@ -37,6 +42,17 @@ here=$(cd "$(dirname "$self")" && pwd)
 root=$(cd "$here/.." && pwd)
 sysroot=${ZORAYA_SYSROOT:-$root/build/sysroot}
 clang=${ZORAYA_CLANG:-clang}
+
+# The cc crate's --target, for a build zcargo started (ADR-0452 item 3).
+if [ "${ZORAYA_RUST:-}" = 1 ]; then
+    n=$#
+    while [ "$n" -gt 0 ]; do
+        a=$1
+        shift
+        [ "$a" = "--target=aarch64-unknown-linux-musl" ] || set -- "$@" "$a"
+        n=$((n - 1))
+    done
+fi
 
 link=1
 startfiles=1
@@ -62,6 +78,13 @@ for a in "$@"; do
         prev=$a
         continue
     fi
+    if [ "${ZORAYA_RUST:-}" != 1 ]; then
+        case "$prev:$a" in
+        -l:zoraya-rust|-Xlinker:*zoraya-rust*)
+            echo "zcc: refusing $prev $a: libzoraya-rust.a is for tools/zcargo's links only (INV-0451-2)" >&2
+            exit 1 ;;
+        esac
+    fi
     case "$a" in
     -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*|*,-D,__linux*|*,-D,__gnu_linux*|*,-D,linux*)
         echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2
@@ -69,6 +92,11 @@ for a in "$@"; do
     --target=*|-target=*|-Xclang|-Xpreprocessor|--define-macro*|@*)
         echo "zcc: refusing $a: zcc sets the target and the preprocessor's definitions itself" >&2
         exit 1;;
+    -lzoraya-rust|-Wl,*zoraya-rust*|*libzoraya-rust.a)
+        if [ "${ZORAYA_RUST:-}" != 1 ]; then
+            echo "zcc: refusing $a: libzoraya-rust.a is for tools/zcargo's links only (INV-0451-2)" >&2
+            exit 1
+        fi ;;
     -shared|-rdynamic|-pie|-static-pie)
         echo "zcc: refusing $a: Zoraya programs are static ET_EXEC (ADR-0033)" >&2
         exit 1;;

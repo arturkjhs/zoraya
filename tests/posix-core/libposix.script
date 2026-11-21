@@ -71,6 +71,41 @@ x missing.h
 < t_syscall: wide passed
 < posixrun: exit 0
 < \r\n~> 
+# ADR-0451 items 1 to 3 (part work/rust-std): the futex forms std sends, the thread id, ioctl(FIONBIO) and the names libc.a
+# gained, by posixrun; getrandom through syscall, addchdir (a child needs a broker) and the report of an unanswered number
+# by zosh, which gives the random service, a broker and the report channel.
+> posixrun /bin/t_syscall futex\r
+< t_syscall: futex passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_syscall tid\r
+< t_syscall: tid passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_syscall fionbio\r
+< t_syscall: fionbio passed
+< posixrun: exit 0
+< \r\n~> 
+> posixrun /bin/t_syscall names\r
+< t_syscall: names passed
+< posixrun: exit 0
+< \r\n~> 
+> /bin/t_syscall random\r
+< t_syscall: random passed
+< \r\n~> 
+> /bin/t_syscall chdir\r
+< t_syscall: child cwd /tmp
+< t_syscall: child cwd /tmp/sub
+< t_syscall: chdir passed
+< \r\n~> 
+> /bin/t_syscall forkexec\r
+< t_syscall: random passed
+< t_syscall: forkexec passed
+< \r\n~> 
+> /bin/t_syscall report\r
+< t_syscall: report passed
+< asked for system call 279, which Zoraya does not answer (ENOSYS)
+< \r\n~> 
 # poll and ppoll (ADR-0342 item 5, ADR-0414 item 1): one case at a time.
 > posixrun /bin/t_poll pipe\r
 < t_poll: pipe passed

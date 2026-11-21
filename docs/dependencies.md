@@ -103,7 +103,7 @@ These are not crates, but the build depends on them:
 
 | Tool | Version used | Where it comes from |
 |---|---|---|
-| Rust | 1.99.1 (stable), pinned in `rust-toolchain.toml` with `rustfmt`, `clippy` and the `aarch64-unknown-none` target | rustup |
+| Rust | 1.99.1 (stable), pinned in `rust-toolchain.toml` with `rustfmt`, `clippy` and the `aarch64-unknown-none` target, and the `aarch64-unknown-linux-musl` target (ADR-0450, ADR-0452 item 6: its prebuilt `std`, 152 MB, MIT OR Apache-2.0, is what `tools/zcargo` links Rust POSIX programs with; no crate of it enters the kernel or a `no_std` crate). `tools/rust-musl-target.sh` puts the same component in `build/rust-musl-sysroot` from the URL and sha256 of the toolchain's own channel manifest, for a host that must not install outside `build/` | rustup |
 | QEMU | 11.1.2 (`qemu-system-aarch64`) | Homebrew on macOS; distribution package on Linux |
 | GNU make, POSIX `sh` | the host's | macOS Command Line Tools / distribution |
 | `cargo-mutants` (only for `make mutants-host`) | 27.1.0, MIT, <https://github.com/sourcefrog/cargo-mutants> | `cargo install cargo-mutants --version 27.1.0 --locked` |

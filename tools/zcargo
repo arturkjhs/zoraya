@@ -1,0 +1,214 @@
+#!/bin/sh
+# zcargo: cargo for Rust POSIX programs (ADR-0452). It builds for
+# aarch64-unknown-linux-musl with the stable toolchain's prebuilt std (ADR-0450)
+# and links through zcc against Zoraya's libc.a (static ET_EXEC, ADR-0033), so
+# that the flags that decide whether a program loads and which unwinder it has
+# cannot drift, and every program it links is checked (zoraya-elf-check, and no
+# svc instruction outside libc.a, INV-0450-2).
+#
+#   tools/zcargo build --release         target/aarch64-unknown-linux-musl/release/NAME
+#   tools/zcargo -v build                the rustc lines; each link's zcc line and
+#                                        map are kept beside its output (NAME.link,
+#                                        NAME.map, NAME.check)
+#
+# What it sets (ADR-0452 item 1): RUSTUP_TOOLCHAIN to the channel of this
+# repository's rust-toolchain.toml, whatever the project's own file or the
+# caller's variable say; CARGO_BUILD_TARGET; the linker (tools/zcargo-link, which
+# runs zcc and then the checks); and in CARGO_ENCODED_RUSTFLAGS, which cargo
+# prefers to every other source, `-C relocation-model=static -C
+# link-self-contained=no -C target-feature=+crt-static -C link-arg=-lzoraya-rust`
+# followed by the caller's RUSTFLAGS (RUSTFLAGS itself is then unset). A project's
+# own `rustflags` in .cargo/config.toml are replaced by these: they are listed
+# with a note, and a port that needs one passes it in RUSTFLAGS.
+#
+# What it refuses (item 2): a -Z argument, a +toolchain argument, a set
+# RUSTC_BOOTSTRAP (INV-0450-1), another --target, a --config that sets a
+# linker, a target or rustflags, and in the caller's flags link-self-contained
+# other than no, a relocation-model other than static, -crt-static, a linker, a
+# --target or --sysroot, any -Z, and panic= other than unwind or abort (ADR-0454).
+#
+# C parts (item 3): CC, CXX and AR for the target are zcc, zc++ and zoraya-ar,
+# and ZORAYA_RUST=1 lets zcc drop the --target=aarch64-unknown-linux-musl that
+# the cc crate adds.
+#
+# Needs the sysroot and the archive: `make -f ports/Makefile sysroot rust`.
+# The prebuilt std of the target comes with the toolchain (`rustup target add
+# aarch64-unknown-linux-musl`, rust-toolchain.toml lists it); on a machine that
+# lacks it, tools/rust-musl-target.sh fetches the same component into build/
+# and zcargo then passes --sysroot.
+set -eu
+
+TARGET=aarch64-unknown-linux-musl
+
+# The repository, through any symbolic link to this file.
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+root=$(cd "$here/.." && pwd)
+
+die() {
+    echo "zcargo: $*" >&2
+    exit 1
+}
+
+# ---- what is refused
+
+[ -z "${RUSTC_BOOTSTRAP:-}" ] || die "refusing a set RUSTC_BOOTSTRAP: Rust POSIX programs use the stable toolchain (ADR-0450)"
+# What would replace the compiler or its wrapper, or set a linker, for the build.
+for v in RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \
+    CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER ZORAYA_LD ZORAYA_CLANG __CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS; do
+    eval "val=\${$v:-}"
+    [ -z "$val" ] || die "refusing the set variable $v: zcargo runs the pinned toolchain and linker (ADR-0450, ADR-0452)"
+done
+first=1
+prev=
+after_dashes=0
+for a in "$@"; do
+    if [ "$after_dashes" = 1 ] && { [ "${1:-}" = rustc ] || [ "${1:-}" = rustdoc ]; }; then
+        # `cargo rustc -- ARGS`: the arguments go to rustc itself.
+        case "$a" in
+        -C*|--codegen*|-Z*|--target*|--sysroot*|-L*|-l*|--cfg*|--extern*|@*)
+            die "refusing $a after --: it would reach rustc past zcargo's flags (ADR-0452)" ;;
+        esac
+    fi
+    [ "$a" != -- ] || after_dashes=1
+    case "$a" in
+    +*)
+        if [ "$first" = 1 ]; then
+            die "refusing $a: zcargo runs the toolchain of rust-toolchain.toml (ADR-0452)"
+        fi ;;
+    -Z*)
+        die "refusing $a: Rust POSIX programs use the stable toolchain's prebuilt std (ADR-0450)" ;;
+    --target|--target=*)
+        die "refusing $a: zcargo builds for $TARGET only (ADR-0452)" ;;
+    --config=*)
+        case "${a#--config=}" in
+        *linker*|*target*|*rustflags*|*runner*|*rustc*|*unstable*|*build*)
+            die "refusing $a: it would replace what zcargo sets (ADR-0452)" ;;
+        *=*) ;;
+        *) die "refusing $a: a --config that is not KEY=VALUE may name a file of settings (ADR-0452)" ;;
+        esac ;;
+    --codegen|--codegen=*)
+        die "refusing $a: pass a flag in RUSTFLAGS, where zcargo checks it (ADR-0452)" ;;
+    esac
+    case "$prev" in
+    --config)
+        case "$a" in
+        *linker*|*target*|*rustflags*|*runner*|*rustc*|*unstable*|*build*)
+            die "refusing --config $a: it would replace what zcargo sets (ADR-0452)" ;;
+        *=*) ;;
+        *) die "refusing --config $a: not KEY=VALUE, it may name a file of settings (ADR-0452)" ;;
+        esac ;;
+    esac
+    first=0
+    prev=$a
+done
+
+# The caller's flags: RUSTFLAGS, or the encoded form (words separated by 0x1f).
+caller=${RUSTFLAGS:-}
+if [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+    caller="$caller $(printf '%s' "$CARGO_ENCODED_RUSTFLAGS" | tr '\037' ' ')"
+fi
+check_flags() {
+    # $1 is the flags as one string: look at each `-C x=y` and `-Cx=y`. No globbing of the words.
+    set -f
+    set -- $1
+    while [ $# -gt 0 ]; do
+        w=$1
+        shift
+        case "$w" in
+        -C|--codegen) w=-C$1; [ $# -gt 0 ] && shift ;;
+        --codegen=*) w=-C${w#--codegen=} ;;
+        esac
+        case "$w" in
+        -Clink-self-contained=no) ;;
+        -Clink-self-contained*) die "refusing $w: the sysroot's libc.a and libunwind.a, not Rust's bundled copies (ADR-0452)" ;;
+        -Crelocation-model=static) ;;
+        -Crelocation-model*) die "refusing $w: Zoraya programs are static ET_EXEC (ADR-0033, ADR-0452)" ;;
+        -Ctarget-feature=*crt-static*)
+            case "$w" in *-crt-static*) die "refusing $w: Rust POSIX programs are static (ADR-0452)" ;; esac ;;
+        -Cpanic=unwind|-Cpanic=abort) ;;
+        -Cpanic*) die "refusing $w: panic is unwind or abort (ADR-0454)" ;;
+        -Clinker*|-Clinker-flavor*) die "refusing $w: zcargo links through zcc (ADR-0452)" ;;
+        --target|--target=*|--sysroot|--sysroot=*) die "refusing $w (ADR-0452)" ;;
+        -Z*) die "refusing $w: Rust POSIX programs use the stable toolchain (ADR-0450)" ;;
+        @*) die "refusing $w: an argument file would hide flags from this check (ADR-0452)" ;;
+        esac
+    done
+}
+check_flags "$caller"
+set +f
+
+# ---- the toolchain
+
+channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "$root/rust-toolchain.toml" | head -1)
+[ -n "$channel" ] || die "no channel in $root/rust-toolchain.toml"
+case "$channel" in
+nightly*|beta*|dev*) die "the channel of rust-toolchain.toml is $channel: Rust POSIX programs use a stable one (ADR-0450)" ;;
+esac
+export RUSTUP_TOOLCHAIN=$channel
+unset RUSTUP_HOME_OVERRIDE 2>/dev/null || true
+
+sysroot=${ZORAYA_SYSROOT:-$root/build/sysroot}
+[ -f "$sysroot/usr/lib/libc.a" ] || die "no $sysroot/usr/lib/libc.a: run make -f ports/Makefile sysroot rust"
+[ -f "$sysroot/usr/lib/libzoraya-rust.a" ] || die "no $sysroot/usr/lib/libzoraya-rust.a: run make -f ports/Makefile rust"
+
+# The prebuilt std: the toolchain's, or the component tools/rust-musl-target.sh put in build/.
+sysroot_flag=
+libdir=$(rustc --print target-libdir --target "$TARGET" 2>/dev/null || true)
+if [ -z "$libdir" ] || ! ls "$libdir"/libstd-*.rlib >/dev/null 2>&1; then
+    own=$root/build/rust-musl-sysroot
+    if ls "$own/lib/rustlib/$TARGET/lib"/libstd-*.rlib >/dev/null 2>&1; then
+        sysroot_flag=--sysroot=$own
+    else
+        die "the toolchain $channel has no std for $TARGET: run rustup target add $TARGET, or tools/rust-musl-target.sh"
+    fi
+fi
+
+# The checks run by the linker wrapper.
+check=$root/target/debug/zoraya-elf-check
+if [ ! -x "$check" ]; then
+    (cd "$root" && cargo build -q -p zoraya-elf-check) || die "cannot build zoraya-elf-check"
+fi
+
+# A project's own rustflags are replaced: say so.
+dir=$(pwd)
+while :; do
+    for c in "$dir/.cargo/config.toml" "$dir/.cargo/config"; do
+        if [ -f "$c" ] && grep -q 'rustflags' "$c"; then
+            echo "zcargo: note: the rustflags of $c are replaced by zcargo's; pass one in RUSTFLAGS" >&2
+        fi
+    done
+    [ "$dir" = / ] && break
+    dir=$(dirname "$dir")
+done
+
+# ---- the build
+
+triple_env=AARCH64_UNKNOWN_LINUX_MUSL
+flags="-C relocation-model=static -C link-self-contained=no -C target-feature=+crt-static -C link-arg=-lzoraya-rust"
+[ -z "$sysroot_flag" ] || flags="$flags $sysroot_flag"
+encoded=
+sep=$(printf '\037')
+set -f
+for w in $flags $caller; do
+    if [ -z "$encoded" ]; then encoded=$w; else encoded=$encoded$sep$w; fi
+done
+set +f
+unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
+export CARGO_ENCODED_RUSTFLAGS=$encoded
+export CARGO_BUILD_TARGET=$TARGET
+export "CARGO_TARGET_${triple_env}_LINKER=$here/zcargo-link"
+export "CC_aarch64_unknown_linux_musl=$here/zcc"
+export "CXX_aarch64_unknown_linux_musl=$here/zc++"
+export "AR_aarch64_unknown_linux_musl=$root/target/debug/zoraya-ar"
+export ZORAYA_RUST=1
+export ZORAYA_SYSROOT=$sysroot
+export ZCARGO_ELF_CHECK=$check
+if [ ! -x "$root/target/debug/zoraya-ar" ]; then
+    (cd "$root" && cargo build -q -p zoraya-ar) || die "cannot build zoraya-ar"
+fi
+exec cargo "$@"

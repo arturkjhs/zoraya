@@ -1,0 +1,16 @@
+[package]
+name = "rstest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "ADR-0452 item 8: Rust's std as a POSIX program on Zoraya, asserted (the probe of TASK-35 made a test)."
+
+# Not part of the repository's workspace: it is built by tools/zcargo for
+# aarch64-unknown-linux-musl, and the workspace's crates are built for the
+# kernel and the host.
+[workspace]
+
+[profile.release]
+opt-level = 2
+debug = false

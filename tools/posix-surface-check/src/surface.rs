@@ -162,7 +162,17 @@ pub fn parse_list(text: &str) -> BTreeSet<String> {
 /// and the functions the system-call shim routes to (`zoraya_posix_*`,
 /// ADR-0100 item 2, ADR-0141).
 pub fn is_internal(name: &str) -> bool {
-    name.starts_with('_') || name.starts_with("zoraya_posix_")
+    (name.starts_with('_') && !is_rustc_runtime(name)) || name.starts_with("zoraya_posix_")
+}
+
+/// A name of libposix's Rust runtime under the `__rustc` pseudo-crate (its
+/// allocator shims and panic handler): `_RNvCs<hash>_7___rustc...`. The
+/// hash is the same for every target of one compiler, so these collide with
+/// the program's own `std` in a Rust program. They are not internal: `hide`
+/// renames them as it does a name outside the tier list, and `check` fails
+/// on one still defined (ADR-0451 item 6, INV-0451-3).
+pub fn is_rustc_runtime(name: &str) -> bool {
+    name.starts_with("_RNvCs") && name.contains("_7___rustc")
 }
 
 /// Whether INV-0005-2 forbids exporting `name`.

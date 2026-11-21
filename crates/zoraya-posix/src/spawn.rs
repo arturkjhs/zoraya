@@ -113,6 +113,9 @@ pub struct Granted<H> {
     pub random: Option<H>,
     /// The parent's window channel, moved.
     pub window: Option<H>,
+    /// `random` is the broker's (ADR-0453 item 3): a failed spawn keeps it for the next ask,
+    /// since the broker lets a process ask once per child.
+    pub broker_random: bool,
 }
 
 impl<H: Copy> Granted<H> {
@@ -121,7 +124,19 @@ impl<H: Copy> Granted<H> {
             net: None,
             random: None,
             window: None,
+            broker_random: false,
         }
+    }
+
+    /// What a failed spawn closes, and the broker-made connection it keeps instead.
+    pub fn made_and_spare(&self) -> (Vec<H>, Option<H>) {
+        let spare = self.random.filter(|_| self.broker_random);
+        let net = self.net.filter(|n| !n.1).map(|n| n.0);
+        let mut made: Vec<H> = net.into_iter().collect();
+        if spare.is_none() {
+            made.extend(self.random);
+        }
+        (made, spare)
     }
 
     /// The handles made for this spawn alone: closed if it does not happen.
@@ -140,6 +155,30 @@ impl<H: Copy> Granted<H> {
             .chain(self.window)
             .collect()
     }
+}
+
+/// The place of the absolute, normal path `cwd` in a child's `entries`: the
+/// first (longest) directory entry that covers it, else none.
+fn cwd_in(cwd: &str, entries: &[(String, EntryKind, u8)]) -> (u32, String) {
+    for (i, (prefix, kind, _)) in entries.iter().enumerate() {
+        if !kind.is_directory() {
+            continue;
+        }
+        let rest = if prefix == "/" {
+            cwd.strip_prefix('/')
+        } else if cwd == *prefix {
+            Some("")
+        } else {
+            cwd.strip_prefix(prefix.as_str())
+                .and_then(|r| r.strip_prefix('/'))
+        };
+        if let Some(rest) = rest
+            && is_relative_normal(rest)
+        {
+            return (i as u32, rest.to_string());
+        }
+    }
+    (NO_ENTRY, String::new())
 }
 
 impl<S: Sys> Posix<S> {
@@ -213,13 +252,69 @@ impl<S: Sys> Posix<S> {
                 _ => None,
             })
             .collect();
-        let r = self.inherit_into(&map, group, shape, &listed, &mut out);
+        let r = self
+            .inherit_into(&map, group, shape, &listed, &mut out)
+            .and_then(|()| self.apply_chdirs(actions, &mut out));
         if let Err(e) = r {
             self.abandon(&out, &temps);
             return Err(e);
         }
         out.temps = temps;
         Ok(out)
+    }
+
+    /// The `addchdir` actions, in order, each resolved in the parent's table
+    /// as `chdir` does (a relative path from the directory before it): the
+    /// child's working directory is the last, found again among the entries
+    /// the child has. A path that is no directory the parent may enter, or
+    /// that the parent's table does not cover, fails the spawn with that
+    /// error (`ENOENT`, `ENOTDIR`, `EACCES`).
+    fn apply_chdirs(&mut self, actions: &[FileAction], out: &mut Inherit<S::H>) -> Result<(), i32> {
+        let mut at: Option<String> = None;
+        for action in actions {
+            let FileAction::Chdir(path) = action else {
+                continue;
+            };
+            if path.is_empty() {
+                return Err(ENOENT);
+            }
+            let base = at.clone().unwrap_or_else(|| self.getcwd());
+            let mut full = Vec::new();
+            if path[0] != b'/' {
+                full.extend_from_slice(base.trim_end_matches('/').as_bytes());
+                full.push(b'/');
+            }
+            full.extend_from_slice(path);
+            let r = self.resolve(AT_FDCWD, &full, Access::Read)?;
+            if self.special(&r).is_some() {
+                return Err(ENOTDIR);
+            }
+            let prefix = self
+                .entries
+                .get(r.place.entry)
+                .map_or_else(|| "/".to_string(), |e| e.prefix.clone());
+            let place = r.place.path.clone();
+            let (_, opened) = self.open_resolved(
+                r,
+                open_flags::DIRECTORY,
+                rights::READ | rights::CLONE,
+                0,
+                0,
+                Access::Read,
+            )?;
+            self.sys.close(opened.conn);
+            if opened.kind != crate::stat::Kind::Directory {
+                return Err(ENOTDIR);
+            }
+            if !crate::stat::owner_allows(opened.meta().mode, false, false, true) {
+                return Err(EACCES);
+            }
+            at = Some(crate::path::absolute_of(&prefix, &place));
+        }
+        if let Some(cwd) = at {
+            out.cwd = cwd_in(&cwd, &out.entries);
+        }
+        Ok(())
     }
 
     /// A refusal: every handle made for the child (the slots' new ends, the
@@ -320,27 +415,7 @@ impl<S: Sys> Posix<S> {
         }
         // The child's working directory: the parent's, if a listed
         // directory covers it, else none (ADR-0433 item 3).
-        let cwd = self.getcwd();
-        out.cwd = (NO_ENTRY, String::new());
-        for (i, (prefix, kind, _)) in out.entries.iter().enumerate() {
-            if !kind.is_directory() {
-                continue;
-            }
-            let rest = if prefix == "/" {
-                cwd.strip_prefix('/')
-            } else if cwd == *prefix {
-                Some("")
-            } else {
-                cwd.strip_prefix(prefix.as_str())
-                    .and_then(|r| r.strip_prefix('/'))
-            };
-            if let Some(rest) = rest
-                && is_relative_normal(rest)
-            {
-                out.cwd = (i as u32, rest.to_string());
-                break;
-            }
-        }
+        out.cwd = cwd_in(&self.getcwd(), &out.entries);
         Ok(())
     }
 
@@ -355,6 +430,18 @@ impl<S: Sys> Posix<S> {
                 self.sys.close(h);
             }
             return Err(e);
+        }
+        // Every POSIX process the broker's session starts has a connection of
+        // its own to the random service, whoever started it and with no grant
+        // word (ADR-0453 item 3, ADR-0227 item 3): the broker makes it. A
+        // process the parent named `GRANT_RANDOM` for has the parent's
+        // (ADR-0435); a session with no broker, or a broker with none to give,
+        // starts the child as it always was, without one.
+        if g.random.is_none()
+            && let Ok(h) = self.broker_random()
+        {
+            g.random = Some(h);
+            g.broker_random = true;
         }
         Ok(g)
     }

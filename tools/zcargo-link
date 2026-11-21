@@ -1,0 +1,36 @@
+#!/bin/sh
+# zcargo-link: the linker tools/zcargo gives cargo (ADR-0452 items 1 and 4).
+# It runs zcc with a link map, keeps the zcc line and the map beside the output
+# (OUT.link, OUT.map, OUT.check), and then checks the program before cargo sees it:
+# zoraya-elf-check (it will load, it is static) and --no-foreign-svc (no svc
+# instruction outside libc.a's members, INV-0450-2), the second before any
+# stripping would hide anything. A program that fails is removed.
+set -eu
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+
+out=
+prev=
+for a in "$@"; do
+    [ "$prev" = -o ] && out=$a
+    prev=$a
+done
+if [ -z "$out" ]; then
+    exec "$here/zcc" "$@"
+fi
+map=$out.map
+printf '%s\n' "$@" > "$out.link"
+"$here/zcc" "$@" "-Wl,-Map=$map"
+check=${ZCARGO_ELF_CHECK:-$here/../target/debug/zoraya-elf-check}
+# What the check says goes beside the output; cargo shows it only on a refusal.
+archive=${ZORAYA_SYSROOT:-$here/../build/sysroot}/usr/lib/libc.a
+if ! "$check" --no-foreign-svc "$map" --libc "$archive" "$out" > "$out.check" 2>&1; then
+    cat "$out.check" >&2
+    rm -f "$out"
+    echo "zcargo-link: $out was refused" >&2
+    exit 1
+fi

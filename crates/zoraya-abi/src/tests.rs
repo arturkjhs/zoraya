@@ -1875,6 +1875,42 @@ mod net_report {
     use crate::posix::*;
 
     #[test]
+    fn a_syscall_report_round_trips_and_no_other_report_is_one() {
+        let mut out = [0u8; 16];
+        for number in [0, 1, 279, u32::MAX] {
+            let r = SyscallReport { number };
+            let n = r.encode(&mut out).unwrap();
+            assert_eq!(n, SyscallReport::SIZE);
+            assert_eq!(SyscallReport::decode(&out[..n]), Some(r));
+            assert!(Report::decode(&out[..n]).is_none());
+            assert!(NetReport::decode(&out[..n]).is_none());
+            for length in 0..n {
+                assert!(SyscallReport::decode(&out[..length]).is_none(), "{length}");
+            }
+            assert!(SyscallReport::decode(&out[..n + 1]).is_none());
+        }
+        assert!(SyscallReport { number: 1 }.encode(&mut out[..7]).is_none());
+        let mut path = [0u8; 300];
+        let p = Report {
+            access: Access::Read,
+            dropped: 0,
+            path: "/x",
+        }
+        .encode(&mut path)
+        .unwrap();
+        assert!(SyscallReport::decode(&path[..p]).is_none());
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..10_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let mut m = [0u8; 8];
+            m.copy_from_slice(&x.to_le_bytes());
+            let _ = SyscallReport::decode(&m);
+        }
+    }
+
+    #[test]
     fn a_net_report_round_trips_and_decodes_totally() {
         let mut out = [0u8; 300];
         let r = NetReport {

@@ -66,6 +66,86 @@ pub fn check(file: &[u8]) -> Result<Program, Refusal> {
     Ok(program)
 }
 
+/// The mask and value of an AArch64 `svc #imm` (`0xd4000001 | imm << 5`).
+const SVC_MASK: u32 = 0xffe0_001f;
+const SVC_VALUE: u32 = 0xd400_0001;
+
+/// The ranges a linker's map (`-Wl,-Map`, lld's format) attributes to input
+/// sections of the archive `libc.a` (its exact path, if given): a line of `VMA LMA Size Align`
+/// followed by `.../libc.a(member.o):(.section)`. A section the linker
+/// discarded is not in the map.
+pub fn libc_ranges(map: &str, archive: Option<&str>) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    for line in map.lines() {
+        let mut words = line.split_whitespace();
+        let (Some(vma), Some(_lma), Some(size), Some(_align), Some(input)) = (
+            words.next().and_then(|w| u64::from_str_radix(w, 16).ok()),
+            words.next().and_then(|w| u64::from_str_radix(w, 16).ok()),
+            words.next().and_then(|w| u64::from_str_radix(w, 16).ok()),
+            words.next().and_then(|w| w.parse::<u64>().ok()),
+            words.next(),
+        ) else {
+            continue;
+        };
+        if size > 0 && input_in_libc(input, archive) {
+            out.push((vma, vma.saturating_add(size)));
+        }
+    }
+    out
+}
+
+/// Whether the map's input word is `ARCHIVE(member):(section)` of the archive: with
+/// `archive` given, its exact path; otherwise any path that ends in `/libc.a` (or is
+/// `libc.a`). The member has no `/`, `(` or `)`, so that a section named
+/// `/x/libc.a(m):(.text)` of an object of the program is not taken for one.
+fn input_in_libc(input: &str, archive: Option<&str>) -> bool {
+    let rest = match archive {
+        Some(a) => input.strip_prefix(a).and_then(|r| r.strip_prefix('(')),
+        None => input.split_once("libc.a(").and_then(|(before, after)| {
+            (before.is_empty() || before.ends_with('/')).then_some(after)
+        }),
+    };
+    let Some((member, tail)) = rest.and_then(|r| r.split_once(')')) else {
+        return false;
+    };
+    !member.is_empty()
+        && !member.contains(['/', '(', ')'])
+        && tail.starts_with(":(")
+        && tail.ends_with(')')
+        && !tail[2..tail.len() - 1].contains(['(', ')', '/'])
+}
+
+/// The addresses of `svc` instructions in the executable segments of `file`
+/// that lie outside `allowed` (INV-0450-2): a Rust program contains no
+/// system-call instruction of its own, only libc.a's. Every aligned word of
+/// an executable segment is read; a word that is `svc #imm` and not in a range
+/// is reported. A constant that looks like one in code is a false positive
+/// the linker's map would not clear: none was seen in a Rust program.
+pub fn foreign_svc(file: &[u8], allowed: &[(u64, u64)]) -> Result<Vec<u64>, Refusal> {
+    let program = check(file)?;
+    let mut found = Vec::new();
+    for s in program.segments().iter().filter(|s| s.execute) {
+        let Some(bytes) = usize::try_from(s.offset)
+            .ok()
+            .zip(usize::try_from(s.filesz).ok())
+            .and_then(|(at, n)| file.get(at..at.checked_add(n)?))
+        else {
+            continue;
+        };
+        for (i, word) in bytes.as_chunks::<4>().0.iter().enumerate() {
+            let w = u32::from_le_bytes(*word);
+            if w & SVC_MASK != SVC_VALUE {
+                continue;
+            }
+            let at = s.vaddr + 4 * i as u64;
+            if !allowed.iter().any(|&(lo, hi)| lo <= at && at < hi) {
+                found.push(at);
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// One line describing an accepted program's segments.
 pub fn describe(program: &Program) -> String {
     let segs: Vec<String> = program

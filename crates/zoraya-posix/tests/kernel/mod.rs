@@ -1038,6 +1038,37 @@ pub fn rig() -> Rig {
     rig_sized(2048)
 }
 
+/// A process whose table is `/tmp` (a directory of a fresh volume) and
+/// `/dev/null` only, so that every other path is outside it.
+pub fn rig_tmp_only() -> Rig {
+    let net = Rc::new(RefCell::new(Net::default()));
+    let (service, root) = volume(&net, 2048);
+    let mut fake = Fake::new(net.clone(), vec![service]);
+    let arena = fake.memory_create(ARENA as u64).unwrap();
+    let base = fake.memory_map(arena, ARENA as u64).unwrap();
+    let (report, reports) = fake.channel_create().unwrap();
+    let mut p = Posix::new(
+        fake,
+        zoraya_abi::posix::Facts {
+            uid: 1000,
+            gid: 100,
+            umask: 0o022,
+            ..Default::default()
+        },
+    );
+    let tmp = p.add_entry("/tmp", EntryKind::Directory, Some(root));
+    p.add_entry("/dev/null", EntryKind::Null, None);
+    p.set_cwd(tmp, "", Form::EntryRelative);
+    p.set_report(Some(report));
+    Rig {
+        p,
+        net,
+        arena: Arena { base },
+        root,
+        reports,
+    }
+}
+
 /// `rig` with a root volume of `blocks` blocks of 4 KiB.
 pub fn rig_sized(blocks: u64) -> Rig {
     let net = Rc::new(RefCell::new(Net::default()));

@@ -1601,3 +1601,104 @@ fn a_refusal_after_the_entries_closes_them() {
         assert_eq!(count(&mut r), held_files);
     }
 }
+
+// ------------------------------------------------------------ ADR-0451 item 3: addchdir
+
+/// `posix_spawn_file_actions_addchdir`: the child starts in the directory, as
+/// `chdir` would put the parent there, without moving the parent.
+#[test]
+fn a_chdir_action_sets_the_childs_directory_and_not_the_parents() {
+    let mut r = rig();
+    mkdir(&mut r, b"/a");
+    mkdir(&mut r, b"/a/b");
+    mkdir(&mut r, b"/c");
+    let held = count(&mut r);
+    // An absolute path and a relative one.
+    for (path, want) in [("/a", "a"), ("a/b", "a/b"), ("./c", "c")] {
+        let out =
+            r.p.inherit(&[FileAction::Chdir(path.as_bytes().to_vec())], 0)
+                .unwrap();
+        assert_eq!(out.cwd, (0, want.to_string()), "{path}");
+        assert_eq!(r.p.getcwd(), "/");
+        drop_made(&mut r, &out);
+    }
+    assert_eq!(count(&mut r), held);
+    // `..` out of the parent's own directory, which stays where it is.
+    r.p.chdir(b"/a").unwrap();
+    let held = count(&mut r);
+    let out =
+        r.p.inherit(&[FileAction::Chdir(b"../c".to_vec())], 0)
+            .unwrap();
+    assert_eq!(out.cwd, (0, "c".to_string()));
+    assert_eq!(r.p.getcwd(), "/a");
+    drop_made(&mut r, &out);
+    assert_eq!(count(&mut r), held);
+}
+
+/// Each action starts from the one before it, and the last one wins.
+#[test]
+fn chdir_actions_follow_each_other() {
+    let mut r = rig();
+    mkdir(&mut r, b"/a");
+    mkdir(&mut r, b"/a/b");
+    let out =
+        r.p.inherit(
+            &[
+                FileAction::Chdir(b"/a".to_vec()),
+                FileAction::Chdir(b"b".to_vec()),
+            ],
+            0,
+        )
+        .unwrap();
+    assert_eq!(out.cwd, (0, "a/b".to_string()));
+    drop_made(&mut r, &out);
+}
+
+/// A child with a chosen table gets the directory as a path in one of its own
+/// entries; with none covering it, none.
+#[test]
+fn a_chdir_action_maps_into_a_chosen_table() {
+    let mut r = rig();
+    mkdir(&mut r, b"/a");
+    mkdir(&mut r, b"/a/b");
+    mkdir(&mut r, b"/z");
+    let out =
+        r.p.inherit_shaped(
+            &[FileAction::Chdir(b"/a/b".to_vec())],
+            0,
+            &chosen(vec![spec("/a", false)]),
+        )
+        .unwrap();
+    assert_eq!(out.cwd, (0, "b".to_string()));
+    drop_made(&mut r, &out);
+    let out =
+        r.p.inherit_shaped(
+            &[FileAction::Chdir(b"/z".to_vec())],
+            0,
+            &chosen(vec![spec("/a", false)]),
+        )
+        .unwrap();
+    assert_eq!(out.cwd.0, NO_ENTRY);
+    drop_made(&mut r, &out);
+}
+
+/// A directory the parent cannot enter makes the spawn fail with the error
+/// `chdir` gives, and leaves nothing made.
+#[test]
+fn a_chdir_action_that_chdir_would_refuse_fails_the_spawn() {
+    let mut r = rig();
+    mkdir(&mut r, b"/a");
+    let fd = create(&mut r, b"/f", b"x");
+    r.p.close(fd).unwrap();
+    let held = count(&mut r);
+    for (path, want) in [
+        (&b"/missing"[..], ENOENT),
+        (b"/f", ENOTDIR),
+        (b"/a/missing/x", ENOENT),
+        (b"", ENOENT),
+    ] {
+        let got = r.p.inherit(&[FileAction::Chdir(path.to_vec())], 0).err();
+        assert_eq!(got, Some(want), "{:?}", String::from_utf8_lossy(path));
+    }
+    assert_eq!(count(&mut r), held);
+}

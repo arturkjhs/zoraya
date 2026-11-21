@@ -47,6 +47,10 @@ const CONTROL: u32 = 6;
 const TERMINAL: u32 = 7;
 const OUTPUT: u32 = 8;
 const HANDOFF: u32 = 9;
+/// The connection to the random service that may share (ADR-0453 item 3),
+/// from the shell or panel that started the broker; from it the broker makes
+/// one for each POSIX process its session starts.
+const RANDOM: u32 = 10;
 
 const KEY_CONTROL: u64 = 1;
 const KEY_TMPD: u64 = 2;
@@ -69,10 +73,18 @@ fn rights_of(h: Handle) -> Rights {
         .map_or(Rights::NONE, |t| t.rights)
 }
 
-struct Rt;
+struct Rt {
+    /// The connection given at [`RANDOM`], if any.
+    random: Option<Handle>,
+}
 
 impl Kernel for Rt {
     type H = Handle;
+
+    fn random_connection(&mut self) -> Option<Handle> {
+        // The end the child holds; `None` when the service has no room.
+        zoraya_user::random::share(self.random?)
+    }
 
     fn job_create(&mut self, parent: Handle) -> Result<Handle, Status> {
         job_create(parent, JobFlags::POSIX)
@@ -603,7 +615,11 @@ fn main() -> i32 {
         out: vec![0; MAX_WIRE_MESSAGE],
         polled: Vec::new(),
     };
-    let mut core = Broker::new(Rt, session_job, !no_shell);
+    // The slot is empty when the starter had no connection to give.
+    let random = handle_type(slot_handle(RANDOM))
+        .ok()
+        .map(|_| slot_handle(RANDOM));
+    let mut core = Broker::new(Rt { random }, session_job, !no_shell);
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     let _ = port_subscribe(port, control, wanted, KEY_CONTROL, Mode::Level);
     let _ = port_subscribe(
