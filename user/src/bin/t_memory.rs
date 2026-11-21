@@ -150,9 +150,14 @@ fn exhaustion_changes_nothing() {
         let backing_after = test_call(HEAP_BACKING);
         assert_eq!(test_call(HEAP_LIVE), live, "the refusal keeps no heap");
         assert!(backing_after >= backing, "the heap does not shrink");
-        assert_eq!((backing_after - backing) % PAGE, 0, "backing grows by pages");
         assert_eq!(
-            free.checked_sub(free_after).expect("free frames did not grow"),
+            (backing_after - backing) % PAGE,
+            0,
+            "backing grows by pages"
+        );
+        assert_eq!(
+            free.checked_sub(free_after)
+                .expect("free frames did not grow"),
             (backing_after - backing) / PAGE,
             "a frame the refusal took is a page the heap grew by"
         );
