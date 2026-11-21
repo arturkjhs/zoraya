@@ -132,8 +132,8 @@ fn bad_arguments() {
 ///
 /// A refusal may grow the kernel heap (the scattered path builds a list of
 /// frames before it fails), and a heap that has grown keeps its backing pages.
-/// That is a one-time loss when this program is the first of a shard on a fresh
-/// boot, not a leak of the call. So the first refusal is accounted: the heap's
+/// That is a one-time loss when this is the first heap growth of that size in
+/// the boot (a shard 2 boot has none from earlier tests), not a leak of the call. So the first refusal is accounted: the heap's
 /// live bytes are unchanged, and every frame it took from the free count is a
 /// page of `HEAP_BACKING`. The kernel's `heap::stats` already counts the
 /// frames of the kernel's own page tables in `backing` (a growth across a
@@ -150,8 +150,9 @@ fn exhaustion_changes_nothing() {
         let backing_after = test_call(HEAP_BACKING);
         assert_eq!(test_call(HEAP_LIVE), live, "the refusal keeps no heap");
         assert!(backing_after >= backing, "the heap does not shrink");
+        assert_eq!((backing_after - backing) % PAGE, 0, "backing grows by pages");
         assert_eq!(
-            free - free_after,
+            free.checked_sub(free_after).expect("free frames did not grow"),
             (backing_after - backing) / PAGE,
             "a frame the refusal took is a page the heap grew by"
         );

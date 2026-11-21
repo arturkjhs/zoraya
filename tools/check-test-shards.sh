@@ -68,6 +68,12 @@ done
 for a in $(targets | grep -e '-a$'); do
 	b="${a%-a}-b"
 	targets | grep -qx -F "$b" || continue
+	ra=$(awk -v t="$a:" '$1==t{f=1;next} f&&/^\t/{print;next} f&&/^[^\t]/{exit}' "$makefile")
+	rb=$(awk -v t="$b:" '$1==t{f=1;next} f&&/^\t/{print;next} f&&/^[^\t]/{exit}' "$makefile")
+	if ! echo "$ra" | grep -q -F '$(RUN_TEST_SLOW) ' || ! echo "$ra" | grep -q -F '$(SHARD_A_EXPECT)' ||
+		! echo "$rb" | grep -q -F '$(RUN_TEST_SLOW_B) ' || ! echo "$rb" | grep -q -F '$(SHARD_B_EXPECT)'; then
+		echo "check-test-shards: $a must use RUN_TEST_SLOW and SHARD_A_EXPECT, $b RUN_TEST_SLOW_B and SHARD_B_EXPECT" >&2; bad=1
+	fi
 	if [ "$(recipe "$a")" != "$(recipe "$b")" ]; then
 		echo "check-test-shards: $a and $b do not have the same recipe (but the shard, its expectation, the runner variant and the label's suffix)" >&2; bad=1
 	fi
