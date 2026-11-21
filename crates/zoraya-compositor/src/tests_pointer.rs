@@ -194,6 +194,8 @@ fn a_press_between_motions_is_delivered_in_its_own_place_and_order() {
     };
     s.f().send(t, message(&m, 0), vec![]);
     s.queue_move(at.0 + 60, at.1 + 60);
+    // The press ends the device's round; the move after it is the next.
+    s.c.step();
     s.c.step();
     let got: Vec<_> = s
         .f()
@@ -864,4 +866,71 @@ fn a_press_from_another_window_is_never_held_in_the_window_it_crosses() {
     t.s.move_to(tx, ty);
     let b = heard(&t.s.f().take(t.b));
     assert!(b.iter().all(|&k| k == 0), "pressed on the desktop: {b:?}");
+}
+
+/// A Shift-click whose messages all wait when the round starts: the
+/// keyboard's Shift down, the pointer's press and release, the keyboard's
+/// Shift up. The keyboard's backlog is not read past its first key before
+/// the pointer's press, so the press carries Shift (the keyboard read
+/// whole made the click a plain one: `files-manage:auto:2`, step 22,
+/// 2026-11-21).
+#[test]
+fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    // A plain click focuses the window.
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let key = |code: u32, value: u32| input::Event {
+        kind: Below(input::kind::KEY),
+        code,
+        value,
+    };
+    let button = |value: u32| {
+        [
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 0,
+                value: axis(px, w),
+            },
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 1,
+                value: axis(py, h),
+            },
+            key(code::BTN_LEFT, value),
+        ]
+    };
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    let frame = |events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    t.s.f().send(k, frame(&[key(code::LEFT_SHIFT, 1)]), vec![]);
+    t.s.f().send(tab, frame(&button(1)), vec![]);
+    t.s.f().send(tab, frame(&button(0)), vec![]);
+    t.s.f().send(k, frame(&[key(code::LEFT_SHIFT, 0)]), vec![]);
+    for _ in 0..4 {
+        t.s.c.step();
+    }
+    let press =
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| (p.buttons.0, p.modifiers.0))
+            .find(|(b, _)| b & gui::buttons::LEFT != 0)
+            .expect("the press is told");
+    assert_eq!(
+        press.1 & gui::modifiers::SHIFT,
+        gui::modifiers::SHIFT,
+        "the press carries Shift: {press:?}"
+    );
 }

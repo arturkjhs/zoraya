@@ -1018,7 +1018,9 @@ Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the 
   is told to the window under it once, at the end, with the last place. A message that changes a button or turns a
   wheel is told at its end, as before, and so is every message while a button is held: the window that has the press
   hears it move before the pointer leaves it (a file manager starts its drag from that move; told only at the end, a
-  whole drag read in one round under TCG gave it none). ADR-0467's Recommendation 2 does not yet say this.
+  whole drag read in one round under TCG gave it none). A message with a key, a button or a wheel ends that device's
+  round, so that devices stay in order across a backlog (the keyboard's Shift down and up both read before the
+  pointer's press made a Shift-click plain). ADR-0467's Recommendation 2 does not yet say either.
 - **One frame per refresh.** `compd` sets 1/60 s (`set_frame_interval`; the library's default is none, so the host
   tests see every frame). What changed waits in the damage, and the loop's wait ends at the due time. A client's
   commit is never held: it is answered in its round (a client with a commit unanswered is not read, and its channel

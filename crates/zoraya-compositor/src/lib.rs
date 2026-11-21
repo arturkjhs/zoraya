@@ -1094,7 +1094,8 @@ impl<P: Platform> Compositor<P> {
         self.handles.clear();
         let mut message = core::mem::take(&mut self.message);
         let mut handles = core::mem::take(&mut self.handles);
-        // Everything the device has waiting, up to `MAX_DRAIN` messages: a
+        // The device's waiting motions, up to `MAX_DRAIN` messages and up to
+        // its first key, button or wheel (which ends its round): a
         // pointer that sent ten positions since the last round is told once
         // (proposed ADR-0467). A message that changes a button or turns a
         // wheel is told at its end, as before: the client hears the press
@@ -1114,14 +1115,26 @@ impl<P: Platform> Compositor<P> {
                         let now = self.platform.now();
                         self.measure.message(now);
                         let buttons = self.buttons;
+                        let mut keyed = false;
                         for event in frame.events.iter() {
                             if event.is_valid() {
+                                keyed |= event.kind.0 == input::kind::KEY;
                                 self.input_event(event);
                             }
                         }
-                        if self.buttons != buttons || self.buttons != 0 || self.wheel != (0, 0) {
+                        let turned = self.wheel != (0, 0);
+                        if self.buttons != buttons || self.buttons != 0 || turned {
                             self.pointer_moved_or_pressed();
                             self.send_wheel();
+                        }
+                        // A key, a button or a wheel ends the device's
+                        // round: the other devices' messages that came
+                        // before the next one are read first, as before
+                        // ADR-0467 (a keyboard's Shift down and up both
+                        // read before the pointer's press made a
+                        // Shift-click a plain click, files-manage:auto:2).
+                        if keyed || turned {
+                            break;
                         }
                     }
                 }
