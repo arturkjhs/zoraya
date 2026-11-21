@@ -1191,14 +1191,14 @@ and `tcg-el2-a`/`-b`: `FULL=1` leaves them out there, and the `tcg` targets expe
 kernel reads `zoraya.shard=N/2` from `/chosen/bootargs` (`tools/run-qemu.sh --shard N/2`); shard 1 is the registered
 tests before `SHARD_2_FIRST` (`kernel/src/testing.rs`), shard 2 the rest, in the registered order, so each test runs
 in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that needs what earlier ones left must
-warm itself up (`t_memory`, of `memory_objects_from_a_process`, refuses an oversized request once before it counts the free frames), because the cut is the first
+account for it (`t_memory`, of `memory_objects_from_a_process`, accounts the first refusal: the heap's live bytes are unchanged and the drop in free frames equals the growth of the heap's backing pages, page-table frames included; from the second refusal on nothing changes), because the cut is the first
 test of shard 2 and a test after it does not follow them. The cut is `job_signal_reaches_every_process_of_its_tree`, which
 puts the slow tests (`a_create_under_churn_is_refused_within_the_round_cap`, `threads_and_futexes_keep_their_rules`) in
 shard 1 and the others (`job_signal_*`, `job_suspend_*`, `kernel_work_is_bounded`) in shard 2 so that each takes about half
-of a whole run. The other `auto-*` suites stay whole (HVF runs one in under two minutes). Known limits:
+of a whole run. Balance, checked 2026-11-21 against the logs of run 44849798104 (which ran the cut before this one, at 135, with the 10 tests after it as shard `-b`): the CI log keeps only the five slowest tests of a job and truncates the `ok` lines, so per-test sums for the current cut cannot be made from it. What it gives: on the TCG suites the old `-a` (135 tests) took 129 s (gicv2), 137 s (el2) and 218 s (gicv3), and the old `-b` (10 tests) 82 to 114 s; the tests moved into shard 2 by the cut at 105 (`job_signal_reaches_every_process_of_its_tree`, 37 to 41 s on a TCG runner, and the other `job_signal_*`) take that much off shard 1 and add it to shard 2, which gives about 130 to 170 s for shard 2 and 90 to 180 s for shard 1. That is not clearly uneven, so the cut stays; the first scheduled run of the split suites should log each shard's duration, and the cut moves only if they differ by more than a factor of 1.5. `auto-default` and `auto-el2` stay whole (HVF runs one in under two minutes). Known limits:
 `tools/check-test-shards.sh` sees only the multi-line `name: "..."` entries of rustfmt's layout (a one-line `Test {..}`
 would escape its uniqueness check); shard 2 holds `kernel_work_is_bounded`, the most variable test (29 to 117 s in CI),
-so a shard-2 job near its limit will be that test. Each run ends with a boot-stack canary check outside any test, since
+and `job_signal_*` are slow too (63 s in run 44849798104), so a shard-2 job near its limit will be one of them. Each run ends with a boot-stack canary check outside any test, since
 the overflow test (shard 1) and `stack_canary_intact` (shard 2) are in different shards.
 
 How the in-QEMU tests run and report:

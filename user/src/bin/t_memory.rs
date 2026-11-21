@@ -14,6 +14,8 @@ use zoraya_user::{
 
 const PAGE: u64 = 4096;
 const FREE_FRAMES: u64 = 0x7006;
+const HEAP_LIVE: u64 = 0x700b;
+const HEAP_BACKING: u64 = 0x7017;
 const OBJECT_MAPPINGS: u64 = 0x7008;
 
 fn test_call(number: u64) -> u64 {
@@ -127,16 +129,36 @@ fn bad_arguments() {
 }
 
 /// INV-0051-1 at exhaustion: more than is free fails, and frees what it took.
+///
+/// A refusal may grow the kernel heap (the scattered path builds a list of
+/// frames before it fails), and a heap that has grown keeps its backing pages.
+/// That is a one-time loss when this program is the first of a shard on a fresh
+/// boot, not a leak of the call. So the first refusal is accounted: the heap's
+/// live bytes are unchanged, and every frame it took from the free count is a
+/// page of `HEAP_BACKING`. The kernel's `heap::stats` already counts the
+/// frames of the kernel's own page tables in `backing` (a growth across a
+/// 2 MiB boundary of the heap window takes one), so the allowance for them is
+/// zero: the drop in free frames equals the growth of `backing` in pages.
+/// From the second refusal on nothing may change at all.
 fn exhaustion_changes_nothing() {
     for flags in [MemoryFlags::NONE, MemoryFlags::CONTIGUOUS] {
-        // A first refusal may grow a kernel table that stays (this program
-        // is the first of a shard on a fresh boot, with nothing grown by the
-        // tests before it); the count is compared from the second one on.
         let free = test_call(FREE_FRAMES);
+        let backing = test_call(HEAP_BACKING);
+        let live = test_call(HEAP_LIVE);
         assert_err!(memory_create((free + 16) * PAGE, flags), Status::NoMemory);
-        let free = test_call(FREE_FRAMES);
+        let free_after = test_call(FREE_FRAMES);
+        let backing_after = test_call(HEAP_BACKING);
+        assert_eq!(test_call(HEAP_LIVE), live, "the refusal keeps no heap");
+        assert!(backing_after >= backing, "the heap does not shrink");
+        assert_eq!(
+            free - free_after,
+            (backing_after - backing) / PAGE,
+            "a frame the refusal took is a page the heap grew by"
+        );
+        let free = free_after;
         assert_err!(memory_create((free + 16) * PAGE, flags), Status::NoMemory);
         assert_eq!(test_call(FREE_FRAMES), free, "nothing kept");
+        assert_eq!(test_call(HEAP_BACKING), backing_after, "no growth");
     }
 }
 
