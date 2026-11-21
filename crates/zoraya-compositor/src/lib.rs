@@ -1089,7 +1089,11 @@ impl<P: Platform> Compositor<P> {
         // pointer that sent ten positions since the last round is told once
         // (proposed ADR-0467). A message that changes a button or turns a
         // wheel is told at its end, as before: the client hears the press
-        // where it happened, in order.
+        // where it happened, in order. So is each message while a button
+        // is held: the window that has the press hears it move on the way
+        // out, not only the window under the last place (a file manager
+        // starts its drag from that move; under TCG a whole drag was read
+        // in one round and the release made a click of it elsewhere).
         for _ in 0..MAX_DRAIN {
             let incoming = self.platform.read(end, &mut message, &mut handles);
             for h in handles.drain(..) {
@@ -1106,7 +1110,7 @@ impl<P: Platform> Compositor<P> {
                                 self.input_event(event);
                             }
                         }
-                        if self.buttons != buttons || self.wheel != (0, 0) {
+                        if self.buttons != buttons || self.buttons != 0 || self.wheel != (0, 0) {
                             self.pointer_moved_or_pressed();
                             self.send_wheel();
                         }

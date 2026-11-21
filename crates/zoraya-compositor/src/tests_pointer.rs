@@ -764,3 +764,57 @@ fn moves_go_while_a_new_image_is_unanswered() {
     // where it is.
     assert_eq!(s.c.cursor_at, s.c.pointer);
 }
+
+/// A press held in one window's body and the pointer's moves after it, all
+/// waiting when the round starts, to a place over another window: the
+/// window that has the press hears the pointer move with the button down
+/// before the pointer leaves it, so that it can start a drag (ADR-0170).
+/// Told only at the end, the move went to the window under the last place,
+/// and the source never heard its press move: the file manager under TCG
+/// started no drag, and `t_open` took the moves and the release for a click
+/// on Save (`make test-gui GUI_RUNS=files:tcg:1`, step 45, 2026-11-21).
+#[test]
+fn a_held_press_moving_out_of_its_window_is_told_to_it_on_the_way() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    assert!(!t.oa.contains(tx, ty) && t.ob.contains(tx, ty));
+    t.s.f().take(t.a);
+    t.s.f().take(t.b);
+    // The runner's `drag`: the press, then eight moves, all read in one
+    // round by a slow guest.
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    for i in 1..=8 {
+        t.s.queue_move(px + (tx - px) * i / 8, py + (ty - py) * i / 8);
+    }
+    t.s.c.step();
+    // Read, not taken: the drag below names the press by its serial.
+    let heard: Vec<_> = t.s.f().peers[&t.a]
+        .outbox
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+        .map(|(_, p)| (p.x, p.y, p.buttons.0))
+        .collect();
+    let press = heard.first().copied().expect("the press is told");
+    assert_eq!(press.2 & gui::buttons::LEFT, gui::buttons::LEFT);
+    assert!(
+        heard
+            .iter()
+            .any(|p| p.2 & gui::buttons::LEFT != 0 && (p.0, p.1) != (press.0, press.1)),
+        "the source hears its press move: {heard:?}"
+    );
+    // The source answers with a drag, which the compositor takes: the
+    // press is still held. The release over the other window drops there.
+    let entry = t.s.f().channel(1);
+    assert_eq!(super::drops::drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    t.s.f().take(t.b);
+    t.s.point(axis(tx, w), axis(ty, h), Some(0));
+    assert!(
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .any(|r| decode::<gui::Drop<'_>>(r, 1).is_ok()),
+        "the other window gets the drop"
+    );
+}

@@ -1015,7 +1015,9 @@ Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the 
   frame as before. `gpud` checks the image's size, the hot spot and the place against the display (INV-0467-2).
 - **A device's messages are read together.** Up to `MAX_DRAIN` (32) messages of an input device a round; the pointer
   is told to the window under it once, at the end, with the last place. A message that changes a button or turns a
-  wheel is told at its end, as before.
+  wheel is told at its end, as before, and so is every message while a button is held: the window that has the press
+  hears it move before the pointer leaves it (a file manager starts its drag from that move; told only at the end, a
+  whole drag read in one round under TCG gave it none). ADR-0467's Recommendation 2 does not yet say this.
 - **One frame per refresh.** `compd` sets 1/60 s (`set_frame_interval`; the library's default is none, so the host
   tests see every frame). What changed waits in the damage, and the loop's wait ends at the due time. A client's
   commit is never held: it is answered in its round (a client with a commit unanswered is not read, and its channel
