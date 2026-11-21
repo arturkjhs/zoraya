@@ -477,8 +477,8 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   Decision): one is in flight, what is composed meanwhile goes out as one rectangle when the driver answers, and a
   driver that misses 2 s is dropped and reported to `init` (`DisplayHung`), which restarts it. Windows are
   placed by the compositor (16, 16, then cascaded by 32). Keys go to the focused surface, translated by the US layout of
-  `zoraya-keymap`; pointer events to the surface under the pointer, with the buttons held only to the body the first of
-  them was pressed in (`pressed_in`: a drag that crosses another window is no press there), and a frame's wheel turns, summed, as one `Wheel`
+  `zoraya-keymap`; pointer events to the surface under the pointer, with the buttons held only to the client in whose body
+  the first of them was pressed (`pressed_in`: a drag that crosses another client's window is no press there), and a frame's wheel turns, summed, as one `Wheel`
   (ordinal 46) to the toplevel or popup body under it, never during a move, a drag or the switcher, and with the
   modifiers only to the focused client (proposed ADR-0322). A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.

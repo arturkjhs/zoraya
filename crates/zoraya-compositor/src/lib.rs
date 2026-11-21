@@ -438,8 +438,9 @@ pub struct Compositor<P: Platform> {
     /// delivered to it: the only one that may start a drag (ADR-0170).
     body_press: Option<(Key, u32, u64)>,
     /// The window in whose body the buttons held now were first pressed:
-    /// the only one told they are held. Another window the pointer crosses
-    /// meanwhile hears it with no button (ADR-0094: a key released after a
+    /// only its client's windows are told they are held. Another client's
+    /// window the pointer crosses meanwhile hears it with no button
+    /// (ADR-0094: a key released after a
     /// focus change is no press for the new window either), so that a drag
     /// passing over it is no press on what it passes (a drop on `t_open`'s
     /// Save button pressed it under TCG, 2026-11-21).
@@ -1999,9 +2000,10 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let (px, py) = ((x - body.x) as u32, (y - body.y) as u32);
-        // Buttons pressed in another window, or outside every body, are not
-        // held here (`pressed_in`).
-        let mine = if self.pressed_in == Some(key) {
+        // Buttons pressed in another client's window, or outside every body,
+        // are not held here (`pressed_in`); the client's own popup, opened
+        // by the press, hears them.
+        let mine = if self.pressed_in.is_some_and(|k| k.client == key.client) {
             u32::MAX
         } else {
             0
