@@ -1037,7 +1037,8 @@ Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the 
   with the modifiers before it. Known limits: (1) the order is the drivers': two drivers that ran in the other order
   than their interrupts, within the same few milliseconds, are told in the order they ran; an event the device adds
   while its driver drains carries the drain's earlier time; a frame not yet sent when the compositor reads is not
-  waited for; a driver whose times are too early holds another device's frame back by at most 512 of its frames (a driver may
+  waited for; a driver whose times are too early holds each frame of another device back by at most 512 of its frames from
+  that frame's read (16 to 512 rounds; a driver may
   send any key already, ADR-0092); a frame sent during a round is caught only before a head that may end it, not
   before a move while a button is held; no GUI run checks `inputd`'s stamp; (5) there are no
   grabs (ADR-0094): a release over another window

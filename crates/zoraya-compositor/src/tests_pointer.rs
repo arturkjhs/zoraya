@@ -1248,6 +1248,137 @@ fn each_head_counts_the_frames_passed_from_its_read() {
     assert!(s.untold(k) > 0);
 }
 
+/// One frame message from `time` with `events`.
+fn frame_at(time: u64, events: &[input::Event]) -> Vec<u8> {
+    message(
+        &input::Frame {
+            dropped: 0,
+            time,
+            events: Seq::Of(events),
+        },
+        0,
+    )
+}
+
+/// An honest backlog of more than 64 frames from two other devices, all
+/// made before a held head, passes it before it is told: the bound is well
+/// above what honest devices queue (verification review of 7da381ff, 5).
+#[test]
+fn an_honest_backlog_of_two_devices_passes_a_held_head() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    let (k, tab) = (s.keyboard, s.tablet);
+    let third = s.f().channel(64);
+    let m = s.manager;
+    s.f().send(m, message(&gui::AttachInput {}, 7), vec![third]);
+    s.c.step();
+    let base = s.f().clock;
+    for i in 0..40u64 {
+        for (n, end) in [(0, k), (1, third)] {
+            let key = [input::Event {
+                kind: Below(input::kind::KEY),
+                code: KEY_A + n,
+                value: (i % 2 == 0).into(),
+            }];
+            s.f()
+                .send(end, frame_at(base + 1 + 2 * i + n as u64, &key), vec![]);
+        }
+    }
+    let mv = [input::Event {
+        kind: Below(input::kind::AXIS),
+        code: 0,
+        value: 100,
+    }];
+    s.f().send(tab, frame_at(base + 1000, &mv), vec![]);
+    s.f().clock = base + 10_000;
+    for _ in 0..200 {
+        if s.untold(tab) == 0 {
+            break;
+        }
+        s.c.step();
+    }
+    assert_eq!(s.untold(tab), 0);
+    assert_eq!(
+        (s.untold(k), s.untold(third)),
+        (0, 0),
+        "the 80 earlier frames went first"
+    );
+    assert_eq!(s.c.stats().odd_input_times, 0);
+}
+
+/// A frame of moves and keys from one device: each move is told before the
+/// key after it (verification review of 7da381ff, 2).
+#[test]
+fn each_move_in_a_frame_is_told_before_the_key_after_it() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let at = |x: i64| input::Event {
+        kind: Below(input::kind::AXIS),
+        code: 0,
+        value: axis(x, w),
+    };
+    let key = |code: u32| input::Event {
+        kind: Below(input::kind::KEY),
+        code,
+        value: 1,
+    };
+    let events = [at(px + 3), key(code::LEFT_SHIFT), at(px + 6), key(KEY_A)];
+    let tab = t.s.tablet;
+    let time = t.s.f().time();
+    t.s.f().send(tab, frame_at(time, &events), vec![]);
+    for _ in 0..3 {
+        t.s.c.step();
+    }
+    let out = t.s.f().take(t.a);
+    let last_move = out
+        .iter()
+        .rposition(|m| decode::<gui::WindowPointerMods>(m, 0).is_ok())
+        .expect("the moves are told");
+    let a = out
+        .iter()
+        .position(|m| decode::<gui::Key>(m, 0).is_ok_and(|(_, k)| k.code == KEY_A))
+        .expect("A is told");
+    assert!(last_move < a, "the second move before A: {last_move} {a}");
+}
+
+/// A driver that stamped a future time and is gone leaves nothing odd for
+/// the next driver in its slot (verification review of 7da381ff, 3).
+#[test]
+fn a_new_driver_in_a_slot_starts_with_no_time_before() {
+    let mut s = setup_with(|_| {});
+    let k = s.keyboard;
+    let key = |v: u32| {
+        [input::Event {
+            kind: Below(input::kind::KEY),
+            code: KEY_A,
+            value: v,
+        }]
+    };
+    s.f().send(k, frame_at(u64::MAX, &key(1)), vec![]);
+    s.c.step();
+    assert_eq!(s.c.stats().odd_input_times, 1);
+    s.f().peers.get_mut(&k).unwrap().gone = true;
+    s.c.step();
+    assert!(s.f().closed.contains(&k));
+    let new = s.f().channel(8);
+    let m = s.manager;
+    s.f().send(m, message(&gui::AttachInput {}, 7), vec![new]);
+    s.c.step();
+    let time = s.f().clock;
+    s.f().send(new, frame_at(time, &key(0)), vec![]);
+    s.c.step();
+    assert_eq!(s.f().peers[&new].inbox.len(), 0);
+    assert_eq!(
+        s.c.stats().odd_input_times,
+        1,
+        "the new driver's time is not odd"
+    );
+}
+
 /// A time later than the compositor's clock is taken as when the frame was
 /// read: a driver's future time cannot put its frame behind another
 /// device's frame sent after it was read.

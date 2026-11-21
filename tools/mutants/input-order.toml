@@ -109,3 +109,30 @@ file = "crates/zoraya-compositor/src/lib.rs"
 find = 'head.last_raw = frame.time;'
 replace = ''
 note = "input-order: equal_and_backward_times_keep_each_devices_order"
+
+[[mutant]]
+id = "IO-flush-once"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+                    if is_key(event) {
+                        self.pointer_moved_or_pressed();
+                    }'''
+replace = '''
+                    if is_key(event) && self.key_events == keys {
+                        self.pointer_moved_or_pressed();
+                    }'''
+note = "input-order: each_move_in_a_frame_is_told_before_the_key_after_it"
+
+[[mutant]]
+id = "IO-last-raw-kept"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'self.heads[slot].last_raw = 0;'
+replace = ''
+note = "input-order: a_new_driver_in_a_slot_starts_with_no_time_before"
+
+[[mutant]]
+id = "IO-passed-small"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'pub const MAX_PASSED: usize = MAX_INPUTS * 2 * 64;'
+replace = 'pub const MAX_PASSED: usize = 64;'
+note = "input-order: an_honest_backlog_of_two_devices_passes_a_held_head"

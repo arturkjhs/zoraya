@@ -162,11 +162,15 @@ struct Head {
 /// not told waits behind their earlier times (proposed ADR-0469). When it
 /// was read, the others held at most one head each and at most a channel's
 /// queue (`zoraya_channel::MAX_QUEUED`, 64) each; an honest frame sent
-/// after it was read has a later time, except one stamped in the same wake
-/// (at most a queue's more). So an honest backlog, drained at any speed,
-/// never reaches this, and a driver whose times are too early (0, a stopped
-/// clock) and that floods holds another device back by at most this many
-/// frames (16 rounds of `MAX_DRAIN`), not for as long as it floods.
+/// after it was read has a later time, except one stamped in the same wake,
+/// and a wake takes at most the 64 buffers `inputd` offers (its `poll`
+/// gives them back only at its end: `zoraya_virtio`'s `offer` does not
+/// write the available index, `notify` does), at most 32 frames. So an
+/// honest backlog, at most 3 by 97 frames, never reaches this, drained at
+/// any speed. A driver whose times are too early (0, a stopped clock) holds
+/// each frame of another device, from its read, back by at most this many
+/// frames and the other aged heads (from 16 rounds of `MAX_DRAIN`, to 512
+/// rounds if every flood frame is a key), not for as long as it floods.
 pub const MAX_PASSED: usize = MAX_INPUTS * 2 * 64;
 
 /// How often a flush that found the driver's queue full is tried again.
