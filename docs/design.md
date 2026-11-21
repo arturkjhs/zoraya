@@ -477,8 +477,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   Decision): one is in flight, what is composed meanwhile goes out as one rectangle when the driver answers, and a
   driver that misses 2 s is dropped and reported to `init` (`DisplayHung`), which restarts it. Windows are
   placed by the compositor (16, 16, then cascaded by 32). Keys go to the focused surface, translated by the US layout of
-  `zoraya-keymap`; pointer events to the surface under the pointer, with the buttons held only to the client in whose body
-  the first of them was pressed (`pressed_in`: a drag that crosses another client's window is no press there), and a frame's wheel turns, summed, as one `Wheel`
+  `zoraya-keymap`; pointer events to the surface under the pointer, with each held button told only to the client in
+  whose window body it was pressed (`pressed_in`, per button, taken before the press acts: a drag that crosses another
+  client's window is no press there, and a press on a title bar's button is held in nobody), and a frame's wheel turns, summed, as one `Wheel`
   (ordinal 46) to the toplevel or popup body under it, never during a move, a drag or the switcher, and with the
   modifiers only to the focused client (proposed ADR-0322). A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
@@ -1020,7 +1021,13 @@ Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the 
   hears it move before the pointer leaves it (a file manager starts its drag from that move; told only at the end, a
   whole drag read in one round under TCG gave it none). A message with a key, a button or a wheel ends that device's
   round, so that devices stay in order across a backlog (the keyboard's Shift down and up both read before the
-  pointer's press made a Shift-click plain). ADR-0467's Recommendation 2 does not yet say either.
+  pointer's press made a Shift-click plain); the round ends on what the message did (a button changed, a key taken,
+  a wheel turned), not on the kind of its events. Known limits: (1) the keyboard's message before the pointer's
+  press is read first only when the port serves the keyboard first in the round; `input::Event` carries no time, so
+  two devices' order within a round is the port's; (5) there are no grabs (ADR-0094): a release over another window
+  is not told to the client that had the press, which hears the button up only with its next pointer event; (7) a
+  device frame that holds both a press and its release leaves the buttons as they were, and the client hears no
+  click.
 - **One frame per refresh.** `compd` sets 1/60 s (`set_frame_interval`; the library's default is none, so the host
   tests see every frame). What changed waits in the damage, and the loop's wait ends at the due time. A client's
   commit is never held: it is answered in its round (a client with a commit unanswered is not read, and its channel

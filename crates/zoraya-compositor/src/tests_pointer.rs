@@ -934,3 +934,177 @@ fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
         "the press carries Shift: {press:?}"
     );
 }
+
+/// The buttons each client hears in `WindowPointerMods` (taken).
+fn held_heard(s: &mut Setup, end: u32) -> Vec<(u32, u32)> {
+    s.f()
+        .take(end)
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+        .map(|(_, p)| (p.window, p.buttons.0))
+        .collect()
+}
+
+/// A press on the upper window's minimise button, over the lower window's
+/// body: the press names nobody, so the lower window, uncovered by it,
+/// never hears the button held (review of e5d1c3c3, 2).
+#[test]
+fn a_press_that_minimises_a_window_is_held_in_none_it_uncovers() {
+    let mut t = super::drops::two();
+    let (mx, my) = (t.ob.x + 42, t.ob.y + 18);
+    assert!(t.oa.contains(mx, my) && !t.oa.contains(t.ob.right() - 2, t.ob.bottom() - 2));
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(mx, w), axis(my, h), Some(1));
+    let ib = t.s.c.stack().find(|k| k.client == 1).unwrap();
+    assert!(t.s.c.window(ib).unwrap().hidden, "the press minimised it");
+    t.s.f().take(t.a);
+    t.s.move_to(mx + 6, my + 6);
+    let a = held_heard(&mut t.s, t.a);
+    assert!(!a.is_empty() && a.iter().all(|p| p.1 == 0), "{a:?}");
+    assert_eq!(t.s.c.pressed_in, [None; 3]);
+}
+
+/// A client that ends with its press held leaves no press behind for the
+/// next client in its slot (review of e5d1c3c3, 3).
+#[test]
+fn a_client_that_ends_holding_a_press_leaves_none() {
+    let mut t = super::drops::two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(bx, w), axis(by, h), Some(1));
+    assert_eq!(t.s.c.pressed_in[0], Some(1));
+    t.s.f().peers.get_mut(&t.b).unwrap().gone = true;
+    t.s.c.step();
+    assert_eq!(t.s.c.pressed_in, [None; 3]);
+}
+
+/// Each button is held in the client it was pressed over: the left in A,
+/// the right in B; once the left is let go, A hears nothing held, though
+/// the right still is (review of e5d1c3c3, 4).
+#[test]
+fn each_button_is_held_only_in_the_client_it_was_pressed_over() {
+    let mut t = super::drops::two();
+    let (w, h) = t.s.f().display_size;
+    let a_at = (t.oa.x + 10, t.oa.y + 60);
+    let b_at = (t.ob.right() - 15, t.ob.bottom() - 15);
+    assert!(!t.oa.contains(b_at.0, b_at.1));
+    let button = |s: &mut Setup, at: (i64, i64), code: u32, value: u32| {
+        let events = [
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 0,
+                value: axis(at.0, w),
+            },
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 1,
+                value: axis(at.1, h),
+            },
+            input::Event {
+                kind: Below(input::kind::KEY),
+                code,
+                value,
+            },
+        ];
+        let tab = s.tablet;
+        s.f().send(
+            tab,
+            message(
+                &input::Frame {
+                    dropped: 0,
+                    events: Seq::Of(&events),
+                },
+                0,
+            ),
+            vec![],
+        );
+        s.c.step();
+    };
+    button(&mut t.s, a_at, code::BTN_LEFT, 1);
+    t.s.move_to(b_at.0, b_at.1);
+    button(&mut t.s, b_at, code::BTN_RIGHT, 1);
+    let b = held_heard(&mut t.s, t.b);
+    assert!(
+        b.iter().any(|p| p.1 == gui::buttons::RIGHT),
+        "B hears its right: {b:?}"
+    );
+    assert!(
+        b.iter().all(|p| p.1 & gui::buttons::LEFT == 0),
+        "never A's left: {b:?}"
+    );
+    button(&mut t.s, b_at, code::BTN_LEFT, 0);
+    t.s.f().take(t.a);
+    t.s.move_to(a_at.0 + 4, a_at.1 + 4);
+    let a = held_heard(&mut t.s, t.a);
+    assert!(
+        !a.is_empty() && a.iter().all(|p| p.1 == 0),
+        "A hears no right: {a:?}"
+    );
+}
+
+/// The pressing client's own popup, under the pointer while the press is
+/// held, hears the button held: the mask is the client's, not the
+/// window's (mutation M4 of the review of e5d1c3c3).
+#[test]
+fn the_pressing_clients_popup_hears_its_press_held() {
+    let mut t = super::drops::two();
+    let (w, h) = t.s.f().display_size;
+    let a_at = (t.oa.x + 10, t.oa.y + 60);
+    // The press in the window (which focuses it), held; the window opens
+    // a popup on its body, as a menu opens on a press.
+    t.s.point(axis(a_at.0, w), axis(a_at.1, h), Some(1));
+    let m = t.s.f().memory(vec![7; 20 * 10], 800, false);
+    let out = t.s.request(
+        t.a,
+        &gui::CreatePopup {
+            parent: t.ida,
+            x: 60,
+            y: 80,
+            width: 20,
+            height: 10,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(p.status.0, status::OK);
+    let pb = t.s.body(0, p.window);
+    assert!(!pb.contains(a_at.0, a_at.1));
+    t.s.f().take(t.a);
+    t.s.move_to(pb.x + 5, pb.y + 5);
+    let a = held_heard(&mut t.s, t.a);
+    assert!(
+        a.iter()
+            .any(|q| q.0 == p.window && q.1 & gui::buttons::LEFT != 0),
+        "{a:?}"
+    );
+}
+
+/// A wheel's message ends the device's round like a button's: the move
+/// behind it waits for the next round (mutation M5 of the review).
+#[test]
+fn a_wheel_message_ends_the_devices_round() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    let tab = s.tablet;
+    let wheel = [input::Event {
+        kind: Below(input::kind::WHEEL),
+        code: 0,
+        value: 120,
+    }];
+    let m = message(
+        &input::Frame {
+            dropped: 0,
+            events: Seq::Of(&wheel),
+        },
+        0,
+    );
+    s.f().send(tab, m, vec![]);
+    s.queue_move(320, 210);
+    s.c.step();
+    assert_eq!(s.f().peers[&tab].inbox.len(), 1, "the move waits");
+    s.c.step();
+    assert!(s.f().peers[&tab].inbox.is_empty());
+}

@@ -74,7 +74,15 @@ Option B, with the two smaller changes that the measurements asked for:
 1. **The host draws the pointer** (Option B). `SetCursor` once per image (scale or appearance), `MoveCursor` at most once a round and
    only when the place changed. The frame has no pointer once the driver holds the image.
 2. **A device's messages are read together.** Up to 32 messages of each input device a round, and the pointer told to the window
-   under it once, at the end, with the last place; a message that changes a button or turns a wheel is told at its end as before.
+   under it once, at the end, with the last place, while no button is held; a message that changes a button or turns a wheel is
+   told at its end as before, and so is every message while a button is held. Each held button is told only to the client in whose
+   window body it was pressed (taken before the press acts; a press on a title bar's button is held in nobody). A message that
+   changes a button, gives a key or turns a wheel ends that device's round, so that the devices stay in order across a backlog.
+   (Amended 2026-11-21 after `files:tcg:1` and `files-manage:auto:2` failed on `main`: a whole drag read in one round gave the
+   file manager no move to start its drag from and pressed `t_open`'s Save; a keyboard read whole before the pointer made a
+   Shift-click plain.) Limits: two devices' order within a round is the port's, as `input::Event` carries no time; there are no
+   grabs (ADR-0094), so a release over another window is not told to the client that had the press; a device frame holding both a
+   press and its release leaves the buttons as they were.
 3. **One frame per refresh.** At most one frame per 1/60 s (`compd` sets 16 666 667 ns; the compositor library's default is none,
    so the host tests see every frame). What changed waits in the damage and the loop's wait ends at the due time. A client's commit is
    answered in its own round: a commit is never held (a client with a commit unanswered is not read, and would keep the loop awake).
