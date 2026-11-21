@@ -9,7 +9,8 @@
 # `auto` configurations of test-qemu that have a `tcg` twin are left out
 # (QEMU_AUTO_TWINS). On a Mac `make test` and `make test-changed` keep `auto`.
 make test-unit
-make test-qemu-auto-smp4-2g
+make test-qemu-auto-smp4-2g-a
+make test-qemu-auto-smp4-2g-b
 make test-qemu-tcg-default
 make test-qemu-tcg-smp4-gicv2-a
 make test-qemu-tcg-smp4-gicv2-b

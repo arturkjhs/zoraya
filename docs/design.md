@@ -1175,7 +1175,7 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 | Label | Accelerator | Machine | Checks beyond the test list |
 |---|---|---|---|
 | auto-default | HVF on a Mac, else TCG | default | entry at EL1 |
-| auto-smp4-2g | HVF on a Mac, else TCG | 4 CPUs, 2 GiB | `cpus: 4`, 2048 MiB region |
+| auto-smp4-2g-a, -b | HVF on a Mac, else TCG | 4 CPUs, 2 GiB | `cpus: 4`, 2048 MiB region |
 | auto-el2 | HVF on a Mac, else TCG | `virtualization=on` | entry at EL2; skipped where HVF has no EL2 (Known limitations) |
 | tcg-default | TCG | default | GICv2 |
 | tcg-smp4-gicv2-a, -b | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
@@ -1186,13 +1186,16 @@ On a Mac the three `auto` lines run under HVF, so they cover GICv3 only. GICv2 u
 cannot start it. Where `auto` is TCG (CI's runners), `auto-default` and `auto-el2` are the machines of `tcg-default`
 and `tcg-el2-a`/`-b`: `FULL=1` leaves them out there, and the `tcg` targets expect their lines (ADR-0350).
 
-The three TCG suites that are not `tcg-default` run in two shards (`-a`, `-b`), each a job with its own 420 s limit
+`auto-smp4-2g` and the three TCG suites that are not `tcg-default` run in two shards (`-a`, `-b`; `auto-smp4-2g` passed 420 s whole on a slow TCG runner, run 44849798104), each a job with its own 420 s limit
 (architect, 2026-11-16: one boot of the list took about 300 s on a fast runner and passed 420 s on a slow one). The test
 kernel reads `zoraya.shard=N/2` from `/chosen/bootargs` (`tools/run-qemu.sh --shard N/2`); shard 1 is the registered
 tests before `SHARD_2_FIRST` (`kernel/src/testing.rs`), shard 2 the rest, in the registered order, so each test runs
-in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that ran after earlier ones
-and needs what they left (`memory_objects_from_a_process` needs the heap grown by the earlier tests) must stay after them:
-the cut is not moved before it. The `auto-*` suites stay whole (HVF runs one in under two minutes). Known limits:
+in exactly one shard (`make check-test-shards`). Shard 1 holds every expected panic. A test that needs what earlier ones left must
+warm itself up (`t_memory`, of `memory_objects_from_a_process`, refuses an oversized request once before it counts the free frames), because the cut is the first
+test of shard 2 and a test after it does not follow them. The cut is `job_signal_reaches_every_process_of_its_tree`, which
+puts the slow tests (`a_create_under_churn_is_refused_within_the_round_cap`, `threads_and_futexes_keep_their_rules`) in
+shard 1 and the others (`job_signal_*`, `job_suspend_*`, `kernel_work_is_bounded`) in shard 2 so that each takes about half
+of a whole run. The other `auto-*` suites stay whole (HVF runs one in under two minutes). Known limits:
 `tools/check-test-shards.sh` sees only the multi-line `name: "..."` entries of rustfmt's layout (a one-line `Test {..}`
 would escape its uniqueness check); shard 2 holds `kernel_work_is_bounded`, the most variable test (29 to 117 s in CI),
 so a shard-2 job near its limit will be that test. Each run ends with a boot-stack canary check outside any test, since

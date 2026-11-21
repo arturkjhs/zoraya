@@ -671,7 +671,7 @@ fn bump(counter: &AtomicUsize) {
 /// (`tools/check-test-shards.sh`). Everything the runner expects of a
 /// deliberate failure (`EXPECT` in the Makefile) comes before it, so shard 1
 /// holds the fault tests and `harness_resumes_after_panic`.
-const SHARD_2_FIRST: &str = "job_suspend_from_a_process";
+const SHARD_2_FIRST: &str = "job_signal_reaches_every_process_of_its_tree";
 
 /// One past the last test of this run (`TESTS.len()` unless sharded).
 static END: AtomicUsize = AtomicUsize::new(usize::MAX);
