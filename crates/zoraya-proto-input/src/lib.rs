@@ -44,7 +44,7 @@ protocol! {
     /// its device (proposed ADR-0469): the compositor tells the devices'
     /// frames waiting for it in this order. It orders only: the compositor
     /// takes it as no later than its clock when it reads the frame, counts
-    /// a time that is 0, later or backwards, tells a frame that waited 2 s
+    /// a time that is 0, later or backwards, tells a frame passed by 512 others
     /// first whatever its time, and keeps a device's own frames in the
     /// order of its channel.
     message Frame<'a> = 1, handles 0 {

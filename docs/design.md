@@ -1029,16 +1029,17 @@ Measured first (`docs/tasks/TASK-31-gui-smooth-report.md`), then changed in the 
   earlier, made it plain too: `files-manage:auto:2`, CI run 44859568963); the round ends on what the message did (a
   button changed, a key taken, a wheel turned), not on the kind of its events. A head read and not told waits for
   the next round, which does not wait on the port. A time later than the compositor's clock when the frame is read
-  is taken as that clock; a head held more than 2 s since it was read (`MAX_INPUT_LAG_NS`) goes first whatever the
-  times, so frames read together keep their order at any backlog and no driver's times hold another device back
-  longer; a time that is 0, later or before the driver's time before is counted (`odd_input_times`) and `compd`
+  is taken as that clock; a head past which 512 frames of other devices were told (`MAX_PASSED`, more than an honest
+  backlog can hold) goes first whatever the times, so frames keep their order at any backlog, drained at any speed,
+  and no driver's times hold another device back longer; a time that is 0, later or before the driver's time before is counted (`odd_input_times`) and `compd`
   prints `an input driver's frame time is odd` once a boot. Before a head that may end the round is told, the
   devices whose channels were empty are read again. A pointer move waiting before a key is told before the key,
   with the modifiers before it. Known limits: (1) the order is the drivers': two drivers that ran in the other order
   than their interrupts, within the same few milliseconds, are told in the order they ran; an event the device adds
   while its driver drains carries the drain's earlier time; a frame not yet sent when the compositor reads is not
-  waited for; a driver whose times are too early holds another device's frame back by at most 2 s (a driver may
-  send any key already, ADR-0092); no GUI run checks `inputd`'s stamp; (5) there are no
+  waited for; a driver whose times are too early holds another device's frame back by at most 512 of its frames (a driver may
+  send any key already, ADR-0092); a frame sent during a round is caught only before a head that may end it, not
+  before a move while a button is held; no GUI run checks `inputd`'s stamp; (5) there are no
   grabs (ADR-0094): a release over another window
   is not told to the client that had the press, which hears the button up only with its next pointer event; (7) a
   device frame that holds both a press and its release leaves the buttons as they were, and the client hears no

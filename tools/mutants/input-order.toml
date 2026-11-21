@@ -47,15 +47,29 @@ note = "input-order: a_wheel_message_ends_the_devices_round, a_frame_read_and_no
 [[mutant]]
 id = "IO-never-aged"
 file = "crates/zoraya-compositor/src/lib.rs"
-find = 'let aged = now.saturating_sub(heads[i].read) > MAX_INPUT_LAG_NS;'
+find = 'let aged = heads[i].passed >= MAX_PASSED;'
 replace = 'let aged = false;'
-note = "input-order: a_flood_with_early_times_holds_another_device_back_only_by_the_lag"
+note = "input-order: a_flood_with_early_times_holds_another_device_back_a_bounded_while"
+
+[[mutant]]
+id = "IO-aged-at-once"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let aged = heads[i].passed >= MAX_PASSED;'
+replace = 'let aged = heads[i].passed >= 2;'
+note = "input-order: a_slow_drain_of_an_honest_backlog_keeps_the_order"
+
+[[mutant]]
+id = "IO-passed-not-reset"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'head.passed = 0;'
+replace = ''
+note = "input-order: each_head_counts_the_frames_passed_from_its_read"
 
 [[mutant]]
 id = "IO-lag-on-times"
 file = "crates/zoraya-compositor/src/lib.rs"
 find = 'head.time = time.min(read);'
-replace = 'head.time = time.min(read).max(read.saturating_sub(MAX_INPUT_LAG_NS));'
+replace = 'head.time = time.min(read).max(read.saturating_sub(2_000_000_000));'
 note = "input-order: frames_read_together_keep_their_order_at_any_backlog"
 
 [[mutant]]
@@ -75,8 +89,11 @@ note = "input-order: a_frame_sent_during_the_round_is_told_before_a_later_press"
 [[mutant]]
 id = "IO-key-before-move"
 file = "crates/zoraya-compositor/src/lib.rs"
-find = 'if !flushed && is_key(event) {'
-replace = 'if false {'
+find = '''
+                    if is_key(event) {
+                        self.pointer_moved_or_pressed();
+                    }'''
+replace = ''
 note = "input-order: a_move_before_a_key_is_told_before_it_with_the_modifiers_before_it"
 
 [[mutant]]
@@ -84,7 +101,7 @@ id = "IO-odd-uncounted"
 file = "crates/zoraya-compositor/src/lib.rs"
 find = 'self.stats.odd_input_times += 1;'
 replace = ''
-note = "input-order: a_flood_with_early_times_holds_another_device_back_only_by_the_lag"
+note = "input-order: a_flood_with_early_times_holds_another_device_back_a_bounded_while"
 
 [[mutant]]
 id = "IO-odd-backward-unseen"

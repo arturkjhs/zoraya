@@ -1036,7 +1036,7 @@ fn a_click_before_a_modifier_waiting_in_two_devices_keeps_its_order() {
 }
 
 /// The same two gestures read 3 s after they were made (a backlog longer
-/// than `MAX_INPUT_LAG_NS`): the frames read together keep their times'
+/// than 2 s): the frames read together keep their times'
 /// order (a bound on the times themselves made every head equal and the
 /// slot decided: review of 5add3833, 1).
 #[test]
@@ -1108,6 +1108,144 @@ fn equal_and_backward_times_keep_each_devices_order() {
         let shift = if case.1 { 0 } else { gui::modifiers::SHIFT };
         assert_eq!(heard.modifiers & gui::modifiers::SHIFT, shift, "{case:?}");
     }
+}
+
+/// An honest backlog drained slowly: forty keys, then Shift down and up
+/// on the keyboard, a press and release made between them on the tablet,
+/// and 100 ms of a slow guest per round (each key ends one). The press,
+/// read in the first round and held for four seconds, still waits for
+/// the keys and the Shift that came before it (an age in wall time made
+/// it go first: verification review of 0ea37765, 1).
+#[test]
+fn a_slow_drain_of_an_honest_backlog_keeps_the_order() {
+    const MS: u64 = 1_000_000;
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let key = |code: u32, value: u32| input::Event {
+        kind: Below(input::kind::KEY),
+        code,
+        value,
+    };
+    let base = t.s.f().clock;
+    let frame = |time: u64, events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                time: base + time,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    let mut ms = 1;
+    for _ in 0..20 {
+        t.s.f().send(k, frame(ms * MS, &[key(KEY_A, 1)]), vec![]);
+        t.s.f()
+            .send(k, frame((ms + 1) * MS, &[key(KEY_A, 0)]), vec![]);
+        ms += 2;
+    }
+    t.s.f()
+        .send(k, frame(ms * MS, &[key(code::LEFT_SHIFT, 1)]), vec![]);
+    t.s.f().send(
+        k,
+        frame((ms + 100) * MS, &[key(code::LEFT_SHIFT, 0)]),
+        vec![],
+    );
+    for (time, value) in [(ms + 50, 1), (ms + 51, 0)] {
+        let events = [
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 0,
+                value: axis(px, w),
+            },
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 1,
+                value: axis(py, h),
+            },
+            key(code::BTN_LEFT, value),
+        ];
+        t.s.f().send(tab, frame(time * MS, &events), vec![]);
+    }
+    t.s.f().clock = base + (ms + 200) * MS;
+    for _ in 0..80 {
+        t.s.c.step();
+        t.s.f().clock += 100 * MS;
+    }
+    assert!(t.s.f().peers[&k].inbox.is_empty() && t.s.f().peers[&tab].inbox.is_empty());
+    let p =
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| (p.buttons.0, p.modifiers.0))
+            .find(|(b, _)| b & gui::buttons::LEFT != 0)
+            .expect("the press is told");
+    assert_eq!(t.s.c.stats().odd_input_times, 0, "honest");
+    assert_eq!(
+        p.1 & gui::modifiers::SHIFT,
+        gui::modifiers::SHIFT,
+        "a Shift-click after a slow drain"
+    );
+}
+
+/// A head's count of frames told past it starts again with each head: the
+/// tablet's first frame, passed by `MAX_PASSED` keyboard frames, goes
+/// first; its next frame, read then, waits for the keyboard's earlier ones.
+#[test]
+fn each_head_counts_the_frames_passed_from_its_read() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    let (k, tab) = (s.keyboard, s.tablet);
+    let base = s.f().clock;
+    let frame = |time: u64, events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                time: base + time,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    let n = MAX_PASSED as u64 + 40;
+    for i in 0..n {
+        let key = [input::Event {
+            kind: Below(input::kind::KEY),
+            code: KEY_A,
+            value: (i % 2 == 0).into(),
+        }];
+        s.f().send(k, frame(1 + i, &key), vec![]);
+    }
+    for (time, x) in [(n + 10, 100), (n + 20, 200)] {
+        let events = [input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 0,
+            value: x,
+        }];
+        s.f().send(tab, frame(time, &events), vec![]);
+    }
+    s.f().clock = base + 10 * n;
+    let mut rounds = 0;
+    while s.untold(tab) == 2 {
+        s.c.step();
+        rounds += 1;
+        assert!(
+            rounds <= MAX_PASSED + 1,
+            "the first frame is told once passed"
+        );
+    }
+    assert_eq!(
+        s.untold(tab),
+        1,
+        "the next waits for the keyboard's earlier frames"
+    );
+    assert!(s.untold(k) > 0);
 }
 
 /// A time later than the compositor's clock is taken as when the frame was
@@ -1292,11 +1430,11 @@ fn a_frame_read_and_not_told_is_told_next_round_without_a_wait() {
 }
 
 /// A driver whose times are all 0 (a stopped clock, or a hostile one) and
-/// that floods holds another device's frame back by at most
-/// `MAX_INPUT_LAG_NS`, not for as long as it floods (review of 8e418c42,
-/// 1); its times are counted as odd.
+/// that floods holds another device's frame back by at most `MAX_PASSED`
+/// of its frames, not for as long as it floods (review of 8e418c42, 1);
+/// its times are counted as odd.
 #[test]
-fn a_flood_with_early_times_holds_another_device_back_only_by_the_lag() {
+fn a_flood_with_early_times_holds_another_device_back_a_bounded_while() {
     let mut s = setup_with(|_| {});
     s.move_to(300, 200);
     let (k, tab) = (s.keyboard, s.tablet);
@@ -1337,14 +1475,13 @@ fn a_flood_with_early_times_holds_another_device_back_only_by_the_lag() {
     while s.untold(k) > 0 {
         assert!(rounds < 60, "the key is still held after {rounds} rounds");
         flood(&mut s);
-        // 100 ms a round: the key is told once the lag has passed.
         s.f().clock += 100_000_000;
         s.c.step();
         rounds += 1;
     }
     assert!(
-        (15..=30).contains(&rounds),
-        "told after the lag of 2 s: {rounds} rounds"
+        rounds == (MAX_PASSED / MAX_DRAIN) as u64,
+        "told once passed by MAX_PASSED frames: {rounds} rounds"
     );
     let odd = s.c.stats().odd_input_times;
     assert!(

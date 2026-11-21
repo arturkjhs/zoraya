@@ -149,21 +149,25 @@ struct Head {
     /// read (a device's own frames keep their channel's order whatever their
     /// times: only heads are compared).
     time: u64,
-    /// The compositor's clock when it was read: a head held longer than
-    /// `MAX_INPUT_LAG_NS` goes first, whatever the times.
-    read: u64,
+    /// Frames of other devices told while it was held: at `MAX_PASSED` it
+    /// goes first, whatever the times.
+    passed: usize,
     /// The time its driver gave the device's frame before (for
     /// `Stats::odd_input_times`).
     last_raw: u64,
     events: Vec<input::Event>,
 }
 
-/// The longest a device's frame read and not told waits behind other
-/// devices' earlier times (proposed ADR-0469): a driver whose times are too
-/// early (0, a stopped clock) and that floods holds the other devices back
-/// by at most this, not for as long as it floods. Frames read together keep
-/// their times' order at any backlog.
-pub const MAX_INPUT_LAG_NS: u64 = 2_000_000_000;
+/// The most frames of other devices told while a device's frame read and
+/// not told waits behind their earlier times (proposed ADR-0469). When it
+/// was read, the others held at most one head each and at most a channel's
+/// queue (`zoraya_channel::MAX_QUEUED`, 64) each; an honest frame sent
+/// after it was read has a later time, except one stamped in the same wake
+/// (at most a queue's more). So an honest backlog, drained at any speed,
+/// never reaches this, and a driver whose times are too early (0, a stopped
+/// clock) and that floods holds another device back by at most this many
+/// frames (16 rounds of `MAX_DRAIN`), not for as long as it floods.
+pub const MAX_PASSED: usize = MAX_INPUTS * 2 * 64;
 
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
@@ -1200,6 +1204,11 @@ impl<P: Platform> Compositor<P> {
                 break;
             }
             told[slot] += 1;
+            for (i, h) in self.heads.iter_mut().enumerate() {
+                if i != slot && h.held {
+                    h.passed += 1;
+                }
+            }
             let ends = self.tell_head(slot);
             self.read_head(slot);
             if ends {
@@ -1210,13 +1219,12 @@ impl<P: Platform> Compositor<P> {
         self.send_wheel();
     }
 
-    /// The head to tell next: one held longer than `MAX_INPUT_LAG_NS`
-    /// first, then the earliest time; of equal times, the first device's.
-    fn earliest_head(&mut self) -> Option<usize> {
-        let now = self.platform.now();
+    /// The head to tell next: one passed by `MAX_PASSED` frames first, then
+    /// the earliest time; of equal times, the first device's.
+    fn earliest_head(&self) -> Option<usize> {
         let heads = &self.heads;
         (0..MAX_INPUTS).filter(|&i| heads[i].held).min_by_key(|&i| {
-            let aged = now.saturating_sub(heads[i].read) > MAX_INPUT_LAG_NS;
+            let aged = heads[i].passed >= MAX_PASSED;
             (!aged, heads[i].time, i)
         })
     }
@@ -1253,7 +1261,7 @@ impl<P: Platform> Compositor<P> {
                         head.last_raw = frame.time;
                         frame.time
                     }
-                    // Told as nothing, as early as the bounds allow.
+                    // Time 0: told (as nothing) first.
                     Err(_) => {
                         head.decoded = false;
                         0
@@ -1261,7 +1269,7 @@ impl<P: Platform> Compositor<P> {
                 };
                 // No later than now.
                 head.time = time.min(read);
-                head.read = read;
+                head.passed = 0;
                 if odd {
                     // Once a boot: an honest driver's times never are.
                     self.platform
@@ -1287,14 +1295,13 @@ impl<P: Platform> Compositor<P> {
             let buttons = self.buttons;
             let keys = self.key_events;
             let pressed = self.pressed_in;
-            let mut flushed = false;
             for event in events.iter() {
                 if event.is_valid() {
                     // A pointer move told before a key that came after it:
                     // the window under it hears it first, with the
                     // modifiers before the key (review of 8e418c42, 2).
-                    if !flushed && is_key(event) {
-                        flushed = true;
+                    // Nothing when the pointer has not moved.
+                    if is_key(event) {
                         self.pointer_moved_or_pressed();
                     }
                     self.input_event(*event);
@@ -1319,8 +1326,8 @@ impl<P: Platform> Compositor<P> {
     fn lose_input(&mut self, slot: usize, end: P::End) {
         self.platform.close(end);
         self.inputs[slot] = None;
-        // Reached only from `read_head`, with the head empty. Its
-        // `last_raw` stays: a new driver's times are later.
+        // Reached only from `read_head`, with the head empty.
+        self.heads[slot].last_raw = 0;
         // Keys it held down will never be released (review R10).
         self.keymap = Keymap::new();
         self.meta = 0;

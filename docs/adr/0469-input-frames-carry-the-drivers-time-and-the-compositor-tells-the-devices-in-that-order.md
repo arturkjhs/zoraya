@@ -54,9 +54,10 @@ Shift and its click, while the compositor may be a second behind.
   or turns a wheel (ADR-0467's end of the round, now for all devices at once), or the earliest head's device has had 32 frames
   this round, or no device has one. A head read and not told waits for the next round, which does not wait on the port. A device's
   own frames keep the order of its channel whatever their times: the time only chooses between devices. A time later than the
-  compositor's clock when it reads the frame is taken as that clock; a head held more than 2 s since it was read
-  (`MAX_INPUT_LAG_NS`) goes first whatever the times, so that no driver's times hold another device back longer; frames read
-  together keep their times' order at any backlog. A time that is 0, later than the clock or before the driver's time before is
+  compositor's clock when it reads the frame is taken as that clock. A head past which 512 frames of other devices were told
+  (`MAX_PASSED`: when it was read the others held at most one head and a channel's queue of 64 each, and an honest frame sent
+  later has a later time, but for one wake's queue more) goes first whatever the times: an honest backlog never reaches it,
+  drained at any speed, and a driver whose times are too early cannot hold another device back for longer. A time that is 0, later than the clock or before the driver's time before is
   counted (`Stats::odd_input_times`) and `compd` says so once a boot. Before a head that may end the round is told, the devices
   whose channels were empty are read again, so that a frame sent during the round with an earlier time is not left behind it. A
   pointer move waiting before a key is told to the window under it before the key (with the modifiers it was made with).
@@ -66,8 +67,12 @@ Shift and its click, while the compositor may be a second behind.
   milliseconds) are told in the drivers' order; a frame not yet sent when the compositor reads is not waited for. The time is
   taken once a wake, before the driver drains its queue: an event the device adds during the drain carries the earlier time
   (a window of the drain's length, microseconds). A driver whose times are too early holds another device's frame back by at
-  most 2 s after that frame was read (decision driver 3: it could already type any key).
-- **Cost:** one `u64` per frame; up to one read more per device and round (estimate: four non-blocking reads, microseconds).
+  most 512 of its frames, 16 rounds (decision driver 3: it could already type any key). A frame sent during a round with an
+  earlier time is caught only before a head that may end the round, not before a move while a button is held (which then
+  carries the modifiers of the frames already told).
+- **Cost:** one `u64` per frame; a non-blocking read of every device at the round's start, and of every device without a head
+  before each head that holds a key, button or wheel: at most 4 by 32 by 4, 512 reads a round in the worst case, usually a few
+  (estimate: microseconds each).
 
 ### Option C: no time; a rule for modifiers
 - **Description:** each round, read all keyboards' frames up to their first non-modifier key and apply their modifier changes
@@ -111,12 +116,12 @@ a press made before a sheet mapped is not guarded (not made worse here; the fram
   32 frames of a device and ends its input at the first frame that tells a key, changes a button or turns a wheel. *Check:*
   `cargo test -p zoraya-compositor` (`a_frame_read_and_not_told_is_told_next_round_without_a_wait`,
   `a_round_reads_at_most_max_drain_messages_of_a_device`, `a_wheel_message_ends_the_devices_round`).
-- **INV-0469-3.** No driver's times hold another device's frame back by more than `MAX_INPUT_LAG_NS` (2 s) after it was read and
-  the round that follows; frames read together keep their times' order at any backlog; a time later than the clock is taken as
+- **INV-0469-3.** No driver's times hold another device's frame back past `MAX_PASSED` (512) frames of other devices, and an
+  honest backlog never reaches that, however slowly it drains; frames read together keep their times' order at any backlog; a time later than the clock is taken as
   the clock; a time that is 0, later or backwards is counted; a frame sent during a round with a time before the head that ends it
   is told first; a pointer move waiting before a key is told before the key, without the key's modifiers. *Check:*
-  `cargo test -p zoraya-compositor` (`a_flood_with_early_times_holds_another_device_back_only_by_the_lag`,
-  `frames_read_together_keep_their_order_at_any_backlog`, `a_future_time_is_taken_as_when_the_frame_was_read`,
+  `cargo test -p zoraya-compositor` (`a_flood_with_early_times_holds_another_device_back_a_bounded_while`,
+  `a_slow_drain_of_an_honest_backlog_keeps_the_order`, `frames_read_together_keep_their_order_at_any_backlog`, `a_future_time_is_taken_as_when_the_frame_was_read`,
   `a_frame_sent_during_the_round_is_told_before_a_later_press`,
   `a_move_before_a_key_is_told_before_it_with_the_modifiers_before_it`).
 
