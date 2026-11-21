@@ -37,13 +37,45 @@ n=$(echo "$panics" | wc -l | tr -d ' ')
 want=$(sed -n -E 's/^const EXPECTED_FAILURES: usize = ([0-9]+);$/\1/p' "$src")
 [ "$n" = "$want" ] || { echo "check-test-shards: EXPECTED_FAILURES is $want, EXPECT lists $n" >&2; bad=1; }
 # Every sharded step has both halves: the targets `X-a` (`--shard 1/2`) and
-# `X-b` (`--shard 2/2`) run the same machine (the same options but the shard).
-for a in $(sed -n -E 's/^(test-qemu-[A-Za-z0-9-]+-a):.*/\1/p' "$makefile"); do
+# `X-b` (`--shard 2/2`) have the same recipe once the shard, the shard's own
+# expectation (SHARD_{A,B}_EXPECT), the slow runner variant (RUN_TEST_SLOW{,_B})
+# and the label's -a/-b are taken out. Every target with `--shard 2/2` is a
+# `-b` with an `-a`, and every `-a` has a `-b`; a target with `--shard N/2` not
+# named `-a`/`-b` fails.
+recipe() { # target, shard marker: the target's whole recipe, normalised
+	awk -v t="$1:" '$1==t{f=1;next} f&&/^\t/{print;next} f&&/^[^\t]/{exit}' "$makefile" |
+		sed -e 's/--shard [12]\/2//' -e 's/\$(SHARD_[AB]_EXPECT)//' -e 's/RUN_TEST_SLOW_B/RUN_TEST_SLOW/' \
+			-e 's/--label \([A-Za-z0-9-]*\)-[ab]\([ ]\)/--label \1\2/' | tr -s ' \t' '  '
+}
+targets() { sed -n -E 's/^(test-qemu-[A-Za-z0-9-]+):.*/\1/p' "$makefile"; }
+for t in $(targets); do
+	body=$(awk -v t="$t:" '$1==t{f=1;next} f&&/^\t/{print;next} f&&/^[^\t]/{exit}' "$makefile")
+	if echo "$body" | grep -q -e '--shard 2/2'; then
+		case $t in *-b) ;; *) echo "check-test-shards: $t has --shard 2/2 but is not named -b" >&2; bad=1 ;; esac
+	fi
+	if echo "$body" | grep -q -e '--shard 1/2'; then
+		case $t in *-a) ;; *) echo "check-test-shards: $t has --shard 1/2 but is not named -a" >&2; bad=1 ;; esac
+	fi
+	case $t in
+	*-a) b="${t%-a}-b"
+		echo "$body" | grep -q -e '--shard 1/2' || { echo "check-test-shards: $t has no --shard 1/2" >&2; bad=1; }
+		targets | grep -qx -F "$b" || { echo "check-test-shards: $t has no $b" >&2; bad=1; continue; } ;;
+	*-b) a="${t%-b}-a"
+		echo "$body" | grep -q -e '--shard 2/2' || { echo "check-test-shards: $t has no --shard 2/2" >&2; bad=1; }
+		targets | grep -qx -F "$a" || { echo "check-test-shards: $t has no $a" >&2; bad=1; continue; } ;;
+	esac
+done
+for a in $(targets | grep -e '-a$'); do
 	b="${a%-a}-b"
-	la=$(awk -v t="$a:" '$1==t{f=1;next} f&&/^\t/&&/--shard 1\/2/{sub(/.*--shard 1\/2/,"");print;exit} /^[^\t]/{f=0}' "$makefile")
-	lb=$(awk -v t="$b:" '$1==t{f=1;next} f&&/^\t/&&/--shard 2\/2/{sub(/.*--shard 2\/2/,"");print;exit} /^[^\t]/{f=0}' "$makefile")
-	if [ -z "$la" ] || [ "$la" != "$lb" ]; then
-		echo "check-test-shards: $a and $b do not run the same machine in shards 1/2 and 2/2" >&2; bad=1
+	targets | grep -qx -F "$b" || continue
+	ra=$(awk -v t="$a:" '$1==t{f=1;next} f&&/^\t/{print;next} f&&/^[^\t]/{exit}' "$makefile")
+	rb=$(awk -v t="$b:" '$1==t{f=1;next} f&&/^\t/{print;next} f&&/^[^\t]/{exit}' "$makefile")
+	if ! echo "$ra" | grep -q -F '$(RUN_TEST_SLOW) ' || ! echo "$ra" | grep -q -F '$(SHARD_A_EXPECT)' ||
+		! echo "$rb" | grep -q -F '$(RUN_TEST_SLOW_B) ' || ! echo "$rb" | grep -q -F '$(SHARD_B_EXPECT)'; then
+		echo "check-test-shards: $a must use RUN_TEST_SLOW and SHARD_A_EXPECT, $b RUN_TEST_SLOW_B and SHARD_B_EXPECT" >&2; bad=1
+	fi
+	if [ "$(recipe "$a")" != "$(recipe "$b")" ]; then
+		echo "check-test-shards: $a and $b do not have the same recipe (but the shard, its expectation, the runner variant and the label's suffix)" >&2; bad=1
 	fi
 done
 [ "$bad" = 0 ] || exit 1

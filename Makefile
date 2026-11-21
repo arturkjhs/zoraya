@@ -317,8 +317,9 @@ test-qemu-tcg-default: test-qemu-disk
 # (kernel/src/testing.rs), shard 2 the rest; `make check-test-shards` checks
 # that every test is in exactly one and that the expected panics are in 1.
 # Shard 2 has none of the faults of EXPECT: it expects the lines of the
-# banner and of `hello`, and the shard line each prints. The `auto` suites
-# stay whole (HVF runs them in seconds).
+# banner and of `hello`, and the shard line each prints. `auto-default` and
+# `auto-el2` stay whole (HVF runs them in seconds); `auto-smp4-2g` is in two
+# shards as well (above).
 EXPECT_B := $(EXPECT_BOOT)
 RUN_TEST_SLOW_B = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) $(EXPECT_B)
 SHARD_A_EXPECT := --expect-line "shard: 1/2 runs tests 0.."
@@ -363,6 +364,7 @@ test-qemu-tcg-smp4-gicv3-b: test-qemu-disk
 # Every test of the kernel suite is in exactly one shard (no QEMU).
 check-test-shards:
 	@tools/check-test-shards.sh
+	@tools/check-test-shards-test.sh
 
 test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
