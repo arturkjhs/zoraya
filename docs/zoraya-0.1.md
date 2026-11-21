@@ -163,10 +163,13 @@ What happened, as facts:
 ## The tag
 
 The tag `zoraya-0.1` is an annotated tag on the commit that contains this file, put there by the dispatcher with the
-architect's explicit permission (his instruction of 2026-11-21). It is placed on a commit for which
-`tools/ci-last-full.rb --green-for` names a green scheduled full run (its head is that commit or a descendant); the
-run's id is in the tag's message (`git show zoraya-0.1`). The stage tags `stage-10h` (`f043ca57`) and `stage-10j`
-(`fe1feacd`) were pushed earlier on a green scheduled run of 2026-11-20, the last full run before 0.1 that included them.
+architect's explicit permission (his instruction of 2026-11-21). The evidence for it is a `candidate-full/zoraya-0.1` run
+on `eb5afd38` (run 44878482107, 91 jobs, all green); the tagged commit is `eb5afd38` plus documents only (this page and
+the README; their push run, 44883324079, was green). CLAUDE.md counts a green `candidate-full/` run for a stage tag
+(ADR-0348), but `tools/ci-last-full.rb --green-for` reads only scheduled runs, and GitHub's cron started no scheduled
+run in the six hours after `eb5afd38` (the last one, 44860388634 on 2026-11-21 at 03:17 UTC, was red in the files-manage GUI job on the Shift-click order that ADR-0469 fixed), so the tool exits 1 for this commit. That is stated here so that nobody reads the tag
+as a scheduled-run tag. The stage tags `stage-10h` (`f043ca57`) and `stage-10j` (`fe1feacd`) were pushed earlier on a
+green scheduled run (44716595367, on `4b7eabfd`).
 
 What was green and what was not, at the end:
 
