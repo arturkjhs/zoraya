@@ -194,6 +194,8 @@ fn a_press_between_motions_is_delivered_in_its_own_place_and_order() {
     };
     s.f().send(t, message(&m, 0), vec![]);
     s.queue_move(at.0 + 60, at.1 + 60);
+    // The press ends the device's round; the move after it is the next.
+    s.c.step();
     s.c.step();
     let got: Vec<_> = s
         .f()
@@ -763,4 +765,346 @@ fn moves_go_while_a_new_image_is_unanswered() {
     // The image's place and the moves are the host's: the compositor knows
     // where it is.
     assert_eq!(s.c.cursor_at, s.c.pointer);
+}
+
+/// A press held in one window's body and the pointer's moves after it, all
+/// waiting when the round starts, to a place over another window: the
+/// window that has the press hears the pointer move with the button down
+/// before the pointer leaves it, so that it can start a drag (ADR-0170).
+/// Told only at the end, the move went to the window under the last place,
+/// and the source never heard its press move: the file manager under TCG
+/// started no drag, and `t_open` took the moves and the release for a click
+/// on Save (`make test-gui GUI_RUNS=files:tcg:1`, step 45, 2026-11-21).
+#[test]
+fn a_held_press_moving_out_of_its_window_is_told_to_it_on_the_way() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    assert!(!t.oa.contains(tx, ty) && t.ob.contains(tx, ty));
+    t.s.f().take(t.a);
+    t.s.f().take(t.b);
+    // The runner's `drag`: the press, then eight moves, all read in one
+    // round by a slow guest.
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    for i in 1..=8 {
+        t.s.queue_move(px + (tx - px) * i / 8, py + (ty - py) * i / 8);
+    }
+    t.s.c.step();
+    // Read, not taken: the drag below names the press by its serial.
+    let heard: Vec<_> = t.s.f().peers[&t.a]
+        .outbox
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+        .map(|(_, p)| (p.x, p.y, p.buttons.0))
+        .collect();
+    let press = heard.first().copied().expect("the press is told");
+    assert_eq!(press.2 & gui::buttons::LEFT, gui::buttons::LEFT);
+    assert!(
+        heard
+            .iter()
+            .any(|p| p.2 & gui::buttons::LEFT != 0 && (p.0, p.1) != (press.0, press.1)),
+        "the source hears its press move: {heard:?}"
+    );
+    // The source answers with a drag, which the compositor takes: the
+    // press is still held. The release over the other window drops there.
+    let entry = t.s.f().channel(1);
+    assert_eq!(super::drops::drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    t.s.f().take(t.b);
+    t.s.point(axis(tx, w), axis(ty, h), Some(0));
+    assert!(
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .any(|r| decode::<gui::Drop<'_>>(r, 1).is_ok()),
+        "the other window gets the drop"
+    );
+}
+
+/// A press held from one window over another, before the source names its
+/// drag: the other window hears the pointer with no button, so that what
+/// it passes over (a button) is not pressed; the drop that follows is its
+/// only news. Under TCG `t_open` took such moves for a press on Save, and
+/// its sheet then refused the drop (`files:tcg:1`, 2026-11-21).
+#[test]
+fn a_press_from_another_window_is_never_held_in_the_window_it_crosses() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.f().take(t.b);
+    // The moves, one a round, reach the other window before the drag.
+    for i in 1..=8 {
+        t.s.move_to(px + (tx - px) * i / 8, py + (ty - py) * i / 8);
+    }
+    let heard = |out: &[Vec<u8>]| -> Vec<u32> {
+        out.iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| p.buttons.0)
+            .collect()
+    };
+    let b = heard(&t.s.f().take(t.b));
+    assert!(!b.is_empty(), "the other window hears the pointer");
+    assert!(b.iter().all(|&k| k == 0), "with no button held: {b:?}");
+    // The source's drag is still taken (its press is held), and the release
+    // drops on the other window.
+    let entry = t.s.f().channel(1);
+    assert_eq!(super::drops::drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    t.s.point(axis(tx, w), axis(ty, h), Some(0));
+    let got = t.s.f().take(t.b);
+    assert!(got.iter().any(|r| decode::<gui::Drop<'_>>(r, 1).is_ok()));
+    assert!(heard(&got).iter().all(|&k| k == 0));
+    // The same window, pressed in itself, hears its own press held.
+    t.s.point(axis(tx, w), axis(ty, h), Some(1));
+    t.s.move_to(tx - 5, ty - 5);
+    let b = heard(&t.s.f().take(t.b));
+    assert!(b.iter().any(|&k| k & gui::buttons::LEFT != 0), "{b:?}");
+    t.s.point(axis(tx - 5, w), axis(ty - 5, h), Some(0));
+    // A press outside every window is held in none.
+    t.s.point(axis(2, w), axis(H as i64 / 2, h), Some(1));
+    t.s.move_to(tx, ty);
+    let b = heard(&t.s.f().take(t.b));
+    assert!(b.iter().all(|&k| k == 0), "pressed on the desktop: {b:?}");
+}
+
+/// A Shift-click whose messages all wait when the round starts: the
+/// keyboard's Shift down, the pointer's press and release, the keyboard's
+/// Shift up. The keyboard's backlog is not read past its first key before
+/// the pointer's press, so the press carries Shift (the keyboard read
+/// whole made the click a plain one: `files-manage:auto:2`, step 22,
+/// 2026-11-21).
+#[test]
+fn a_modifier_click_waiting_in_two_devices_keeps_its_order() {
+    let mut t = super::drops::two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    let (w, h) = t.s.f().display_size;
+    // A plain click focuses the window.
+    t.s.point(axis(px, w), axis(py, h), Some(1));
+    t.s.point(axis(px, w), axis(py, h), Some(0));
+    t.s.f().take(t.a);
+    let key = |code: u32, value: u32| input::Event {
+        kind: Below(input::kind::KEY),
+        code,
+        value,
+    };
+    let button = |value: u32| {
+        [
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 0,
+                value: axis(px, w),
+            },
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 1,
+                value: axis(py, h),
+            },
+            key(code::BTN_LEFT, value),
+        ]
+    };
+    let (k, tab) = (t.s.keyboard, t.s.tablet);
+    let frame = |events: &[input::Event]| {
+        message(
+            &input::Frame {
+                dropped: 0,
+                events: Seq::Of(events),
+            },
+            0,
+        )
+    };
+    t.s.f().send(k, frame(&[key(code::LEFT_SHIFT, 1)]), vec![]);
+    t.s.f().send(tab, frame(&button(1)), vec![]);
+    t.s.f().send(tab, frame(&button(0)), vec![]);
+    t.s.f().send(k, frame(&[key(code::LEFT_SHIFT, 0)]), vec![]);
+    for _ in 0..4 {
+        t.s.c.step();
+    }
+    let press =
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+            .map(|(_, p)| (p.buttons.0, p.modifiers.0))
+            .find(|(b, _)| b & gui::buttons::LEFT != 0)
+            .expect("the press is told");
+    assert_eq!(
+        press.1 & gui::modifiers::SHIFT,
+        gui::modifiers::SHIFT,
+        "the press carries Shift: {press:?}"
+    );
+}
+
+/// The buttons each client hears in `WindowPointerMods` (taken).
+fn held_heard(s: &mut Setup, end: u32) -> Vec<(u32, u32)> {
+    s.f()
+        .take(end)
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
+        .map(|(_, p)| (p.window, p.buttons.0))
+        .collect()
+}
+
+/// A press on the upper window's minimise button, over the lower window's
+/// body: the press names nobody, so the lower window, uncovered by it,
+/// never hears the button held (review of e5d1c3c3, 2).
+#[test]
+fn a_press_that_minimises_a_window_is_held_in_none_it_uncovers() {
+    let mut t = super::drops::two();
+    let (mx, my) = (t.ob.x + 42, t.ob.y + 18);
+    assert!(t.oa.contains(mx, my) && !t.oa.contains(t.ob.right() - 2, t.ob.bottom() - 2));
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(mx, w), axis(my, h), Some(1));
+    let ib = t.s.c.stack().find(|k| k.client == 1).unwrap();
+    assert!(t.s.c.window(ib).unwrap().hidden, "the press minimised it");
+    t.s.f().take(t.a);
+    t.s.move_to(mx + 6, my + 6);
+    let a = held_heard(&mut t.s, t.a);
+    assert!(!a.is_empty() && a.iter().all(|p| p.1 == 0), "{a:?}");
+    assert_eq!(t.s.c.pressed_in, [None; 3]);
+}
+
+/// A client that ends with its press held leaves no press behind for the
+/// next client in its slot (review of e5d1c3c3, 3).
+#[test]
+fn a_client_that_ends_holding_a_press_leaves_none() {
+    let mut t = super::drops::two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    let (w, h) = t.s.f().display_size;
+    t.s.point(axis(bx, w), axis(by, h), Some(1));
+    assert_eq!(t.s.c.pressed_in[0], Some(1));
+    t.s.f().peers.get_mut(&t.b).unwrap().gone = true;
+    t.s.c.step();
+    assert_eq!(t.s.c.pressed_in, [None; 3]);
+}
+
+/// Each button is held in the client it was pressed over: the left in A,
+/// the right in B; once the left is let go, A hears nothing held, though
+/// the right still is (review of e5d1c3c3, 4).
+#[test]
+fn each_button_is_held_only_in_the_client_it_was_pressed_over() {
+    let mut t = super::drops::two();
+    let (w, h) = t.s.f().display_size;
+    let a_at = (t.oa.x + 10, t.oa.y + 60);
+    let b_at = (t.ob.right() - 15, t.ob.bottom() - 15);
+    assert!(!t.oa.contains(b_at.0, b_at.1));
+    let button = |s: &mut Setup, at: (i64, i64), code: u32, value: u32| {
+        let events = [
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 0,
+                value: axis(at.0, w),
+            },
+            input::Event {
+                kind: Below(input::kind::AXIS),
+                code: 1,
+                value: axis(at.1, h),
+            },
+            input::Event {
+                kind: Below(input::kind::KEY),
+                code,
+                value,
+            },
+        ];
+        let tab = s.tablet;
+        s.f().send(
+            tab,
+            message(
+                &input::Frame {
+                    dropped: 0,
+                    events: Seq::Of(&events),
+                },
+                0,
+            ),
+            vec![],
+        );
+        s.c.step();
+    };
+    button(&mut t.s, a_at, code::BTN_LEFT, 1);
+    t.s.move_to(b_at.0, b_at.1);
+    button(&mut t.s, b_at, code::BTN_RIGHT, 1);
+    let b = held_heard(&mut t.s, t.b);
+    assert!(
+        b.iter().any(|p| p.1 == gui::buttons::RIGHT),
+        "B hears its right: {b:?}"
+    );
+    assert!(
+        b.iter().all(|p| p.1 & gui::buttons::LEFT == 0),
+        "never A's left: {b:?}"
+    );
+    button(&mut t.s, b_at, code::BTN_LEFT, 0);
+    t.s.f().take(t.a);
+    t.s.move_to(a_at.0 + 4, a_at.1 + 4);
+    let a = held_heard(&mut t.s, t.a);
+    assert!(
+        !a.is_empty() && a.iter().all(|p| p.1 == 0),
+        "A hears no right: {a:?}"
+    );
+}
+
+/// The pressing client's own popup, under the pointer while the press is
+/// held, hears the button held: the mask is the client's, not the
+/// window's (mutation M4 of the review of e5d1c3c3).
+#[test]
+fn the_pressing_clients_popup_hears_its_press_held() {
+    let mut t = super::drops::two();
+    let (w, h) = t.s.f().display_size;
+    let a_at = (t.oa.x + 10, t.oa.y + 60);
+    // The press in the window (which focuses it), held; the window opens
+    // a popup on its body, as a menu opens on a press.
+    t.s.point(axis(a_at.0, w), axis(a_at.1, h), Some(1));
+    let m = t.s.f().memory(vec![7; 20 * 10], 800, false);
+    let out = t.s.request(
+        t.a,
+        &gui::CreatePopup {
+            parent: t.ida,
+            x: 60,
+            y: 80,
+            width: 20,
+            height: 10,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(p.status.0, status::OK);
+    let pb = t.s.body(0, p.window);
+    assert!(!pb.contains(a_at.0, a_at.1));
+    t.s.f().take(t.a);
+    t.s.move_to(pb.x + 5, pb.y + 5);
+    let a = held_heard(&mut t.s, t.a);
+    assert!(
+        a.iter()
+            .any(|q| q.0 == p.window && q.1 & gui::buttons::LEFT != 0),
+        "{a:?}"
+    );
+}
+
+/// A wheel's message ends the device's round like a button's: the move
+/// behind it waits for the next round (mutation M5 of the review).
+#[test]
+fn a_wheel_message_ends_the_devices_round() {
+    let mut s = setup_with(|_| {});
+    s.move_to(300, 200);
+    let tab = s.tablet;
+    let wheel = [input::Event {
+        kind: Below(input::kind::WHEEL),
+        code: 0,
+        value: 120,
+    }];
+    let m = message(
+        &input::Frame {
+            dropped: 0,
+            events: Seq::Of(&wheel),
+        },
+        0,
+    );
+    s.f().send(tab, m, vec![]);
+    s.queue_move(320, 210);
+    s.c.step();
+    assert_eq!(s.f().peers[&tab].inbox.len(), 1, "the move waits");
+    s.c.step();
+    assert!(s.f().peers[&tab].inbox.is_empty());
 }
